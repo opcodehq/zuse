@@ -2,9 +2,8 @@
 use crate::{state::AppState, theme::Theme};
 use gpui::{Context, Entity, SharedString, Task, Window, div, prelude::*, px};
 use std::time::Duration;
-use zuse_protocol::{
-    SandboxLevel,
-    pr_watch::{MAX_REPAIR_ATTEMPTS, PrWatchRequest, PrWatchStatus, SetPrWatchRequest},
+use zuse_protocol::pr_watch::{
+    MAX_REPAIR_ATTEMPTS, PrWatchRequest, PrWatchStatus, SetPrWatchRequest,
 };
 use zuse_rpc::methods;
 
@@ -140,12 +139,7 @@ impl Render for PrWatchControl {
             .chats
             .iter()
             .find(|c| c.id == self.request.chat_id)
-            .is_some_and(|c| {
-                !c.archived
-                    && c.config
-                        .as_ref()
-                        .is_some_and(|c| c.sandbox != SandboxLevel::ReadOnly)
-            });
+            .is_some_and(|c| !c.archived && c.config.as_ref().is_some_and(|c| !c.plan));
         let ready = self.connected && !self.busy;
         let error = self
             .error

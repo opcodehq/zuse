@@ -1,7 +1,10 @@
 //! Zuse cloud identity for hosted plugins and provider connections.
 //!
-//! Device authorization works from native and remote browser clients. Credentials
-//! stay in the engine; views receive only profile and sign-in progress metadata.
+//! Native clients on this machine sign in through the browser: AuthKit redirects
+//! back to a loopback callback and the engine redeems the code with PKCE. Remote
+//! browser clients, and machines where the callback cannot bind, use device
+//! authorization instead. Credentials stay in the engine; views receive only
+//! profile and sign-in progress metadata.
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -19,6 +22,8 @@ pub const API_URL: &str = "https://api.zuse.sh";
 pub const PUBLIC_CLIENT_ID: &str = "client_01KWGQ818571ARFATQ3G9AR2Y2";
 const IDENTITY_URL: &str = "https://api.workos.com";
 const MAX_RESPONSE: usize = 256 * 1024;
+/// How long a browser sign-in waits for AuthKit to redirect back.
+const BROWSER_SIGN_IN_SECS: i64 = 10 * 60;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AccountError {
@@ -52,6 +57,9 @@ pub struct Credential {
 #[serde(rename_all = "camelCase")]
 pub struct LoginProgress {
     pub url: String,
+    /// The code to confirm on the device authorization page; empty for a
+    /// browser sign-in, which returns to this machine on its own.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub user_code: String,
     pub expires_at: i64,
 }
@@ -173,7 +181,8 @@ impl Account {
         Self::configured(root, endpoint(&api_url)?, client_id, IDENTITY_URL.into())
     }
 
-    fn configured(
+    /// [`Self::open`] with explicit service endpoints (deployments and tests).
+    pub fn configured(
         root: &Path,
         api_url: String,
         client_id: String,
@@ -278,21 +287,223 @@ impl Account {
         });
     }
 
-    pub async fn sign_in(&self) -> Result<LoginProgress, AccountError> {
-        let (generation, cancel) = {
-            let mut state = lock(&self.0.state);
-            if state.retired {
-                return Err(AccountError::Changed);
+    /// Retire any sign-in in flight and open a new attempt.
+    fn begin_login(&self) -> Result<(u64, CancellationToken), AccountError> {
+        let mut state = lock(&self.0.state);
+        if state.retired {
+            return Err(AccountError::Changed);
+        }
+        state.generation = state.generation.wrapping_add(1);
+        state.login_cancel.cancel();
+        state.login_cancel = CancellationToken::new();
+        state.login = None;
+        state.error = None;
+        self.publish(&state);
+        Ok((state.generation, state.login_cancel.clone()))
+    }
+
+    /// Publish an attempt's progress unless a newer attempt replaced it.
+    fn show_login(&self, generation: u64, progress: &LoginProgress) -> Result<(), AccountError> {
+        let mut state = lock(&self.0.state);
+        if state.retired || state.generation != generation {
+            return Err(AccountError::Cancelled);
+        }
+        state.login = Some(progress.clone());
+        self.publish(&state);
+        Ok(())
+    }
+
+    /// Finish an attempt in the background; failures surface on the status.
+    fn complete_login(
+        &self,
+        generation: u64,
+        completion: impl std::future::Future<Output = Result<(), AccountError>> + Send + 'static,
+    ) {
+        let account = self.clone();
+        tokio::spawn(async move {
+            if let Err(error) = completion.await {
+                let mut state = lock(&account.0.state);
+                if state.generation == generation {
+                    state.login = None;
+                    if !matches!(error, AccountError::Cancelled) {
+                        state.error = Some(error.to_string());
+                    }
+                    account.publish(&state);
+                }
             }
-            state.generation = state.generation.wrapping_add(1);
-            state.login_cancel.cancel();
-            state.login_cancel = CancellationToken::new();
-            state.login = None;
-            state.error = None;
-            self.publish(&state);
-            (state.generation, state.login_cancel.clone())
+        });
+    }
+
+    /// Sign in through this machine's browser: AuthKit redirects to a loopback
+    /// callback and the code is redeemed with PKCE, so there is no code to
+    /// confirm. Falls back to [`Self::sign_in`] (device authorization) when the
+    /// callback cannot bind or the identity provider rejects its redirect.
+    /// Only for clients on the engine's own machine.
+    pub async fn sign_in_in_browser(&self) -> Result<LoginProgress, AccountError> {
+        let listener = match tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await
+        {
+            Ok(listener) => listener,
+            Err(error) => {
+                tracing::info!(%error, "account: loopback sign-in unavailable; using device authorization");
+                return self.sign_in().await;
+            }
         };
+        let port = listener
+            .local_addr()
+            .map_err(|_| AccountError::Unavailable)?
+            .port();
+        let (generation, cancel) = self.begin_login()?;
+        let redirect_uri = format!("http://127.0.0.1:{port}/callback");
+        let expected_state = uuid::Uuid::new_v4().simple().to_string();
+        let verifier = {
+            use rand_core::RngCore;
+            let mut bytes = [0u8; 32];
+            rand_core::OsRng.fill_bytes(&mut bytes);
+            URL_SAFE_NO_PAD.encode(bytes)
+        };
+        let challenge = {
+            use sha2::Digest;
+            URL_SAFE_NO_PAD.encode(sha2::Sha256::digest(verifier.as_bytes()))
+        };
+        let url = reqwest::Url::parse_with_params(
+            &format!("{}/user_management/authorize", self.0.identity_url),
+            [
+                ("response_type", "code"),
+                ("client_id", self.0.client_id.as_str()),
+                ("redirect_uri", redirect_uri.as_str()),
+                ("provider", "authkit"),
+                ("state", expected_state.as_str()),
+                ("code_challenge", challenge.as_str()),
+                ("code_challenge_method", "S256"),
+            ],
+        )
+        .map_err(|_| AccountError::InvalidEndpoint)?;
+        let rejected = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return Err(AccountError::Cancelled),
+            rejected = crate::auth::loopback_redirect_rejected(url.as_str()) => rejected,
+        };
+        if rejected {
+            tracing::info!("account: loopback redirect rejected; using device authorization");
+            return self.sign_in_attempt(generation, cancel).await;
+        }
+        let progress = LoginProgress {
+            url: url.into(),
+            user_code: String::new(),
+            expires_at: now() + BROWSER_SIGN_IN_SECS,
+        };
+        self.show_login(generation, &progress)?;
+        let callback = BrowserCallback {
+            port,
+            state: expected_state,
+            verifier,
+        };
+        let account = self.clone();
+        self.complete_login(generation, async move {
+            account
+                .await_callback(listener, callback, generation, cancel)
+                .await
+        });
+        Ok(progress)
+    }
+
+    async fn await_callback(
+        &self,
+        listener: tokio::net::TcpListener,
+        callback: BrowserCallback,
+        generation: u64,
+        cancel: CancellationToken,
+    ) -> Result<(), AccountError> {
+        let deadline =
+            tokio::time::Instant::now() + Duration::from_secs(BROWSER_SIGN_IN_SECS as u64);
+        loop {
+            let mut stream = tokio::select! {
+                _ = cancel.cancelled() => return Err(AccountError::Cancelled),
+                _ = tokio::time::sleep_until(deadline) => return Err(AccountError::Expired),
+                accepted = listener.accept() => match accepted {
+                    Ok((stream, _)) => stream,
+                    Err(_) => continue,
+                },
+            };
+            let Some(request) = read_request_head(&mut stream).await else {
+                continue;
+            };
+            let outcome = match callback.parse(&request) {
+                CallbackRequest::Ignored(status, message) => {
+                    respond(&mut stream, status, message).await;
+                    continue;
+                }
+                CallbackRequest::Denied => Err(AccountError::Denied),
+                CallbackRequest::Code(code) => tokio::select! {
+                    _ = cancel.cancelled() => Err(AccountError::Cancelled),
+                    result = self.redeem(&code, &callback.verifier, generation) => result,
+                },
+            };
+            let (status, message) = match &outcome {
+                Ok(()) => (
+                    "200 OK",
+                    "Signed in. You can close this tab and return to Zuse.",
+                ),
+                Err(AccountError::Denied) => {
+                    ("200 OK", "Sign-in was denied. Return to Zuse to try again.")
+                }
+                Err(_) => (
+                    "502 Bad Gateway",
+                    "Sign-in could not be completed. Return to Zuse and retry.",
+                ),
+            };
+            respond(&mut stream, status, message).await;
+            return outcome;
+        }
+    }
+
+    /// Redeem an authorization code from the browser redirect.
+    async fn redeem(
+        &self,
+        code: &str,
+        verifier: &str,
+        generation: u64,
+    ) -> Result<(), AccountError> {
+        let response = self
+            .0
+            .http
+            .post(format!(
+                "{}/user_management/authenticate",
+                self.0.identity_url
+            ))
+            .json(&json!({
+                "client_id": self.0.client_id,
+                "grant_type": "authorization_code",
+                "code": code,
+                "code_verifier": verifier,
+            }))
+            .send()
+            .await
+            .map_err(|_| AccountError::Unavailable)?;
+        let success = response.status().is_success();
+        let body = read_json(response).await?;
+        if !success {
+            return Err(AccountError::Unavailable);
+        }
+        let tokens: TokenResponse =
+            serde_json::from_value(body).map_err(|_| AccountError::InvalidResponse)?;
+        self.install(tokens, generation, None)
+    }
+
+    /// Sign in with device authorization: the user confirms a code on the
+    /// identity provider's page, from any device.
+    pub async fn sign_in(&self) -> Result<LoginProgress, AccountError> {
+        let (generation, cancel) = self.begin_login()?;
+        self.sign_in_attempt(generation, cancel).await
+    }
+
+    async fn sign_in_attempt(
+        &self,
+        generation: u64,
+        cancel: CancellationToken,
+    ) -> Result<LoginProgress, AccountError> {
         let response = tokio::select! {
+            biased;
             _=cancel.cancelled()=>return Err(AccountError::Cancelled),
             response=self.0.http.post(format!("{}/user_management/authorize/device",self.0.identity_url))
                 .form(&[("client_id",self.0.client_id.as_str())]).send()=>response.map_err(|_|AccountError::Unavailable)?,
@@ -325,27 +536,10 @@ impl Account {
             user_code: grant.user_code.clone(),
             expires_at: now() + grant.expires_in as i64,
         };
-        {
-            let mut state = lock(&self.0.state);
-            if state.retired || state.generation != generation {
-                return Err(AccountError::Cancelled);
-            }
-            state.login = Some(progress.clone());
-            self.publish(&state);
-        }
+        self.show_login(generation, &progress)?;
         let account = self.clone();
-        tokio::spawn(async move {
-            let result = account.poll_login(grant, generation, cancel).await;
-            if let Err(error) = result {
-                let mut state = lock(&account.0.state);
-                if state.generation == generation {
-                    state.login = None;
-                    if !matches!(error, AccountError::Cancelled) {
-                        state.error = Some(error.to_string());
-                    }
-                    account.publish(&state);
-                }
-            }
+        self.complete_login(generation, async move {
+            account.poll_login(grant, generation, cancel).await
         });
         Ok(progress)
     }
@@ -566,6 +760,97 @@ impl Account {
         }
         result
     }
+}
+
+/// The browser sign-in's loopback redirect target and PKCE secret.
+struct BrowserCallback {
+    port: u16,
+    state: String,
+    verifier: String,
+}
+
+enum CallbackRequest {
+    /// Not this sign-in's redirect; answer and keep waiting.
+    Ignored(&'static str, &'static str),
+    Denied,
+    Code(String),
+}
+
+impl BrowserCallback {
+    /// Classify a request head received on the loopback listener.
+    fn parse(&self, head: &str) -> CallbackRequest {
+        let invalid = CallbackRequest::Ignored(
+            "400 Bad Request",
+            "Invalid or expired sign-in link. Start again from Zuse.",
+        );
+        let host = format!("127.0.0.1:{}", self.port);
+        let host_matches = head.lines().skip(1).any(|line| {
+            line.split_once(':').is_some_and(|(name, value)| {
+                name.trim().eq_ignore_ascii_case("host") && value.trim() == host
+            })
+        });
+        let mut request_line = head.lines().next().unwrap_or_default().split_whitespace();
+        let (Some("GET"), Some(target)) = (request_line.next(), request_line.next()) else {
+            return invalid;
+        };
+        let Ok(url) = reqwest::Url::parse(&format!("http://{host}{target}")) else {
+            return invalid;
+        };
+        if url.path() != "/callback" {
+            return CallbackRequest::Ignored("404 Not Found", "Not found.");
+        }
+        if !host_matches {
+            return invalid;
+        }
+        let param = |name: &str| {
+            url.query_pairs()
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| value.into_owned())
+        };
+        if param("state").as_deref() != Some(self.state.as_str()) {
+            return invalid;
+        }
+        if param("error").is_some() {
+            return CallbackRequest::Denied;
+        }
+        match param("code").filter(|code| !code.is_empty() && code.len() <= 1024) {
+            Some(code) => CallbackRequest::Code(code),
+            None => invalid,
+        }
+    }
+}
+
+/// Read an HTTP request head (bounded); `None` when the client goes away.
+async fn read_request_head(stream: &mut tokio::net::TcpStream) -> Option<String> {
+    use tokio::io::AsyncReadExt;
+    let mut head = Vec::with_capacity(1024);
+    let mut chunk = [0u8; 1024];
+    while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+        if head.len() > 16 * 1024 {
+            return None;
+        }
+        let read = tokio::time::timeout(Duration::from_secs(10), stream.read(&mut chunk));
+        match read.await {
+            Ok(Ok(n)) if n > 0 => head.extend_from_slice(&chunk[..n]),
+            _ => return None,
+        }
+    }
+    Some(String::from_utf8_lossy(&head).into_owned())
+}
+
+async fn respond(stream: &mut tokio::net::TcpStream, status: &str, message: &str) {
+    use tokio::io::AsyncWriteExt;
+    let body = format!(
+        "<!doctype html><meta charset=utf-8><title>Zuse</title><h1>Zuse</h1><p>{message}</p>"
+    );
+    let response = format!(
+        "HTTP/1.1 {status}\r\ncontent-type: text/html; charset=utf-8\r\ncache-control: no-store\r\n\
+         referrer-policy: no-referrer\r\ncontent-security-policy: default-src 'none'\r\n\
+         content-length: {}\r\nconnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    let _ = stream.write_all(response.as_bytes()).await;
+    let _ = stream.shutdown().await;
 }
 
 async fn read_json(response: reqwest::Response) -> Result<Value, AccountError> {

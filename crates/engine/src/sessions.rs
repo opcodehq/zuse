@@ -346,7 +346,7 @@ impl SessionsEngine {
         &self,
         chat: &str,
         run: Option<&str>,
-    ) -> Option<(String, String, zuse_protocol::SandboxLevel)> {
+    ) -> Option<(String, String, crate::permission_rules::RunPosture)> {
         let live = lock(&self.inner.runs).get(chat).and_then(|h| {
             if run.is_some_and(|id| id != h.run_id)
                 || h.retiring.load(std::sync::atomic::Ordering::Acquire)
@@ -376,11 +376,17 @@ impl SessionsEngine {
             .and_then(|c| c.space_id.as_ref())
             .map(|id| format!("space:{id}"))
             .unwrap_or_else(|| format!("path:{cwd}"));
-        let sandbox = live
-            .map(|r| r.sandbox)
-            .or_else(|| row.and_then(|c| c.config.map(|c| c.sandbox)))
-            .unwrap_or(zuse_protocol::SandboxLevel::WorkspaceWrite);
-        Some((project, cwd, sandbox))
+        let posture = live
+            .map(|r| crate::permission_rules::RunPosture::of(&r))
+            .or_else(|| {
+                row.and_then(|c| c.config)
+                    .map(|c| crate::permission_rules::RunPosture {
+                        sandbox: c.sandbox,
+                        plan: c.plan,
+                    })
+            })
+            .unwrap_or_else(|| zuse_protocol::SandboxLevel::WorkspaceWrite.into());
+        Some((project, cwd, posture))
     }
 
     pub fn new(
@@ -590,9 +596,26 @@ impl SessionsEngine {
     }
 
     /// Any run currently working or blocked on input — the auto-updater's
-    /// "don't restart from under a session" gate.
+    /// "don't restart from under a session" gate. An archived chat's status
+    /// never counts: its runs are fenced, and a status left behind by one
+    /// must not block updates forever.
     pub fn any_active(&self) -> bool {
-        lock(&self.inner.statuses).values().any(is_active)
+        let active: Vec<String> = lock(&self.inner.statuses)
+            .iter()
+            .filter(|(_, session)| is_active(session))
+            .map(|(chat_id, _)| chat_id.clone())
+            .collect();
+        let workspace = self.inner.workspace();
+        let archived = |chat_id: &str| {
+            workspace.as_ref().is_some_and(|workspace| {
+                workspace
+                    .chat(chat_id)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|chat| chat.archived)
+            })
+        };
+        active.iter().any(|chat_id| !archived(chat_id))
             || lock(&self.inner.runs)
                 .values()
                 .any(|r| r.voice_active.live())
@@ -1116,7 +1139,13 @@ impl SessionsEngine {
         // the Done-time call below stays as the retry for a failed
         // generation).
         if !idle && let Some(titles) = self.inner.titles.get() {
-            titles.maybe_generate(chat_id, harness_id, &request.prompt, &request.cwd);
+            titles.maybe_generate(
+                chat_id,
+                harness_id,
+                &request.prompt,
+                &request.cwd,
+                crate::titles::TitleTrigger::TurnStarted,
+            );
         }
 
         tokio::spawn(drive_run(
@@ -1514,12 +1543,12 @@ impl SessionsEngine {
                 h.engine_tx.clone(),
                 h.interrupt_token.clone(),
                 h.run_id.clone(),
-                h.runtime_config.request.sandbox == zuse_protocol::SandboxLevel::ReadOnly,
+                h.runtime_config.request.plan,
             )
         };
         if read_only {
             return Err(Error::Tool(
-                "Private operations are unavailable in read-only mode".into(),
+                "Private operations are unavailable in plan mode".into(),
             ));
         }
         let request_id = new_id();
@@ -1682,6 +1711,7 @@ impl SessionsEngine {
                     .or_else(|| {
                         let (_, cwd) = sessions.inner.journal_harness_session(&chat_id)?;
                         Some(RunRequest {
+                            plan: false,
                             mcp: None,
                             prompt: String::new(),
                             harness: None,
@@ -4042,7 +4072,13 @@ async fn drive_run(
             if *status == DoneStatus::Completed
                 && let Some(titles) = inner.titles.get()
             {
-                titles.maybe_generate(&chat_id, harness_id, &user_prompt, &run_cwd);
+                titles.maybe_generate(
+                    &chat_id,
+                    harness_id,
+                    &user_prompt,
+                    &run_cwd,
+                    crate::titles::TitleTrigger::TurnCompleted,
+                );
             }
             // A turn stopped in place: the runtime lives on, parked like a
             // completed turn. Steers it had accepted but not yet delivered
@@ -4227,6 +4263,7 @@ fn background_task(record: &zuse_providers::BackgroundTaskRecord) -> zuse_protoc
         id: record.task.id.clone(),
         kind: record.task.kind,
         description: record.task.description.clone(),
+        command: record.task.command.clone(),
         started_at: record.started.into(),
         ended_at: record.ended.map(Into::into),
         outcome: record.outcome,
@@ -4635,6 +4672,7 @@ mod tests {
 
     fn request() -> RunRequest {
         RunRequest {
+            plan: false,
             mcp: None,
             prompt: "first".into(),
             harness: None,
@@ -4994,6 +5032,29 @@ mod tests {
     // A tagged subagent event that folds to NO parts used to leave its sink
     // dirty forever: the commit branch's guard stayed true on a deadline in
     // the past and the run loop burned a core until real content arrived.
+    #[tokio::test]
+    async fn archived_chats_never_hold_the_update_gate() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = crate::EngineCore::assemble(
+            dir.path(),
+            Arc::new(HarnessRegistry::new()),
+            HarnessId::Mock,
+            None,
+        )
+        .unwrap();
+        core.workspace
+            .create_chat("chat-archived", None, Some(&core.device_id), None, None)
+            .unwrap();
+        core.sessions
+            .set_status("chat-archived", SessionStatus::Working, true);
+        assert!(core.sessions.any_active());
+        core.workspace
+            .set_chat_archived("chat-archived", true)
+            .unwrap();
+        assert!(!core.sessions.any_active());
+        core.shutdown().await;
+    }
+
     #[tokio::test]
     async fn empty_subagent_events_commit_once_per_window_not_per_tick() {
         use super::*;

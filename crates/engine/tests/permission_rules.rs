@@ -2,7 +2,7 @@
 use async_trait::async_trait;
 use futures::{StreamExt, stream::BoxStream};
 use std::{sync::Arc, time::Duration};
-use zuse_engine::{EngineCore, HarnessRegistry};
+use zuse_engine::{EngineCore, HarnessRegistry, permission_rules::RunPosture};
 use zuse_protocol::{
     AgentEvent, DoneStatus, HarnessId, Model, ReasoningLevel, RunRequest, SandboxLevel,
     SteeringMode, UserInputAnswer, UserInputQuestion,
@@ -106,7 +106,7 @@ fn assemble(dir: &std::path::Path) -> EngineCore {
 async fn run(
     core: &EngineCore,
     cwd: &str,
-    mode: SandboxLevel,
+    mode: impl Into<RunPosture>,
     prompt: &str,
     pick: Option<&str>,
 ) -> (usize, Vec<String>, Vec<Vec<String>>) {
@@ -115,7 +115,7 @@ async fn run(
 async fn run_on(
     core: &EngineCore,
     cwd: &str,
-    mode: SandboxLevel,
+    mode: impl Into<RunPosture>,
     prompt: &str,
     pick: Option<&str>,
     harness: HarnessId,
@@ -123,8 +123,9 @@ async fn run_on(
     let chat = uuid::Uuid::new_v4().to_string();
     core.doc_host.open(&chat).unwrap();
     let (_, mut events) = core.sessions.subscribe(&chat, 0).unwrap();
+    let mode = mode.into();
     let request: RunRequest = serde_json::from_value(
-        serde_json::json!({"cwd":cwd,"sandbox":mode,"prompt":prompt,"autoApprove":true}),
+        serde_json::json!({"cwd":cwd,"sandbox":mode.sandbox,"plan":mode.plan,"prompt":prompt,"autoApprove":true}),
     )
     .unwrap();
     core.sessions
@@ -159,7 +160,9 @@ async fn run_on(
                     assert_eq!(display.action.detail(), "cargo test");
                     assert_eq!(
                         display.persistent_allowed,
-                        prompt != "forced" && prompt != "reserved" && mode != SandboxLevel::Auto
+                        prompt != "forced"
+                            && prompt != "reserved"
+                            && mode.sandbox != SandboxLevel::Auto
                     );
                 }
                 options.push(questions[0].options.clone());
@@ -211,7 +214,7 @@ async fn project_grant_saved_from_prompt_survives_engine_restart_and_read_only_w
     let (prompts, replies, _) = run(&core, cwd, SandboxLevel::WorkspaceWrite, "tool", None).await;
     assert_eq!(prompts, 0);
     assert_eq!(replies, ["Yes", "Yes"]);
-    let (prompts, replies, _) = run(&core, cwd, SandboxLevel::ReadOnly, "tool", None).await;
+    let (prompts, replies, _) = run(&core, cwd, RunPosture::PLAN, "tool", None).await;
     assert_eq!(prompts, 0);
     assert_eq!(replies, ["No", "No"]);
 }

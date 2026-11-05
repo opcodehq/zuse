@@ -38,6 +38,7 @@ fn harness() -> ClaudeHarness {
 
 fn request(prompt: &str) -> RunRequest {
     RunRequest {
+        plan: false,
         mcp: None,
         prompt: prompt.into(),
         harness: None,
@@ -1480,7 +1481,14 @@ async fn a_stopped_turn_keeps_the_process_and_its_background_work() {
 async fn access_policy_preserves_sandbox_and_routes_only_explicit_approvals() {
     use std::sync::atomic::{AtomicUsize, Ordering};
     for (profile, sandbox, auto_approve, answer, prompts) in [
-        ("readonly deny", SandboxLevel::ReadOnly, true, "Yes", 0),
+        // Plan mode keeps the agent read only even under full access.
+        (
+            "readonly deny",
+            SandboxLevel::DangerFullAccess,
+            true,
+            "Yes",
+            0,
+        ),
         ("workspace", SandboxLevel::WorkspaceWrite, true, "Yes", 1),
         (
             "workspace deny",
@@ -1509,6 +1517,7 @@ async fn access_policy_preserves_sandbox_and_routes_only_explicit_approvals() {
         let mut request = request(&format!("scenario:access-policy {profile}"));
         request.sandbox = sandbox;
         request.auto_approve = auto_approve;
+        request.plan = profile.starts_with("readonly");
         let events = run_to_end(&harness(), request, control).await;
         assert!(
             events.iter().any(|event| matches!(
@@ -1539,7 +1548,7 @@ fn changing_access_posture_requires_a_new_runtime() {
     let mut before = request("before");
     before.sandbox = SandboxLevel::DangerFullAccess;
     let mut after = before.clone();
-    after.sandbox = SandboxLevel::ReadOnly;
+    after.plan = true;
     assert!(!harness().same_runtime(&before, &after));
     assert!(!harness().reconfigures_in_place(&before, &after));
     // These use the same default CLI flags, but distinct permission postures.

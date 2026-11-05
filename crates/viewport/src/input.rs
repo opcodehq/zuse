@@ -9,6 +9,10 @@ pub struct Submitted {
 }
 impl EventEmitter<Submitted> for TextInput {}
 
+/// Shift+Enter in a single-line field, e.g. "previous match" in a find bar.
+pub struct ShiftSubmitted;
+impl EventEmitter<ShiftSubmitted> for TextInput {}
+
 pub struct FocusChanged;
 impl EventEmitter<FocusChanged> for TextInput {}
 pub struct Changed;
@@ -185,6 +189,11 @@ impl TextInput {
                 cx.emit(Submitted {
                     secondary: *secondary,
                 });
+            }
+            if matches!(self.editor, Editor::Single(_))
+                && matches!(event, InputEvent::PressEnter { shift: true, .. })
+            {
+                cx.emit(ShiftSubmitted);
             }
         }
         cx.notify();

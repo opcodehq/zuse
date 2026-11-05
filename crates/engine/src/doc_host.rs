@@ -5763,6 +5763,7 @@ impl DocHost {
                     && ws.chat_config(chat_id).is_none()
                 {
                     let config = zuse_protocol::ChatConfig {
+                        plan: request.plan,
                         harness,
                         model: request.model.clone(),
                         reasoning: request.reasoning,
@@ -6298,10 +6299,7 @@ impl DocHost {
                 .map(|s| s.branch.as_str())
                 .or(chat.branch.as_deref())
                 != Some(branch)
-            || !chat
-                .config
-                .as_ref()
-                .is_some_and(|c| c.sandbox != zuse_protocol::SandboxLevel::ReadOnly)
+            || !chat.config.as_ref().is_some_and(|c| !c.plan)
         {
             return Err(EngineError::Other(
                 "CI repair requires the original writable chat checkout".into(),
@@ -6345,6 +6343,7 @@ impl DocHost {
         };
         let config = chat.config;
         Some(zuse_protocol::RunRequest {
+            plan: config.as_ref().is_some_and(|c| c.plan),
             mcp: None,
             prompt: prompt.to_string(),
             harness: config.as_ref().map(|c| c.harness),

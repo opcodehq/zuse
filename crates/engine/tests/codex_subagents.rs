@@ -53,6 +53,7 @@ async fn check_persistence(
     let dir = tempfile::tempdir().unwrap();
     let (core, profile) = assemble(dir.path());
     let request = RunRequest {
+        plan: true,
         mcp: None,
         prompt: format!("scenario:{scenario}"),
         harness: None,
@@ -60,7 +61,7 @@ async fn check_persistence(
         reasoning: None,
         model_options: Default::default(),
         cwd: dir.path().display().to_string(),
-        sandbox: SandboxLevel::ReadOnly,
+        sandbox: SandboxLevel::WorkspaceWrite,
         auto_approve: true,
         attachments: vec![],
         worktree: None,

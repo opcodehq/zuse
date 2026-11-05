@@ -36,7 +36,12 @@ enum Command {
     /// Run the engine without a UI (local-only unless a saved session enables sync).
     Headless,
     /// Sign in and enable sync on the next engine start.
-    Login,
+    Login {
+        /// Print a sign-in link and paste the code back instead of opening
+        /// this machine's browser (for SSH sessions or headless machines).
+        #[arg(long)]
+        no_browser: bool,
+    },
     /// Remove the saved session and return to local-only on the next start.
     Logout,
     /// Show workspace mode, optional auth, and engine status.
@@ -249,9 +254,9 @@ fn main() -> anyhow::Result<()> {
                 engine.run().await
             })
         }
-        Some(Command::Login) => {
+        Some(Command::Login { no_browser }) => {
             let runtime = tokio::runtime::Runtime::new()?;
-            runtime.block_on(auth_cli::login(engine_config_from_env()))
+            runtime.block_on(auth_cli::login(engine_config_from_env(), no_browser))
         }
         Some(Command::Logout) => {
             let runtime = tokio::runtime::Runtime::new()?;

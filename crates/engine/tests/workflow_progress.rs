@@ -24,6 +24,7 @@ const RUN: &str = "toolu_workflow";
 
 fn run_request(prompt: &str) -> RunRequest {
     RunRequest {
+        plan: false,
         mcp: None,
         prompt: prompt.into(),
         harness: None,

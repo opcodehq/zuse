@@ -329,10 +329,21 @@ impl Identity {
             .as_i64()
             .filter(|e| *e > crate::now_ms())
             .ok_or_else(|| anyhow::anyhow!("runtime_renewal_binding_mismatch"))?;
-        boot.runtime_credential = credential.into();
-        boot.runtime_credential_expires_at = expiry;
-        self.stored.pending_renewal_id = None;
-        self.save()
+        // Memory follows disk: a failed save leaves the old credential and the
+        // pending request in place, so the renewal replays with the same id.
+        let previous_credential =
+            std::mem::replace(&mut boot.runtime_credential, credential.into());
+        let previous_expiry = std::mem::replace(&mut boot.runtime_credential_expires_at, expiry);
+        let pending = self.stored.pending_renewal_id.take();
+        if let Err(error) = self.save() {
+            if let Some(boot) = self.stored.bootstrap.as_mut() {
+                boot.runtime_credential = previous_credential;
+                boot.runtime_credential_expires_at = previous_expiry;
+            }
+            self.stored.pending_renewal_id = pending;
+            return Err(error);
+        }
+        Ok(())
     }
     pub fn open_transcript_key(&self, sealed: &str) -> Result<Zeroizing<String>> {
         use aes_gcm::{
@@ -428,4 +439,50 @@ fn digest(value: &str) -> String {
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect()
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    #[test]
+    fn a_renewal_that_cannot_be_saved_leaves_memory_matching_disk() {
+        let root = tempfile::tempdir().unwrap();
+        let binding = IdentityBinding {
+            workspace: "workspace-original".into(),
+            api_url: "https://api-rust.zuse.sh".into(),
+            incarnation: "original-storage".into(),
+            generation: 2,
+        };
+        let mut identity = Identity::open(root.path(), &binding, Some("synthetic-boot")).unwrap();
+        identity.stored.bootstrap = Some(serde_json::from_value(json!({"workspaceId":"workspace-original","zuseAccountId":"user-original","chatId":"thread-original","initialSessionId":"conversation-original","runtimeCredential":"old-bearer","runtimeGeneration":2,"gatewayEpoch":3,"runtimeCredentialExpiresAt":9999999999999i64,"gatewayUrl":"wss://api-rust.zuse.sh/v1/cloud/workspaces/workspace-original/gateway","gatewayProtocol":"zuse-workspace-rust-v1","rpcProtocol":"zuse-rpc-v1","sealedTranscriptKey":"ciphertext","runtimeStorage":{"format":"zuse-rust-engine-v1","storageIncarnationId":"original-storage"}})).unwrap());
+        let request = identity.begin_renewal().unwrap();
+        let response = json!({
+            "workspaceId": "workspace-original",
+            "requestId": request,
+            "generation": 2,
+            "gatewayEpoch": 3,
+            "runtimeCredential": "fresh-bearer",
+            "expiresAt": crate::now_ms() + 120_000,
+        });
+
+        // A directory where the identity file belongs makes the save fail.
+        let file = root.path().join(FILE);
+        std::fs::remove_file(&file).unwrap();
+        std::fs::create_dir_all(file.join("occupied")).unwrap();
+        let failed = identity.commit_renewal(&response);
+        std::fs::remove_dir_all(&file).unwrap();
+        assert!(failed.is_err());
+        let boot = identity.bootstrap().unwrap();
+        assert_eq!(boot.runtime_credential, "old-bearer");
+        assert_eq!(boot.runtime_credential_expires_at, 9999999999999);
+        // Still pending with the same id, so the renewal replays it.
+        assert_eq!(identity.begin_renewal().unwrap(), request);
+
+        identity.commit_renewal(&response).unwrap();
+        assert_eq!(
+            identity.bootstrap().unwrap().runtime_credential,
+            "fresh-bearer"
+        );
+        assert!(!identity.has_pending_renewal());
+    }
 }

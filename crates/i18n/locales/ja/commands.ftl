@@ -152,3 +152,22 @@ commands-command_group_application = アプリケーション
 commands-new_chat_without_project = プロジェクトなしで新しいチャット
 
 commands-new_chat_without_project_description = 専用の作業フォルダーで新しいチャットを開始
+
+commands-commands_no_background_tasks = 停止できるバックグラウンドタスクはありません
+commands-commands_stop_background_tasks_confirm =
+    { $count ->
+       *[other] もう一度 { $shortcut } を押すと { $count } 件のバックグラウンドタスクを停止します
+    }
+commands-commands_stopping_background_tasks =
+    { $count ->
+       *[other] { $count } 件のバックグラウンドタスクを停止しています
+    }
+commands-shortcuts_panel_title = キーボードショートカット
+commands-shortcuts_panel_description = 空のコンポーザーで ? を入力すると、いつでもこのパネルを開けます。
+commands-shortcuts_panel_chat = チャット
+commands-shortcuts_panel_triggers = コンポーザーで入力
+commands-shortcuts_panel_trigger_command = コマンドを実行
+commands-shortcuts_panel_trigger_file = ファイルをメンション
+commands-shortcuts_panel_trigger_skill = スキルを使う
+commands-shortcuts_panel_customize = 設定でショートカットを変更
+commands-shortcuts_panel_close = 閉じる

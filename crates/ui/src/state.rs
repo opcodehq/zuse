@@ -140,6 +140,11 @@ trait EngineBackend: Send + Sync {
         None
     }
     fn mode(&self) -> EngineMode;
+    /// Whether account sign-in is served by an engine on this machine, so a
+    /// browser opened here can reach its loopback callback.
+    fn signs_in_on_this_machine(&self) -> bool {
+        false
+    }
     fn remote_status(&self) -> Option<tokio::sync::watch::Receiver<remote_connection::Status>> {
         None
     }
@@ -178,6 +183,9 @@ impl EngineBackend for InProcessEngine {
     }
     fn mode(&self) -> EngineMode {
         EngineMode::InProcess
+    }
+    fn signs_in_on_this_machine(&self) -> bool {
+        true
     }
     async fn shutdown(&self) {
         self.boot_task.abort();
@@ -293,6 +301,10 @@ impl EngineBackend for RemoteEngine {
         EngineMode::Remote {
             url: self.url.clone(),
         }
+    }
+    /// The daemon behind the local IPC port.
+    fn signs_in_on_this_machine(&self) -> bool {
+        true
     }
     async fn shutdown(&self) {
         // The daemon outlives this viewport; only stop our readiness probe.
@@ -608,6 +620,11 @@ impl EngineHandle {
         self.inner.client()
     }
 
+    /// Params for `CloudAccountSignIn`: an engine on this machine signs in
+    /// through the browser's loopback redirect; a remote one uses a device code.
+    pub(crate) fn account_sign_in_params(&self) -> serde_json::Value {
+        serde_json::json!({ "browser": self.inner.signs_in_on_this_machine() })
+    }
     pub fn mode(&self) -> EngineMode {
         self.inner.mode()
     }
@@ -5707,6 +5724,7 @@ mod tests {
         let mut state = AppState::new();
         state.apply_chats(vec![chat("a", 0, None), chat("b", 1, None)]);
         let config = zuse_protocol::ChatConfig {
+            plan: false,
             harness: HarnessId::ClaudeCode,
             model: Some("claude-fable-5".into()),
             reasoning: Some(zuse_protocol::ReasoningLevel::XHigh),
@@ -5731,6 +5749,7 @@ mod tests {
         state.apply_chat_config(
             "missing",
             zuse_protocol::ChatConfig {
+                plan: false,
                 harness: HarnessId::ClaudeCode,
                 model: None,
                 reasoning: None,

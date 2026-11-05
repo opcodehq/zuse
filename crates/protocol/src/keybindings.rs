@@ -61,6 +61,22 @@ pub enum Command {
     OpenChatSwitcher,
     #[serde(rename = "search-files")]
     SearchFiles,
+    #[serde(rename = "show-shortcuts")]
+    ShowShortcuts,
+    #[serde(rename = "find-in-chat")]
+    FindInChat,
+    #[serde(rename = "open-model-picker")]
+    OpenModelPicker,
+    #[serde(rename = "cycle-reasoning-effort")]
+    CycleReasoningEffort,
+    #[serde(rename = "toggle-fast-mode")]
+    ToggleFastMode,
+    #[serde(rename = "toggle-tool-details")]
+    ToggleToolDetails,
+    #[serde(rename = "toggle-task-list")]
+    ToggleTaskList,
+    #[serde(rename = "stop-background-tasks")]
+    StopBackgroundTasks,
     #[serde(rename = "composer.submit")]
     ComposerSubmit,
     #[serde(rename = "composer.newline")]
@@ -69,13 +85,35 @@ pub enum Command {
     ComposerForceSubmit,
     #[serde(rename = "composer.togglePlanMode")]
     ComposerTogglePlanMode,
+    #[serde(rename = "composer.previousMessage")]
+    ComposerPreviousMessage,
+    #[serde(rename = "composer.nextMessage")]
+    ComposerNextMessage,
+    #[serde(rename = "composer.queueSubmit")]
+    ComposerQueueSubmit,
+    #[serde(rename = "composer.deleteToStart")]
+    ComposerDeleteToStart,
+    #[serde(rename = "composer.deleteToEnd")]
+    ComposerDeleteToEnd,
+    #[serde(rename = "composer.deleteWord")]
+    ComposerDeleteWord,
+    #[serde(rename = "composer.interrupt")]
+    ComposerInterrupt,
+    #[serde(rename = "composer.yank")]
+    ComposerYank,
+    #[serde(rename = "composer.yankPop")]
+    ComposerYankPop,
+    #[serde(rename = "composer.stash")]
+    ComposerStash,
+    #[serde(rename = "composer.searchHistory")]
+    ComposerSearchHistory,
     #[serde(rename = "editor.save")]
     EditorSave,
     #[serde(rename = "editor.annotate")]
     EditorAnnotate,
 }
 impl Command {
-    pub const ALL: [Self; 35] = [
+    pub const ALL: [Self; 54] = [
         Self::NewChat,
         Self::NewChatWithoutProject,
         Self::OpenProject,
@@ -105,15 +143,44 @@ impl Command {
         Self::FocusPrevPane,
         Self::OpenChatSwitcher,
         Self::SearchFiles,
+        Self::ShowShortcuts,
+        Self::FindInChat,
+        Self::OpenModelPicker,
+        Self::CycleReasoningEffort,
+        Self::ToggleFastMode,
+        Self::ToggleToolDetails,
+        Self::ToggleTaskList,
+        Self::StopBackgroundTasks,
         Self::ComposerSubmit,
         Self::ComposerNewline,
         Self::ComposerForceSubmit,
         Self::ComposerTogglePlanMode,
+        Self::ComposerPreviousMessage,
+        Self::ComposerNextMessage,
+        Self::ComposerQueueSubmit,
+        Self::ComposerDeleteToStart,
+        Self::ComposerDeleteToEnd,
+        Self::ComposerDeleteWord,
+        Self::ComposerInterrupt,
+        Self::ComposerYank,
+        Self::ComposerYankPop,
+        Self::ComposerStash,
+        Self::ComposerSearchHistory,
         Self::EditorSave,
         Self::EditorAnnotate,
     ];
     pub fn default_combo(self) -> &'static str {
+        self.default_combo_on(cfg!(target_os = "macos"))
+    }
+    /// The default for an explicit platform. Control+letter is free on macOS,
+    /// where Cmd is the primary modifier; elsewhere it would collide with the
+    /// Ctrl-as-primary shortcuts, so those defaults add Shift.
+    pub fn default_combo_on(self, mac: bool) -> &'static str {
         match self {
+            Self::ToggleToolDetails if mac => "ctrl-o",
+            Self::ToggleToolDetails => "mod-shift-o",
+            Self::ToggleTaskList if mac => "ctrl-t",
+            Self::ToggleTaskList => "mod-shift-t",
             Self::NewChat => "mod-n",
             Self::NewChatWithoutProject => "mod-alt-n",
             Self::OpenProject => "mod-o",
@@ -143,10 +210,27 @@ impl Command {
             Self::FocusPrevPane => "ctrl-shift-`",
             Self::OpenChatSwitcher => "mod-k",
             Self::SearchFiles => "mod-p",
+            Self::ShowShortcuts => "mod-/",
+            Self::FindInChat => "mod-f",
+            Self::OpenModelPicker => "alt-p",
+            Self::CycleReasoningEffort => "alt-t",
+            Self::ToggleFastMode => "alt-o",
+            Self::StopBackgroundTasks => "mod-shift-k",
             Self::ComposerSubmit => "enter",
             Self::ComposerNewline => "shift-enter",
             Self::ComposerForceSubmit => "mod-enter",
             Self::ComposerTogglePlanMode => "shift-tab",
+            Self::ComposerPreviousMessage => "up",
+            Self::ComposerNextMessage => "down",
+            Self::ComposerQueueSubmit => "alt-enter",
+            Self::ComposerDeleteToStart => "ctrl-u",
+            Self::ComposerDeleteToEnd => "ctrl-k",
+            Self::ComposerDeleteWord => "ctrl-backspace",
+            Self::ComposerInterrupt => "escape",
+            Self::ComposerYank => "ctrl-y",
+            Self::ComposerYankPop => "alt-y",
+            Self::ComposerStash => "ctrl-s",
+            Self::ComposerSearchHistory => "ctrl-r",
             Self::EditorSave => "mod-s",
             Self::EditorAnnotate => "mod-shift-a",
         }
@@ -182,10 +266,29 @@ impl Command {
             Self::FocusPrevPane => "Focus previous pane",
             Self::OpenChatSwitcher => "Open chat switcher",
             Self::SearchFiles => "Search files",
+            Self::ShowShortcuts => "Show keyboard shortcuts",
+            Self::FindInChat => "Find in chat",
+            Self::OpenModelPicker => "Switch model",
+            Self::CycleReasoningEffort => "Change reasoning effort",
+            Self::ToggleFastMode => "Toggle fast mode",
+            Self::ToggleToolDetails => "Expand or collapse tool details",
+            Self::ToggleTaskList => "Show or hide task list",
+            Self::StopBackgroundTasks => "Stop background tasks",
             Self::ComposerSubmit => "Send message",
             Self::ComposerNewline => "Insert newline",
             Self::ComposerForceSubmit => "Send message now",
             Self::ComposerTogglePlanMode => "Toggle plan mode",
+            Self::ComposerPreviousMessage => "Previous sent message",
+            Self::ComposerNextMessage => "Next sent message",
+            Self::ComposerQueueSubmit => "Queue message",
+            Self::ComposerDeleteToStart => "Delete to line start",
+            Self::ComposerDeleteToEnd => "Delete to line end",
+            Self::ComposerDeleteWord => "Delete previous word",
+            Self::ComposerInterrupt => "Stop agent (press twice)",
+            Self::ComposerYank => "Paste deleted text",
+            Self::ComposerYankPop => "Cycle deleted text",
+            Self::ComposerStash => "Stash draft",
+            Self::ComposerSearchHistory => "Search sent messages",
             Self::EditorSave => "Save file",
             Self::EditorAnnotate => "Annotate selection",
         }
@@ -195,7 +298,18 @@ impl Command {
             Self::ComposerSubmit
             | Self::ComposerNewline
             | Self::ComposerForceSubmit
-            | Self::ComposerTogglePlanMode => "Composer",
+            | Self::ComposerTogglePlanMode
+            | Self::ComposerPreviousMessage
+            | Self::ComposerNextMessage
+            | Self::ComposerQueueSubmit
+            | Self::ComposerDeleteToStart
+            | Self::ComposerDeleteToEnd
+            | Self::ComposerDeleteWord
+            | Self::ComposerInterrupt
+            | Self::ComposerYank
+            | Self::ComposerYankPop
+            | Self::ComposerStash
+            | Self::ComposerSearchHistory => "Composer",
             Self::EditorSave | Self::EditorAnnotate | Self::SearchFiles => "Files",
             Self::NextTab
             | Self::PrevTab
@@ -222,7 +336,18 @@ impl Command {
             Self::ComposerSubmit
             | Self::ComposerNewline
             | Self::ComposerForceSubmit
-            | Self::ComposerTogglePlanMode => Some("MessageComposer"),
+            | Self::ComposerTogglePlanMode
+            | Self::ComposerPreviousMessage
+            | Self::ComposerNextMessage
+            | Self::ComposerQueueSubmit
+            | Self::ComposerDeleteToStart
+            | Self::ComposerDeleteToEnd
+            | Self::ComposerDeleteWord
+            | Self::ComposerInterrupt
+            | Self::ComposerYank
+            | Self::ComposerYankPop
+            | Self::ComposerStash
+            | Self::ComposerSearchHistory => Some("MessageComposer"),
             Self::EditorSave | Self::EditorAnnotate => Some("Input"),
             _ => None,
         }
@@ -405,7 +530,7 @@ mod tests {
     fn all_desktop_defaults_round_trip_through_the_import_contract() {
         let rules:Vec<_>=Command::ALL.into_iter().map(|command|serde_json::json!({"key":command.default_combo().replace('-',"+"),"command":command})).collect();
         let parsed = import(&serde_json::json!({"schemaVersion":1,"rules":rules})).unwrap();
-        assert_eq!(parsed.len(), 35);
+        assert_eq!(parsed.len(), Command::ALL.len());
         for (rule, command) in parsed.iter().zip(Command::ALL) {
             assert_eq!(rule.command, command);
             assert_eq!(rule.key, command.default_combo());
@@ -428,6 +553,94 @@ mod tests {
         for invalid in ["foo &&", "foo | bar", "(foo", "1foo"] {
             assert!(evaluate_when(invalid).is_err());
         }
+    }
+    #[test]
+    fn composer_message_commands_keep_their_wire_names_and_scope() {
+        for (name, command, key) in [
+            (
+                "composer.previousMessage",
+                Command::ComposerPreviousMessage,
+                "up",
+            ),
+            ("composer.nextMessage", Command::ComposerNextMessage, "down"),
+            (
+                "composer.queueSubmit",
+                Command::ComposerQueueSubmit,
+                "alt-enter",
+            ),
+            (
+                "composer.deleteToStart",
+                Command::ComposerDeleteToStart,
+                "ctrl-u",
+            ),
+            (
+                "composer.deleteToEnd",
+                Command::ComposerDeleteToEnd,
+                "ctrl-k",
+            ),
+            (
+                "composer.deleteWord",
+                Command::ComposerDeleteWord,
+                "ctrl-backspace",
+            ),
+            ("composer.interrupt", Command::ComposerInterrupt, "escape"),
+            ("composer.yank", Command::ComposerYank, "ctrl-y"),
+            ("composer.yankPop", Command::ComposerYankPop, "alt-y"),
+            ("composer.stash", Command::ComposerStash, "ctrl-s"),
+            (
+                "composer.searchHistory",
+                Command::ComposerSearchHistory,
+                "ctrl-r",
+            ),
+        ] {
+            assert_eq!(serde_json::to_value(command).unwrap(), name);
+            assert_eq!(command.default_combo(), key);
+            assert_eq!(command.context(), Some("MessageComposer"));
+            assert_eq!(command.group(), "Composer");
+        }
+    }
+    #[test]
+    fn every_command_has_a_unique_wire_name_and_is_importable() {
+        let names: std::collections::HashSet<_> = Command::ALL
+            .iter()
+            .map(|command| serde_json::to_value(command).unwrap())
+            .collect();
+        assert_eq!(names.len(), Command::ALL.len());
+        let rules = import(&serde_json::json!({"schemaVersion":1,"rules":[
+            {"key":"mod+shift+/","command":"show-shortcuts"},
+            {"key":"alt+m","command":"open-model-picker"},
+            {"key":"ctrl+alt+k","command":"stop-background-tasks"}
+        ]}))
+        .unwrap();
+        assert_eq!(rules[0].command, Command::ShowShortcuts);
+        assert_eq!(rules[1].command, Command::OpenModelPicker);
+        assert_eq!(rules[2].command, Command::StopBackgroundTasks);
+    }
+    #[test]
+    fn chat_defaults_differ_by_platform_only_where_ctrl_would_collide() {
+        assert_eq!(Command::ToggleToolDetails.default_combo_on(true), "ctrl-o");
+        assert_eq!(
+            Command::ToggleToolDetails.default_combo_on(false),
+            "mod-shift-o"
+        );
+        assert_eq!(Command::ToggleTaskList.default_combo_on(true), "ctrl-t");
+        assert_eq!(
+            Command::ToggleTaskList.default_combo_on(false),
+            "mod-shift-t"
+        );
+        for command in [
+            Command::ShowShortcuts,
+            Command::FindInChat,
+            Command::OpenModelPicker,
+            Command::StopBackgroundTasks,
+        ] {
+            assert_eq!(
+                command.default_combo_on(true),
+                command.default_combo_on(false)
+            );
+        }
+        assert_eq!(Command::ShowShortcuts.default_combo(), "mod-/");
+        assert_eq!(Command::OpenModelPicker.default_combo(), "alt-p");
     }
     #[test]
     fn invalid_command_and_file_versions_are_rejected() {

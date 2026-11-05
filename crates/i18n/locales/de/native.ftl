@@ -340,6 +340,45 @@ native-stop_agent_with_escape = Agent mit Escape stoppen
 native-stop_active_agent_with_escape = Aktiven Agenten mit Escape stoppen
 
 # Context: application-owned interface text; do not translate paths or product names.
+native-direct_steer = Direkt steuern
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-direct_steer_description = Enter sendet sofort an einen laufenden Agenten. Alt+Enter reiht immer ein.
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-steer_message = Nachricht zum Steuern senden
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-press_esc_again_to_clear = Zum Leeren erneut Esc drücken
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-draft_stashed = Entwurf zurückgelegt
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-stashed_drafts = Zurückgelegte Entwürfe
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-nothing_stashed = Noch nichts zurückgelegt
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-search_sent_messages = Gesendete Nachrichten durchsuchen…
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-sent_messages = Gesendete Nachrichten
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-no_matching_messages = Keine passenden Nachrichten
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-nothing_to_search = Noch keine gesendeten Nachrichten
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-remove_attachments_before_stashing = Entferne die Anhänge, bevor du diesen Entwurf zurücklegst.
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-emoji = Emoji
+
+# Context: application-owned interface text; do not translate paths or product names.
 native-open_pull_requests_in = Pull Requests öffnen in
 
 # Context: application-owned interface text; do not translate paths or product names.
@@ -1138,3 +1177,42 @@ native-local_workspace = Lokaler Arbeitsbereich
 
 # Context: new-chat landing screen and local account status.
 native-no_messages_archived = Keine Nachrichten in diesem archivierten Chat.
+
+# Labels for conversation and composer keyboard commands.
+native-shortcut_previous_message = Vorherige gesendete Nachricht
+native-shortcut_next_message = Nächste gesendete Nachricht
+native-shortcut_queue_message = Nachricht einreihen
+native-shortcut_delete_line_start = Bis zum Zeilenanfang löschen
+native-shortcut_delete_line_end = Bis zum Zeilenende löschen
+native-shortcut_delete_word = Vorheriges Wort löschen
+native-shortcut_stop_agent = Agent anhalten (zweimal drücken)
+native-shortcut_show_shortcuts = Tastenkürzel
+native-shortcut_find_in_chat = Im Chat suchen
+native-shortcut_model_picker = Modellauswahl öffnen
+native-shortcut_reasoning = Denkaufwand wechseln
+native-shortcut_fast_mode = Schnellmodus umschalten
+native-shortcut_tool_details = Werkzeugdetails ein-/ausklappen
+native-shortcut_task_list = Aufgabenliste umschalten
+native-shortcut_stop_background = Hintergrundaufgaben anhalten
+native-shortcut_yank = Gelöschten Text einfügen
+native-shortcut_yank_pop = Gelöschte Texte durchgehen
+native-shortcut_stash = Entwurf zurücklegen
+native-shortcut_history = Gesendete Nachrichten durchsuchen
+
+# Context: composer add menu and plan mode toggle.
+native-composer_add_to_message = Zur Nachricht hinzufügen
+
+# Context: composer add menu and plan mode toggle.
+native-composer_attach_images = Bilder anhängen
+
+# Context: composer add menu and plan mode toggle.
+native-composer_plan_mode_description = Prüft und schlägt vor, ohne Dateien zu ändern.
+
+# Context: composer add menu and plan mode toggle.
+native-composer_plan_mode_unavailable = Für diesen Agenten nicht verfügbar
+
+# Context: composer add menu and plan mode toggle.
+native-composer_plan_chip = Plan
+
+# Context: composer add menu and plan mode toggle.
+native-composer_cloud_plan_unavailable = Der Planmodus ist für Cloud-Starts nicht verfügbar. Schalten Sie ihn vor dem Start aus.

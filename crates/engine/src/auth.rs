@@ -514,6 +514,44 @@ impl Auth {
         Ok(self.begin_sign_in(&format!("http://127.0.0.1:{port}/callback")))
     }
 
+    /// Begin a headed sign-in and hand the authorize URL to `open` (normally
+    /// [`open_browser`]). `None` means the browser route is unavailable — the
+    /// loopback listener could not bind, its redirect was rejected, or nothing
+    /// opened the URL — and the
+    /// caller should fall back to [`Self::start_headless_sign_in`]. On `Some`,
+    /// completion arrives through [`Self::watch_state`] once the browser
+    /// returns to the loopback callback.
+    pub async fn start_browser_sign_in(&self, open: impl FnOnce(&str) -> bool) -> Option<String> {
+        let url = match self.start_sign_in().await {
+            Ok(url) if !url.is_empty() => url,
+            Ok(_) => return None,
+            Err(err) => {
+                tracing::info!(error = %err, "auth: browser sign-in unavailable");
+                return None;
+            }
+        };
+        let state = reqwest::Url::parse(&url)
+            .ok()?
+            .query_pairs()
+            .find(|(key, _)| key == "state")
+            .map(|(_, value)| value.into_owned())?;
+        if loopback_redirect_rejected(&url).await {
+            self.take_pending(&state);
+            tracing::info!("auth: loopback redirect rejected; using paste-code sign-in");
+            return None;
+        }
+        // Signing out while the probe was in flight invalidates this attempt.
+        if !lock(&self.inner.sign_in).pending.contains_key(&state) {
+            return None;
+        }
+        if open(&url) {
+            Some(url)
+        } else {
+            self.take_pending(&state);
+            None
+        }
+    }
+
     /// Begin a headless sign-in: the redirect is the edge's hosted paste-code page —
     /// nothing ever redirects to this machine, so the browser can be anywhere.
     pub fn start_headless_sign_in(&self) -> String {
@@ -1037,6 +1075,97 @@ impl Auth {
         tokio::spawn(loopback_loop(listener, weak));
         tracing::info!(port, "auth: sign-in callback listening");
         Ok(port)
+    }
+}
+
+/// How an interactive terminal sign-in reaches WorkOS.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TerminalSignIn {
+    /// Open this machine's browser; AuthKit redirects back to the loopback callback.
+    Browser,
+    /// Print the URL; the edge's hosted page shows a code to paste back here.
+    PasteCode,
+}
+
+impl TerminalSignIn {
+    /// The route for this process: paste-code when asked (`--no-browser` or
+    /// `ZUSE_NO_BROWSER`), over SSH, or without a graphical session.
+    pub fn detect(no_browser: bool) -> Self {
+        Self::for_environment(no_browser, std::env::consts::OS, |name| {
+            std::env::var_os(name).is_some_and(|value| !value.is_empty())
+        })
+    }
+
+    /// [`Self::detect`] over an explicit OS name and environment lookup.
+    pub fn for_environment(no_browser: bool, os: &str, set: impl Fn(&str) -> bool) -> Self {
+        let remote = ["SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY"]
+            .into_iter()
+            .any(&set);
+        // macOS and Windows always have a desktop session for a local user;
+        // elsewhere a browser needs an X11 or Wayland display.
+        let display = matches!(os, "macos" | "windows") || set("DISPLAY") || set("WAYLAND_DISPLAY");
+        if no_browser || set("ZUSE_NO_BROWSER") || remote || !display {
+            Self::PasteCode
+        } else {
+            Self::Browser
+        }
+    }
+}
+
+/// WorkOS reports an unregistered callback using this explicit error redirect.
+/// Probe without following it, so the browser never opens a dead-end error page.
+/// Network failures leave the normal browser route available to the user's browser.
+pub(crate) async fn loopback_redirect_rejected(url: &str) -> bool {
+    let Ok(client) = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(5))
+        .build()
+    else {
+        return false;
+    };
+    let Ok(response) = client.get(url).send().await else {
+        return false;
+    };
+    if !response.status().is_redirection() {
+        return false;
+    }
+    response
+        .headers()
+        .get(reqwest::header::LOCATION)
+        .and_then(|location| location.to_str().ok())
+        .and_then(|location| reqwest::Url::parse(location).ok())
+        .is_some_and(|location| {
+            location.host_str() == Some("error.workos.com")
+                && location.path() == "/redirect-uri-invalid"
+        })
+}
+
+/// Open `url` in the user's default browser. `false` when no opener could start.
+pub fn open_browser(url: &str) -> bool {
+    let mut command = if cfg!(target_os = "macos") {
+        std::process::Command::new("open")
+    } else if cfg!(windows) {
+        let mut command = std::process::Command::new("rundll32");
+        command.arg("url.dll,FileProtocolHandler");
+        command
+    } else {
+        std::process::Command::new("xdg-open")
+    };
+    command
+        .arg(url)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    match command.spawn() {
+        Ok(mut child) => {
+            // Reap the opener without blocking sign-in on it.
+            std::thread::spawn(move || child.wait());
+            true
+        }
+        Err(err) => {
+            tracing::info!(error = %err, "auth: could not open a browser");
+            false
+        }
     }
 }
 

@@ -340,6 +340,45 @@ native-stop_agent_with_escape = 按 Escape 停止智能体
 native-stop_active_agent_with_escape = 按 Escape 停止活动智能体
 
 # Context: application-owned interface text; do not translate paths or product names.
+native-direct_steer = 直接引导
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-direct_steer_description = 按 Enter 立即发送给正在运行的智能体。Alt+Enter 始终加入队列。
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-steer_message = 发送消息以引导
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-press_esc_again_to_clear = 再按一次 Esc 清除
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-draft_stashed = 草稿已暂存
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-stashed_drafts = 暂存的草稿
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-nothing_stashed = 尚无暂存内容
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-search_sent_messages = 搜索已发送的消息…
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-sent_messages = 已发送的消息
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-no_matching_messages = 没有匹配的消息
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-nothing_to_search = 还没有已发送的消息
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-remove_attachments_before_stashing = 暂存此草稿前请先移除附件。
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-emoji = 表情符号
+
+# Context: application-owned interface text; do not translate paths or product names.
 native-open_pull_requests_in = 打开拉取请求的位置
 
 # Context: application-owned interface text; do not translate paths or product names.
@@ -1051,7 +1090,7 @@ native-read_saved_conversations_or_restore_them_to_your_workspace = 阅读已保
 native-cloud_workspaces_beta = 云端工作区（测试版）
 
 # Context: application-owned interface text; do not translate paths or product names.
-native-no_other_computers_yet = 尚无其他计算机
+native-no_other_computers_yet = 还没有其他电脑
 
 # Context: application-owned interface text; do not translate paths or product names.
 native-cloud_workspaces = 云端工作区
@@ -1138,3 +1177,42 @@ native-local_workspace = 本地工作区
 
 # Context: new-chat landing screen and local account status.
 native-no_messages_archived = 此归档聊天中没有消息。
+
+# Labels for conversation and composer keyboard commands.
+native-shortcut_previous_message = 上一条已发送消息
+native-shortcut_next_message = 下一条已发送消息
+native-shortcut_queue_message = 将消息加入队列
+native-shortcut_delete_line_start = 删除到行首
+native-shortcut_delete_line_end = 删除到行尾
+native-shortcut_delete_word = 删除前一个词
+native-shortcut_stop_agent = 停止智能体（按两次）
+native-shortcut_show_shortcuts = 键盘快捷键
+native-shortcut_find_in_chat = 在聊天中查找
+native-shortcut_model_picker = 打开模型选择器
+native-shortcut_reasoning = 切换推理强度
+native-shortcut_fast_mode = 切换快速模式
+native-shortcut_tool_details = 展开或折叠工具详情
+native-shortcut_task_list = 切换任务列表
+native-shortcut_stop_background = 停止后台任务
+native-shortcut_yank = 粘贴已删除的文本
+native-shortcut_yank_pop = 循环切换已删除的文本
+native-shortcut_stash = 暂存草稿
+native-shortcut_history = 搜索已发送消息
+
+# Context: composer add menu and plan mode toggle.
+native-composer_add_to_message = 添加到消息
+
+# Context: composer add menu and plan mode toggle.
+native-composer_attach_images = 附加图片
+
+# Context: composer add menu and plan mode toggle.
+native-composer_plan_mode_description = 检查并提出方案，不修改文件。
+
+# Context: composer add menu and plan mode toggle.
+native-composer_plan_mode_unavailable = 此智能体不可用
+
+# Context: composer add menu and plan mode toggle.
+native-composer_plan_chip = 计划
+
+# Context: composer add menu and plan mode toggle.
+native-composer_cloud_plan_unavailable = 云端启动不支持计划模式。请在开始前将其关闭。

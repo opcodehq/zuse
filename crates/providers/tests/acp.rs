@@ -37,6 +37,7 @@ fn harness() -> AcpHarness {
 
 fn request(prompt: &str) -> RunRequest {
     RunRequest {
+        plan: false,
         mcp: None,
         prompt: prompt.into(),
         harness: None,
@@ -2583,7 +2584,7 @@ async fn access_modes_and_permissions_preserve_posture_and_session_ownership() {
     for (profile, sandbox, auto_approve, answer, count) in [
         (
             "readonly",
-            SandboxLevel::ReadOnly,
+            SandboxLevel::DangerFullAccess,
             true,
             Some("Allow once"),
             0,
@@ -2669,6 +2670,7 @@ async fn access_modes_and_permissions_preserve_posture_and_session_ownership() {
         let mut req = request(&format!("access-policy {profile}"));
         req.sandbox = sandbox;
         req.auto_approve = auto_approve;
+        req.plan = profile == "readonly";
         let events = run_to_end(&agent, req, ctl).await;
         assert_eq!(
             dones(&events),
@@ -2682,13 +2684,14 @@ async fn access_modes_and_permissions_preserve_posture_and_session_ownership() {
 #[test]
 fn access_posture_changes_do_not_reuse_or_reconfigure_an_acp_runtime() {
     let before = request("before");
-    for (sandbox, auto_approve) in [
-        (SandboxLevel::ReadOnly, true),
-        (SandboxLevel::WorkspaceWrite, true),
-        (SandboxLevel::DangerFullAccess, false),
+    for (sandbox, plan, auto_approve) in [
+        (before.sandbox, true, before.auto_approve),
+        (SandboxLevel::WorkspaceWrite, false, true),
+        (SandboxLevel::DangerFullAccess, false, false),
     ] {
         let mut after = before.clone();
         after.sandbox = sandbox;
+        after.plan = plan;
         after.auto_approve = auto_approve;
         assert!(!harness().same_runtime(&before, &after));
         assert!(!harness().reconfigures_in_place(&before, &after));
@@ -2709,7 +2712,7 @@ async fn access_mode_rejection_stops_before_sending_the_prompt() {
     let (mut ctl, _steer, _token) = controls();
     ctl.request_input = Box::new(|_| panic!("A rejected mode must not start tool execution"));
     let mut req = request("access-policy readonly");
-    req.sandbox = SandboxLevel::ReadOnly;
+    req.plan = true;
     let events = run_to_end(&AcpHarness::grok().with_executable(peer), req, ctl).await;
     assert!(
         dones(&events)

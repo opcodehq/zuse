@@ -2559,6 +2559,9 @@ chat-voice_error_recorder_failed = Recording stopped unexpectedly. Try again.
 # Source key: chat:voice_error_no_speech
 chat-voice_error_no_speech = No speech was detected. Try again.
 
+# Source key: chat:voice_error_no_audio
+chat-voice_error_no_audio = No audio reached Zuse from your microphone. Check your input device in Settings, then try again.
+
 # Source key: chat:voice_error_transcription_failed
 chat-voice_error_transcription_failed = Couldn't transcribe your recording. Check your connection and try again.
 
@@ -2801,3 +2804,98 @@ chat-review_guide_file_count-plural =
        [one] { $count }{ " " }file
        *[other] { $count }{ " " }files
     }
+
+# Tool group headers: the running call's label, then a per-kind summary.
+chat-tool_activity_running_command = Running command…
+chat-tool_activity_reading = Reading files…
+chat-tool_activity_searching_files = Searching files…
+chat-tool_activity_editing = Editing files…
+chat-tool_activity_writing = Writing files…
+chat-tool_activity_searching_web = Searching the web…
+chat-tool_activity_fetching = Fetching page…
+# Variables: tool
+chat-tool_activity_using = Using { $tool }…
+chat-tool_group_thinking = Thinking
+# Variables: running, total
+chat-tool_group_agents_running = { $running } of { $total } running
+chat-tool_activity_summary_separator = { ", " }
+chat-tool_group_status_separator = { " · " }
+# Variables: count
+chat-tool_activity_summary_commands =
+    { $count ->
+       [one] ran { $count } command
+       *[other] ran { $count } commands
+    }
+# Variables: count
+chat-tool_activity_summary_reads =
+    { $count ->
+       [one] read { $count } file
+       *[other] read { $count } files
+    }
+# Variables: count
+chat-tool_activity_summary_searches =
+    { $count ->
+       [one] ran { $count } search
+       *[other] ran { $count } searches
+    }
+# Variables: count
+chat-tool_activity_summary_edits =
+    { $count ->
+       [one] made { $count } edit
+       *[other] made { $count } edits
+    }
+# Variables: count
+chat-tool_activity_summary_writes =
+    { $count ->
+       [one] wrote { $count } file
+       *[other] wrote { $count } files
+    }
+# Variables: count
+chat-tool_activity_summary_web_searches =
+    { $count ->
+       [one] ran { $count } web search
+       *[other] ran { $count } web searches
+    }
+# Variables: count
+chat-tool_activity_summary_fetches =
+    { $count ->
+       [one] fetched { $count } page
+       *[other] fetched { $count } pages
+    }
+# Variables: count
+chat-tool_activity_summary_tools =
+    { $count ->
+       [one] used { $count } tool
+       *[other] used { $count } tools
+    }
+# Variables: count
+chat-tool_group_failed = { $count } failed
+# Variables: count
+chat-tool_group_agents_done = { $count } done
+# Variables: count
+chat-tool_group_notes =
+    { $count ->
+       [one] Wrote a note
+       *[other] Wrote { $count } notes
+    }
+
+chat-find_in_chat_placeholder = Find in chat
+chat-find_in_chat_count = { $current } of { $total }
+chat-find_in_chat_no_results = No results
+chat-find_in_chat_previous = Previous match
+chat-find_in_chat_next = Next match
+chat-find_in_chat_close = Close find
+
+chat-history_search_results = Sent messages
+chat-history_search_no_results = No matches
+chat-stash_title = Stash
+chat-stash_open = Stashed prompts: { $count }. Open stash.
+chat-stash_list = Stashed prompts
+chat-stash_empty = Nothing stashed yet. Press { $shortcut } with a draft to stash it.
+chat-stash_delete = Delete stashed prompt
+chat-history_search_empty = No messages sent in this chat yet.
+chat-history_search_title = Searching sent messages
+chat-history_search_use = use
+chat-history_search_cancel = cancel
+chat-stash_saved_notice = Draft stashed · <part0>{ $shortcut }</part0> to view
+chat-chat_composer_press_esc_again_to_clear = Press <part0>Esc</part0> again to clear

@@ -294,15 +294,11 @@ impl Composer {
                         }))
                     })
                 };
-                // The three postures, then read only below a hairline: it
-                // restricts rather than grants, so it sits apart.
-                let mut rows: Vec<gpui::AnyElement> = Vec::with_capacity(LEVELS.len() + 1);
-                for (index, level) in LEVELS.into_iter().enumerate() {
-                    if level == SandboxLevel::ReadOnly {
-                        rows.push(popover::menu_separator().into_any_element());
-                    }
-                    rows.push(row(index, level).into_any_element());
-                }
+                // Plan mode is not an access level; it lives in the `+` menu.
+                let rows = LEVELS
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, level)| row(index, level).into_any_element());
                 let menu = popover::popover_card(&popup_theme)
                     .id("composer-permission-menu")
                     .role(Role::ListBox)
@@ -404,12 +400,7 @@ mod tests {
     fn approve_for_me_needs_an_automatic_approver() {
         assert_eq!(
             LEVELS.map(label),
-            [
-                "Ask for approval",
-                "Approve for me",
-                "Full access",
-                "Read only"
-            ]
+            ["Ask for approval", "Approve for me", "Full access"]
         );
         for harness in [HarnessId::Codex, HarnessId::ClaudeCode] {
             assert_eq!(unavailable(SandboxLevel::Auto, Some(&harness)), None);
@@ -448,13 +439,13 @@ mod tests {
                 composer.state.update(cx, |state, cx| {
                     state.chats = vec![
                         serde_json::from_value(serde_json::json!({
-                            "id":"readonly", "deviceId":"local", "archived":false,
+                            "id":"saved", "deviceId":"local", "archived":false,
                             "createdAt":"2026-01-01T00:00:00Z",
-                            "config":{"harness":"codex","sandbox":"read-only"}
+                            "config":{"harness":"codex","sandbox":"auto"}
                         }))
                         .unwrap(),
                     ];
-                    state.selected_chat = Some("readonly".into());
+                    state.selected_chat = Some("saved".into());
                     cx.notify();
                 });
             })
@@ -464,12 +455,12 @@ mod tests {
             .update(cx, |composer, window, cx| {
                 assert_eq!(
                     composer.pickers.read(cx).resolved(cx).sandbox,
-                    SandboxLevel::ReadOnly
+                    SandboxLevel::Auto
                 );
                 composer.choose_permission(SandboxLevel::DangerFullAccess, window, cx);
                 assert_eq!(
                     composer.pickers.read(cx).resolved(cx).sandbox,
-                    SandboxLevel::ReadOnly
+                    SandboxLevel::Auto
                 );
                 assert!(
                     composer
@@ -478,7 +469,7 @@ mod tests {
                         .unwrap()
                         .contains("Connect to the execution host")
                 );
-                assert_eq!(composer.failure_key.as_deref(), Some("readonly"));
+                assert_eq!(composer.failure_key.as_deref(), Some("saved"));
                 composer.state.update(cx, |state, cx| {
                     state.selected_chat = None;
                     cx.notify();

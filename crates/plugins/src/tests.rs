@@ -114,8 +114,13 @@ impl Fixture {
                             else if route.ends_with("/plugins/tools") {json!({"workspace":workspace,"arguments":body["arguments"]})}
                             else if body["action"]=="list" {json!({"kind":"snapshot","tenantId":if workspace=="organization:wrong"{"personal:user"}else{body["tenantId"].as_str().unwrap_or("personal:user")},"tenants":[],"endpoint":"unused","catalog":[],"connections":[]})}
                             else {json!({"kind":"ok"})};
-                            let json=serde_json::to_string(&result).unwrap();
-                            let response=format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",json.len(),json);
+                            let (status,json)=match body["address"].as_str() {
+                                Some("unreachable")=>("400 Bad Request",json!({"error":"plugin_unreachable"}).to_string()),
+                                Some("odd-code")=>("400 Bad Request",json!({"error":"Not A Code"}).to_string()),
+                                Some("gateway")=>("502 Bad Gateway","<html>gateway</html>".to_owned()),
+                                _=>("200 OK",serde_json::to_string(&result).unwrap()),
+                            };
+                            let response=format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",json.len(),json);
                             let _=stream.write_all(response.as_bytes()).await;let _=stream.shutdown().await;
                         });
                     },
@@ -292,4 +297,49 @@ async fn in_flight_account_switch_and_cancellation_never_publish_or_replay() {
     assert!(matches!(run.await.unwrap(), Err(PluginError::Cancelled)));
     f.server.release.notify_one();
     assert_eq!(f.server.requests.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn rejected_requests_keep_the_api_error_code() {
+    let f = Fixture::new().await;
+    let cancel = CancellationToken::new();
+    for (address, expected) in [
+        ("unreachable", "plugin_unreachable"),
+        ("odd-code", "http_400"),
+        ("gateway", "http_502"),
+    ] {
+        let call = PluginToolRequest::Call {
+            address: address.into(),
+            arguments: Default::default(),
+        };
+        let error = f
+            .client
+            .tools_in_tenant("personal:user", &call, true, &cancel)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&error, PluginError::Rejected { code, .. } if code == expected),
+            "{address}: {error:?}"
+        );
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "Plugin request failed ({expected}). Check Plugins in the workspace this chat belongs to."
+            )
+        );
+    }
+}
+
+#[test]
+fn rejection_code_accepts_only_short_snake_case_codes() {
+    assert_eq!(
+        rejection_code(400, br#"{"error":"plugin_unreachable"}"#),
+        "plugin_unreachable"
+    );
+    assert_eq!(rejection_code(400, br#"{"error":"Bad-Code"}"#), "http_400");
+    assert_eq!(rejection_code(400, br#"{"error":7}"#), "http_400");
+    let long = format!(r#"{{"error":"{}"}}"#, "a".repeat(65));
+    assert_eq!(rejection_code(403, long.as_bytes()), "http_403");
+    assert_eq!(rejection_code(502, b"<html>gateway</html>"), "http_502");
+    assert_eq!(rejection_code(500, b""), "http_500");
 }

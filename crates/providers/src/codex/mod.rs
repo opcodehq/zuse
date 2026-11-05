@@ -695,6 +695,7 @@ impl Harness for CodexHarness {
     fn same_runtime(&self, live: &RunRequest, next: &RunRequest) -> bool {
         live.cwd == next.cwd
             && live.sandbox == next.sandbox
+            && live.plan == next.plan
             && live.model == next.model
             && to_effort(live.reasoning) == to_effort(next.reasoning)
             && service_tier(live) == service_tier(next)
@@ -707,6 +708,7 @@ impl Harness for CodexHarness {
     fn reconfigures_in_place(&self, live: &RunRequest, next: &RunRequest) -> bool {
         live.cwd == next.cwd
             && live.sandbox == next.sandbox
+            && live.plan == next.plan
             && live.auto_approve == next.auto_approve
             && (next.model.is_some() || live.model.is_none())
             && (to_effort(next.reasoning).is_some() || to_effort(live.reasoning).is_none())
@@ -831,7 +833,7 @@ impl CodexHarness {
                 .map_err(HarnessError::Io)?,
         );
         if title_only {
-            request.sandbox = zuse_protocol::SandboxLevel::ReadOnly;
+            request.plan = true;
         }
         let mut cmd = Command::new(&exe);
         cmd.arg("app-server");
@@ -1167,10 +1169,13 @@ async fn run_session(session: Session) {
             overrides.extend(codex_mcp_overrides(mcp));
         }
         p.insert("approvalPolicy".into(), approval_policy.into());
-        if let Some(reviewer) = approvals_reviewer(request.sandbox) {
+        if let Some(reviewer) = approvals_reviewer(request.sandbox, request.plan) {
             p.insert("approvalsReviewer".into(), reviewer.into());
         }
-        p.insert("sandbox".into(), sandbox_mode(request.sandbox).into());
+        p.insert(
+            "sandbox".into(),
+            sandbox_mode(request.sandbox, request.plan).into(),
+        );
         if let Some(model) = &request.model {
             p.insert("model".into(), Value::String(model.clone()));
         }
@@ -1296,10 +1301,13 @@ async fn run_session(session: Session) {
         p.insert("threadId".into(), Value::String(thread_id.clone()));
         p.insert("input".into(), prompt_input(text));
         p.insert("approvalPolicy".into(), policy_for(live).into());
-        if let Some(reviewer) = approvals_reviewer(live.sandbox) {
+        if let Some(reviewer) = approvals_reviewer(live.sandbox, live.plan) {
             p.insert("approvalsReviewer".into(), reviewer.into());
         }
-        p.insert("sandboxPolicy".into(), sandbox_policy_value(live.sandbox));
+        p.insert(
+            "sandboxPolicy".into(),
+            sandbox_policy_value(live.sandbox, live.plan),
+        );
         // Reasoning summaries stream (`item/reasoning/summaryTextDelta`) only
         // when asked for — without this codex "thinks" in silence for minutes:
         // nothing renders and the UI's 45s staleness gate flips Working off
@@ -1823,7 +1831,7 @@ async fn run_session(session: Session) {
                         &method,
                         &params,
                         live.auto_approves_tools(),
-                        live.sandbox,
+                        live.plan,
                         &request_input,
                     );
                 }
@@ -2117,7 +2125,7 @@ type RequestInputFn = Box<
 >;
 
 fn policy_for(request: &RunRequest) -> &'static str {
-    if request.sandbox == zuse_protocol::SandboxLevel::ReadOnly || request.auto_approves_tools() {
+    if request.plan || request.auto_approves_tools() {
         "never"
     } else {
         "on-request"
@@ -2127,7 +2135,7 @@ fn policy_for(request: &RunRequest) -> &'static str {
 /// Serve one server→client request. Approval requests round-trip through
 /// `request_input` as a synthesized yes/no question (in a subtask so the
 /// message loop keeps flowing); with `auto_approve` they're accepted outright
-/// when paired with full access. Read-only declines escalations. Anything else is
+/// when paired with full access. Plan mode declines escalations. Anything else is
 /// rejected as unsupported so the server never wedges awaiting a reply.
 fn handle_server_request(
     client: &RpcClient,
@@ -2135,7 +2143,7 @@ fn handle_server_request(
     method: &str,
     params: &Value,
     auto_approve: bool,
-    sandbox: zuse_protocol::SandboxLevel,
+    plan: bool,
     request_input: &Arc<RequestInputFn>,
 ) {
     // A tool's user-input request (EXPERIMENTAL, codex 0.146.x) is a CONTENT
@@ -2177,11 +2185,11 @@ fn handle_server_request(
         client.respond_error(&id, -32601, &format!("unsupported method: {method}"));
         return;
     }
-    if sandbox == zuse_protocol::SandboxLevel::ReadOnly {
+    if plan {
         client.respond(&id, json!({ "decision": "decline" }));
         return;
     }
-    if auto_approve && sandbox == zuse_protocol::SandboxLevel::DangerFullAccess {
+    if auto_approve {
         client.respond(&id, json!({ "decision": "accept" }));
         return;
     }
@@ -2394,6 +2402,8 @@ fn background_commands(
             id: id.clone(),
             kind: zuse_protocol::BackgroundTaskKind::Shell,
             description: command.command.clone(),
+            // The description is already the command line.
+            command: None,
             stoppable: false,
         })
         .collect();
@@ -2486,8 +2496,18 @@ for line in sys.stdin:
     #[test]
     fn access_levels_map_to_codex_policy_sandbox_and_reviewer() {
         use zuse_protocol::SandboxLevel;
+        let plan: RunRequest = serde_json::from_value(
+            json!({"prompt":"","cwd":"/tmp","sandbox":"auto","autoApprove":true,"plan":true}),
+        )
+        .unwrap();
+        assert_eq!(policy_for(&plan), "never");
+        assert_eq!(sandbox_mode(plan.sandbox, true), "read-only");
+        assert_eq!(approvals_reviewer(plan.sandbox, true), None);
+        assert_eq!(
+            sandbox_policy_value(plan.sandbox, true),
+            json!({"type":"readOnly"})
+        );
         for (sandbox, auto, policy, mode, reviewer) in [
-            (SandboxLevel::ReadOnly, true, "never", "read-only", None),
             (
                 SandboxLevel::WorkspaceWrite,
                 true,
@@ -2522,11 +2542,11 @@ for line in sys.stdin:
             )
             .unwrap();
             assert_eq!(policy_for(&request), policy, "{sandbox:?}");
-            assert_eq!(sandbox_mode(sandbox), mode);
-            assert_eq!(approvals_reviewer(sandbox), reviewer);
+            assert_eq!(sandbox_mode(sandbox, false), mode);
+            assert_eq!(approvals_reviewer(sandbox, false), reviewer);
         }
         assert_eq!(
-            sandbox_policy_value(SandboxLevel::Auto),
+            sandbox_policy_value(SandboxLevel::Auto, false),
             json!({"type":"workspaceWrite","networkAccess":false})
         );
     }

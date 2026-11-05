@@ -1,8 +1,11 @@
 //! Automatic session titles from the first user prompt. Device preferences select
 //! the harness and model; restricted title drivers run outside the repository.
-//! Failures fall back to the prompt's first words. A user rename always wins.
+//! Only a parsed JSON naming reply counts: a failing provider answers in plain
+//! text ("Limit reached"), which must never become a name. The prompt's first
+//! words are the fallback, and only on the completed-turn retry. A user
+//! rename always wins.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use futures::StreamExt;
@@ -26,7 +29,32 @@ struct Inner {
     workspace: WorkspaceHost,
     registry: Arc<HarnessRegistry>,
     repos: Repos,
-    in_flight: Mutex<HashSet<String>>,
+    /// Chats being named, each with whether a completed-turn retry arrived
+    /// meanwhile (it runs, with the fallback, once the current run ends).
+    in_flight: Mutex<HashMap<String, bool>>,
+}
+
+/// What asked for a name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TitleTrigger {
+    /// The first turn started: name it from the model's reply alone, so an
+    /// unusable reply leaves the chat for the completed-turn retry.
+    TurnStarted,
+    /// A turn completed: retry, falling back to the prompt's first words.
+    TurnCompleted,
+}
+
+impl TitleTrigger {
+    fn fallback(self) -> bool {
+        self == Self::TurnCompleted
+    }
+}
+
+/// A model's naming reply.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct NamingReply {
+    title: String,
+    branch: String,
 }
 
 #[derive(Clone)]
@@ -41,36 +69,61 @@ impl TitleGenerator {
                 workspace,
                 registry,
                 repos,
-                in_flight: Mutex::new(HashSet::new()),
+                in_flight: Mutex::new(HashMap::new()),
             }),
         }
     }
 
-    /// Fire-and-forget: title `chat_id` if it's still untitled. Called by the run
-    /// task after a completed exchange; runs detached so it never delays anything.
-    pub fn maybe_generate(&self, chat_id: &str, harness: HarnessId, prompt: &str, cwd: &str) {
-        if !self
-            .inner
-            .in_flight
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(chat_id.to_string())
+    /// Fire-and-forget: title `chat_id` if it's still untitled. Called when
+    /// a turn starts and again when one completes; runs detached so it never
+    /// delays anything.
+    pub fn maybe_generate(
+        &self,
+        chat_id: &str,
+        harness: HarnessId,
+        prompt: &str,
+        cwd: &str,
+        trigger: TitleTrigger,
+    ) {
         {
-            return;
+            let mut in_flight = self
+                .inner
+                .in_flight
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(retry) = in_flight.get_mut(chat_id) {
+                *retry |= trigger.fallback();
+                return;
+            }
+            in_flight.insert(chat_id.to_string(), false);
         }
         let this = self.clone();
         let chat_id = chat_id.to_string();
         let prompt = prompt.to_string();
         let cwd = cwd.to_string();
         tokio::spawn(async move {
-            if let Err(err) = this.generate(&chat_id, harness, &prompt, &cwd).await {
-                tracing::debug!(chat = %chat_id, error = %err, "chat auto-titling skipped");
+            let mut fallback = trigger.fallback();
+            loop {
+                if let Err(err) = this
+                    .generate(&chat_id, harness, &prompt, &cwd, fallback)
+                    .await
+                {
+                    tracing::debug!(chat = %chat_id, error = %err, "chat auto-titling skipped");
+                }
+                let mut in_flight = this
+                    .inner
+                    .in_flight
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                // A completed turn arrived while a launch-time run was live:
+                // retry now with the fallback (a no-op once the chat is named).
+                if !fallback && in_flight.get(&chat_id) == Some(&true) {
+                    fallback = true;
+                    continue;
+                }
+                in_flight.remove(&chat_id);
+                break;
             }
-            this.inner
-                .in_flight
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .remove(&chat_id);
         });
     }
 
@@ -80,6 +133,7 @@ impl TitleGenerator {
         harness_id: HarnessId,
         prompt: &str,
         cwd: &str,
+        fallback: bool,
     ) -> Result<(), EngineError> {
         let chat = self
             .inner
@@ -90,20 +144,24 @@ impl TitleGenerator {
             return Ok(()); // already named
         }
 
-        let generated = self.run_title_model(harness_id, prompt, cwd).await;
-        // Fallback so a chat is always named even if the model run produced nothing.
-        let fallback: String = prompt
-            .split_whitespace()
-            .take(7)
-            .collect::<Vec<_>>()
-            .join(" ")
-            .chars()
-            .take(48)
-            .collect();
-        let title = generated.unwrap_or(fallback);
+        let reply = match self.run_title_model(harness_id, prompt, cwd).await {
+            Some(reply) => reply,
+            // A completed turn still names the chat from its request.
+            None if fallback => NamingReply {
+                title: first_words(prompt),
+                branch: String::new(),
+            },
+            None => return Ok(()),
+        };
+        let title = reply.title;
         if title.is_empty() {
             return Ok(());
         }
+        let branch_name = if reply.branch.is_empty() {
+            &title
+        } else {
+            &reply.branch
+        };
 
         // Re-read after the model call: a user may have named the chat or checked
         // out another branch while the throwaway generation was live.
@@ -124,7 +182,7 @@ impl TitleGenerator {
             match self
                 .inner
                 .repos
-                .rename_worktree_branch(std::path::Path::new(chat_cwd), branch, &title)
+                .rename_worktree_branch(std::path::Path::new(chat_cwd), branch, branch_name)
                 .await
             {
                 Ok(renamed) if &renamed != branch => {
@@ -144,13 +202,14 @@ impl TitleGenerator {
         Ok(())
     }
 
-    /// One-shot titling run: collect TextDeltas until Done; retries on failure.
+    /// One-shot titling run: collect TextDeltas until Done; retries on
+    /// failure or an unusable reply.
     async fn run_title_model(
         &self,
         harness_id: HarnessId,
         prompt: &str,
         _cwd: &str,
-    ) -> Option<String> {
+    ) -> Option<NamingReply> {
         let settings = self.inner.registry.title_settings();
         let enabled = self.inner.registry.enabled_set();
         let harness_id = settings.harness.or_else(|| {
@@ -200,6 +259,7 @@ impl TitleGenerator {
         );
         for attempt in 0..=RETRY_DELAYS_MS.len() {
             let request = RunRequest {
+                plan: true,
                 mcp: None,
                 prompt: title_prompt.clone(),
                 harness: Some(harness_id),
@@ -207,7 +267,7 @@ impl TitleGenerator {
                 reasoning: Some(ReasoningLevel::Minimal),
                 model_options: serde_json::Map::new(),
                 cwd: scratch.path().to_string_lossy().into_owned(),
-                sandbox: SandboxLevel::ReadOnly,
+                sandbox: SandboxLevel::WorkspaceWrite,
                 auto_approve: false,
                 attachments: Vec::new(),
                 resume: None,
@@ -221,10 +281,13 @@ impl TitleGenerator {
             .unwrap_or_else(|_| Err(EngineError::Other("title generation timed out".into())))
             {
                 Ok(raw) => {
-                    let candidate = clean_title(&raw);
-                    if !candidate.is_empty() {
-                        return Some(candidate);
+                    if let Some(reply) = parse_naming_reply(&raw) {
+                        return Some(reply);
                     }
+                    tracing::debug!(
+                        attempt = attempt + 1,
+                        "automatic chat title reply was not a naming object"
+                    );
                 }
                 Err(err) => {
                     tracing::warn!(attempt = attempt + 1, error = %err,
@@ -253,6 +316,46 @@ fn cheapest_model(models: &[Model]) -> Option<String> {
             .any(|tier| haystack.contains(tier))
     });
     small.or(models.last()).map(|m| m.id.clone())
+}
+
+/// The naming object in a reply. Agents sometimes wrap it in prose or a code
+/// fence, so the outermost `{…}` is parsed; anything else (plain text, an
+/// empty title) is unusable.
+fn parse_naming_reply(raw: &str) -> Option<NamingReply> {
+    #[derive(serde::Deserialize)]
+    struct Reply {
+        #[serde(default)]
+        title: Option<serde_json::Value>,
+        #[serde(default)]
+        branch: Option<serde_json::Value>,
+    }
+    let start = raw.find('{')?;
+    let end = raw.rfind('}')?;
+    let reply: Reply = serde_json::from_str(raw.get(start..=end)?).ok()?;
+    let text = |value: Option<serde_json::Value>| {
+        value
+            .as_ref()
+            .and_then(serde_json::Value::as_str)
+            .map(clean_title)
+            .unwrap_or_default()
+    };
+    let title = text(reply.title);
+    (!title.is_empty()).then(|| NamingReply {
+        title,
+        branch: text(reply.branch),
+    })
+}
+
+/// The request's first words: the completed-turn fallback name.
+fn first_words(prompt: &str) -> String {
+    prompt
+        .split_whitespace()
+        .take(7)
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(48)
+        .collect()
 }
 
 /// First line, stripped of quote/heading dressing, capped at 60 chars.
@@ -370,6 +473,7 @@ mod tests {
             ],
         };
         let request = RunRequest {
+            plan: true,
             mcp: None,
             prompt: "Title only".into(),
             harness: None,
@@ -377,7 +481,7 @@ mod tests {
             reasoning: None,
             model_options: Default::default(),
             cwd: String::new(),
-            sandbox: SandboxLevel::ReadOnly,
+            sandbox: SandboxLevel::WorkspaceWrite,
             auto_approve: false,
             resume: None,
             attachments: vec![],
@@ -392,7 +496,7 @@ mod tests {
         );
     }
 
-    struct RecordingTitleHarness(std::sync::Mutex<Vec<RunRequest>>);
+    struct RecordingTitleHarness(std::sync::Mutex<Vec<RunRequest>>, &'static str);
 
     #[async_trait::async_trait]
     impl zuse_providers::Harness for RecordingTitleHarness {
@@ -436,7 +540,7 @@ mod tests {
             self.0.lock().unwrap().push(request);
             Ok(futures::stream::iter(vec![
                 Ok(AgentEvent::TextDelta {
-                    text: "Fix Login Flow".into(),
+                    text: self.1.into(),
                 }),
                 Ok(AgentEvent::Done {
                     status: DoneStatus::Completed,
@@ -453,7 +557,10 @@ mod tests {
     async fn configured_title_harness_and_model_run_outside_the_project() {
         let dir = tempfile::tempdir().unwrap();
         let registry = Arc::new(HarnessRegistry::new());
-        let recorder = Arc::new(RecordingTitleHarness(Default::default()));
+        let recorder = Arc::new(RecordingTitleHarness(
+            Default::default(),
+            r#"{"title":"Fix Login Flow","branch":"fix-login"}"#,
+        ));
         registry.register(recorder.clone());
         let core = crate::EngineCore::assemble(dir.path(), registry.clone(), HarnessId::Mock, None)
             .unwrap();
@@ -468,9 +575,11 @@ mod tests {
         assert_eq!(
             generator
                 .run_title_model(HarnessId::Codex, prompt, &dir.path().to_string_lossy())
-                .await
-                .as_deref(),
-            Some("Fix Login Flow")
+                .await,
+            Some(NamingReply {
+                title: "Fix Login Flow".into(),
+                branch: "fix-login".into(),
+            })
         );
         {
             let requests = recorder.0.lock().unwrap();
@@ -478,7 +587,7 @@ mod tests {
             let request = &requests[0];
             assert_eq!(request.harness, Some(HarnessId::ClaudeCode));
             assert_eq!(request.model.as_deref(), Some("chosen-title-model"));
-            assert_eq!(request.sandbox, SandboxLevel::ReadOnly);
+            assert!(request.plan);
             assert!(!request.auto_approve);
             assert!(request.resume.is_none());
             assert_ne!(std::path::Path::new(&request.cwd), dir.path());
@@ -493,6 +602,79 @@ mod tests {
             );
         }
         core.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn plain_text_replies_name_a_chat_only_on_the_completed_turn_retry() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = Arc::new(HarnessRegistry::new());
+        registry.register(Arc::new(RecordingTitleHarness(
+            Default::default(),
+            "Limit reached",
+        )));
+        let core = crate::EngineCore::assemble(dir.path(), registry.clone(), HarnessId::Mock, None)
+            .unwrap();
+        registry
+            .set_title_settings(crate::registry::TitleSettings {
+                harness: Some(HarnessId::ClaudeCode),
+                model: Some("title-model".into()),
+            })
+            .unwrap();
+        core.workspace
+            .create_chat("chat-1", None, Some(&core.device_id), None, None)
+            .unwrap();
+        let generator = TitleGenerator::new(core.workspace.clone(), registry, core.repos.clone());
+        let title = || core.workspace.chat("chat-1").unwrap().unwrap().title;
+        let prompt = "please fix the login flow";
+        generator
+            .generate("chat-1", HarnessId::ClaudeCode, prompt, "", false)
+            .await
+            .unwrap();
+        assert_eq!(
+            title(),
+            None,
+            "a plain-text reply must never become a title"
+        );
+        generator
+            .generate("chat-1", HarnessId::ClaudeCode, prompt, "", true)
+            .await
+            .unwrap();
+        assert_eq!(title().as_deref(), Some(prompt));
+        core.shutdown().await;
+    }
+
+    #[test]
+    fn only_a_json_naming_reply_counts() {
+        let named = |title: &str, branch: &str| {
+            Some(NamingReply {
+                title: title.into(),
+                branch: branch.into(),
+            })
+        };
+        assert_eq!(
+            parse_naming_reply(r#"{"title":"Fix Login Flow","branch":"fix-login"}"#),
+            named("Fix Login Flow", "fix-login")
+        );
+        // Wrapped in prose or a code fence, or without a branch.
+        assert_eq!(
+            parse_naming_reply("Sure:\n```json\n{\"title\": \"Add Dark Mode\"}\n```"),
+            named("Add Dark Mode", "")
+        );
+        // A failing provider's plain text, a fragment, or an empty title.
+        assert_eq!(parse_naming_reply("Limit reached"), None);
+        assert_eq!(parse_naming_reply(r#"{"ti"#), None);
+        assert_eq!(parse_naming_reply(r#"{"title":"  ","branch":"x"}"#), None);
+        assert_eq!(parse_naming_reply(r#"{"title":7}"#), None);
+    }
+
+    #[test]
+    fn the_fallback_is_the_request_s_first_words() {
+        assert_eq!(
+            first_words("please   fix the login flow when the session expires today"),
+            "please fix the login flow when the"
+        );
+        assert!(!TitleTrigger::TurnStarted.fallback());
+        assert!(TitleTrigger::TurnCompleted.fallback());
     }
 
     #[test]

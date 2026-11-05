@@ -73,6 +73,30 @@ pub(super) fn action_row(theme: &Theme, id: impl Into<SharedString>) -> gpui::St
         .hover(move |style| style.bg(wash))
 }
 
+/// The background processes still running, oldest first.
+fn running_background(
+    tasks: Vec<zuse_protocol::BackgroundTask>,
+) -> Vec<zuse_protocol::BackgroundTask> {
+    tasks
+        .into_iter()
+        .filter(zuse_protocol::BackgroundTask::running)
+        .collect()
+}
+
+fn background_label(task: &zuse_protocol::BackgroundTask) -> SharedString {
+    match task.description.trim() {
+        "" => "Background process".into(),
+        text => text.to_owned().into(),
+    }
+}
+
+/// The command line shown under a task, unless it only repeats the label.
+fn background_command(task: &zuse_protocol::BackgroundTask) -> Option<SharedString> {
+    let command = task.command.as_deref()?.trim();
+    (!command.is_empty() && command != background_label(task).as_ref())
+        .then(|| command.to_owned().into())
+}
+
 /// A quiet sub-row under a section, indented to its labels.
 pub(super) fn sub_row(theme: &Theme) -> gpui::Div {
     div()
@@ -607,9 +631,10 @@ impl Shell {
         (row, open)
     }
 
-    /// The Background work section, folded by default: running processes
-    /// first, each with its own stop control when the runtime offers one,
-    /// then the recently ended ones with how they ended.
+    /// The Background work section, folded by default: the processes still
+    /// running, each with its own stop control when the runtime offers one
+    /// and its command line beneath. Finished processes drop out, and the
+    /// section hides once nothing runs.
     fn render_session_info_background(
         &mut self,
         chat_id: &str,
@@ -617,22 +642,20 @@ impl Shell {
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
-        if tasks.is_empty() {
-            return Vec::new();
-        }
-        let now = Utc::now();
-        let (running, ended): (Vec<_>, Vec<_>) = tasks
-            .into_iter()
-            .partition(zuse_protocol::BackgroundTask::running);
+        let running = running_background(tasks);
         // A requested stop lasts until the task leaves the live set.
         self.background_stops
             .retain(|id| running.iter().any(|task| &task.id == id));
+        if running.is_empty() {
+            return Vec::new();
+        }
+        let now = Utc::now();
         let (header, open) = self.session_info_section(
             "background",
             false,
             row_glyph(icons::SUMMARY_BACKGROUND, theme),
             "Background work",
-            (!running.is_empty()).then(|| format!("{} running", running.len()).into()),
+            Some(format!("{} running", running.len()).into()),
             theme,
             cx,
         );
@@ -641,133 +664,142 @@ impl Shell {
             return rows;
         }
         let elapsed = |task: &zuse_protocol::BackgroundTask| {
-            let end = task.ended_at.unwrap_or(now);
             SharedString::from(crate::transcript::format_elapsed(
-                end.signed_duration_since(task.started_at).num_seconds(),
+                now.signed_duration_since(task.started_at).num_seconds(),
             ))
         };
-        let label = |task: &zuse_protocol::BackgroundTask| -> SharedString {
-            let text = task.description.trim();
-            if text.is_empty() {
-                "Background process".into()
-            } else {
-                text.to_owned().into()
-            }
-        };
-        let group = |text: &'static str, action: Option<AnyElement>| {
-            sub_row(theme)
-                .min_h(px(22.0))
-                .text_size(px(11.0))
-                .text_color(theme.text_muted.opacity(0.8))
-                .child(div().flex_1().min_w_0().truncate().child(text))
-                .children(action)
-                .into_any_element()
-        };
-        if !running.is_empty() {
-            let stoppable: Vec<String> = running
-                .iter()
-                .filter(|task| task.stoppable && !self.background_stops.contains(&task.id))
-                .map(|task| task.id.clone())
-                .collect();
-            let stop_all = (stoppable.len() > 1).then(|| {
-                let chat_id = chat_id.to_owned();
+        for task in &running {
+            let stopping = self.background_stops.contains(&task.id);
+            let control: AnyElement = if stopping {
+                crate::loaders::ring_spinner(
+                    SharedString::from(format!("session-info-background-stopping-{}", task.id)),
+                    12.0,
+                    1.5,
+                    theme.text_muted.opacity(0.25),
+                    theme.text_muted,
+                )
+            } else if task.stoppable {
+                let (chat_id, id) = (chat_id.to_owned(), task.id.clone());
+                let group = SharedString::from(format!("session-info-background-stop-{}", task.id));
                 div()
-                    .id("session-info-background-stop-all")
-                    .flex_none()
+                    .id(group.clone())
+                    .group(group.clone())
+                    .size(px(16.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(4.0))
                     .cursor_pointer()
-                    .hover(|style| style.text_color(theme.text))
+                    .tooltip(crate::settings::widgets::text_tooltip("Stop"))
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        for id in &stoppable {
-                            this.stop_background_task(&chat_id, id, cx);
-                        }
+                        this.stop_background_task(&chat_id, &id, cx);
                     }))
-                    .child(tr(cx, msg::chat::background_stop_all))
-                    .into_any_element()
-            });
-            rows.push(group("Running", stop_all));
-            for task in &running {
-                let stopping = self.background_stops.contains(&task.id);
-                let control: AnyElement = if stopping {
-                    crate::loaders::ring_spinner(
-                        SharedString::from(format!("session-info-background-stopping-{}", task.id)),
-                        12.0,
-                        1.5,
-                        theme.text_muted.opacity(0.25),
-                        theme.text_muted,
+                    // A filled square: the stop mark, unmistakable at
+                    // this size where an outlined one reads as a checkbox.
+                    .child(
+                        div()
+                            .size(px(8.0))
+                            .rounded(px(2.0))
+                            .bg(theme.text_muted)
+                            .group_hover(group, |style| style.bg(theme.text)),
                     )
-                } else if task.stoppable {
-                    let (chat_id, id) = (chat_id.to_owned(), task.id.clone());
-                    let group =
-                        SharedString::from(format!("session-info-background-stop-{}", task.id));
-                    div()
-                        .id(group.clone())
-                        .group(group.clone())
-                        .size(px(16.0))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(4.0))
-                        .cursor_pointer()
-                        .tooltip(crate::settings::widgets::text_tooltip("Stop"))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.stop_background_task(&chat_id, &id, cx);
-                        }))
-                        // A filled square: the stop mark, unmistakable at
-                        // this size where an outlined one reads as a checkbox.
-                        .child(
-                            div()
-                                .size(px(8.0))
-                                .rounded(px(2.0))
-                                .bg(theme.text_muted)
-                                .group_hover(group, |style| style.bg(theme.text)),
-                        )
-                        .into_any_element()
-                } else {
-                    agent_status_glyph(zuse_doc::SubagentStatus::Running, theme)
-                };
-                rows.push(
-                    sub_row(theme)
-                        .min_h(px(SUMMARY_ROW_HEIGHT))
-                        .text_color(theme.text)
-                        .gap(px(8.0))
-                        .child(div().flex_1().min_w_0().truncate().child(label(task)))
-                        .child(row_meta(theme).child(elapsed(task)).child(control))
-                        .into_any_element(),
-                );
-            }
+                    .into_any_element()
+            } else {
+                agent_status_glyph(zuse_doc::SubagentStatus::Running, theme)
+            };
+            let label = background_label(task);
+            let command = background_command(task);
+            let tooltip = match &command {
+                Some(command) => format!("{label}\n{command}"),
+                None => label.to_string(),
+            };
+            rows.push(
+                sub_row(theme)
+                    .id(SharedString::from(format!(
+                        "session-info-background-{}",
+                        task.id
+                    )))
+                    .min_h(px(SUMMARY_ROW_HEIGHT))
+                    .text_color(theme.text)
+                    .gap(px(8.0))
+                    .tooltip(crate::settings::widgets::text_tooltip(tooltip))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .py(px(if command.is_some() { 4.0 } else { 0.0 }))
+                            .child(div().truncate().child(label))
+                            .children(command.map(|command| {
+                                div()
+                                    .truncate()
+                                    .font_family(theme.font_mono.clone())
+                                    .text_size(px(10.0))
+                                    .text_color(theme.text_muted)
+                                    .child(command)
+                            })),
+                    )
+                    .child(row_meta(theme).child(elapsed(task)).child(control))
+                    .into_any_element(),
+            );
         }
-        if !ended.is_empty() {
-            rows.push(group("Stopped", None));
-            for task in ended.iter().rev() {
-                let glyph = match task.outcome {
-                    Some(zuse_protocol::BackgroundTaskOutcome::Failed) => {
-                        agent_status_glyph(zuse_doc::SubagentStatus::Failed, theme)
-                    }
-                    // Stopped on request: a quiet dash, neither success nor failure.
-                    Some(zuse_protocol::BackgroundTaskOutcome::Stopped) => {
-                        icon(icons::TASK_STOPPED)
-                            .size(px(12.0))
-                            .text_color(theme.text_muted)
-                            .into_any_element()
-                    }
-                    _ => agent_status_glyph(zuse_doc::SubagentStatus::Done, theme),
-                };
-                rows.push(
-                    sub_row(theme)
-                        .min_h(px(SUMMARY_ROW_HEIGHT))
-                        .gap(px(8.0))
-                        .child(div().flex_1().min_w_0().truncate().child(label(task)))
-                        .child(row_meta(theme).child(elapsed(task)).child(glyph))
-                        .into_any_element(),
-                );
-            }
+        let stoppable: Vec<String> = running
+            .iter()
+            .filter(|task| task.stoppable && !self.background_stops.contains(&task.id))
+            .map(|task| task.id.clone())
+            .collect();
+        if stoppable.len() > 1 {
+            let chat_id = chat_id.to_owned();
+            rows.push(
+                sub_row(theme)
+                    .min_h(px(22.0))
+                    .justify_end()
+                    .text_size(px(11.0))
+                    .text_color(theme.text_muted.opacity(0.8))
+                    .child(
+                        div()
+                            .id("session-info-background-stop-all")
+                            .flex_none()
+                            .cursor_pointer()
+                            .hover(|style| style.text_color(theme.text))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                for id in &stoppable {
+                                    this.stop_background_task(&chat_id, id, cx);
+                                }
+                            }))
+                            .child(tr(cx, msg::chat::background_stop_all)),
+                    )
+                    .into_any_element(),
+            );
         }
         rows
     }
 
+    /// The running tasks a stop request would reach right now: the runtime
+    /// can stop them and no stop is already on its way. Shared by the
+    /// section's Stop all and the stop-background-tasks shortcut.
+    pub(super) fn stoppable_background_tasks(
+        &self,
+        tasks: &[zuse_protocol::BackgroundTask],
+    ) -> Vec<String> {
+        tasks
+            .iter()
+            .filter(|task| {
+                task.running() && task.stoppable && !self.background_stops.contains(&task.id)
+            })
+            .map(|task| task.id.clone())
+            .collect()
+    }
+
     /// Ask the chat's host to stop one background task: a session command,
     /// so it reaches the device the chat runs on wherever this one is.
-    fn stop_background_task(&mut self, chat_id: &str, task_id: &str, cx: &mut Context<Self>) {
+    pub(super) fn stop_background_task(
+        &mut self,
+        chat_id: &str,
+        task_id: &str,
+        cx: &mut Context<Self>,
+    ) {
         let Some(engine) = self.state.read(cx).engine().cloned() else {
             return;
         };
@@ -1063,6 +1095,49 @@ impl Shell {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn task(
+        id: &str,
+        description: &str,
+        command: Option<&str>,
+        ended: bool,
+    ) -> zuse_protocol::BackgroundTask {
+        zuse_protocol::BackgroundTask {
+            id: id.into(),
+            kind: zuse_protocol::BackgroundTaskKind::Shell,
+            description: description.into(),
+            command: command.map(Into::into),
+            started_at: Utc::now(),
+            ended_at: ended.then(Utc::now),
+            outcome: ended.then_some(zuse_protocol::BackgroundTaskOutcome::Completed),
+            stoppable: !ended,
+        }
+    }
+
+    #[test]
+    fn the_background_section_lists_running_processes_only() {
+        let running = running_background(vec![
+            task("done", "npm run build", None, true),
+            task("dev", "Start the dev server", Some("pnpm dev"), false),
+        ]);
+        let ids: Vec<&str> = running.iter().map(|task| task.id.as_str()).collect();
+        assert_eq!(ids, ["dev"]);
+        assert!(running_background(vec![task("done", "build", None, true)]).is_empty());
+    }
+
+    #[test]
+    fn a_task_shows_its_command_unless_it_repeats_the_label() {
+        let dev = task("dev", "Start the dev server", Some(" pnpm dev "), false);
+        assert_eq!(background_command(&dev).as_deref(), Some("pnpm dev"));
+        let same = task("w", "cargo watch", Some("cargo watch"), false);
+        assert_eq!(background_command(&same), None);
+        assert_eq!(background_command(&task("x", "x", None, false)), None);
+        assert_eq!(background_command(&task("x", "x", Some("  "), false)), None);
+        // An unnamed task still has a label for its command to sit under.
+        let unnamed = task("u", " ", Some("make serve"), false);
+        assert_eq!(background_label(&unnamed).as_ref(), "Background process");
+        assert_eq!(background_command(&unnamed).as_deref(), Some("make serve"));
+    }
 
     #[test]
     fn a_wide_column_keeps_the_transcript_centered_beside_the_card() {

@@ -349,6 +349,9 @@ impl HarnessesPage {
             .then(|| self.accounts_page.clone())
             .flatten()
             .map(|page| page.into_any_element());
+        let cli_sign_in = (!accounts::signs_in(harness))
+            .then(|| self.render_cli_sign_in(harness, theme, cx))
+            .flatten();
         // Expanded sections share the provider row's horizontal inset.
         let content = div()
             .flex()
@@ -358,6 +361,7 @@ impl HarnessesPage {
             .pt(px(4.))
             .pb(px(16.))
             .when_some(accounts, |details, accounts| details.child(accounts))
+            .when_some(cli_sign_in, |details, sign_in| details.child(sign_in))
             .child({
                 let expanded = self.open_options.contains(&harness);
                 let phase = self
@@ -402,6 +406,80 @@ impl HarnessesPage {
         } else {
             motion::menu_in(format!("agent-details-{harness:?}"), content).into_any_element()
         }
+    }
+
+    /// Sign in row for agents whose own CLI owns sign-in (no Accounts section):
+    /// the login command to copy, and how to store an API key instead.
+    fn render_cli_sign_in(
+        &self,
+        harness: HarnessId,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        use zuse_viewport::provider_signin::{login_command, login_hint};
+        let hint = login_hint(harness, cx)?;
+        let command = login_command(harness)?;
+        Some(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(6.))
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(theme.text_muted)
+                        .child(tr(cx, msg::common::signIn)),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .rounded(px(7.))
+                        .bg(theme.settings_frame_bg().opacity(0.4))
+                        .px(px(10.))
+                        .py(px(6.))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .font_family(theme.font_mono.clone())
+                                .text_size(px(11.))
+                                .child(command),
+                        )
+                        .child(
+                            widgets::action_button(theme, widgets::ActionTone::Quiet)
+                                .id("copy-provider-login")
+                                .aria_label(tr(
+                                    cx,
+                                    msg::settings::cloud_workspace_auth_copy_command,
+                                ))
+                                .role(gpui::Role::Button)
+                                .tab_index(0)
+                                .size(px(24.))
+                                .px_0()
+                                .justify_center()
+                                .child(
+                                    crate::icons::icon(crate::icons::COPY)
+                                        .size(px(12.))
+                                        .text_color(theme.text_muted),
+                                )
+                                .on_click(move |_, _, cx| {
+                                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                        command.to_owned(),
+                                    ))
+                                }),
+                        ),
+                )
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(theme.text_muted)
+                        .child(hint),
+                )
+                .into_any_element(),
+        )
     }
 
     /// The expanded provider's Updates section: the update policy, short

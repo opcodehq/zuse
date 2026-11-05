@@ -1637,6 +1637,8 @@ chat-voice_error_recorder_failed = 녹음이 예기치 않게 중지되었습니
 
 chat-voice_error_no_speech = 음성이 감지되지 않았습니다. 다시 시도하세요.
 
+chat-voice_error_no_audio = 마이크에서 Zuse로 오디오가 전달되지 않았습니다. 설정에서 입력 장치를 확인한 후 다시 시도하세요.
+
 chat-voice_error_transcription_failed = 녹음을 텍스트로 변환하지 못했습니다. 연결을 확인하고 다시 시도하세요.
 
 chat-voice_error_service_unavailable = 이 워크스페이스에서는 텍스트 변환을 사용할 수 없습니다.
@@ -1801,3 +1803,62 @@ chat-review_guide_file_count-plural =
        [one] 파일{ " " }{ $count }개
        *[other] 파일{ " " }{ $count }개
     }
+
+# Tool group headers: the running call's label, then a per-kind summary.
+chat-tool_activity_running_command = 명령 실행 중…
+chat-tool_activity_reading = 파일 읽는 중…
+chat-tool_activity_searching_files = 파일 검색 중…
+chat-tool_activity_editing = 파일 편집 중…
+chat-tool_activity_writing = 파일 쓰는 중…
+chat-tool_activity_searching_web = 웹 검색 중…
+chat-tool_activity_fetching = 페이지 가져오는 중…
+# Variables: tool
+chat-tool_activity_using = { $tool } 사용 중…
+chat-tool_group_thinking = 생각 중
+# Variables: running, total
+chat-tool_group_agents_running = { $total }개 중 { $running }개 실행 중
+chat-tool_activity_summary_separator = { ", " }
+chat-tool_group_status_separator = { " · " }
+# Variables: count
+chat-tool_activity_summary_commands = 명령 { $count }개 실행
+# Variables: count
+chat-tool_activity_summary_reads = 파일 { $count }개 읽음
+# Variables: count
+chat-tool_activity_summary_searches = 검색 { $count }회
+# Variables: count
+chat-tool_activity_summary_edits = 편집 { $count }회
+# Variables: count
+chat-tool_activity_summary_writes = 파일 { $count }개 작성
+# Variables: count
+chat-tool_activity_summary_web_searches = 웹 검색 { $count }회
+# Variables: count
+chat-tool_activity_summary_fetches = 페이지 { $count }개 가져옴
+# Variables: count
+chat-tool_activity_summary_tools = 도구 { $count }개 사용
+# Variables: count
+chat-tool_group_failed = { $count }개 실패
+# Variables: count
+chat-tool_group_agents_done = { $count }개 완료
+# Variables: count
+chat-tool_group_notes = 메모 { $count }개 작성
+
+chat-find_in_chat_placeholder = 채팅에서 찾기
+chat-find_in_chat_count = { $current } / { $total }
+chat-find_in_chat_no_results = 결과 없음
+chat-find_in_chat_previous = 이전 결과
+chat-find_in_chat_next = 다음 결과
+chat-find_in_chat_close = 찾기 닫기
+
+chat-history_search_results = 보낸 메시지
+chat-history_search_no_results = 일치 항목 없음
+chat-stash_title = 보관함
+chat-stash_open = 보관한 프롬프트: { $count }개. 보관함 열기.
+chat-stash_list = 보관한 프롬프트
+chat-stash_empty = 아직 보관한 항목이 없습니다. 초안이 있을 때 { $shortcut } 키를 누르면 보관됩니다.
+chat-stash_delete = 보관한 프롬프트 삭제
+chat-history_search_empty = 이 채팅에서 아직 보낸 메시지가 없습니다.
+chat-history_search_title = 보낸 메시지 검색 중
+chat-history_search_use = 사용
+chat-history_search_cancel = 취소
+chat-stash_saved_notice = 초안을 보관했습니다 · <part0>{ $shortcut }</part0> 키로 보기
+chat-chat_composer_press_esc_again_to_clear = 지우려면 <part0>Esc</part0> 키를 한 번 더 누르세요

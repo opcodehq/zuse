@@ -340,6 +340,45 @@ native-stop_agent_with_escape = Arrêter l’agent avec Échap
 native-stop_active_agent_with_escape = Arrêter l’agent actif avec Échap
 
 # Context: application-owned interface text; do not translate paths or product names.
+native-direct_steer = Orientation directe
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-direct_steer_description = Entrée envoie immédiatement à un agent en cours. Alt+Entrée met toujours en file d’attente.
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-steer_message = Orienter avec ce message
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-press_esc_again_to_clear = Appuyez à nouveau sur Échap pour effacer
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-draft_stashed = Brouillon mis de côté
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-stashed_drafts = Brouillons mis de côté
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-nothing_stashed = Rien n’a encore été mis de côté
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-search_sent_messages = Rechercher dans les messages envoyés…
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-sent_messages = Messages envoyés
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-no_matching_messages = Aucun message correspondant
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-nothing_to_search = Aucun message envoyé pour l’instant
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-remove_attachments_before_stashing = Retirez les pièces jointes avant de mettre ce brouillon de côté.
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-emoji = Emoji
+
+# Context: application-owned interface text; do not translate paths or product names.
 native-open_pull_requests_in = Ouvrir les demandes de fusion dans
 
 # Context: application-owned interface text; do not translate paths or product names.
@@ -1138,3 +1177,42 @@ native-local_workspace = Espace de travail local
 
 # Context: new-chat landing screen and local account status.
 native-no_messages_archived = Aucun message dans cette discussion archivée.
+
+# Labels for conversation and composer keyboard commands.
+native-shortcut_previous_message = Message envoyé précédent
+native-shortcut_next_message = Message envoyé suivant
+native-shortcut_queue_message = Mettre le message en attente
+native-shortcut_delete_line_start = Supprimer jusqu’au début de la ligne
+native-shortcut_delete_line_end = Supprimer jusqu’à la fin de la ligne
+native-shortcut_delete_word = Supprimer le mot précédent
+native-shortcut_stop_agent = Arrêter l’agent (appuyer deux fois)
+native-shortcut_show_shortcuts = Raccourcis clavier
+native-shortcut_find_in_chat = Rechercher dans le chat
+native-shortcut_model_picker = Ouvrir le sélecteur de modèle
+native-shortcut_reasoning = Changer le niveau de raisonnement
+native-shortcut_fast_mode = Activer ou désactiver le mode rapide
+native-shortcut_tool_details = Développer ou réduire les détails des outils
+native-shortcut_task_list = Afficher ou masquer la liste des tâches
+native-shortcut_stop_background = Arrêter les tâches en arrière-plan
+native-shortcut_yank = Coller le texte supprimé
+native-shortcut_yank_pop = Parcourir les textes supprimés
+native-shortcut_stash = Mettre le brouillon de côté
+native-shortcut_history = Rechercher dans les messages envoyés
+
+# Context: composer add menu and plan mode toggle.
+native-composer_add_to_message = Ajouter au message
+
+# Context: composer add menu and plan mode toggle.
+native-composer_attach_images = Joindre des images
+
+# Context: composer add menu and plan mode toggle.
+native-composer_plan_mode_description = Examine et propose sans modifier les fichiers.
+
+# Context: composer add menu and plan mode toggle.
+native-composer_plan_mode_unavailable = Non disponible pour cet agent
+
+# Context: composer add menu and plan mode toggle.
+native-composer_plan_chip = Plan
+
+# Context: composer add menu and plan mode toggle.
+native-composer_cloud_plan_unavailable = Le mode plan n’est pas disponible pour les lancements cloud. Désactivez-le avant de commencer.

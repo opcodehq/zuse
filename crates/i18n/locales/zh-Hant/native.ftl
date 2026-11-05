@@ -340,6 +340,45 @@ native-stop_agent_with_escape = 按 Escape 停止代理程式
 native-stop_active_agent_with_escape = 按 Escape 停止使用中的代理程式
 
 # Context: application-owned interface text; do not translate paths or product names.
+native-direct_steer = 直接引導
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-direct_steer_description = 按 Enter 立即傳送給執行中的代理程式。Alt+Enter 一律加入佇列。
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-steer_message = 傳送訊息以引導
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-press_esc_again_to_clear = 再按一次 Esc 清除
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-draft_stashed = 草稿已暫存
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-stashed_drafts = 暫存的草稿
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-nothing_stashed = 尚無暫存內容
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-search_sent_messages = 搜尋已傳送的訊息…
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-sent_messages = 已傳送的訊息
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-no_matching_messages = 沒有相符的訊息
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-nothing_to_search = 尚無已傳送的訊息
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-remove_attachments_before_stashing = 暫存此草稿前請先移除附件。
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-emoji = 表情符號
+
+# Context: application-owned interface text; do not translate paths or product names.
 native-open_pull_requests_in = 開啟提取要求的位置
 
 # Context: application-owned interface text; do not translate paths or product names.
@@ -1051,7 +1090,7 @@ native-read_saved_conversations_or_restore_them_to_your_workspace = 閱讀已儲
 native-cloud_workspaces_beta = 雲端工作區（測試版）
 
 # Context: application-owned interface text; do not translate paths or product names.
-native-no_other_computers_yet = 尚無其他電腦
+native-no_other_computers_yet = 還沒有其他電腦
 
 # Context: application-owned interface text; do not translate paths or product names.
 native-cloud_workspaces = 雲端工作區
@@ -1128,7 +1167,7 @@ native-reconnecting = 正在重新連線至引擎…
 native-loading_account = 正在載入帳戶…
 
 # Context: new-chat landing screen and local account status.
-native-account_unavailable = 帳戶無法使用
+native-account_unavailable = 帳戶不可用
 
 # Context: new-chat landing screen and local account status.
 native-reconnect_account = 重新連線至此電腦以載入已儲存的帳戶工作階段。
@@ -1138,3 +1177,42 @@ native-local_workspace = 本機工作區
 
 # Context: new-chat landing screen and local account status.
 native-no_messages_archived = 此封存聊天中沒有訊息。
+
+# Labels for conversation and composer keyboard commands.
+native-shortcut_previous_message = 上一則已傳送訊息
+native-shortcut_next_message = 下一則已傳送訊息
+native-shortcut_queue_message = 將訊息加入佇列
+native-shortcut_delete_line_start = 刪除至行首
+native-shortcut_delete_line_end = 刪除至行尾
+native-shortcut_delete_word = 刪除前一個詞
+native-shortcut_stop_agent = 停止代理程式（按兩次）
+native-shortcut_show_shortcuts = 鍵盤快捷鍵
+native-shortcut_find_in_chat = 在聊天中尋找
+native-shortcut_model_picker = 開啟模型選擇器
+native-shortcut_reasoning = 切換推理強度
+native-shortcut_fast_mode = 切換快速模式
+native-shortcut_tool_details = 展開或收合工具詳細資料
+native-shortcut_task_list = 切換工作清單
+native-shortcut_stop_background = 停止背景工作
+native-shortcut_yank = 貼上已刪除的文字
+native-shortcut_yank_pop = 循環切換已刪除的文字
+native-shortcut_stash = 暫存草稿
+native-shortcut_history = 搜尋已傳送訊息
+
+# Context: composer add menu and plan mode toggle.
+native-composer_add_to_message = 新增到訊息
+
+# Context: composer add menu and plan mode toggle.
+native-composer_attach_images = 附加圖片
+
+# Context: composer add menu and plan mode toggle.
+native-composer_plan_mode_description = 檢查並提出方案，不修改檔案。
+
+# Context: composer add menu and plan mode toggle.
+native-composer_plan_mode_unavailable = 此代理程式無法使用
+
+# Context: composer add menu and plan mode toggle.
+native-composer_plan_chip = 計畫
+
+# Context: composer add menu and plan mode toggle.
+native-composer_cloud_plan_unavailable = 雲端啟動不支援計畫模式。請在開始前將其關閉。

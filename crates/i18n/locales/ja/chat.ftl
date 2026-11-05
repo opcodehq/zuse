@@ -1637,6 +1637,8 @@ chat-voice_error_recorder_failed = 録音が予期せず停止しました。も
 
 chat-voice_error_no_speech = 音声が検出されませんでした。もう一度お試しください。
 
+chat-voice_error_no_audio = マイクから Zuse に音声が届いていません。設定で入力デバイスを確認してから、もう一度お試しください。
+
 chat-voice_error_transcription_failed = 録音を文字起こしできませんでした。接続を確認して、もう一度お試しください。
 
 chat-voice_error_service_unavailable = このワークスペースでは文字起こしを利用できません。
@@ -1801,3 +1803,62 @@ chat-review_guide_file_count-plural =
        [one] { $count }{ " " }ファイル
        *[other] { $count }{ " " }ファイル
     }
+
+# Tool group headers: the running call's label, then a per-kind summary.
+chat-tool_activity_running_command = コマンドを実行中…
+chat-tool_activity_reading = ファイルを読み取り中…
+chat-tool_activity_searching_files = ファイルを検索中…
+chat-tool_activity_editing = ファイルを編集中…
+chat-tool_activity_writing = ファイルを書き込み中…
+chat-tool_activity_searching_web = ウェブを検索中…
+chat-tool_activity_fetching = ページを取得中…
+# Variables: tool
+chat-tool_activity_using = { $tool } を使用中…
+chat-tool_group_thinking = 思考中
+# Variables: running, total
+chat-tool_group_agents_running = { $total } 件中 { $running } 件を実行中
+chat-tool_activity_summary_separator = 、
+chat-tool_group_status_separator = { " · " }
+# Variables: count
+chat-tool_activity_summary_commands = { $count } 件のコマンドを実行
+# Variables: count
+chat-tool_activity_summary_reads = { $count } 件のファイルを読み取り
+# Variables: count
+chat-tool_activity_summary_searches = { $count } 件の検索を実行
+# Variables: count
+chat-tool_activity_summary_edits = { $count } 件の編集
+# Variables: count
+chat-tool_activity_summary_writes = { $count } 件のファイルを書き込み
+# Variables: count
+chat-tool_activity_summary_web_searches = { $count } 件のウェブ検索
+# Variables: count
+chat-tool_activity_summary_fetches = { $count } 件のページを取得
+# Variables: count
+chat-tool_activity_summary_tools = { $count } 件のツールを使用
+# Variables: count
+chat-tool_group_failed = { $count } 件失敗
+# Variables: count
+chat-tool_group_agents_done = { $count } 件完了
+# Variables: count
+chat-tool_group_notes = { $count } 件のメモを作成
+
+chat-find_in_chat_placeholder = チャット内を検索
+chat-find_in_chat_count = { $current } / { $total }
+chat-find_in_chat_no_results = 結果なし
+chat-find_in_chat_previous = 前の一致
+chat-find_in_chat_next = 次の一致
+chat-find_in_chat_close = 検索を閉じる
+
+chat-history_search_results = 送信済みメッセージ
+chat-history_search_no_results = 一致なし
+chat-stash_title = 保留
+chat-stash_open = 保留中のプロンプト: { $count } 件。保留一覧を開く。
+chat-stash_list = 保留中のプロンプト
+chat-stash_empty = 保留中のものはまだありません。下書きがある状態で { $shortcut } を押すと保留できます。
+chat-stash_delete = 保留中のプロンプトを削除
+chat-history_search_empty = このチャットではまだメッセージを送信していません。
+chat-history_search_title = 送信済みメッセージを検索中
+chat-history_search_use = 使用
+chat-history_search_cancel = キャンセル
+chat-stash_saved_notice = 下書きを保留しました · <part0>{ $shortcut }</part0> で表示
+chat-chat_composer_press_esc_again_to_clear = もう一度 <part0>Esc</part0> を押すとクリアします

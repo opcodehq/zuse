@@ -269,7 +269,6 @@ pub fn access_label(level: zuse_protocol::SandboxLevel, cx: &App) -> String {
         zuse_protocol::SandboxLevel::DangerFullAccess => {
             message(cx, chat::runtime_mode_meta_full_access)
         }
-        zuse_protocol::SandboxLevel::ReadOnly => "Read only".into(),
     }
 }
 

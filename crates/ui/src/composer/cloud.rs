@@ -1,6 +1,8 @@
 //! Native cloud launch uses the existing attached tray and retains the accepted request on failure.
 use super::*;
+use crate::localization::message as tr;
 use serde_json::{Value, json};
+use zuse_i18n::messages as msg;
 #[derive(Default)]
 pub(super) struct Launch {
     pub task: Option<Task<()>>,
@@ -267,18 +269,16 @@ impl Composer {
             let (Some(agent), Some(model)) = (config.harness, config.model) else {
                 return true;
             };
+            if config.plan {
+                self.failure = Some(tr(cx, msg::native::composer_cloud_plan_unavailable).into());
+                self.failure_key = None;
+                cx.notify();
+                return true;
+            }
             let runtime_mode = match config.sandbox {
                 SandboxLevel::WorkspaceWrite => "approval-required",
                 SandboxLevel::Auto => "auto",
                 SandboxLevel::DangerFullAccess => "full-access",
-                SandboxLevel::ReadOnly => {
-                    self.failure = Some(
-                        "Read-only cloud launch is unavailable. Choose Ask before starting.".into(),
-                    );
-                    self.failure_key = None;
-                    cx.notify();
-                    return true;
-                }
             };
             self.cloud.request = Some(
                 json!({"runtimeMode":runtime_mode,"projectId":project["projectId"],"providerId":project["providerId"],"baseRef":base_ref,"branch":branch,"agent":agent,"model":model,"reasoning":config.reasoning,"modelOptions":config.model_options,"idempotencyKey":uuid::Uuid::new_v4().to_string(),"firstMessage":text,"expectedAccountId":subject,"attachmentTransfers":staged.iter().map(|a|json!({"uploadId":a.id,"fileName":a.name})).collect::<Vec<_>>()}),

@@ -1305,7 +1305,7 @@ impl Composer {
                             .dismissed_errors
                             .insert(retry_chat.clone(), retry_id.clone());
                         let queue = this.run_live(cx);
-                        this.send(prompt.clone(), queue, cx);
+                        this.send(prompt.clone(), queue, false, cx);
                     }))
                     .into_any_element(),
             );

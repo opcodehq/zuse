@@ -94,6 +94,7 @@ use zuse_protocol::{
 use crate::repos::home_dir;
 use crate::{EngineError, new_id, now_ms};
 
+mod dictation;
 mod oauth;
 #[cfg(test)]
 mod provider_tests;
@@ -738,6 +739,8 @@ struct Inner {
     identities: Mutex<HashMap<String, IdentityLookup>>,
     /// Test seam: fixed CLI binaries per agent instead of PATH resolution.
     cli_overrides: Mutex<HashMap<HarnessId, PathBuf>>,
+    /// The refreshed Codex account dictation uploads with.
+    dictation: dictation::DictationAccount,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -829,6 +832,7 @@ impl AgentAccounts {
                 callback_routes,
                 identities: Mutex::new(HashMap::new()),
                 cli_overrides: Mutex::new(HashMap::new()),
+                dictation: Default::default(),
             }),
         }
     }
@@ -2733,9 +2737,27 @@ impl AgentAccounts {
         claude_usage_windows(&body).ok_or_else(|| schema_error("claude-code", &body))
     }
 
-    /// Dictation shares the active Codex login. Hold the account operation
-    /// lock while Codex refreshes and reads it so account switching cannot race.
-    pub(crate) async fn dictation_auth(&self) -> Result<(String, Option<String>), EngineError> {
+    /// Dictation shares the active Codex login. The refreshed account is
+    /// reused for a few minutes and concurrent requests share one refresh.
+    /// `rejected` is a token the service refused, which forces a fresh one.
+    pub(crate) async fn dictation_auth(
+        &self,
+        rejected: Option<&str>,
+    ) -> Result<dictation::DictationAuth, EngineError> {
+        self.inner
+            .dictation
+            .get(rejected, || self.refresh_dictation_auth())
+            .await
+    }
+
+    /// The signed-in account changed; the next dictation refreshes it.
+    pub(crate) fn forget_dictation_auth(&self) {
+        self.inner.dictation.forget();
+    }
+
+    /// Hold the account operation lock while Codex refreshes and reads the
+    /// login so account switching cannot race.
+    async fn refresh_dictation_auth(&self) -> Result<dictation::DictationAuth, EngineError> {
         let _ops = self.inner.ops.lock().await;
         zuse_providers::codex::refresh_dictation_account(&self.inner.config.codex_home)
             .await

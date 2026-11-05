@@ -172,6 +172,9 @@ pub struct ChatConfig {
     #[serde(default)]
     pub model_options: serde_json::Map<String, serde_json::Value>,
     pub sandbox: SandboxLevel,
+    /// Plan mode for this chat, chosen independently of the access level.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub plan: bool,
 }
 
 /// Immutable-at-run-start repository context owned by one conversation.
@@ -372,6 +375,9 @@ pub struct BackgroundTask {
     pub kind: BackgroundTaskKind,
     /// What it is, in the agent's words or as its command line.
     pub description: String,
+    /// The shell command a background process runs, when the runtime said.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
     pub started_at: DateTime<Utc>,
     /// Set once the task leaves the runtime's live set.
     #[serde(default, skip_serializing_if = "Option::is_none")]

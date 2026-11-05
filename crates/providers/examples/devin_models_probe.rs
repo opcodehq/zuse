@@ -39,6 +39,7 @@ async fn main() -> anyhow::Result<()> {
         turn: Default::default(),
     };
     let request = RunRequest {
+        plan: true,
         mcp: None,
         prompt: "Reply with exactly: Devin model discovery verified. Do not use tools.".into(),
         harness: None,
@@ -46,7 +47,7 @@ async fn main() -> anyhow::Result<()> {
         reasoning: None,
         model_options: Default::default(),
         cwd: std::env::current_dir()?.to_string_lossy().into_owned(),
-        sandbox: SandboxLevel::ReadOnly,
+        sandbox: SandboxLevel::WorkspaceWrite,
         auto_approve: true,
         attachments: Vec::new(),
         worktree: None,

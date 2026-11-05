@@ -228,3 +228,24 @@ commands-new_chat_without_project = New chat without a project
 
 # Source key: commands:new_chat_without_project_description
 commands-new_chat_without_project_description = Start a new chat in its own scratch folder
+
+commands-commands_no_background_tasks = No background tasks to stop
+commands-commands_stop_background_tasks_confirm =
+    { $count ->
+       [one] Press { $shortcut } again to stop { $count } background task
+       *[other] Press { $shortcut } again to stop { $count } background tasks
+    }
+commands-commands_stopping_background_tasks =
+    { $count ->
+       [one] Stopping { $count } background task
+       *[other] Stopping { $count } background tasks
+    }
+commands-shortcuts_panel_title = Keyboard shortcuts
+commands-shortcuts_panel_description = Type ? in an empty composer to open this anytime.
+commands-shortcuts_panel_chat = Chat
+commands-shortcuts_panel_triggers = Type in the composer
+commands-shortcuts_panel_trigger_command = Run a command
+commands-shortcuts_panel_trigger_file = Mention a file
+commands-shortcuts_panel_trigger_skill = Use a skill
+commands-shortcuts_panel_customize = Change shortcuts in Settings
+commands-shortcuts_panel_close = Close

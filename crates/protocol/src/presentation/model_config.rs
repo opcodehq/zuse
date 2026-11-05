@@ -195,10 +195,11 @@ mod tests {
     fn model_patch_preserves_permission_and_unowned_fields() {
         let config = config("codex", Some("model"), "fast");
         let patched = config.apply_to(
-            &json!({"harness":"codex","sandbox":"read-only","futureSetting":{"keep":true}}),
+            &json!({"harness":"codex","sandbox":"auto","plan":true,"futureSetting":{"keep":true}}),
             crate::SandboxLevel::DangerFullAccess,
         );
-        assert_eq!(patched["sandbox"], "read-only");
+        assert_eq!(patched["sandbox"], "auto");
+        assert_eq!(patched["plan"], true);
         assert_eq!(patched["futureSetting"]["keep"], true);
         assert_eq!(patched["modelOptions"]["tier"], "fast");
         assert_eq!(

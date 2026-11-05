@@ -234,6 +234,32 @@ native-stop_agent_with_escape = Stop agent with Escape
 
 native-stop_active_agent_with_escape = Stop active agent with Escape
 
+native-direct_steer = Direct steer
+
+native-direct_steer_description = Enter sends to a running agent right away. Alt+Enter always queues.
+
+native-steer_message = Steer message
+
+native-press_esc_again_to_clear = Press Esc again to clear
+
+native-draft_stashed = Draft stashed
+
+native-stashed_drafts = Stashed drafts
+
+native-nothing_stashed = Nothing stashed yet
+
+native-search_sent_messages = Search sent messages…
+
+native-sent_messages = Sent messages
+
+native-no_matching_messages = No matching messages
+
+native-nothing_to_search = No sent messages yet
+
+native-remove_attachments_before_stashing = Remove attachments before stashing this draft.
+
+native-emoji = Emoji
+
 native-open_pull_requests_in = Open pull requests in
 
 native-move_chats_and_settings_from_electron = Move chats and settings from Electron
@@ -793,3 +819,42 @@ native-local_workspace = Local workspace
 
 # Context: new-chat landing screen and local account status.
 native-no_messages_archived = No messages in this archived chat.
+
+# Labels for conversation and composer keyboard commands.
+native-shortcut_previous_message = Previous sent message
+native-shortcut_next_message = Next sent message
+native-shortcut_queue_message = Queue message
+native-shortcut_delete_line_start = Delete to line start
+native-shortcut_delete_line_end = Delete to line end
+native-shortcut_delete_word = Delete previous word
+native-shortcut_stop_agent = Stop agent (press twice)
+native-shortcut_show_shortcuts = Keyboard shortcuts
+native-shortcut_find_in_chat = Find in chat
+native-shortcut_model_picker = Open model picker
+native-shortcut_reasoning = Cycle reasoning effort
+native-shortcut_fast_mode = Toggle fast mode
+native-shortcut_tool_details = Expand/collapse tool details
+native-shortcut_task_list = Toggle task list
+native-shortcut_stop_background = Stop background tasks
+native-shortcut_yank = Paste deleted text
+native-shortcut_yank_pop = Cycle deleted text
+native-shortcut_stash = Stash draft
+native-shortcut_history = Search sent messages
+
+# Context: composer add menu and plan mode toggle.
+native-composer_add_to_message = Add to message
+
+# Context: composer add menu and plan mode toggle.
+native-composer_attach_images = Attach images
+
+# Context: composer add menu and plan mode toggle.
+native-composer_plan_mode_description = Inspects and proposes without changing files.
+
+# Context: composer add menu and plan mode toggle.
+native-composer_plan_mode_unavailable = Not available for this agent
+
+# Context: composer add menu and plan mode toggle.
+native-composer_plan_chip = Plan
+
+# Context: composer add menu and plan mode toggle.
+native-composer_cloud_plan_unavailable = Plan mode is unavailable for cloud launches. Turn it off before starting.

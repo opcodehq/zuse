@@ -885,6 +885,7 @@ mod tests {
             checkout_id: None,
             source_context: None,
             config: Some(ChatConfig {
+                plan: false,
                 harness: HarnessId::Mock,
                 model: Some("mock-1".into()),
                 reasoning: None,
@@ -955,6 +956,7 @@ mod tests {
             serde_json::Value::String("1m".into()),
         );
         let config = ChatConfig {
+            plan: false,
             harness: HarnessId::ClaudeCode,
             model: Some("claude-fable-5".into()),
             reasoning: Some(zuse_protocol::ReasoningLevel::XHigh),
@@ -1033,6 +1035,7 @@ mod tests {
             id: "bg-1".into(),
             kind: zuse_protocol::BackgroundTaskKind::Shell,
             description: "pnpm dev".into(),
+            command: Some("pnpm --filter web dev".into()),
             started_at: ts(3_100),
             ended_at: Some(ts(3_400)),
             outcome: Some(zuse_protocol::BackgroundTaskOutcome::Stopped),

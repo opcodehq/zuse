@@ -1637,6 +1637,8 @@ chat-voice_error_recorder_failed = Die Aufnahme wurde unerwartet beendet. Versuc
 
 chat-voice_error_no_speech = Keine Sprache erkannt. Versuche es erneut.
 
+chat-voice_error_no_audio = Von deinem Mikrofon ist kein Ton bei Zuse angekommen. Prüfe das Eingabegerät in den Einstellungen und versuche es erneut.
+
 chat-voice_error_transcription_failed = Die Aufnahme konnte nicht transkribiert werden. Prüfe deine Verbindung und versuche es erneut.
 
 chat-voice_error_service_unavailable = Transkription ist in diesem Workspace nicht verfügbar.
@@ -1801,3 +1803,98 @@ chat-review_guide_file_count-plural =
        [one] { $count }{ " " }Datei
        *[other] { $count }{ " " }Dateien
     }
+
+# Tool group headers: the running call's label, then a per-kind summary.
+chat-tool_activity_running_command = Befehl wird ausgeführt…
+chat-tool_activity_reading = Dateien werden gelesen…
+chat-tool_activity_searching_files = Dateien werden durchsucht…
+chat-tool_activity_editing = Dateien werden bearbeitet…
+chat-tool_activity_writing = Dateien werden geschrieben…
+chat-tool_activity_searching_web = Web wird durchsucht…
+chat-tool_activity_fetching = Seite wird abgerufen…
+# Variables: tool
+chat-tool_activity_using = { $tool } wird verwendet…
+chat-tool_group_thinking = Denkt nach
+# Variables: running, total
+chat-tool_group_agents_running = { $running } von { $total } laufen
+chat-tool_activity_summary_separator = { ", " }
+chat-tool_group_status_separator = { " · " }
+# Variables: count
+chat-tool_activity_summary_commands =
+    { $count ->
+       [one] { $count } Befehl ausgeführt
+       *[other] { $count } Befehle ausgeführt
+    }
+# Variables: count
+chat-tool_activity_summary_reads =
+    { $count ->
+       [one] { $count } Datei gelesen
+       *[other] { $count } Dateien gelesen
+    }
+# Variables: count
+chat-tool_activity_summary_searches =
+    { $count ->
+       [one] { $count } Suche ausgeführt
+       *[other] { $count } Suchen ausgeführt
+    }
+# Variables: count
+chat-tool_activity_summary_edits =
+    { $count ->
+       [one] { $count } Änderung vorgenommen
+       *[other] { $count } Änderungen vorgenommen
+    }
+# Variables: count
+chat-tool_activity_summary_writes =
+    { $count ->
+       [one] { $count } Datei geschrieben
+       *[other] { $count } Dateien geschrieben
+    }
+# Variables: count
+chat-tool_activity_summary_web_searches =
+    { $count ->
+       [one] { $count } Websuche ausgeführt
+       *[other] { $count } Websuchen ausgeführt
+    }
+# Variables: count
+chat-tool_activity_summary_fetches =
+    { $count ->
+       [one] { $count } Seite abgerufen
+       *[other] { $count } Seiten abgerufen
+    }
+# Variables: count
+chat-tool_activity_summary_tools =
+    { $count ->
+       [one] { $count } Tool verwendet
+       *[other] { $count } Tools verwendet
+    }
+# Variables: count
+chat-tool_group_failed = { $count } fehlgeschlagen
+# Variables: count
+chat-tool_group_agents_done = { $count } fertig
+# Variables: count
+chat-tool_group_notes =
+    { $count ->
+       [one] Eine Notiz geschrieben
+       *[other] { $count } Notizen geschrieben
+    }
+
+chat-find_in_chat_placeholder = Im Chat suchen
+chat-find_in_chat_count = { $current } von { $total }
+chat-find_in_chat_no_results = Keine Treffer
+chat-find_in_chat_previous = Vorheriger Treffer
+chat-find_in_chat_next = Nächster Treffer
+chat-find_in_chat_close = Suche schließen
+
+chat-history_search_results = Gesendete Nachrichten
+chat-history_search_no_results = Keine Treffer
+chat-stash_title = Zurückgelegt
+chat-stash_open = Zurückgelegte Prompts: { $count }. Liste öffnen.
+chat-stash_list = Zurückgelegte Prompts
+chat-stash_empty = Noch nichts zurückgelegt. Drücke { $shortcut } mit einem Entwurf, um ihn zurückzulegen.
+chat-stash_delete = Zurückgelegten Prompt löschen
+chat-history_search_empty = In diesem Chat wurden noch keine Nachrichten gesendet.
+chat-history_search_title = Gesendete Nachrichten werden durchsucht
+chat-history_search_use = übernehmen
+chat-history_search_cancel = abbrechen
+chat-stash_saved_notice = Entwurf zurückgelegt · <part0>{ $shortcut }</part0> zum Anzeigen
+chat-chat_composer_press_esc_again_to_clear = Zum Leeren erneut <part0>Esc</part0> drücken

@@ -126,6 +126,7 @@ fn harness(root: &std::path::Path, fixture: Arc<ModelFixture>) -> NativeHarness 
 }
 fn request(root: &std::path::Path) -> RunRequest {
     RunRequest {
+        plan: false,
         prompt: "Implement this".into(),
         harness: Some(HarnessId::Zuse),
         model: Some("chatgpt/fixture".into()),

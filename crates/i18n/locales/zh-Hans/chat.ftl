@@ -1637,6 +1637,8 @@ chat-voice_error_recorder_failed = 录音意外停止。请重试。
 
 chat-voice_error_no_speech = 未检测到语音。请重试。
 
+chat-voice_error_no_audio = Zuse 没有收到来自麦克风的音频。请在设置中检查输入设备，然后重试。
+
 chat-voice_error_transcription_failed = 无法转写录音。请检查网络连接后重试。
 
 chat-voice_error_service_unavailable = 此工作区无法使用转写服务。
@@ -1801,3 +1803,62 @@ chat-review_guide_file_count-plural =
        [one] { $count }{ " " }个文件
        *[other] { $count }{ " " }个文件
     }
+
+# Tool group headers: the running call's label, then a per-kind summary.
+chat-tool_activity_running_command = 正在运行命令…
+chat-tool_activity_reading = 正在读取文件…
+chat-tool_activity_searching_files = 正在搜索文件…
+chat-tool_activity_editing = 正在编辑文件…
+chat-tool_activity_writing = 正在写入文件…
+chat-tool_activity_searching_web = 正在搜索网页…
+chat-tool_activity_fetching = 正在获取页面…
+# Variables: tool
+chat-tool_activity_using = 正在使用 { $tool }…
+chat-tool_group_thinking = 思考中
+# Variables: running, total
+chat-tool_group_agents_running = { $total } 个中 { $running } 个正在运行
+chat-tool_activity_summary_separator = ，
+chat-tool_group_status_separator = { " · " }
+# Variables: count
+chat-tool_activity_summary_commands = 运行了 { $count } 条命令
+# Variables: count
+chat-tool_activity_summary_reads = 读取了 { $count } 个文件
+# Variables: count
+chat-tool_activity_summary_searches = 执行了 { $count } 次搜索
+# Variables: count
+chat-tool_activity_summary_edits = 进行了 { $count } 次编辑
+# Variables: count
+chat-tool_activity_summary_writes = 写入了 { $count } 个文件
+# Variables: count
+chat-tool_activity_summary_web_searches = 进行了 { $count } 次网页搜索
+# Variables: count
+chat-tool_activity_summary_fetches = 获取了 { $count } 个网页
+# Variables: count
+chat-tool_activity_summary_tools = 使用了 { $count } 个工具
+# Variables: count
+chat-tool_group_failed = { $count } 个失败
+# Variables: count
+chat-tool_group_agents_done = { $count } 个已完成
+# Variables: count
+chat-tool_group_notes = 写了 { $count } 条笔记
+
+chat-find_in_chat_placeholder = 在对话中查找
+chat-find_in_chat_count = 第 { $current } 个，共 { $total } 个
+chat-find_in_chat_no_results = 无结果
+chat-find_in_chat_previous = 上一个匹配项
+chat-find_in_chat_next = 下一个匹配项
+chat-find_in_chat_close = 关闭查找
+
+chat-history_search_results = 已发送的消息
+chat-history_search_no_results = 无匹配项
+chat-stash_title = 暂存
+chat-stash_open = 已暂存的提示：{ $count } 条。打开暂存列表。
+chat-stash_list = 已暂存的提示
+chat-stash_empty = 还没有暂存内容。有草稿时按 { $shortcut } 即可暂存。
+chat-stash_delete = 删除暂存的提示
+chat-history_search_empty = 此对话中还没有发送过消息。
+chat-history_search_title = 正在搜索已发送的消息
+chat-history_search_use = 使用
+chat-history_search_cancel = 取消
+chat-stash_saved_notice = 草稿已暂存 · 按 <part0>{ $shortcut }</part0> 查看
+chat-chat_composer_press_esc_again_to_clear = 再按一次 <part0>Esc</part0> 即可清除

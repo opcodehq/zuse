@@ -162,6 +162,7 @@ impl Harness for MuseHarness {
     fn reconfigures_in_place(&self, live: &RunRequest, next: &RunRequest) -> bool {
         live.cwd == next.cwd
             && live.sandbox == next.sandbox
+            && live.plan == next.plan
             && live.auto_approve == next.auto_approve
             && (next.model.is_some() || live.model.is_none())
     }
@@ -231,7 +232,7 @@ mod tests {
         next.reasoning = Some(ReasoningLevel::High);
         assert!(harness.reconfigures_in_place(&live, &next));
         assert!(!harness.reconfigures_in_place(&next, &live));
-        next.sandbox = zuse_protocol::SandboxLevel::ReadOnly;
+        next.plan = true;
         assert!(!harness.reconfigures_in_place(&live, &next));
     }
 

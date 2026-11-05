@@ -294,6 +294,7 @@ impl Harness for CursorHarness {
     fn reconfigures_in_place(&self, live: &RunRequest, next: &RunRequest) -> bool {
         live.cwd == next.cwd
             && live.sandbox == next.sandbox
+            && live.plan == next.plan
             && live.auto_approve == next.auto_approve
     }
 

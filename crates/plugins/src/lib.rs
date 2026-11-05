@@ -23,8 +23,9 @@ pub enum PluginError {
     Cancelled,
     #[error("Plugin service is unavailable. Check the account connection and try again.")]
     Unavailable,
-    #[error("Plugin service rejected this request ({0}).")]
-    Rejected(u16),
+    /// `code` is the API's stable error code, or `http_<status>` without one.
+    #[error("Plugin request failed ({code}). Check Plugins in the workspace this chat belongs to.")]
+    Rejected { status: u16, code: String },
     #[error("Plugin service returned an invalid response.")]
     InvalidResponse,
     #[error("Plugin service URL must be an HTTPS base URL.")]
@@ -169,7 +170,9 @@ impl PluginClient {
                 .map_err(|_| PluginError::Unavailable)?;
             let organizations: Vec<Organization> = match self.decode(response).await {
                 // Older deployments or disabled organization rollout still support Personal.
-                Err(PluginError::Rejected(403 | 404)) => vec![],
+                Err(PluginError::Rejected {
+                    status: 403 | 404, ..
+                }) => vec![],
                 result => result?,
             };
             if organizations.len() > 1024 {
@@ -250,24 +253,17 @@ impl PluginClient {
         &self,
         response: reqwest::Response,
     ) -> Result<O, PluginError> {
-        if !response.status().is_success() {
-            return Err(PluginError::Rejected(response.status().as_u16()));
+        let status = response.status();
+        let body = read_body(response).await;
+        if !status.is_success() {
+            // An unreadable error body still reports the HTTP status.
+            let code = rejection_code(status.as_u16(), body.as_deref().unwrap_or_default());
+            return Err(PluginError::Rejected {
+                status: status.as_u16(),
+                code,
+            });
         }
-        if response
-            .content_length()
-            .is_some_and(|n| n > MAX_RESPONSE_BYTES as u64)
-        {
-            return Err(PluginError::InvalidResponse);
-        }
-        let mut body = Vec::new();
-        let mut chunks = response.bytes_stream();
-        while let Some(chunk) = chunks.next().await {
-            let chunk = chunk.map_err(|_| PluginError::Unavailable)?;
-            if body.len().saturating_add(chunk.len()) > MAX_RESPONSE_BYTES {
-                return Err(PluginError::InvalidResponse);
-            }
-            body.extend_from_slice(&chunk);
-        }
+        let body = body?;
         // Account switching while an upstream request was in flight must not
         // publish another account's discovery results into the new UI context.
         if self.credentials.current().await?.subject != self.subject.as_ref() {
@@ -275,6 +271,43 @@ impl PluginClient {
         }
         serde_json::from_slice(&body).map_err(|_| PluginError::InvalidResponse)
     }
+}
+
+async fn read_body(response: reqwest::Response) -> Result<Vec<u8>, PluginError> {
+    if response
+        .content_length()
+        .is_some_and(|n| n > MAX_RESPONSE_BYTES as u64)
+    {
+        return Err(PluginError::InvalidResponse);
+    }
+    let mut body = Vec::new();
+    let mut chunks = response.bytes_stream();
+    while let Some(chunk) = chunks.next().await {
+        let chunk = chunk.map_err(|_| PluginError::Unavailable)?;
+        if body.len().saturating_add(chunk.len()) > MAX_RESPONSE_BYTES {
+            return Err(PluginError::InvalidResponse);
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
+/// The API's `{"error": "<code>"}` when it is a short snake_case code, so a
+/// failure names its cause (e.g. `plugin_unreachable`); otherwise `http_<status>`.
+fn rejection_code(status: u16, body: &[u8]) -> String {
+    #[derive(Deserialize)]
+    struct Failure {
+        error: Option<serde_json::Value>,
+    }
+    serde_json::from_slice::<Failure>(body)
+        .ok()
+        .and_then(|failure| failure.error)
+        .and_then(|error| error.as_str().map(str::to_owned))
+        .filter(|code| {
+            (1..=64).contains(&code.len())
+                && code.bytes().all(|b| b.is_ascii_lowercase() || b == b'_')
+        })
+        .unwrap_or_else(|| format!("http_{status}"))
 }
 
 /// Versioned routes prevent an older API from ignoring organization scope and

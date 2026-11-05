@@ -46,6 +46,7 @@ fn harness(dir: &Path, env: &str) -> MuseHarness {
 
 fn request(cwd: &Path, prompt: &str) -> RunRequest {
     RunRequest {
+        plan: false,
         prompt: prompt.into(),
         harness: None,
         model: None,
@@ -546,7 +547,7 @@ async fn live_muse_lists_models_and_answers() {
     assert!(!models.is_empty());
     let dir = tempfile::tempdir().unwrap();
     let mut req = request(dir.path(), "Reply with the single word: pong");
-    req.sandbox = SandboxLevel::ReadOnly;
+    req.plan = true;
     req.model = Some(models[0].id.clone());
     let (controls, tx, _, _, _) = controls("No");
     drop(tx);

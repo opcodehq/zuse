@@ -2449,9 +2449,13 @@ impl RpcService for EngineRpc {
                 | methods::FORGET_AGENT_ACCOUNT
         ) {
             self.voice.retire();
+            self.agent_accounts.forget_dictation_auth();
         }
         if method == "TranscribeDictation" {
             return self.transcribe_dictation(params).await;
+        }
+        if method == "PrepareDictation" {
+            return self.prepare_dictation().await;
         }
         if voice_remote::handles(method) {
             return self.voice_remote(method, params).await;
@@ -2973,10 +2977,14 @@ impl RpcService for EngineRpc {
                     .account
                     .as_ref()
                     .ok_or_else(|| RpcError::Failed("Account service is unavailable.".into()))?;
-                let progress = account
-                    .sign_in()
-                    .await
-                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                // Only a client on this machine can follow a loopback redirect;
+                // remote browsers confirm a device code instead.
+                let progress = if params["browser"] == true {
+                    account.sign_in_in_browser().await
+                } else {
+                    account.sign_in().await
+                }
+                .map_err(|e| RpcError::Failed(e.to_string()))?;
                 RpcReply::value(&progress)
             }
             methods::CLOUD_ACCOUNT_SIGN_OUT => {
@@ -6019,17 +6027,17 @@ mod tests {
         );
         let expected =
             serde_json::to_value(core.workspace.chat("selected").unwrap().unwrap().config).unwrap();
-        let readonly = serde_json::json!({"harness":"codex","model":"first","sandbox":"read-only"});
+        let planned =
+            serde_json::json!({"harness":"codex","model":"first","sandbox":"auto","plan":true});
         rpc.handle(
             methods::MUTATE,
-            serde_json::json!({"op":"setChatConfig","chatId":"selected","config":readonly}),
+            serde_json::json!({"op":"setChatConfig","chatId":"selected","config":planned}),
         )
         .await
         .unwrap();
-        assert_eq!(
-            stream.next().await.unwrap()["config"]["sandbox"],
-            "read-only"
-        );
+        let published = stream.next().await.unwrap();
+        assert_eq!(published["config"]["sandbox"], "auto");
+        assert_eq!(published["config"]["plan"], true);
         let desired =
             serde_json::json!({"harness":"codex","model":"second","sandbox":"workspace-write"});
         let stale = rpc.handle(methods::MUTATE, serde_json::json!({"op":"setChatConfig","chatId":"selected","expectedConfig":{"deviceId":core.device_id,"config":expected},"config":desired})).await;
@@ -6042,11 +6050,12 @@ mod tests {
                 .config
                 .unwrap()
                 .sandbox,
-            zuse_protocol::SandboxLevel::ReadOnly
+            zuse_protocol::SandboxLevel::Auto
         );
         let current =
             serde_json::to_value(core.workspace.chat("selected").unwrap().unwrap().config).unwrap();
-        let saved = serde_json::json!({"harness":"codex","model":"second","sandbox":"read-only"});
+        let saved =
+            serde_json::json!({"harness":"codex","model":"second","sandbox":"auto","plan":true});
         rpc.handle(methods::MUTATE, serde_json::json!({"op":"setChatConfig","chatId":"selected","expectedConfig":{"deviceId":core.device_id,"config":current},"config":saved})).await.unwrap();
         assert_eq!(stream.next().await.unwrap()["config"]["model"], "second");
         let wrong_host = rpc.handle(methods::MUTATE, serde_json::json!({"op":"setChatConfig","chatId":"selected","expectedConfig":{"deviceId":"another-computer","config":saved},"config":desired})).await;

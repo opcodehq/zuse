@@ -23,12 +23,10 @@ pub async fn serve(
         if identity.has_pending_renewal()
             || bootstrap.runtime_credential_expires_at <= now_ms() + 60000
         {
-            match authority.renew(identity).await {
-                Ok(()) => {
-                    if let Some(boot) = identity.bootstrap() {
-                        credentials.send_replace(boot.clone());
-                    }
-                }
+            let renewed = authority.renew(identity).await;
+            publish(identity, &credentials);
+            match renewed {
+                Ok(()) => {}
                 Err(error) if retryable(&error) => {
                     wait(&cancel, backoff).await;
                     backoff = (backoff * 2).min(10);
@@ -94,8 +92,10 @@ pub async fn serve(
                 _=renewal.tick()=> {
                     let boot=identity.bootstrap().ok_or_else(||anyhow::anyhow!("runtime_not_enrolled"))?;
                     if identity.has_pending_renewal() || boot.runtime_credential_expires_at<=now_ms()+120000 {
-                        match authority.renew(identity).await {
-                            Ok(())=>{backoff=1;if let Some(boot)=identity.bootstrap(){credentials.send_replace(boot.clone());}},Err(error) if retryable(&error)=>{},Err(error)=>return Err(error),
+                        let renewed = authority.renew(identity).await;
+                        publish(identity, &credentials);
+                        match renewed {
+                            Ok(())=>backoff=1,Err(error) if retryable(&error)=>{},Err(error)=>return Err(error),
                         }
                     }
                     if identity.bootstrap().is_none_or(|b|b.runtime_credential_expires_at<=now_ms()) {link_cancel.cancel();let _=(&mut socket).await;break;}
@@ -107,6 +107,17 @@ pub async fn serve(
         }
         wait(&cancel, backoff).await;
         backoff = (backoff * 2).min(10);
+    }
+}
+/// Hand consumers whatever credential the identity now holds, whether or not
+/// the renewal call reported success: a failure after the identity changed
+/// must not leave them presenting a bearer the identity no longer has.
+fn publish(
+    identity: &Identity,
+    credentials: &tokio::sync::watch::Sender<zuse_protocol::cloud::CloudRuntimeBootstrap>,
+) {
+    if let Some(boot) = identity.bootstrap() {
+        credentials.send_replace(boot.clone());
     }
 }
 pub fn retryable(error: &anyhow::Error) -> bool {

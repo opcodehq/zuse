@@ -246,6 +246,7 @@ async fn turn(core: &EngineCore, cwd: &std::path::Path, live: bool, second: bool
             CHAT,
             HarnessId::Codex,
             RunRequest {
+                plan: true,
                 mcp: None,
                 prompt: prompt.into(),
                 harness: None,
@@ -254,7 +255,7 @@ async fn turn(core: &EngineCore, cwd: &std::path::Path, live: bool, second: bool
                 reasoning: Some(ReasoningLevel::Medium),
                 model_options: Default::default(),
                 cwd: cwd.display().to_string(),
-                sandbox: SandboxLevel::ReadOnly,
+                sandbox: SandboxLevel::WorkspaceWrite,
                 auto_approve: true,
                 attachments: vec![],
                 worktree: None,

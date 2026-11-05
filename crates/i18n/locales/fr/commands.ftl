@@ -152,3 +152,24 @@ commands-command_group_application = Demande
 commands-new_chat_without_project = Nouvelle discussion sans projet
 
 commands-new_chat_without_project_description = Commencer une nouvelle discussion dans son propre dossier temporaire
+
+commands-commands_no_background_tasks = Aucune tâche en arrière-plan à arrêter
+commands-commands_stop_background_tasks_confirm =
+    { $count ->
+       [one] Appuyez de nouveau sur { $shortcut } pour arrêter { $count } tâche en arrière-plan
+       *[other] Appuyez de nouveau sur { $shortcut } pour arrêter { $count } tâches en arrière-plan
+    }
+commands-commands_stopping_background_tasks =
+    { $count ->
+       [one] Arrêt de { $count } tâche en arrière-plan
+       *[other] Arrêt de { $count } tâches en arrière-plan
+    }
+commands-shortcuts_panel_title = Raccourcis clavier
+commands-shortcuts_panel_description = Tapez ? dans un compositeur vide pour ouvrir ce panneau à tout moment.
+commands-shortcuts_panel_chat = Discussion
+commands-shortcuts_panel_triggers = Saisir dans le compositeur
+commands-shortcuts_panel_trigger_command = Exécuter une commande
+commands-shortcuts_panel_trigger_file = Mentionner un fichier
+commands-shortcuts_panel_trigger_skill = Utiliser une compétence
+commands-shortcuts_panel_customize = Modifier les raccourcis dans les Réglages
+commands-shortcuts_panel_close = Fermer

@@ -21,6 +21,7 @@ pub mod accounts;
 pub mod appearance;
 pub mod archived;
 pub mod cloud_billing;
+mod command_labels;
 pub mod composer;
 mod custom_acp;
 pub mod defaults;
@@ -392,6 +393,11 @@ pub fn default_permission_mode(cx: &App) -> zuse_protocol::presentation::Permiss
 }
 
 /// Read the picker preference without cloning the full settings for each model row.
+pub fn direct_steer_enabled(cx: &App) -> bool {
+    cx.try_global::<SettingsStore>()
+        .is_some_and(|store| store.current.direct_steer_enabled)
+}
+
 pub fn compact_model_picker(cx: &App) -> bool {
     cx.try_global::<SettingsStore>()
         .is_some_and(|store| store.current.compact_model_picker)
@@ -949,6 +955,12 @@ pub struct UiSettings {
     /// Whether bare Escape stops the active agent after contextual consumers
     /// decline it. Device-local and opt-in.
     pub escape_stops_active_agent: bool,
+    /// Enter steers a running agent instead of queueing the message behind
+    /// its turn. The queue shortcut (Alt+Enter) always queues. Opt-in.
+    pub direct_steer_enabled: bool,
+    /// Drafts set aside with Ctrl+S, newest first (at most 20). Kept on this
+    /// device across restarts.
+    pub prompt_stash: Vec<crate::composer::StashedPrompt>,
     /// The Settings section last viewed. ⌘, / Ctrl+,, the footer gear and the
     /// palette reopen it; links naming a section replace it. Files without
     /// it, or with a name this build does not know, open on General.
@@ -1097,6 +1109,8 @@ impl Default for UiSettings {
             terminal_open: false,
             keymap: KeymapConfig::default(),
             escape_stops_active_agent: false,
+            direct_steer_enabled: false,
+            prompt_stash: Vec::new(),
             settings_section: crate::shell::SettingsSection::default(),
             composer_send_behavior: ComposerSendBehavior::default(),
             default_model: None,
@@ -1199,7 +1213,7 @@ pub enum ShortcutId {
 }
 
 impl ShortcutId {
-    pub const ALL: [ShortcutId; 51] = [
+    pub const ALL: [ShortcutId; 69] = [
         ShortcutId::Desktop(keybindings::Command::NewChat),
         ShortcutId::Desktop(keybindings::Command::NewChatWithoutProject),
         ShortcutId::Desktop(keybindings::Command::OpenProject),
@@ -1229,10 +1243,29 @@ impl ShortcutId {
         ShortcutId::Desktop(keybindings::Command::FocusPrevPane),
         ShortcutId::Desktop(keybindings::Command::OpenChatSwitcher),
         ShortcutId::Desktop(keybindings::Command::SearchFiles),
+        ShortcutId::Desktop(keybindings::Command::ShowShortcuts),
+        ShortcutId::Desktop(keybindings::Command::FindInChat),
+        ShortcutId::Desktop(keybindings::Command::OpenModelPicker),
+        ShortcutId::Desktop(keybindings::Command::CycleReasoningEffort),
+        ShortcutId::Desktop(keybindings::Command::ToggleFastMode),
+        ShortcutId::Desktop(keybindings::Command::ToggleToolDetails),
+        ShortcutId::Desktop(keybindings::Command::ToggleTaskList),
+        ShortcutId::Desktop(keybindings::Command::StopBackgroundTasks),
         ShortcutId::Desktop(keybindings::Command::ComposerSubmit),
         ShortcutId::Desktop(keybindings::Command::ComposerNewline),
         ShortcutId::Desktop(keybindings::Command::ComposerForceSubmit),
         ShortcutId::Desktop(keybindings::Command::ComposerTogglePlanMode),
+        ShortcutId::Desktop(keybindings::Command::ComposerPreviousMessage),
+        ShortcutId::Desktop(keybindings::Command::ComposerNextMessage),
+        ShortcutId::Desktop(keybindings::Command::ComposerQueueSubmit),
+        ShortcutId::Desktop(keybindings::Command::ComposerDeleteToStart),
+        ShortcutId::Desktop(keybindings::Command::ComposerDeleteToEnd),
+        ShortcutId::Desktop(keybindings::Command::ComposerDeleteWord),
+        ShortcutId::Desktop(keybindings::Command::ComposerInterrupt),
+        ShortcutId::Desktop(keybindings::Command::ComposerYank),
+        ShortcutId::Desktop(keybindings::Command::ComposerYankPop),
+        ShortcutId::Desktop(keybindings::Command::ComposerStash),
+        ShortcutId::Desktop(keybindings::Command::ComposerSearchHistory),
         ShortcutId::Desktop(keybindings::Command::EditorSave),
         ShortcutId::Desktop(keybindings::Command::EditorAnnotate),
         ShortcutId::ToggleDictation,
@@ -1240,7 +1273,6 @@ impl ShortcutId {
         ShortcutId::RandomWallpaper,
         ShortcutId::BrowserReload,
         ShortcutId::ToggleFiles,
-        ShortcutId::OpenModelPicker,
         ShortcutId::ArchiveSession,
         ShortcutId::JumpSession(0),
         ShortcutId::JumpSession(1),
@@ -1264,6 +1296,7 @@ impl ShortcutId {
             Self::NewProject => Command::OpenProject,
             Self::NextSession => Command::NextChat,
             Self::PrevSession => Command::PrevChat,
+            Self::OpenModelPicker => Command::OpenModelPicker,
             other => return other,
         })
     }
@@ -1276,6 +1309,7 @@ impl ShortcutId {
         match self {
             Self::Desktop(command) => command.context(),
             Self::ToggleDictation => Some("MessageComposer"),
+            Self::SaveFile => Some("Input"),
             _ => None,
         }
     }
@@ -1319,7 +1353,24 @@ impl ShortcutId {
             ShortcutId::Desktop(keybindings::Command::PrevChat) if !mac => "mod-shift-tab",
             ShortcutId::Desktop(keybindings::Command::FocusNextPane) if !mac => "mod-`",
             ShortcutId::Desktop(keybindings::Command::FocusPrevPane) if !mac => "mod-shift-`",
-            ShortcutId::Desktop(command) => command.default_combo(),
+            // Ctrl+U/Ctrl+K are line kills on macOS only; elsewhere Ctrl is
+            // the primary modifier and those keys already belong to app
+            // shortcuts, so the commands start unbound there.
+            ShortcutId::Desktop(
+                keybindings::Command::ComposerDeleteToStart
+                | keybindings::Command::ComposerDeleteToEnd,
+            ) if !mac => "",
+            ShortcutId::Desktop(keybindings::Command::ComposerDeleteWord) if !mac => {
+                "mod-backspace"
+            }
+            // Off macOS Ctrl is the primary modifier, which the recorder
+            // spells "mod". Stash shares Ctrl+S with Save file, but each is
+            // scoped to its own editor. Ctrl+R reloads elsewhere, so search
+            // takes Alt+R.
+            ShortcutId::Desktop(keybindings::Command::ComposerYank) if !mac => "mod-y",
+            ShortcutId::Desktop(keybindings::Command::ComposerStash) if !mac => "mod-s",
+            ShortcutId::Desktop(keybindings::Command::ComposerSearchHistory) if !mac => "alt-r",
+            ShortcutId::Desktop(command) => command.default_combo_on(mac),
             ShortcutId::ToggleDictation => "mod-d",
             ShortcutId::RandomWallpaper => "mod-u",
             ShortcutId::CaptureAppshot if mac => "ctrl-alt-space",
@@ -1332,7 +1383,8 @@ impl ShortcutId {
             ShortcutId::ToggleTerminal => "mod-j",
             ShortcutId::NewSession => "mod-n",
             ShortcutId::NewProject => "mod-o",
-            ShortcutId::OpenModelPicker => "mod-/",
+            // Mod+/ opens the shortcuts panel.
+            ShortcutId::OpenModelPicker => "alt-p",
             // Ctrl+Tab on every platform — but spelled the way THAT platform's
             // recorder spells ctrl (see `combo_from_keystroke`). Off macOS
             // ctrl IS the primary and stores as "mod"; on macOS it is its own
@@ -1363,6 +1415,9 @@ impl ShortcutId {
         }
     }
 }
+
+/// Bumped whenever a shipped default moves; see [`KeymapConfig::align_desktop_defaults`].
+const DESKTOP_DEFAULTS_VERSION: u8 = 3;
 
 /// Persisted shortcut combos. Stored platform-neutral ("mod-s"); translated to
 /// "cmd-s"/"ctrl-s" at bind time by [`platform_combo`].
@@ -1440,7 +1495,7 @@ pub fn sidebar_pin_profile_key(
 impl Default for KeymapConfig {
     fn default() -> Self {
         Self {
-            desktop_defaults_version: 1,
+            desktop_defaults_version: DESKTOP_DEFAULTS_VERSION,
             desktop: HashMap::new(),
             desktop_rules: Vec::new(),
             toggle_dictation: ShortcutId::ToggleDictation.default_combo().into(),
@@ -1476,9 +1531,20 @@ impl KeymapConfig {
         self.desktop_rules = rules;
     }
     fn align_desktop_defaults(&mut self) {
-        if self.desktop_defaults_version > 0 {
-            return;
+        if self.desktop_defaults_version < 1 {
+            self.align_desktop_defaults_v1();
         }
+        // Version 2 hands Mod+/ to the shortcuts panel; an untouched model
+        // picker binding follows its new default.
+        if self.desktop_defaults_version < 2 && self.open_model_picker == "mod-/" {
+            self.open_model_picker = ShortcutId::OpenModelPicker.default_combo().into();
+        }
+        if self.desktop_defaults_version < 3 {
+            self.heal_new_composer_defaults();
+        }
+        self.desktop_defaults_version = DESKTOP_DEFAULTS_VERSION;
+    }
+    fn align_desktop_defaults_v1(&mut self) {
         for (field, old, new) in [
             (&mut self.toggle_changes, "mod-r", "mod-alt-b"),
             (&mut self.new_project, "mod-shift-n", "mod-o"),
@@ -1493,7 +1559,6 @@ impl KeymapConfig {
                 combo.clear();
             }
         }
-        self.desktop_defaults_version = 1;
     }
 
     fn legacy_command(command: keybindings::Command) -> Option<ShortcutId> {
@@ -1507,6 +1572,7 @@ impl KeymapConfig {
             Command::NextChat => ShortcutId::NextSession,
             Command::PrevChat => ShortcutId::PrevSession,
             Command::EditorSave => ShortcutId::SaveFile,
+            Command::OpenModelPicker => ShortcutId::OpenModelPicker,
             _ => return None,
         })
     }
@@ -1618,6 +1684,32 @@ impl KeymapConfig {
         while self.jump_session.len() < JUMP_SLOTS {
             self.jump_session
                 .push(JUMP_DEFAULTS[self.jump_session.len()].to_string());
+        }
+    }
+
+    /// Newly added composer defaults must not steal an existing app shortcut.
+    fn heal_new_composer_defaults(&mut self) {
+        use keybindings::Command;
+        for command in [
+            Command::ComposerYank,
+            Command::ComposerYankPop,
+            Command::ComposerStash,
+            Command::ComposerSearchHistory,
+        ] {
+            if self.desktop.contains_key(&command) {
+                continue;
+            }
+            let id = ShortcutId::Desktop(command);
+            let combo = platform_combo(self.get(id));
+            if !combo.is_empty()
+                && ShortcutId::ALL.into_iter().any(|other| {
+                    other != id
+                        && other.overlaps_context(id)
+                        && platform_combo(self.get(other)) == combo
+                })
+            {
+                self.desktop.insert(command, String::new());
+            }
         }
     }
 
@@ -1883,6 +1975,8 @@ impl UiSettings {
             skills_in_slash_menu,
             skill_completion_by_harness,
             compact_model_picker,
+            direct_steer_enabled,
+            prompt_stash,
             sidebar_width,
             sidebar_collapsed,
             sidebar_grouped,
@@ -2092,6 +2186,7 @@ impl UiSettings {
                                         && !ShortcutId::ALL.iter().any(|other| {
                                             let existing = resolved.get(*other);
                                             !existing.is_empty()
+                                                && other.overlaps_context(id)
                                                 && platform_combo(existing)
                                                     == platform_combo(candidate)
                                         })
@@ -2987,6 +3082,12 @@ mod tests {
                 ..KeymapConfig::default()
             },
             escape_stops_active_agent: true,
+            direct_steer_enabled: true,
+            prompt_stash: vec![crate::composer::StashedPrompt {
+                id: "stash-1".into(),
+                text: "Parked idea".into(),
+                created_at: 1,
+            }],
             settings_section: crate::shell::SettingsSection::Shortcuts,
             composer_send_behavior: ComposerSendBehavior::ModEnter,
             skills_in_slash_menu: true,
@@ -3629,6 +3730,7 @@ mod tests {
         assert_eq!(d.terminal_height, 280.0);
         assert!(!d.sidebar_collapsed && !d.right_pane_open && !d.terminal_open);
         assert!(!d.escape_stops_active_agent);
+        assert!(!d.direct_steer_enabled);
     }
 
     #[test]
@@ -3687,6 +3789,91 @@ mod tests {
         assert_eq!(loaded.keymap.save_file, "");
         assert_eq!(loaded.keymap.new_session, "mod-s");
         assert!(conflicted_shortcuts(&loaded.keymap).is_empty());
+    }
+
+    #[test]
+    fn model_picker_leaves_mod_slash_to_the_shortcuts_panel() {
+        use keybindings::Command;
+        let migrate = |json: serde_json::Value| {
+            let mut keymap: KeymapConfig = serde_json::from_value(json).unwrap();
+            keymap.align_desktop_defaults();
+            keymap
+        };
+        // An untouched model picker from an older version follows the move.
+        let keymap =
+            migrate(serde_json::json!({"desktopDefaultsVersion":1,"openModelPicker":"mod-/"}));
+        assert_eq!(
+            keymap.get(ShortcutId::Desktop(Command::OpenModelPicker)),
+            "alt-p"
+        );
+        assert_eq!(
+            keymap.get(ShortcutId::Desktop(Command::ShowShortcuts)),
+            "mod-/"
+        );
+        assert!(conflicted_shortcuts(&keymap).is_empty());
+        // A custom combo is kept, and later versions are left alone.
+        let keymap =
+            migrate(serde_json::json!({"desktopDefaultsVersion":1,"openModelPicker":"mod-alt-m"}));
+        assert_eq!(
+            keymap.get(ShortcutId::Desktop(Command::OpenModelPicker)),
+            "mod-alt-m"
+        );
+        let keymap =
+            migrate(serde_json::json!({"desktopDefaultsVersion":2,"openModelPicker":"mod-/"}));
+        assert_eq!(keymap.open_model_picker, "mod-/");
+        // Rebinding the desktop command writes the legacy field.
+        let mut keymap = KeymapConfig::default();
+        keymap.set(
+            ShortcutId::Desktop(Command::OpenModelPicker),
+            "alt-m".into(),
+        );
+        assert_eq!(keymap.open_model_picker, "alt-m");
+        assert_eq!(
+            ShortcutId::OpenModelPicker.canonical(),
+            ShortcutId::Desktop(Command::OpenModelPicker)
+        );
+    }
+
+    #[test]
+    fn chat_shortcut_defaults_are_conflict_free_on_both_platforms() {
+        use keybindings::Command;
+        for mac in [true, false] {
+            let combos: Vec<_> = ShortcutId::ALL
+                .into_iter()
+                .filter(|id| id.available() && id.key_context().is_none())
+                .map(|id| platform_combo_on(mac, id.default_combo_on(mac)))
+                .filter(|combo| !combo.is_empty())
+                .collect();
+            let unique: std::collections::HashSet<_> = combos.iter().collect();
+            assert_eq!(unique.len(), combos.len(), "mac={mac}: {combos:?}");
+        }
+        assert_eq!(
+            ShortcutId::Desktop(Command::ToggleToolDetails).default_combo_on(true),
+            "ctrl-o"
+        );
+        assert_eq!(
+            ShortcutId::Desktop(Command::ToggleTaskList).default_combo_on(false),
+            "mod-shift-t"
+        );
+        assert!(conflicted_shortcuts(&KeymapConfig::default()).is_empty());
+    }
+
+    #[test]
+    fn composer_default_upgrade_keeps_existing_app_bindings() {
+        use keybindings::Command;
+        let mut keymap: KeymapConfig = serde_json::from_value(serde_json::json!({
+            "desktopDefaultsVersion": 2, "newSession": "mod-s", "saveFile": "mod-shift-s"
+        }))
+        .unwrap();
+        keymap.align_desktop_defaults();
+        assert_eq!(keymap.new_session, "mod-s");
+        assert_eq!(keymap.save_file, "mod-shift-s");
+        assert_eq!(keymap.get(ShortcutId::Desktop(Command::ComposerStash)), "");
+        assert!(conflicted_shortcuts(&keymap).is_empty());
+        let mut restored: KeymapConfig =
+            serde_json::from_value(serde_json::to_value(&keymap).unwrap()).unwrap();
+        restored.align_desktop_defaults();
+        assert_eq!(restored, keymap);
     }
 
     #[test]
@@ -3830,13 +4017,21 @@ mod tests {
     fn defaults_are_distinct_physical_keys() {
         // Distinct STRINGS is not enough — two defaults could still resolve to
         // the same keystroke through `platform_combo`.
-        let mut seen = std::collections::HashSet::new();
+        // Editors with disjoint key contexts (the composer's Stash and the
+        // file editor's Save) may share a key.
+        let mut seen: Vec<(String, ShortcutId)> = Vec::new();
         for id in ShortcutId::ALL {
             let bound = platform_combo(id.default_combo());
             if bound.is_empty() {
                 continue;
             }
-            assert!(seen.insert(bound.clone()), "{bound:?} bound twice");
+            assert!(
+                !seen
+                    .iter()
+                    .any(|(other, owner)| *other == bound && owner.overlaps_context(id)),
+                "{bound:?} bound twice"
+            );
+            seen.push((bound, id));
         }
     }
 
@@ -3902,6 +4097,7 @@ mod tests {
 
         let loaded = UiSettings::load(dir.path());
         assert!(!loaded.escape_stops_active_agent);
+        assert!(!loaded.direct_steer_enabled);
         assert_eq!(loaded.sidebar_width, 300.0);
         assert!(!loaded.sound_enabled);
     }

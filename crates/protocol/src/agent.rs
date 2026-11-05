@@ -191,8 +191,10 @@ pub enum ReasoningLevel {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SandboxLevel {
-    ReadOnly,
+    /// Ask before restricted actions. Chats stored with the retired
+    /// `read-only` level load here; plan mode is now [`RunRequest::plan`].
     #[default]
+    #[serde(alias = "read-only")]
     WorkspaceWrite,
     /// "Approve for me": workspace writes, with the agent's own automatic
     /// approver deciding escalations (Claude Code's `auto` permission mode,
@@ -278,6 +280,11 @@ pub struct RunRequest {
     pub model_options: serde_json::Map<String, serde_json::Value>,
     pub cwd: String,
     pub sandbox: SandboxLevel,
+    /// Plan mode: the agent inspects and proposes without changing files.
+    /// Independent of the access level. Engine-internal runs that must not
+    /// write (titles, coordinators) set it too. Additive + serde-defaulted.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub plan: bool,
     #[serde(default)]
     pub auto_approve: bool,
     /// Harness-native session id to resume, if any.
@@ -308,9 +315,10 @@ pub struct RunRequest {
 
 impl RunRequest {
     /// Bypassing approvals requires both explicit full access and the opt-in.
-    /// A stale auto-approval flag must never weaken a restricted sandbox.
+    /// A stale auto-approval flag must never weaken a restricted sandbox,
+    /// and plan mode never approves tools on the agent's behalf.
     pub fn auto_approves_tools(&self) -> bool {
-        self.auto_approve && self.sandbox == SandboxLevel::DangerFullAccess
+        self.auto_approve && !self.plan && self.sandbox == SandboxLevel::DangerFullAccess
     }
 }
 
@@ -320,7 +328,6 @@ mod access_posture_tests {
     #[test]
     fn approval_bypass_requires_both_full_access_and_explicit_opt_in() {
         for sandbox in [
-            SandboxLevel::ReadOnly,
             SandboxLevel::WorkspaceWrite,
             SandboxLevel::Auto,
             SandboxLevel::DangerFullAccess,
@@ -333,12 +340,13 @@ mod access_posture_tests {
                 );
             }
         }
+        let planned: RunRequest = serde_json::from_value(serde_json::json!({"prompt":"test","cwd":"/tmp","sandbox":"danger-full-access","autoApprove":true,"plan":true})).unwrap();
+        assert!(!planned.auto_approves_tools());
     }
 
     #[test]
     fn sandbox_levels_round_trip_and_keep_legacy_words() {
         for (level, word) in [
-            (SandboxLevel::ReadOnly, "read-only"),
             (SandboxLevel::WorkspaceWrite, "workspace-write"),
             (SandboxLevel::Auto, "auto"),
             (SandboxLevel::DangerFullAccess, "danger-full-access"),
@@ -356,6 +364,15 @@ mod access_posture_tests {
             serde_json::from_value::<SandboxLevel>(serde_json::json!("auto-review")).unwrap(),
             SandboxLevel::Auto
         );
+        assert_eq!(
+            serde_json::from_value::<SandboxLevel>(serde_json::json!("read-only")).unwrap(),
+            SandboxLevel::WorkspaceWrite
+        );
+        let legacy: crate::ChatConfig =
+            serde_json::from_value(serde_json::json!({"harness":"codex","sandbox":"read-only"}))
+                .unwrap();
+        assert_eq!(legacy.sandbox, SandboxLevel::WorkspaceWrite);
+        assert!(!legacy.plan);
         let config: crate::ChatConfig =
             serde_json::from_value(serde_json::json!({"harness":"codex","sandbox":"auto"}))
                 .unwrap();

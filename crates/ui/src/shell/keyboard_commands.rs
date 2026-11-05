@@ -40,6 +40,37 @@ pub(super) fn bind(cx: &mut App, keymap: &KeymapConfig) {
             Command::ComposerSubmit | Command::ComposerForceSubmit | Command::ComposerNewline => {
                 continue;
             }
+            Command::ComposerPreviousMessage => {
+                KeyBinding::new(&combo, crate::composer::PreviousMessage, context)
+            }
+            Command::ComposerNextMessage => {
+                KeyBinding::new(&combo, crate::composer::NextMessage, context)
+            }
+            Command::ComposerQueueSubmit => {
+                KeyBinding::new(&combo, crate::composer::QueueSubmit, context)
+            }
+            Command::ComposerDeleteToStart => {
+                KeyBinding::new(&combo, crate::composer::DeleteToLineStart, context)
+            }
+            Command::ComposerDeleteToEnd => {
+                KeyBinding::new(&combo, crate::composer::DeleteToLineEnd, context)
+            }
+            Command::ComposerDeleteWord => {
+                KeyBinding::new(&combo, crate::composer::DeleteWordLeft, context)
+            }
+            Command::ComposerYank => KeyBinding::new(&combo, crate::composer::Yank, context),
+            Command::ComposerYankPop => KeyBinding::new(&combo, crate::composer::YankPop, context),
+            Command::ComposerStash => KeyBinding::new(&combo, crate::composer::StashDraft, context),
+            Command::ComposerSearchHistory => {
+                KeyBinding::new(&combo, crate::composer::SearchHistory, context)
+            }
+            Command::ComposerInterrupt => KeyBinding::new(
+                &combo,
+                crate::composer::InterruptAgent {
+                    double_press: rule.key == "escape",
+                },
+                context,
+            ),
             Command::NewChat => KeyBinding::new(&combo, NewSession, context),
             Command::OpenProject => KeyBinding::new(&combo, AddSpacePalette, context),
             Command::Settings => KeyBinding::new(&combo, OpenSettings, context),
@@ -47,6 +78,7 @@ pub(super) fn bind(cx: &mut App, keymap: &KeymapConfig) {
             Command::ToggleRightSidebar => KeyBinding::new(&combo, ToggleChanges, context),
             Command::ToggleTerminal => KeyBinding::new(&combo, ToggleTerminal, context),
             Command::EditorSave => KeyBinding::new(&combo, SaveFile, context),
+            Command::OpenModelPicker => KeyBinding::new(&combo, OpenModelPicker, context),
             _ => KeyBinding::new(&combo, DesktopCommand(command), context),
         };
         cx.bind_keys([binding]);
@@ -83,7 +115,10 @@ impl Shell {
         if self.navigation_overlay_open(cx)
             && !matches!(
                 command,
-                Command::Settings | Command::OpenChatSwitcher | Command::SearchFiles
+                Command::Settings
+                    | Command::OpenChatSwitcher
+                    | Command::SearchFiles
+                    | Command::ShowShortcuts
             )
         {
             return;
@@ -231,11 +266,45 @@ impl Shell {
             }
             Command::ComposerTogglePlanMode => {
                 self.composer
-                    .read(cx)
-                    .pickers()
-                    .clone()
-                    .update(cx, |pickers, cx| pickers.toggle_plan_mode(cx));
+                    .update(cx, |composer, cx| composer.toggle_plan_mode(cx));
             }
+            Command::ShowShortcuts => self.toggle_shortcuts_panel(cx),
+            Command::FindInChat => {
+                if matches!(self.route, Route::Chat) {
+                    self.shortcut_conversation(window, cx)
+                        .1
+                        .update(cx, |transcript, cx| transcript.open_find(window, cx));
+                }
+            }
+            Command::OpenModelPicker => window.dispatch_action(Box::new(OpenModelPicker), cx),
+            Command::CycleReasoningEffort | Command::ToggleFastMode => {
+                if matches!(self.route, Route::Chat) {
+                    let composer = self.shortcut_conversation(window, cx).2;
+                    let pickers = composer.read(cx).pickers().clone();
+                    pickers.update(cx, |pickers, cx| {
+                        if command == Command::CycleReasoningEffort {
+                            pickers.cycle_reasoning_effort(cx)
+                        } else {
+                            pickers.toggle_fast_mode(cx)
+                        }
+                    });
+                }
+            }
+            Command::ToggleToolDetails => {
+                if matches!(self.route, Route::Chat) {
+                    self.shortcut_conversation(window, cx)
+                        .1
+                        .update(cx, |transcript, cx| transcript.toggle_all_tool_details(cx));
+                }
+            }
+            Command::ToggleTaskList => {
+                if matches!(self.route, Route::Chat) {
+                    self.shortcut_conversation(window, cx)
+                        .2
+                        .update(cx, |composer, cx| composer.toggle_task_list(cx));
+                }
+            }
+            Command::StopBackgroundTasks => self.stop_background_tasks_shortcut(window, cx),
             Command::EditorAnnotate => {
                 let file = self
                     .active_main_file(cx)
@@ -252,6 +321,17 @@ impl Shell {
             Command::ComposerSubmit
             | Command::ComposerNewline
             | Command::ComposerForceSubmit
+            | Command::ComposerPreviousMessage
+            | Command::ComposerNextMessage
+            | Command::ComposerQueueSubmit
+            | Command::ComposerDeleteToStart
+            | Command::ComposerDeleteToEnd
+            | Command::ComposerDeleteWord
+            | Command::ComposerInterrupt
+            | Command::ComposerYank
+            | Command::ComposerYankPop
+            | Command::ComposerStash
+            | Command::ComposerSearchHistory
             | Command::EditorSave => {}
         }
     }
@@ -418,34 +498,75 @@ mod tests {
             let focus = shell.read(cx).composer.focus_handle(cx);
             window.focus(&focus, cx);
         });
-        cx.simulate_keystrokes("shift-tab");
-        cx.update(|_, cx| {
-            assert_eq!(
-                shell
+        let resolved = |cx: &mut gpui::VisualTestContext| {
+            cx.update(|_, cx| {
+                let resolved = shell
                     .read(cx)
                     .composer
                     .read(cx)
                     .pickers()
                     .read(cx)
-                    .resolved(cx)
-                    .sandbox,
-                zuse_protocol::SandboxLevel::ReadOnly
-            )
-        });
+                    .resolved(cx);
+                (resolved.sandbox, resolved.plan)
+            })
+        };
         cx.simulate_keystrokes("shift-tab");
-        cx.update(|_, cx| {
-            assert_eq!(
+        // Plan mode is its own flag: the chosen access level is untouched.
+        assert_eq!(resolved(cx), (zuse_protocol::SandboxLevel::Auto, true));
+        cx.simulate_keystrokes("shift-tab");
+        assert_eq!(resolved(cx), (zuse_protocol::SandboxLevel::Auto, false));
+    }
+    #[gpui::test]
+    fn chat_shortcuts_run_from_the_focused_composer(cx: &mut TestAppContext) {
+        let (shell, _, _dir) = setup(cx);
+        let (_, cx) = cx.add_window_view(|_, _| ComposerHost {
+            shell: shell.clone(),
+        });
+        shell.update(cx, |shell, cx| shell.open_new_session(None, cx));
+        cx.update(|window, cx| {
+            window.draw(cx).clear();
+            let focus = shell.read(cx).composer.focus_handle(cx);
+            window.focus(&focus, cx);
+        });
+        let text = |cx: &mut VisualTestContext| {
+            cx.update(|_, cx| {
                 shell
                     .read(cx)
                     .composer
                     .read(cx)
-                    .pickers()
+                    .input
                     .read(cx)
-                    .resolved(cx)
-                    .sandbox,
-                zuse_protocol::SandboxLevel::Auto
+                    .text()
+                    .to_owned()
+            })
+        };
+        // `?` in the empty composer opens the panel instead of typing.
+        cx.simulate_input("?");
+        cx.update(|_, cx| assert!(shell.read(cx).shortcuts_panel_open));
+        assert_eq!(text(cx), "");
+        cx.simulate_keystrokes(&platform_combo("mod-/"));
+        cx.update(|_, cx| assert!(!shell.read(cx).shortcuts_panel_open));
+        // Once there is a draft, `?` is just a character.
+        cx.simulate_input("why?");
+        assert_eq!(text(cx), "why?");
+        cx.update(|_, cx| assert!(!shell.read(cx).shortcuts_panel_open));
+        // App chords reach the transcript before the editor sees them.
+        let details = Command::ToggleToolDetails.default_combo();
+        cx.simulate_keystrokes(&platform_combo(details));
+        cx.update(|_, cx| {
+            assert_eq!(
+                shell.read(cx).transcript.read(cx).bulk_tool_details(),
+                Some(true)
             )
         });
+        cx.simulate_keystrokes(&platform_combo(details));
+        cx.update(|_, cx| {
+            assert_eq!(
+                shell.read(cx).transcript.read(cx).bulk_tool_details(),
+                Some(false)
+            )
+        });
+        assert_eq!(text(cx), "why?");
     }
     #[test]
     fn scoped_commands_do_not_reserve_typing_chords_globally() {

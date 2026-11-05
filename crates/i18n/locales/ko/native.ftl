@@ -340,6 +340,45 @@ native-stop_agent_with_escape = Escape로 에이전트 중지
 native-stop_active_agent_with_escape = Escape로 활성 에이전트 중지
 
 # Context: application-owned interface text; do not translate paths or product names.
+native-direct_steer = 바로 조정
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-direct_steer_description = Enter를 누르면 실행 중인 에이전트에 바로 보냅니다. Alt+Enter는 항상 대기열에 추가합니다.
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-steer_message = 메시지로 조정
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-press_esc_again_to_clear = 지우려면 Esc를 한 번 더 누르세요
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-draft_stashed = 초안을 보관했습니다
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-stashed_drafts = 보관한 초안
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-nothing_stashed = 아직 보관한 초안이 없습니다
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-search_sent_messages = 보낸 메시지 검색…
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-sent_messages = 보낸 메시지
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-no_matching_messages = 일치하는 메시지가 없습니다
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-nothing_to_search = 아직 보낸 메시지가 없습니다
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-remove_attachments_before_stashing = 이 초안을 보관하기 전에 첨부 파일을 제거하세요.
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-emoji = 이모지
+
+# Context: application-owned interface text; do not translate paths or product names.
 native-open_pull_requests_in = 풀 리퀘스트를 열 위치
 
 # Context: application-owned interface text; do not translate paths or product names.
@@ -1138,3 +1177,42 @@ native-local_workspace = 로컬 작업 공간
 
 # Context: new-chat landing screen and local account status.
 native-no_messages_archived = 이 보관된 채팅에 메시지가 없습니다.
+
+# Labels for conversation and composer keyboard commands.
+native-shortcut_previous_message = 이전 보낸 메시지
+native-shortcut_next_message = 다음 보낸 메시지
+native-shortcut_queue_message = 메시지 대기열에 추가
+native-shortcut_delete_line_start = 줄 시작까지 삭제
+native-shortcut_delete_line_end = 줄 끝까지 삭제
+native-shortcut_delete_word = 이전 단어 삭제
+native-shortcut_stop_agent = 에이전트 중지(두 번 누르기)
+native-shortcut_show_shortcuts = 키보드 단축키
+native-shortcut_find_in_chat = 채팅에서 찾기
+native-shortcut_model_picker = 모델 선택 열기
+native-shortcut_reasoning = 추론 수준 전환
+native-shortcut_fast_mode = 빠른 모드 전환
+native-shortcut_tool_details = 도구 세부 정보 펼치기/접기
+native-shortcut_task_list = 작업 목록 전환
+native-shortcut_stop_background = 백그라운드 작업 중지
+native-shortcut_yank = 삭제한 텍스트 붙여넣기
+native-shortcut_yank_pop = 삭제한 텍스트 순환
+native-shortcut_stash = 초안 보관
+native-shortcut_history = 보낸 메시지 검색
+
+# Context: composer add menu and plan mode toggle.
+native-composer_add_to_message = 메시지에 추가
+
+# Context: composer add menu and plan mode toggle.
+native-composer_attach_images = 이미지 첨부
+
+# Context: composer add menu and plan mode toggle.
+native-composer_plan_mode_description = 파일을 변경하지 않고 살펴보고 제안합니다.
+
+# Context: composer add menu and plan mode toggle.
+native-composer_plan_mode_unavailable = 이 에이전트에서는 사용할 수 없습니다
+
+# Context: composer add menu and plan mode toggle.
+native-composer_plan_chip = 계획
+
+# Context: composer add menu and plan mode toggle.
+native-composer_cloud_plan_unavailable = 계획 모드는 클라우드 실행에서 사용할 수 없습니다. 시작하기 전에 끄세요.

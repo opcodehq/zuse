@@ -176,3 +176,7 @@ required-features = ["appshots-fixture"]
 [[example]]
 name = "approval-rules-fixture"
 required-features = ["appshots-fixture", "browser-fixture"]
+
+[[example]]
+name = "shortcut-visual-fixture"
+required-features = ["browser-fixture"]

@@ -10,7 +10,7 @@
 
 use std::io::IsTerminal;
 
-use zuse_engine::{AuthState, Engine, EngineConfig, InstanceLock, WorkspaceScope};
+use zuse_engine::{AuthState, Engine, EngineConfig, InstanceLock, TerminalSignIn, WorkspaceScope};
 
 #[derive(Debug, PartialEq, Eq)]
 struct AccountStatus {
@@ -76,9 +76,10 @@ fn account_status(scope: WorkspaceScope, auth: &AuthState) -> AccountStatus {
     }
 }
 
-/// `zuse login`: authenticate via the paste-code flow (and workspace
-/// onboarding), persist `session.json`, and exit.
-pub async fn login(config: EngineConfig) -> anyhow::Result<()> {
+/// `zuse login`: authenticate in this machine's browser (loopback redirect), or
+/// via the paste-code flow with `--no-browser`, over SSH or without a display;
+/// run workspace onboarding, persist `session.json`, and exit.
+pub async fn login(config: EngineConfig, no_browser: bool) -> anyhow::Result<()> {
     std::fs::create_dir_all(&config.data_dir)?;
     let _lock = engine_lock(&config, "sign in")?;
     let auth = Engine::build_auth(&config).await;
@@ -101,7 +102,7 @@ pub async fn login(config: EngineConfig) -> anyhow::Result<()> {
     if !std::io::stdin().is_terminal() {
         anyhow::bail!("zuse login needs an interactive terminal");
     }
-    zuse_engine::terminal_sign_in(&auth).await?;
+    zuse_engine::terminal_sign_in(&auth, TerminalSignIn::detect(no_browser)).await?;
     match auth.state() {
         AuthState::SignedIn { user, org_id } => {
             println!(

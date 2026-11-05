@@ -280,7 +280,7 @@ impl ShortcutsPage {
                     .min_w(px(160.0))
                     .flex()
                     .flex_col()
-                    .child(widgets::row_title(theme, id.label()))
+                    .child(widgets::row_title(theme, id.localized_label(cx)))
                     .when(
                         matches!(id, ShortcutId::NextSession | ShortcutId::PrevSession),
                         |row| {
@@ -907,6 +907,47 @@ impl Render for ShortcutsPage {
                     this.set_escape_stops_active_agent(!escape_stops_active_agent, cx);
                 })),
             );
+        let direct_steer = crate::settings::direct_steer_enabled(cx);
+        let direct_steer_row = widgets::card_row(&theme, false)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(160.0))
+                    .child(widgets::row_title(
+                        &theme,
+                        tr(cx, msg::native::direct_steer),
+                    ))
+                    .child(widgets::meta_line(
+                        &theme,
+                        vec![
+                            div()
+                                .child(tr(cx, msg::native::direct_steer_description))
+                                .into_any_element(),
+                        ],
+                    )),
+            )
+            .child(
+                widgets::toggle_switch(&theme, direct_steer, "direct-steer")
+                    .id("direct-steer-toggle")
+                    .debug_selector(|| "direct-steer-toggle".into())
+                    .tab_index(0)
+                    .role(gpui::Role::Switch)
+                    .aria_label(tr(cx, msg::native::direct_steer))
+                    .aria_toggled(if direct_steer {
+                        gpui::Toggled::True
+                    } else {
+                        gpui::Toggled::False
+                    })
+                    .focus_visible(|s| s.border_2().border_color(theme.accent))
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        crate::settings::update(SavePolicy::Immediate, cx, |settings| {
+                            settings.direct_steer_enabled = !direct_steer
+                        });
+                        cx.refresh_windows();
+                        cx.notify();
+                    })),
+            );
         if self.general_page {
             let pull_request_destination = crate::settings::current(cx).pull_request_destination;
             let pull_request_destination_control = widgets::select(
@@ -987,7 +1028,8 @@ impl Render for ShortcutsPage {
                                                         .child(send_behavior_row)
                                                         .child(compact_mode_row)
                                                         .child(compact_model_picker_row)
-                                                        .child(escape_behavior_row),
+                                                        .child(escape_behavior_row)
+                                                        .child(direct_steer_row),
                                                 ),
                                             )
                                             .child(widgets::section(

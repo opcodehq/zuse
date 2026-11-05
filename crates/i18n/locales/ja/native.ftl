@@ -340,6 +340,45 @@ native-stop_agent_with_escape = Escape でエージェントを停止
 native-stop_active_agent_with_escape = Escape で実行中のエージェントを停止
 
 # Context: application-owned interface text; do not translate paths or product names.
+native-direct_steer = 直接ステア
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-direct_steer_description = Enter で実行中のエージェントにすぐ送信します。Alt+Enter は常にキューに追加します。
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-steer_message = メッセージでステア
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-press_esc_again_to_clear = もう一度 Esc を押すとクリアします
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-draft_stashed = 下書きを保管しました
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-stashed_drafts = 保管した下書き
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-nothing_stashed = まだ保管した下書きはありません
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-search_sent_messages = 送信済みメッセージを検索…
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-sent_messages = 送信済みメッセージ
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-no_matching_messages = 一致するメッセージはありません
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-nothing_to_search = まだ送信済みメッセージはありません
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-remove_attachments_before_stashing = この下書きを保管する前に添付ファイルを削除してください。
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-emoji = 絵文字
+
+# Context: application-owned interface text; do not translate paths or product names.
 native-open_pull_requests_in = プルリクエストを開く場所
 
 # Context: application-owned interface text; do not translate paths or product names.
@@ -1138,3 +1177,42 @@ native-local_workspace = ローカルワークスペース
 
 # Context: new-chat landing screen and local account status.
 native-no_messages_archived = このアーカイブしたチャットにメッセージはありません。
+
+# Labels for conversation and composer keyboard commands.
+native-shortcut_previous_message = 前の送信メッセージ
+native-shortcut_next_message = 次の送信メッセージ
+native-shortcut_queue_message = メッセージをキューに追加
+native-shortcut_delete_line_start = 行頭まで削除
+native-shortcut_delete_line_end = 行末まで削除
+native-shortcut_delete_word = 前の単語を削除
+native-shortcut_stop_agent = エージェントを停止（2回押す）
+native-shortcut_show_shortcuts = キーボードショートカット
+native-shortcut_find_in_chat = チャット内を検索
+native-shortcut_model_picker = モデル選択を開く
+native-shortcut_reasoning = 推論の強度を切り替え
+native-shortcut_fast_mode = 高速モードを切り替え
+native-shortcut_tool_details = ツールの詳細を展開／折りたたみ
+native-shortcut_task_list = タスクリストを切り替え
+native-shortcut_stop_background = バックグラウンドタスクを停止
+native-shortcut_yank = 削除したテキストを貼り付け
+native-shortcut_yank_pop = 削除したテキストを切り替え
+native-shortcut_stash = 下書きを保存して退避
+native-shortcut_history = 送信メッセージを検索
+
+# Context: composer add menu and plan mode toggle.
+native-composer_add_to_message = メッセージに追加
+
+# Context: composer add menu and plan mode toggle.
+native-composer_attach_images = 画像を添付
+
+# Context: composer add menu and plan mode toggle.
+native-composer_plan_mode_description = ファイルを変更せずに調査して提案します。
+
+# Context: composer add menu and plan mode toggle.
+native-composer_plan_mode_unavailable = このエージェントでは利用できません
+
+# Context: composer add menu and plan mode toggle.
+native-composer_plan_chip = プラン
+
+# Context: composer add menu and plan mode toggle.
+native-composer_cloud_plan_unavailable = プランモードはクラウドでの起動には使用できません。開始する前にオフにしてください。

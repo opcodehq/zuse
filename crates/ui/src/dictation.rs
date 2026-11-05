@@ -11,6 +11,33 @@ pub(crate) use meter::{Bar, FLOOR, Meter};
 pub(crate) use model::{card, enabled, init};
 
 pub(crate) const FINALIZE_TIMEOUT: Duration = Duration::from_secs(45);
+/// A confirmed account is reused briefly so hovering again skips the check.
+pub(crate) const READY_REUSE: Duration = Duration::from_secs(30);
+
+/// The account check started ahead of a click. Only success is remembered:
+/// after a failure the next hover checks again.
+#[derive(Debug, Default)]
+pub(crate) struct Readiness {
+    confirmed: Option<Instant>,
+    checking: bool,
+}
+impl Readiness {
+    /// True when a check should start now.
+    pub fn begin(&mut self, now: Instant) -> bool {
+        let fresh = self
+            .confirmed
+            .is_some_and(|at| now.saturating_duration_since(at) < READY_REUSE);
+        if self.checking || fresh {
+            return false;
+        }
+        self.checking = true;
+        true
+    }
+    pub fn settle(&mut self, ready: bool, now: Instant) {
+        self.checking = false;
+        self.confirmed = ready.then_some(now);
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 #[serde(tag = "kind", content = "text", rename_all = "snake_case")]
@@ -19,6 +46,8 @@ pub(crate) enum Event {
     Finalizing,
     Partial(String),
     Final(String),
+    /// The microphone produced no audio at all, unlike silence (`Final("")`).
+    NoAudio,
     Denied(String),
     Unavailable(String),
     Failed(String),
@@ -110,7 +139,9 @@ impl Transcriber for Native {
         self.session.as_mut()?.poll().map(|event| match event {
             zuse_voice::Event::Listening => Event::Listening,
             zuse_voice::Event::Finalizing => Event::Finalizing,
+            zuse_voice::Event::Partial(t) => Event::Partial(t),
             zuse_voice::Event::Final(t) => Event::Final(t),
+            zuse_voice::Event::NoAudio => Event::NoAudio,
             zuse_voice::Event::Failed(e) => Event::Failed(e),
         })
     }
@@ -324,6 +355,20 @@ mod tests {
         assert_eq!(native.poll(), Some(Event::Final(String::new())));
         assert_eq!(native.poll(), None);
         assert!(native.session.is_none());
+    }
+
+    #[test]
+    fn account_check_is_reused_for_thirty_seconds_and_retried_after_failure() {
+        let mut ready = Readiness::default();
+        let t0 = Instant::now();
+        assert!(ready.begin(t0));
+        // Focus right after hover shares the check in flight.
+        assert!(!ready.begin(t0));
+        ready.settle(true, t0);
+        assert!(!ready.begin(t0 + READY_REUSE - Duration::from_millis(1)));
+        assert!(ready.begin(t0 + READY_REUSE));
+        ready.settle(false, t0 + READY_REUSE);
+        assert!(ready.begin(t0 + READY_REUSE + Duration::from_millis(1)));
     }
 
     #[test]
