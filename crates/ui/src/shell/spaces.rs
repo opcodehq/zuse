@@ -927,6 +927,28 @@ mod pinned_session_tests {
         cx.run_until_parked();
     }
 
+    #[test]
+    fn only_the_filtered_project_keeps_an_empty_sidebar_group() {
+        use super::*;
+        let mut state = AppState::new();
+        state.spaces = ["a", "empty"]
+            .into_iter()
+            .map(|id| {
+                serde_json::from_value(serde_json::json!({
+                    "id": id, "deviceId": "local", "path": format!("/project/{id}"),
+                    "name": id, "createdAt": Utc::now()
+                }))
+                .unwrap()
+            })
+            .collect();
+        assert_eq!(filtered_project_group(&state, None), None);
+        assert_eq!(
+            filtered_project_group(&state, Some("empty")),
+            Some(("empty".into(), "empty".into()))
+        );
+        assert_eq!(filtered_project_group(&state, Some("missing")), None);
+    }
+
     #[gpui::test]
     fn sidebar_projects_sharing_a_repository_group_only_by_project(cx: &mut gpui::TestAppContext) {
         use super::*;
@@ -2194,6 +2216,18 @@ fn promote_local_device_group<T>(
         let local = groups.remove(index);
         groups.insert(0, local);
     }
+}
+
+/// The sidebar group a project filter keeps on screen even when the project
+/// has no chats yet; `None` without a filter or for a projectless folder.
+fn filtered_project_group(state: &AppState, filter: Option<&str>) -> Option<(String, String)> {
+    let space = state
+        .space_row(filter?)
+        .filter(|space| !zuse_protocol::projectless::is_projectless_cwd(Some(&space.path)))?;
+    Some((
+        zuse_protocol::view::project_key(space),
+        space.display_name().to_owned(),
+    ))
 }
 
 /// Project-mode group of a chat as (key, label). Projects sharing a
@@ -5414,26 +5448,15 @@ impl Shell {
         }
         if self.settings.sidebar_organization == SidebarOrganization::ByProject {
             let state = self.state.read(cx);
-            // Under a project filter only the filtered project is listed.
-            let filter_key = filter
-                .as_deref()
-                .and_then(|id| state.space_row(id))
-                .map(zuse_protocol::view::project_key);
-            for space in &state.spaces {
-                if zuse_protocol::projectless::is_projectless_cwd(Some(&space.path)) {
-                    continue;
-                }
-                let key = zuse_protocol::view::project_key(space);
-                if filter_key.as_ref().is_some_and(|filter| filter != &key) {
-                    continue;
-                }
-                let group = Some((key.clone(), space.display_name().to_owned()));
-                if !regular_groups
+            // Projects without chats stay out of the sidebar (they remain in
+            // the composer's project picker), except the filtered project:
+            // its header must stay visible so the filter reads as active.
+            if let Some((key, name)) = filtered_project_group(state, filter.as_deref())
+                && !regular_groups
                     .iter()
                     .any(|(existing, _)| existing.as_ref().is_some_and(|(id, _)| id == &key))
-                {
-                    regular_groups.push((group, Vec::new()));
-                }
+            {
+                regular_groups.push((Some((key, name)), Vec::new()));
             }
         }
         // Sections keep their placed order, as Pinned does, not activity order.

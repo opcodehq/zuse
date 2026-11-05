@@ -118,6 +118,8 @@ pub struct LiveBackgroundTask {
     pub id: String,
     pub kind: BackgroundTaskKind,
     pub description: String,
+    /// The shell command a background process runs, when the driver knows it.
+    pub command: Option<String>,
     /// The driver can stop this task alone ([`TurnControl::stop_background_task`]).
     pub stoppable: bool,
 }
@@ -961,6 +963,7 @@ mod background_task_tests {
             id: id.into(),
             kind: BackgroundTaskKind::Shell,
             description: format!("run {id}"),
+            command: None,
             stoppable: true,
         }
     }

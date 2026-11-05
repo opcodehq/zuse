@@ -1033,6 +1033,7 @@ mod tests {
             id: "bg-1".into(),
             kind: zuse_protocol::BackgroundTaskKind::Shell,
             description: "pnpm dev".into(),
+            command: Some("pnpm --filter web dev".into()),
             started_at: ts(3_100),
             ended_at: Some(ts(3_400)),
             outcome: Some(zuse_protocol::BackgroundTaskOutcome::Stopped),

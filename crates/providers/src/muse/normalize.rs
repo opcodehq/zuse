@@ -183,6 +183,8 @@ impl Items {
                         BackgroundTaskKind::Other
                     },
                     description,
+                    // The description is already the command line.
+                    command: None,
                     stoppable: true,
                 })
             })

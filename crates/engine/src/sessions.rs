@@ -4256,6 +4256,7 @@ fn background_task(record: &zuse_providers::BackgroundTaskRecord) -> zuse_protoc
         id: record.task.id.clone(),
         kind: record.task.kind,
         description: record.task.description.clone(),
+        command: record.task.command.clone(),
         started_at: record.started.into(),
         ended_at: record.ended.map(Into::into),
         outcome: record.outcome,

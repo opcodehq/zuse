@@ -2394,6 +2394,8 @@ fn background_commands(
             id: id.clone(),
             kind: zuse_protocol::BackgroundTaskKind::Shell,
             description: command.command.clone(),
+            // The description is already the command line.
+            command: None,
             stoppable: false,
         })
         .collect();

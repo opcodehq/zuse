@@ -928,6 +928,7 @@ async fn run_session(session: Session) {
     let mut stop_done_at: Option<tokio::time::Instant> = None;
     let mut active_since_stop = false;
     let mut commands = Commands::default();
+    let mut background_commands = wire::BackgroundCommands::default();
     commands.written(first_command);
     // A `result` that is a steer boundary rather than the turn's end (see
     // [`Commands`]). It is superseded — dropped — once the waiting message
@@ -961,6 +962,7 @@ async fn run_session(session: Session) {
                             continue;
                         }
                     };
+                    background_commands.observe(&frame);
                     if let Frame::ControlResponse(response) = &frame {
                         if stopping.as_deref() == Some(response.response.request_id.as_str()) {
                             stop_settle_at = Some(tokio::time::Instant::now() + STOP_SETTLE);
@@ -973,6 +975,7 @@ async fn run_session(session: Session) {
                         turn.set_background(system.tasks.as_ref().map_or(0, Vec::len));
                         turn.set_background_tasks(wire::live_background_tasks(
                             system.tasks.as_deref().unwrap_or_default(),
+                            &background_commands,
                         ));
                     }
                     if let Frame::System(system) = &frame

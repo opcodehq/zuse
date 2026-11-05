@@ -19617,6 +19617,7 @@ impl Shell {
                 let now = Utc::now();
                 let task = |id: &str,
                             description: &str,
+                            command: &str,
                             started: i64,
                             ended: Option<(i64, zuse_protocol::BackgroundTaskOutcome)>,
                             stoppable| {
@@ -19624,6 +19625,7 @@ impl Shell {
                         id: id.into(),
                         kind: zuse_protocol::BackgroundTaskKind::Shell,
                         description: description.into(),
+                        command: Some(command.into()),
                         started_at: now - chrono::Duration::seconds(started),
                         ended_at: ended.map(|(at, _)| now - chrono::Duration::seconds(at)),
                         outcome: ended.map(|(_, outcome)| outcome),
@@ -19635,10 +19637,25 @@ impl Shell {
                         last_completed_turn: None,
                         running_subagents: 0,
                         background_tasks: vec![
-                            task("bg-1", "pnpm dev --port 3000", 312, None, true),
-                            task("bg-2", "cargo watch -x test", 95, None, true),
+                            task(
+                                "bg-1",
+                                "Start the dev server",
+                                "pnpm dev --port 3000",
+                                312,
+                                None,
+                                true,
+                            ),
+                            task(
+                                "bg-2",
+                                "cargo watch -x test",
+                                "cargo watch -x test",
+                                95,
+                                None,
+                                true,
+                            ),
                             task(
                                 "bg-3",
+                                "npm run build",
                                 "npm run build",
                                 400,
                                 Some((340, zuse_protocol::BackgroundTaskOutcome::Completed)),
@@ -19646,6 +19663,7 @@ impl Shell {
                             ),
                             task(
                                 "bg-4",
+                                "tail -f logs/server.log",
                                 "tail -f logs/server.log",
                                 600,
                                 Some((420, zuse_protocol::BackgroundTaskOutcome::Stopped)),

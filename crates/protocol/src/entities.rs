@@ -372,6 +372,9 @@ pub struct BackgroundTask {
     pub kind: BackgroundTaskKind,
     /// What it is, in the agent's words or as its command line.
     pub description: String,
+    /// The shell command a background process runs, when the runtime said.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
     pub started_at: DateTime<Utc>,
     /// Set once the task leaves the runtime's live set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
