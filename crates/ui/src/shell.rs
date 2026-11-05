@@ -6130,10 +6130,10 @@ impl Shell {
                         settings::widgets::settings_page_column(window)
                             .child(settings::widgets::section_title(
                                 &theme,
-                                "Plugins",
-                                "Turn plugins and MCP servers on or off for your agents.",
+                                "Plugins & MCP",
+                                "Turn plugins and MCP servers on or off for your agents, or import the ones already on this computer.",
                             ))
-                            .child(div().mt(px(20.)).child(card)),
+                            .child(settings::widgets::section_stack().child(card)),
                     )
                     .into_any_element()
             }
@@ -12509,22 +12509,37 @@ impl Shell {
                                 .text_size(crate::typography::text_lg())
                                 .font_weight(gpui::FontWeight::MEDIUM)
                                 .text_color(theme.text_strong)
-                                .child(SharedString::from("Add a project to get started")),
+                                .child(SharedString::from("Where should agents work?")),
                         )
                         .child(
                             div()
                                 .mt(px(6.0))
+                                .max_w(px(360.))
+                                .text_center()
                                 .text_size(crate::typography::text_sm())
                                 .text_color(theme.text_muted.opacity(0.7))
                                 .child(SharedString::from(
-                                    "A project is a folder on one of your devices.",
+                                    "Add a folder from one of your devices, or run agents on a cloud computer with a GitHub repository.",
                                 )),
                         )
                         .child(
-                            popover::btn_primary(&theme_owned, "Add a project")
-                                .id("onboarding-add-space")
+                            div()
                                 .mt(px(20.0))
-                                .on_click(cx.listener(|this, _, _, cx| this.open_add_space(cx))),
+                                .flex()
+                                .items_center()
+                                .gap(px(8.))
+                                .child(
+                                    popover::btn_primary(&theme_owned, "Add a project")
+                                        .id("onboarding-add-space")
+                                        .on_click(cx.listener(|this, _, _, cx| this.open_add_space(cx))),
+                                )
+                                .child(
+                                    popover::btn_ghost(&theme_owned, "Set up Cloud", "onboarding-cloud")
+                                        .id("onboarding-cloud")
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.open_settings(SettingsSection::Cloud, cx)
+                                        })),
+                                ),
                         )
                         .child(
                             div()
