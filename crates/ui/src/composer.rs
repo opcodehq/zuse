@@ -6698,7 +6698,7 @@ const MAX_CLEARED_DRAFTS: usize = 10;
 /// Keyboard-driven lists above the composer that are not typed triggers.
 enum ComposerList {
     /// Prompts set aside with Ctrl+S.
-    Stash { active: usize },
+    Stash { active: usize, opening_text: String },
     /// The composer text is the query until a match is taken or the search
     /// is cancelled, which puts `origin` back.
     History {
@@ -10437,13 +10437,15 @@ impl Composer {
 
     fn list_active(&self) -> usize {
         match &self.list {
-            Some(ComposerList::Stash { active } | ComposerList::History { active, .. }) => *active,
+            Some(ComposerList::Stash { active, .. } | ComposerList::History { active, .. }) => {
+                *active
+            }
             None => 0,
         }
     }
 
     fn set_list_active(&mut self, index: usize) {
-        if let Some(ComposerList::Stash { active } | ComposerList::History { active, .. }) =
+        if let Some(ComposerList::Stash { active, .. } | ComposerList::History { active, .. }) =
             &mut self.list
         {
             *active = index;
@@ -10491,7 +10493,9 @@ impl Composer {
                 self.list_scroll.scroll_to_item(0);
             }
             // Typing into the composer puts the stash list away.
-            Some(ComposerList::Stash { .. }) if !text.is_empty() => self.list = None,
+            Some(ComposerList::Stash { opening_text, .. }) if *opening_text != text => {
+                self.list = None
+            }
             _ => {}
         }
         let trigger =
@@ -10612,7 +10616,10 @@ impl Composer {
             self.emoji = None;
             self.reset_mention(None, cx);
             self.reset_slash(None, cx);
-            self.list = Some(ComposerList::Stash { active: 0 });
+            self.list = Some(ComposerList::Stash {
+                active: 0,
+                opening_text: self.input.read(cx).text().to_owned(),
+            });
             self.list_scroll.scroll_to_item(0);
             self.sync_mention_controls(cx);
             cx.notify();
@@ -13756,6 +13763,9 @@ mod tests {
             .update(cx, |composer, _, cx| composer.toggle_stash_list(cx))
             .unwrap();
         assert_eq!(composer_text(cx, handle), "current draft");
+        handle
+            .update(cx, |composer, _, cx| composer.on_state_changed(cx))
+            .unwrap();
         handle
             .read_with(cx, |composer, cx| {
                 assert!(matches!(composer.list, Some(ComposerList::Stash { .. })));
