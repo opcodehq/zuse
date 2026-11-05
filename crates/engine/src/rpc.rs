@@ -3924,6 +3924,15 @@ impl EngineRpc {
             methods::LOCAL_DEVICE => {
                 RpcReply::value(&serde_json::json!({ "deviceId": self.doc_host.device_id() }))
             }
+            methods::DISCOVER_LOCAL_MCP_SERVERS => {
+                let home = std::env::var_os("HOME")
+                    .map(std::path::PathBuf::from)
+                    .ok_or_else(|| RpcError::Failed("home directory unavailable".into()))?;
+                let servers = tokio::task::spawn_blocking(move || crate::local_mcp::discover(&home))
+                    .await
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(&serde_json::json!({ "servers": servers }))
+            }
             methods::LOCAL_IMPORT_STATUS => {
                 let importer = self.local_importer()?.clone();
                 let status = tokio::task::spawn_blocking(move || importer.status())

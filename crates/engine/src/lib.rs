@@ -18,6 +18,7 @@ use zuse_sync::DocsStore;
 pub mod account;
 pub mod agent_accounts;
 mod api_origins;
+pub mod local_mcp;
 pub mod archives;
 pub mod auth;
 mod branch_graph;
