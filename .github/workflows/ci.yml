@@ -95,6 +95,7 @@ jobs:
       - run: cargo test -p zuse-engine --lib doc_host::tool_result_tests
       - run: cargo test -p zuse-voice-session -p zuse-orb
       - run: cargo test -p zuse-rpc --lib
+      - run: cargo test -p zuse-engine --test auth
       - run: cargo test -p zuse-engine --lib account::tests
       - run: cargo test -p zuse-engine --lib harness_models::tests
       - run: cargo test -p zuse-engine --lib model_connections::tests
