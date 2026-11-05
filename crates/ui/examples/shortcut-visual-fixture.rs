@@ -85,6 +85,13 @@ fn main() -> anyhow::Result<()> {
                         window.update(cx, |s,w,cx| s.fixture_shortcut_visual(kind,w,cx))?;
                         pause(cx).await;
                         capture(window.into(),cx,&output.join(format!("{kind}-{name}.png"))).await?;
+                        if kind == "stash" {
+                            // The fixed 1100×850 capture was inspected before choosing this
+                            // position in the first saved draft's trailing action slot.
+                            window.update(cx, |_, w, cx| { w.dispatch_event(gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent { position: gpui::point(px(1008.), px(638.)), ..Default::default() }), cx); })?;
+                            pause(cx).await;
+                            capture(window.into(),cx,&output.join(format!("stash-hover-{name}.png"))).await?;
+                        }
                     }
                 }
                 window.update(cx, |s,w,cx| { w.resize(size(px(600.),px(850.))); s.fixture_shortcut_visual("shortcuts",w,cx); })?;
@@ -93,6 +100,8 @@ fn main() -> anyhow::Result<()> {
                 Ok(())
             }.await;
             if let Err(error) = run { *failure.lock().unwrap() = Some(format!("{error:#}")); }
+            window.update(cx, |_, w, _| w.remove_window()).ok();
+            pause(cx).await;
             cx.update(|cx| cx.quit());
         }).detach();
     });
