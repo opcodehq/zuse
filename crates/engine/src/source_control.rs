@@ -1412,6 +1412,13 @@ fn branch_from_upstream<'a>(upstream: &'a str, remote_name: Option<&str>) -> Opt
         .and_then(|(_, branch)| (!branch.is_empty()).then_some(branch))
 }
 
+/// `<remote>/<branch>` from a branch's `remote` and `merge` configuration.
+fn upstream_from_merge(remote: &str, merge: &str) -> Option<String> {
+    let branch = merge.trim();
+    let branch = branch.strip_prefix("refs/heads/").unwrap_or(branch);
+    (!remote.is_empty() && !branch.is_empty()).then(|| format!("{remote}/{branch}"))
+}
+
 fn normalized_upstream(upstream: &str) -> &str {
     upstream.strip_prefix("refs/remotes/").unwrap_or(upstream)
 }
@@ -1447,7 +1454,7 @@ impl GitCheckoutInspector {
             return Err(ChangeRequestError::RepositoryUnavailable);
         }
 
-        let upstream_ref = self
+        let mut upstream_ref = self
             .git_optional(
                 &checkout_root,
                 &[
@@ -1463,6 +1470,18 @@ impl GitCheckoutInspector {
             .git_optional(&checkout_root, &["config", "--get", &branch_remote_key])
             .await
             .filter(|remote| remote != ".");
+        // `@{upstream}` fails until the tracked branch has been fetched, yet
+        // the configured merge ref still names the remote branch a pull
+        // request was opened from, which may differ from the local name.
+        if upstream_ref.is_none()
+            && let Some(remote) = remote_name.as_deref()
+        {
+            let merge_key = format!("branch.{local_branch}.merge");
+            upstream_ref = self
+                .git_optional(&checkout_root, &["config", "--get", &merge_key])
+                .await
+                .and_then(|merge| upstream_from_merge(remote, &merge));
+        }
         if remote_name.is_none() {
             remote_name = upstream_ref.as_deref().and_then(remote_from_upstream);
         }
@@ -4208,6 +4227,58 @@ printf '%s\n' '[{"number":90,"title":"Host-resolved pull request","url":"https:/
             resolver.repository_for_checkout(&checkout).await.as_deref(),
             Some("acme/zuse")
         );
+    }
+
+    #[tokio::test]
+    async fn git_inspector_uses_the_configured_merge_branch_before_it_is_fetched() {
+        let temp = tempfile::tempdir().expect("fixture tempdir");
+        let checkout = temp.path().join("checkout");
+        std::fs::create_dir_all(&checkout).expect("checkout directory");
+        run_git(&checkout, &["init", "-q", "-b", "feature"]);
+        run_git(
+            &checkout,
+            &["remote", "add", "origin", "git@github.com:acme/zuse.git"],
+        );
+        run_git(&checkout, &["config", "branch.feature.remote", "origin"]);
+        run_git(
+            &checkout,
+            &[
+                "config",
+                "branch.feature.merge",
+                "refs/heads/fix/remote-feature",
+            ],
+        );
+
+        let source = ChangeRequestResolver::new()
+            .inspect_checkout(&checkout)
+            .await
+            .expect("inspect checkout");
+
+        assert_eq!(source.branch.local_branch, "feature");
+        assert_eq!(
+            source.branch.upstream_ref.as_deref(),
+            Some("origin/fix/remote-feature")
+        );
+        assert_eq!(source.branch.head_branch, "fix/remote-feature");
+        assert!(
+            source
+                .branch
+                .head_selectors
+                .contains(&"acme:fix/remote-feature".to_owned())
+        );
+    }
+
+    #[test]
+    fn merge_config_names_the_upstream_branch() {
+        assert_eq!(
+            upstream_from_merge("origin", "refs/heads/fix/x").as_deref(),
+            Some("origin/fix/x")
+        );
+        assert_eq!(
+            upstream_from_merge("origin", "main").as_deref(),
+            Some("origin/main")
+        );
+        assert_eq!(upstream_from_merge("origin", "refs/heads/"), None);
     }
 
     #[tokio::test]
