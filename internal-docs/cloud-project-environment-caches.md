@@ -1,5 +1,10 @@
 # Project environment caches
 
+**Off by default.** Every task starts from the one shared managed base and
+clones only its own repository; setup commands run on that computer. Per-project
+provider snapshots are costly on some providers, so preparation requests and
+cache selection only run with `ZUSE_CLOUD_PROJECT_CACHES=1` on the API/worker.
+
 Project cache preparation is an optional acceleration path. Computer creation
 retains the managed base when the optional schema, runtime certification, exact
 resolved input or compatible prepared artifact is unavailable. Existing managed

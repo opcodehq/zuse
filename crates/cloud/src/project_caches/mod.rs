@@ -10,6 +10,14 @@ pub(crate) mod source;
 pub use selection::{CacheHit, lookup_tx};
 mod requests;
 pub mod worker;
+
+/// Per-project snapshots are off by default: every task starts from the one
+/// shared base image and clones only its own repository. Operators opt in
+/// with `ZUSE_CLOUD_PROJECT_CACHES=1` where provider snapshots are affordable.
+pub(crate) fn enabled() -> bool {
+    // The crate's cache tests exercise the opt-in path itself.
+    cfg!(test) || std::env::var("ZUSE_CLOUD_PROJECT_CACHES").is_ok_and(|v| v == "1")
+}
 use crate::error::ApiError;
 pub use identity::CacheIdentity;
 use serde::{Deserialize, Serialize};
