@@ -59,14 +59,14 @@ class DistributionTests(unittest.TestCase):
             distribution.unpack(self.archive, target)
 
     def test_traversal_and_links_are_rejected(self):
-        for name, link in (('../escape', False), ('package/link', True)):
+        for index, (name, link) in enumerate((('../escape', False), ('package/link', True), ('C:/escape', False), ('package/C:/escape', False), ('package/file:stream', False), ('package/NUL', False))):
             with self.subTest(name=name), tarfile.open(self.archive, 'w:gz') as bundle:
                 member = tarfile.TarInfo(name)
                 if link:
                     member.type = tarfile.SYMTYPE
                     member.linkname = '/etc/passwd'
                 bundle.addfile(member, io.BytesIO())
-            target = self.fixture.root / ('unpacked-link' if link else 'unpacked-path')
+            target = self.fixture.root / f'unpacked-{index}'
             target.mkdir()
             with self.assertRaises(ValueError):
                 distribution.unpack(self.archive, target)

@@ -6,7 +6,7 @@ import importlib.util
 import io
 import json
 import os
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 import shutil
 import subprocess
@@ -45,7 +45,7 @@ def unpack(archive, directory):
     names = set()
     def destination(name):
         path = PurePosixPath(name)
-        if path.is_absolute() or '..' in path.parts or '\\' in name or not path.parts:
+        if path.is_absolute() or '..' in path.parts or '\\' in name or ':' in name or not path.parts or any(PureWindowsPath(part).is_reserved() for part in path.parts):
             raise ValueError(f'Invalid archive path: {name}')
         if str(path) in names:
             raise ValueError(f'Duplicate archive path: {name}')
