@@ -8953,28 +8953,9 @@ impl Composer {
             .unwrap_or_default();
         // Full pill width at the mention card's height budget — both composer
         // completions share the same surface shape.
-        let label: SharedString = if id == "stash-list" {
-            tr(cx, msg::chat::stash_list).into()
-        } else {
-            tr(cx, msg::chat::history_search_results).into()
-        };
         let mut card = crate::popover::completion_card(theme)
-            .role(Role::Dialog)
-            .aria_label(label.clone())
             .p(px(6.))
             .gap_0()
-            .on_mouse_down_out(cx.listener(|this, event: &MouseDownEvent, _, cx| {
-                // The editor and the stash toggle may keep the list open.
-                // A click elsewhere cancels history search and returns its draft.
-                if !this
-                    .surface_bounds
-                    .get()
-                    .is_some_and(|bounds| bounds.contains(&event.position))
-                {
-                    this.close_list(true, cx);
-                    cx.notify();
-                }
-            }))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| {
@@ -10933,9 +10914,26 @@ impl Composer {
         rows: Vec<gpui::AnyElement>,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
+        let label: SharedString = if id == "stash-list" {
+            tr(cx, msg::chat::stash_list).into()
+        } else {
+            tr(cx, msg::chat::history_search_results).into()
+        };
         let mut card = crate::popover::completion_card(theme)
+            .role(Role::Dialog)
+            .aria_label(label.clone())
             .p(px(6.))
             .gap_0()
+            .on_mouse_down_out(cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                // Leave editor/toggle clicks to the composer; cancel from elsewhere.
+                if !this
+                    .surface_bounds
+                    .get()
+                    .is_some_and(|bounds| bounds.contains(&event.position))
+                {
+                    this.close_list(true, cx);
+                }
+            }))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| {
