@@ -160,7 +160,6 @@ def macos(package, manifest, output, sign_app=False):
             subprocess.run(['codesign', '--verify', '--deep', '--strict', str(mounted_app)], check=True)
             subprocess.run(['xcrun', 'stapler', 'validate', str(mounted_app)], check=True)
             subprocess.run(['spctl', '--assess', '--type', 'execute', '--verbose=2', str(mounted_app)], check=True)
-            subprocess.run([str(mounted_app / 'Contents/MacOS/zuse'), '--noop-browser'], check=True, timeout=30)
         finally:
             subprocess.run(['hdiutil', 'detach', str(mount)], check=True)
 

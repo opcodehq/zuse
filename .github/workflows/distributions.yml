@@ -82,6 +82,9 @@ jobs:
           cargo build --locked --release -p zuse -p zuse-cli -p zuse-relay --bins
           python -c 'import subprocess; subprocess.run(["target/release/zuse", "--noop-browser"], check=True, timeout=30)'
           python scripts/package.py --platform ${{ matrix.platform }} --arch ${{ matrix.arch }} --version "${{ steps.existing.outputs.version }}" --skip-build --output ../built
+      - if: steps.existing.outputs.found == 'true' && runner.os == 'Linux'
+        name: Install native runtime libraries for the archive smoke check
+        run: sudo apt-get update && sudo apt-get install -y libasound2t64 libxkbcommon-x11-0 libvulkan1 libwebkit2gtk-4.1-0 libjson-glib-1.0-0
       - name: Prepare verified input artifact
         env:
           FOUND: ${{ steps.existing.outputs.found }}
@@ -101,6 +104,9 @@ jobs:
           if os.environ['FOUND'] != 'true':
               (root / 'new-architecture').write_text('1\n')
           PY
+      # Execute app code here, before any runner receives signing credentials.
+      - name: Smoke-test the verified native archive without signing secrets
+        run: python scripts/verify-native-archive.py input/zuse-* input/SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:
           name: distribution-input-${{ matrix.platform }}-${{ matrix.arch }}
