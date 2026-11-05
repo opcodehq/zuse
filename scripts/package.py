@@ -89,6 +89,44 @@ def copy_tree(source, destination):
     shutil.copytree(source, destination)
 
 
+def sign_macos(app, run=subprocess.run):
+    """Sign the app with a Developer ID and, when Apple credentials are
+    present, notarize it and staple the ticket. Does nothing without
+    ZUSE_MACOS_SIGN_IDENTITY, so local and preview builds stay unsigned."""
+    identity = os.environ.get("ZUSE_MACOS_SIGN_IDENTITY")
+    if not identity:
+        return False
+    keychain = os.environ.get("ZUSE_MACOS_KEYCHAIN")
+    base = ["codesign", "--force", "--timestamp", "--options", "runtime", "--sign", identity]
+    if keychain:
+        base += ["--keychain", keychain]
+    # Helpers first, then the bundle, whose seal covers the main executable.
+    for name in BINS:
+        if name != "zuse":
+            run(base + [str(app / "Contents/MacOS" / name)], check=True)
+    run(base + ["--entitlements", str(ROOT / "dist/macos/Zuse.entitlements"), str(app)], check=True)
+    run(["codesign", "--verify", "--strict", "--verbose=2", str(app)], check=True)
+    apple_id, password, team = (os.environ.get(key) for key in (
+        "APPLE_ID", "APPLE_APP_SPECIFIC_PASSWORD", "APPLE_TEAM_ID"))
+    if not (apple_id and password and team):
+        return True
+    with tempfile.TemporaryDirectory(prefix="zuse-notarize-") as temporary:
+        upload = Path(temporary) / "Zuse.zip"
+        run(["ditto", "-c", "-k", "--keepParent", str(app), str(upload)], check=True)
+        submitted = run(["xcrun", "notarytool", "submit", str(upload), "--apple-id", apple_id,
+                         "--password", password, "--team-id", team, "--wait",
+                         "--output-format", "json"], check=True, capture_output=True, text=True)
+        result = json.loads(submitted.stdout)
+        if result.get("status") != "Accepted":
+            run(["xcrun", "notarytool", "log", result.get("id", ""), "--apple-id", apple_id,
+                 "--password", password, "--team-id", team], check=False)
+            raise ValueError(f"Notarization was not accepted: {result.get('status')}")
+    run(["xcrun", "stapler", "staple", str(app)], check=True)
+    run(["xcrun", "stapler", "validate", str(app)], check=True)
+    run(["spctl", "--assess", "--type", "execute", "--verbose=2", str(app)], check=True)
+    return True
+
+
 def assemble(destination, binaries, assets, system, arch, version, provenance):
     for binary in binaries:
         if binary_target(binary) != (system, arch):
@@ -139,6 +177,9 @@ def assemble(destination, binaries, assets, system, arch, version, provenance):
         target = legal / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, target)
+    if macos:
+        # Everything inside the app must be in place before it is sealed.
+        sign_macos(destination / "Zuse.app")
     (destination / "docs").mkdir()
     shutil.copyfile(ROOT / "internal-docs/development.md", destination / "docs/development.md")
     readme = (ROOT / "internal-docs/packaging.md").read_text().replace("(development.md)", "(docs/development.md)")
@@ -161,6 +202,11 @@ def main():
     parser.add_argument("--binaries", type=Path, help="Assemble prebuilt executables from this directory; skips all builds")
     parser.add_argument("--assets", type=Path, default=ROOT / "dist/web")
     parser.add_argument("--output", type=Path, default=ROOT / "dist/build")
+    # Release jobs build without signing credentials, then sign in a separate
+    # step that runs no dependency build code.
+    stage = parser.add_mutually_exclusive_group()
+    stage.add_argument("--build-only", action="store_true", help="Build the web assets and executables, then stop")
+    stage.add_argument("--skip-build", action="store_true", help="Assemble what --build-only produced in this checkout")
     args = parser.parse_args()
     system = args.platform or {"Linux": "linux", "Darwin": "macos"}.get(platform.system())
     arch = args.arch or {"x86_64": "x86_64", "aarch64": "aarch64", "arm64": "aarch64"}.get(platform.machine())
@@ -173,9 +219,12 @@ def main():
             parser.error("Build on the target host, or supply --binaries for an existing target build")
         if args.assets.resolve() != (ROOT / "dist/web").resolve():
             parser.error("Default builds produce dist/web; use --binaries to assemble other assets")
-        subprocess.run(["bash", "scripts/build-web.sh", "--release"], cwd=ROOT, check=True)
-        subprocess.run(["cargo", "+stable", "build", "--locked", "--profile", args.profile,
-                        "-p", "zuse", "-p", "zuse-cli", "-p", "zuse-relay", "--bins"], cwd=ROOT, check=True)
+        if not args.skip_build:
+            subprocess.run(["bash", "scripts/build-web.sh", "--release"], cwd=ROOT, check=True)
+            subprocess.run(["cargo", "+stable", "build", "--locked", "--profile", args.profile,
+                            "-p", "zuse", "-p", "zuse-cli", "-p", "zuse-relay", "--bins"], cwd=ROOT, check=True)
+        if args.build_only:
+            return
         target = Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target"))
         if not target.is_absolute():
             target = ROOT / target
