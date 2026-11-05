@@ -40,6 +40,31 @@ pub(super) fn bind(cx: &mut App, keymap: &KeymapConfig) {
             Command::ComposerSubmit | Command::ComposerForceSubmit | Command::ComposerNewline => {
                 continue;
             }
+            Command::ComposerPreviousMessage => {
+                KeyBinding::new(&combo, crate::composer::PreviousMessage, context)
+            }
+            Command::ComposerNextMessage => {
+                KeyBinding::new(&combo, crate::composer::NextMessage, context)
+            }
+            Command::ComposerQueueSubmit => {
+                KeyBinding::new(&combo, crate::composer::QueueSubmit, context)
+            }
+            Command::ComposerDeleteToStart => {
+                KeyBinding::new(&combo, crate::composer::DeleteToLineStart, context)
+            }
+            Command::ComposerDeleteToEnd => {
+                KeyBinding::new(&combo, crate::composer::DeleteToLineEnd, context)
+            }
+            Command::ComposerDeleteWord => {
+                KeyBinding::new(&combo, crate::composer::DeleteWordLeft, context)
+            }
+            Command::ComposerInterrupt => KeyBinding::new(
+                &combo,
+                crate::composer::InterruptAgent {
+                    double_press: rule.key == "escape",
+                },
+                context,
+            ),
             Command::NewChat => KeyBinding::new(&combo, NewSession, context),
             Command::OpenProject => KeyBinding::new(&combo, AddSpacePalette, context),
             Command::Settings => KeyBinding::new(&combo, OpenSettings, context),
@@ -252,6 +277,13 @@ impl Shell {
             Command::ComposerSubmit
             | Command::ComposerNewline
             | Command::ComposerForceSubmit
+            | Command::ComposerPreviousMessage
+            | Command::ComposerNextMessage
+            | Command::ComposerQueueSubmit
+            | Command::ComposerDeleteToStart
+            | Command::ComposerDeleteToEnd
+            | Command::ComposerDeleteWord
+            | Command::ComposerInterrupt
             | Command::EditorSave => {}
         }
     }

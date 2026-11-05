@@ -340,6 +340,15 @@ native-stop_agent_with_escape = 按 Escape 停止智能体
 native-stop_active_agent_with_escape = 按 Escape 停止活动智能体
 
 # Context: application-owned interface text; do not translate paths or product names.
+native-direct_steer = 直接引导
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-direct_steer_description = 按 Enter 立即发送给正在运行的智能体。Alt+Enter 始终加入队列。
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-steer_message = 发送消息以引导
+
+# Context: application-owned interface text; do not translate paths or product names.
 native-open_pull_requests_in = 打开拉取请求的位置
 
 # Context: application-owned interface text; do not translate paths or product names.

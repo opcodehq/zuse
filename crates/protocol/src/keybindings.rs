@@ -69,13 +69,27 @@ pub enum Command {
     ComposerForceSubmit,
     #[serde(rename = "composer.togglePlanMode")]
     ComposerTogglePlanMode,
+    #[serde(rename = "composer.previousMessage")]
+    ComposerPreviousMessage,
+    #[serde(rename = "composer.nextMessage")]
+    ComposerNextMessage,
+    #[serde(rename = "composer.queueSubmit")]
+    ComposerQueueSubmit,
+    #[serde(rename = "composer.deleteToStart")]
+    ComposerDeleteToStart,
+    #[serde(rename = "composer.deleteToEnd")]
+    ComposerDeleteToEnd,
+    #[serde(rename = "composer.deleteWord")]
+    ComposerDeleteWord,
+    #[serde(rename = "composer.interrupt")]
+    ComposerInterrupt,
     #[serde(rename = "editor.save")]
     EditorSave,
     #[serde(rename = "editor.annotate")]
     EditorAnnotate,
 }
 impl Command {
-    pub const ALL: [Self; 35] = [
+    pub const ALL: [Self; 42] = [
         Self::NewChat,
         Self::NewChatWithoutProject,
         Self::OpenProject,
@@ -109,6 +123,13 @@ impl Command {
         Self::ComposerNewline,
         Self::ComposerForceSubmit,
         Self::ComposerTogglePlanMode,
+        Self::ComposerPreviousMessage,
+        Self::ComposerNextMessage,
+        Self::ComposerQueueSubmit,
+        Self::ComposerDeleteToStart,
+        Self::ComposerDeleteToEnd,
+        Self::ComposerDeleteWord,
+        Self::ComposerInterrupt,
         Self::EditorSave,
         Self::EditorAnnotate,
     ];
@@ -147,6 +168,13 @@ impl Command {
             Self::ComposerNewline => "shift-enter",
             Self::ComposerForceSubmit => "mod-enter",
             Self::ComposerTogglePlanMode => "shift-tab",
+            Self::ComposerPreviousMessage => "up",
+            Self::ComposerNextMessage => "down",
+            Self::ComposerQueueSubmit => "alt-enter",
+            Self::ComposerDeleteToStart => "ctrl-u",
+            Self::ComposerDeleteToEnd => "ctrl-k",
+            Self::ComposerDeleteWord => "ctrl-backspace",
+            Self::ComposerInterrupt => "escape",
             Self::EditorSave => "mod-s",
             Self::EditorAnnotate => "mod-shift-a",
         }
@@ -186,6 +214,13 @@ impl Command {
             Self::ComposerNewline => "Insert newline",
             Self::ComposerForceSubmit => "Send message now",
             Self::ComposerTogglePlanMode => "Toggle plan mode",
+            Self::ComposerPreviousMessage => "Previous sent message",
+            Self::ComposerNextMessage => "Next sent message",
+            Self::ComposerQueueSubmit => "Queue message",
+            Self::ComposerDeleteToStart => "Delete to line start",
+            Self::ComposerDeleteToEnd => "Delete to line end",
+            Self::ComposerDeleteWord => "Delete previous word",
+            Self::ComposerInterrupt => "Stop agent (press twice)",
             Self::EditorSave => "Save file",
             Self::EditorAnnotate => "Annotate selection",
         }
@@ -195,7 +230,14 @@ impl Command {
             Self::ComposerSubmit
             | Self::ComposerNewline
             | Self::ComposerForceSubmit
-            | Self::ComposerTogglePlanMode => "Composer",
+            | Self::ComposerTogglePlanMode
+            | Self::ComposerPreviousMessage
+            | Self::ComposerNextMessage
+            | Self::ComposerQueueSubmit
+            | Self::ComposerDeleteToStart
+            | Self::ComposerDeleteToEnd
+            | Self::ComposerDeleteWord
+            | Self::ComposerInterrupt => "Composer",
             Self::EditorSave | Self::EditorAnnotate | Self::SearchFiles => "Files",
             Self::NextTab
             | Self::PrevTab
@@ -222,7 +264,14 @@ impl Command {
             Self::ComposerSubmit
             | Self::ComposerNewline
             | Self::ComposerForceSubmit
-            | Self::ComposerTogglePlanMode => Some("MessageComposer"),
+            | Self::ComposerTogglePlanMode
+            | Self::ComposerPreviousMessage
+            | Self::ComposerNextMessage
+            | Self::ComposerQueueSubmit
+            | Self::ComposerDeleteToStart
+            | Self::ComposerDeleteToEnd
+            | Self::ComposerDeleteWord
+            | Self::ComposerInterrupt => Some("MessageComposer"),
             Self::EditorSave | Self::EditorAnnotate => Some("Input"),
             _ => None,
         }
@@ -405,7 +454,7 @@ mod tests {
     fn all_desktop_defaults_round_trip_through_the_import_contract() {
         let rules:Vec<_>=Command::ALL.into_iter().map(|command|serde_json::json!({"key":command.default_combo().replace('-',"+"),"command":command})).collect();
         let parsed = import(&serde_json::json!({"schemaVersion":1,"rules":rules})).unwrap();
-        assert_eq!(parsed.len(), 35);
+        assert_eq!(parsed.len(), Command::ALL.len());
         for (rule, command) in parsed.iter().zip(Command::ALL) {
             assert_eq!(rule.command, command);
             assert_eq!(rule.key, command.default_combo());
@@ -427,6 +476,43 @@ mod tests {
         assert!(!evaluate_when("settingsOpen || composerFocus").unwrap());
         for invalid in ["foo &&", "foo | bar", "(foo", "1foo"] {
             assert!(evaluate_when(invalid).is_err());
+        }
+    }
+    #[test]
+    fn composer_message_commands_keep_their_wire_names_and_scope() {
+        for (name, command, key) in [
+            (
+                "composer.previousMessage",
+                Command::ComposerPreviousMessage,
+                "up",
+            ),
+            ("composer.nextMessage", Command::ComposerNextMessage, "down"),
+            (
+                "composer.queueSubmit",
+                Command::ComposerQueueSubmit,
+                "alt-enter",
+            ),
+            (
+                "composer.deleteToStart",
+                Command::ComposerDeleteToStart,
+                "ctrl-u",
+            ),
+            (
+                "composer.deleteToEnd",
+                Command::ComposerDeleteToEnd,
+                "ctrl-k",
+            ),
+            (
+                "composer.deleteWord",
+                Command::ComposerDeleteWord,
+                "ctrl-backspace",
+            ),
+            ("composer.interrupt", Command::ComposerInterrupt, "escape"),
+        ] {
+            assert_eq!(serde_json::to_value(command).unwrap(), name);
+            assert_eq!(command.default_combo(), key);
+            assert_eq!(command.context(), Some("MessageComposer"));
+            assert_eq!(command.group(), "Composer");
         }
     }
     #[test]

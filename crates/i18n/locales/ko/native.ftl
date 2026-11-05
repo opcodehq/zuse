@@ -340,6 +340,15 @@ native-stop_agent_with_escape = Escape로 에이전트 중지
 native-stop_active_agent_with_escape = Escape로 활성 에이전트 중지
 
 # Context: application-owned interface text; do not translate paths or product names.
+native-direct_steer = 바로 조정
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-direct_steer_description = Enter를 누르면 실행 중인 에이전트에 바로 보냅니다. Alt+Enter는 항상 대기열에 추가합니다.
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-steer_message = 메시지로 조정
+
+# Context: application-owned interface text; do not translate paths or product names.
 native-open_pull_requests_in = 풀 리퀘스트를 열 위치
 
 # Context: application-owned interface text; do not translate paths or product names.

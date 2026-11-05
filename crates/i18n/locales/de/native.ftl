@@ -340,6 +340,15 @@ native-stop_agent_with_escape = Agent mit Escape stoppen
 native-stop_active_agent_with_escape = Aktiven Agenten mit Escape stoppen
 
 # Context: application-owned interface text; do not translate paths or product names.
+native-direct_steer = Direkt steuern
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-direct_steer_description = Enter sendet sofort an einen laufenden Agenten. Alt+Enter reiht immer ein.
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-steer_message = Nachricht zum Steuern senden
+
+# Context: application-owned interface text; do not translate paths or product names.
 native-open_pull_requests_in = Pull Requests öffnen in
 
 # Context: application-owned interface text; do not translate paths or product names.

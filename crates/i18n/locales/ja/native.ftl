@@ -340,6 +340,15 @@ native-stop_agent_with_escape = Escape でエージェントを停止
 native-stop_active_agent_with_escape = Escape で実行中のエージェントを停止
 
 # Context: application-owned interface text; do not translate paths or product names.
+native-direct_steer = 直接ステア
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-direct_steer_description = Enter で実行中のエージェントにすぐ送信します。Alt+Enter は常にキューに追加します。
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-steer_message = メッセージでステア
+
+# Context: application-owned interface text; do not translate paths or product names.
 native-open_pull_requests_in = プルリクエストを開く場所
 
 # Context: application-owned interface text; do not translate paths or product names.

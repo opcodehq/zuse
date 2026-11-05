@@ -234,6 +234,12 @@ native-stop_agent_with_escape = Stop agent with Escape
 
 native-stop_active_agent_with_escape = Stop active agent with Escape
 
+native-direct_steer = Direct steer
+
+native-direct_steer_description = Enter sends to a running agent right away. Alt+Enter always queues.
+
+native-steer_message = Steer message
+
 native-open_pull_requests_in = Open pull requests in
 
 native-move_chats_and_settings_from_electron = Move chats and settings from Electron

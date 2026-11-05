@@ -340,6 +340,15 @@ native-stop_agent_with_escape = Arrêter l’agent avec Échap
 native-stop_active_agent_with_escape = Arrêter l’agent actif avec Échap
 
 # Context: application-owned interface text; do not translate paths or product names.
+native-direct_steer = Orientation directe
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-direct_steer_description = Entrée envoie immédiatement à un agent en cours. Alt+Entrée met toujours en file d’attente.
+
+# Context: application-owned interface text; do not translate paths or product names.
+native-steer_message = Orienter avec ce message
+
+# Context: application-owned interface text; do not translate paths or product names.
 native-open_pull_requests_in = Ouvrir les demandes de fusion dans
 
 # Context: application-owned interface text; do not translate paths or product names.

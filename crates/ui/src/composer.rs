@@ -52,6 +52,7 @@ use crate::theme::Theme;
 
 mod chip;
 mod cloud;
+mod message_recall;
 mod project_creation;
 pub(crate) mod tray;
 pub use chip::ChipKind;
@@ -542,6 +543,31 @@ fn retain_live_interrupts(pending: &mut HashSet<String>, mut is_live: impl FnMut
     pending.retain(|chat_id| is_live(chat_id));
 }
 
+/// The user's sent messages in this transcript, oldest first, as editable
+/// draft text: attachment trailers, review-comment blocks and chips whose
+/// files are no longer staged are reduced to the words the user typed.
+fn sent_message_texts(transcript: &[SessionMessageEntry]) -> Vec<String> {
+    transcript
+        .iter()
+        .filter(|entry| entry.role == zuse_doc::MessageRole::User)
+        .filter_map(|entry| {
+            let raw = entry
+                .parts
+                .iter()
+                .filter_map(|part| match part {
+                    MessagePart::Text { text, .. } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            let parsed = attachments::parse_user_message_images(&raw);
+            let (body, _) = crate::badges::split(&parsed.text);
+            let text = zuse_protocol::attachment_mentions::attachment_mention_prompt(&body);
+            (!text.trim().is_empty()).then_some(text)
+        })
+        .collect()
+}
+
 fn interrupt_params(chat_id: &str) -> serde_json::Value {
     serde_json::json!({
         "chatId": chat_id,
@@ -806,8 +832,20 @@ actions!(
         MentionTab,
         ToggleDictation,
         OutdentList,
+        PreviousMessage,
+        NextMessage,
+        QueueSubmit,
     ]
 );
+
+/// Stop the running agent from the composer. Bound to Escape it needs a
+/// second press within [`DOUBLE_ESCAPE_WINDOW`] with the draft unchanged; a
+/// user-assigned key stops on the first press.
+#[derive(Clone, PartialEq, gpui::Action)]
+#[action(namespace = composer, no_json)]
+pub struct InterruptAgent {
+    pub double_press: bool,
+}
 
 /// How long a run of single-character edits keeps merging into one undo step.
 /// A pause longer than this starts a fresh step, so undo rewinds in the
@@ -1663,6 +1701,24 @@ fn message_input_context(wizard_active: bool) -> &'static str {
         GENERIC_COMPOSER_CONTEXT
     } else {
         MESSAGE_COMPOSER_CONTEXT
+    }
+}
+
+/// Which submit gesture sent the draft. Only matters while the agent runs:
+/// Enter queues (or steers with direct steer on), the force-submit chord
+/// steers, and the queue chord always queues.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SubmitIntent {
+    Enter,
+    Steer,
+    Queue,
+}
+
+fn submit_steers(intent: SubmitIntent, direct_steer: bool) -> bool {
+    match intent {
+        SubmitIntent::Enter => direct_steer,
+        SubmitIntent::Steer => true,
+        SubmitIntent::Queue => false,
     }
 }
 
@@ -6426,6 +6482,13 @@ pub struct Composer {
     /// after the transcript lands instead of vanishing.
     voice_last: Option<VoiceFrame>,
     voice_tween: VoiceTween,
+    /// Up/Down browsing through the chat's sent messages.
+    recall: message_recall::MessageRecall,
+    /// The first half of a double Escape that stops the running agent.
+    escape_presses: message_recall::DoubleEscape,
+    /// Background attachment staging still running; recall waits for it so
+    /// a late file never lands in a recalled message.
+    staging_in_flight: usize,
 }
 
 impl EventEmitter<ComposerEvent> for Composer {}
@@ -6650,9 +6713,12 @@ impl Composer {
         let input_events = cx.subscribe(&input, |this: &mut Self, _, event, cx| match event {
             ComposerInputEvent::Submitted => this.on_submit(cx),
             ComposerInputEvent::ModifiedSubmitted => this.on_modified_submit(cx),
-            ComposerInputEvent::Edited | ComposerInputEvent::CursorMoved => {
+            ComposerInputEvent::Edited => {
+                let text = this.input.read(cx).text().to_owned();
+                this.recall.observe_text(&text);
                 this.on_input_edited(cx)
             }
+            ComposerInputEvent::CursorMoved => this.on_input_edited(cx),
             ComposerInputEvent::ViewportChanged => cx.notify(),
             // The slash popup and the mention popup share the input's
             // completion key routing; they are mutually exclusive by token
@@ -6818,6 +6884,9 @@ impl Composer {
             dictation_focus: cx.focus_handle(),
             voice_last: None,
             voice_tween: VoiceTween::default(),
+            recall: Default::default(),
+            escape_presses: Default::default(),
+            staging_in_flight: 0,
         };
         // Dev knob: pre-stage attachments (drop/paste can't be synthesized on
         // a rig) — `ZUSE_ATTACH=/path/a.png[,/path/b.png]`, and
@@ -7054,9 +7123,11 @@ impl Composer {
         cx: &mut Context<Self>,
     ) {
         let key = self.current_key.clone();
+        self.staging_in_flight += 1;
         cx.spawn(async move |this, cx| {
             let results = cx.background_executor().spawn(async move { stage() }).await;
             this.update(cx, |this, cx| {
+                this.staging_in_flight = this.staging_in_flight.saturating_sub(1);
                 let mut staged = Vec::new();
                 let mut refused = Vec::new();
                 for result in results {
@@ -8801,7 +8872,11 @@ impl Composer {
             // A question temporarily borrows the editor. Its answer must never
             // replace the ordinary chat draft saved when the panel opened.
             if self.wizard.is_none() {
-                let old_text = self.input.read(cx).text().to_string();
+                let old_text = self
+                    .recall
+                    .unsent_draft()
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| self.input.read(cx).text().to_string());
                 if old_text.is_empty() {
                     self.drafts.remove(&self.current_key);
                 } else {
@@ -8810,6 +8885,8 @@ impl Composer {
             }
             let draft = self.drafts.get(&key).cloned().unwrap_or_default();
             self.current_key = key;
+            self.recall.reset();
+            self.escape_presses.reset();
             // `failure` deliberately survives navigation: chat-scoped
             // failures render only under their own chat (see `failure_key`),
             // so switching away and back must not erase the one visible
@@ -8865,11 +8942,14 @@ impl Composer {
                 if !same {
                     self.input.update(cx, |input, _| input.cancel_dictation());
                     if self.wizard.is_none() {
-                        self.drafts.insert(
-                            self.current_key.clone(),
-                            self.input.read(cx).text().to_string(),
-                        );
+                        let draft = self
+                            .recall
+                            .unsent_draft()
+                            .map(str::to_owned)
+                            .unwrap_or_else(|| self.input.read(cx).text().to_string());
+                        self.drafts.insert(self.current_key.clone(), draft);
                     }
+                    self.recall.reset();
                     self.reset_mention(None, cx);
                     let prefill = questions
                         .first()
@@ -9049,10 +9129,17 @@ impl Composer {
             return;
         }
         self.input.update(cx, |input, cx| input.set_text(text, cx));
+        // A control outside the editor sent this; focus stays where it is.
+        let focus_pending = self.focus_pending;
         self.on_submit(cx);
+        self.focus_pending = focus_pending;
     }
 
     fn on_submit(&mut self, cx: &mut Context<Self>) {
+        self.submit_with(SubmitIntent::Enter, cx);
+    }
+
+    fn submit_with(&mut self, intent: SubmitIntent, cx: &mut Context<Self>) {
         if self
             .input
             .update(cx, |input, cx| input.finish_dictation(true, cx))
@@ -9096,9 +9183,17 @@ impl Composer {
             SendButtonMode::Stop => {}
             _ if no_content => {}
             _ if self.send_blocked(cx) => {}
-            SendButtonMode::Send => self.send(text, false, cx),
-            // Busy: keep the message queued until the current turn ends.
-            SendButtonMode::Queue => self.send(text, true, cx),
+            SendButtonMode::Send => {
+                self.send(text, false, false, cx);
+                self.focus_pending = true;
+            }
+            // Busy: keep the message queued until the current turn ends, or
+            // steer it into the live turn when this submit asks for that.
+            SendButtonMode::Queue => {
+                let steer = submit_steers(intent, crate::settings::direct_steer_enabled(cx));
+                self.send(text, true, steer, cx);
+                self.focus_pending = true;
+            }
         }
     }
 
@@ -9121,7 +9216,7 @@ impl Composer {
             self.staged_comments(cx).len(),
         );
         match modified_submit_target(has_content) {
-            ModifiedSubmitTarget::SubmitContent => self.on_submit(cx),
+            ModifiedSubmitTarget::SubmitContent => self.submit_with(SubmitIntent::Steer, cx),
             ModifiedSubmitTarget::ActivateLatestQueued => self.activate_latest_queued(cx),
         }
     }
@@ -9131,7 +9226,7 @@ impl Composer {
     /// thread the picked config in: worktree creation (when the isolated toggle
     /// is on), `Mutate createChat` with the `ChatConfig` + cwd, and the model /
     /// reasoning / options on the Run request itself (§1.7).
-    fn send(&mut self, text: String, queue: bool, cx: &mut Context<Self>) {
+    fn send(&mut self, text: String, queue: bool, steer: bool, cx: &mut Context<Self>) {
         if self
             .state
             .read(cx)
@@ -9311,6 +9406,9 @@ impl Composer {
         // Existing busy chats always queue; compatibility was checked before
         // taking the draft, attachments, or review comments.
         let queue = queue && !is_new;
+        // Attachment rows can only be delivered by interrupting the turn, so
+        // a direct steer never applies to them; they stay queued.
+        let steer = steer && queue && staged.is_empty();
         let clean_queue_attachment_text = staged.is_empty()
             || (engine
                 .engine_info()
@@ -9444,6 +9542,8 @@ impl Composer {
 
         self.input.update(cx, |input, cx| input.set_text("", cx));
         self.drafts.remove(&self.current_key);
+        self.recall.reset();
+        self.escape_presses.reset();
         self.failure = None;
         self.sending = true;
         // A queued row is represented by the queue panel, not the transcript.
@@ -9926,6 +10026,9 @@ impl Composer {
                         chat_id: err_chat_id.clone(),
                         message_id: message_id.clone(),
                     });
+                    if steer {
+                        composer.steer_queued_message(&err_chat_id, message_id.clone(), cx);
+                    }
                 }
                 if let Err(message) = result {
                     // Failure: red banner, echo removed, prompt back in the
@@ -9989,6 +10092,143 @@ impl Composer {
             })
             .ok();
         }));
+    }
+
+    /// Whether the composer's stop shortcut can act now: the agent runs and
+    /// no popup, question, queue edit, dictation or IME composition owns the
+    /// key.
+    fn interrupt_available(&self, cx: &App) -> bool {
+        let input = self.input.read(cx);
+        let interrupting = self
+            .state
+            .read(cx)
+            .selected_chat
+            .as_deref()
+            .is_some_and(|chat_id| self.is_interrupting(chat_id));
+        self.run_live(cx)
+            && !interrupting
+            && self.wizard.is_none()
+            && self.editing_queued.is_none()
+            && self.preview.is_none()
+            && !self.permission_open
+            && !self.pickers.read(cx).is_open()
+            && self.mention.token.is_none()
+            && self.slash.token.is_none()
+            && !input.mention_open
+            && input.marked_range.is_none()
+            && !input.dictation.phase.active()
+    }
+
+    fn on_interrupt_agent(
+        &mut self,
+        action: &InterruptAgent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.interrupt_available(cx) {
+            self.escape_presses.reset();
+            cx.propagate();
+            return;
+        }
+        if action.double_press {
+            // A single press already stops the agent from the shell.
+            if crate::settings::current(cx).escape_stops_active_agent {
+                cx.propagate();
+                return;
+            }
+            let revision = self.input.read(cx).edit_revision;
+            if !self.escape_presses.press(revision, Instant::now()) {
+                // The first press keeps its ordinary meaning elsewhere.
+                cx.propagate();
+                return;
+            }
+        }
+        self.interrupt_selected(cx);
+    }
+
+    /// Up at the very start / Down at the very end of the draft steps through
+    /// this chat's sent messages. Returns false when the key should keep its
+    /// ordinary caret motion.
+    fn recall_message(&mut self, direction: isize, cx: &mut Context<Self>) -> bool {
+        {
+            let input = self.input.read(cx);
+            let edge = if direction < 0 {
+                0
+            } else {
+                input.content.len()
+            };
+            if !input.selected_range.is_empty()
+                || input.cursor_offset() != edge
+                || input.read_only
+                || input.marked_range.is_some()
+                || input.mention_open
+                || input.mention_has_selection
+                || input.dictation.phase.active()
+            {
+                return false;
+            }
+        }
+        if self.wizard.is_some()
+            || self.editing_queued.is_some()
+            || self.queue_edit_pending_id.is_some()
+            || self.queue_edit_finishing
+            || self.staging_in_flight > 0
+            || !self.staged().is_empty()
+            || !self.staged_appshots().is_empty()
+        {
+            return false;
+        }
+        let current = self.input.read(cx).text().to_owned();
+        let messages = if self.recall.browsing() {
+            Vec::new()
+        } else {
+            sent_message_texts(&self.state.read(cx).transcript)
+        };
+        let Some(text) = self.recall.navigate(direction, &current, || messages) else {
+            return false;
+        };
+        self.input.update(cx, |input, cx| {
+            input.set_text(text, cx);
+            if direction < 0 {
+                input.move_to(0, cx);
+            }
+        });
+        cx.notify();
+        true
+    }
+
+    fn on_previous_message(&mut self, _: &PreviousMessage, _: &mut Window, cx: &mut Context<Self>) {
+        if !self.recall_message(-1, cx) {
+            cx.propagate();
+        }
+    }
+
+    fn on_next_message(&mut self, _: &NextMessage, _: &mut Window, cx: &mut Context<Self>) {
+        if !self.recall_message(1, cx) {
+            cx.propagate();
+        }
+    }
+
+    fn on_queue_submit(&mut self, _: &QueueSubmit, _: &mut Window, cx: &mut Context<Self>) {
+        let input = self.input.read(cx);
+        if input.marked_range.is_some() || input.mention_has_selection {
+            cx.propagate();
+            return;
+        }
+        if self
+            .input
+            .update(cx, |input, cx| input.finish_dictation(true, cx))
+        {
+            return;
+        }
+        if self.commit_queue_edit(cx) {
+            return;
+        }
+        if self.wizard.is_some() {
+            cx.propagate();
+            return;
+        }
+        self.submit_with(SubmitIntent::Queue, cx);
     }
 
     pub(crate) fn interrupt_selected(&mut self, cx: &mut Context<Self>) {
@@ -10787,10 +11027,14 @@ impl Composer {
                         el.on_click(cx.listener(|this, _, _, cx| this.on_submit(cx)))
                     })
                     .tooltip(crate::settings::widgets::text_tooltip(
-                        if mode == SendButtonMode::Queue {
-                            "Queue message"
+                        if mode == SendButtonMode::Queue
+                            && crate::settings::direct_steer_enabled(cx)
+                        {
+                            tr(cx, msg::native::steer_message)
+                        } else if mode == SendButtonMode::Queue {
+                            "Queue message".into()
                         } else {
-                            "Send message"
+                            "Send message".into()
                         },
                     ))
                     .into_any_element()
@@ -10892,7 +11136,7 @@ impl Render for Composer {
             self.input
                 .update(cx, |input, cx| input.set_text(text.clone(), cx));
             if send && !text.trim().is_empty() {
-                self.send(text, false, cx);
+                self.send(text, false, false, cx);
             }
         }
         let archived = self
@@ -11014,6 +11258,15 @@ impl Render for Composer {
         // The shell owns the width and its route animation. A route-dependent
         // cap here would cut a wide composer before its return glide finishes.
         let container = div()
+            .on_action(cx.listener(Self::on_interrupt_agent))
+            .on_action(cx.listener(Self::on_previous_message))
+            .on_action(cx.listener(Self::on_next_message))
+            .on_action(cx.listener(Self::on_queue_submit))
+            .on_key_up(cx.listener(|this, event: &gpui::KeyUpEvent, _, _| {
+                if event.keystroke.key == "escape" {
+                    this.escape_presses.release();
+                }
+            }))
             .w_full()
             .max_w(px(self.last_available_width.unwrap_or(COMPOSER_MAX_WIDTH)))
             .mx_auto()
@@ -12217,6 +12470,286 @@ mod tests {
                     .collect();
                 assert_eq!(names, ["shot.png"]);
                 assert!(!composer.attachments.contains_key("chat-b"));
+            })
+            .unwrap();
+    }
+
+    fn user_entry(id: &str, text: &str) -> SessionMessageEntry {
+        SessionMessageEntry {
+            id: id.into(),
+            role: zuse_doc::MessageRole::User,
+            parts: vec![MessagePart::Text {
+                id: "t0".into(),
+                text: text.into(),
+            }],
+            created_at: 0,
+            device_id: "local".into(),
+            status: None,
+            continuation_of: None,
+            duration_ms: None,
+        }
+    }
+
+    #[test]
+    fn submit_gestures_choose_between_queue_and_steer() {
+        assert!(!submit_steers(SubmitIntent::Enter, false));
+        assert!(submit_steers(SubmitIntent::Enter, true));
+        assert!(submit_steers(SubmitIntent::Steer, false));
+        assert!(!submit_steers(SubmitIntent::Queue, true));
+    }
+
+    #[test]
+    fn recalled_messages_drop_attachment_trailers_and_image_only_sends() {
+        let mut agent = user_entry("a", "ignored");
+        agent.role = zuse_doc::MessageRole::Assistant;
+        let transcript = vec![
+            user_entry("1", "first"),
+            agent,
+            user_entry(
+                "2",
+                &attachments::with_attachments("look at this", &["/tmp/shot.png".to_string()]),
+            ),
+            user_entry(
+                "3",
+                &attachments::with_attachments("", &["/tmp/only.png".to_string()]),
+            ),
+        ];
+        assert_eq!(sent_message_texts(&transcript), ["first", "look at this"]);
+    }
+
+    /// The message composer with the full app keymap bound, its input
+    /// focused, in a chat whose transcript holds `sent`.
+    fn recall_window(
+        cx: &mut gpui::TestAppContext,
+        sent: &[&str],
+    ) -> (tempfile::TempDir, gpui::WindowHandle<Composer>) {
+        let (dir, handle) = composer_focus_window(cx);
+        cx.update(|cx| {
+            crate::shell::apply_keymap(
+                cx,
+                &crate::settings::KeymapConfig::default(),
+                ComposerSendBehavior::default(),
+            )
+        });
+        let transcript: Vec<_> = sent
+            .iter()
+            .enumerate()
+            .map(|(ix, text)| user_entry(&ix.to_string(), text))
+            .collect();
+        handle
+            .update(cx, |composer, window, cx| {
+                composer.state.update(cx, |state, cx| {
+                    state.selected_chat = Some("chat".into());
+                    state.transcript = transcript;
+                    cx.notify();
+                });
+                let focus = composer.input.read(cx).focus_handle.clone();
+                window.focus(&focus, cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        cx.update_window(handle.into(), |_, window, cx| window.draw(cx).clear())
+            .unwrap();
+        (dir, handle)
+    }
+
+    fn composer_text(
+        cx: &mut gpui::TestAppContext,
+        handle: gpui::WindowHandle<Composer>,
+    ) -> String {
+        handle
+            .read_with(cx, |composer, cx| composer.input.read(cx).text().to_owned())
+            .unwrap()
+    }
+
+    fn set_caret(cx: &mut gpui::TestAppContext, handle: gpui::WindowHandle<Composer>, end: bool) {
+        handle
+            .update(cx, |composer, _, cx| {
+                composer.input.update(cx, |input, cx| {
+                    let offset = if end { input.content.len() } else { 0 };
+                    input.move_to(offset, cx);
+                })
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn up_and_down_at_the_text_edges_recall_sent_messages_around_the_draft(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (_dir, handle) = recall_window(cx, &["first", "second"]);
+        handle
+            .update(cx, |composer, _, cx| {
+                composer
+                    .input
+                    .update(cx, |input, cx| input.set_text("my draft", cx))
+            })
+            .unwrap();
+        cx.run_until_parked();
+        // Mid-text, Up is ordinary caret motion.
+        cx.simulate_keystrokes(handle.into(), "up");
+        set_caret(cx, handle, true);
+        cx.simulate_keystrokes(handle.into(), "up");
+        // The caret was not at the very start: nothing was recalled.
+        assert_eq!(composer_text(cx, handle), "my draft");
+        set_caret(cx, handle, false);
+        cx.simulate_keystrokes(handle.into(), "up");
+        assert_eq!(composer_text(cx, handle), "second");
+        cx.simulate_keystrokes(handle.into(), "up");
+        assert_eq!(composer_text(cx, handle), "first");
+        // Down only recalls from the very end.
+        cx.simulate_keystrokes(handle.into(), "down");
+        assert_eq!(composer_text(cx, handle), "first");
+        set_caret(cx, handle, true);
+        cx.simulate_keystrokes(handle.into(), "down");
+        assert_eq!(composer_text(cx, handle), "second");
+        set_caret(cx, handle, true);
+        cx.simulate_keystrokes(handle.into(), "down");
+        assert_eq!(composer_text(cx, handle), "my draft");
+    }
+
+    #[gpui::test]
+    fn an_edited_recall_becomes_the_draft_and_leaving_keeps_the_unsent_one(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (_dir, handle) = recall_window(cx, &["sent"]);
+        handle
+            .update(cx, |composer, _, cx| {
+                composer
+                    .input
+                    .update(cx, |input, cx| input.set_text("unsent", cx))
+            })
+            .unwrap();
+        set_caret(cx, handle, false);
+        cx.simulate_keystrokes(handle.into(), "up");
+        assert_eq!(composer_text(cx, handle), "sent");
+        // Navigating away mid-browse saves the unsent draft, not the recall.
+        handle
+            .update(cx, |composer, _, cx| {
+                composer.state.update(cx, |state, cx| {
+                    state.selected_chat = Some("other".into());
+                    cx.notify();
+                })
+            })
+            .unwrap();
+        cx.run_until_parked();
+        handle
+            .read_with(cx, |composer, _| {
+                assert_eq!(
+                    composer.drafts.get("chat").map(String::as_str),
+                    Some("unsent")
+                );
+                assert!(!composer.recall.browsing());
+            })
+            .unwrap();
+
+        let (_dir, handle) = recall_window(cx, &["sent"]);
+        set_caret(cx, handle, false);
+        cx.simulate_keystrokes(handle.into(), "up");
+        set_caret(cx, handle, true);
+        cx.simulate_input(handle.into(), "!");
+        assert_eq!(composer_text(cx, handle), "sent!");
+        handle
+            .read_with(cx, |composer, _| assert!(!composer.recall.browsing()))
+            .unwrap();
+        // Down from the edited text has no newer entry to show.
+        cx.simulate_keystrokes(handle.into(), "down");
+        assert_eq!(composer_text(cx, handle), "sent!");
+    }
+
+    #[gpui::test]
+    fn recall_waits_for_attachments_still_staging(cx: &mut gpui::TestAppContext) {
+        let (dir, handle) = recall_window(cx, &["sent"]);
+        let bmp = dir.path().join("shot.bmp");
+        image::RgbImage::new(1, 1).save(&bmp).unwrap();
+        handle
+            .update(cx, |composer, _, cx| composer.add_paths(vec![bmp], cx))
+            .unwrap();
+        // The keystroke lands while staging is still in flight.
+        handle
+            .update(cx, |composer, _, cx| {
+                assert_eq!(composer.staging_in_flight, 1);
+                assert!(!composer.recall_message(-1, cx));
+            })
+            .unwrap();
+        cx.run_until_parked();
+        // Staged attachments belong to the draft; recall leaves them alone.
+        set_caret(cx, handle, false);
+        cx.simulate_keystrokes(handle.into(), "up");
+        assert!(!composer_text(cx, handle).contains("sent"));
+    }
+
+    #[gpui::test]
+    fn new_chat_drafts_survive_project_switches(cx: &mut gpui::TestAppContext) {
+        let (_dir, handle) = composer_focus_window(cx);
+        handle
+            .update(cx, |composer, _, cx| {
+                composer
+                    .input
+                    .update(cx, |input, cx| input.set_text("plan the release", cx));
+                composer.attachments.insert(
+                    String::new(),
+                    vec![attachments::stage_png_bytes("draft.png".into(), Vec::new())],
+                );
+                composer.state.update(cx, |state, cx| {
+                    state.select_space(Some("project-b".into()), cx)
+                });
+            })
+            .unwrap();
+        cx.run_until_parked();
+        handle
+            .update(cx, |composer, _, cx| {
+                composer
+                    .state
+                    .update(cx, |state, cx| state.select_space(None, cx));
+            })
+            .unwrap();
+        cx.run_until_parked();
+        handle
+            .read_with(cx, |composer, cx| {
+                assert_eq!(composer.current_key, "");
+                assert_eq!(composer.input.read(cx).text(), "plan the release");
+                assert_eq!(composer.staged().len(), 1);
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn a_new_chat_upload_finishing_after_navigation_stays_in_the_new_chat_draft(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (dir, handle) = composer_focus_window(cx);
+        let bmp = dir.path().join("shot.bmp");
+        image::RgbImage::new(1, 1).save(&bmp).unwrap();
+        handle
+            .update(cx, |composer, _, cx| {
+                composer.add_paths(vec![bmp], cx);
+                composer.state.update(cx, |state, cx| {
+                    state.selected_chat = Some("chat-a".into());
+                    cx.notify();
+                });
+            })
+            .unwrap();
+        cx.run_until_parked();
+        handle
+            .update(cx, |composer, _, cx| {
+                assert_eq!(composer.current_key, "chat-a");
+                assert!(composer.staged().is_empty());
+                composer.state.update(cx, |state, cx| {
+                    state.selected_chat = None;
+                    cx.notify();
+                });
+            })
+            .unwrap();
+        cx.run_until_parked();
+        handle
+            .read_with(cx, |composer, _| {
+                let names: Vec<_> = composer
+                    .staged()
+                    .iter()
+                    .map(|att| att.name.as_str())
+                    .collect();
+                assert_eq!(names, ["shot.png"]);
             })
             .unwrap();
     }
@@ -14643,7 +15176,7 @@ mod tests {
                 })).unwrap()];
                 });
                 assert!(!composer.reference_delivery_supported(cx));
-                composer.send(draft.clone(), false, cx);
+                composer.send(draft.clone(), false, false, cx);
                 assert!(
                     composer
                         .failure

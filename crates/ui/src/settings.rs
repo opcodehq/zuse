@@ -392,6 +392,11 @@ pub fn default_permission_mode(cx: &App) -> zuse_protocol::presentation::Permiss
 }
 
 /// Read the picker preference without cloning the full settings for each model row.
+pub fn direct_steer_enabled(cx: &App) -> bool {
+    cx.try_global::<SettingsStore>()
+        .is_some_and(|store| store.current.direct_steer_enabled)
+}
+
 pub fn compact_model_picker(cx: &App) -> bool {
     cx.try_global::<SettingsStore>()
         .is_some_and(|store| store.current.compact_model_picker)
@@ -949,6 +954,9 @@ pub struct UiSettings {
     /// Whether bare Escape stops the active agent after contextual consumers
     /// decline it. Device-local and opt-in.
     pub escape_stops_active_agent: bool,
+    /// Enter steers a running agent instead of queueing the message behind
+    /// its turn. The queue shortcut (Alt+Enter) always queues. Opt-in.
+    pub direct_steer_enabled: bool,
     /// The Settings section last viewed. ⌘, / Ctrl+,, the footer gear and the
     /// palette reopen it; links naming a section replace it. Files without
     /// it, or with a name this build does not know, open on General.
@@ -1097,6 +1105,7 @@ impl Default for UiSettings {
             terminal_open: false,
             keymap: KeymapConfig::default(),
             escape_stops_active_agent: false,
+            direct_steer_enabled: false,
             settings_section: crate::shell::SettingsSection::default(),
             composer_send_behavior: ComposerSendBehavior::default(),
             default_model: None,
@@ -1199,7 +1208,7 @@ pub enum ShortcutId {
 }
 
 impl ShortcutId {
-    pub const ALL: [ShortcutId; 51] = [
+    pub const ALL: [ShortcutId; 58] = [
         ShortcutId::Desktop(keybindings::Command::NewChat),
         ShortcutId::Desktop(keybindings::Command::NewChatWithoutProject),
         ShortcutId::Desktop(keybindings::Command::OpenProject),
@@ -1233,6 +1242,13 @@ impl ShortcutId {
         ShortcutId::Desktop(keybindings::Command::ComposerNewline),
         ShortcutId::Desktop(keybindings::Command::ComposerForceSubmit),
         ShortcutId::Desktop(keybindings::Command::ComposerTogglePlanMode),
+        ShortcutId::Desktop(keybindings::Command::ComposerPreviousMessage),
+        ShortcutId::Desktop(keybindings::Command::ComposerNextMessage),
+        ShortcutId::Desktop(keybindings::Command::ComposerQueueSubmit),
+        ShortcutId::Desktop(keybindings::Command::ComposerDeleteToStart),
+        ShortcutId::Desktop(keybindings::Command::ComposerDeleteToEnd),
+        ShortcutId::Desktop(keybindings::Command::ComposerDeleteWord),
+        ShortcutId::Desktop(keybindings::Command::ComposerInterrupt),
         ShortcutId::Desktop(keybindings::Command::EditorSave),
         ShortcutId::Desktop(keybindings::Command::EditorAnnotate),
         ShortcutId::ToggleDictation,
@@ -1319,6 +1335,16 @@ impl ShortcutId {
             ShortcutId::Desktop(keybindings::Command::PrevChat) if !mac => "mod-shift-tab",
             ShortcutId::Desktop(keybindings::Command::FocusNextPane) if !mac => "mod-`",
             ShortcutId::Desktop(keybindings::Command::FocusPrevPane) if !mac => "mod-shift-`",
+            // Ctrl+U/Ctrl+K are line kills on macOS only; elsewhere Ctrl is
+            // the primary modifier and those keys already belong to app
+            // shortcuts, so the commands start unbound there.
+            ShortcutId::Desktop(
+                keybindings::Command::ComposerDeleteToStart
+                | keybindings::Command::ComposerDeleteToEnd,
+            ) if !mac => "",
+            ShortcutId::Desktop(keybindings::Command::ComposerDeleteWord) if !mac => {
+                "mod-backspace"
+            }
             ShortcutId::Desktop(command) => command.default_combo(),
             ShortcutId::ToggleDictation => "mod-d",
             ShortcutId::RandomWallpaper => "mod-u",
@@ -1883,6 +1909,7 @@ impl UiSettings {
             skills_in_slash_menu,
             skill_completion_by_harness,
             compact_model_picker,
+            direct_steer_enabled,
             sidebar_width,
             sidebar_collapsed,
             sidebar_grouped,
@@ -2987,6 +3014,7 @@ mod tests {
                 ..KeymapConfig::default()
             },
             escape_stops_active_agent: true,
+            direct_steer_enabled: true,
             settings_section: crate::shell::SettingsSection::Shortcuts,
             composer_send_behavior: ComposerSendBehavior::ModEnter,
             skills_in_slash_menu: true,
@@ -3629,6 +3657,7 @@ mod tests {
         assert_eq!(d.terminal_height, 280.0);
         assert!(!d.sidebar_collapsed && !d.right_pane_open && !d.terminal_open);
         assert!(!d.escape_stops_active_agent);
+        assert!(!d.direct_steer_enabled);
     }
 
     #[test]
@@ -3902,6 +3931,7 @@ mod tests {
 
         let loaded = UiSettings::load(dir.path());
         assert!(!loaded.escape_stops_active_agent);
+        assert!(!loaded.direct_steer_enabled);
         assert_eq!(loaded.sidebar_width, 300.0);
         assert!(!loaded.sound_enabled);
     }
