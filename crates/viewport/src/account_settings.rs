@@ -403,9 +403,12 @@ impl Render for AccountCard {
                     .py(px(10.))
                     .border_t_1()
                     .border_color(c.border)
-                    .child(s::description_text(format!(
-                        "Enter {code} in your browser to finish signing in."
-                    )))
+                    .child(s::description_text(if code.is_empty() {
+                        // Browser sign-in returns on its own; there is no code.
+                        tr(cx, msg::providers::accounts_waiting)
+                    } else {
+                        format!("Enter {code} in your browser to finish signing in.")
+                    }))
                     .child(
                         div()
                             .flex()

@@ -255,6 +255,11 @@ impl ManagedAccessCard {
         let Some(engine) = self.engine.clone() else {
             return;
         };
+        let params = if method == methods::CLOUD_ACCOUNT_SIGN_IN {
+            engine.account_sign_in_params()
+        } else {
+            params
+        };
         self.load = None;
         self.epoch = self.epoch.wrapping_add(1);
         self.busy = true;

@@ -2977,10 +2977,14 @@ impl RpcService for EngineRpc {
                     .account
                     .as_ref()
                     .ok_or_else(|| RpcError::Failed("Account service is unavailable.".into()))?;
-                let progress = account
-                    .sign_in()
-                    .await
-                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                // Only a client on this machine can follow a loopback redirect;
+                // remote browsers confirm a device code instead.
+                let progress = if params["browser"] == true {
+                    account.sign_in_in_browser().await
+                } else {
+                    account.sign_in().await
+                }
+                .map_err(|e| RpcError::Failed(e.to_string()))?;
                 RpcReply::value(&progress)
             }
             methods::CLOUD_ACCOUNT_SIGN_OUT => {

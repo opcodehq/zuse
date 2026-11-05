@@ -86,6 +86,10 @@ impl super::remote_connection::Source for Source {
     fn controller(&self) -> Option<EngineHandle> {
         Some(self.target.controller.clone())
     }
+    /// Account methods are forwarded to the controller.
+    fn signs_in_on_this_machine(&self) -> bool {
+        self.target.controller.inner.signs_in_on_this_machine()
+    }
     fn cloud_workspace(&self) -> Option<String> {
         Some(self.target.workspace.clone())
     }

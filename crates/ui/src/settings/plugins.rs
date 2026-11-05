@@ -312,7 +312,9 @@ impl PluginsCard {
         let Some(engine) = self.state.read(cx).engine().cloned() else {
             return;
         };
-        let params = if matches!(method, methods::PLUGINS | methods::SELECT_PLUGIN_WORKSPACE) {
+        let params = if method == methods::CLOUD_ACCOUNT_SIGN_IN {
+            engine.account_sign_in_params()
+        } else if matches!(method, methods::PLUGINS | methods::SELECT_PLUGIN_WORKSPACE) {
             let prepared = if method == methods::SELECT_PLUGIN_WORKSPACE {
                 self.plugins.begin_workspace_selection(params)
             } else {
@@ -560,7 +562,12 @@ impl PluginsCard {
                             .child(catalog_ui::title_block(
                                 theme,
                                 "Finish signing in",
-                                format!("Confirm the code {} in your browser.", login.user_code),
+                                if login.user_code.is_empty() {
+                                    // Browser sign-in: nothing to confirm.
+                                    tr(cx, msg::providers::accounts_waiting)
+                                } else {
+                                    format!("Confirm the code {} in your browser.", login.user_code)
+                                },
                                 crate::typography::TEXT_SM,
                                 crate::typography::TEXT_XS,
                             ))

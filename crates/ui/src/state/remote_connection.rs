@@ -8,6 +8,10 @@ pub(super) trait Source: Send + Sync {
     fn controller(&self) -> Option<EngineHandle> {
         None
     }
+    /// Whether account sign-in is served by an engine on this machine.
+    fn signs_in_on_this_machine(&self) -> bool {
+        false
+    }
     fn cloud_workspace(&self) -> Option<String> {
         None
     }
@@ -45,6 +49,9 @@ struct RemoteEngine {
 impl EngineBackend for RemoteEngine {
     fn controller(&self) -> Option<EngineHandle> {
         self.source.controller()
+    }
+    fn signs_in_on_this_machine(&self) -> bool {
+        self.source.signs_in_on_this_machine()
     }
     fn cloud_workspace(&self) -> Option<String> {
         self.source.cloud_workspace()
