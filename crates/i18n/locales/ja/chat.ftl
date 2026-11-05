@@ -1848,3 +1848,16 @@ chat-find_in_chat_no_results = 結果なし
 chat-find_in_chat_previous = 前の一致
 chat-find_in_chat_next = 次の一致
 chat-find_in_chat_close = 検索を閉じる
+
+chat-history_search_results = 送信済みメッセージ
+chat-history_search_no_results = 一致なし
+chat-stash_title = 保留
+chat-stash_open = 保留中のプロンプト: { $count } 件。保留一覧を開く。
+chat-stash_list = 保留中のプロンプト
+chat-stash_empty = 保留中のものはまだありません。下書きがある状態で { $shortcut } を押すと保留できます。
+chat-stash_delete = 保留中のプロンプトを削除
+chat-history_search_empty = このチャットではまだメッセージを送信していません。
+chat-history_search_title = 送信済みメッセージを検索中
+chat-history_search_use = 使用
+chat-history_search_cancel = キャンセル
+chat-stash_saved_notice = 下書きを保留しました · <part0>{ $shortcut }</part0> で表示
