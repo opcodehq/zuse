@@ -11215,10 +11215,17 @@ impl Composer {
 
     fn render_flash(&self, theme: &Theme, cx: &App) -> Option<gpui::AnyElement> {
         let text = self.flash.clone()?;
-        let stashed = text.as_ref() == tr(cx, msg::native::draft_stashed);
-        let shortcut = Self::shortcut_label(Command::ComposerStash, cx);
-        let content = if stashed {
-            let notice = tr(cx, |l10n| msg::chat::stash_saved_notice(l10n, &shortcut));
+        let notice = if text.as_ref() == tr(cx, msg::native::draft_stashed) {
+            let shortcut = Self::shortcut_label(Command::ComposerStash, cx);
+            Some(tr(cx, |l10n| {
+                msg::chat::stash_saved_notice(l10n, &shortcut)
+            }))
+        } else if text.as_ref() == tr(cx, msg::native::press_esc_again_to_clear) {
+            Some(tr(cx, msg::chat::chat_composer_press_esc_again_to_clear))
+        } else {
+            None
+        };
+        let content = if let Some(notice) = notice {
             let (before, marked) = notice.split_once("<part0>").unwrap_or((&notice, ""));
             let (key, after) = marked.split_once("</part0>").unwrap_or(("", ""));
             div()
@@ -11227,16 +11234,6 @@ impl Composer {
                 .gap(px(4.))
                 .child(before.to_owned())
                 .child(Self::list_keycap(theme, key))
-                .child(after.to_owned())
-                .into_any_element()
-        } else if text.as_ref() == tr(cx, msg::native::press_esc_again_to_clear) {
-            let (before, after) = text.split_once("Esc").unwrap_or((&text, ""));
-            div()
-                .flex()
-                .items_center()
-                .gap(px(4.))
-                .child(before.to_owned())
-                .child(Self::list_keycap(theme, "Esc"))
                 .child(after.to_owned())
                 .into_any_element()
         } else {

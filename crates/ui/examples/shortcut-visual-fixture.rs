@@ -100,7 +100,19 @@ fn main() -> anyhow::Result<()> {
                 Ok(())
             }.await;
             if let Err(error) = run { *failure.lock().unwrap() = Some(format!("{error:#}")); }
-            window.update(cx, |_, w, _| w.remove_window()).ok();
+            // Release the focused editor's platform input handler before the
+            // native test platform shuts down and checks for leaked entities.
+            window.update(cx, |_, w, cx| {
+                w.blur();
+                w.replace_root(cx, |_, _| gpui::EmptyView);
+                w.draw(cx).clear();
+                w.present_if_needed();
+            }).ok();
+            pause(cx).await;
+            window.update(cx, |_, w, cx| {
+                w.draw(cx).clear();
+                w.remove_window();
+            }).ok();
             pause(cx).await;
             cx.update(|cx| cx.quit());
         }).detach();

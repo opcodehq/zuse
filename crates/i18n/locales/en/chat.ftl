@@ -2895,3 +2895,4 @@ chat-history_search_title = Searching sent messages
 chat-history_search_use = use
 chat-history_search_cancel = cancel
 chat-stash_saved_notice = Draft stashed · <part0>{ $shortcut }</part0> to view
+chat-chat_composer_press_esc_again_to_clear = Press <part0>Esc</part0> again to clear
