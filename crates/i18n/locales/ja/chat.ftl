@@ -1637,6 +1637,8 @@ chat-voice_error_recorder_failed = 録音が予期せず停止しました。も
 
 chat-voice_error_no_speech = 音声が検出されませんでした。もう一度お試しください。
 
+chat-voice_error_no_audio = マイクから Zuse に音声が届いていません。設定で入力デバイスを確認してから、もう一度お試しください。
+
 chat-voice_error_transcription_failed = 録音を文字起こしできませんでした。接続を確認して、もう一度お試しください。
 
 chat-voice_error_service_unavailable = このワークスペースでは文字起こしを利用できません。

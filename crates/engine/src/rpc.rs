@@ -2449,9 +2449,13 @@ impl RpcService for EngineRpc {
                 | methods::FORGET_AGENT_ACCOUNT
         ) {
             self.voice.retire();
+            self.agent_accounts.forget_dictation_auth();
         }
         if method == "TranscribeDictation" {
             return self.transcribe_dictation(params).await;
+        }
+        if method == "PrepareDictation" {
+            return self.prepare_dictation().await;
         }
         if voice_remote::handles(method) {
             return self.voice_remote(method, params).await;

@@ -1637,6 +1637,8 @@ chat-voice_error_recorder_failed = 녹음이 예기치 않게 중지되었습니
 
 chat-voice_error_no_speech = 음성이 감지되지 않았습니다. 다시 시도하세요.
 
+chat-voice_error_no_audio = 마이크에서 Zuse로 오디오가 전달되지 않았습니다. 설정에서 입력 장치를 확인한 후 다시 시도하세요.
+
 chat-voice_error_transcription_failed = 녹음을 텍스트로 변환하지 못했습니다. 연결을 확인하고 다시 시도하세요.
 
 chat-voice_error_service_unavailable = 이 워크스페이스에서는 텍스트 변환을 사용할 수 없습니다.

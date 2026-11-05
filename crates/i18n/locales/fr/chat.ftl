@@ -1645,6 +1645,8 @@ chat-voice_error_recorder_failed = L'enregistrement s'est arrêté de façon ina
 
 chat-voice_error_no_speech = Aucune parole détectée. Réessayez.
 
+chat-voice_error_no_audio = Aucun son n'est parvenu à Zuse depuis votre micro. Vérifiez le périphérique d'entrée dans les Réglages, puis réessayez.
+
 chat-voice_error_transcription_failed = Impossible de transcrire l'enregistrement. Vérifiez votre connexion et réessayez.
 
 chat-voice_error_service_unavailable = La transcription n'est pas disponible depuis cet espace de travail.

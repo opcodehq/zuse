@@ -2559,6 +2559,9 @@ chat-voice_error_recorder_failed = Recording stopped unexpectedly. Try again.
 # Source key: chat:voice_error_no_speech
 chat-voice_error_no_speech = No speech was detected. Try again.
 
+# Source key: chat:voice_error_no_audio
+chat-voice_error_no_audio = No audio reached Zuse from your microphone. Check your input device in Settings, then try again.
+
 # Source key: chat:voice_error_transcription_failed
 chat-voice_error_transcription_failed = Couldn't transcribe your recording. Check your connection and try again.
 

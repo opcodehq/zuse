@@ -3069,6 +3069,8 @@ impl ComposerInput {
                 Event::Unavailable(message) => {
                     self.complete_dictation(Phase::Unavailable(message), cx)
                 }
+                Event::NoAudio => self
+                    .complete_dictation(Phase::Failed(tr(cx, msg::chat::voice_error_no_audio)), cx),
                 Event::Failed(message) => self.complete_dictation(Phase::Failed(message), cx),
                 Event::Cancelled => {
                     self.cancel_dictation();
@@ -6594,6 +6596,11 @@ pub struct Composer {
     /// Focus once on mount, navigation, or after opening/closing a queue edit.
     pub(crate) focus_pending: bool,
     dictation_hold: Option<DictationHold>,
+    /// Account check the microphone starts on hover or focus.
+    dictation_ready: crate::dictation::Readiness,
+    dictation_ready_task: Option<Task<()>>,
+    dictation_button_focus: FocusHandle,
+    dictation_button_focused: Option<Subscription>,
     /// Live drag over the queue panel: which row, and where it would land.
     pub(crate) queue_drag: Option<crate::queue::QueueDragState>,
     pub(crate) queue_scroll: gpui::ScrollHandle,
@@ -7120,6 +7127,10 @@ impl Composer {
             dictation_activation: None,
             dictation_blur: None,
             dictation_focus: cx.focus_handle(),
+            dictation_ready: Default::default(),
+            dictation_ready_task: None,
+            dictation_button_focus: cx.focus_handle(),
+            dictation_button_focused: None,
             voice_last: None,
             voice_tween: VoiceTween::default(),
             recall: Default::default(),
@@ -11548,6 +11559,16 @@ impl Composer {
         // Per-composer key: the main and sidechat composers share this
         // render, and the hover fade store is keyed by string.
         let hover_key: SharedString = format!("composer-dictation-{}", cx.entity_id()).into();
+        let fade = motion::hover_listener(hover_key.clone());
+        let hovered_composer = composer.clone();
+        let on_hover = move |hovered: &bool, window: &mut Window, cx: &mut App| {
+            fade(hovered, window, cx);
+            if *hovered {
+                hovered_composer
+                    .update(cx, |this, cx| this.prepare_dictation(cx))
+                    .ok();
+            }
+        };
         let centered = || {
             div()
                 .absolute()
@@ -11570,11 +11591,12 @@ impl Composer {
             } else {
                 gpui::Toggled::False
             })
+            .track_focus(&self.dictation_button_focus)
             .tab_index(0)
             .cursor_pointer()
             // At rest it is a sibling of the paperclip: the same eased ink
             // wash. Live, it is the accent plate and dims like Send.
-            .on_hover(motion::hover_listener(hover_key.clone()))
+            .on_hover(on_hover)
             .when(t <= 0.0, |el| {
                 el.bg(motion::hover_blend(
                     &hover_key,
@@ -11658,6 +11680,40 @@ impl Composer {
                 )
             });
         Some(button.into_any_element())
+    }
+
+    /// Confirms the account while the pointer is on its way to the
+    /// microphone, so the engine has it ready when the first phrase uploads.
+    fn prepare_dictation(&mut self, cx: &mut Context<Self>) {
+        if !crate::dictation::enabled(cx) || self.input.read(cx).dictation.phase.active() {
+            return;
+        }
+        let Some(engine) = self
+            .state
+            .read(cx)
+            .engine()
+            .map(|engine| engine.controller())
+        else {
+            return;
+        };
+        if !self.dictation_ready.begin(Instant::now()) {
+            return;
+        }
+        let check = gpui_tokio::Tokio::spawn(cx, async move {
+            engine
+                .client()
+                .call_scoped("PrepareDictation", serde_json::json!({}))
+                .await
+                .is_ok()
+        });
+        self.dictation_ready_task = Some(cx.spawn(async move |this, cx| {
+            let ready = check.await.unwrap_or(false);
+            this.update(cx, |this, _| {
+                this.dictation_ready.settle(ready, Instant::now());
+                this.dictation_ready_task = None;
+            })
+            .ok();
+        }));
     }
 
     fn dismiss_dictation(&mut self, cx: &mut Context<Self>) {
@@ -12087,6 +12143,11 @@ impl Render for Composer {
                     cx.notify();
                 });
             }));
+        }
+        if self.dictation_button_focused.is_none() {
+            let focus = self.dictation_button_focus.clone();
+            self.dictation_button_focused =
+                Some(cx.on_focus(&focus, window, |this, _, cx| this.prepare_dictation(cx)));
         }
         if self.dictation_activation.is_none() {
             self.dictation_activation =

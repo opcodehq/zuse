@@ -1,19 +1,36 @@
 //! In-memory microphone capture for Codex-authenticated dictation.
 use anyhow::{Context, Result, bail};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use std::collections::BTreeMap;
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicBool, AtomicU32, Ordering},
+    atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering},
 };
+use std::time::{Duration, Instant};
 
 mod resample;
 
 pub const MAX_SECONDS: usize = 150;
+/// A pause this long ends a phrase; shorter gaps fall between words.
+const PAUSE: Duration = Duration::from_millis(800);
+/// Phrases grow to at least this length: tiny clips transcribe poorly.
+const MIN_PHRASE: Duration = Duration::from_millis(1_500);
+const PAUSE_POLL: Duration = Duration::from_millis(100);
+/// RMS that counts as speech rather than room noise: 0.08 on a level meter
+/// that scales RMS by four so normal speaking fills it.
+const SPEECH_RMS: f32 = 0.08 / 4.0;
+
 struct Audio {
-    /// Only the audio callback touches this until the stream is dropped.
+    /// The phrase being recorded. The audio callback appends; a phrase cut
+    /// swaps in an empty buffer, which holds the lock only for a pointer swap.
     samples: Mutex<Vec<f32>>,
+    /// Frames recorded across every phrase, for the duration limit.
+    recorded: AtomicUsize,
+    /// Loudest RMS since the phrase cutter last read it. The waveform reads
+    /// its own meter, so neither consumer steals the other's peaks.
+    phrase_level: AtomicU32,
     // Outside the lock: the capture loop polls these every 10 ms and must
-    // never make the real-time callback's `try_lock` drop a buffer.
+    // never make the real-time callback wait.
     failed: AtomicBool,
     full: AtomicBool,
 }
@@ -21,6 +38,8 @@ impl Audio {
     fn with_capacity(capacity: usize) -> Self {
         Self {
             samples: Mutex::new(Vec::with_capacity(capacity)),
+            recorded: AtomicUsize::new(0),
+            phrase_level: AtomicU32::new(0),
             failed: AtomicBool::new(false),
             full: AtomicBool::new(false),
         }
@@ -52,15 +71,28 @@ fn append<T: cpal::Sample>(data: &[T], channels: usize, rate: u32, a: &Audio)
 where
     f32: cpal::FromSample<T>,
 {
-    if let Ok(mut samples) = a.samples.try_lock() {
-        for frame in data.chunks_exact(channels) {
-            if samples.len() >= rate as usize * MAX_SECONDS {
-                a.full.store(true, Ordering::Release);
-                break;
-            }
-            samples.push(frame.iter().map(|s| s.to_sample::<f32>()).sum::<f32>() / channels as f32);
+    // A phrase cut holds the lock only to swap buffers, so spin briefly
+    // rather than drop audio at the seam between two phrases.
+    let mut samples = None;
+    for _ in 0..1_024 {
+        if let Ok(guard) = a.samples.try_lock() {
+            samples = Some(guard);
+            break;
         }
+        std::hint::spin_loop();
     }
+    let Some(mut samples) = samples else { return };
+    let limit = rate as usize * MAX_SECONDS;
+    let mut recorded = a.recorded.load(Ordering::Relaxed);
+    for frame in data.chunks_exact(channels) {
+        if recorded >= limit {
+            a.full.store(true, Ordering::Release);
+            break;
+        }
+        samples.push(frame.iter().map(|s| s.to_sample::<f32>()).sum::<f32>() / channels as f32);
+        recorded += 1;
+    }
+    a.recorded.store(recorded, Ordering::Release);
 }
 /// A microphone the user can choose: a stable identifier and a display name.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -129,6 +161,7 @@ impl Capture {
                     &config.into(),
                     move |d: &[$sample], _| {
                         meter(d, channels, &level);
+                        meter(d, channels, &a.phrase_level);
                         append(d, channels, rate, &a)
                     },
                     err,
@@ -161,6 +194,17 @@ impl Capture {
     pub fn ended(&self) -> bool {
         self.audio.full.load(Ordering::Acquire) || self.audio.failed.load(Ordering::Acquire)
     }
+    /// Hands off the phrase recorded so far. The next phrase's buffer is in
+    /// place before this one leaves, so no audio falls between them.
+    pub fn cut(&self) -> Vec<f32> {
+        let limit = self.rate as usize * MAX_SECONDS;
+        let recorded = self.audio.recorded.load(Ordering::Acquire);
+        // Allocate outside the lock; untouched capacity costs no memory.
+        let mut next = Vec::with_capacity(limit.saturating_sub(recorded));
+        let mut samples = self.audio.samples.lock().unwrap_or_else(|e| e.into_inner());
+        std::mem::swap(&mut *samples, &mut next);
+        next
+    }
     pub fn finish(mut self) -> Result<(Vec<f32>, u32)> {
         self.stream.take();
         if self.audio.failed.load(Ordering::Acquire) {
@@ -175,9 +219,16 @@ impl Capture {
 pub enum Event {
     Listening,
     Finalizing,
+    /// Everything transcribed so far, in spoken order. Each phrase extends
+    /// the previous text, so the latest partial replaces earlier ones.
+    Partial(String),
     Final(String),
+    /// The microphone delivered no audio at all.
+    NoAudio,
     Failed(String),
 }
+/// Partials are cumulative, so dropping one under backpressure loses nothing.
+const EVENT_CAPACITY: usize = 32;
 struct Job {
     stop: Arc<AtomicBool>,
     cancel: Arc<AtomicBool>,
@@ -185,94 +236,241 @@ struct Job {
     device: Option<String>,
     events: std::sync::mpsc::SyncSender<Event>,
 }
+impl Job {
+    /// Terminal events block until queued: unlike partials, they carry the
+    /// outcome. A dropped session closes the channel, so this never hangs.
+    fn finished(&self, result: Result<Option<Finished>>) {
+        let event = match result {
+            Ok(Some(finished)) if finished.recorded == 0 => Event::NoAudio,
+            Ok(Some(finished)) => Event::Final(finished.text),
+            Ok(None) => return,
+            Err(error) => Event::Failed(error.to_string()),
+        };
+        let _ = self.events.send(event);
+    }
+}
 // Capture owns its stream on a separate thread until Stop or cancellation.
 trait Recording {
     fn ended(&self) -> bool;
-    fn finish(self) -> Result<(Vec<f32>, u32)>;
+    fn rate(&self) -> u32;
+    /// Loudest RMS since the previous call.
+    fn take_level(&self) -> f32;
+    /// Audio since the previous cut; recording continues without a gap.
+    fn cut(&self) -> Vec<f32>;
+    /// Closes the microphone and returns the audio after the last cut.
+    fn finish(self) -> Result<Vec<f32>>;
 }
 impl Recording for Capture {
     fn ended(&self) -> bool {
         self.ended()
     }
-    fn finish(self) -> Result<(Vec<f32>, u32)> {
-        self.finish()
+    fn rate(&self) -> u32 {
+        self.rate
+    }
+    fn take_level(&self) -> f32 {
+        f32::from_bits(self.audio.phrase_level.swap(0, Ordering::Relaxed))
+    }
+    fn cut(&self) -> Vec<f32> {
+        self.cut()
+    }
+    fn finish(self) -> Result<Vec<f32>> {
+        Ok(self.finish()?.0)
     }
 }
 
-fn record<C: Recording>(
+/// Decides where one phrase ends: after a pause, once it holds enough audio
+/// to transcribe well. Silence before any speech never ends a phrase.
+struct PhraseCutter {
+    started: Instant,
+    quiet_since: Option<Instant>,
+    heard_speech: bool,
+}
+impl PhraseCutter {
+    fn new(now: Instant) -> Self {
+        Self {
+            started: now,
+            quiet_since: None,
+            heard_speech: false,
+        }
+    }
+    /// Folds in the loudest level since the previous poll. True when the
+    /// phrase should be cut now; the next one starts at `now`.
+    fn poll(&mut self, now: Instant, rms: f32) -> bool {
+        if rms >= SPEECH_RMS {
+            self.heard_speech = true;
+            self.quiet_since = None;
+            return false;
+        }
+        let quiet_since = *self.quiet_since.get_or_insert(now);
+        if !self.heard_speech
+            || now.duration_since(quiet_since) < PAUSE
+            || now.duration_since(self.started) < MIN_PHRASE
+        {
+            return false;
+        }
+        *self = Self::new(now);
+        true
+    }
+}
+
+/// Whether a phrase goes to the transcription service. Clips too short or
+/// digitally silent to hold words never do. The first phrase is always sent,
+/// so a quiet speaker the meter misses still gets text; a later phrase the
+/// meter heard as silence is the trailing pause and would only invite
+/// invented text.
+fn worth_sending(samples: &[f32], rate: u32, first: bool, heard_speech: bool) -> bool {
+    samples.len() >= rate as usize / 5
+        && samples.iter().any(|s| s.abs() >= 0.0001)
+        && (first || heard_speech)
+}
+
+/// How a dictation ended when it was not cancelled.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Finished {
+    /// Every delivered phrase, in spoken order.
+    text: String,
+    /// Frames the microphone produced; zero means no audio arrived at all.
+    recorded: usize,
+}
+
+/// Delivers phrase transcripts in spoken order, however their requests race.
+#[derive(Default)]
+struct Delivery {
+    sent: usize,
+    next: usize,
+    arrived: BTreeMap<usize, String>,
+    text: String,
+}
+impl Delivery {
+    /// Reserves the next spoken-order slot.
+    fn reserve(&mut self) -> usize {
+        self.sent += 1;
+        self.sent - 1
+    }
+    fn pending(&self) -> bool {
+        self.next < self.sent
+    }
+    /// Records one phrase's text. Returns the full transcript when it grew.
+    fn arrive(&mut self, index: usize, text: String) -> Option<&str> {
+        self.arrived.insert(index, text);
+        let before = self.text.len();
+        while let Some(text) = self.arrived.remove(&self.next) {
+            self.next += 1;
+            let text = text.trim();
+            if text.is_empty() {
+                continue;
+            }
+            if !self.text.is_empty() {
+                self.text.push(' ');
+            }
+            self.text.push_str(text);
+        }
+        (self.text.len() != before).then_some(self.text.as_str())
+    }
+}
+
+fn run_job<C: Recording>(
     job: &Job,
     start: impl FnOnce() -> Result<C>,
-) -> Result<Option<(Vec<f32>, u32)>> {
-    if job.cancel.load(Ordering::Acquire) || job.stop.load(Ordering::Acquire) {
-        return Ok(None);
-    }
-    let capture = start()?;
-    // Stop/cancel may arrive while the audio device is opening.
+    transcribe: impl Fn(Vec<f32>, u32) -> Result<String> + Sync,
+) -> Result<Option<Finished>> {
     if job.cancel.load(Ordering::Acquire) {
         return Ok(None);
     }
-    if !job.stop.load(Ordering::Acquire) {
-        let _ = job.events.try_send(Event::Listening);
-    }
-    let started = std::time::Instant::now();
-    while !job.stop.load(Ordering::Acquire)
-        && !job.cancel.load(Ordering::Acquire)
-        && !capture.ended()
-        && started.elapsed().as_secs() < MAX_SECONDS as u64
-    {
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    if job.cancel.load(Ordering::Acquire) {
-        return Ok(None);
-    }
-    let audio = capture.finish()?; // Close the microphone before uploading.
-    let _ = job.events.try_send(Event::Finalizing);
-    Ok(Some(audio))
-}
-
-fn run_job<C, F>(
-    job: &Job,
-    start: impl FnOnce() -> Result<C> + Send,
-    load: impl FnOnce() -> Result<F>,
-) -> Result<Option<String>>
-where
-    C: Recording,
-    F: FnOnce(Vec<f32>, u32) -> Result<String>,
-{
-    if job.cancel.load(Ordering::Acquire) {
-        return Ok(None);
+    if job.stop.load(Ordering::Acquire) {
+        return Ok(Some(Finished::default()));
     }
     std::thread::scope(|scope| {
-        let capture = std::thread::Builder::new()
-            .name("dictation-capture".into())
-            .spawn_scoped(scope, || record(job, start))?;
-        // If native loading unwinds, scope teardown still has to close capture
-        // before joining it. Normal cancellation uses the same signal.
+        // Leaving for any reason, error or unwind included, aborts uploads
+        // still in flight before the scope joins them.
         struct CancelOnDrop<'a>(&'a AtomicBool);
         impl Drop for CancelOnDrop<'_> {
             fn drop(&mut self) {
                 self.0.store(true, Ordering::Release);
             }
         }
-        let _close_capture = CancelOnDrop(&job.cancel);
-        let model = load();
-        // A load failure must stop capture even if the user has not pressed Stop.
-        // Keep the admission guard until the stream has actually been dropped.
-        if model.is_err() {
-            job.cancel.store(true, Ordering::Release);
-        }
-        let audio = capture
-            .join()
-            .map_err(|_| anyhow::anyhow!("Microphone worker failed"))?;
-        let transcribe = model?;
+        let _abort_uploads = CancelOnDrop(&job.cancel);
+        let capture = start()?;
+        // Stop/cancel may arrive while the audio device is opening.
         if job.cancel.load(Ordering::Acquire) {
             return Ok(None);
         }
-        let Some((samples, rate)) = audio? else {
-            return Ok(Some(String::new()));
+        if !job.stop.load(Ordering::Acquire) {
+            let _ = job.events.try_send(Event::Listening);
+        }
+        let rate = capture.rate();
+        let (done, results) = std::sync::mpsc::channel::<(usize, Result<String>)>();
+        let mut delivery = Delivery::default();
+        let mut recorded = 0;
+        // Each phrase uploads on its own thread while recording goes on.
+        let mut send = |samples: Vec<f32>, heard_speech: bool, delivery: &mut Delivery| {
+            recorded += samples.len();
+            let first = delivery.sent == 0;
+            if !worth_sending(&samples, rate, first, heard_speech) {
+                return Ok(());
+            }
+            let index = delivery.reserve();
+            let done = done.clone();
+            let transcribe = &transcribe;
+            std::thread::Builder::new()
+                .name("dictation-phrase".into())
+                .spawn_scoped(scope, move || {
+                    let _ = done.send((index, transcribe(samples, rate)));
+                })
+                .map(|_| ())
         };
-        let text = transcribe(samples, rate)?;
-        Ok((!job.cancel.load(Ordering::Acquire)).then_some(text))
+        // A failed phrase ends dictation at once, before earlier ones land.
+        let deliver = |delivery: &mut Delivery, wait: Option<Duration>| -> Result<()> {
+            let mut next = match wait {
+                Some(wait) => results.recv_timeout(wait).ok(),
+                None => results.try_recv().ok(),
+            };
+            while let Some((index, result)) = next {
+                let text = result?;
+                if let Some(text) = delivery.arrive(index, text) {
+                    let _ = job.events.try_send(Event::Partial(text.to_owned()));
+                }
+                next = results.try_recv().ok();
+            }
+            Ok(())
+        };
+        let started = Instant::now();
+        let mut cutter = PhraseCutter::new(started);
+        let mut polled = started;
+        while !job.stop.load(Ordering::Acquire)
+            && !job.cancel.load(Ordering::Acquire)
+            && !capture.ended()
+            && started.elapsed().as_secs() < MAX_SECONDS as u64
+        {
+            std::thread::sleep(Duration::from_millis(10));
+            let now = Instant::now();
+            if now.duration_since(polled) >= PAUSE_POLL {
+                polled = now;
+                if cutter.poll(now, capture.take_level()) {
+                    send(capture.cut(), true, &mut delivery)?;
+                }
+            }
+            deliver(&mut delivery, None)?;
+        }
+        if job.cancel.load(Ordering::Acquire) {
+            return Ok(None);
+        }
+        // Fold in speech since the last poll so a short tail is not skipped.
+        let tail_heard = cutter.heard_speech || capture.take_level() >= SPEECH_RMS;
+        let tail = capture.finish()?; // Close the microphone before the last upload.
+        let _ = job.events.try_send(Event::Finalizing);
+        send(tail, tail_heard, &mut delivery)?;
+        // Stop waits only for phrases still in flight.
+        while delivery.pending() {
+            if job.cancel.load(Ordering::Acquire) {
+                return Ok(None);
+            }
+            deliver(&mut delivery, Some(Duration::from_millis(20)))?;
+        }
+        Ok((!job.cancel.load(Ordering::Acquire)).then(|| Finished {
+            text: std::mem::take(&mut delivery.text),
+            recorded,
+        }))
     })
 }
 
@@ -303,17 +501,20 @@ pub struct Session {
     events: std::sync::mpsc::Receiver<Event>,
 }
 impl Session {
-    /// Capture locally, then hand the recording to the signed-in transcription
-    /// service. Dropping the session cancels capture and any pending upload.
+    /// Capture locally and hand each phrase to the signed-in transcription
+    /// service as soon as the speaker pauses, while recording continues.
+    /// Phrases may upload concurrently; their text arrives in spoken order as
+    /// `Partial` events. Dropping the session cancels capture and any upload
+    /// still in flight; text already delivered stays delivered.
     pub fn start_remote(
         device: Option<String>,
-        transcribe: impl FnOnce(Vec<u8>, Arc<AtomicBool>) -> Result<String> + Send + 'static,
+        transcribe: impl Fn(Vec<u8>, Arc<AtomicBool>) -> Result<String> + Send + Sync + 'static,
     ) -> Result<Self> {
         let admission = BusyGuard::acquire()?;
         let stop = Arc::new(AtomicBool::new(false));
         let cancel = Arc::new(AtomicBool::new(false));
         let level = Arc::new(AtomicU32::new(0));
-        let (tx, events) = std::sync::mpsc::sync_channel(4);
+        let (tx, events) = std::sync::mpsc::sync_channel(EVENT_CAPACITY);
         let job = Job {
             stop: stop.clone(),
             cancel: cancel.clone(),
@@ -328,26 +529,11 @@ impl Session {
                 let result = run_job(
                     &job,
                     || Capture::start(job.device.as_deref(), job.level.clone()),
-                    || {
-                        Ok(|samples: Vec<f32>, rate: u32| {
-                            if samples.len() < rate as usize / 5
-                                || samples.iter().all(|s| s.abs() < 0.0001)
-                            {
-                                return Ok(String::new());
-                            }
-                            transcribe(recording_wav(samples, rate)?, job.cancel.clone())
-                        })
+                    |samples: Vec<f32>, rate: u32| {
+                        transcribe(recording_wav(samples, rate)?, job.cancel.clone())
                     },
                 );
-                match result {
-                    Ok(Some(text)) => {
-                        let _ = job.events.try_send(Event::Final(text));
-                    }
-                    Err(error) => {
-                        let _ = job.events.try_send(Event::Failed(error.to_string()));
-                    }
-                    _ => {}
-                }
+                job.finished(result);
             })?;
         Ok(Self {
             stop,

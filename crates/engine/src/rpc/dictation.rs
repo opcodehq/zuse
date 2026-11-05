@@ -2,6 +2,7 @@
 use super::*;
 use base64::engine::general_purpose::STANDARD;
 use serde_json::{Value, json};
+use std::future::Future;
 
 const ENDPOINT: &str = "https://chatgpt.com/backend-api/transcribe";
 const MAX_BYTES: usize = 10 * 1024 * 1024;
@@ -38,7 +39,7 @@ fn upload(
     endpoint: &str,
     token: &str,
     account: Option<&str>,
-    audio: Vec<u8>,
+    audio: &[u8],
 ) -> reqwest::RequestBuilder {
     let boundary = format!("zuse-{}", uuid::Uuid::new_v4());
     let mut body = format!("--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"recording.wav\"\r\nContent-Type: audio/wav\r\n\r\n").into_bytes();
@@ -80,43 +81,84 @@ fn transcript(status: reqwest::StatusCode, body: &[u8]) -> Result<String, RpcErr
         .ok_or_else(|| RpcError::Failed("Transcription returned no text.".into()))
 }
 
+/// Uploads with the cached account. A cached token may have been revoked
+/// since it was fetched, so a rejection fetches a fresh one and retries once.
+async fn upload_with_retry<A, S>(
+    auth: impl Fn(Option<String>) -> A,
+    send: impl Fn(String, Option<String>) -> S,
+) -> Result<(reqwest::StatusCode, Vec<u8>), RpcError>
+where
+    A: Future<Output = Result<(String, Option<String>), RpcError>>,
+    S: Future<Output = Result<(reqwest::StatusCode, Vec<u8>), RpcError>>,
+{
+    let (token, account) = auth(None).await?;
+    let response = send(token.clone(), account).await?;
+    if response.0 != reqwest::StatusCode::UNAUTHORIZED {
+        return Ok(response);
+    }
+    let (token, account) = auth(Some(token)).await?;
+    send(token, account).await
+}
+
 impl EngineRpc {
+    async fn dictation_account(
+        &self,
+        rejected: Option<String>,
+    ) -> Result<(String, Option<String>), RpcError> {
+        self.agent_accounts
+            .dictation_auth(rejected.as_deref())
+            .await
+            .map_err(|error| RpcError::Failed(error.to_string()))
+    }
+
+    /// Confirms the account before recording starts, so the first phrase
+    /// uploads without waiting for a refresh.
+    pub(super) async fn prepare_dictation(&self) -> Result<RpcReply, RpcError> {
+        self.dictation_account(None).await?;
+        RpcReply::value(&json!({"ready":true}))
+    }
+
     pub(super) async fn transcribe_dictation(&self, params: Value) -> Result<RpcReply, RpcError> {
         let audio = recording(&params)?;
-        let (token, account) = self
-            .agent_accounts
-            .dictation_auth()
-            .await
-            .map_err(|error| RpcError::Failed(error.to_string()))?;
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|_| RpcError::Failed("Transcription is unavailable.".into()))?;
-        let response = upload(&client, ENDPOINT, &token, account.as_deref(), audio)
-            .send()
-            .await
-            .map_err(|_| {
-                RpcError::Failed("Transcription could not connect. Your draft is safe.".into())
-            })?;
-        let status = response.status();
-        // Responses should only be a short transcript, not an unbounded download.
-        let mut response = response;
-        let mut body = Vec::new();
-        while let Some(chunk) = response
-            .chunk()
-            .await
-            .map_err(|_| RpcError::Failed("Transcription was interrupted.".into()))?
-        {
-            if body.len() + chunk.len() > 1024 * 1024 {
-                return Err(RpcError::Failed(
-                    "Transcription response is too large.".into(),
-                ));
-            }
-            body.extend(chunk);
-        }
+        let (status, body) = upload_with_retry(
+            |rejected| self.dictation_account(rejected),
+            |token, account| {
+                let request = upload(&client, ENDPOINT, &token, account.as_deref(), &audio);
+                receive(request)
+            },
+        )
+        .await?;
         RpcReply::value(&json!({"text":transcript(status, &body)?}))
     }
+}
+
+async fn receive(
+    request: reqwest::RequestBuilder,
+) -> Result<(reqwest::StatusCode, Vec<u8>), RpcError> {
+    let mut response = request.send().await.map_err(|_| {
+        RpcError::Failed("Transcription could not connect. Your draft is safe.".into())
+    })?;
+    let status = response.status();
+    // Responses should only be a short transcript, not an unbounded download.
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| RpcError::Failed("Transcription was interrupted.".into()))?
+    {
+        if body.len() + chunk.len() > 1024 * 1024 {
+            return Err(RpcError::Failed(
+                "Transcription response is too large.".into(),
+            ));
+        }
+        body.extend(chunk);
+    }
+    Ok((status, body))
 }
 
 #[cfg(test)]
@@ -129,7 +171,7 @@ mod tests {
             ENDPOINT,
             "fixture-token",
             Some("fixture-account"),
-            b"fixture-audio".to_vec(),
+            b"fixture-audio",
         )
         .build()
         .unwrap();
@@ -148,12 +190,57 @@ mod tests {
             ENDPOINT,
             "fixture-token",
             None,
-            vec![],
+            &[],
         )
         .build()
         .unwrap();
         assert!(!without_account.headers().contains_key("chatgpt-account-id"));
     }
+    #[tokio::test]
+    async fn rejected_token_is_replaced_and_retried_once() {
+        use std::sync::Mutex;
+        let auths = Mutex::new(Vec::new());
+        let sends = Mutex::new(Vec::new());
+        let result = upload_with_retry(
+            |rejected| {
+                auths.lock().unwrap().push(rejected.clone());
+                let token = if rejected.is_some() {
+                    "fresh"
+                } else {
+                    "cached"
+                };
+                async move { Ok((token.to_owned(), None)) }
+            },
+            |token, _| {
+                sends.lock().unwrap().push(token.clone());
+                let status = if token == "cached" {
+                    reqwest::StatusCode::UNAUTHORIZED
+                } else {
+                    reqwest::StatusCode::OK
+                };
+                async move { Ok((status, b"{}".to_vec())) }
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.0, reqwest::StatusCode::OK);
+        assert_eq!(*auths.lock().unwrap(), [None, Some("cached".to_owned())]);
+        assert_eq!(*sends.lock().unwrap(), ["cached", "fresh"]);
+        // A second rejection is reported, not retried again.
+        let sends = Mutex::new(0);
+        let result = upload_with_retry(
+            |_| async { Ok(("token".to_owned(), None)) },
+            |_, _| {
+                *sends.lock().unwrap() += 1;
+                async { Ok((reqwest::StatusCode::UNAUTHORIZED, Vec::new())) }
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.0, reqwest::StatusCode::UNAUTHORIZED);
+        assert_eq!(*sends.lock().unwrap(), 2);
+    }
+
     #[test]
     fn accepts_electron_response_formats_and_silence_but_redacts_errors() {
         assert_eq!(

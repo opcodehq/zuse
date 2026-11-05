@@ -1637,6 +1637,8 @@ chat-voice_error_recorder_failed = Die Aufnahme wurde unerwartet beendet. Versuc
 
 chat-voice_error_no_speech = Keine Sprache erkannt. Versuche es erneut.
 
+chat-voice_error_no_audio = Von deinem Mikrofon ist kein Ton bei Zuse angekommen. Prüfe das Eingabegerät in den Einstellungen und versuche es erneut.
+
 chat-voice_error_transcription_failed = Die Aufnahme konnte nicht transkribiert werden. Prüfe deine Verbindung und versuche es erneut.
 
 chat-voice_error_service_unavailable = Transkription ist in diesem Workspace nicht verfügbar.

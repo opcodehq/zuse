@@ -1637,6 +1637,8 @@ chat-voice_error_recorder_failed = 录音意外停止。请重试。
 
 chat-voice_error_no_speech = 未检测到语音。请重试。
 
+chat-voice_error_no_audio = Zuse 没有收到来自麦克风的音频。请在设置中检查输入设备，然后重试。
+
 chat-voice_error_transcription_failed = 无法转写录音。请检查网络连接后重试。
 
 chat-voice_error_service_unavailable = 此工作区无法使用转写服务。
