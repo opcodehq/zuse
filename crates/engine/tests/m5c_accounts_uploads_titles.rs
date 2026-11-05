@@ -933,7 +933,7 @@ async fn titling_e2e_names_chat_and_renames_worktree_branch() {
         &tmp.path().join("data"),
         vec![
             AgentEvent::TextDelta {
-                text: "Fix Login Flow".into(),
+                text: r#"{"title":"Fix Login Flow","branch":"fix-login-flow"}"#.into(),
             },
             AgentEvent::Done {
                 status: DoneStatus::Completed,
