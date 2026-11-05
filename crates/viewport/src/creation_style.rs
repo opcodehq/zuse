@@ -102,12 +102,19 @@ pub fn option(
                 cx.stop_propagation()
             }
         })
-        .when(!glyph.is_empty(), |v| {
-            v.child(
-                icon(glyph)
-                    .size(px(if glyph == "cloud-dither" { 16. } else { 14. }))
-                    .opacity(0.8),
-            )
+        // An empty glyph keeps the icon slot so labels stay aligned with
+        // the iconed rows around it.
+        .map(|v| {
+            if glyph.is_empty() {
+                v.child(div().size(px(14.)).flex_none())
+            } else {
+                v.child(
+                    icon(glyph)
+                        .size(px(if glyph == "cloud-dither" { 16. } else { 14. }))
+                        .flex_none()
+                        .opacity(0.8),
+                )
+            }
         })
         .child(div().flex_1().min_w_0().truncate().child(label))
 }

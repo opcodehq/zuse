@@ -42,13 +42,23 @@ impl Pickers {
     pub(super) fn settings_menu_height(&self, cx: &App) -> f32 {
         let (_, body) = self.reference_items(cx);
         let error = matches!(self.harnesses, Loadable::Error(_))
-            || self.rail_descriptors(cx).iter().any(|p| {
-                self.model_scope.is_none_or(|scope| scope == p.id)
-                    && self.model_refresh_errors.contains_key(&p.id)
-            });
+            || self.scoped_model_refresh_error(cx).is_some();
         (ui::SEARCH_HEIGHT + body + if error { 44. } else { 0. })
             .max(44. + self.rail_descriptors(cx).len() as f32 * 36.)
             .min(ui::MAX_HEIGHT)
+    }
+
+    /// A provider's discovery failure belongs to that provider's tab. The
+    /// All view keeps listing every healthy provider instead of leading with
+    /// one agent's raw error (e.g. an agent that was never signed in).
+    fn scoped_model_refresh_error(&self, cx: &App) -> Option<String> {
+        let scope = self.model_scope?;
+        self.rail_descriptors(cx)
+            .iter()
+            .any(|p| p.id == scope)
+            .then(|| self.model_refresh_errors.get(&scope))
+            .flatten()
+            .map(|error| super::model_catalog_notice(error))
     }
 
     fn reference_key(&self, cx: &App) -> ModelRowsKey {
@@ -369,14 +379,9 @@ impl Pickers {
         }
         .or_else(|| match self.harness_catalog(cx) {
             Loadable::Error(message) => Some(message.clone()),
-            _ => self.rail_descriptors(cx).iter().find_map(|p| {
-                if self.model_scope.is_some_and(|scope| scope != p.id) {
-                    return None;
-                }
-                (!self.cloud_models_active(cx))
-                    .then(|| self.model_refresh_errors.get(&p.id).cloned())
-                    .flatten()
-            }),
+            _ => (!self.cloud_models_active(cx))
+                .then(|| self.scoped_model_refresh_error(cx))
+                .flatten(),
         });
         let loading = matches!(self.harness_catalog(cx), Loadable::Loading | Loadable::Idle)
             || self.rail_descriptors(cx).iter().any(|p| {
