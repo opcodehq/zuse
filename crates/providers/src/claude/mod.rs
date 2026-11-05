@@ -93,8 +93,8 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 
 use zuse_protocol::{
-    AgentEvent, DoneStatus, HarnessId, Model, ReasoningLevel, RunRequest, SandboxLevel,
-    SlashCommand, SteeringMode, UserInputAnswer, UserInputQuestion,
+    AgentEvent, DoneStatus, HarnessId, Model, ReasoningLevel, RunRequest, SlashCommand,
+    SteeringMode, UserInputAnswer, UserInputQuestion,
 };
 
 use crate::process::{Child, ChildStdin, Command, Stdio};
@@ -497,6 +497,7 @@ impl Harness for ClaudeHarness {
     fn same_runtime(&self, live: &RunRequest, next: &RunRequest) -> bool {
         live.cwd == next.cwd
             && live.sandbox == next.sandbox
+            && live.plan == next.plan
             && live.auto_approve == next.auto_approve
             && Self::launch_args(live) == Self::launch_args(next)
     }
@@ -507,6 +508,7 @@ impl Harness for ClaudeHarness {
         live.cwd == next.cwd
             && live.auto_approve == next.auto_approve
             && live.sandbox == next.sandbox
+            && live.plan == next.plan
     }
 
     /// Credential and executable identity scopes both initialize and catalog caches.
@@ -994,7 +996,7 @@ async fn run_session(session: Session) {
                             }));
                             let _ = stdin_tx.send(StdinMsg::Line(line));
                         } else {
-                            handle_control_request(req, config.sandbox, config.auto_approves_tools(), &request_input, &stdin_tx);
+                            handle_control_request(req, config.plan, config.auto_approves_tools(), &request_input, &stdin_tx);
                         }
                         continue;
                     }
@@ -1407,7 +1409,7 @@ impl Commands {
 /// Claude Code's own `auto` mode: its classifier approves routine actions and
 /// the tool calls it still escalates reach `can_use_tool`, which asks the user.
 fn permission_args(request: &RunRequest) -> &'static [&'static str] {
-    if request.sandbox == SandboxLevel::ReadOnly {
+    if request.plan {
         &["--permission-mode", "plan"]
     } else if request.auto_approves_tools() {
         &[
@@ -1428,12 +1430,12 @@ type RequestInputFn = Box<
         + Sync,
 >;
 
-/// Permission requests use the selected posture. Read-only never grants a
+/// Permission requests use the selected posture. Plan mode never grants a
 /// requested escalation; full access bypasses approval only when explicitly
 /// enabled. Content questions always use the engine's input bridge.
 fn handle_control_request(
     req: ControlRequestFrame,
-    sandbox: SandboxLevel,
+    plan: bool,
     auto_approve: bool,
     request_input: &Arc<RequestInputFn>,
     stdin_tx: &mpsc::UnboundedSender<StdinMsg>,
@@ -1446,13 +1448,13 @@ fn handle_control_request(
         return;
     }
     if req.request.tool_name != "AskUserQuestion" {
-        if sandbox == SandboxLevel::ReadOnly {
+        if plan {
             let line = control_response_line(
                 &req.request_id,
-                serde_json::json!({"behavior":"deny","message":"This chat is read only. Change its permission mode before allowing this action."}),
+                serde_json::json!({"behavior":"deny","message":"This chat is in plan mode. Turn plan mode off before allowing this action."}),
             );
             let _ = stdin_tx.send(StdinMsg::Line(line));
-        } else if auto_approve && sandbox == SandboxLevel::DangerFullAccess {
+        } else if auto_approve {
             let line = control_response_line(&req.request_id, allow_response(req.request.input));
             let _ = stdin_tx.send(StdinMsg::Line(line));
         } else {
@@ -1640,13 +1642,25 @@ mod tests {
 
     #[test]
     fn access_levels_map_to_claude_permission_modes() {
+        let plan: RunRequest = serde_json::from_value(
+            json!({"prompt":"","cwd":"/tmp","sandbox":"danger-full-access","autoApprove":true,"plan":true}),
+        )
+        .unwrap();
+        assert_eq!(permission_args(&plan), ["--permission-mode", "plan"]);
         for (sandbox, auto, mode) in [
-            (SandboxLevel::ReadOnly, true, "plan"),
-            (SandboxLevel::WorkspaceWrite, true, "default"),
-            (SandboxLevel::Auto, true, "auto"),
-            (SandboxLevel::Auto, false, "auto"),
-            (SandboxLevel::DangerFullAccess, true, "bypassPermissions"),
-            (SandboxLevel::DangerFullAccess, false, "default"),
+            (zuse_protocol::SandboxLevel::WorkspaceWrite, true, "default"),
+            (zuse_protocol::SandboxLevel::Auto, true, "auto"),
+            (zuse_protocol::SandboxLevel::Auto, false, "auto"),
+            (
+                zuse_protocol::SandboxLevel::DangerFullAccess,
+                true,
+                "bypassPermissions",
+            ),
+            (
+                zuse_protocol::SandboxLevel::DangerFullAccess,
+                false,
+                "default",
+            ),
         ] {
             let request: RunRequest = serde_json::from_value(
                 json!({"prompt":"","cwd":"/tmp","sandbox":sandbox,"autoApprove":auto}),

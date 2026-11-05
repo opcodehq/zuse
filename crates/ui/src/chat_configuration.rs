@@ -417,6 +417,7 @@ mod tests {
     }
     fn config(model: &str, sandbox: SandboxLevel) -> ChatConfig {
         ChatConfig {
+            plan: false,
             harness: HarnessId::Codex,
             model: Some(model.into()),
             reasoning: None,
@@ -551,7 +552,12 @@ mod tests {
             state.update(cx, |state, cx| {
                 assert!(state.configuration_blocked());
                 assert!(state.stage_chat_configuration(
-                    ChatConfigPatch::sandbox(SandboxLevel::ReadOnly),
+                    ChatConfigPatch::sandbox(SandboxLevel::Auto),
+                    first.clone(),
+                    cx
+                ));
+                assert!(state.stage_chat_configuration(
+                    ChatConfigPatch::plan(true),
                     first.clone(),
                     cx
                 ));
@@ -564,7 +570,8 @@ mod tests {
                 state.apply_chats(vec![row(&config("replica", SandboxLevel::WorkspaceWrite))]);
                 let projected = state.selected_chat_row().unwrap().config.as_ref().unwrap();
                 assert_eq!(projected.model.as_deref(), Some("last"));
-                assert_eq!(projected.sandbox, SandboxLevel::ReadOnly);
+                assert_eq!(projected.sandbox, SandboxLevel::Auto);
+                assert!(projected.plan);
                 state.select_chat(None, cx);
             })
         });
@@ -573,10 +580,9 @@ mod tests {
             cx.read(|cx| state.read(cx).chat_configuration.pending.is_empty())
         });
         assert_eq!(host.writes.load(Ordering::SeqCst), 2);
-        assert_eq!(
-            *host.config.lock().unwrap(),
-            config("last", SandboxLevel::ReadOnly)
-        );
+        let mut planned = config("last", SandboxLevel::Auto);
+        planned.plan = true;
+        assert_eq!(*host.config.lock().unwrap(), planned);
         cx.update(|cx| state.update(cx, |state, cx| state.select_chat(Some("chat".into()), cx)));
         settle(cx, &runtime, || {
             cx.read(|cx| !state.read(cx).configuration_blocked())
@@ -586,7 +592,7 @@ mod tests {
                 state.apply_chats(vec![row(&config("replica", SandboxLevel::WorkspaceWrite))]);
                 assert_eq!(
                     state.selected_chat_row().unwrap().config.as_ref().unwrap(),
-                    &config("last", SandboxLevel::ReadOnly)
+                    &planned
                 );
             })
         });

@@ -192,12 +192,6 @@ impl WorkspaceView {
                 zuse_protocol::SandboxLevel::WorkspaceWrite => "approval-required",
                 zuse_protocol::SandboxLevel::Auto => "auto",
                 zuse_protocol::SandboxLevel::DangerFullAccess => "full-access",
-                zuse_protocol::SandboxLevel::ReadOnly => {
-                    self.error =
-                        Some("Choose a supported permission mode before starting Cloud.".into());
-                    cx.notify();
-                    return;
-                }
             };
             self.cloud.launch = Some(json!({
                 "projectId":project["projectId"],"providerId":project["providerId"],

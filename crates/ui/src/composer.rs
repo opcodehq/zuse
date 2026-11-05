@@ -9,6 +9,7 @@
 
 use crate::localization::message as tr;
 use zuse_i18n::messages as msg;
+mod add_menu;
 mod archive;
 mod permission_inspector;
 mod permission_prompt;
@@ -6512,6 +6513,10 @@ pub struct Composer {
     /// Composer actions row plus the new-session floating target tab
     /// ([`Pickers::render_new_thread_target_selectors`]).
     pickers: Entity<Pickers>,
+    /// The `+` menu: attach images and the plan-mode toggle.
+    add_menu_open: bool,
+    add_menu_active: usize,
+    add_menu_focus: FocusHandle,
     permission_open: bool,
     permission_inspector: Option<permission_inspector::Inspector>,
     permission_rules_task: Option<Task<()>>,
@@ -6907,6 +6912,7 @@ impl Composer {
         let pickers_observe = cx.observe(&pickers, |this, _, cx| {
             if this.pickers.read(cx).is_open() {
                 this.permission_open = false;
+                this.add_menu_open = false;
             }
             this.on_input_edited(cx);
             cx.notify();
@@ -7039,6 +7045,9 @@ impl Composer {
             queue_edit_draft: None,
             queue_edit_attachment_draft: None,
             pickers,
+            add_menu_open: false,
+            add_menu_active: 0,
+            add_menu_focus: cx.focus_handle(),
             permission_open: false,
             permission_inspector: None,
             permission_rules_task: None,
@@ -9083,6 +9092,7 @@ impl Composer {
 
         if key != self.current_key {
             self.permission_open = false;
+            self.add_menu_open = false;
         }
 
         // A queue edit belongs to exactly one visible row. Navigation or a
@@ -9614,6 +9624,7 @@ impl Composer {
                 // Run, including defaults learned since the harness was picked.
                 if let Some(existing) = state.selected_chat_row().and_then(|c| c.config.as_ref()) {
                     config.sandbox = existing.sandbox;
+                    config.plan = existing.plan;
                 }
                 state.apply_chat_config(&chat_id, config);
             }
@@ -10170,6 +10181,7 @@ impl Composer {
                     .is_some();
                 let command = SessionCommandPayload::Run {
                     request: RunRequest {
+                        plan: resolved.plan,
                         mcp: None,
                         prompt: content.clone(),
                         harness: resolved.harness,
@@ -12483,12 +12495,14 @@ impl Render for Composer {
         let microphone = self.render_dictation_button(voice_t, voice_frame.as_ref(), cx);
         let attach_action = cx.entity().downgrade();
         let attach_hover_key: SharedString = format!("composer-attach-{}", cx.entity_id()).into();
-        // Attach button — opens the native image picker (the original's hidden
-        // `<input type=file accept="image/*" multiple>`); paste/drop also feed
-        // the same strip. The leading utility group owns the spacing between
-        // this button and the model picker.
+        let add_label = SharedString::from(tr(cx, msg::native::composer_add_to_message));
+        // `+` opens the add menu: attach images (the native image picker;
+        // paste/drop also feed the same strip) and the plan-mode toggle. The
+        // leading utility group owns the spacing between this button and the
+        // model picker.
         let attach = div()
             .id("composer-attach")
+            .track_focus(&self.add_menu_focus)
             .size(px(28.0))
             .flex_none()
             .flex()
@@ -12509,44 +12523,50 @@ impl Render for Composer {
             // follows the dictation phase, never the animation.
             .role(Role::Button)
             .aria_label(if dictating {
-                "Cancel dictation"
+                SharedString::from("Cancel dictation")
             } else {
-                "Attach images"
+                add_label.clone()
             })
+            .aria_expanded(self.add_menu_open)
             .tab_index(0)
             .focus_visible(|style| style.border_1().border_color(theme.accent))
             .when(dictating, |el| {
                 el.debug_selector(|| "dictation-dismiss".into())
             })
-            .tooltip(crate::settings::widgets::text_tooltip(if dictating {
-                "Cancel dictation"
-            } else {
-                "Attach images"
-            }))
-            .on_click(cx.listener(move |this, _, _, cx| {
+            .when(!self.add_menu_open, |el| {
+                el.tooltip(crate::settings::widgets::text_tooltip(if dictating {
+                    SharedString::from("Cancel dictation")
+                } else {
+                    add_label.clone()
+                }))
+            })
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(move |this, _, window, cx| {
                 if this.input.read(cx).dictation.phase.active() {
                     this.dismiss_dictation(cx);
                 } else {
-                    this.open_file_picker(cx);
+                    this.toggle_add_menu(window, cx);
                 }
             }))
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if this.on_add_menu_key(event, window, cx) {
+                    cx.stop_propagation();
+                } else if matches!(event.keystroke.key.as_str(), "enter" | "space") {
                     cx.stop_propagation();
                     if this.input.read(cx).dictation.phase.active() {
                         this.dismiss_dictation(cx);
                     } else {
-                        this.open_file_picker(cx);
+                        this.toggle_add_menu(window, cx);
                     }
                 }
             }))
-            .on_a11y_action(gpui::AccessibleAction::Click, move |_, _, cx| {
+            .on_a11y_action(gpui::AccessibleAction::Click, move |_, window, cx| {
                 attach_action
                     .update(cx, |this, cx| {
                         if this.input.read(cx).dictation.phase.active() {
                             this.dismiss_dictation(cx);
                         } else {
-                            this.open_file_picker(cx);
+                            this.toggle_add_menu(window, cx);
                         }
                     })
                     .ok();
@@ -12589,6 +12609,14 @@ impl Render for Composer {
                         ),
                 )
             });
+        // The menu anchors beside the button, outside its click target.
+        let attach = div()
+            .relative()
+            .flex_none()
+            .child(attach)
+            .when(self.add_menu_open && !dictating, |el| {
+                el.child(self.render_add_menu(&theme, cx))
+            });
         let appshot_strip = self.render_appshot_strip(&theme, window, cx);
 
         let pill_border = theme.composer_glass_border();
@@ -12599,7 +12627,10 @@ impl Render for Composer {
                 cx.listener(|this, _, window, cx| {
                     // Padding and action controls are part of the text composer.
                     // Open menus keep their own keyboard/search focus.
-                    if !this.pickers.read(cx).is_open() && !this.permission_open {
+                    if !this.pickers.read(cx).is_open()
+                        && !this.permission_open
+                        && !this.add_menu_open
+                    {
                         window.focus(&this.input.focus_handle(cx), cx);
                         window.prevent_default();
                     }
@@ -12678,6 +12709,9 @@ impl Render for Composer {
         let permission = self
             .render_permission_control(&theme, narrow, cx)
             .opacity(beneath_voice);
+        let plan_chip = self
+            .render_plan_chip(&theme, narrow, cx)
+            .map(|chip| chip.opacity(beneath_voice));
         // Plugins: a quiet `size-7` icon key beside the access chip that opens
         // the plugins page.
         let plugins_hover_key: SharedString = format!("composer-plugins-{}", cx.entity_id()).into();
@@ -12796,6 +12830,7 @@ impl Render for Composer {
                             .gap(px(ACTION_UTILITY_GAP))
                             .child(attach)
                             .child(permission)
+                            .children(plan_chip)
                             .when(!self.side_chat, |el| el.child(plugins))
                             .child(stash)
                             .children(voice_track),

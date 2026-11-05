@@ -11,7 +11,7 @@ use std::{
 use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
 use zuse_protocol::{
-    AgentEvent, DoneStatus, HarnessId, RunRequest, SandboxLevel, UserInputAnswer, UserInputQuestion,
+    AgentEvent, DoneStatus, HarnessId, RunRequest, UserInputAnswer, UserInputQuestion,
 };
 
 use super::{
@@ -65,7 +65,7 @@ pub(super) async fn run(config: Config, request: RunRequest, controls: RunContro
             &config.exe,
             &cwd,
             Mode::Session {
-                read_only: request.sandbox == SandboxLevel::ReadOnly,
+                read_only: request.plan,
             },
             config.init_timeout,
             config.kill_grace,
@@ -987,7 +987,7 @@ enum Verdict {
     Ask,
 }
 
-/// Zuse's access policy for one Muse approval: read-only sessions only ever
+/// Zuse's access policy for one Muse approval: plan-mode sessions only ever
 /// consider reads, full access with auto-approve allows everything but
 /// protected writes, and everything else asks the user.
 fn verdict(request: &RunRequest, approval: &Value) -> Verdict {
@@ -996,7 +996,7 @@ fn verdict(request: &RunRequest, approval: &Value) -> Verdict {
         && subject["access"]
             .as_str()
             .is_some_and(|a| a.eq_ignore_ascii_case("read"));
-    if request.sandbox == SandboxLevel::ReadOnly {
+    if request.plan {
         return if read { Verdict::Ask } else { Verdict::Deny };
     }
     if request.auto_approves_tools() && approval["protectedWrite"] != true {
@@ -1119,8 +1119,10 @@ mod tests {
     use super::*;
 
     fn request(sandbox: &str, auto: bool) -> RunRequest {
+        let plan = sandbox == "plan";
+        let sandbox = if plan { "danger-full-access" } else { sandbox };
         serde_json::from_value(
-            json!({"prompt":"x","cwd":"/tmp","sandbox":sandbox,"autoApprove":auto}),
+            json!({"prompt":"x","cwd":"/tmp","sandbox":sandbox,"autoApprove":auto,"plan":plan}),
         )
         .unwrap()
     }
@@ -1142,9 +1144,9 @@ mod tests {
     #[test]
     fn policy_follows_the_access_level() {
         let shell = approval("shell", false);
-        assert_eq!(verdict(&request("read-only", true), &shell), Verdict::Deny);
+        assert_eq!(verdict(&request("plan", true), &shell), Verdict::Deny);
         assert_eq!(
-            verdict(&request("read-only", false), &approval("fileAccess", false)),
+            verdict(&request("plan", false), &approval("fileAccess", false)),
             Verdict::Ask
         );
         assert_eq!(

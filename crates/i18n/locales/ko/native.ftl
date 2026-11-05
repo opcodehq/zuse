@@ -1198,3 +1198,21 @@ native-shortcut_yank = 삭제한 텍스트 붙여넣기
 native-shortcut_yank_pop = 삭제한 텍스트 순환
 native-shortcut_stash = 초안 보관
 native-shortcut_history = 보낸 메시지 검색
+
+# Context: composer add menu and plan mode toggle.
+native-composer_add_to_message = 메시지에 추가
+
+# Context: composer add menu and plan mode toggle.
+native-composer_attach_images = 이미지 첨부
+
+# Context: composer add menu and plan mode toggle.
+native-composer_plan_mode_description = 파일을 변경하지 않고 살펴보고 제안합니다.
+
+# Context: composer add menu and plan mode toggle.
+native-composer_plan_mode_unavailable = 이 에이전트에서는 사용할 수 없습니다
+
+# Context: composer add menu and plan mode toggle.
+native-composer_plan_chip = 계획
+
+# Context: composer add menu and plan mode toggle.
+native-composer_cloud_plan_unavailable = 계획 모드는 클라우드 실행에서 사용할 수 없습니다. 시작하기 전에 끄세요.

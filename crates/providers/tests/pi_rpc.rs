@@ -13,6 +13,7 @@ fn harness() -> PiHarness {
 }
 fn request(cwd: &std::path::Path, prompt: &str) -> RunRequest {
     RunRequest {
+        plan: false,
         prompt: prompt.into(),
         harness: None,
         model: None,
@@ -809,19 +810,20 @@ async fn a_model_switch_applies_to_the_live_process() {
 
 #[tokio::test]
 async fn access_guard_uses_current_posture_and_hides_its_readiness_command() {
-    for (sandbox, auto_approve, mode) in [
-        (SandboxLevel::ReadOnly, false, "read-only"),
-        (SandboxLevel::ReadOnly, true, "read-only"),
-        (SandboxLevel::WorkspaceWrite, false, "ask"),
-        (SandboxLevel::WorkspaceWrite, true, "ask"),
-        (SandboxLevel::DangerFullAccess, false, "ask"),
-        (SandboxLevel::DangerFullAccess, true, "full"),
+    for (sandbox, plan, auto_approve, mode) in [
+        (SandboxLevel::DangerFullAccess, true, false, "read-only"),
+        (SandboxLevel::DangerFullAccess, true, true, "read-only"),
+        (SandboxLevel::WorkspaceWrite, false, false, "ask"),
+        (SandboxLevel::WorkspaceWrite, false, true, "ask"),
+        (SandboxLevel::DangerFullAccess, false, false, "ask"),
+        (SandboxLevel::DangerFullAccess, false, true, "full"),
     ] {
         let dir = tempfile::tempdir().unwrap();
         let (controls, steer, _) = controls();
         drop(steer);
         let mut request = request(dir.path(), "hello");
         request.sandbox = sandbox;
+        request.plan = plan;
         request.auto_approve = auto_approve;
         let stream = harness()
             .with_session_store(dir.path().join("index"))

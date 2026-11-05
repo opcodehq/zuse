@@ -1198,3 +1198,21 @@ native-shortcut_yank = 粘贴已删除的文本
 native-shortcut_yank_pop = 循环切换已删除的文本
 native-shortcut_stash = 暂存草稿
 native-shortcut_history = 搜索已发送消息
+
+# Context: composer add menu and plan mode toggle.
+native-composer_add_to_message = 添加到消息
+
+# Context: composer add menu and plan mode toggle.
+native-composer_attach_images = 附加图片
+
+# Context: composer add menu and plan mode toggle.
+native-composer_plan_mode_description = 检查并提出方案，不修改文件。
+
+# Context: composer add menu and plan mode toggle.
+native-composer_plan_mode_unavailable = 此智能体不可用
+
+# Context: composer add menu and plan mode toggle.
+native-composer_plan_chip = 计划
+
+# Context: composer add menu and plan mode toggle.
+native-composer_cloud_plan_unavailable = 云端启动不支持计划模式。请在开始前将其关闭。

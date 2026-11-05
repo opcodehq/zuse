@@ -92,12 +92,11 @@ pub struct AccessDetails {
     pub description: &'static str,
     pub icon: &'static str,
 }
-/// The composer's access menu order: the three postures, then read only.
-pub const ACCESS_LEVELS: [crate::SandboxLevel; 4] = [
+/// The composer's access menu order. Plan mode is a separate toggle.
+pub const ACCESS_LEVELS: [crate::SandboxLevel; 3] = [
     crate::SandboxLevel::WorkspaceWrite,
     crate::SandboxLevel::Auto,
     crate::SandboxLevel::DangerFullAccess,
-    crate::SandboxLevel::ReadOnly,
 ];
 /// Descriptions stay one short line so the menu never wraps.
 pub fn access_details(level: crate::SandboxLevel) -> AccessDetails {
@@ -116,11 +115,6 @@ pub fn access_details(level: crate::SandboxLevel) -> AccessDetails {
             label: "Full access",
             description: "Runs actions without approval.",
             icon: "icons/access-full.svg",
-        },
-        crate::SandboxLevel::ReadOnly => AccessDetails {
-            label: "Read only",
-            description: "Inspects files without changes.",
-            icon: "icons/access-read-only.svg",
         },
     }
 }
@@ -526,7 +520,12 @@ mod permission_tests {
         let mut chat: crate::Chat = serde_json::from_value(serde_json::json!({"id":"c","deviceId":"d","archived":false,"createdAt":"2026-01-01T00:00:00Z","config":{"harness":"codex","sandbox":"read-only"}})).unwrap();
         assert_eq!(
             PermissionMode::FullAccess.for_chat(Some(&chat)),
-            SandboxLevel::ReadOnly
+            SandboxLevel::WorkspaceWrite
+        );
+        chat.config.as_mut().unwrap().sandbox = SandboxLevel::Auto;
+        assert_eq!(
+            PermissionMode::FullAccess.for_chat(Some(&chat)),
+            SandboxLevel::Auto
         );
         chat.config = None;
         assert_eq!(
@@ -565,12 +564,7 @@ mod permission_tests {
         assert_eq!(PermissionMode::Auto.label(), "Approve for me");
         assert_eq!(
             ACCESS_LEVELS.map(|level| access_details(level).label),
-            [
-                "Ask for approval",
-                "Approve for me",
-                "Full access",
-                "Read only"
-            ]
+            ["Ask for approval", "Approve for me", "Full access"]
         );
     }
 }

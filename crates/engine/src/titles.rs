@@ -259,6 +259,7 @@ impl TitleGenerator {
         );
         for attempt in 0..=RETRY_DELAYS_MS.len() {
             let request = RunRequest {
+                plan: true,
                 mcp: None,
                 prompt: title_prompt.clone(),
                 harness: Some(harness_id),
@@ -266,7 +267,7 @@ impl TitleGenerator {
                 reasoning: Some(ReasoningLevel::Minimal),
                 model_options: serde_json::Map::new(),
                 cwd: scratch.path().to_string_lossy().into_owned(),
-                sandbox: SandboxLevel::ReadOnly,
+                sandbox: SandboxLevel::WorkspaceWrite,
                 auto_approve: false,
                 attachments: Vec::new(),
                 resume: None,
@@ -472,6 +473,7 @@ mod tests {
             ],
         };
         let request = RunRequest {
+            plan: true,
             mcp: None,
             prompt: "Title only".into(),
             harness: None,
@@ -479,7 +481,7 @@ mod tests {
             reasoning: None,
             model_options: Default::default(),
             cwd: String::new(),
-            sandbox: SandboxLevel::ReadOnly,
+            sandbox: SandboxLevel::WorkspaceWrite,
             auto_approve: false,
             resume: None,
             attachments: vec![],
@@ -585,7 +587,7 @@ mod tests {
             let request = &requests[0];
             assert_eq!(request.harness, Some(HarnessId::ClaudeCode));
             assert_eq!(request.model.as_deref(), Some("chosen-title-model"));
-            assert_eq!(request.sandbox, SandboxLevel::ReadOnly);
+            assert!(request.plan);
             assert!(!request.auto_approve);
             assert!(request.resume.is_none());
             assert_ne!(std::path::Path::new(&request.cwd), dir.path());

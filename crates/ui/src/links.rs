@@ -129,6 +129,7 @@ mod tests {
             checkout_id: None,
             source_context: None,
             config: Some(zuse_protocol::ChatConfig {
+                plan: false,
                 harness,
                 model: None,
                 reasoning: None,

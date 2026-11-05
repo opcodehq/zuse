@@ -1198,3 +1198,21 @@ native-shortcut_yank = 削除したテキストを貼り付け
 native-shortcut_yank_pop = 削除したテキストを切り替え
 native-shortcut_stash = 下書きを保存して退避
 native-shortcut_history = 送信メッセージを検索
+
+# Context: composer add menu and plan mode toggle.
+native-composer_add_to_message = メッセージに追加
+
+# Context: composer add menu and plan mode toggle.
+native-composer_attach_images = 画像を添付
+
+# Context: composer add menu and plan mode toggle.
+native-composer_plan_mode_description = ファイルを変更せずに調査して提案します。
+
+# Context: composer add menu and plan mode toggle.
+native-composer_plan_mode_unavailable = このエージェントでは利用できません
+
+# Context: composer add menu and plan mode toggle.
+native-composer_plan_chip = プラン
+
+# Context: composer add menu and plan mode toggle.
+native-composer_cloud_plan_unavailable = プランモードはクラウドでの起動には使用できません。開始する前にオフにしてください。

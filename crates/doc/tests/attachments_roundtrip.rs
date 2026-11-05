@@ -7,6 +7,7 @@ use zuse_doc::{SessionCommandEntry, SessionCommandPayload, SessionCommandStatus,
 fn run_request_attachments_survive_command_round_trip() {
     let doc = SessionDoc::init("chat-1").unwrap();
     let request = zuse_protocol::RunRequest {
+        plan: false,
         mcp: None,
         prompt: "p".into(),
         harness: None,

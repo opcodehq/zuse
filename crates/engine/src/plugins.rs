@@ -15,9 +15,8 @@ use zuse_plugins::{
     PluginClient, PluginCredential, PluginCredentials, PluginError,
     local::{self, LocalServers},
 };
-use zuse_protocol::{
-    SandboxLevel,
-    plugins::{PluginRequest, PluginResponse, PluginReturnTo, PluginToolRequest, is_local_server},
+use zuse_protocol::plugins::{
+    PluginRequest, PluginResponse, PluginReturnTo, PluginToolRequest, is_local_server,
 };
 
 #[async_trait]
@@ -264,11 +263,8 @@ impl Plugins {
             anyhow::bail!("Plugin requests must run on the session's host.");
         }
         // External calls follow the session's tool policy. Discovery remains available
-        // in read-only sessions; callers cannot supply a permission override.
-        let permitted = chat
-            .config
-            .as_ref()
-            .is_some_and(|c| c.sandbox != SandboxLevel::ReadOnly);
+        // in plan-mode sessions; callers cannot supply a permission override.
+        let permitted = chat.config.as_ref().is_some_and(|c| !c.plan);
         if request.invokes_external_tool() && !permitted {
             return Err(PluginError::PermissionRequired.into());
         }

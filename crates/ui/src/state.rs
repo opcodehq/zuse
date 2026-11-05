@@ -5707,6 +5707,7 @@ mod tests {
         let mut state = AppState::new();
         state.apply_chats(vec![chat("a", 0, None), chat("b", 1, None)]);
         let config = zuse_protocol::ChatConfig {
+            plan: false,
             harness: HarnessId::ClaudeCode,
             model: Some("claude-fable-5".into()),
             reasoning: Some(zuse_protocol::ReasoningLevel::XHigh),
@@ -5731,6 +5732,7 @@ mod tests {
         state.apply_chat_config(
             "missing",
             zuse_protocol::ChatConfig {
+                plan: false,
                 harness: HarnessId::ClaudeCode,
                 model: None,
                 reasoning: None,

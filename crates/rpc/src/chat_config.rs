@@ -124,7 +124,7 @@ mod tests {
         };
         assert!(client.read_chat_config(&target).await.unwrap().is_none());
         let config: ChatConfig = serde_json::from_value(
-            json!({"harness":"codex","sandbox":"read-only","model":"chosen"}),
+            json!({"harness":"codex","sandbox":"auto","plan":true,"model":"chosen"}),
         )
         .unwrap();
         client

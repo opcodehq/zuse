@@ -266,10 +266,7 @@ impl Shell {
             }
             Command::ComposerTogglePlanMode => {
                 self.composer
-                    .read(cx)
-                    .pickers()
-                    .clone()
-                    .update(cx, |pickers, cx| pickers.toggle_plan_mode(cx));
+                    .update(cx, |composer, cx| composer.toggle_plan_mode(cx));
             }
             Command::ShowShortcuts => self.toggle_shortcuts_panel(cx),
             Command::FindInChat => {
@@ -501,34 +498,23 @@ mod tests {
             let focus = shell.read(cx).composer.focus_handle(cx);
             window.focus(&focus, cx);
         });
-        cx.simulate_keystrokes("shift-tab");
-        cx.update(|_, cx| {
-            assert_eq!(
-                shell
+        let resolved = |cx: &mut gpui::VisualTestContext| {
+            cx.update(|_, cx| {
+                let resolved = shell
                     .read(cx)
                     .composer
                     .read(cx)
                     .pickers()
                     .read(cx)
-                    .resolved(cx)
-                    .sandbox,
-                zuse_protocol::SandboxLevel::ReadOnly
-            )
-        });
+                    .resolved(cx);
+                (resolved.sandbox, resolved.plan)
+            })
+        };
         cx.simulate_keystrokes("shift-tab");
-        cx.update(|_, cx| {
-            assert_eq!(
-                shell
-                    .read(cx)
-                    .composer
-                    .read(cx)
-                    .pickers()
-                    .read(cx)
-                    .resolved(cx)
-                    .sandbox,
-                zuse_protocol::SandboxLevel::Auto
-            )
-        });
+        // Plan mode is its own flag: the chosen access level is untouched.
+        assert_eq!(resolved(cx), (zuse_protocol::SandboxLevel::Auto, true));
+        cx.simulate_keystrokes("shift-tab");
+        assert_eq!(resolved(cx), (zuse_protocol::SandboxLevel::Auto, false));
     }
     #[gpui::test]
     fn chat_shortcuts_run_from_the_focused_composer(cx: &mut TestAppContext) {

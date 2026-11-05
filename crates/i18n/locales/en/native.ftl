@@ -840,3 +840,21 @@ native-shortcut_yank = Paste deleted text
 native-shortcut_yank_pop = Cycle deleted text
 native-shortcut_stash = Stash draft
 native-shortcut_history = Search sent messages
+
+# Context: composer add menu and plan mode toggle.
+native-composer_add_to_message = Add to message
+
+# Context: composer add menu and plan mode toggle.
+native-composer_attach_images = Attach images
+
+# Context: composer add menu and plan mode toggle.
+native-composer_plan_mode_description = Inspects and proposes without changing files.
+
+# Context: composer add menu and plan mode toggle.
+native-composer_plan_mode_unavailable = Not available for this agent
+
+# Context: composer add menu and plan mode toggle.
+native-composer_plan_chip = Plan
+
+# Context: composer add menu and plan mode toggle.
+native-composer_cloud_plan_unavailable = Plan mode is unavailable for cloud launches. Turn it off before starting.

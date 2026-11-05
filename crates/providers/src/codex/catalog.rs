@@ -35,19 +35,24 @@ pub(crate) fn to_effort(reasoning: Option<ReasoningLevel>) -> Option<&'static st
     })
 }
 
-/// `thread/start`'s `sandbox` param (kebab-case wire words).
-pub(crate) fn sandbox_mode(sandbox: SandboxLevel) -> &'static str {
+/// `thread/start`'s `sandbox` param (kebab-case wire words). Plan mode runs
+/// in Codex's read-only sandbox whatever the access level.
+pub(crate) fn sandbox_mode(sandbox: SandboxLevel, plan: bool) -> &'static str {
+    if plan {
+        return "read-only";
+    }
     match sandbox {
-        SandboxLevel::ReadOnly => "read-only",
         SandboxLevel::WorkspaceWrite | SandboxLevel::Auto => "workspace-write",
         SandboxLevel::DangerFullAccess => "danger-full-access",
     }
 }
 
 /// `turn/start`'s `sandboxPolicy.type` (camelCase variant of the same policy).
-pub(crate) fn sandbox_policy_type(sandbox: SandboxLevel) -> &'static str {
+pub(crate) fn sandbox_policy_type(sandbox: SandboxLevel, plan: bool) -> &'static str {
+    if plan {
+        return "readOnly";
+    }
     match sandbox {
-        SandboxLevel::ReadOnly => "readOnly",
         SandboxLevel::WorkspaceWrite | SandboxLevel::Auto => "workspaceWrite",
         SandboxLevel::DangerFullAccess => "dangerFullAccess",
     }
@@ -55,10 +60,10 @@ pub(crate) fn sandbox_policy_type(sandbox: SandboxLevel) -> &'static str {
 
 /// Workspace-write keeps network restricted; the configured approval policy
 /// lets the user explicitly approve required escalations.
-pub(crate) fn sandbox_policy_value(sandbox: SandboxLevel) -> serde_json::Value {
+pub(crate) fn sandbox_policy_value(sandbox: SandboxLevel, plan: bool) -> serde_json::Value {
     let mut policy = serde_json::Map::new();
-    policy.insert("type".into(), sandbox_policy_type(sandbox).into());
-    if matches!(sandbox, SandboxLevel::WorkspaceWrite | SandboxLevel::Auto) {
+    policy.insert("type".into(), sandbox_policy_type(sandbox, plan).into());
+    if !plan && matches!(sandbox, SandboxLevel::WorkspaceWrite | SandboxLevel::Auto) {
         policy.insert("networkAccess".into(), false.into());
     }
     serde_json::Value::Object(policy)
@@ -67,8 +72,8 @@ pub(crate) fn sandbox_policy_value(sandbox: SandboxLevel) -> serde_json::Value {
 /// `approvalsReviewer` for "Approve for me": Codex's automatic reviewer
 /// decides escalations the workspace sandbox would otherwise ask about.
 /// Other levels omit the parameter and keep the user as the reviewer.
-pub(crate) fn approvals_reviewer(sandbox: SandboxLevel) -> Option<&'static str> {
-    sandbox.automatic_review().then_some("auto_review")
+pub(crate) fn approvals_reviewer(sandbox: SandboxLevel, plan: bool) -> Option<&'static str> {
+    (!plan && sandbox.automatic_review()).then_some("auto_review")
 }
 
 const ULTRA_LADDER: &[ReasoningLevel] = &[

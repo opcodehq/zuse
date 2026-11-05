@@ -304,6 +304,7 @@ mod tests {
 
     fn run_request() -> RunRequest {
         RunRequest {
+            plan: false,
             mcp: None,
             prompt: "hello".into(),
             harness: None,

@@ -1198,3 +1198,21 @@ native-shortcut_yank = Gelöschten Text einfügen
 native-shortcut_yank_pop = Gelöschte Texte durchgehen
 native-shortcut_stash = Entwurf zurücklegen
 native-shortcut_history = Gesendete Nachrichten durchsuchen
+
+# Context: composer add menu and plan mode toggle.
+native-composer_add_to_message = Zur Nachricht hinzufügen
+
+# Context: composer add menu and plan mode toggle.
+native-composer_attach_images = Bilder anhängen
+
+# Context: composer add menu and plan mode toggle.
+native-composer_plan_mode_description = Prüft und schlägt vor, ohne Dateien zu ändern.
+
+# Context: composer add menu and plan mode toggle.
+native-composer_plan_mode_unavailable = Für diesen Agenten nicht verfügbar
+
+# Context: composer add menu and plan mode toggle.
+native-composer_plan_chip = Plan
+
+# Context: composer add menu and plan mode toggle.
+native-composer_cloud_plan_unavailable = Der Planmodus ist für Cloud-Starts nicht verfügbar. Schalten Sie ihn vor dem Start aus.

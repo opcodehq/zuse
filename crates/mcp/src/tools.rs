@@ -138,7 +138,8 @@ fn catalog() -> Vec<ToolDef> {
                     "harness": { "type": "string", "description": "Harness id (see list_harnesses with the chosen device). Defaults to claude-code when available." },
                     "model": { "type": "string", "description": "Model id from list_models on the chosen device. Omit for the harness default." },
                     "reasoning": { "type": "string", "description": "Reasoning level the model supports (e.g. low, medium, high, max)." },
-                    "sandbox": { "type": "string", "enum": ["read-only", "workspace-write", "auto", "danger-full-access"], "default": "workspace-write" },
+                    "sandbox": { "type": "string", "enum": ["workspace-write", "auto", "danger-full-access"], "default": "workspace-write" },
+                    "plan": { "type": "boolean", "default": false, "description": "Start in plan mode: the agent inspects and proposes without changing files." },
                     "title": { "type": "string", "description": "Sidebar title. Otherwise the engine titles it from the first exchange." },
                     "branch": { "type": "string", "description": "Branch label to record on the chat." },
                     "cwd": { "type": "string", "description": "Working directory override (an existing worktree path). Defaults to the project folder." },
@@ -556,6 +557,8 @@ struct CreateChatArgs {
     model: Option<String>,
     reasoning: Option<String>,
     sandbox: Option<String>,
+    #[serde(default)]
+    plan: bool,
     title: Option<String>,
     branch: Option<String>,
     cwd: Option<String>,
@@ -1066,6 +1069,7 @@ impl Tools {
             None => SandboxLevel::WorkspaceWrite,
         };
         let config = ChatConfig {
+            plan: args.plan,
             harness,
             model: args.model.clone(),
             reasoning,
@@ -1453,6 +1457,7 @@ impl Tools {
                     .or_else(|| space.map(|s| s.path.clone()))
                     .unwrap_or_else(|| "~".into());
                 let request = RunRequest {
+                    plan: config.as_ref().is_some_and(|c| c.plan),
                     mcp: None,
                     prompt: text,
                     harness: Some(harness),

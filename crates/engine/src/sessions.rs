@@ -346,7 +346,7 @@ impl SessionsEngine {
         &self,
         chat: &str,
         run: Option<&str>,
-    ) -> Option<(String, String, zuse_protocol::SandboxLevel)> {
+    ) -> Option<(String, String, crate::permission_rules::RunPosture)> {
         let live = lock(&self.inner.runs).get(chat).and_then(|h| {
             if run.is_some_and(|id| id != h.run_id)
                 || h.retiring.load(std::sync::atomic::Ordering::Acquire)
@@ -376,11 +376,17 @@ impl SessionsEngine {
             .and_then(|c| c.space_id.as_ref())
             .map(|id| format!("space:{id}"))
             .unwrap_or_else(|| format!("path:{cwd}"));
-        let sandbox = live
-            .map(|r| r.sandbox)
-            .or_else(|| row.and_then(|c| c.config.map(|c| c.sandbox)))
-            .unwrap_or(zuse_protocol::SandboxLevel::WorkspaceWrite);
-        Some((project, cwd, sandbox))
+        let posture = live
+            .map(|r| crate::permission_rules::RunPosture::of(&r))
+            .or_else(|| {
+                row.and_then(|c| c.config)
+                    .map(|c| crate::permission_rules::RunPosture {
+                        sandbox: c.sandbox,
+                        plan: c.plan,
+                    })
+            })
+            .unwrap_or_else(|| zuse_protocol::SandboxLevel::WorkspaceWrite.into());
+        Some((project, cwd, posture))
     }
 
     pub fn new(
@@ -1537,12 +1543,12 @@ impl SessionsEngine {
                 h.engine_tx.clone(),
                 h.interrupt_token.clone(),
                 h.run_id.clone(),
-                h.runtime_config.request.sandbox == zuse_protocol::SandboxLevel::ReadOnly,
+                h.runtime_config.request.plan,
             )
         };
         if read_only {
             return Err(Error::Tool(
-                "Private operations are unavailable in read-only mode".into(),
+                "Private operations are unavailable in plan mode".into(),
             ));
         }
         let request_id = new_id();
@@ -1705,6 +1711,7 @@ impl SessionsEngine {
                     .or_else(|| {
                         let (_, cwd) = sessions.inner.journal_harness_session(&chat_id)?;
                         Some(RunRequest {
+                            plan: false,
                             mcp: None,
                             prompt: String::new(),
                             harness: None,
@@ -4665,6 +4672,7 @@ mod tests {
 
     fn request() -> RunRequest {
         RunRequest {
+            plan: false,
             mcp: None,
             prompt: "first".into(),
             harness: None,

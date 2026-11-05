@@ -77,10 +77,7 @@ impl EngineRpc {
                 .await
                 .map_err(failed)?;
             if matches!(name, "device_open" | "device_close" | "device_input")
-                && !chat
-                    .config
-                    .as_ref()
-                    .is_some_and(|c| c.sandbox != zuse_protocol::SandboxLevel::ReadOnly)
+                && !chat.config.as_ref().is_some_and(|c| !c.plan)
             {
                 return Err(RpcError::Failed(
                     "Device actions are blocked in plan mode".into(),

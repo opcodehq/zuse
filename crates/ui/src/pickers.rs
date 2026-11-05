@@ -95,6 +95,8 @@ pub struct DraftConfig {
     pub model: Option<String>,
     pub reasoning: Option<ReasoningLevel>,
     pub sandbox: Option<SandboxLevel>,
+    /// Plan mode for the new chat, separate from its access level.
+    pub plan: bool,
     /// The picked ref (base branch in NewWorktree mode; a worktree's branch
     /// when reusing one). `None` = the repo's current branch.
     pub branch: Option<String>,
@@ -140,6 +142,7 @@ pub struct ResolvedRunConfig {
     pub reasoning: Option<ReasoningLevel>,
     pub model_options: serde_json::Map<String, serde_json::Value>,
     pub sandbox: SandboxLevel,
+    pub plan: bool,
 }
 
 impl ResolvedRunConfig {
@@ -151,6 +154,7 @@ impl ResolvedRunConfig {
             reasoning: self.reasoning,
             model_options: self.model_options.clone(),
             sandbox: self.sandbox,
+            plan: self.plan,
         })
     }
 }
@@ -778,7 +782,6 @@ pub struct Pickers {
     cloud: cloud::Cloud,
     state: Entity<AppState>,
     config: DraftConfig,
-    plan_previous_sandbox: HashMap<String, SandboxLevel>,
     source_picker: Entity<zuse_viewport::creation_sources::SourcePicker>,
     import_picker: Entity<zuse_viewport::import_chat::ImportMenu>,
     import_tasks: HashMap<u64, Task<()>>,
@@ -994,6 +997,7 @@ impl Pickers {
                 this.config.model = None;
                 this.config.reasoning = None;
                 this.config.sandbox = None;
+                this.config.plan = false;
                 this.switch_error = None;
             }
             // A space switch invalidates the branch draft + cache — the folder
@@ -1111,7 +1115,6 @@ impl Pickers {
             compact_motion: compact::CompactMotion::default(),
             compact_keyboard: false,
             effort_bounds: None,
-            plan_previous_sandbox: HashMap::new(),
             config: DraftConfig {
                 checkout,
                 ..Default::default()
@@ -1201,35 +1204,37 @@ impl Pickers {
         }
     }
 
-    pub fn toggle_plan_mode(&mut self, cx: &mut Context<Self>) {
-        if self.cloud_launch_frozen()
-            || matches!(
+    /// Whether the current agent offers plan mode at all.
+    pub fn plan_mode_available(&self, cx: &App) -> bool {
+        !self.cloud_launch_frozen()
+            && !matches!(
                 self.resolved(cx).harness,
                 Some(HarnessId::Pi | HarnessId::Muse)
             )
-        {
-            return;
+    }
+
+    /// Flip plan mode for the draft or the selected chat; the access level is
+    /// left as it is. `false` when the chat's saved choices could not be
+    /// staged (the caller explains why).
+    pub fn toggle_plan_mode(&mut self, cx: &mut Context<Self>) -> bool {
+        let resolved = self.resolved(cx);
+        // Turning plan mode off is always allowed, even after switching to an
+        // agent that does not offer it.
+        if self.cloud_launch_frozen() || (!resolved.plan && !self.plan_mode_available(cx)) {
+            return true;
         }
-        let key = self
-            .state
-            .read(cx)
-            .selected_chat
-            .clone()
-            .unwrap_or_else(|| "new-chat".into());
-        let current = self.resolved(cx).sandbox;
-        let sandbox = if current == SandboxLevel::ReadOnly {
-            self.plan_previous_sandbox
-                .remove(&key)
-                .unwrap_or_else(|| crate::settings::default_permission_mode(cx).sandbox())
-        } else {
-            self.plan_previous_sandbox.insert(key, current);
-            SandboxLevel::ReadOnly
-        };
+        let plan = !resolved.plan;
         if self.state.read(cx).selected_chat.is_none() {
-            self.set_draft_sandbox(sandbox, cx);
-        } else {
-            self.update_chat_config(cx, |config| config.sandbox = sandbox);
+            self.config.plan = plan;
+            cx.notify();
+            return true;
         }
+        let Some(config) = resolved.chat_config() else {
+            return false;
+        };
+        self.state.update(cx, |state, cx| {
+            state.stage_chat_configuration(zuse_protocol::ChatConfigPatch::plan(plan), config, cx)
+        })
     }
 
     pub fn set_draft_sandbox(&mut self, sandbox: SandboxLevel, cx: &mut Context<Self>) {
@@ -1597,13 +1602,20 @@ impl Pickers {
     /// `Mutate createChat`: concrete model + reasoning whenever the catalog is
     /// loaded (no "engine picks a default" passthrough).
     pub fn resolved(&self, cx: &App) -> ResolvedRunConfig {
-        let sandbox = if self.state.read(cx).selected_chat.is_none() {
-            self.config
-                .sandbox
-                .unwrap_or_else(|| crate::settings::default_permission_mode(cx).sandbox())
+        let (sandbox, plan) = if self.state.read(cx).selected_chat.is_none() {
+            (
+                self.config
+                    .sandbox
+                    .unwrap_or_else(|| crate::settings::default_permission_mode(cx).sandbox()),
+                self.config.plan,
+            )
         } else {
-            crate::settings::default_permission_mode(cx)
-                .for_chat(self.state.read(cx).selected_chat_row())
+            let chat = self.state.read(cx).selected_chat_row();
+            (
+                crate::settings::default_permission_mode(cx).for_chat(chat),
+                chat.and_then(|chat| chat.config.as_ref())
+                    .is_some_and(|config| config.plan),
+            )
         };
         let harness = self.effective_harness(cx);
         // A catalog still from the previous device must not pick for this
@@ -1614,6 +1626,7 @@ impl Pickers {
             return ResolvedRunConfig {
                 harness,
                 sandbox,
+                plan,
                 model: self.effective_model_id(cx).map(str::to_string),
                 reasoning: self.explicit_reasoning(cx),
                 model_options: self.explicit_options(cx),
@@ -1622,6 +1635,7 @@ impl Pickers {
         ResolvedRunConfig {
             harness,
             sandbox,
+            plan,
             model: self
                 .selected_model(cx)
                 .map(|m| m.id.clone())
@@ -2480,6 +2494,7 @@ impl Pickers {
             .and_then(|c| c.config.as_ref())
         {
             config.sandbox = existing.sandbox;
+            config.plan = existing.plan;
         }
         change(&mut config);
         // Reasoning must stay concrete for whatever model the row now names —
@@ -6567,7 +6582,7 @@ mod tests {
             "createdAt": chrono::Utc::now(),
             "config": {
                 "harness": "claude-code", "model": "parent-model", "reasoning": "high",
-                "modelOptions": { "context": "1m" }, "sandbox": "read-only"
+                "modelOptions": { "context": "1m" }, "sandbox": "auto", "plan": true
             }
         }))
         .unwrap();
@@ -6605,7 +6620,8 @@ mod tests {
                 let create = state.read(cx).unsaved_side_chat_create("side").unwrap();
                 assert_eq!(create["config"]["harness"], "codex");
                 assert_eq!(create["config"]["model"], serde_json::Value::Null);
-                assert_eq!(create["config"]["sandbox"], "read-only");
+                assert_eq!(create["config"]["sandbox"], "auto");
+                assert_eq!(create["config"]["plan"], true);
                 assert_eq!(create["parentChatId"], "main");
                 assert_eq!(create["cwd"], "/tmp/main");
                 assert_eq!(create["branch"], "main");
@@ -9580,11 +9596,9 @@ mod tests {
         assert_eq!(config.harness, HarnessId::ClaudeCode);
         assert_eq!(config.model.as_deref(), Some("opus"));
         assert_eq!(config.sandbox, SandboxLevel::WorkspaceWrite);
-        resolved.sandbox = SandboxLevel::ReadOnly;
-        assert_eq!(
-            resolved.chat_config().unwrap().sandbox,
-            SandboxLevel::ReadOnly
-        );
+        assert!(!config.plan);
+        resolved.plan = true;
+        assert!(resolved.chat_config().unwrap().plan);
         resolved.sandbox = SandboxLevel::DangerFullAccess;
         assert_eq!(
             resolved.chat_config().unwrap().sandbox,

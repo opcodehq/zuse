@@ -13,7 +13,7 @@ use std::{
 use tokio::{sync::watch, time::Instant};
 use tokio_util::sync::CancellationToken;
 use zuse_protocol::{
-    ChangeRequestDetail, Chat, SandboxLevel,
+    ChangeRequestDetail, Chat,
     change_request_assessment::{CiState, check_failed, check_status, valid_head_oid},
     pr_watch::{MAX_REPAIR_ATTEMPTS, PrWatchRequest, PrWatchStatus, SetPrWatchRequest},
 };
@@ -454,11 +454,7 @@ impl PrWatches {
 
     fn require_writable(&self, id: &str) -> Result<Chat, EngineError> {
         let chat = self.chat(id)?;
-        if !chat
-            .config
-            .as_ref()
-            .is_some_and(|c| c.sandbox != SandboxLevel::ReadOnly)
-        {
+        if !chat.config.as_ref().is_some_and(|c| !c.plan) {
             return Err(other("Auto-fix requires a writable chat"));
         }
         Ok(chat)
@@ -672,6 +668,7 @@ fn repair_prompt(detail: &ChangeRequestDetail, logs: &str, attempt: usize) -> St
 #[cfg(test)]
 mod tests {
     use super::*;
+    use zuse_protocol::SandboxLevel;
     fn failing() -> ChangeRequestDetail {
         serde_json::from_str(include_str!("fixtures/pr-watch/failing.json")).unwrap()
     }
@@ -888,7 +885,7 @@ mod tests {
         }
     }
     fn service(
-        sandbox: SandboxLevel,
+        plan: bool,
         checkout: bool,
     ) -> (
         tempfile::TempDir,
@@ -929,11 +926,12 @@ mod tests {
         sessions.set_doc_host(host.clone());
         host.set_sessions(sessions.clone());
         let config = zuse_protocol::ChatConfig {
+            plan,
             harness: zuse_protocol::HarnessId::Mock,
             model: None,
             reasoning: None,
             model_options: Default::default(),
-            sandbox,
+            sandbox: SandboxLevel::WorkspaceWrite,
         };
         workspace
             .create_chat(
@@ -976,7 +974,7 @@ mod tests {
     }
     #[tokio::test]
     async fn writable_fixture_dispatches_once_with_logs_and_current_permissions() {
-        let (_temp, watches, fixture, sessions) = service(SandboxLevel::WorkspaceWrite, true);
+        let (_temp, watches, fixture, sessions) = service(false, true);
         watches.observe(request()).unwrap();
         poll(&watches).await;
         enable(&watches).unwrap();
@@ -997,8 +995,8 @@ mod tests {
         watches.inner.workspace.shutdown();
     }
     #[tokio::test]
-    async fn readonly_chats_observe_but_never_enable_or_dispatch() {
-        let (_temp, watches, fixture, sessions) = service(SandboxLevel::ReadOnly, true);
+    async fn plan_mode_chats_observe_but_never_enable_or_dispatch() {
+        let (_temp, watches, fixture, sessions) = service(true, true);
         watches.observe(request()).unwrap();
         poll(&watches).await;
         assert!(
@@ -1019,14 +1017,13 @@ mod tests {
     #[tokio::test]
     async fn permission_changes_and_dirty_checkout_pause_before_logs_or_dispatch() {
         for change_permissions in [true, false] {
-            let (_temp, watches, fixture, sessions) =
-                service(SandboxLevel::WorkspaceWrite, change_permissions);
+            let (_temp, watches, fixture, sessions) = service(false, change_permissions);
             watches.observe(request()).unwrap();
             poll(&watches).await;
             enable(&watches).unwrap();
             if change_permissions {
                 let mut config = watches.inner.workspace.chat_config("chat").unwrap();
-                config.sandbox = SandboxLevel::ReadOnly;
+                config.plan = true;
                 watches
                     .inner
                     .workspace
@@ -1047,7 +1044,7 @@ mod tests {
     }
     #[tokio::test]
     async fn pause_fences_a_stale_poll_and_preserves_budget() {
-        let (_temp, watches, _, _) = service(SandboxLevel::WorkspaceWrite, true);
+        let (_temp, watches, _, _) = service(false, true);
         watches.observe(request()).unwrap();
         poll(&watches).await;
         enable(&watches).unwrap();
@@ -1076,7 +1073,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn scheduler_backs_off_errors_and_stops_on_shutdown() {
         use std::sync::atomic::Ordering::SeqCst;
-        let (_temp, watches, fixture, _) = service(SandboxLevel::ReadOnly, true);
+        let (_temp, watches, fixture, _) = service(true, true);
         watches.observe(request()).unwrap();
         fixture.fail_reads.store(true, SeqCst);
         watches.start();
@@ -1099,7 +1096,7 @@ mod tests {
     #[tokio::test]
     async fn archived_or_moved_chat_stops_watching_without_dispatch() {
         for archive in [false, true] {
-            let (_temp, watches, fixture, _) = service(SandboxLevel::WorkspaceWrite, true);
+            let (_temp, watches, fixture, _) = service(false, true);
             watches.observe(request()).unwrap();
             poll(&watches).await;
             enable(&watches).unwrap();
@@ -1129,7 +1126,7 @@ mod tests {
     }
     #[tokio::test]
     async fn exhausted_budget_requires_an_explicit_restart_and_observe_preserves_permission() {
-        let (_temp, watches, _, _) = service(SandboxLevel::WorkspaceWrite, true);
+        let (_temp, watches, _, _) = service(false, true);
         watches.observe(request()).unwrap();
         poll(&watches).await;
         enable(&watches).unwrap();
@@ -1160,7 +1157,7 @@ mod tests {
     }
     #[tokio::test]
     async fn another_watch_cannot_automatically_repair_the_same_checkout() {
-        let (_temp, watches, _, _) = service(SandboxLevel::WorkspaceWrite, true);
+        let (_temp, watches, _, _) = service(false, true);
         watches.observe(request()).unwrap();
         poll(&watches).await;
         enable(&watches).unwrap();
@@ -1195,7 +1192,7 @@ mod tests {
     }
     #[tokio::test]
     async fn changed_pr_identity_retires_the_old_watch_and_repair_permission() {
-        let (_temp, watches, fixture, sessions) = service(SandboxLevel::WorkspaceWrite, true);
+        let (_temp, watches, fixture, sessions) = service(false, true);
         watches.observe(request()).unwrap();
         poll(&watches).await;
         enable(&watches).unwrap();

@@ -149,7 +149,7 @@ impl crate::mailbox::Executor for EngineExecutor {
             None => serde_json::to_value(&config.model_options)?,
         };
         let entry: zuse_doc::SessionCommandEntry = serde_json::from_value(
-            serde_json::json!({"id":payload.command_id,"payload":{"kind":"run","messageId":payload.client_message_id,"request":{"prompt":payload.prompt(),"harness":config.harness,"model":config.model,"reasoning":config.reasoning,"modelOptions":model_options,"cwd":cwd,"sandbox":config.sandbox,"autoApprove":config.sandbox==SandboxLevel::DangerFullAccess}},"issuedBy":format!("cloud-mailbox:{fingerprint}"),"issuedAt":created_at,"expiresAt":9_007_199_254_740_991i64,"status":"pending"}),
+            serde_json::json!({"id":payload.command_id,"payload":{"kind":"run","messageId":payload.client_message_id,"request":{"prompt":payload.prompt(),"harness":config.harness,"model":config.model,"reasoning":config.reasoning,"modelOptions":model_options,"cwd":cwd,"sandbox":config.sandbox,"plan":config.plan,"autoApprove":config.sandbox==SandboxLevel::DangerFullAccess}},"issuedBy":format!("cloud-mailbox:{fingerprint}"),"issuedAt":created_at,"expiresAt":9_007_199_254_740_991i64,"status":"pending"}),
         )?;
         self.core
             .doc_host

@@ -1198,3 +1198,21 @@ native-shortcut_yank = 貼上已刪除的文字
 native-shortcut_yank_pop = 循環切換已刪除的文字
 native-shortcut_stash = 暫存草稿
 native-shortcut_history = 搜尋已傳送訊息
+
+# Context: composer add menu and plan mode toggle.
+native-composer_add_to_message = 新增到訊息
+
+# Context: composer add menu and plan mode toggle.
+native-composer_attach_images = 附加圖片
+
+# Context: composer add menu and plan mode toggle.
+native-composer_plan_mode_description = 檢查並提出方案，不修改檔案。
+
+# Context: composer add menu and plan mode toggle.
+native-composer_plan_mode_unavailable = 此代理程式無法使用
+
+# Context: composer add menu and plan mode toggle.
+native-composer_plan_chip = 計畫
+
+# Context: composer add menu and plan mode toggle.
+native-composer_cloud_plan_unavailable = 雲端啟動不支援計畫模式。請在開始前將其關閉。

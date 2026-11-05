@@ -1860,7 +1860,7 @@ impl WorkspaceView {
             draft.chat_id = Some(uuid::Uuid::new_v4().to_string());
         }
         self.persist_outgoing_draft(draft.clone(), cx);
-        let command = json!({"kind":"run","messageId":message_id,"request":{"prompt":prompt,"harness":provider["id"],"model":self.model,"reasoning":self.reasoning,"modelOptions":self.model_options,"cwd":self.cwd(),"sandbox":self.sandbox,"autoApprove":self.sandbox==zuse_protocol::SandboxLevel::DangerFullAccess,"resume":null,"attachments":self.attachment_paths(),"worktree":self.creation_worktree()}});
+        let command = json!({"kind":"run","messageId":message_id,"request":{"prompt":prompt,"harness":provider["id"],"model":self.model,"reasoning":self.reasoning,"modelOptions":self.model_options,"cwd":self.cwd(),"sandbox":self.sandbox,"plan":self.selected.as_ref().is_some_and(|chat| chat["config"]["plan"] == true),"autoApprove":self.sandbox==zuse_protocol::SandboxLevel::DangerFullAccess,"resume":null,"attachments":self.attachment_paths(),"worktree":self.creation_worktree()}});
         let send = if let Some(chat) = &self.selected {
             self.call(
                 methods::QUEUE_COMMAND,

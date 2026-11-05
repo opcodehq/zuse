@@ -387,7 +387,7 @@ impl DesktopImport {
                 "id":chat_id,"deviceId":destination.device_id,"title":if original_id==root_session {text(thread,"title").or_else(||text(session,"title"))} else {text(session,"title").or_else(||text(thread,"title"))},
                 "archived":archived,"cwd":cwd,"branch":worktree.and_then(|w|text(w,"branch")),
                 "checkoutId":Value::Null,"spaceId":project_id.and_then(|p|mapped_projects.get(p)),
-                "config":ChatConfig{harness:provider,model:text(session,"model").map(str::to_owned),reasoning:None,model_options:Default::default(),sandbox:sandbox(text(session,"runtime_mode"))},
+                "config":ChatConfig{harness:provider,model:text(session,"model").map(str::to_owned),reasoning:None,model_options:Default::default(),sandbox:sandbox(text(session,"runtime_mode")),plan:false},
                 "lastMessagePreview":messages.iter().rev().flat_map(|m|&m.parts).find_map(|p|if let MessagePart::Text{text,..}=p{Some(text.chars().take(160).collect::<String>())}else{None}),
                 "lastMessageAt":entry_time,"createdAt":timestamp(session,"created_at"),"lastSeenAt":text(thread,"last_read_at"),
                 "harnessSessionId":resume,"harnessSessionCwd":resume.and(cwd),"roomGen":2,

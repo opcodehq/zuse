@@ -6,6 +6,34 @@ use std::path::{Path, PathBuf};
 use zuse_protocol::{SandboxLevel, permission::*};
 
 type Result<T> = std::result::Result<T, EngineError>;
+
+/// The posture an approval is decided under: the chat's access level plus
+/// its plan-mode flag. Plan mode denies every escalation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RunPosture {
+    pub sandbox: SandboxLevel,
+    pub plan: bool,
+}
+impl RunPosture {
+    pub const PLAN: Self = Self {
+        sandbox: SandboxLevel::WorkspaceWrite,
+        plan: true,
+    };
+    pub fn of(request: &zuse_protocol::RunRequest) -> Self {
+        Self {
+            sandbox: request.sandbox,
+            plan: request.plan,
+        }
+    }
+}
+impl From<SandboxLevel> for RunPosture {
+    fn from(sandbox: SandboxLevel) -> Self {
+        Self {
+            sandbox,
+            plan: false,
+        }
+    }
+}
 fn error(e: impl std::fmt::Display) -> EngineError {
     EngineError::Other(format!("permission rules: {e}"))
 }
@@ -180,13 +208,14 @@ impl PermissionRules {
         &self,
         project: &str,
         chat: &str,
-        mode: SandboxLevel,
+        mode: impl Into<RunPosture>,
         approval: &ToolApproval,
     ) -> Result<Option<bool>> {
+        let mode = mode.into();
         let db = self.db()?;
-        let (decision, source, rule) = if mode == SandboxLevel::ReadOnly {
-            (Some(false), "read-only ceiling", None)
-        } else if mode.automatic_review() {
+        let (decision, source, rule) = if mode.plan {
+            (Some(false), "plan mode ceiling", None)
+        } else if mode.sandbox.automatic_review() {
             (None, "native reviewer escalation", None)
         } else if forced(approval) {
             (None, "forced prompt", None)
@@ -221,7 +250,7 @@ impl PermissionRules {
             },
             source,
             rule.as_deref(),
-            serde_json::json!({"sandbox":mode,"inputHash":input_hash(&approval.input)}),
+            serde_json::json!({"sandbox":mode.sandbox,"plan":mode.plan,"inputHash":input_hash(&approval.input)}),
         )?;
         Ok(decision)
     }
@@ -231,7 +260,7 @@ impl PermissionRules {
         chat: &str,
         approval: &ToolApproval,
         allowed: bool,
-        mode: SandboxLevel,
+        mode: RunPosture,
     ) -> Result<()> {
         audit(
             &self.db()?,
@@ -241,7 +270,7 @@ impl PermissionRules {
             if allowed { "allow" } else { "deny" },
             "user answer",
             None,
-            serde_json::json!({"sandbox":mode,"inputHash":input_hash(&approval.input)}),
+            serde_json::json!({"sandbox":mode.sandbox,"plan":mode.plan,"inputHash":input_hash(&approval.input)}),
         )
     }
 }
@@ -459,7 +488,7 @@ impl crate::sessions::SessionsEngine {
                 approval.force_prompt = true;
             }
             // The native reviewer already declined to decide this escalation.
-            if mode.automatic_review() {
+            if mode.sandbox.automatic_review() {
                 approval.force_prompt = true;
             }
             // Persist through this host, using one-time choices on the provider wire.
@@ -537,7 +566,7 @@ impl crate::sessions::SessionsEngine {
             let unambiguous = matching.next().is_none();
             let mut allowed = false;
             if let Some((project, _, mode)) = self.permission_context(chat, Some(run)) {
-                if mode != SandboxLevel::ReadOnly && unambiguous && labels.len() == 1 {
+                if !mode.plan && unambiguous && labels.len() == 1 {
                     let label = &labels[0];
                     if label == &approval.allow_label {
                         allowed = true;
@@ -622,9 +651,7 @@ mod tests {
             Some(true)
         );
         assert_eq!(
-            rules
-                .decide("p", "c", SandboxLevel::ReadOnly, &next)
-                .unwrap(),
+            rules.decide("p", "c", RunPosture::PLAN, &next).unwrap(),
             Some(false)
         );
         let snapshot = rules.snapshot("p", "c").unwrap();
@@ -718,9 +745,7 @@ mod tests {
                 None
             );
             assert_eq!(
-                rules
-                    .decide("p", "c", SandboxLevel::ReadOnly, &approval)
-                    .unwrap(),
+                rules.decide("p", "c", RunPosture::PLAN, &approval).unwrap(),
                 Some(false)
             );
         }
@@ -885,18 +910,18 @@ mod tests {
         );
     }
     #[test]
-    fn read_only_ceiling_beats_every_grant() {
+    fn plan_mode_ceiling_beats_every_grant() {
         let (_dir, rules) = store();
         let a = approval();
         rules.save("p", None, &a).unwrap();
         rules.save("p", Some("c"), &a).unwrap();
         assert_eq!(
-            rules.decide("p", "c", SandboxLevel::ReadOnly, &a).unwrap(),
+            rules.decide("p", "c", RunPosture::PLAN, &a).unwrap(),
             Some(false)
         );
         assert_eq!(
             rules.snapshot("p", "c").unwrap().activity[0].source,
-            "read-only ceiling"
+            "plan mode ceiling"
         );
     }
     #[test]
@@ -916,7 +941,7 @@ mod tests {
         a.input = serde_json::json!({"path":"/project/.env.local"});
         assert!(rules.save("p", Some("c"), &a).is_err());
         assert_eq!(
-            rules.decide("p", "c", SandboxLevel::ReadOnly, &a).unwrap(),
+            rules.decide("p", "c", RunPosture::PLAN, &a).unwrap(),
             Some(false)
         );
     }

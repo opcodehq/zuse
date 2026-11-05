@@ -6023,17 +6023,17 @@ mod tests {
         );
         let expected =
             serde_json::to_value(core.workspace.chat("selected").unwrap().unwrap().config).unwrap();
-        let readonly = serde_json::json!({"harness":"codex","model":"first","sandbox":"read-only"});
+        let planned =
+            serde_json::json!({"harness":"codex","model":"first","sandbox":"auto","plan":true});
         rpc.handle(
             methods::MUTATE,
-            serde_json::json!({"op":"setChatConfig","chatId":"selected","config":readonly}),
+            serde_json::json!({"op":"setChatConfig","chatId":"selected","config":planned}),
         )
         .await
         .unwrap();
-        assert_eq!(
-            stream.next().await.unwrap()["config"]["sandbox"],
-            "read-only"
-        );
+        let published = stream.next().await.unwrap();
+        assert_eq!(published["config"]["sandbox"], "auto");
+        assert_eq!(published["config"]["plan"], true);
         let desired =
             serde_json::json!({"harness":"codex","model":"second","sandbox":"workspace-write"});
         let stale = rpc.handle(methods::MUTATE, serde_json::json!({"op":"setChatConfig","chatId":"selected","expectedConfig":{"deviceId":core.device_id,"config":expected},"config":desired})).await;
@@ -6046,11 +6046,12 @@ mod tests {
                 .config
                 .unwrap()
                 .sandbox,
-            zuse_protocol::SandboxLevel::ReadOnly
+            zuse_protocol::SandboxLevel::Auto
         );
         let current =
             serde_json::to_value(core.workspace.chat("selected").unwrap().unwrap().config).unwrap();
-        let saved = serde_json::json!({"harness":"codex","model":"second","sandbox":"read-only"});
+        let saved =
+            serde_json::json!({"harness":"codex","model":"second","sandbox":"auto","plan":true});
         rpc.handle(methods::MUTATE, serde_json::json!({"op":"setChatConfig","chatId":"selected","expectedConfig":{"deviceId":core.device_id,"config":current},"config":saved})).await.unwrap();
         assert_eq!(stream.next().await.unwrap()["config"]["model"], "second");
         let wrong_host = rpc.handle(methods::MUTATE, serde_json::json!({"op":"setChatConfig","chatId":"selected","expectedConfig":{"deviceId":"another-computer","config":saved},"config":desired})).await;
