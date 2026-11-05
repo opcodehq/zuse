@@ -1,5 +1,11 @@
 # Cloud parity inventory
 
+Architecture update (2026-10-29): the owner selected a standalone Rust database with
+full retained-data migration. Shared-schema requirements below describe the frozen
+reference and earlier rollout approach. Follow the current
+[cloud performance decisions](cloud-performance-architecture.md), including no warm
+pools and unchanged-checkout resume, for new implementation work.
+
 Frozen reference: `swarajbachu/zuse@2016cf4f0cc240e6797916dd5cab1d8bebab89ae` (October 22, 2026).
 Inspect with `git -C .context/zuse-ref show 2016cf4:<path>`; the checkout's HEAD may be older.
 This is a source inventory, not evidence that a service is deployed or credentials are available.

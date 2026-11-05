@@ -1,5 +1,6 @@
 //! Frozen cloud transcript: no engine or execution transport is installed in the child state.
 pub(crate) mod saved;
+mod shared;
 use crate::{
     icons,
     state::{AppState, EngineHandle},
@@ -7,6 +8,7 @@ use crate::{
     transcript::Transcript,
 };
 use gpui::{Context, Entity, EventEmitter, Render, Task, div, prelude::*, px};
+pub(crate) use shared::{open_project, open_setup};
 use zuse_model::cloud::{Head, Workspace};
 
 pub enum Event {
@@ -22,6 +24,7 @@ pub enum Event {
 pub struct CloudHistory {
     root: EngineHandle,
     owner: String,
+    organization: Option<String>,
     workspace: Workspace,
     view: Entity<Transcript>,
     composer: Entity<crate::composer::Composer>,
@@ -33,6 +36,11 @@ pub struct CloudHistory {
     task: Option<Task<()>>,
     reading: bool,
     session_task: Option<Task<()>>,
+    page_head: Head,
+    page_rows: Vec<zuse_model::SessionMessageEntry>,
+    older_loading: bool,
+    older_task: Option<Task<()>>,
+    admissions: Vec<serde_json::Value>,
 }
 impl EventEmitter<Event> for CloudHistory {}
 impl CloudHistory {
@@ -60,6 +68,7 @@ impl CloudHistory {
         Self {
             root,
             owner,
+            organization: None,
             workspace,
             view,
             composer,
@@ -71,12 +80,106 @@ impl CloudHistory {
             task: None,
             reading: false,
             session_task: None,
+            page_rows: match &head.transcript.frame {
+                zuse_model::TranscriptFrame::Reset { reset } => reset.as_ref().clone(),
+                _ => vec![],
+            },
+            page_head: head,
+            older_loading: false,
+            older_task: None,
+            admissions: vec![],
         }
+    }
+    pub(crate) fn with_scope(
+        mut self,
+        organization: Option<String>,
+        metadata: serde_json::Value,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        self.organization = organization;
+        self.admissions = metadata["commandAdmissions"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        self.project_rows(cx);
+        self
+    }
+    // Only presentation changes: page_head/cursor and encrypted cache certificates
+    // stay canonical. This view never installs an execution engine.
+    pub(crate) fn admission_rows(
+        head: &Head,
+        admissions: &[serde_json::Value],
+        mut rows: Vec<zuse_model::SessionMessageEntry>,
+    ) -> Vec<zuse_model::SessionMessageEntry> {
+        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+
+        let mut seen: std::collections::HashSet<_> = rows.iter().map(|m| m.id.clone()).collect();
+        for entry in admissions.iter().take(256) {
+            let Some(id) = entry["messageId"]
+                .as_str()
+                .filter(|id| !id.is_empty() && id.len() <= 512)
+            else {
+                continue;
+            };
+            if !seen.insert(id.to_owned()) {
+                continue;
+            }
+            let Some(text) = entry["text"].as_str() else {
+                continue;
+            };
+            let Ok(assets) = serde_json::from_value::<Vec<zuse_protocol::cloud_assets::Asset>>(
+                entry
+                    .get("attachments")
+                    .cloned()
+                    .unwrap_or(serde_json::json!([])),
+            ) else {
+                continue;
+            };
+            let refs: Vec<_> = assets
+                .iter()
+                .filter_map(|asset| {
+                    serde_json::to_vec(asset)
+                        .ok()
+                        .filter(|bytes| bytes.len() <= 3072)
+                        .map(|bytes| {
+                            format!(
+                                "cloud-asset://{}/{}",
+                                URL_SAFE_NO_PAD.encode(bytes),
+                                asset.original_name.replace(['/', '\\'], "_")
+                            )
+                        })
+                })
+                .collect();
+            if refs.len() != assets.len() {
+                continue;
+            }
+            rows.push(zuse_model::SessionMessageEntry {
+                id: id.into(),
+                role: zuse_model::MessageRole::User,
+                parts: vec![zuse_model::MessagePart::Text {
+                    id: format!("admission:{id}"),
+                    text: zuse_protocol::message_attachments::with_attachments(text, &refs),
+                }],
+                created_at: entry["createdAt"].as_i64().unwrap_or_default(),
+                device_id: head.chat.device_id.clone(),
+                status: None,
+                continuation_of: None,
+                duration_ms: None,
+            });
+        }
+        rows
+    }
+    fn project_rows(&self, cx: &mut Context<Self>) {
+        let rows = Self::admission_rows(&self.page_head, &self.admissions, self.page_rows.clone());
+        self._state.update(cx, |state, cx| {
+            state.apply_transcript(rows);
+            cx.notify();
+        });
     }
     fn frozen(
         head: &Head,
         archived: bool,
-        cx: &mut Context<Self>,
+        cx: &mut gpui::App,
     ) -> (Entity<AppState>, Entity<Transcript>) {
         let state = cx.new(|cx| {
             let mut state = AppState::new();
@@ -112,27 +215,35 @@ impl CloudHistory {
             .unwrap_or_else(|| self.workspace.initial_session_id.clone())
     }
     fn select_session(&mut self, id: String, cx: &mut Context<Self>) {
-        if self.busy || self.reading || self._state.read(cx).selected_chat.as_deref() == Some(&id) {
+        if self.busy
+            || self.reading
+            || self.older_loading
+            || self._state.read(cx).selected_chat.as_deref() == Some(&id)
+        {
             return;
         }
         self.reading = true;
         self.error = None;
         let root = self.root.clone();
         let owner = self.owner.clone();
+        let organization = self.organization.clone();
         let workspace = self.workspace.workspace_id.clone();
         self.session_task = Some(cx.spawn(async move |this, cx| {
             let result = root
                 .client()
                 .call_scoped(
                     zuse_protocol::methods::CLOUD_HISTORY,
-                    serde_json::json!({"workspaceId":workspace,"sessionId":id,"expectedAccountId":owner,"expectedOrganizationId":null}),
+                    serde_json::json!({"workspaceId":workspace,"sessionId":id,"incremental":true,"expectedAccountId":owner,"expectedOrganizationId":organization}),
                 )
                 .await;
             let _ = this.update(cx, |this, cx| {
                 this.reading = false;
                 match result {
-                    Ok(value) if value["accountId"].as_str()==Some(owner.as_str()) => match serde_json::from_value::<Head>(value["head"].clone()) {
+                    Ok(value) if value["accountId"].as_str()==Some(owner.as_str())&&value["organizationId"].as_str()==organization.as_deref() => match serde_json::from_value::<Head>(value["head"].clone()) {
                         Ok(head) if head.workspace_id == workspace && head.session_id == id => {
+                            this.page_rows=match &head.transcript.frame {zuse_model::TranscriptFrame::Reset{reset}=>reset.as_ref().clone(),_=>vec![]};
+                            this.page_head=head.clone();
+                            this.admissions=value["commandAdmissions"].as_array().cloned().unwrap_or_default();
                             let archived = this.workspace.archived();
                             this._state.update(cx, |state, cx| {
                                 state.chats = head.conversations.clone();
@@ -142,6 +253,7 @@ impl CloudHistory {
                                 let _ = state.receive_transcript_update(head.transcript.clone(), cx);
                                 cx.notify();
                             });
+                            this.project_rows(cx);
                         }
                         _ => {
                             this.error =
@@ -156,6 +268,41 @@ impl CloudHistory {
         }));
         cx.notify();
     }
+    fn load_older(&mut self, cx: &mut Context<Self>) {
+        let Some(before) = self.page_head.older_message_sequence else {
+            return;
+        };
+        if self.older_loading || self.reading || self.busy {
+            return;
+        }
+        self.older_loading = true;
+        self.error = None;
+        let root = self.root.clone();
+        let owner = self.owner.clone();
+        let organization = self.organization.clone();
+        let expected = self.page_head.clone();
+        self.older_task=Some(cx.spawn(async move |this,cx| {
+            let result=root.client().call_scoped(zuse_protocol::methods::CLOUD_HISTORY,serde_json::json!({"workspaceId":expected.workspace_id,"sessionId":expected.session_id,"beforeSequence":before,"cursor":expected.cursor,"incremental":true,"expectedAccountId":owner,"expectedOrganizationId":organization})).await;
+            let _=this.update(cx,|this,cx| {
+                this.older_loading=false;
+                let page=result.ok().filter(|value|value["accountId"].as_str()==Some(owner.as_str())&&value["organizationId"].as_str()==organization.as_deref()).and_then(|value|serde_json::from_value::<Head>(value["head"].clone()).ok());
+                match page {
+                    Some(page) if page.workspace_id==expected.workspace_id&&page.session_id==expected.session_id&&page.runtime_generation==expected.runtime_generation&&page.cursor.epoch==expected.cursor.epoch&&page.older_message_sequence.is_none_or(|next|next<before)=> {
+                        if let zuse_model::TranscriptFrame::Reset{reset}=&page.transcript.frame {
+                            let seen:std::collections::HashSet<_>=this.page_rows.iter().map(|m|m.id.clone()).collect();
+                            let mut rows:Vec<_>=reset.iter().filter(|m|!seen.contains(&m.id)).cloned().collect();
+                            rows.append(&mut this.page_rows);this.page_rows=rows;
+                            this.page_head.older_message_sequence=page.older_message_sequence;
+                            this.project_rows(cx);
+                        }else{this.error=Some("Earlier history returned an invalid page.".into());}
+                    },
+                    _=>this.error=Some("Earlier history changed or is unavailable. Refresh this conversation to retry.".into()),
+                }
+                cx.notify();
+            });
+        }));
+        cx.notify();
+    }
     fn unarchive(&mut self, cx: &mut Context<Self>) {
         if self.busy || self.workspace.state != "archived" {
             return;
@@ -164,6 +311,7 @@ impl CloudHistory {
         self.error = None;
         let engine = self.root.clone();
         let owner = self.owner.clone();
+        let organization = self.organization.clone();
         let id = self.workspace.workspace_id.clone();
         let command = self.command.clone();
         self.task = Some(cx.spawn(async move |this, cx| {
@@ -171,7 +319,7 @@ impl CloudHistory {
                 .client()
                 .call(
                     zuse_engine::cloud::UNARCHIVE,
-                    serde_json::json!({"workspaceId":id,"commandId":command,"expectedAccountId":owner,"expectedOrganizationId":null}),
+                    serde_json::json!({"workspaceId":id,"commandId":command,"expectedAccountId":owner,"expectedOrganizationId":organization}),
                 )
                 .await;
             let _ = this.update(cx, |this, cx| {
@@ -249,6 +397,33 @@ impl Render for CloudHistory {
                 |this, id, _, cx| this.select_session(id, cx),
                 cx,
             ))
+            .when(self.page_head.older_message_sequence.is_some(), |v| {
+                v.child(
+                    div()
+                        .id("cloud-history-load-earlier")
+                        .flex_none()
+                        .px(px(16.))
+                        .py(px(6.))
+                        .text_size(px(12.))
+                        .cursor_pointer()
+                        .child(if self.older_loading {
+                            "Loading earlier messages…"
+                        } else {
+                            "Load earlier messages"
+                        })
+                        .on_click(cx.listener(|this, _, _, cx| this.load_older(cx))),
+                )
+            })
+            .when_some(self.error.clone(), |v, error| {
+                v.child(
+                    div()
+                        .flex_none()
+                        .px(px(16.))
+                        .py(px(4.))
+                        .text_size(px(12.))
+                        .child(error),
+                )
+            })
             .child(div().flex_1().min_h_0().child(if self.reading {
                 div()
                     .size_full()
@@ -370,3 +545,9 @@ impl Render for CloudHistory {
             ).into_any_element()
     }
 }
+
+#[cfg(feature = "appshots-fixture")]
+pub(crate) use shared::fixture;
+
+#[cfg(feature = "appshots-fixture")]
+pub(crate) use saved::fixture as saved_fixture;

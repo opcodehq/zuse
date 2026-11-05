@@ -35,6 +35,7 @@ zuse-update.workspace = true
 zuse-visual.workspace = true
 loro.workspace = true
 tokio.workspace = true
+tokio-tungstenite.workspace = true
 futures.workspace = true
 async-trait.workspace = true
 axum.workspace = true
@@ -71,6 +72,5 @@ zuse-providers = { workspace = true, features = ["installer-fixture"] }
 # Paused-clock tests (the 30-minute idle reaper).
 tokio = { workspace = true, features = ["test-util"] }
 zip.workspace = true
-tokio-tungstenite.workspace = true
 # In-process registry server for the two-engine workspace integration tests.
 zuse-sync = { workspace = true, features = ["mock-server"] }

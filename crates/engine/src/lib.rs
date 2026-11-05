@@ -17,6 +17,7 @@ use zuse_sync::DocsStore;
 
 pub mod account;
 pub mod agent_accounts;
+mod api_origins;
 pub mod archives;
 pub mod auth;
 mod branch_graph;
@@ -28,6 +29,11 @@ mod chat_persistence;
 pub mod desktop_import;
 pub mod diff_sync;
 pub mod doc_host;
+pub mod execution;
+pub mod execution_progress;
+pub use cloud::hosted as hosted_cloud;
+mod parking;
+pub use parking::ParkedExecution;
 mod external_chats;
 mod fs_watch;
 mod git_workspace;
@@ -180,6 +186,7 @@ pub struct EngineCore {
     pub project_creation: project_creation::ProjectCreationService,
     pub previews: zuse_preview::PreviewService,
     pub change_requests: CheckoutChangeRequests,
+    github_launcher: source_control::GitHubCommandLauncher,
     pub diff_sync: CheckoutDiffSync,
     pub spaces_sync: SpacesSync,
     pub uploads: Uploads,
@@ -278,6 +285,9 @@ impl EngineCore {
         let store_for_import = store.clone();
         let journal = Arc::new(RunJournal::open(profile.store_root().join("journals"))?);
         let sessions = SessionsEngine::new(device_id.clone(), journal, registry.clone());
+        if profile.preparation_pending() {
+            sessions.require_preparation();
+        }
         let doc_host = DocHost::new(
             store.clone(),
             DocHostConfig {
@@ -286,6 +296,11 @@ impl EngineCore {
                 edge: edge.clone(),
             },
         );
+        if profile.managed_recovery() {
+            sessions.set_managed_recovery();
+            doc_host.set_managed_recovery();
+            doc_host.disable_native_provider_import();
+        }
         let workspace = WorkspaceHost::open(
             store,
             WorkspaceHostConfig {
@@ -310,7 +325,18 @@ impl EngineCore {
         let repos = Repos::new(data_dir, &device_id);
         sessions.set_scratch_root(repos.scratch_root());
         doc_host.set_repos(repos.clone());
-        let change_requests = CheckoutChangeRequests::start(repos.clone(), &device_id);
+        let github_launcher = source_control::GitHubCommandLauncher::default();
+        let change_requests = CheckoutChangeRequests::new(
+            repos.clone(),
+            &device_id,
+            Arc::new(
+                source_control::ChangeRequestResolver::new().with_github(
+                    source_control::GitHubCli::new()
+                        .with_store(&data_dir)
+                        .with_launcher(github_launcher.clone()),
+                ),
+            ),
+        );
         let workspace_files =
             WorkspaceFiles::new(repos.clone(), workspace.clone(), device_id.clone());
         let terminals = Terminals::new();
@@ -450,6 +476,7 @@ impl EngineCore {
             project_creation,
             previews,
             change_requests,
+            github_launcher,
             diff_sync,
             spaces_sync,
             uploads,
@@ -590,6 +617,16 @@ impl EngineCore {
         zuse_rpc::HostRelay::spawn(config, self.rpc_service(), on_nudge)
     }
 
+    /// Managed tasks cannot borrow a configured desktop/guest GitHub account.
+    pub fn require_github_launcher(&self) {
+        self.github_launcher.require();
+    }
+    pub fn install_github_launcher(
+        &self,
+        path: PathBuf,
+    ) -> Result<(), source_control::ChangeRequestError> {
+        self.github_launcher.install(path)
+    }
     pub fn rpc_service(&self) -> Arc<EngineRpc> {
         let mut rpc = EngineRpc::new(
             self.sessions.clone(),
@@ -608,6 +645,7 @@ impl EngineCore {
         )
         .with_pr_watches(self.pr_watches.clone())
         .with_project_creation(self.project_creation.clone())
+        .with_github_launcher(self.github_launcher.clone())
         .with_usage(self.usage.clone())
         .with_desktop_import(self.desktop_import_profile.clone())
         .with_visuals(self.visuals.clone())

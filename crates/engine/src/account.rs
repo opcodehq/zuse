@@ -15,7 +15,7 @@ use tokio::sync::{Mutex as AsyncMutex, watch};
 use tokio_util::sync::CancellationToken;
 use zuse_protocol::UserProfile;
 
-pub const API_URL: &str = "https://api.zuse.sh";
+pub const API_URL: &str = crate::api_origins::DEFAULT_API_URL;
 pub const PUBLIC_CLIENT_ID: &str = "client_01KWGQ818571ARFATQ3G9AR2Y2";
 const IDENTITY_URL: &str = "https://api.workos.com";
 const MAX_RESPONSE: usize = 256 * 1024;
@@ -89,7 +89,7 @@ struct Inner {
     client_id: String,
     identity_url: String,
     api_url: String,
-    store: PathBuf,
+    store: Option<PathBuf>,
     state: Mutex<State>,
     refresh: AsyncMutex<()>,
     status: watch::Sender<AccountStatus>,
@@ -165,7 +165,7 @@ fn endpoint(value: &str) -> Result<String, AccountError> {
 
 impl Account {
     pub fn open(root: &Path) -> Result<Self, AccountError> {
-        let api_url = std::env::var("ZUSE_API_URL").unwrap_or_else(|_| API_URL.into());
+        let api_url = crate::api_origins::from_env().general;
         let client_id = std::env::var("ZUSE_WORKOS_CLIENT_ID")
             .ok()
             .filter(|s| !s.trim().is_empty())
@@ -179,10 +179,74 @@ impl Account {
         client_id: String,
         identity_url: String,
     ) -> Result<Self, AccountError> {
-        let store = root.join("account").join("session.json");
+        Self::with_storage(
+            Some(root.join("account").join("session.json")),
+            api_url,
+            client_id,
+            identity_url,
+        )
+    }
+
+    /// An isolated hosted-browser account. Refresh credentials remain in server
+    /// memory; this never loads a desktop session or writes a profile/cache.
+    pub fn ephemeral(api_url: &str, client_id: &str) -> Result<Self, AccountError> {
+        if client_id.trim().is_empty() {
+            return Err(AccountError::InvalidEndpoint);
+        }
+        Self::with_storage(
+            None,
+            endpoint(api_url)?,
+            client_id.into(),
+            IDENTITY_URL.into(),
+        )
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn ephemeral_fixture(
+        api_url: &str,
+        identity_url: &str,
+        client_id: &str,
+    ) -> Result<Self, AccountError> {
+        fn fixture_endpoint(value: &str) -> Result<String, AccountError> {
+            let url = reqwest::Url::parse(value).map_err(|_| AccountError::InvalidEndpoint)?;
+            if url.scheme() == "http"
+                && url.host_str().is_some_and(|host| {
+                    host.parse::<std::net::IpAddr>()
+                        .is_ok_and(|ip| ip.is_loopback())
+                })
+                && url.username().is_empty()
+                && url.password().is_none()
+                && url.path() == "/"
+                && url.query().is_none()
+                && url.fragment().is_none()
+            {
+                Ok(value.trim_end_matches('/').into())
+            } else {
+                endpoint(value)
+            }
+        }
+        if client_id.trim().is_empty() {
+            return Err(AccountError::InvalidEndpoint);
+        }
+        Self::with_storage(
+            None,
+            fixture_endpoint(api_url)?,
+            client_id.into(),
+            fixture_endpoint(identity_url)?,
+        )
+    }
+
+    fn with_storage(
+        store: Option<PathBuf>,
+        api_url: String,
+        client_id: String,
+        identity_url: String,
+    ) -> Result<Self, AccountError> {
         // A damaged cloud session must not prevent local agent work.
-        let (saved, storage_error) = match std::fs::read(&store) {
-            Ok(bytes) => match serde_json::from_slice::<Option<SavedSession>>(&bytes) {
+        let loaded = store.as_ref().map(std::fs::read).transpose();
+        let (saved, storage_error) = match loaded {
+            Ok(None) => (None, None),
+            Ok(Some(bytes)) => match serde_json::from_slice::<Option<SavedSession>>(&bytes) {
                 Ok(saved) => (saved, None),
                 Err(_) => (None, Some(AccountError::Storage.to_string())),
             },
@@ -415,7 +479,7 @@ impl Account {
             user,
             refresh_token: tokens.refresh_token,
         };
-        persist(&self.0.store, &saved)?;
+        self.persist(&saved)?;
         if state
             .saved
             .as_ref()
@@ -497,7 +561,7 @@ impl Account {
                     state.saved = None;
                     state.access = None;
                     state.error = Some("Your Zuse sign-in expired. Sign in again.".into());
-                    if persist(&self.0.store, &Value::Null).is_err() {
+                    if self.persist(&Value::Null).is_err() {
                         state.error = Some(AccountError::Storage.to_string());
                     }
                     self.publish(&state);
@@ -547,6 +611,12 @@ impl Account {
         self.publish(&state);
     }
 
+    fn persist(&self, value: &impl Serialize) -> Result<(), AccountError> {
+        match &self.0.store {
+            Some(path) => persist(path, value),
+            None => Ok(()),
+        }
+    }
     pub fn sign_out(&self) -> Result<(), AccountError> {
         let mut state = lock(&self.0.state);
         state.generation = state.generation.wrapping_add(1);
@@ -559,7 +629,12 @@ impl Account {
         state.retry_after = 0;
         self.publish(&state);
         // Persist a signed-out tombstone atomically, including directory fsync.
-        let result = persist(&self.0.store, &Value::Null);
+        let result = self.persist(&Value::Null);
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.0.store.is_some() && crate::cloud::clear_native_history_cache().is_err() {
+            state.error = Some("Signed out. Local history cache cleanup could not finish.".into());
+            self.publish(&state);
+        }
         if result.is_err() {
             state.error = Some(AccountError::Storage.to_string());
             self.publish(&state);
@@ -669,7 +744,10 @@ mod tests {
             Err(AccountError::Changed)
         ));
         assert!(account.status().user.is_none());
-        assert_eq!(std::fs::read_to_string(&account.0.store).unwrap(), "null");
+        assert_eq!(
+            std::fs::read_to_string(account.0.store.as_ref().unwrap()).unwrap(),
+            "null"
+        );
         assert!(Account::open(dir.path()).unwrap().status().user.is_none());
     }
     #[test]
@@ -684,7 +762,7 @@ mod tests {
             account.install(token("a", now() + 3600), 1, Some("a")),
             Err(AccountError::Changed)
         ));
-        let bytes = std::fs::read_to_string(&account.0.store).unwrap();
+        let bytes = std::fs::read_to_string(account.0.store.as_ref().unwrap()).unwrap();
         assert!(!bytes.contains("access_token"));
         assert!(!bytes.contains("signature"));
         let reopened = Account::open(dir.path()).unwrap();
@@ -694,7 +772,7 @@ mod tests {
         {
             use std::os::unix::fs::PermissionsExt;
             assert_eq!(
-                std::fs::metadata(&account.0.store)
+                std::fs::metadata(account.0.store.as_ref().unwrap())
                     .unwrap()
                     .permissions()
                     .mode()

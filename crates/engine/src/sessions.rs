@@ -146,6 +146,7 @@ struct RunHandle {
     voice: Option<zuse_providers::codex::realtime::RealtimeHandle>,
     voice_active: Arc<VoiceActivity>,
     run_id: String,
+    active_message: Option<String>,
     steerable: bool,
     runtime_config: RuntimeConfig,
     steer_tx: mpsc::Sender<SteerMessage>,
@@ -248,6 +249,10 @@ async fn publish_steer(
 
 struct Inner {
     secret_namespace: String,
+    preparation: Mutex<(u64, bool)>,
+    managed_recovery: std::sync::atomic::AtomicBool,
+    secret_filter: OnceLock<Arc<zuse_providers::credentials::redaction::Secrets>>,
+    execution: crate::execution::ExecutionAdmission,
     filesystem_gate: Arc<tokio::sync::RwLock<()>>,
     filesystem_admissions: Mutex<HashMap<String, usize>>,
     voice: crate::voice::VoiceManager,
@@ -290,6 +295,8 @@ struct Inner {
     /// dispatch or accepted steer) — the diff sync snapshots the checkout tree
     /// for the Changes pane's "Latest turn" scope. Absent in bare tests.
     turn_listener: OnceLock<TurnListener>,
+    provider_context: OnceLock<ProviderContext>,
+    execution_observer: OnceLock<crate::execution_progress::Observer>,
 }
 
 struct FilesystemAdmission {
@@ -312,6 +319,33 @@ impl Drop for FilesystemAdmission {
 /// retain the existing base rather than inventing another user turn.
 pub type TurnListener =
     Arc<dyn Fn(String, String) -> futures::future::BoxFuture<'static, ()> + Send + Sync>;
+
+/// Host context applied only to provider delivery, after the original user
+/// message is persisted. It must not mutate transcript or retry identities.
+pub type ProviderContext = Arc<dyn Fn(&mut RunRequest) -> Result<(), EngineError> + Send + Sync>;
+
+// Permission matching retains its exact host-only ToolApproval. Only the new
+// display projection is masked before it can enter transcripts or viewer RPCs.
+fn redact_permission_display(
+    questions: &mut [UserInputQuestion],
+    filter: &Arc<zuse_providers::credentials::redaction::Secrets>,
+) {
+    use zuse_protocol::permission::PermissionAction;
+    for question in questions {
+        let Some(prompt) = question.approval_prompt.as_mut() else {
+            continue;
+        };
+        match &mut prompt.action {
+            PermissionAction::FileWrite { path } => *path = filter.mask(path),
+            PermissionAction::Command { command } => *command = filter.mask(command),
+            PermissionAction::Network { url } => *url = filter.mask(url),
+            PermissionAction::Other { tool, summary } => {
+                *tool = filter.mask(tool);
+                *summary = filter.mask(summary);
+            }
+        }
+    }
+}
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
@@ -392,6 +426,10 @@ impl SessionsEngine {
         Self {
             inner: Arc::new(Inner {
                 secret_namespace: new_id(),
+                preparation: Mutex::new((0, true)),
+                managed_recovery: std::sync::atomic::AtomicBool::new(false),
+                secret_filter: OnceLock::new(),
+                execution: crate::execution::ExecutionAdmission::default(),
                 filesystem_gate: Arc::new(tokio::sync::RwLock::new(())),
                 filesystem_admissions: Mutex::new(HashMap::new()),
                 voice: crate::voice::VoiceManager::default(),
@@ -412,6 +450,8 @@ impl SessionsEngine {
                 generated_images: OnceLock::new(),
                 scratch_root: OnceLock::new(),
                 turn_listener: OnceLock::new(),
+                provider_context: OnceLock::new(),
+                execution_observer: OnceLock::new(),
             }),
         }
     }
@@ -423,6 +463,14 @@ impl SessionsEngine {
     /// Record the loopback IPC port this engine serves. Runs started after
     /// this carry Zuse's MCP server (see [`Inner::zuse_mcp`]); until then —
     /// or with 0 — agents get no Zuse tools rather than a dead server.
+    pub(crate) fn set_managed_recovery(&self) {
+        self.inner
+            .managed_recovery
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
+    pub fn set_secret_filter(&self, filter: Arc<zuse_providers::credentials::redaction::Secrets>) {
+        let _ = self.inner.secret_filter.set(filter);
+    }
     pub fn set_ipc_port(&self, port: u16) {
         self.inner
             .ipc_port
@@ -471,6 +519,44 @@ impl SessionsEngine {
         let _ = self.inner.turn_listener.set(listener);
     }
 
+    pub fn set_provider_context(&self, context: ProviderContext) -> Result<(), EngineError> {
+        self.inner
+            .provider_context
+            .set(context)
+            .map_err(|_| EngineError::Other("provider_context_already_configured".into()))
+    }
+
+    pub fn set_execution_observer(
+        &self,
+        observer: crate::execution_progress::Observer,
+    ) -> Result<(), EngineError> {
+        self.inner
+            .execution_observer
+            .set(observer)
+            .map_err(|_| EngineError::Other("execution_observer_already_configured".into()))
+    }
+    pub(crate) fn observes_execution(&self) -> bool {
+        self.inner.execution_observer.get().is_some()
+    }
+    pub(crate) fn observe_command_execution(
+        &self,
+        chat: &str,
+        command: &str,
+        message: &str,
+        state: crate::execution_progress::State,
+    ) -> Result<(), EngineError> {
+        let Some(observer) = self.inner.execution_observer.get() else {
+            return Ok(());
+        };
+        observer(&crate::execution_progress::Fact {
+            chat_id: chat.into(),
+            command_id: Some(command.into()),
+            message_id: message.into(),
+            assistant_message_id: None,
+            state,
+            at: now_ms(),
+        })
+    }
     async fn note_turn_start(&self, chat_id: &str, cwd: &str) {
         if let Some(listener) = self.inner.turn_listener.get() {
             listener(chat_id.to_owned(), cwd.to_owned()).await;
@@ -483,6 +569,34 @@ impl SessionsEngine {
             .doc_host()
             .ok_or_else(|| EngineError::Other("doc host not wired into sessions engine".into()))?;
         host.open(chat_id)
+    }
+
+    pub fn execution_admission(&self) -> &crate::execution::ExecutionAdmission {
+        &self.inner.execution
+    }
+    /// Gate model turns independently of terminal/files and the retained-sleep
+    /// execution barrier. A stale preparation attempt cannot reopen a new one.
+    pub fn require_preparation(&self) -> u64 {
+        let mut state = lock(&self.inner.preparation);
+        state.0 = state.0.checked_add(1).expect("preparation epoch exhausted");
+        state.1 = false;
+        state.0
+    }
+    pub fn preparation_epoch(&self) -> u64 {
+        lock(&self.inner.preparation).0
+    }
+    pub fn agent_preparation_ready(&self) -> bool {
+        lock(&self.inner.preparation).1
+    }
+    pub fn complete_preparation(&self, epoch: u64) -> Result<(), EngineError> {
+        let mut state = lock(&self.inner.preparation);
+        if state.0 != epoch || state.1 {
+            return Err(EngineError::Other(
+                "runtime_preparation_attempt_fenced".into(),
+            ));
+        }
+        state.1 = true;
+        Ok(())
     }
 
     /// Archive serializes the brief admission claim with its idle check.
@@ -674,6 +788,9 @@ impl SessionsEngine {
         chat_id: &str,
         request: RunRequest,
     ) -> Result<String, EngineError> {
+        if !self.agent_preparation_ready() {
+            return Err(EngineError::Other("runtime_preparation_pending".into()));
+        }
         // A fresh explicit request may renew an identity-invalidated idle
         // process. Never interrupt a native delegated turn to recover voice.
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(8);
@@ -765,6 +882,31 @@ impl SessionsEngine {
     }
 
     async fn dispatch_inner(
+        &self,
+        chat_id: &str,
+        harness_id: HarnessId,
+        request: RunRequest,
+        message_id: Option<String>,
+        startup_retry: bool,
+        idle: bool,
+    ) -> Result<String, EngineError> {
+        if !self.agent_preparation_ready() {
+            return Err(EngineError::Other("runtime_preparation_pending".into()));
+        }
+        let execution = self.inner.execution.enter()?;
+        execution
+            .scope(self.dispatch_admitted(
+                chat_id,
+                harness_id,
+                request,
+                message_id,
+                startup_retry,
+                idle,
+            ))
+            .await
+    }
+
+    async fn dispatch_admitted(
         &self,
         chat_id: &str,
         harness_id: HarnessId,
@@ -887,7 +1029,16 @@ impl SessionsEngine {
                     lock(&self.inner.last_requests).insert(chat_id.to_string(), request.clone());
                 }
                 let handle = self.doc_handle(chat_id)?;
-                handle.write_user_message(&user_id, &request.prompt, now_ms())?;
+                let presentation = self
+                    .inner
+                    .secret_filter
+                    .get()
+                    .map(|filter| filter.mask(&request.prompt));
+                handle.write_user_message(
+                    &user_id,
+                    presentation.as_deref().unwrap_or(&request.prompt),
+                    now_ms(),
+                )?;
                 self.record_agent_context(chat_id, &user_id, harness_id, request.model.clone())?;
                 if self.is_live(chat_id, &run_id) {
                     if bootstrap.is_some() {
@@ -947,7 +1098,16 @@ impl SessionsEngine {
         let handle = self.doc_handle(chat_id)?;
         let user_id = message_id.unwrap_or_else(new_id);
         if !idle {
-            handle.write_user_message(&user_id, &request.prompt, now_ms())?;
+            let presentation = self
+                .inner
+                .secret_filter
+                .get()
+                .map(|filter| filter.mask(&request.prompt));
+            handle.write_user_message(
+                &user_id,
+                presentation.as_deref().unwrap_or(&request.prompt),
+                now_ms(),
+            )?;
             self.record_agent_context(chat_id, &user_id, harness_id, request.model.clone())?;
         }
 
@@ -982,7 +1142,19 @@ impl SessionsEngine {
             let permission_engine = Arc::downgrade(&self.inner);
             let permission_run = run_id.clone();
             let secret_namespace = self.inner.secret_namespace.clone();
+            let secret_filter = self.inner.secret_filter.get().cloned();
             Box::new(move |mut questions: Vec<UserInputQuestion>| {
+                let (mut tx, rx) = oneshot::channel();
+                if secret_filter
+                    .as_ref()
+                    .is_some_and(|filter| !filter.questions(&mut questions))
+                {
+                    let _ = engine_tx.send(AgentEvent::Error {
+                        message: "Secret values cannot be exposed as input choices".into(),
+                    });
+                    let _ = tx.send(Vec::new());
+                    return rx;
+                }
                 let Some(inner) = permission_engine.upgrade() else {
                     return oneshot::channel().1;
                 };
@@ -993,11 +1165,13 @@ impl SessionsEngine {
                     &mut questions,
                 );
                 if questions.is_empty() {
-                    let (tx, rx) = oneshot::channel();
                     let _ = tx.send(automatic);
                     return rx;
                 }
                 let permission_questions = questions.clone();
+                if let Some(filter) = secret_filter.as_ref() {
+                    redact_permission_display(&mut questions, filter);
+                }
                 // Matching inputs belong to the parked host request. Persist only
                 // display copy/options in the transcript, never a second raw payload.
                 for question in &mut questions {
@@ -1005,7 +1179,6 @@ impl SessionsEngine {
                 }
                 let permission_chat = secret_chat.clone();
                 let permission_run = permission_run.clone();
-                let (mut tx, rx) = oneshot::channel();
                 let (answer_tx, answer_rx) = oneshot::channel();
                 let request_id = new_id();
                 for question in &questions {
@@ -1080,6 +1253,7 @@ impl SessionsEngine {
                 voice: (harness_id == HarnessId::Codex).then_some(voice_handle),
                 voice_active: voice_active.clone(),
                 run_id: run_id.clone(),
+                active_message: (!idle).then(|| user_id.clone()),
                 steerable: harness.supports_steering(),
                 runtime_config: RuntimeConfig::new(harness_id, &request, harness.clone()),
                 steer_tx,
@@ -1222,6 +1396,22 @@ impl SessionsEngine {
         message_id: Option<String>,
         issued_at: i64,
     ) -> Result<SteerOutcome, EngineError> {
+        if !self.agent_preparation_ready() {
+            return Err(EngineError::Other("runtime_preparation_pending".into()));
+        }
+        let execution = self.inner.execution.enter()?;
+        execution
+            .scope(self.steer_admitted(chat_id, prompt, message_id, issued_at))
+            .await
+    }
+
+    async fn steer_admitted(
+        &self,
+        chat_id: &str,
+        prompt: &str,
+        message_id: Option<String>,
+        issued_at: i64,
+    ) -> Result<SteerOutcome, EngineError> {
         let admission = self.filesystem_admission().await;
         self.require_unarchived(chat_id)?;
         let _activity = self.claim_filesystem_admission(chat_id);
@@ -1301,7 +1491,16 @@ impl SessionsEngine {
             return Ok(outcome);
         }
         let handle = self.doc_handle(chat_id)?;
-        handle.write_user_message(&user_id, prompt, issued_at.min(now_ms()))?;
+        let presentation = self
+            .inner
+            .secret_filter
+            .get()
+            .map(|filter| filter.mask(prompt));
+        handle.write_user_message(
+            &user_id,
+            presentation.as_deref().unwrap_or(prompt),
+            issued_at.min(now_ms()),
+        )?;
         self.record_agent_context(chat_id, &user_id, harness_id, sent_model)?;
         if self.is_live(chat_id, &run_id) {
             if bootstrap.is_some() {
@@ -1364,6 +1563,27 @@ impl SessionsEngine {
     /// that, runs whose harness has not started yet, and stops that do not
     /// settle fall back to [`Self::terminate`].
     pub async fn stop_turn(&self, chat_id: &str) -> Result<bool, EngineError> {
+        self.stop_turn_mode(chat_id, false).await
+    }
+
+    /// Parking cannot silently replace an unsupported or unsettled harness.
+    /// Failure leaves execution fenced; the caller must not acknowledge RAM sleep.
+    pub(crate) async fn settle_retained_turns(&self) -> Result<(), EngineError> {
+        let ids: Vec<String> = lock(&self.inner.runs).keys().cloned().collect();
+        for id in ids {
+            self.stop_turn_mode(&id, true).await?;
+        }
+        Ok(())
+    }
+
+    async fn stop_turn_mode(
+        &self,
+        chat_id: &str,
+        preserve_runtime: bool,
+    ) -> Result<bool, EngineError> {
+        if preserve_runtime && !self.turn_in_flight(chat_id) {
+            return Ok(false);
+        }
         const STOP_SETTLE: std::time::Duration = std::time::Duration::from_secs(15);
         let target = lock(&self.inner.runs)
             .get(chat_id)
@@ -1379,6 +1599,11 @@ impl SessionsEngine {
                 )
             });
         let Some((run_id, turn, pending, ledger)) = target else {
+            if preserve_runtime {
+                return Err(EngineError::Other(
+                    "runtime_memory_sleep_harness_unsupported".into(),
+                ));
+            }
             return self.terminate(chat_id).await;
         };
         if !self.turn_in_flight(chat_id) {
@@ -1403,6 +1628,11 @@ impl SessionsEngine {
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
+        if preserve_runtime {
+            return Err(EngineError::Other(
+                "runtime_memory_sleep_turn_unsettled".into(),
+            ));
+        }
         tracing::warn!(chat = %chat_id, "turn stop did not settle; tearing the runtime down");
         self.terminate(chat_id).await
     }
@@ -1412,27 +1642,46 @@ impl SessionsEngine {
     /// streaming entry stamped `aborted`; this waits (bounded) for that
     /// settlement. Background work the runtime held dies with it.
     pub async fn terminate(&self, chat_id: &str) -> Result<bool, EngineError> {
-        let target = lock(&self.inner.runs).get(chat_id).map(|h| {
-            (
-                h.run_id.clone(),
-                h.interrupt_token.clone(),
-                h.cancel.clone(),
-                h.pending_inputs.clone(),
-                h.routed_steers.clone(),
-                h.retiring.clone(),
-                h.turn.clone(),
-            )
-        });
-        let Some((run_id, token, cancel, pending, ledger, retiring, turn)) = target else {
+        self.terminate_matching(chat_id, None).await
+    }
+
+    /// An authority-bound Stop cannot migrate onto a newer turn while waiting
+    /// for input preparation, a control lease or the native driver's response.
+    pub async fn stop_admitted_message(
+        &self,
+        chat_id: &str,
+        message: &str,
+    ) -> Result<bool, EngineError> {
+        self.cancel_sent_messages(chat_id, vec![message.to_owned()]);
+        self.terminate_matching(chat_id, Some(message)).await
+    }
+
+    async fn terminate_matching(
+        &self,
+        chat_id: &str,
+        message: Option<&str>,
+    ) -> Result<bool, EngineError> {
+        let target = {
+            let runs = lock(&self.inner.runs);
+            runs.get(chat_id)
+                .filter(|h| {
+                    message.is_none_or(|message| h.active_message.as_deref() == Some(message))
+                })
+                .map(|h| {
+                    let _order = lock(&h.routed_steers);
+                    h.retiring.store(true, std::sync::atomic::Ordering::Release);
+                    h.turn.cancel_steers();
+                    (
+                        h.run_id.clone(),
+                        h.interrupt_token.clone(),
+                        h.cancel.clone(),
+                        h.pending_inputs.clone(),
+                    )
+                })
+        };
+        let Some((run_id, token, cancel, pending)) = target else {
             return Ok(false);
         };
-        // From here the runtime takes no prompt: a send now starts a fresh
-        // runtime, and one that raced into this mailbox is re-dispatched.
-        {
-            let _order = lock(&ledger);
-            retiring.store(true, std::sync::atomic::Ordering::Release);
-            turn.cancel_steers();
-        }
         // Publish cancellation BEFORE waking the harness. Otherwise a fast
         // EOF after token.cancel() can beat this watch notification and be
         // classified as an error instead of an interrupted turn.
@@ -1460,6 +1709,13 @@ impl SessionsEngine {
     /// Whether the chat has a run on this device (one `inject_event` can reach).
     pub fn has_run(&self, chat_id: &str) -> bool {
         lock(&self.inner.runs).contains_key(chat_id)
+    }
+
+    /// The retained runtime may precede a newer queued conversation configuration.
+    pub fn live_harness(&self, chat_id: &str) -> Option<HarnessId> {
+        lock(&self.inner.runs)
+            .get(chat_id)
+            .map(|run| run.runtime_config.harness_id)
     }
 
     pub fn inject_event(&self, chat_id: &str, event: AgentEvent) -> bool {
@@ -1645,9 +1901,15 @@ impl SessionsEngine {
                         .map(|e| now_ms() - e.created_at < RESUME_FRESH_MS)
                 })
                 .unwrap_or(false);
-            let will_resume = fresh && prompt.is_some() && attempts < MAX_AUTO_RESUME;
+            let managed = self
+                .inner
+                .managed_recovery
+                .load(std::sync::atomic::Ordering::Acquire);
+            let will_resume = !managed && fresh && prompt.is_some() && attempts < MAX_AUTO_RESUME;
 
-            let note = if will_resume {
+            let note = if managed {
+                "Run interrupted by computer restart. Previous actions may have completed. Review the retained work and send a new message to continue."
+            } else if will_resume {
                 "Run interrupted by engine restart — resuming"
             } else {
                 "Run interrupted by engine restart"
@@ -1835,6 +2097,31 @@ impl Inner {
             .collect()
     }
 
+    fn observe_execution(
+        &self,
+        chat: &str,
+        message: &str,
+        assistant: Option<String>,
+        state: crate::execution_progress::State,
+    ) -> bool {
+        let Some(observer) = self.execution_observer.get() else {
+            return true;
+        };
+        let fact = crate::execution_progress::Fact {
+            chat_id: chat.into(),
+            message_id: message.into(),
+            command_id: None,
+            assistant_message_id: assistant,
+            state,
+            at: now_ms(),
+        };
+        if observer(&fact).is_err() {
+            tracing::error!("Durable execution progress unavailable; stopping the active run");
+            false
+        } else {
+            true
+        }
+    }
     fn publish(&self, chat_id: &str, event: &AgentEvent) -> u64 {
         let seq = match self.journal.append(chat_id, event) {
             Ok(seq) => seq,
@@ -2887,6 +3174,15 @@ async fn drive_run(
             Ok(())
         }
     });
+    let prepared = prepared.and_then(|()| {
+        if !resume_state.idle
+            && let Some(context) = inner.provider_context.get()
+        {
+            context(&mut request)
+                .map_err(|error| zuse_providers::HarnessError::Protocol(error.to_string()))?;
+        }
+        Ok(())
+    });
     // Waiting here keeps dispatch and the shared queue-flush watcher responsive.
     // The pending-update marker still orders new subprocesses after installation.
     // Share the lease with the adapter so child cleanup outlives this event loop.
@@ -2997,6 +3293,16 @@ async fn drive_run(
                     session_id: None,
                 },
             );
+            if !resume_state.idle {
+                // A driver may have crossed turn/start before returning an
+                // error (for example a lost response). Never infer no effects.
+                inner.observe_execution(
+                    &chat_id,
+                    &resume_state.user_message_id,
+                    None,
+                    crate::execution_progress::State::OutcomeUnknown,
+                );
+            }
             inner.remove_run(&chat_id, &run_id);
             inner.set_status(&chat_id, SessionStatus::Errored, false);
             return;
@@ -3162,6 +3468,7 @@ async fn drive_run(
     // Workflow chips this run saw progress for and that have not settled.
     let mut live_workflows: std::collections::HashSet<String> = std::collections::HashSet::new();
 
+    let mut execution_message = (!resume_state.idle).then(|| resume_state.user_message_id.clone());
     let mut final_completed_turn = None;
     let final_status = loop {
         let event: AgentEvent = if let Some(event) = prepared_events.pop_front() {
@@ -3888,6 +4195,7 @@ async fn drive_run(
             ..
         } = &event
         {
+            let preceding_assistant = entry_id.clone();
             inner.publish(&chat_id, &event);
             // A steer boundary means a real prompt owns the turn again — its
             // Done will come; the short self-continued window stands down.
@@ -3915,9 +4223,36 @@ async fn drive_run(
             // The boundary confirms delivery of the oldest accepted steer —
             // retire its at-least-once ledger entry.
             let confirmed = lock(&inner.runs)
-                .get(&chat_id)
+                .get_mut(&chat_id)
                 .filter(|h| h.run_id == run_id)
-                .and_then(|h| lock(&h.routed_steers).pop_front());
+                .and_then(|h| {
+                    let confirmed = lock(&h.routed_steers).pop_front();
+                    if let Some(confirmed) = &confirmed {
+                        h.active_message = Some(confirmed.message_id.clone());
+                    }
+                    confirmed
+                });
+            if let Some(confirmed) = confirmed.as_ref() {
+                if let Some(previous) = execution_message.take() {
+                    if !inner.observe_execution(
+                        &chat_id,
+                        &previous,
+                        Some(preceding_assistant),
+                        crate::execution_progress::State::Cancelled,
+                    ) {
+                        break SessionStatus::Errored;
+                    }
+                }
+                execution_message = Some(confirmed.message_id.clone());
+                if !inner.observe_execution(
+                    &chat_id,
+                    &confirmed.message_id,
+                    Some(entry_id.clone()),
+                    crate::execution_progress::State::Running,
+                ) {
+                    break SessionStatus::Errored;
+                }
+            }
             // Native configuration is acknowledged at consumption, not mailbox
             // publication: a duplicate receipt cannot change the live route.
             if harness_id == HarnessId::Zuse
@@ -3952,6 +4287,16 @@ async fn drive_run(
                 session_id, cwd, ..
             } => {
                 saw_session_started = true;
+                if let Some(message) = execution_message.as_deref() {
+                    if !inner.observe_execution(
+                        &chat_id,
+                        message,
+                        Some(entry_id.clone()),
+                        crate::execution_progress::State::Running,
+                    ) {
+                        break SessionStatus::Errored;
+                    }
+                }
                 // The event's own cwd (where the harness actually created the
                 // session) scopes the stored id, not the request's.
                 inner.remember_owned_harness_session(&chat_id, session_id, cwd, harness_id);
@@ -3967,9 +4312,29 @@ async fn drive_run(
             AgentEvent::InputRequested { .. } => {
                 // Known-id guaranteed: the unknown-id twin was dropped above,
                 // before the parked gate.
+                if let Some(message) = execution_message.as_deref() {
+                    if !inner.observe_execution(
+                        &chat_id,
+                        message,
+                        Some(entry_id.clone()),
+                        crate::execution_progress::State::WaitingInput,
+                    ) {
+                        break SessionStatus::Errored;
+                    }
+                }
                 inner.set_status(&chat_id, SessionStatus::AwaitingInput, false);
             }
             AgentEvent::InputResolved { .. } => {
+                if let Some(message) = execution_message.as_deref() {
+                    if !inner.observe_execution(
+                        &chat_id,
+                        message,
+                        Some(entry_id.clone()),
+                        crate::execution_progress::State::Running,
+                    ) {
+                        break SessionStatus::Errored;
+                    }
+                }
                 inner.set_status(&chat_id, SessionStatus::Working, false);
             }
             _ => {}
@@ -3986,6 +4351,23 @@ async fn drive_run(
         }
 
         if let AgentEvent::Done { status, .. } = &event {
+            if let Some(message) = execution_message.take() {
+                if let Some(handle) = lock(&inner.runs)
+                    .get_mut(&chat_id)
+                    .filter(|h| h.run_id == run_id)
+                {
+                    handle.active_message = None;
+                }
+                let state = match status {
+                    DoneStatus::Completed => crate::execution_progress::State::Completed,
+                    DoneStatus::Interrupted => crate::execution_progress::State::Cancelled,
+                    DoneStatus::Errored => crate::execution_progress::State::Failed,
+                };
+                if !inner.observe_execution(&chat_id, &message, Some(entry_id.clone()), state) {
+                    break SessionStatus::Errored;
+                }
+            }
+
             // A question still pending at turn end can never be legitimately
             // answered (its turn is over): drain the resolvers NOW, or a late
             // `respond_input` finds one, emits InputResolved, and un-parks
@@ -4122,6 +4504,23 @@ async fn drive_run(
         }
     };
 
+    if let Some(message) = execution_message.take() {
+        if let Some(handle) = lock(&inner.runs)
+            .get_mut(&chat_id)
+            .filter(|h| h.run_id == run_id)
+        {
+            handle.active_message = None;
+        }
+        // EOF/cancellation without a terminal driver frame is uncertainty,
+        // never evidence that an admitted model action did not execute.
+        inner.observe_execution(
+            &chat_id,
+            &message,
+            Some(entry_id.clone()),
+            crate::execution_progress::State::OutcomeUnknown,
+        );
+    }
+
     // Any subagent still streaming when the run ends freezes as-is: the
     // parent process is gone, so nothing more can arrive on this stream.
     for (parent_id, sink) in subagents.drain() {
@@ -4237,6 +4636,33 @@ fn background_task(record: &zuse_providers::BackgroundTaskRecord) -> zuse_protoc
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn preparation_blocks_agent_effects_without_closing_terminal_admission() {
+        let dir = tempfile::tempdir().unwrap();
+        let sessions = SessionsEngine::new(
+            "preparing-device".into(),
+            Arc::new(RunJournal::open(dir.path()).unwrap()),
+            Arc::new(HarnessRegistry::new()),
+        );
+        let first = sessions.require_preparation();
+        // The diagnostic terminal uses execution admission, which must remain
+        // available while the separate model gate is closed.
+        drop(sessions.execution_admission().enter().unwrap());
+        let error = sessions
+            .dispatch("not-yet-created", HarnessId::Mock, request(), None)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("runtime_preparation_pending"));
+        assert!(!sessions.any_active());
+        assert!(sessions.watch_sessions().borrow().is_empty());
+        let second = sessions.require_preparation();
+        assert!(sessions.complete_preparation(first).is_err());
+        assert!(!sessions.agent_preparation_ready());
+        sessions.complete_preparation(second).unwrap();
+        assert!(sessions.agent_preparation_ready());
+        assert!(sessions.complete_preparation(second).is_err());
+    }
 
     #[tokio::test]
     async fn steering_waits_for_stop_settlement_even_after_reserving_mailbox_capacity() {
@@ -5308,5 +5734,79 @@ mod tests {
             ]
         );
         core.shutdown().await;
+    }
+    #[path = "provider_context_tests.rs"]
+    mod provider_context_tests;
+    #[path = "secret_tests.rs"]
+    mod secret_tests;
+}
+
+#[cfg(test)]
+mod permission_display_secret_merge_tests {
+    use super::*;
+    use zuse_protocol::permission::{ApprovalPrompt, PermissionAction, ToolApproval};
+
+    #[test]
+    fn new_permission_display_masks_secrets_without_changing_host_matching_or_answers() {
+        let secret = "synthetic-merge-secret-794c";
+        let filter = Arc::new(zuse_providers::credentials::redaction::Secrets::default());
+        filter.record(secret).unwrap();
+        let raw = ToolApproval::new(
+            "test:shell",
+            serde_json::json!({"command":format!("echo {secret}")}),
+            "Allow",
+            "Deny",
+        );
+        let actions = [
+            PermissionAction::from_tool_input(&raw.tool, &raw.input),
+            PermissionAction::FileWrite {
+                path: format!("/tmp/{secret}"),
+            },
+            PermissionAction::Network {
+                url: format!("https://example.test/{secret}"),
+            },
+            PermissionAction::Other {
+                tool: format!("tool-{secret}"),
+                summary: format!("summary-{secret}"),
+            },
+        ];
+        for action in actions {
+            let mut questions = vec![UserInputQuestion {
+                id: "permission".into(),
+                header: "Permission".into(),
+                question: "Continue?".into(),
+                options: vec!["Allow".into(), "Deny".into()],
+                multi_select: false,
+                prefill: None,
+                multiline: false,
+                approval: Some(raw.clone()),
+                approval_prompt: Some(ApprovalPrompt {
+                    persistent_allowed: false,
+                    action,
+                    allow_label: "Allow".into(),
+                    deny_label: "Deny".into(),
+                }),
+            }];
+            assert!(
+                filter.questions(&mut questions),
+                "the older filter cannot see the new display action"
+            );
+            assert!(
+                serde_json::to_string(&questions[0].approval_prompt)
+                    .unwrap()
+                    .contains(secret)
+            );
+            let host_questions = questions.clone();
+            redact_permission_display(&mut questions, &filter);
+            assert_eq!(questions[0].approval, Some(raw.clone()));
+            assert_eq!(host_questions[0].approval, Some(raw.clone()));
+            assert_eq!(questions[0].options, vec!["Allow", "Deny"]);
+            let display = questions[0].approval_prompt.as_ref().unwrap();
+            assert_eq!(display.allow_label, "Allow");
+            assert_eq!(display.deny_label, "Deny");
+            assert!(!serde_json::to_string(display).unwrap().contains(secret));
+            questions[0].approval = None;
+            assert!(!serde_json::to_string(&questions).unwrap().contains(secret));
+        }
     }
 }

@@ -180,6 +180,8 @@ mod tests {
                 max_cache_bytes: 1024,
             },
             plan: ImagePlan {
+                managed_base: false,
+                rust_runtime_supervisor_version: None,
                 build_id: "test".into(),
                 template_version: "template".into(),
                 configuration_digest: "digest".into(),

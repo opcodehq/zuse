@@ -421,6 +421,33 @@ impl Boxd {
     }
     /// Check the created machine's recorded provenance, not just the current
     /// snapshot head. This detects a capture/version change racing allocation.
+    pub async fn verify_initial_snapshot_source(
+        &self,
+        machine: &str,
+        artifact: &str,
+        name: &str,
+    ) -> Result<(), ProviderError> {
+        let snapshot = self
+            .inspect_snapshot(artifact)
+            .await?
+            .ok_or(ProviderError::Rejected)?;
+        if snapshot.state != SnapshotState::Ready || snapshot.version == 0 {
+            return Err(ProviderError::Rejected);
+        }
+        let details: wire::MachineDetails =
+            self.unary("GetVm", machine_id(machine)?, false).await?;
+        let source = details.source_info.ok_or(ProviderError::Rejected)?;
+        if details.vm_id != machine
+            || details.name != name
+            || details.status != "running"
+            || source.kind != "snapshot"
+            || source.id != snapshot.id
+            || source.version != snapshot.version
+        {
+            return Err(ProviderError::Rejected);
+        }
+        Ok(())
+    }
     pub async fn verify_snapshot_source(
         &self,
         machine: &str,
@@ -519,6 +546,9 @@ impl Boxd {
     pub async fn start(&self, id: &str) -> Result<(), ProviderError> {
         self.action("StartVm", id).await
     }
+    pub async fn suspend(&self, id: &str) -> Result<(), ProviderError> {
+        self.action("SuspendVm", id).await
+    }
     pub async fn hibernate(&self, id: &str) -> Result<(), ProviderError> {
         self.action("HibernateVm", id).await
     }
@@ -533,6 +563,14 @@ impl Boxd {
             .unary::<wire::ResumeResult>("ResumeVm", machine_id(id)?, true)
             .await?
             .resume_us)
+    }
+    pub async fn activate(&self, id: &str, state: &MachineState) -> Result<(), ProviderError> {
+        match state {
+            MachineState::Standby => self.resume(id).await.map(|_| ()),
+            MachineState::Paused => self.wake(id).await,
+            MachineState::Stopped => self.start(id).await,
+            _ => Err(ProviderError::Conflict),
+        }
     }
     pub async fn set_auto_hibernate(&self, id: &str, seconds: u32) -> Result<(), ProviderError> {
         if seconds > 2592000 {
@@ -620,7 +658,8 @@ fn machine_id(id: &str) -> Result<wire::MachineId, ProviderError> {
 fn machine_state(status: String) -> MachineState {
     match status.as_str() {
         "running" => MachineState::Running,
-        "suspended" | "hibernated" => MachineState::Paused,
+        "suspended" => MachineState::Standby,
+        "hibernated" => MachineState::Paused,
         "stopped" => MachineState::Stopped,
         "starting" | "creating" | "pending" => MachineState::Starting,
         _ => MachineState::Unknown(status),
@@ -739,6 +778,16 @@ fn usage(report: wire::VmUsage) -> Result<Usage, ProviderError> {
 #[cfg(test)]
 mod usage_configuration_tests {
     use super::*;
+    #[test]
+    fn retained_states_preserve_the_required_resume_operation() {
+        assert_eq!(machine_state("suspended".into()), MachineState::Standby);
+        assert_eq!(machine_state("hibernated".into()), MachineState::Paused);
+        assert_eq!(machine_state("stopped".into()), MachineState::Stopped);
+        assert_eq!(
+            machine_state("hibernating".into()),
+            MachineState::Unknown("hibernating".into())
+        );
+    }
     #[test]
     fn cluster_exchange_matches_sdk_and_refuses_insecure_credentials() {
         for (base, exchange) in [

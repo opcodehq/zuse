@@ -23,6 +23,7 @@ pub(super) struct QueueEdit {
     tag: String,
     chat: Value,
     item: String,
+    revision: Option<i64>,
     lease: Option<QueueEditLease>,
     previous: Option<Draft>,
     pending: Option<PendingEdit>,
@@ -78,13 +79,14 @@ impl WorkspaceView {
             methods::BEGIN_QUEUED_MESSAGE_EDIT,
             chat_request(
                 &chat,
-                json!({"id":id,"editorDeviceId":self.device_id,"editorInstanceId":tag}),
+                json!({"id":id,"revision":item["revision"],"editorDeviceId":self.device_id,"editorInstanceId":tag}),
             ),
         );
         self.queue_edit = Some(QueueEdit {
             tag: tag.clone(),
             chat,
             item: id.into(),
+            revision: item["revision"].as_i64(),
             lease: None,
             previous: None,
             pending: Some(PendingEdit {
@@ -114,6 +116,7 @@ impl WorkspaceView {
         cx.notify();
     }
     fn queue_edit_tick(&mut self, tag: &str, cx: &mut Context<Self>) -> bool {
+        let command_online = self.connected || self.cloud_server_commands();
         let host_matches = self
             .queue_edit
             .as_ref()
@@ -139,7 +142,7 @@ impl WorkspaceView {
             }
             return true;
         }
-        if edit.uncertain || edit.review_only || !self.connected {
+        if edit.uncertain || edit.review_only || !command_online {
             return true;
         }
         edit.renew_ticks = edit.renew_ticks.saturating_add(1);
@@ -152,7 +155,10 @@ impl WorkspaceView {
         let Some(edit) = self.queue_edit.as_ref() else {
             return;
         };
-        if !self.connected || !self.queue_edit_host_matches(edit) || edit.pending.is_some() {
+        if (!self.connected && !self.cloud_server_commands())
+            || !self.queue_edit_host_matches(edit)
+            || edit.pending.is_some()
+        {
             return;
         }
         let Some(lease) = edit.lease.as_ref() else {
@@ -234,7 +240,7 @@ impl WorkspaceView {
         };
         if edit.lease.is_none()
             || edit.uncertain
-            || !self.connected
+            || (!self.connected && !self.cloud_server_commands())
             || !self.queue_edit_host_matches(edit)
         {
             self.leave_queue_edit(edit.previous.is_some(), cx);
@@ -267,7 +273,10 @@ impl WorkspaceView {
         if edit.pending.is_some() {
             return;
         }
-        if !self.connected || edit.uncertain || !self.queue_edit_host_matches(edit) {
+        if (!self.connected && !self.cloud_server_commands())
+            || edit.uncertain
+            || !self.queue_edit_host_matches(edit)
+        {
             self.error = Some(
                 "Check the queue edit with its host before saving. Your text is preserved.".into(),
             );
@@ -280,7 +289,7 @@ impl WorkspaceView {
         let submitted = self.queue_edit_copy(cx);
         let params = chat_request(
             &edit.chat,
-            json!({"id":edit.item,"leaseId":lease.id,"expectedTextHash":lease.base_text_hash,
+            json!({"id":edit.item,"revision":edit.revision,"leaseId":lease.id,"expectedTextHash":lease.base_text_hash,
             "action":match op {EditOp::Cancel=>"cancel",EditOp::Discard=>"discard",_=>"commit"},
             "text":submitted.text,"attachments":self.attachment_paths()}),
         );
@@ -426,7 +435,9 @@ impl WorkspaceView {
         let Some(edit) = self.queue_edit.as_ref() else {
             return div().into_any_element();
         };
-        let uncertain = edit.uncertain || !self.connected || !self.queue_edit_host_matches(edit);
+        let uncertain = edit.uncertain
+            || (!self.connected && !self.cloud_server_commands())
+            || !self.queue_edit_host_matches(edit);
         let pending = edit.pending.as_ref().map(|pending| pending.op);
         let can_save = edit.lease.is_some()
             && !uncertain

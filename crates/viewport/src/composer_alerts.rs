@@ -5,6 +5,12 @@ use crate::{
     shell::{BORDER, FAINT, MUTED, TEXT, column, control, icon_button, label, row},
 };
 
+fn show_preparation_step(status: &Value, step: &crate::cloud::preparation::Step) -> bool {
+    !(status["state"] == "ready"
+        && step.state == crate::cloud::preparation::StepState::Pending
+        && status["preparation"][step.key]["state"].is_null())
+}
+
 impl WorkspaceView {
     fn latest_provider_alert(&self) -> Option<(String, String)> {
         if self.is_working() {
@@ -69,9 +75,28 @@ impl WorkspaceView {
             cx.notify();
         }
     }
+    pub(crate) fn cloud_preparation_progress(&self) -> crate::cloud::preparation::Progress {
+        let session = self.selected.as_ref().and_then(|chat| chat["id"].as_str());
+        let waiting = session.is_some_and(|session| {
+            crate::cloud::preparation::awaiting_response(
+                session,
+                &self.cloud.command_admissions,
+                &self.messages,
+                self.cloud.response_wait.as_ref(),
+            ) || self.send_draft.iter().any(|(id, draft)| {
+                self.pending
+                    .get(id)
+                    .is_some_and(|method| method == methods::QUEUE_COMMAND)
+                    && draft.chat_id.as_deref() == Some(session)
+            })
+        });
+        crate::cloud::preparation::progress(&self.cloud.guest_status, waiting)
+    }
     pub(super) fn has_composer_notices(&self) -> bool {
-        (!self.connected && !self.cloud.guest)
-            || (self.cloud.guest && self.cloud.guest_status["state"] != "ready")
+        (!self.connected && !self.cloud.guest && !self.cloud.mode)
+            || (self.cloud.guest
+                && (self.cloud.guest_status["state"] != "ready"
+                    || self.cloud_preparation_progress().visible))
             || self.transcript_state.notice.is_some()
             || self.error.is_some()
             || self.latest_provider_alert().is_some()
@@ -80,6 +105,7 @@ impl WorkspaceView {
             || self.is_working()
             || self.provider_update_notice()
             || self.has_cloud_creation_notice()
+            || self.cloud_unreviewed_command().is_some()
     }
     pub(super) fn composer_notices(&self, cx: &mut Context<Self>) -> AnyElement {
         let alert = self
@@ -91,40 +117,138 @@ impl WorkspaceView {
                     .map(|(id, text)| (id, text, false))
             });
         let mut view = column().w_full();
+        if self.cloud_unreviewed_command().is_some() {
+            let pending = self.unknown_review_request.is_some();
+            view=view.child(row().min_h(px(38.)).px_3().gap_2()
+                .child(column().flex_1().min_w_0().child(label("Check the earlier action before continuing"))
+                    .child(label("It may have executed. Check files and running commands first. This review allows new messages; it never retries the earlier action.").text_size(px(11.))))
+                .child(control("cloud-review-unknown",if pending{"Reviewing…"}else{"Allow new messages"})
+                    .when(pending,|view|view.opacity(0.35))
+                    .when(!pending,|view|view.on_click(cx.listener(|this,_,_,cx|this.review_unknown_command(cx))))));
+        }
+
         if self.has_cloud_creation_notice() {
             view = view.child(self.cloud_notices(cx));
         }
-        if self.cloud.guest && self.cloud.guest_status["state"] != "ready" {
+        let preparation = self.cloud_preparation_progress();
+        if self.cloud.guest && (self.cloud.guest_status["state"] != "ready" || preparation.visible)
+        {
+            let inactive = matches!(
+                self.cloud.guest_status["state"].as_str(),
+                Some("paused" | "pausing" | "archived" | "archiving" | "deleting" | "deleted")
+            );
+            let issue = if inactive {
+                None
+            } else {
+                crate::cloud::preparation::issue(
+                    self.cloud.guest_status["statusCode"]
+                        .as_str()
+                        .unwrap_or_default(),
+                )
+                .or_else(|| {
+                    ["repository", "environment", "credentials", "agent"]
+                        .into_iter()
+                        .find_map(|key| {
+                            let stage = &self.cloud.guest_status["preparation"][key];
+                            (stage["state"] == "failed")
+                                .then(|| {
+                                    crate::cloud::preparation::issue(
+                                        stage["errorCode"].as_str().unwrap_or_default(),
+                                    )
+                                    .or_else(|| match key {
+                                        "repository" => crate::cloud::preparation::issue(
+                                            "repository_preparation_failed",
+                                        ),
+                                        "environment" => crate::cloud::preparation::issue(
+                                            "environment_setup_failed",
+                                        ),
+                                        _ => None,
+                                    })
+                                })
+                                .flatten()
+                        })
+                })
+            };
             let state = self.cloud.guest_status["state"]
                 .as_str()
                 .unwrap_or("connecting");
-            let retry = matches!(state, "blocked" | "failed" | "paused");
-            let title = if state == "paused" {
-                "Cloud workspace paused"
+            let retry = issue.is_none() && matches!(state, "blocked" | "failed" | "paused");
+            let title = if let Some(issue) = issue {
+                issue.title
+            } else if state == "paused" {
+                "Computer sleeping"
+            } else if state == "pausing" {
+                "Putting computer to sleep"
+            } else if matches!(state, "deleting" | "deleted") {
+                "Computer deleted or being removed"
+            } else if matches!(state, "archiving" | "archived") {
+                "Computer archived or being archived"
             } else if retry {
                 "Cloud connection needs attention"
             } else {
-                "Resuming cloud workspace…"
+                preparation.title.as_str()
             };
             view = view.child(
                 row()
                     .min_h(px(32.))
                     .px_3()
                     .gap_2()
-                    .child(icon("cloud-dither").size(px(14.)))
-                    .child(
-                        column().flex_1().min_w_0().child(label(title)).when_some(
+                    .id("cloud-preparation-status")
+                    .role(Role::Status)
+                    .aria_label(title.to_owned())
+                    .child(if preparation.busy {
+                        crate::acp_catalog::spinner("cloud-preparation-spinner", 14.)
+                    } else {
+                        icon("cloud-dither").size(px(14.)).into_any_element()
+                    })
+                    .child(column().flex_1().min_w_0().child(label(title.to_owned())).when_some(
+                        issue.map(|issue| issue.detail.to_owned()).or_else(|| {
                             self.cloud.guest_status["message"]
                                 .as_str()
-                                .map(str::to_owned),
-                            |view, detail| view.child(label(detail).text_size(px(11.))),
-                        ),
+                                .map(str::to_owned)
+                                .or_else(|| preparation.busy.then(|| preparation.next.to_owned()))
+                        }),
+                        |view, detail| view.child(label(detail).text_size(px(11.))),
+                    ))
+                    .child(
+                        control(
+                            "cloud-preparation-details",
+                                        if self.cloud.preparation_open {
+                                "Hide activity"
+                            } else {
+                                "Activity"
+                            },
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.cloud.preparation_open = !this.cloud.preparation_open;
+                            if this.cloud.preparation_open {
+                                let _ = this
+                                    .requests
+                                    .unbounded_send(json!({"ui":"cloudPreparationLogs"}));
+                            }
+                            cx.notify();
+                        })),
+                    )
+                    .when_some(
+                        issue.and_then(|issue| issue.recovery.label()),
+                        |view, action| {
+                            view.child(control("cloud-preparation-recovery", action).on_click(
+                                cx.listener(move |this, _, _, _| {
+                                    let agent = issue.is_some_and(|issue| issue.recovery == crate::cloud::preparation::Recovery::Agent);
+                                    let _ = this.requests.unbounded_send(json!({"ui":if agent {"cloudAgentSetup"} else {"cloudSetup"}}));
+                                }),
+                            ))
+                        },
                     )
                     .when(retry, |view| {
                         view.child(
                             control(
                                 "retry-cloud-connection",
-                                if state == "paused" { "Resume" } else { "Retry" },
+                                if state == "paused" {
+                                    "Resume"
+                                } else {
+                                    "Retry connection"
+                                },
                             )
                             .on_click(cx.listener(|this, _, _, _| {
                                 let _ = this.requests.unbounded_send(json!({"ui":"resumeCloud"}));
@@ -132,6 +256,137 @@ impl WorkspaceView {
                         )
                     }),
             );
+            if preparation.busy
+                && self.cloud.guest_status["state"] != "ready"
+                && !self.cloud.preparation_open
+            {
+                let completed = preparation
+                    .steps
+                    .iter()
+                    .filter(|step| step.state == crate::cloud::preparation::StepState::Completed)
+                    .count();
+                let remaining = preparation
+                    .steps
+                    .iter()
+                    .filter(|step| step.state != crate::cloud::preparation::StepState::Completed)
+                    .map(|step| format!("{}: {}", step.title, step.state.label()))
+                    .collect::<Vec<_>>()
+                    .join(" · ");
+                view = view.child(
+                    div()
+                        .id("cloud-preparation-steps")
+                        .px_3()
+                        .pb_2()
+                        .text_size(px(11.))
+                        .text_color(rgb(MUTED))
+                        .child(if completed == 0 {
+                            remaining
+                        } else if remaining.is_empty() {
+                            format!("{completed} steps done")
+                        } else {
+                            format!("{completed} done · {remaining}")
+                        }),
+                );
+            }
+            if self.cloud.preparation_open {
+                let status = &self.cloud.guest_status;
+                let mut activity = column()
+                    .px_3()
+                    .py_2()
+                    .gap_1()
+                    .border_b_1()
+                    .border_color(rgb(BORDER));
+                let mut failed_stage = false;
+                for step in preparation
+                    .steps
+                    .iter()
+                    .filter(|step| show_preparation_step(status, step))
+                {
+                    failed_stage |= step.state == crate::cloud::preparation::StepState::Failed;
+                    activity = activity.child(
+                        row()
+                            .gap_2()
+                            .child(label(step.title).text_size(px(11.)))
+                            .child(label(step.state.label()).text_size(px(11.)).text_color(rgb(
+                                if step.state == crate::cloud::preparation::StepState::Failed {
+                                    0xeb8f8f
+                                } else {
+                                    MUTED
+                                },
+                            ))),
+                    );
+                    if let Some(error) = status["preparation"][step.key]["errorCode"].as_str() {
+                        if let Some(step_issue) = crate::cloud::preparation::issue(error)
+                            && issue.is_none_or(|issue| issue.detail != step_issue.detail)
+                        {
+                            activity = activity.child(
+                                label(step_issue.detail)
+                                    .text_size(px(11.))
+                                    .text_color(rgb(0xeb8f8f)),
+                            );
+                        }
+                    }
+                }
+                if failed_stage && issue.is_none() {
+                    activity =
+                        activity.child(control("cloud-prepare-settings", "Review setup").on_click(
+                            cx.listener(|this, _, _, _| {
+                                let _ = this.requests.unbounded_send(json!({"ui":"cloudSetup"}));
+                            }),
+                        ));
+                }
+                let log = &status["preparationLog"];
+                activity = activity.child(
+                    control("refresh-cloud-preparation-output", "Refresh output").on_click(
+                        cx.listener(|this, _, _, _| {
+                            let _ = this
+                                .requests
+                                .unbounded_send(json!({"ui":"cloudPreparationLogs"}));
+                        }),
+                    ),
+                );
+                if log.is_object() {
+                    let output = format!(
+                        "{}{}{}",
+                        log["stdout"].as_str().unwrap_or_default(),
+                        if log["stdout"].as_str().is_some_and(|s| !s.is_empty()) {
+                            "\n"
+                        } else {
+                            ""
+                        },
+                        log["stderr"].as_str().unwrap_or_default()
+                    );
+                    activity = activity
+                        .child(label("Initialization output").text_size(px(11.)))
+                        .child(
+                            column()
+                                .id("cloud-preparation-output")
+                                .max_h(px(180.))
+                                .overflow_y_scroll()
+                                .child(
+                                    div()
+                                        .font_family("Geist Mono")
+                                        .text_size(px(11.))
+                                        .child(output),
+                                ),
+                        );
+                    if log["truncated"] == true {
+                        activity = activity.child(
+                            label("Output truncated.")
+                                .text_size(px(11.))
+                                .text_color(rgb(MUTED)),
+                        );
+                    }
+                }
+                if let Some(error) = status["preparationLogError"].as_str() {
+                    activity = activity.child(
+                        label(error.to_owned())
+                            .text_size(px(11.))
+                            .text_color(rgb(0xeb8f8f)),
+                    );
+                }
+                view = view.child(activity);
+            }
         }
 
         if let Some(notice) = &self.transcript_state.notice {
@@ -188,7 +443,7 @@ impl WorkspaceView {
                     ),
             );
         }
-        if !self.connected && !self.cloud.guest {
+        if !self.connected && !self.cloud.guest && !self.cloud.mode {
             view = view.child(
                 row()
                     .id("connection-alert")
@@ -524,5 +779,53 @@ impl WorkspaceView {
                     })),
             )
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::prelude::v1::test;
+    #[test]
+    fn ready_activity_hides_unreported_pending_stages_without_claiming_completion() {
+        let ready = json!({"state":"ready","preparation":{"repository":{"state":"completed"},"environment":{"state":"failed"},"credentials":{"state":"pending"}}});
+        let progress = crate::cloud::preparation::progress(&ready, true);
+        let shown: Vec<_> = progress
+            .steps
+            .iter()
+            .filter(|step| show_preparation_step(&ready, step))
+            .map(|step| step.key)
+            .collect();
+        assert!(shown.contains(&"repository"));
+        assert!(
+            shown.contains(&"environment"),
+            "failures must remain visible"
+        );
+        assert!(
+            shown.contains(&"credentials"),
+            "an explicit pending receipt is still meaningful"
+        );
+        assert!(
+            !shown.contains(&"agent"),
+            "legacy runtime never reported an agent stage"
+        );
+        assert_eq!(
+            progress
+                .steps
+                .iter()
+                .find(|step| step.key == "agent")
+                .unwrap()
+                .state,
+            crate::cloud::preparation::StepState::Pending,
+            "display filtering must not manufacture completion"
+        );
+        let preparing = json!({"state":"setup"});
+        assert!(
+            progress
+                .steps
+                .iter()
+                .all(|step| show_preparation_step(&preparing, step)),
+            "preparation still shows upcoming work"
+        );
     }
 }

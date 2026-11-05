@@ -15,6 +15,13 @@ const UNARCHIVE: &str = zuse_protocol::methods::CLOUD_UNARCHIVE;
 pub(super) struct ArchiveView {
     pub state: ArchivedCloud,
     owner: Option<String>,
+    organization: Option<String>,
+    before: Option<i64>,
+    refresh_view: bool,
+    prepended: bool,
+    events: Option<UnboundedSender<Value>>,
+    pump: Option<Task<()>>,
+    tool_reads: HashMap<u64, u64>,
     loaded: bool,
     list: Option<u64>,
     read: Option<(u64, u64)>,
@@ -28,10 +35,43 @@ pub(super) struct ArchiveView {
     error_target: Option<String>,
 }
 impl WorkspaceView {
+    fn reset_cloud_archive_transport(&mut self) {
+        for (id, _) in std::mem::take(&mut self.cloud_archive.tool_reads) {
+            self.cancel(id);
+            self.pending.remove(&id);
+        }
+        self.cloud_archive.view = None;
+        self.cloud_archive.events = None;
+        self.cloud_archive.pump = None;
+    }
+    pub(super) fn revoke_cloud_archive_history(&mut self) {
+        if let Some((id, _)) = self.cloud_archive.read.take() {
+            self.cancel(id);
+            self.pending.remove(&id);
+        }
+        for (id, _) in std::mem::take(&mut self.cloud_archive.tool_reads) {
+            self.cancel(id);
+            self.pending.remove(&id);
+        }
+        self.cloud_archive.view = None;
+        self.cloud_archive.events = None;
+        self.cloud_archive.pump = None;
+        self.cloud_archive.state.head = None;
+        self.cloud_archive.state.rows.clear();
+        self.cloud_archive.state.selected = None;
+        self.cloud_archive.state.loading = false;
+        self.cloud_archive.state.error =
+            Some("Cloud access changed. Reopen an authorized workspace.".into());
+    }
     pub(super) fn interrupt_cloud_archive(&mut self) {
         self.cloud_archive.poll = None;
         self.cloud_archive.list = None;
         self.cloud_archive.read = None;
+        self.cloud_archive.before = None;
+        for (id, _) in std::mem::take(&mut self.cloud_archive.tool_reads) {
+            self.pending.remove(&id);
+        }
+        self.reset_cloud_archive_transport();
         self.cloud_archive.loaded = false;
         self.cloud_archive.state.loading = false;
         self.cloud_archive.state.busy = false;
@@ -65,15 +105,17 @@ impl WorkspaceView {
             .is_some_and(|m| m == methods::CLOUD_ACCOUNT_STATUS)
         {
             if let Some(value) = frame.get("item").or_else(|| frame.get("ok")) {
-                let owner = value["user"]["id"]
-                    .as_str()
-                    .filter(|_| value["orgId"].is_null())
-                    .map(str::to_owned);
-                if owner != self.cloud_archive.owner {
+                let owner = value["user"]["id"].as_str().map(str::to_owned);
+                let organization = value["orgId"].as_str().map(str::to_owned);
+                if owner != self.cloud_archive.owner
+                    || organization != self.cloud_archive.organization
+                {
+                    self.reset_cloud_archive_transport();
                     let mut state = self.cloud_archive.state.clone();
                     state.clear();
                     self.cloud_archive = ArchiveView {
                         owner,
+                        organization,
                         state,
                         ..Default::default()
                     };
@@ -86,6 +128,20 @@ impl WorkspaceView {
                 cx.notify();
             }
             return false;
+        }
+        if let Some(child_id) = self.cloud_archive.tool_reads.remove(&id) {
+            let response = if let Some(error) = frame.get("err") {
+                json!({"id":child_id,"err":error})
+            } else if frame["ok"]["toolOutput"].is_object() {
+                json!({"id":child_id,"ok":frame["ok"]["toolOutput"]})
+            } else {
+                json!({"id":child_id,"err":"Tool output is still syncing. Retry shortly."})
+            };
+            if let Some(events) = &self.cloud_archive.events {
+                let _ = events.unbounded_send(response);
+            }
+            self.pending.remove(&id);
+            return true;
         }
         let list = self.cloud_archive.list == Some(id);
         let read = self.cloud_archive.read.filter(|(req, _)| *req == id);
@@ -118,12 +174,21 @@ impl WorkspaceView {
                     .unwrap_or("Cloud request failed. Try again.")
                     .to_owned(),
             )
-        } else if value["accountId"].as_str() != self.cloud_archive.owner.as_deref() {
+        } else if value["accountId"].as_str() != self.cloud_archive.owner.as_deref()
+            || value["organizationId"].as_str() != self.cloud_archive.organization.as_deref()
+        {
             Some("Your account changed. Reopen this view.".into())
         } else {
             None
         };
         if let Some(error) = error {
+            self.cloud_archive.before = None;
+            if let Some(child) = &self.cloud_archive.view {
+                child.update(cx, |view, cx| {
+                    view.cloud.older_loading = false;
+                    cx.notify();
+                });
+            }
             if list {
                 self.cloud_archive.error_target = None;
             }
@@ -141,11 +206,53 @@ impl WorkspaceView {
             }
         } else if let Some((_, revision)) = read {
             match serde_json::from_value::<Head>(value["head"].clone()) {
-                Ok(head)
+                Ok(mut head)
                     if Some(head.session_id.as_str()) == self.cloud_archive.session.as_deref() =>
                 {
-                    if self.cloud_archive.state.receive(revision, head) {
-                        self.cloud_archive.view = None;
+                    let mut valid = true;
+                    if let Some(before) = self.cloud_archive.before.take() {
+                        valid = false;
+                        if let Some(prior) = &self.cloud_archive.state.head {
+                            if value["historyPage"] == true
+                                && value["requestedBefore"] == before
+                                && prior.workspace_id == head.workspace_id
+                                && prior.session_id == head.session_id
+                                && prior.cursor == head.cursor
+                                && prior.runtime_generation == head.runtime_generation
+                                && prior.older_message_sequence == Some(before)
+                                && head
+                                    .older_message_sequence
+                                    .is_none_or(|n| n > 0 && n < before)
+                            {
+                                if let (
+                                    zuse_model::TranscriptFrame::Reset { reset: old },
+                                    zuse_model::TranscriptFrame::Reset { reset: new },
+                                ) = (&prior.transcript.frame, &head.transcript.frame)
+                                {
+                                    let mut entries = new.as_ref().clone();
+                                    entries.extend(old.iter().cloned());
+                                    head.transcript.replay_baseline =
+                                        Some(zuse_model::TranscriptBaseline::capture(&entries));
+                                    head.transcript.frame = zuse_model::TranscriptFrame::Reset {
+                                        reset: entries.into(),
+                                    };
+                                    valid = true;
+                                    self.cloud_archive.prepended = true;
+                                }
+                            }
+                        }
+                    }
+                    if valid && self.cloud_archive.state.receive(revision, head) {
+                        self.cloud_archive.refresh_view = true;
+                    } else {
+                        self.cloud_archive.state.error =
+                            Some("Saved history changed. Reopen the conversation.".into());
+                    }
+                    if let Some(child) = &self.cloud_archive.view {
+                        child.update(cx, |view, cx| {
+                            view.cloud.older_loading = false;
+                            cx.notify();
+                        });
                     }
                 }
                 _ => {
@@ -257,7 +364,7 @@ impl WorkspaceView {
         }
         if let Some(revision) = self.cloud_archive.state.select(id) {
             self.cloud_archive.poll = None;
-            self.cloud_archive.view = None;
+            self.reset_cloud_archive_transport();
             self.cloud_archive.error_target = Some(id.into());
             self.cloud_archive.session = self
                 .cloud_archive
@@ -269,7 +376,7 @@ impl WorkspaceView {
             let req = self.call(
                 READ,
                 self.cloud_archive_params(
-                    json!({"workspaceId":id,"sessionId":self.cloud_archive.session}),
+                    json!({"workspaceId":id,"sessionId":self.cloud_archive.session,"incremental":true}),
                 ),
             );
             self.cloud_archive.read = Some((req, revision));
@@ -290,13 +397,16 @@ impl WorkspaceView {
             return;
         }
         let workspace = head.workspace_id.clone();
+        self.reset_cloud_archive_transport();
         self.cloud_archive.state.revision = self.cloud_archive.state.revision.wrapping_add(1);
         self.cloud_archive.state.loading = true;
         self.cloud_archive.state.error = None;
         self.cloud_archive.session = Some(id.into());
         let req = self.call(
             READ,
-            self.cloud_archive_params(json!({"workspaceId":workspace,"sessionId":id})),
+            self.cloud_archive_params(
+                json!({"workspaceId":workspace,"sessionId":id,"incremental":true}),
+            ),
         );
         self.cloud_archive.read = Some((req, self.cloud_archive.state.revision));
         cx.notify();
@@ -332,7 +442,7 @@ impl WorkspaceView {
     }
     fn cloud_archive_params(&self, mut params: Value) -> Value {
         params["expectedAccountId"] = json!(self.cloud_archive.owner);
-        params["expectedOrganizationId"] = Value::Null;
+        params["expectedOrganizationId"] = json!(self.cloud_archive.organization);
         params
     }
     fn cloud_card_action(
@@ -390,8 +500,6 @@ impl WorkspaceView {
             cards::Access::Loading
         } else if !self.cloud_account["user"].is_object() {
             cards::Access::SignedOut
-        } else if !self.cloud_account["orgId"].is_null() {
-            cards::Access::PersonalAccount
         } else {
             cards::Access::Ready
         };
@@ -670,14 +778,59 @@ impl WorkspaceView {
     ) -> AnyElement {
         let head = self.cloud_archive.state.head.as_ref().unwrap().clone();
         if self.cloud_archive.view.is_none() {
-            let (requests, _discard) = futures::channel::mpsc::unbounded();
-            let (_events, events) = futures::channel::mpsc::unbounded();
+            let (requests, mut receiver) = futures::channel::mpsc::unbounded::<Value>();
+            let (send, events) = futures::channel::mpsc::unbounded();
+            self.cloud_archive.events = Some(send);
             let child = cx.new(|cx| {
                 let mut view = Self::new(Transport { requests, events }, window, cx);
                 view.install_cached_history(&head);
                 view
             });
             self.cloud_archive.view = Some(child);
+            self.cloud_archive.refresh_view = true;
+            self.cloud_archive.pump=Some(cx.spawn(async move |this,cx| {
+                while let Some(request)=receiver.next().await {
+                    if this.update(cx,|this,cx| {
+                        if request["ui"]=="cloudHistoryOlder" && this.cloud_archive.read.is_none() {
+                            if let Some(head)=&this.cloud_archive.state.head {
+                                if let Some(before)=head.older_message_sequence {
+                                    let body=this.cloud_archive_params(json!({"workspaceId":head.workspace_id,"sessionId":head.session_id,"beforeSequence":before,"cursor":head.cursor,"incremental":true}));
+                                    let id=this.call(READ,body);this.cloud_archive.before=Some(before);this.cloud_archive.read=Some((id,this.cloud_archive.state.revision));cx.notify();
+                                }
+                            }
+                        } else if request["method"]==methods::FETCH_TOOL_BLOB {
+                            if let (Some(child_id),Some(head))=(request["id"].as_u64(),this.cloud_archive.state.head.as_ref()) {
+                                let params=&request["params"];
+                                let body=this.cloud_archive_params(json!({"workspaceId":head.workspace_id,"sessionId":head.session_id,"toolBlobRef":params["blobRef"],"offset":params["offset"]}));
+                                let id=this.call(READ,body);this.cloud_archive.tool_reads.insert(id,child_id);
+                            }
+                        }
+                    }).is_err(){break;}
+                }
+            }));
+        }
+        if std::mem::take(&mut self.cloud_archive.refresh_view) {
+            let child = self.cloud_archive.view.as_ref().unwrap().clone();
+            let anchor = std::mem::take(&mut self.cloud_archive.prepended).then(|| {
+                let view = child.read(cx);
+                (
+                    view.transcript_scroll.clone(),
+                    view.transcript_scroll.max_offset().y,
+                    view.transcript_scroll.offset(),
+                )
+            });
+            child.update(cx, |view, cx| {
+                view.install_cached_history(&head);
+                view.cloud.older_before = head.older_message_sequence;
+                view.cloud.older_loading = false;
+                cx.notify();
+            });
+            if let Some((scroll, height, offset)) = anchor {
+                window.on_next_frame(move |_, cx| {
+                    scroll.set_offset(point(offset.x, offset.y - (scroll.max_offset().y - height)));
+                    child.update(cx, |_, cx| cx.notify());
+                });
+            }
         }
         let id = head.workspace_id.clone();
         column()
@@ -697,7 +850,7 @@ impl WorkspaceView {
                         s::button("cloud-history-back", "Back").on_click(cx.listener(
                             |this, _, _, cx| {
                                 this.cloud_archive.state.back();
-                                this.cloud_archive.view = None;
+                                this.reset_cloud_archive_transport();
                                 this.cloud_archive.loaded = false;
                                 this.load_cloud_archive();
                                 cx.notify();
@@ -726,18 +879,20 @@ impl WorkspaceView {
                 |this, id, _, cx| this.select_cloud_archive_session(&id, cx),
                 cx,
             ))
-            .child(if self.cloud_archive.read.is_some() {
-                div()
-                    .flex_1()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .text_color(rgb(MUTED))
-                    .child("Loading saved conversation…")
-                    .into_any_element()
-            } else {
-                self.cloud_archive.view.clone().unwrap().into_any_element()
-            })
+            .child(
+                if self.cloud_archive.read.is_some() && self.cloud_archive.before.is_none() {
+                    div()
+                        .flex_1()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_color(rgb(MUTED))
+                        .child("Loading saved conversation…")
+                        .into_any_element()
+                } else {
+                    self.cloud_archive.view.clone().unwrap().into_any_element()
+                },
+            )
             .child(
                 row()
                     .flex_none()

@@ -1422,3 +1422,158 @@ fn journal_files(directory: &std::path::Path) -> Vec<(String, Vec<u8>)> {
         })
         .collect()
 }
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn memory_parking_retains_the_harness_terminal_and_queued_followup() {
+    use base64::Engine as _;
+    use zuse_rpc::{RpcService, methods};
+    let root = tempfile::tempdir().unwrap();
+    let fixture = ModelFixture::new(vec![]);
+    fixture.block_root.store(true, Ordering::Release);
+    let mut native = harness(root.path(), fixture.clone());
+    let registry = Arc::new(crate::HarnessRegistry::new());
+    let core = crate::EngineCore::assemble_with_profile(
+        crate::EngineProfile::local(&root.path().join("engine")).unwrap(),
+        registry.clone(),
+        HarnessId::Zuse,
+        None,
+    )
+    .unwrap();
+    native.device_id = core.device_id.clone();
+    registry.register(Arc::new(native));
+    core.workspace
+        .create_chat(
+            "chat",
+            None,
+            Some(&core.device_id),
+            None,
+            Some(root.path().to_string_lossy().into_owned()),
+        )
+        .unwrap();
+    core.doc_host
+        .queue_command(
+            "chat",
+            zuse_doc::SessionCommandPayload::Run {
+                request: request(root.path()),
+                message_id: "before-park".into(),
+            },
+        )
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), fixture.blocked.notified())
+        .await
+        .unwrap();
+    let root_id = lock(&fixture.seen)[0].root.clone();
+    let pid_file = root.path().join("terminal.pid");
+    let quoted = format!("'{}'", pid_file.to_string_lossy().replace('\'', "'\\''"));
+    let terminal=core.terminals.open_with_command(&root.path().to_string_lossy(),80,24,&Default::default(),&format!("printf '%s\\n' \"$$\" > {quoted}; while IFS= read -r marker; do printf 'RETAINED:%s:%s\\n' \"$$\" \"$marker\"; done")).unwrap();
+    struct CloseTerminal(crate::Terminals, String);
+    impl Drop for CloseTerminal {
+        fn drop(&mut self) {
+            let _ = self.0.close(&self.1);
+        }
+    }
+    let _terminal_cleanup = CloseTerminal(core.terminals.clone(), terminal.id.clone());
+    let mut events = core.terminals.subscribe(&terminal.id, None).unwrap();
+    core.terminals.write(&terminal.id, "before\n").unwrap();
+    async fn until(
+        events: &mut tokio::sync::mpsc::UnboundedReceiver<zuse_protocol::TerminalEvent>,
+        marker: &str,
+    ) -> String {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let mut output = String::new();
+            loop {
+                match events.recv().await.unwrap() {
+                    zuse_protocol::TerminalEvent::Data { data, .. } => {
+                        output.push_str(&String::from_utf8_lossy(
+                            &base64::engine::general_purpose::STANDARD
+                                .decode(data)
+                                .unwrap(),
+                        ))
+                    }
+                    zuse_protocol::TerminalEvent::Exit { .. } => panic!("retained terminal exited"),
+                }
+                if output.contains(marker) {
+                    return output;
+                }
+            }
+        })
+        .await
+        .unwrap()
+    }
+    until(&mut events, ":before").await;
+    let pid = std::fs::read_to_string(&pid_file)
+        .unwrap()
+        .trim()
+        .to_owned();
+    let parked = core.park_execution().await.unwrap();
+    assert!(core.sessions.execution_admission().is_closed());
+    assert!(!core.sessions.turn_in_flight("chat"));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), fixture.removed.notified())
+            .await
+            .is_err(),
+        "parking must retain the native harness root"
+    );
+    let rpc = core.rpc_service();
+    let denied = rpc
+        .handle(
+            methods::WRITE_TERMINAL,
+            json!({"terminalId":terminal.id,"data":"must-not-run\n"}),
+        )
+        .await;
+    assert!(
+        matches!(denied,Err(zuse_rpc::RpcError::Failed(message)) if message=="runtime_execution_parked")
+    );
+    assert!(
+        rpc.handle(methods::LIST_TERMINALS, json!({"chatId":"chat"}))
+            .await
+            .is_ok(),
+        "history/read access does not admit execution"
+    );
+    fixture.block_root.store(false, Ordering::Release);
+    let mut followup = request(root.path());
+    followup.prompt = "continue after memory sleep".into();
+    core.doc_host
+        .queue_command(
+            "chat",
+            zuse_doc::SessionCommandPayload::Run {
+                request: followup,
+                message_id: "after-park".into(),
+            },
+        )
+        .unwrap();
+    core.doc_host
+        .drain_commands(&core.doc_host.open_local("chat").unwrap())
+        .await;
+    assert_eq!(
+        lock(&fixture.seen).len(),
+        1,
+        "a parked queue cannot dispatch an agent"
+    );
+    core.resume_execution(parked).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if lock(&fixture.seen).len() == 2
+                && core
+                    .sessions
+                    .session_status("chat")
+                    .is_some_and(|s| s.status == zuse_protocol::SessionStatus::Idle)
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        lock(&fixture.seen)[1].root,
+        root_id,
+        "followup must use the retained harness"
+    );
+    core.terminals.write(&terminal.id, "after\n").unwrap();
+    until(&mut events, &format!("RETAINED:{pid}:after")).await;
+    assert_eq!(std::fs::read_to_string(&pid_file).unwrap().trim(), pid);
+    core.shutdown().await;
+}

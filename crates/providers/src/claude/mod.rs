@@ -634,13 +634,19 @@ impl ClaudeHarness {
     ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
         let exe = self.resolve_executable()?;
         let mut cmd = self.build_command(&exe, &request);
-        if let Some(credentials) = &self.credentials {
+        let live_credentials = if let Some(credentials) = &self.credentials {
             let environment = tokio::select! {biased;
                 _=controls.interrupt.cancelled()=>return Ok(interrupted_start(request.resume.clone())),
                 environment=credentials.environment()=>environment?,
             };
             environment.apply(&mut cmd);
-        }
+            Some(crate::credentials::LiveCredentials::new(
+                credentials.clone(),
+                &environment,
+            ))
+        } else {
+            None
+        };
         if controls.interrupt.is_cancelled() {
             return Ok(interrupted_start(request.resume.clone()));
         }
@@ -724,6 +730,7 @@ impl ClaudeHarness {
 
         let (event_tx, event_rx) = mpsc::channel::<Result<AgentEvent, HarnessError>>(256);
         tokio::spawn(run_session(Session {
+            live_credentials,
             normalizer,
             title_only,
             child,
@@ -850,6 +857,7 @@ async fn stdin_writer(mut stdin: ChildStdin, mut rx: mpsc::UnboundedReceiver<Std
 }
 
 struct Session {
+    live_credentials: Option<crate::credentials::LiveCredentials>,
     normalizer: Normalizer,
     title_only: bool,
     child: Child,
@@ -872,6 +880,7 @@ struct Session {
 /// mailbox, the interrupt token, and consumer liveness.
 async fn run_session(session: Session) {
     let Session {
+        live_credentials,
         normalizer: mut norm,
         title_only,
         mut child,
@@ -904,6 +913,7 @@ async fn run_session(session: Session) {
     let mut interrupted = false;
     let mut interrupt_sent = false;
     let mut any_done = false;
+    let mut credential_boundary = false;
     // A turn stop in flight (`TurnControl::stop_turn`): its request id, and
     // once the CLI has answered, how long a turn-ending `result` may still
     // take. The CLI answers a stop between turns without any result — the
@@ -1015,6 +1025,7 @@ async fn run_session(session: Session) {
                         _ => (None, false),
                     };
                     if taken_up {
+                        credential_boundary = false;
                         held_done = None;
                         active_since_stop = true;
                     }
@@ -1039,6 +1050,7 @@ async fn run_session(session: Session) {
                             break 'main;
                         }
                         any_done = true;
+                        credential_boundary = true;
                     }
                     // The stopped turn reporting late: a result with nothing
                     // since the stop's Done. Judged on the frame, before it
@@ -1059,12 +1071,16 @@ async fn run_session(session: Session) {
                     for ev in norm.normalize(frame, interrupted || stopping.is_some()) {
                         match &ev {
                             AgentEvent::ToolCall { id, .. } => {
+                                credential_boundary = false;
                                 open_tools.insert(id.clone());
                             }
                             AgentEvent::ToolResult { id, .. } => {
                                 open_tools.remove(id);
                             }
                             AgentEvent::Done { .. } => open_tools.clear(),
+                            AgentEvent::TextDelta { .. } | AgentEvent::ReasoningDelta { .. } => {
+                                credential_boundary = false;
+                            }
                             _ => {}
                         }
                         let is_done = matches!(ev, AgentEvent::Done { .. });
@@ -1110,6 +1126,7 @@ async fn run_session(session: Session) {
                         }
                         if is_done {
                             any_done = true;
+                        credential_boundary = true;
                             if interrupted {
                                 done_after_interrupt = true;
                                 break 'main;
@@ -1126,6 +1143,17 @@ async fn run_session(session: Session) {
 
             steer = crate::receive_steer(&mut steering, &turn), if steering_open && !interrupted => match steer {
                 Some(msg) => {
+                    if credential_boundary && let Some(credentials) = &live_credentials {
+                        let validation = tokio::select! { biased;
+                            _ = interrupt.cancelled() => break 'main,
+                            result = credentials.validate() => result,
+                        };
+                        if let Err(error) = validation {
+                            let _ = event_tx.send(Err(error)).await;
+                            break 'main;
+                        }
+                    }
+                    credential_boundary = false;
                     // A message of ours now owns whatever result comes next.
                     active_since_stop = true;
                     // A changed configuration applies before the prompt, on
@@ -1221,6 +1249,7 @@ async fn run_session(session: Session) {
                         break 'main;
                     }
                     any_done = true;
+                        credential_boundary = true;
                     stop_done_at = Some(tokio::time::Instant::now());
                     active_since_stop = false;
                 }
@@ -1264,6 +1293,7 @@ async fn run_session(session: Session) {
                     break 'main;
                 }
                 any_done = true;
+                        credential_boundary = true;
             },
 
             _ = event_tx.closed() => break 'main,

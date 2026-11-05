@@ -96,6 +96,7 @@ impl LiveTerminal {
 
 struct TerminalsInner {
     sessions: Mutex<HashMap<String, Arc<Mutex<LiveTerminal>>>>,
+    host_environment: Mutex<Arc<std::collections::BTreeMap<String, zeroize::Zeroizing<String>>>>,
 }
 
 impl Drop for TerminalsInner {
@@ -160,10 +161,20 @@ impl Terminals {
         let terminals = Self {
             inner: Arc::new(TerminalsInner {
                 sessions: Mutex::new(HashMap::new()),
+                host_environment: Mutex::new(Arc::new(std::collections::BTreeMap::new())),
             }),
         };
         tokio::spawn(reaper_task(Arc::downgrade(&terminals.inner)));
         terminals
+    }
+
+    /// Task-local values never enter terminal descriptions or action scripts.
+    /// Existing PTYs retain their original process environment.
+    pub fn set_host_environment(
+        &self,
+        values: Arc<std::collections::BTreeMap<String, zeroize::Zeroizing<String>>>,
+    ) {
+        *lock(&self.inner.host_environment) = values;
     }
 
     /// Open a login shell in `cwd`. The PTY outlives every subscriber; it dies on
@@ -312,6 +323,9 @@ impl Terminals {
             cmd.env("TERM", "xterm-256color");
             cmd.env("COLORTERM", "truecolor");
             cmd.env("TERM_PROGRAM", "Zuse");
+            for (name, value) in lock(&self.inner.host_environment).iter() {
+                cmd.env(name, value.as_str());
+            }
             for (name, value) in environment {
                 cmd.env(name, value);
             }
@@ -1245,3 +1259,6 @@ mod initial_command_tests {
         assert!(!terminals.any_open());
     }
 }
+
+#[cfg(all(test, unix))]
+mod workload_tests;

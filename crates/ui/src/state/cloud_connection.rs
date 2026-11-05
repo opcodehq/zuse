@@ -9,6 +9,7 @@ use tokio_util::{sync::CancellationToken, task::AbortOnDropHandle};
 pub struct CloudTarget {
     pub controller: EngineHandle,
     pub subject: String,
+    pub organization: Option<String>,
     pub workspace: String,
     pub initial_session: String,
 }
@@ -36,10 +37,10 @@ impl Source {
             .await
             .map_err(|_| RpcError::Transport("Account status timed out".into()))?
             .ok_or(RpcError::Closed)?;
-        let expected = (target.subject.clone(), None);
+        let expected = (target.subject.clone(), target.organization.clone());
         if binding(&first) != Some(expected.clone()) {
             return Err(RpcError::Failed(
-                "Select this cloud workspace from its personal account.".into(),
+                "Select this cloud workspace from its original account and organization.".into(),
             ));
         }
         let mut updates = target
@@ -47,7 +48,7 @@ impl Source {
             .client()
             .subscribe_scoped(
                 methods::CLOUD_ENVIRONMENT,
-                json!({"workspaceId":target.workspace}),
+                json!({"workspaceId":target.workspace,"expectedAccountId":target.subject,"expectedOrganizationId":target.organization,"interactiveResume":false}),
             )
             .await?;
         let closed = CancellationToken::new();
@@ -146,8 +147,8 @@ impl super::remote_connection::Source for Source {
                             let frame: zuse_rpc::ClientFrame=match serde_json::from_str(line){Ok(frame)=>frame,Err(_)=>continue};
                             tasks.retain(|_,task|!task.is_finished());
                             if frame.cancel {tasks.remove(&frame.id);continue;}
-                            let id=frame.id;let reply=replies.clone();let controller=source.target.controller.clone();let workspace=source.target.workspace.clone();let subject=source.target.subject.clone();
-                            tasks.insert(id,AbortOnDropHandle::new(tokio::spawn(async move{forward(controller,workspace,subject,frame,reply).await;})));
+                            let id=frame.id;let reply=replies.clone();let controller=source.target.controller.clone();let workspace=source.target.workspace.clone();let subject=source.target.subject.clone();let organization=source.target.organization.clone();
+                            tasks.insert(id,AbortOnDropHandle::new(tokio::spawn(async move{forward(controller,workspace,subject,organization,frame,reply).await;})));
                         }
                     }
                 }
@@ -167,6 +168,7 @@ async fn forward(
     controller: EngineHandle,
     workspace: String,
     subject: String,
+    organization: Option<String>,
     frame: zuse_rpc::ClientFrame,
     replies: mpsc::Sender<String>,
 ) {
@@ -188,14 +190,14 @@ async fn forward(
     let (method, params) = if let Some(chat) = local_chat {
         (
             methods::CLOUD_LOCAL_TERMINAL.into(),
-            json!({"workspaceId":workspace,"expectedAccountId":subject,"chatId":chat,"requestId":id,"method":method,"params":frame.params}),
+            json!({"workspaceId":workspace,"expectedAccountId":subject,"expectedOrganizationId":organization,"chatId":chat,"requestId":id,"method":method,"params":frame.params}),
         )
     } else if authority {
         (method, frame.params)
     } else {
         (
             methods::CLOUD_RPC.into(),
-            json!({"workspaceId":workspace,"requestId":id,"method":method,"params":frame.params}),
+            json!({"workspaceId":workspace,"expectedAccountId":subject,"expectedOrganizationId":organization,"logicalCommandId":uuid::Uuid::new_v4().to_string(),"requestId":id,"method":method,"params":frame.params}),
         )
     };
     let result = controller.client().forward(&method, params).await;

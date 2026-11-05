@@ -35,6 +35,17 @@ enum Pending {
     Resolve { generation: u64 },
 }
 
+/// In-memory canvas selection only; no pending request or credential is copied.
+#[derive(Clone)]
+pub struct SelectionSnapshot {
+    target: Option<Target>,
+    selection: Option<Resolution>,
+}
+impl SelectionSnapshot {
+    pub fn new(target: Option<Target>, selection: Option<Resolution>) -> Self {
+        Self { target, selection }
+    }
+}
 pub struct SourcePicker {
     target: Option<Target>,
     generation: u64,
@@ -103,6 +114,24 @@ impl SourcePicker {
         cx.emit(Event::Changed(None));
         cx.notify();
     }
+    pub fn selection_snapshot(&self) -> SelectionSnapshot {
+        SelectionSnapshot::new(self.target.clone(), self.selection.clone())
+    }
+    pub fn restore_selection(&mut self, snapshot: SelectionSnapshot, cx: &mut Context<Self>) {
+        self.generation += 1;
+        self.pending.clear();
+        self.target = snapshot.target;
+        self.selection = snapshot.selection;
+        self.open = false;
+        self.rows.clear();
+        self.loading = false;
+        self.error = None;
+        self.preparing = false;
+        self.attempt = None;
+        self.clear_search(cx);
+        // Rehydration is not a new user issue selection or RPC request.
+        cx.notify();
+    }
     pub fn selection(&self) -> Option<&Resolution> {
         self.selection.as_ref()
     }
@@ -122,7 +151,7 @@ impl SourcePicker {
             Some(Resolution::CloudRef {
                 base_ref, branch, ..
             }) => (base_ref.clone(), branch.clone()),
-            _ => (format!("origin/{default_branch}"), None),
+            _ => (format!("refs/heads/{default_branch}"), None),
         }
     }
     pub fn dismiss(&mut self, cx: &mut Context<Self>) {
@@ -709,4 +738,95 @@ fn source_accent() -> Hsla {
         hsla(130. / 360., 0.06, 0.165, 1.),
         hsla(106. / 360., 0.16, 0.89, 1.),
     )
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+    use std::path::Path;
+    use std::prelude::v1::test;
+    fn git(root: &Path, args: &[&str]) -> String {
+        let output = std::process::Command::new("git")
+            .current_dir(root)
+            .args([
+                "-c",
+                "core.hooksPath=/dev/null",
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "user.name=Source picker test",
+                "-c",
+                "user.email=source-picker@example.invalid",
+            ])
+            .args(args)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    }
+    #[gpui::test]
+    fn default_cloud_ref_fetches_remote_default_branch_without_rewriting_explicit_refs(
+        cx: &mut TestAppContext,
+    ) {
+        let root =
+            std::env::temp_dir().join(format!("zuse-source-picker-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        struct Cleanup(std::path::PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let _cleanup = Cleanup(root.clone());
+        let source = root.join("source");
+        let consumer = root.join("consumer");
+        std::fs::create_dir(&source).unwrap();
+        std::fs::create_dir(&consumer).unwrap();
+        git(&source, &["init", "--initial-branch=main"]);
+        std::fs::write(source.join("marker"), "main").unwrap();
+        git(&source, &["add", "marker"]);
+        git(&source, &["commit", "-m", "main"]);
+        let main = git(&source, &["rev-parse", "HEAD"]);
+        git(&source, &["checkout", "-b", "origin/main"]);
+        std::fs::write(source.join("marker"), "literal origin/main branch").unwrap();
+        git(&source, &["commit", "-am", "literal branch"]);
+        let literal = git(&source, &["rev-parse", "HEAD"]);
+        assert_ne!(main, literal);
+        git(&consumer, &["init"]);
+        git(
+            &consumer,
+            &["remote", "add", "origin", source.to_str().unwrap()],
+        );
+        let picker = cx.new(SourcePicker::new);
+        let (default_ref, branch) = picker.update(cx, |picker, _| picker.cloud_ref("main"));
+        assert!(branch.is_none());
+        git(&consumer, &["fetch", "origin", &default_ref]);
+        assert_eq!(
+            git(&consumer, &["rev-parse", "FETCH_HEAD"]),
+            main,
+            "Default must fetch remote refs/heads/main, never a local tracking name"
+        );
+        picker.update(cx, |picker, _| {
+            picker.selection = Some(Resolution::CloudRef {
+                label: "Literal branch".into(),
+                base_ref: "origin/main".into(),
+                branch: Some("task-branch".into()),
+            })
+        });
+        let (explicit_ref, branch) = picker.update(cx, |picker, _| picker.cloud_ref("main"));
+        assert_eq!(explicit_ref, "origin/main");
+        assert_eq!(branch.as_deref(), Some("task-branch"));
+        git(&consumer, &["fetch", "origin", &explicit_ref]);
+        assert_eq!(
+            git(&consumer, &["rev-parse", "FETCH_HEAD"]),
+            literal,
+            "Explicit branch named origin/main retains exact remote meaning"
+        );
+    }
 }

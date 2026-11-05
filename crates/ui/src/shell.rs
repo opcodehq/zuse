@@ -105,7 +105,11 @@ mod usage_dashboard;
 mod workspace_layout;
 mod workspace_storage;
 use side_chats::SideChatTab;
+mod cloud_conversation;
 mod cloud_info;
+mod cloud_sidebar;
+mod cloud_start;
+mod cloud_tabs;
 mod tabs;
 mod top_bar;
 mod voice_stage;
@@ -1992,8 +1996,18 @@ enum PendingExit {
     InstallUpdate(PathBuf),
 }
 
+/// A capture destination contains identity metadata only, never credentials.
+#[derive(Clone, Default)]
+pub(crate) struct AppshotDeliveryIdentity {
+    pub(crate) account: Option<String>,
+    pub(crate) organization: Option<String>,
+    pub(crate) canvas: Option<String>,
+}
 pub struct Shell {
     state: Entity<AppState>,
+    cloud_conversation: Option<Entity<cloud_conversation::CloudConversation>>,
+    cloud_conversation_events: Option<Subscription>,
+    cloud_tabs: cloud_tabs::CloudTabs,
     desktop_import: Entity<crate::desktop_import::Onboarding>,
     sidebar_pane: Entity<SidebarPane>,
     sidebar_controls: Entity<zuse_viewport::sidebar_controls::SidebarControls>,
@@ -2505,10 +2519,46 @@ impl Shell {
         let composer_events = cx.subscribe(&composer, {
             let transcript = transcript.clone();
             move |this: &mut Shell, _, event: &ComposerEvent, cx| match event {
+                ComposerEvent::CloudAdmitted {
+                    workspace,
+                    account,
+                    organization,
+                    launch,
+                } => {
+                    let controller = this
+                        .state
+                        .read(cx)
+                        .engine()
+                        .map(|engine| engine.controller());
+                    if let Some(controller) = controller {
+                        let Some(id) = workspace["workspaceId"]
+                            .as_str()
+                            .filter(|id| !id.is_empty())
+                        else {
+                            return;
+                        };
+                        let Some(session) = workspace["initialSessionId"]
+                            .as_str()
+                            .filter(|id| !id.is_empty())
+                        else {
+                            return;
+                        };
+                        let target = crate::state::CloudTarget {
+                            controller,
+                            subject: account.clone(),
+                            organization: organization.clone(),
+                            workspace: id.into(),
+                            initial_session: session.into(),
+                        };
+                        this.open_cloud_conversation(target, workspace.clone(), launch.clone(), cx);
+                    }
+                }
                 ComposerEvent::CloudLaunchChanged => {
                     cx.notify();
                 }
-                ComposerEvent::ResumeCloud { .. } => {}
+                ComposerEvent::ResumeCloud { .. }
+                | ComposerEvent::CloudSleepRequested
+                | ComposerEvent::CloudForegroundAdmitted => {}
                 ComposerEvent::WorkspaceCommand(command) => {
                     this.pending_workspace_command = Some(*command);
                     cx.notify();
@@ -2637,6 +2687,9 @@ impl Shell {
         let sidebar_controls = Self::create_sidebar_controls(state.clone(), cx);
         Self {
             state: state.clone(),
+            cloud_conversation: None,
+            cloud_conversation_events: None,
+            cloud_tabs: Default::default(),
             desktop_import,
             sidebar_pane,
             sidebar_controls,
@@ -2888,6 +2941,81 @@ impl Shell {
         }
     }
 
+    pub(crate) fn appshot_capture_identity(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> AppshotDeliveryIdentity {
+        self.sync_cloud_tab_scope(cx);
+        let (account, organization) = {
+            let state = self.state.read(cx);
+            (
+                state.cloud_user_id().map(str::to_owned),
+                state.cloud_organization_id().map(str::to_owned),
+            )
+        };
+        let canvas = if self.settings.appshot_destination
+            == crate::appshots::AppshotDestination::Automatic
+        {
+            if let Some(view) = &self.cloud_conversation {
+                Some(view.read(cx).target.initial_session.clone())
+            } else if self.state.read(cx).selected_chat.is_none()
+                && self.state.read(cx).cloud_project.is_some()
+            {
+                self.track_current_cloud_canvas(cx);
+                Some(self.composer.read(cx).current_key.clone())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        AppshotDeliveryIdentity {
+            account,
+            organization,
+            canvas,
+        }
+    }
+    pub(crate) fn accepts_appshot_identity(
+        &self,
+        identity: &AppshotDeliveryIdentity,
+        cx: &App,
+    ) -> bool {
+        let state = self.state.read(cx);
+        state.cloud_user_id() == identity.account.as_deref()
+            && state.cloud_organization_id() == identity.organization.as_deref()
+            && identity.canvas.as_deref().is_none_or(|key| {
+                self.retains_cloud_canvas(key)
+                    || self.cloud_tabs.composer_for_session(key, cx).is_some()
+            })
+    }
+    pub(crate) fn receive_scoped_appshot(
+        &mut self,
+        identity: AppshotDeliveryIdentity,
+        appshot: crate::appshots::CapturedAppshot,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        self.sync_cloud_tab_scope(cx);
+        if !self.accepts_appshot_identity(&identity, cx) {
+            return false;
+        }
+        if let Some(key) = identity.canvas {
+            let composer = self
+                .cloud_tabs
+                .composer_for_session(&key, cx)
+                .unwrap_or_else(|| self.composer.clone());
+            let accepted = composer.update(cx, |composer, cx| {
+                composer.stage_appshot_for(key.clone(), appshot, cx)
+            });
+            if composer.read(cx).current_key == key {
+                window.focus(&composer.focus_handle(cx), cx);
+            }
+            cx.notify();
+            return accepted;
+        }
+        self.receive_appshot(appshot, window, cx);
+        true
+    }
     /// Route a completed viewer-side capture only after its source window is
     /// safely captured. The explicit target key avoids relying on the
     /// state-observation/draft-swap effect ordering when opening the canvas.
@@ -2920,7 +3048,10 @@ impl Shell {
         } else {
             self.set_route(Route::Chat, cx);
         }
-        let key = target.unwrap_or_default();
+        if target.is_none() && self.state.read(cx).cloud_project.is_some() {
+            self.track_current_cloud_canvas(cx);
+        }
+        let key = target.unwrap_or_else(|| self.composer.read(cx).current_key.clone());
         self.composer.update(cx, |composer, cx| {
             composer.stage_appshot_for(key, appshot, cx)
         });
@@ -3293,7 +3424,12 @@ impl Shell {
         // snap, no tween — the panels belong to the destination chat). The
         // new-chat canvas is the exception: it always lands with the terminal
         // hidden.
-        let selected = state.read(cx).selected_chat.clone().unwrap_or_default();
+        let selected = self
+            .conversation_state(cx)
+            .read(cx)
+            .selected_chat
+            .clone()
+            .unwrap_or_default();
         if !selected.is_empty() {
             self.last_appshot_chat = Some(selected.clone());
         }
@@ -3382,7 +3518,7 @@ impl Shell {
     /// Does the selected space's folder have git? Owner-stamped and synced —
     /// gates the Changes pane, its toggle, and Cmd-B with zero RPCs.
     fn space_git_detected(&self, cx: &App) -> bool {
-        self.state.read(cx).selected_space_git()
+        self.conversation_state(cx).read(cx).selected_space_git()
     }
 
     /// The current chat's changes-pane flag (per-session, in-memory), gated on
@@ -3415,7 +3551,7 @@ impl Shell {
 
     /// The current chat's terminal flag (per-session, in-memory).
     fn terminal_open(&self, cx: &App) -> bool {
-        self.panels.get(&self.panel_key(cx)).terminal_open
+        self.cloud_conversation.is_none() && self.panels.get(&self.panel_key(cx)).terminal_open
     }
 
     fn right_target(&self, cx: &App) -> f32 {
@@ -3560,6 +3696,16 @@ impl Shell {
     }
 
     fn right_terminal_panel(&mut self, cx: &mut Context<Self>) -> Entity<TerminalPanel> {
+        if let Some(view) = self.cloud_conversation.clone() {
+            return view.update(cx, |view, cx| {
+                if let Some(terminal) = &view.terminal {
+                    return terminal.clone();
+                }
+                let terminal = cx.new(|cx| TerminalPanel::new_embedded(view.state.clone(), cx));
+                view.terminal = Some(terminal.clone());
+                terminal
+            });
+        }
         if let Some(terminal) = &self.right_terminal {
             return terminal.clone();
         }
@@ -3581,8 +3727,17 @@ impl Shell {
             .get(&key)
             .map(|v| v.as_slice())
             .unwrap_or(&[]);
-        let terminals: Vec<(u64, SharedString, bool)> = self
-            .right_terminal
+        let terminal = self
+            .cloud_conversation
+            .as_ref()
+            .and_then(|view| view.read(cx).terminal.clone())
+            .or_else(|| {
+                self.cloud_conversation
+                    .is_none()
+                    .then(|| self.right_terminal.clone())
+                    .flatten()
+            });
+        let terminals: Vec<(u64, SharedString, bool)> = terminal
             .as_ref()
             .map(|t| t.read(cx).tab_summaries(cx))
             .unwrap_or_default();
@@ -4182,7 +4337,7 @@ impl Shell {
 
     /// Open or focus a session-owned editor tab. The explorer is independent.
     fn add_file_surface(&mut self, path: String, window: &mut Window, cx: &mut Context<Self>) {
-        let owner = (self.active_chat.clone(), self.state.clone());
+        let owner = (self.active_chat.clone(), self.conversation_state(cx));
         self.add_file_surface_at(owner, path, None, window, cx);
     }
 
@@ -4190,7 +4345,7 @@ impl Shell {
     /// an open side chat's own (its chat row may not reach the main list yet).
     fn link_owner(&self, chat_id: &str, cx: &App) -> Option<(String, Entity<AppState>)> {
         if chat_id == self.active_chat {
-            return Some((chat_id.to_owned(), self.state.clone()));
+            return Some((chat_id.to_owned(), self.conversation_state(cx)));
         }
         self.side_chats
             .values()
@@ -4491,6 +4646,13 @@ impl Shell {
     /// The picker's Terminal card / the `+` menu's Terminal row: every click
     /// opens a fresh embedded terminal tab.
     fn add_terminal_surface(&mut self, cx: &mut Context<Self>) {
+        if self
+            .cloud_conversation
+            .as_ref()
+            .is_some_and(|view| !view.read(cx).ready(cx))
+        {
+            return;
+        }
         let panel = self.right_terminal_panel(cx);
         let opened = panel.update(cx, |panel, cx| {
             panel.set_open(true, cx);
@@ -5000,6 +5162,29 @@ impl Shell {
     /// animates 200 ms; closing detaches (PTYs stay alive), opening restores.
     /// The flag is per chat (zuse `sessionPanels`).
     fn toggle_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Cloud tools belong to the task's right sidebar, never the local
+        // controller's bottom terminal. Reuse its existing terminal tab.
+        if let Some(conversation) = &self.cloud_conversation {
+            if !conversation.read(cx).ready(cx) {
+                return;
+            }
+            let terminal = self
+                .right_surface_rows(cx)
+                .into_iter()
+                .find_map(|(surface, _, _, _)| {
+                    matches!(surface, RightSurface::Terminal(_)).then_some(surface)
+                });
+            if let Some(terminal) = terminal {
+                if self.right_pane_open(cx) && self.resolved_right_active(cx) == terminal {
+                    self.toggle_right_pane(cx);
+                } else {
+                    self.set_right_active(terminal, cx);
+                }
+            } else {
+                self.add_terminal_surface(cx);
+            }
+            return;
+        }
         let from = self.terminal_geometry.get().height;
         let key = self.panel_key(cx);
         let open = self.panels.toggle_terminal(&key);
@@ -7704,9 +7889,9 @@ impl Shell {
                     .child(window_control_button(
                         "titlebar-new-session",
                         icons::PLUS,
-                        ShortcutId::NewSession.label(),
+                        "New tab",
                         &theme,
-                        cx.listener(|this, _, _, cx| this.open_new_session(None, cx)),
+                        cx.listener(|this, _, _, cx| this.open_new_conversation_tab(cx)),
                     ))
             }))
             .into_any_element()
@@ -7767,7 +7952,7 @@ impl Shell {
     pub(super) fn titlebar_plus_alpha(&self, cx: &App) -> f32 {
         let sidebar_reveal =
             (self.sidebar_now() / self.sidebar_content_width().max(1.0)).clamp(0.0, 1.0);
-        titlebar_new_session_alpha(&self.route, self.state.read(cx).selected_chat.is_some())
+        titlebar_new_session_alpha(&self.route, self.has_conversation(cx))
             * (1.0 - sidebar_reveal)
     }
 
@@ -10106,6 +10291,7 @@ impl Shell {
             // window above this column.)
             .child(self.render_sidebar_nav(theme, cx))
             .child(self.render_sidebar_modes(theme, cx))
+            .children(self.render_cloud_sidebar_status(theme, cx))
             .child(filter_row)
             .child(sidebar_lists)
             // Global connection pill (durable-by-design UI truth): appears
@@ -11948,6 +12134,28 @@ impl Shell {
         transcript_width: f32,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        // Active cloud tabs share the normal header's tab row. Draft tabs
+        // retain their canvas strip until a conversation is admitted.
+        let strip = self.cloud_conversation.is_none().then(|| self.render_cloud_tabs(cx)).flatten();
+        let content = self.render_main_content(window, main_content_width, transcript_width, cx);
+        div()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .flex()
+            .flex_col()
+            .children(strip)
+            .child(content)
+            .into_any_element()
+    }
+
+    fn render_main_content(
+        &mut self,
+        window: &mut Window,
+        main_content_width: f32,
+        transcript_width: f32,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let theme_owned = Theme::of(cx).clone();
         let theme = &theme_owned;
         let (border, text, faint) = (theme.border, theme.text, theme.text_faint);
@@ -11999,9 +12207,18 @@ impl Shell {
                 .into_any_element();
         }
 
+        if let Some(conversation) = self.cloud_conversation.clone() {
+            return div()
+                .flex_1()
+                .min_w_0()
+                .h_full()
+                .child(conversation)
+                .into_any_element();
+        }
         let _ = (text, border);
         let has_selection = self.state.read(cx).selected_chat.is_some();
-        let has_spaces = !self.state.read(cx).spaces.is_empty();
+        let has_spaces = !self.state.read(cx).spaces.is_empty()
+            || !self.state.read(cx).cloud_sidebar_projects().is_empty();
         let cloud_starting = !has_selection && self.composer.read(cx).cloud_launch_pending(cx);
         let has_appshots = !self.composer.read(cx).staged_appshots().is_empty();
         let no_project = self.state.read(cx).no_project;
@@ -14174,6 +14391,7 @@ fn header_icon_button_with(
 
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.sync_cloud_tab_scope(cx);
         // Every repaint (state frame, input, or the clock firing) reschedules
         // the next clock-driven one; the sidebar and transcript follow this
         // view's notifications.
@@ -14217,7 +14435,7 @@ impl Render for Shell {
             use crate::composer::WorkspaceCommand;
             match command {
                 WorkspaceCommand::Model => self
-                    .composer
+                    .conversation_composer(cx)
                     .update(cx, |c, cx| c.open_model_menu(window, cx)),
                 WorkspaceCommand::New => self.open_new_session(None, cx),
                 WorkspaceCommand::Resume => self.toggle_command_palette(window, cx),
@@ -14236,9 +14454,9 @@ impl Render for Shell {
                 WorkspaceCommand::Rename if !self.active_chat.is_empty() => {
                     self.open_rename_chat(self.active_chat.clone(), cx)
                 }
-                WorkspaceCommand::Stop => {
-                    self.composer.update(cx, |c, cx| c.interrupt_selected(cx))
-                }
+                WorkspaceCommand::Stop => self
+                    .conversation_composer(cx)
+                    .update(cx, |c, cx| c.interrupt_selected(cx)),
                 _ => {}
             }
         }
@@ -14996,9 +15214,7 @@ impl Render for Shell {
                 } else {
                     Empty.into_any_element()
                 };
-                let show_main_chrome = self.workspace_gutter() == 0.
-                    || self.state.read(cx).selected_chat.is_some()
-                    || self.settings.sidebar_collapsed;
+                let show_main_chrome = self.main_chrome_visible(cx);
                 let title_bar = show_main_chrome.then(|| self.render_title_bar(cx));
                 // Sidebar tone: a slightly lighter column behind the sidebar.
                 // Its width rides the same tween as the sidebar, so the tone
@@ -15079,7 +15295,18 @@ impl Render for Shell {
             }
             phase @ (GatePhase::Failed(_) | GatePhase::SignIn) => {
                 let card = self.render_gate_card(phase, cx);
-                root.child(card)
+                if matches!(phase, GatePhase::Failed(_)) && self.has_offline_cloud_navigation(cx) {
+                    let sidebar = self.render_offline_cloud_sidebar(cx);
+                    root.child(
+                        div()
+                            .size_full()
+                            .flex()
+                            .child(sidebar)
+                            .child(div().flex_1().min_w_0().h_full().child(card)),
+                    )
+                } else {
+                    root.child(card)
+                }
             }
         };
         let root = if restart_required {

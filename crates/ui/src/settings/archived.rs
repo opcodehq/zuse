@@ -309,6 +309,7 @@ impl ArchivedPage {
                                                         crate::state::CloudTarget {
                                                             controller: engine.controller(),
                                                             subject: owner.clone(),
+                                                            organization: None,
                                                             workspace: head.workspace_id.clone(),
                                                             initial_session: session.clone(),
                                                         },

@@ -1,0 +1,21 @@
+# Applied only after account-event migration/configuration preflight. Signals are
+# one-byte wake hints; the database remains the durable event authority.
+x-signals: &signals
+  type: bind
+  source: ${ZUSE_CONFIG_DIR:?}/event-signals
+  target: /run/zuse/account-events
+  bind:
+    create_host_path: false
+services:
+  api:
+    environment:
+      ZUSE_CLOUD_EVENT_SIGNAL_DIRECTORY: /run/zuse/account-events
+    volumes: [*signals]
+  worker:
+    environment:
+      ZUSE_CLOUD_EVENT_SIGNAL_DIRECTORY: /run/zuse/account-events
+    volumes: [*signals]
+  auth-worker:
+    environment:
+      ZUSE_CLOUD_EVENT_SIGNAL_DIRECTORY: /run/zuse/account-events
+    volumes: [*signals]

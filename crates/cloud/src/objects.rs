@@ -1,4 +1,5 @@
 //! Immutable R2 objects through the S3 API. Bodies and credentials never enter errors.
+pub mod probe;
 use crate::error::ApiError;
 use async_trait::async_trait;
 use hmac::{Hmac, Mac};

@@ -213,7 +213,7 @@ async fn scoped_http_repository_connect_list_remove_preserves_existing_workspace
         )
         .await
         .0,
-        StatusCode::FORBIDDEN
+        StatusCode::CREATED
     );
     let same = request("same");
     let (a, b) = tokio::join!(
@@ -456,6 +456,181 @@ async fn scoped_http_repository_connect_list_remove_preserves_existing_workspace
         server.abort();
         authority.abort();
     }
+    pool.close().await;
+    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+        .execute(&admin)
+        .await
+        .unwrap();
+    admin.close().await;
+}
+
+#[tokio::test]
+#[ignore = "requires explicit isolated localhost PostgreSQL"]
+async fn conditional_create_is_atomic_and_never_reconnects_existing_or_removed_projects() {
+    let url = std::env::var("ZUSE_CLOUD_TEST_DATABASE_URL").expect("isolated PostgreSQL required");
+    assert!(matches!(
+        reqwest::Url::parse(&url).unwrap().host_str(),
+        Some("127.0.0.1" | "localhost" | "::1")
+    ));
+    let admin = PgPool::connect(&url).await.unwrap();
+    let schema = format!("conditional_projects_{}", uuid::Uuid::new_v4().simple());
+    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        .execute(&admin)
+        .await
+        .unwrap();
+    let copy = schema.clone();
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(8)
+        .after_connect(move |conn, _| {
+            let schema = copy.clone();
+            Box::pin(async move {
+                sqlx::query(&format!("SET search_path={schema}"))
+                    .execute(conn)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect(&url)
+        .await
+        .unwrap();
+    for sql in [
+        include_str!("../../tests/fixtures/legacy-catalog.sql"),
+        include_str!("../../tests/fixtures/projects.sql"),
+        crate::jobs::MIGRATION,
+    ] {
+        sqlx::raw_sql(sql).execute(&pool).await.unwrap();
+    }
+    sqlx::raw_sql(
+        "INSERT INTO zuse_rust_control_owners VALUES('project-catalog','user-alice','rust',1,0)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let api = app(
+        Store::from_pool(pool.clone()).with_project_control(ProjectControl::from_pool(
+            pool.clone(),
+            vec!["user-alice".into()],
+        )),
+    );
+    async fn create(api: &Router, body: &Value, precondition: &str) -> (StatusCode, Value) {
+        let request = Request::builder()
+            .method("POST")
+            .uri("/v1/cloud/projects")
+            .header("authorization", "Bearer alice")
+            .header("content-type", "application/json")
+            .header("if-none-match", precondition)
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let response = api.clone().oneshot(request).await.unwrap();
+        let status = response.status();
+        (
+            status,
+            serde_json::from_slice(&to_bytes(response.into_body(), 1_000_000).await.unwrap())
+                .unwrap(),
+        )
+    }
+    let mut initial = request("conditional-initial");
+    initial["repositoryUrl"] = json!("https://github.com/example/conditional.git");
+    for invalid in ["", "\"tag\"", "*, \"tag\"", "W/\"*\""] {
+        assert_eq!(
+            create(&api, &initial, invalid).await.0,
+            StatusCode::BAD_REQUEST
+        );
+    }
+    let (status, created) = create(&api, &initial, "*").await;
+    assert_eq!(status, StatusCode::CREATED);
+    let id = created["projectId"].as_str().unwrap();
+    let before: Value =
+        sqlx::query_scalar("SELECT to_jsonb(p) FROM api_cloud_projects p WHERE project_id=$1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let mut reused_key = initial.clone();
+    reused_key["repositoryUrl"] = json!("https://github.com/example/different-repository.git");
+    assert_eq!(create(&api, &reused_key, "*").await.0, StatusCode::CONFLICT);
+    let mut duplicate = initial.clone();
+    duplicate["displayName"] = json!("must-not-overwrite");
+    for key in ["conditional-initial", "conditional-other-key"] {
+        duplicate["idempotencyKey"] = json!(key);
+        let (status, error) = create(&api, &duplicate, "*").await;
+        assert_eq!(status, StatusCode::PRECONDITION_FAILED);
+        assert_eq!(error["error"], "cloud_project_already_exists");
+        let current: Value =
+            sqlx::query_scalar("SELECT to_jsonb(p) FROM api_cloud_projects p WHERE project_id=$1")
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(current, before);
+    }
+    sqlx::query("UPDATE api_cloud_projects SET included=false WHERE project_id=$1")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let removed: Value =
+        sqlx::query_scalar("SELECT to_jsonb(p) FROM api_cloud_projects p WHERE project_id=$1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        create(&api, &duplicate, "*").await.0,
+        StatusCode::PRECONDITION_FAILED
+    );
+    let after: Value =
+        sqlx::query_scalar("SELECT to_jsonb(p) FROM api_cloud_projects p WHERE project_id=$1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(after, removed);
+    // The existing ordinary reconnect contract remains available without a condition.
+    assert_eq!(
+        call(
+            &api,
+            "POST",
+            "/v1/cloud/projects",
+            "alice",
+            None,
+            Some(&duplicate)
+        )
+        .await
+        .0,
+        StatusCode::CREATED
+    );
+    let ordinary: Value =
+        sqlx::query_scalar("SELECT to_jsonb(p) FROM api_cloud_projects p WHERE project_id=$1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(ordinary["display_name"], "must-not-overwrite");
+    assert_eq!(ordinary["included"], true);
+    // Competing HTTP conditional creates serialize under the existing owner/repo
+    // locks. Exactly one creates; the loser cannot reconnect or alter its row.
+    let mut left = initial.clone();
+    left["repositoryUrl"] = json!("https://github.com/example/racing.git");
+    left["displayName"] = json!("left");
+    left["idempotencyKey"] = json!("racing-left");
+    let mut right = left.clone();
+    right["displayName"] = json!("right");
+    right["idempotencyKey"] = json!("racing-right");
+    let (a, b) = tokio::join!(create(&api, &left, "*"), create(&api, &right, "*"));
+    assert!(matches!(
+        (a.0, b.0),
+        (StatusCode::CREATED, StatusCode::PRECONDITION_FAILED)
+            | (StatusCode::PRECONDITION_FAILED, StatusCode::CREATED)
+    ));
+    let winner = if a.0 == StatusCode::CREATED {
+        left
+    } else {
+        right
+    };
+    let row: Value = sqlx::query_scalar("SELECT to_jsonb(p) FROM api_cloud_projects p WHERE account_id='user-alice' AND repository_identity='github.com/example/racing'").fetch_one(&pool).await.unwrap();
+    assert_eq!(row["display_name"], winner["displayName"]);
+    assert_eq!(row["idempotency_key"], winner["idempotencyKey"]);
     pool.close().await;
     sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
         .execute(&admin)

@@ -725,20 +725,18 @@ impl Render for CloudBillingPage {
                 cx,
                 action,
             ));
-        if self.subscribed == Some(true) {
-            content = content.child(zuse_viewport::cloud_settings::tabs(
-                self.tab,
-                &self.tab_focus,
-                cx,
-                |this: &mut Self, tab, _, cx| {
-                    this.tab = tab;
-                    if tab == zuse_viewport::cloud_settings::Tab::Usage {
-                        this.load(false, cx);
-                    }
-                    cx.notify();
-                },
-            ));
-        }
+        content = content.child(zuse_viewport::cloud_settings::tabs(
+            self.tab,
+            &self.tab_focus,
+            cx,
+            |this: &mut Self, tab, _, cx| {
+                this.tab = tab;
+                if tab == zuse_viewport::cloud_settings::Tab::Usage {
+                    this.load(false, cx);
+                }
+                cx.notify();
+            },
+        ));
         let storage = self.repository_panel.update(cx, |panel, cx| {
             panel.set_usage(
                 self.tab == zuse_viewport::cloud_settings::Tab::Usage,
@@ -747,9 +745,7 @@ impl Render for CloudBillingPage {
             )
         });
         if self.tab == zuse_viewport::cloud_settings::Tab::Setup {
-            if self.subscribed == Some(true) {
-                content = content.child(self.repository_panel.clone());
-            }
+            content = content.child(self.repository_panel.clone());
         } else {
             if storage {
                 content = content.child(self.repository_panel.clone());

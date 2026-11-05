@@ -602,7 +602,8 @@ pub fn compose_login_shell_path(cmd: &mut tokio::process::Command) {
 }
 
 /// Compose the child's PATH: the resolved executable's directory first, then
-/// our own PATH, then the login-shell PATH snapshot — deduped. npm-shim CLIs
+/// its explicitly configured PATH, our own PATH, then the login-shell snapshot
+/// — deduped. npm-shim CLIs
 /// are `#!/usr/bin/env node` scripts whose `node` lives beside them in the
 /// version manager's bin dir, and the CLIs themselves shell out to tools
 /// (git, rg, node) that a GUI/service launch's own PATH may lack.
@@ -620,6 +621,17 @@ fn compose_path<'a>(
     let mut paths: Vec<std::path::PathBuf> = Vec::new();
     for dir in executable_dir {
         paths.push(dir.to_path_buf());
+    }
+    // Authority/workload setup may have installed task-scoped command
+    // launchers before this step. Replacing that PATH loses their credentials
+    // and silently selects the unauthenticated system executable instead.
+    let configured_path = cmd.get_envs().find_map(|(key, value)| {
+        (key == std::ffi::OsStr::new("PATH"))
+            .then(|| value.map(std::ffi::OsStr::to_os_string))
+            .flatten()
+    });
+    if let Some(path) = configured_path {
+        paths.extend(std::env::split_paths(&path));
     }
     if let Some(path) = std::env::var_os("PATH") {
         paths.extend(std::env::split_paths(&path));

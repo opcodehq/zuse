@@ -1,11 +1,16 @@
 //! Original archive capabilities with durable native verification and retirement barriers.
 use super::*;
+use crate::providers::contract::{DesiredState, OperationState, ProviderOperation};
 use crate::{
     jobs,
     objects::Objects,
     providers::{Machine, MachineState, ProviderError},
 };
 use async_trait::async_trait;
+mod retirement;
+#[cfg(test)]
+mod retirement_tests;
+mod stages;
 use zeroize::Zeroizing;
 use zuse_cloud_runtime::recovery::{Binding, RustStorage};
 use zuse_protocol::cloud::{ArchiveManifest, ArchivePhase, RecoveryArchive};
@@ -119,12 +124,79 @@ pub struct CapturePlan {
 }
 #[async_trait]
 pub trait RecoveryProvider: Send + Sync {
+    fn provider_id(&self) -> &'static str {
+        "boxd"
+    }
     async fn inspect(&self, id: &str) -> Result<Option<Machine>, ProviderError>;
     async fn wake(&self, id: &str, state: &MachineState) -> Result<(), ProviderError>;
     async fn capture(&self, plan: &CapturePlan) -> Result<(), ProviderError>;
     async fn stop_capture(&self, id: &str, operation: &str) -> Result<(), ProviderError>;
     async fn pause(&self, id: &str) -> Result<(), ProviderError>;
     async fn retire(&self, id: &str) -> Result<(), ProviderError>;
+    async fn pause_receipt(&self, id: &str) -> Result<ProviderOperation, ProviderError> {
+        self.pause(id).await?;
+        Ok(ProviderOperation {
+            resource_id: id.into(),
+            operation_id: None,
+            desired: DesiredState::Sleeping,
+        })
+    }
+    async fn wake_receipt(
+        &self,
+        id: &str,
+        state: &MachineState,
+    ) -> Result<ProviderOperation, ProviderError> {
+        self.wake(id, state).await?;
+        Ok(ProviderOperation {
+            resource_id: id.into(),
+            operation_id: None,
+            desired: DesiredState::Running,
+        })
+    }
+    async fn recovery_state(
+        &self,
+        receipt: &ProviderOperation,
+    ) -> Result<OperationState, ProviderError> {
+        if receipt.operation_id.is_some() {
+            return Err(ProviderError::InvalidResponse);
+        }
+        let machine = self.inspect(&receipt.resource_id).await?;
+        let completed = match (receipt.desired, machine.as_ref().map(|m| &m.state)) {
+            (DesiredState::Deleted, None) => true,
+            (DesiredState::Running, Some(MachineState::Running)) => true,
+            (
+                DesiredState::Sleeping,
+                Some(MachineState::Standby | MachineState::Paused | MachineState::Stopped),
+            ) => true,
+            _ => false,
+        };
+        Ok(if completed {
+            OperationState::Completed
+        } else {
+            OperationState::Pending
+        })
+    }
+    async fn retire_receipt(&self, id: &str) -> Result<ProviderOperation, ProviderError> {
+        self.retire(id).await?;
+        Ok(ProviderOperation {
+            resource_id: id.into(),
+            operation_id: None,
+            desired: DesiredState::Deleted,
+        })
+    }
+    async fn retirement_state(
+        &self,
+        receipt: &ProviderOperation,
+    ) -> Result<OperationState, ProviderError> {
+        if receipt.operation_id.is_some() || receipt.desired != DesiredState::Deleted {
+            return Err(ProviderError::InvalidResponse);
+        }
+        Ok(if self.inspect(&receipt.resource_id).await?.is_none() {
+            OperationState::Completed
+        } else {
+            OperationState::Pending
+        })
+    }
 }
 impl RuntimeControl {
     pub fn with_recovery_policy(mut self, enabled: bool, workspaces: Vec<String>) -> Self {
@@ -134,7 +206,7 @@ impl RuntimeControl {
     }
     pub async fn recovery_ready(&self) -> Result<(), ApiError> {
         let ready: bool =
-            sqlx::query_scalar("SELECT to_regclass('zuse_rust_recovery_operations') IS NOT NULL AND to_regclass('zuse_rust_restores') IS NOT NULL AND to_regclass('api_cloud_usage_outbox') IS NOT NULL AND to_regclass('api_cloud_runtime_observations') IS NOT NULL")
+            sqlx::query_scalar("SELECT to_regclass('zuse_rust_recovery_operations') IS NOT NULL AND to_regclass('zuse_rust_restores') IS NOT NULL AND to_regclass('api_cloud_usage_outbox') IS NOT NULL AND to_regclass('api_cloud_runtime_observations') IS NOT NULL AND EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='zuse_rust_recovery_operations' AND column_name='provider_effects') AND EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='zuse_rust_restores' AND column_name='provider_effects')")
                 .fetch_one(&self.pool)
                 .await?;
         if !ready {
@@ -163,6 +235,7 @@ impl RuntimeControl {
             .map_err(|_| failed())?;
         let mut config = json!({"operationId":a.id,"workspaceId":row["workspace_id"],"chatId":row["chat_id"],"sessionId":row["initial_session_id"],"mode":"backup","expiresAtMs":a.expires_at_ms,"home":"/home/zuse","repositoriesPath":"/home/zuse/workspace","url":format!("{}/v1/cloud/workspaces/{}/archive/{}",self.signer.issuer(),crate::objects::encode(required(row,"workspace_id")?,false),a.id),"token":capability(&self.master,row,a),"key":&*key});
         config["rustStorage"] = binding["rustStorage"].clone();
+        config["supervisorBinding"] = json!({"workspaceId":row["workspace_id"],"generation":row["request_config"]["runtimeGeneration"],"storageIncarnationId":row["request_config"]["rustRuntimeStorage"]["storageIncarnationId"]});
         Ok(CapturePlan {
             operation_id: a.id.clone(),
             workspace_id: required(row, "workspace_id")?.into(),
@@ -207,10 +280,11 @@ impl RuntimeControl {
             .is_some_and(|at| at <= now);
         let caps = &config["rustStorageEnrollment"]["capabilities"];
         if deleted(&row)
-            || row["state"] != "archived"
-            || row["desired_state"] != "archived"
-            || !due
-            || row["provider"] != "boxd"
+            || (!super::recreation::capture_intent(&row)
+                && (row["state"] != "archived" || row["desired_state"] != "archived" || !due))
+            || !(row["provider"] == "boxd"
+                || config["rustProviderControllerVersion"] == 1
+                    && matches!(row["provider"].as_str(), Some("boat" | "e2b" | "daytona")))
             || !storage_enrolled(&row)
             || config["rustLifecycleOperation"]["phase"] != "paused"
             || config["providerAuthMode"] != "broker-v1"
@@ -347,7 +421,7 @@ impl RuntimeControl {
                 return Err(ApiError::bad_request("workspace_archive_object_invalid"));
             }
             let op = locked_op(&mut tx, &row).await?;
-            if row["desired_state"] != "archived"
+            if (row["desired_state"] != "archived" && !super::recreation::capture_intent(&row))
                 || !matches!(op["phase"].as_str(), Some("uploading" | "verifying"))
                 || !matches!(a.phase, ArchivePhase::Uploading | ArchivePhase::Verifying)
             {
@@ -415,31 +489,31 @@ fn hash_bytes(bytes: &[u8]) -> String {
 fn quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
+pub(super) fn capture_command(plan: &CapturePlan) -> (String, String) {
+    let staged = format!("/tmp/zuse-recovery-{}", plan.operation_id);
+    let directory = format!("/var/lib/zuse/recovery/{}", plan.operation_id);
+    let command = format!(
+        "set -eu\nsudo -n install -d -o zuse -g zuse -m 700 {}\nsudo -n install -o zuse -g zuse -m 600 {} {}/config.json\nsudo -n rm -- {}\nsudo -n -u zuse /usr/local/lib/zuse/launch-rust-recovery {}",
+        quote(&directory),
+        quote(&staged),
+        quote(&directory),
+        quote(&staged),
+        quote(&plan.operation_id)
+    );
+    (staged, command)
+}
 #[async_trait]
 impl RecoveryProvider for crate::providers::boxd::Boxd {
     async fn inspect(&self, id: &str) -> Result<Option<Machine>, ProviderError> {
         self.inspect(id).await
     }
     async fn wake(&self, id: &str, state: &MachineState) -> Result<(), ProviderError> {
-        match state {
-            MachineState::Paused => self.wake(id).await,
-            MachineState::Stopped => self.start(id).await,
-            _ => Err(ProviderError::Conflict),
-        }
+        self.activate(id, state).await
     }
     async fn capture(&self, plan: &CapturePlan) -> Result<(), ProviderError> {
-        let staged = format!("/tmp/zuse-recovery-{}", plan.operation_id);
+        let (staged, command) = capture_command(plan);
         self.upload(&plan.source_machine_id, &staged, plan.config.as_bytes())
             .await?;
-        let directory = format!("/var/lib/zuse/recovery/{}", plan.operation_id);
-        let command = format!(
-            "set -eu\nsudo -n install -d -o zuse -g zuse -m 700 {}\nsudo -n install -o zuse -g zuse -m 600 {} {}/config.json\nsudo -n rm -- {}\nsudo -n -u zuse /usr/local/lib/zuse/launch-rust-recovery {}",
-            quote(&directory),
-            quote(&staged),
-            quote(&directory),
-            quote(&staged),
-            quote(&plan.operation_id)
-        );
         if self
             .exec(&plan.source_machine_id, &command)
             .await?
@@ -486,7 +560,7 @@ impl zuse_cloud_runtime::recovery::Objects for Reader {
     async fn get(&self, name: &str) -> anyhow::Result<Vec<u8>> {
         anyhow::ensure!(valid_object(name), "archive_object_invalid");
         // Cancellation/deletion stops additional privileged chunk reads, not only the final barrier write.
-        let allowed:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM api_cloud_workspaces w JOIN zuse_rust_control_owners o ON o.resource_kind='workspace' AND o.resource_id=w.workspace_id AND o.backend='rust' AND o.generation=$2 WHERE w.workspace_id=$1 AND w.desired_state='archived' AND w.state NOT IN ('deleting','deleted') AND w.request_config->'recoveryArchive'->>'id'=$3 AND EXISTS(SELECT 1 FROM zuse_rust_jobs j WHERE j.job_id=$4 AND j.lease_token=$5 AND j.state='running' AND j.lease_expires_at>$6))").bind(&self.workspace).bind(self.job.generation).bind(&self.operation).bind(&self.job.id).bind(&self.job.lease_token).bind(clock_ms()).fetch_one(&self.pool).await?;
+        let allowed:bool=sqlx::query_scalar(&format!("SELECT EXISTS(SELECT 1 FROM api_cloud_workspaces w JOIN zuse_rust_control_owners o ON o.resource_kind='workspace' AND o.resource_id=w.workspace_id AND o.backend='rust' AND o.generation=$2 WHERE w.workspace_id=$1 AND {} AND w.state NOT IN ('deleting','deleted') AND w.request_config->'recoveryArchive'->>'id'=$3 AND EXISTS(SELECT 1 FROM zuse_rust_jobs j WHERE j.job_id=$4 AND j.lease_token=$5 AND j.state='running' AND j.lease_expires_at>$6))",super::recreation::CAPTURE_SQL)).bind(&self.workspace).bind(self.job.generation).bind(&self.operation).bind(&self.job.id).bind(&self.job.lease_token).bind(clock_ms()).fetch_one(&self.pool).await?;
         anyhow::ensure!(allowed, "archive_verification_fenced");
         self.objects
             .get_archive(&object_key(&self.workspace, &self.operation, name))
@@ -514,7 +588,10 @@ pub(super) async fn defer(
     complete: bool,
     now: i64,
 ) -> Result<(), ApiError> {
-    sqlx::query("UPDATE zuse_rust_jobs SET state=$3,lease_token=NULL,lease_expires_at=NULL,due_at=$4,updated_at=$5,attempts=CASE WHEN $3='pending' THEN 0 ELSE attempts END WHERE job_id=$1 AND lease_token=$2").bind(&job.id).bind(&job.lease_token).bind(if complete{"completed"}else{"pending"}).bind(now+2000).bind(now).execute(&mut **tx).await?;
+    let saved=sqlx::query("UPDATE zuse_rust_jobs SET state=$3,lease_token=NULL,lease_expires_at=NULL,due_at=$4,updated_at=$5,attempts=CASE WHEN $3='pending' THEN 0 ELSE attempts END WHERE job_id=$1 AND lease_token=$2 AND state='running' AND lease_expires_at>$6").bind(&job.id).bind(&job.lease_token).bind(if complete{"completed"}else{"pending"}).bind(now+2000).bind(now).bind(clock_ms()).execute(&mut **tx).await?;
+    if saved.rows_affected() != 1 {
+        return Err(fenced());
+    }
     Ok(())
 }
 impl RuntimeControl {
@@ -530,53 +607,55 @@ impl RuntimeControl {
         if !ready {
             return Ok(false);
         }
+        self.recovery_admit_due(now).await?;
+        let Some(job) = jobs::claim(&self.pool, JOB_KIND, "workspace", now, LEASE).await? else {
+            return Ok(false);
+        };
+        self.recovery_run_job(provider, &job, now).await
+    }
+    pub(super) async fn recovery_admit_due(&self, now: i64) -> Result<(), ApiError> {
         if self.recovery_enabled {
             let ids:Vec<String>=sqlx::query_scalar("SELECT w.workspace_id FROM api_cloud_workspaces w JOIN zuse_rust_control_owners o ON o.resource_kind='workspace' AND o.resource_id=w.workspace_id AND o.backend='rust' WHERE w.state='archived' AND w.desired_state='archived' AND w.provider_sandbox_id IS NOT NULL AND (w.archive_requested_at+864000000 <= $1 OR w.archive_requested_at IS NULL AND w.archive_delete_at<=$1) AND NOT EXISTS(SELECT 1 FROM zuse_rust_recovery_operations r WHERE r.workspace_id=w.workspace_id AND r.phase NOT IN ('cancelled','restored')) ORDER BY w.archive_delete_at LIMIT 10").bind(now).fetch_all(&self.pool).await?;
             for id in ids {
                 self.begin_recovery(&id, now).await?;
             }
         }
-        let Some(job) = jobs::claim(&self.pool, JOB_KIND, "workspace", now, LEASE).await? else {
-            return Ok(false);
-        };
-        let result = self.recovery_step(provider, &job, now).await;
+        Ok(())
+    }
+    pub(super) async fn recovery_run_job(
+        &self,
+        provider: &dyn RecoveryProvider,
+        job: &jobs::Job,
+        now: i64,
+    ) -> Result<bool, ApiError> {
+        let row: Value = sqlx::query_scalar(
+            "SELECT to_jsonb(w) FROM api_cloud_workspaces w WHERE workspace_id=$1",
+        )
+        .bind(&job.resource_id)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| ApiError::not_found("cloud_workspace_not_found"))?;
+        self.recreation_effect_scope(&row).await?;
+        let result = self.recovery_step(provider, job, now).await;
         if let Err(error) = &result {
-            jobs::retry(&self.pool, &job, clock_ms(), error.code).await?;
-            if let Ok(mut tx) = self.pool.begin().await {
-                if let Ok((row, _, _)) = locked_workspace(&mut tx, &job.resource_id).await {
-                    if !deleted(&row)
-                        && row["desired_state"] == "archived"
-                        && row["request_config"]["recoveryArchive"]["id"]
-                            == job.payload["operationId"]
-                    {
-                        if let Ok(op) = locked_op(&mut tx, &row).await {
-                            if matches!(op["phase"].as_str(), Some("uploading" | "verifying")) {
-                                if let Some(source) = op["source_machine_id"].as_str() {
-                                    if let Ok(Some(machine)) = provider.inspect(source).await {
-                                        if machine.id == source
-                                            && machine.state == MachineState::Running
-                                        {
-                                            if provider
-                                                .stop_capture(
-                                                    source,
-                                                    op["operation_id"].as_str().unwrap_or(""),
-                                                )
-                                                .await
-                                                .is_ok()
-                                            {
-                                                let _ = provider.pause(source).await;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+            // A failed delivery may have lost its lease or generation. Never
+            // issue provider cleanup from this error path: the next admitted
+            // state-machine step reconciles the helper and original operation.
+            let mut tx = self.pool.begin().await?;
+            if let Ok((row, generation, _)) = locked_workspace(&mut tx, &job.resource_id).await {
+                if generation == job.generation
+                    && active_job(&mut tx, &job).await.is_ok()
+                    && !deleted(&row)
+                    && (row["desired_state"] == "archived"
+                        || super::recreation::capture_intent(&row))
+                    && row["request_config"]["recoveryArchive"]["id"] == job.payload["operationId"]
+                {
+                    sqlx::query("UPDATE api_cloud_workspaces SET status_code=$2,revision=revision+1,updated_at=GREATEST(updated_at+1,$3) WHERE workspace_id=$1")
+                        .bind(&job.resource_id).bind(error.code).bind(clock_ms()).execute(&mut *tx).await?;
                 }
-                let _ = tx.commit().await;
             }
-
-            sqlx::query("UPDATE api_cloud_workspaces SET status_code=$3,revision=revision+1,updated_at=GREATEST(updated_at+1,$4) WHERE workspace_id=$1 AND request_config->'recoveryArchive'->>'id'=$2 AND desired_state='archived' AND state NOT IN ('deleting','deleted')").bind(&job.resource_id).bind(job.payload["operationId"].as_str()).bind(error.code).bind(clock_ms()).execute(&self.pool).await?;
+            tx.commit().await?;
+            jobs::retry(&self.pool, &job, clock_ms(), error.code).await?;
         }
         result.map(|_| true)
     }
@@ -603,138 +682,29 @@ impl RuntimeControl {
         {
             return Err(fenced());
         }
-        if op["phase"] == "cancelled" {
-            if row["provider_sandbox_id"] != op["source_machine_id"] {
-                return Err(fenced());
-            }
-            let source = required(&op, "source_machine_id")?;
-            let machine = provider
-                .inspect(source)
-                .await
-                .map_err(|_| failed())?
-                .ok_or_else(|| ApiError::unavailable("archive-source-missing"))?;
-            if machine.id != source {
-                return Err(fenced());
-            }
-            observe(&mut tx, &row, &op, Some(&machine), now).await?;
-            if matches!(machine.state, MachineState::Paused | MachineState::Stopped)
-                && op["helper_stopped"] != true
-            {
-                provider
-                    .wake(source, &machine.state)
-                    .await
-                    .map_err(|_| failed())?;
-                defer(&mut tx, job, false, now).await?;
-                tx.commit().await?;
-                return Ok(());
-            }
-            if machine.state == MachineState::Starting {
-                defer(&mut tx, job, false, now).await?;
-                tx.commit().await?;
-                return Ok(());
-            }
-            if machine.state == MachineState::Running {
-                provider
-                    .stop_capture(source, op_id)
-                    .await
-                    .map_err(|_| ApiError::unavailable("archive-cancel-failed"))?;
-                sqlx::query("UPDATE zuse_rust_recovery_operations SET helper_stopped=true WHERE operation_id=$1").bind(op_id).execute(&mut *tx).await?;
-                provider.pause(source).await.map_err(|_| failed())?;
-                defer(&mut tx, job, false, now).await?;
-                tx.commit().await?;
-                return Ok(());
-            }
-            if !matches!(machine.state, MachineState::Paused | MachineState::Stopped) {
-                return Err(failed());
-            }
-            if row["desired_state"] != "ready" {
-                if let Some(machine) = provider.inspect(source).await.map_err(|_| failed())? {
-                    if machine.id != source {
-                        return Err(fenced());
-                    }
-                    if machine.state == MachineState::Running {
-                        provider.pause(source).await.map_err(|_| failed())?;
-                    }
-                }
-            }
-            sqlx::query("UPDATE zuse_rust_recovery_operations SET helper_stopped=true,updated_at=$2 WHERE operation_id=$1").bind(op_id).bind(now).execute(&mut *tx).await?;
-            sqlx::query("UPDATE api_cloud_workspaces SET runtime_credential_hash=$2,request_config=request_config-'rustRecoveryCancellation',revision=revision+1 WHERE workspace_id=$1").bind(&job.resource_id).bind(op["source_credential_hash"].as_str()).execute(&mut *tx).await?;
-            defer(&mut tx, job, true, now).await?;
-            tx.commit().await?;
-            return Ok(());
+        if row["provider"] != provider.provider_id() {
+            return Err(ApiError::conflict("cloud_provider_identity_mismatch"));
         }
-        let mut a = archive(&row)?;
+        if op["phase"] == "cancelled" {
+            tx.commit().await?;
+            return self.recovery_cancel(provider, job).await;
+        }
+        let a = archive(&row)?;
         let current = locked_op(&mut tx, &row).await?;
         if a.id != op_id || current["operation_id"] != op_id {
             return Err(fenced());
         }
         match op["phase"].as_str() {
             Some("uploading") => {
-                if row["desired_state"] != "archived" {
-                    return Err(fenced());
-                }
-                if a.expires_at_ms <= now {
-                    a.expires_at_ms = now + TTL;
-                    sqlx::query("UPDATE zuse_rust_recovery_operations SET expires_at=$2 WHERE operation_id=$1").bind(op_id).bind(a.expires_at_ms).execute(&mut *tx).await?;
-                    save(&mut tx, &row, &a, "archive-uploading", now).await?;
-                }
-                let source = &a.source_sandbox_id;
-                let machine = provider
-                    .inspect(source)
-                    .await
-                    .map_err(|_| failed())?
-                    .ok_or_else(|| ApiError::unavailable("archive-source-missing"))?;
-                if machine.id != *source {
-                    return Err(fenced());
-                }
-                observe(&mut tx, &row, &op, Some(&machine), now).await?;
-                match machine.state {
-                    MachineState::Paused | MachineState::Stopped => provider
-                        .wake(source, &machine.state)
-                        .await
-                        .map_err(|_| failed())?,
-                    MachineState::Running => provider
-                        .capture(&self.capture_plan(&row, &a, op["binding"].clone())?)
-                        .await
-                        .map_err(|_| ApiError::unavailable("archive-capture-failed"))?,
-                    MachineState::Starting => {}
-                    _ => return Err(failed()),
-                }
+                tx.commit().await?;
+                return self.recovery_upload(provider, job).await;
             }
             Some("verifying") => {
-                if row["desired_state"] != "archived" {
-                    return Err(fenced());
+                tx.commit().await?;
+                if !self.recovery_prepare_verification(provider, job).await? {
+                    return Ok(());
                 }
-                if let Some(machine) = provider
-                    .inspect(&a.source_sandbox_id)
-                    .await
-                    .map_err(|_| failed())?
-                {
-                    if machine.id != a.source_sandbox_id {
-                        return Err(fenced());
-                    }
-                    observe(&mut tx, &row, &op, Some(&machine), now).await?;
-                    if machine.state == MachineState::Running {
-                        provider
-                            .stop_capture(&a.source_sandbox_id, &a.id)
-                            .await
-                            .map_err(|_| failed())?;
-                        sqlx::query("UPDATE zuse_rust_recovery_operations SET helper_stopped=true WHERE operation_id=$1").bind(&a.id).execute(&mut *tx).await?;
-                        provider
-                            .pause(&a.source_sandbox_id)
-                            .await
-                            .map_err(|_| failed())?;
-                        defer(&mut tx, job, false, now).await?;
-                        tx.commit().await?;
-                        return Ok(());
-                    }
-                    if !matches!(machine.state, MachineState::Paused | MachineState::Stopped) {
-                        defer(&mut tx, job, false, now).await?;
-                        tx.commit().await?;
-                        return Ok(());
-                    }
-                }
-
+                let (tx, row, op) = self.recovery_stage_locked(job, "verifying").await?;
                 let key = self
                     .master
                     .open_transcript_key(
@@ -761,7 +731,7 @@ impl RuntimeControl {
                     handle.block_on(async move {
                         // Keep the execution guard through TempDir destruction, even if the job lease is revoked.
                         let guard=effects;
-                        let allowed:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM api_cloud_workspaces w JOIN zuse_rust_control_owners o ON o.resource_id=w.workspace_id AND o.resource_kind='workspace' AND o.backend='rust' AND o.generation=$2 WHERE w.workspace_id=$1 AND w.desired_state='archived' AND w.state NOT IN ('deleting','deleted'))").bind(&resource).bind(expected_generation).fetch_one(&pool).await?;
+                        let allowed:bool=sqlx::query_scalar(&format!("SELECT EXISTS(SELECT 1 FROM api_cloud_workspaces w JOIN zuse_rust_control_owners o ON o.resource_id=w.workspace_id AND o.resource_kind='workspace' AND o.backend='rust' AND o.generation=$2 WHERE w.workspace_id=$1 AND {} AND w.state NOT IN ('deleting','deleted'))",super::recreation::CAPTURE_SQL)).bind(&resource).bind(expected_generation).fetch_one(&pool).await?;
                         anyhow::ensure!(allowed,"archive_verification_fenced");
                         let temp = guard.temp()?;
                         let root = temp.path();
@@ -795,7 +765,8 @@ impl RuntimeControl {
                 let mut a = archive(&row)?;
                 if generation != job.generation
                     || a.id != op_id
-                    || row["desired_state"] != "archived"
+                    || (row["desired_state"] != "archived"
+                        && !super::recreation::capture_intent(&row))
                     || op["phase"] != "verifying"
                     || serde_json::to_value(&verified).map_err(|_| failed())? != op["manifest"]
                 {
@@ -812,49 +783,8 @@ impl RuntimeControl {
                 return Ok(());
             }
             Some("retiring") => {
-                if op["verified_at"].is_null()
-                    || !a.backup_verified()
-                    || a.manifest
-                        .as_ref()
-                        .is_none_or(|m| op["verified_archive_sha256"] != m.archive_sha256)
-                {
-                    return Err(fenced());
-                }
-                let source = &a.source_sandbox_id;
-                let shared:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM api_cloud_workspaces WHERE workspace_id<>$1 AND provider=$2 AND provider_sandbox_id=$3 AND state<>'deleted')").bind(&job.resource_id).bind(required(&row,"provider")?).bind(source).fetch_one(&mut *tx).await?;
-                if shared {
-                    return Err(ApiError::conflict("archive-source-shared"));
-                }
-                if let Some(machine) = provider.inspect(source).await.map_err(|_| failed())? {
-                    if machine.id != *source {
-                        return Err(fenced());
-                    }
-                    provider
-                        .retire(source)
-                        .await
-                        .map_err(|_| ApiError::unavailable("archive-retirement-failed"))?;
-                }
-                if provider
-                    .inspect(source)
-                    .await
-                    .map_err(|_| failed())?
-                    .is_none()
-                {
-                    observe(&mut tx, &row, &op, None, now).await?;
-                    a.phase = ArchivePhase::Retired;
-                    sqlx::query("UPDATE zuse_rust_recovery_operations SET phase='retired',updated_at=$2 WHERE operation_id=$1").bind(op_id).bind(now).execute(&mut *tx).await?;
-                    save(&mut tx, &row, &a, "archive-retired", now).await?;
-                    sqlx::query("UPDATE api_cloud_workspaces SET provider_sandbox_id=NULL,runtime_state='offline',runtime_credential_hash=NULL,runtime_boot_token_hash=NULL,runtime_boot_token_expires_at=NULL,state=CASE WHEN desired_state='archived' THEN 'archived' ELSE 'paused' END,next_action_at=9007199254740991 WHERE workspace_id=$1").bind(&job.resource_id).execute(&mut *tx).await?;
-                    defer(
-                        &mut tx,
-                        job,
-                        !row["request_config"]["rustRestoreRequested"].is_string(),
-                        now,
-                    )
-                    .await?;
-                    tx.commit().await?;
-                    return Ok(());
-                }
+                tx.commit().await?;
+                return self.recovery_retirement(provider, job, now).await;
             }
             Some("retired")
                 if row["request_config"]["rustRestoreRequested"].is_string()
@@ -880,9 +810,6 @@ impl RuntimeControl {
             }
             _ => return Err(fenced()),
         }
-        defer(&mut tx, job, false, now).await?;
-        tx.commit().await?;
-        Ok(())
     }
 }
 
@@ -934,7 +861,8 @@ impl RuntimeControl {
             }
             crate::images::deletion::snapshot_read_guard(tx, required(row, "account_id")?, None)
                 .await?;
-            lifecycle::require_resume_capacity(tx, row, now).await?;
+            lifecycle::require_resume_capacity(self.staging_candidate.as_deref(), tx, row, now)
+                .await?;
             if op["phase"] == "restoring" {
                 sqlx::query("UPDATE zuse_rust_jobs SET state='pending',attempts=0,due_at=$3,last_error_code=NULL,updated_at=$3 WHERE kind=$1 AND resource_id=$2 AND resource_generation=$4 AND payload->>'operationId'=$5 AND state='failed'")
                     .bind(restore::JOB_KIND).bind(required(row,"workspace_id")?).bind(now).bind(row["request_config"]["runtimeGeneration"].as_i64()).bind(row["request_config"]["rustRestoreOperationId"].as_str()).execute(&mut **tx).await?;

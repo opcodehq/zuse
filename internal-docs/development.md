@@ -15,6 +15,40 @@ Successful builds relaunch only the native UI; active agents and chat history
 stay in the engine. Failed builds leave the current window running until the
 next edit. No watcher package is required.
 
+The launcher uses line-table debug symbols for first-party runtime crates,
+preserving line-number backtraces and existing third-party build profiles.
+Pass `--full-debug` when you need debugger variable/type inspection. Switching
+symbol profiles rebuilds affected local crates once. An explicit
+`CARGO_PROFILE_DEV_DEBUG` value is respected. Ordinary `cargo build` retains
+the workspace's original profile.
+
+The watcher follows the desktop's local runtime/build dependencies and bundled
+assets, excluding unrelated cloud crates, tests and package documentation.
+Content hashes ignore timestamp-only sync updates. A successful Cargo build
+that leaves the executable unchanged keeps the current UI open. Build duration
+is printed, and Cargo writes a report under `target/cargo-timings/`.
+The launcher also selects `ZUSE_ICON_STYLE=free` or `solid` from license-key
+presence before invoking Cargo. This public selector avoids the icon build
+script's automatic presence check forcing downstream recompilation every time;
+the license key itself is never added to Cargo's tracked environment inputs.
+An explicit selector is respected. Restart the launcher after changing icon
+credentials; when rotating a solid-icon key, rebuild the icon package explicitly
+to revalidate authorization. Direct Cargo builds retain automatic style checks.
+Desktop resource watches are platform-specific, so absent Windows resources do
+not force macOS/Linux builds to relink.
+
+On the owner's arm64 Mac (2026-10-29), the repaired cached build finished in
+1.69 seconds with all 1,113 artifacts fresh. The first successful local-crate
+recompile after disk recovery took 93 seconds. The cached measurement represents
+an unchanged build, not the latency of compiling a UI edit.
+
+Keep several GiB free for generated artifacts; large builds can require more.
+The launcher refuses to begin with less than 1 GiB available, but this cannot
+guarantee sufficient space for the whole build. It never deletes caches
+automatically. If disk space is tight, `CARGO_BUILD_JOBS=2` reduces concurrent
+compiler output; it does not reduce the final cache size. Avoid routine
+`cargo clean`, which discards reusable dependencies.
+
 This is automatic rebuild/relaunch, not Rust code replacement inside a running
 process. Unsaved editor buffers and UI-only drafts do not survive a relaunch.
 Engine or protocol changes require restarting the command so both processes use
@@ -25,6 +59,62 @@ Use `--data-dir /path/to/profile` and `--ipc-port 27665` to override them;
 `ZUSE_DATA_DIR` and `ZUSE_IPC_PORT` also work. An occupied port fails startup
 rather than connecting to a different engine. Existing provider CLI logins work;
 cloud sync is opt-in through `ZUSE_WORKOS_CLIENT_ID` or `ZUSE_EDGE_TOKEN`.
+
+### Staging cloud account sign-in
+
+General settings signs in through WorkOS device authorization. This is separate
+from the optional workspace/device/relay identity using `ZUSE_EDGE_URL` and
+`/auth/*`. The cloud REST API is not an auth-edge replacement.
+
+For the owner-only staging pilot, stop the previous development runner with
+Ctrl+C before starting the engine with the staging environment:
+
+```bash
+ZUSE_API_URL=https://api-rust-stag.zuse.sh \
+ZUSE_CLOUD_API_URL=https://api-rust-stag.zuse.sh \
+ZUSE_WORKOS_CLIENT_ID=client_01KW6ZEZKVMZ0G429A89XZD83Q \
+python3 scripts/dev-native.py --data-dir .context/native-staging-profile
+```
+
+The explicit staging profile leaves the existing development/production profile
+untouched and avoids loading its saved workspace identity. Then use
+**Settings → General → Sign in**. Restarting only the UI does not update
+an already running engine's environment. For an installed daemon, run its install
+command with the same environment before restarting it; installation captures
+both API overrides and the public client. No private WorkOS key belongs on the Mac.
+
+`ZUSE_API_URL` selects General account services, model connections and managed
+access; `ZUSE_CLOUD_API_URL` selects cloud task operations. If only one is set,
+both use that origin. Setting both preserves each explicit choice. With neither,
+the existing production API default remains unchanged. Optional workspace sync
+keeps its separate edge configuration and local default. This command/configuration
+is covered by local tests; interactive Mac sign-in still needs device acceptance.
+
+### Optional hosted cloud browser (source integration)
+
+The API's optional `hosted-browser` feature serves the existing shared client at
+`/app/` and scoped controller sessions at `/api/session/check` and `/api/rpc`.
+It is disabled by default. Build its static client with the explicit hosted base:
+
+```sh
+bash scripts/build-web.sh --public-url /app/
+```
+
+An enabled deployment must provide `ZUSE_CLOUD_BROWSER_ORIGIN` and
+`ZUSE_CLOUD_BROWSER_ASSETS` together, plus an explicit `CLOUD_PUBLIC_API_URL`
+matching that same HTTPS origin and the deployment's public `WORKOS_CLIENT_ID`.
+The assets path points to the resulting compiled directory. The API binary must
+be built with `cargo build -p zuse-cloud-api --features hosted-browser`.
+These are source configuration instructions, not evidence that staging has
+this feature deployed or that a real browser login has been approved.
+
+Each browser receives an opaque HttpOnly/Secure cookie and its own in-memory
+General account and cloud controller. General uses the existing public device
+sign-in flow. No running Mac or host-local workspace/terminal controller is used.
+Sessions expire after eight hours; anonymous sessions expire after ten minutes.
+**An API restart requires browser sign-in again.** Durable hosted login and
+restart recovery remain a release gate. Native persisted account sessions are
+unchanged. History reads remain separate from foreground compute actions.
 
 ## Linux native dependencies
 

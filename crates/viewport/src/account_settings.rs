@@ -367,17 +367,14 @@ impl Render for AccountCard {
             let (title, description) = if !available {
                 (
                     "Account unavailable",
-                    "Reconnect this computer to load the saved account session.",
+                    "Reconnect to load your account session.",
                 )
             } else if !p.loaded {
-                (
-                    "Checking account…",
-                    "Loading the saved account session from this computer.",
-                )
+                ("Checking account…", "Loading your account session.")
             } else {
                 (
                     "Not signed in",
-                    "You're using Zuse (Beta) locally without an account. Sign in to sync and unlock remote agents.",
+                    "Sign in to use cloud computers and manage your connected accounts.",
                 )
             };
             card = card.child(

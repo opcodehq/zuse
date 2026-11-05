@@ -463,7 +463,21 @@ impl RepositoryPanel {
         )
     }
     fn github_group(&self, window: &Window, cx: &mut Context<Self>) -> Div {
-        let loading = self.pending.values().any(|p| p.kind == "github");
+        if let Some(body) = self.github_operation_rows(cx) {
+            return cs::group(
+                "GitHub",
+                Some(
+                    "Connect your own GitHub account, then choose the installation to use with this workspace.",
+                ),
+                None,
+                body,
+            );
+        }
+
+        let loading = self
+            .pending
+            .values()
+            .any(|p| matches!(p.kind, "github" | "github-install"));
         let configured = self.github.as_ref().is_none_or(|g| g.configured);
         let connected = self.github_connected();
         let mut body = column();
@@ -477,7 +491,7 @@ impl RepositoryPanel {
         } else if self
             .github
             .as_ref()
-            .is_none_or(|g| g.installations.is_empty())
+            .is_none_or(|g| g.installations.is_empty() || g.user.is_none())
         {
             body = body.child(cs::setting_row(
                 true,
@@ -485,14 +499,23 @@ impl RepositoryPanel {
                 "",
                 Some(
                     cs::icon_label_button(
-                        "check-github-connection",
-                        "refresh",
-                        "Check connection",
+                        "connect-cloud-github",
+                        "github",
+                        "Connect GitHub",
                         false,
                         loading,
                         loading,
                     )
-                    .on_click(cx.listener(|this, _, _, cx| this.refresh(cx)))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if !this.repository_busy() {
+                            this.call(
+                                "github-install",
+                                zuse_protocol::methods::CLOUD_GITHUB_INSTALL,
+                                serde_json::json!({}),
+                                cx,
+                            );
+                        }
+                    }))
                     .into_any_element(),
                 ),
             ));
@@ -536,6 +559,9 @@ impl RepositoryPanel {
                 body=body.child(cs::setting_row(false,github.user.as_ref().map(|u|format!("Connected as {}",u.login)).unwrap_or_else(||"Connection status".into()),"Repository changes refresh automatically when you return from GitHub. Existing cloud chats are not affected.",Some(cs::icon_label_button("refresh-cloud-github","refresh","Refresh",false,loading,loading).on_click(cx.listener(|this,_,_,cx|this.refresh(cx))).into_any_element())));
             }
         }
+        if let Some(disconnect) = self.github_disconnect_row(cx) {
+            body = body.child(disconnect);
+        }
         cs::group(
             "GitHub",
             Some(
@@ -554,15 +580,23 @@ impl Render for RepositoryPanel {
         if self.usage_only {
             return self.render_storage(window, cx);
         }
-        let image = self.render_image(window, cx);
         let repos = self.repositories(window, cx);
         let github = self.github_group(window, cx);
-        let mut root = column().gap(px(16.)).child(image);
+        let agents = self.render_agents(window, cx);
+        let environment = self.render_environment(cx);
+        let mut root = column().gap(px(16.));
+        if self.agent_recovery_open() {
+            return root
+                .child(agents)
+                .child(github)
+                .child(repos)
+                .child(environment);
+        }
         if self.github_connected() {
             root = root.child(repos).child(github);
         } else {
             root = root.child(github).child(repos);
         }
-        root
+        root.child(agents).child(environment)
     }
 }

@@ -22,25 +22,55 @@ impl WorkspaceView {
     pub(crate) fn has_cloud_creation_notice(&self) -> bool {
         self.cloud_startup_pending()
             || self.cloud_models_active()
-                && (self.cloud.notice.is_some() || !self.cloud_model_ready())
+                && (self.cloud.notice.is_some()
+                    || (!(self.cloud_controller && self.cloud.account.is_none())
+                        && !self.cloud_model_ready()))
     }
 
     pub(crate) fn cloud_creation_notice(&self, cx: &mut Context<Self>) -> AnyElement {
-        let launch_retry = self.cloud.launch.is_some() && self.cloud.create.is_none();
-        let connection_retry = self.cloud.target.is_some()
+        let issue = super::preparation::issue(
+            self.cloud.status["statusCode"]
+                .as_str()
+                .or_else(|| {
+                    self.cloud
+                        .target
+                        .as_ref()
+                        .and_then(|target| target["statusCode"].as_str())
+                })
+                .unwrap_or_default(),
+        );
+        let admitted = self
+            .cloud
+            .target
+            .as_ref()
+            .and_then(|target| target["workspaceId"].as_str())
+            .or_else(|| self.cloud.status["workspaceId"].as_str())
+            .is_some_and(|id| !id.is_empty());
+        let launch_retry =
+            issue.is_none() && self.cloud.launch.is_some() && self.cloud.create.is_none();
+        let connection_retry = issue.is_none()
+            && self.cloud.target.is_some()
             && (self.cloud.status_request.is_none()
                 || matches!(
                     self.cloud.status["state"].as_str(),
                     Some("failed" | "blocked")
                 ));
         let model_retry = !self.cloud_model_ready() && !self.cloud_models_loading();
+        let setup_required = model_retry
+            && self.cloud_models.providers.is_empty()
+            && self.cloud.capabilities.is_object();
         if let Some(prompt) = self.cloud.queued_prompt.clone() {
-            let busy = self.cloud.create.is_some()
-                || self.cloud.status_request.is_some() && !connection_retry;
-            let status = self.cloud.status["message"]
-                .as_str()
-                .filter(|message| !message.is_empty())
-                .map(str::to_owned)
+            let busy = issue.is_none()
+                && (self.cloud.create.is_some()
+                    || self.cloud.status_request.is_some() && !connection_retry);
+            let status = issue
+                .map(|issue| issue.detail_for_admission(admitted).to_owned())
+                .or_else(|| {
+                    self.cloud.status["message"]
+                        .as_str()
+                        .filter(|message| !message.is_empty())
+                        .map(str::to_owned)
+                })
                 .or_else(|| self.cloud.notice.clone())
                 .unwrap_or_else(|| "Preparing cloud workspace…".into());
             return column()
@@ -55,6 +85,23 @@ impl WorkspaceView {
                     rgb(MUTED).into(),
                     rgb(BORDER).opacity(0.4).into(),
                 ))
+                .when_some(
+                    issue.and_then(|issue| issue.recovery.label()),
+                    |view, action| {
+                        view.child(row().w_full().px_3().py_1().justify_end().child(
+                            control("cloud-preparation-recovery", action).on_click(cx.listener(
+                                |this, _, _, cx| {
+                                    this.settings = true;
+                                    this.select_settings_section(
+                                        crate::settings_view::Section::Cloud,
+                                        cx,
+                                    );
+                                    cx.notify();
+                                },
+                            )),
+                        ))
+                    },
+                )
                 .when(launch_retry || connection_retry, |view| {
                     view.child(
                         row().w_full().px_3().py_1().justify_end().child(
@@ -74,10 +121,9 @@ impl WorkspaceView {
                 })
                 .into_any_element();
         }
-        let title = self
-            .cloud
-            .notice
-            .clone()
+        let title = issue
+            .map(|issue| issue.detail_for_admission(admitted).to_owned())
+            .or_else(|| self.cloud.notice.clone())
             .or_else(|| self.cloud_models.error.clone())
             .unwrap_or_else(|| {
                 if self.cloud_models_loading() {
@@ -97,9 +143,35 @@ impl WorkspaceView {
             .gap_2()
             .child(icon("cloud-dither").size(px(14.)))
             .child(label(title).flex_1().min_w_0().text_size(px(12.)))
-            .when(launch_retry || connection_retry || model_retry, |view| {
-                view.child(
-                    control("retry-cloud-creation", "Retry")
+            .when_some(
+                issue.and_then(|issue| issue.recovery.label()),
+                |view, action| {
+                    view.child(
+                        control("cloud-preparation-recovery", action).on_click(cx.listener(
+                            |this, _, _, cx| {
+                                this.settings = true;
+                                this.select_settings_section(
+                                    crate::settings_view::Section::Cloud,
+                                    cx,
+                                );
+                                cx.notify();
+                            },
+                        )),
+                    )
+                },
+            )
+            .when(
+                issue.is_none() && (launch_retry || connection_retry || model_retry),
+                |view| {
+                    view.child(
+                        control(
+                            "retry-cloud-creation",
+                            if setup_required {
+                                "Review setup"
+                            } else {
+                                "Retry"
+                            },
+                        )
                         .h(px(24.))
                         .tab_index(0)
                         .on_click(cx.listener(move |this, _, _, cx| {
@@ -108,13 +180,21 @@ impl WorkspaceView {
                                 cx.notify();
                             } else if launch_retry {
                                 this.submit_cloud(cx);
+                            } else if setup_required {
+                                this.settings = true;
+                                this.select_settings_section(
+                                    crate::settings_view::Section::Cloud,
+                                    cx,
+                                );
+                                cx.notify();
                             } else {
                                 this.refresh_cloud();
                                 cx.notify();
                             }
                         })),
-                )
-            })
+                    )
+                },
+            )
             .into_any_element()
     }
 
@@ -172,6 +252,18 @@ impl WorkspaceView {
                         },
                     );
                 }
+                if next.providers.is_empty() && self.cloud.capabilities.is_object() {
+                    let providers = self.cloud.capabilities["providers"].as_array();
+                    next.error=Some(if !providers.is_some_and(|rows|rows.iter().any(|p|p["configured"]==true)) {
+                        "Cloud providers need server configuration before a computer can start."
+                    } else if self.cloud.compute_provider.is_none() {
+                        "A managed computer environment must be published before this task can start."
+                    } else if !self.cloud.connections.iter().any(|connection|connection["state"]=="connected") {
+                        "Connect a coding agent in Cloud setup before starting."
+                    } else {
+                        "This computer has no compatible connected agent. Choose another computer or review Cloud setup."
+                    }.into());
+                }
                 self.cloud_models = next;
                 if self.cloud_models_active() {
                     self.reconcile_creation_model(previous, cx);
@@ -195,7 +287,7 @@ impl WorkspaceView {
             .selected_model()
             .map(|model| model.id.clone())
             .or_else(|| self.model.clone());
-        self.cloud.mode = cloud;
+        self.cloud.mode = cloud || self.cloud_controller;
         self.reconcile_creation_model(provider, cx);
     }
 

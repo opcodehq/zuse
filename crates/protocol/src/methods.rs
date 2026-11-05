@@ -261,6 +261,8 @@ pub const LIST_ACCOUNT_DEVICES: &str = "ListAccountDevices";
 pub const REVOKE_ACCOUNT_DEVICE: &str = "RevokeAccountDevice";
 /// Host-authorized cloud catalog and saved history; neither wakes compute.
 pub const CLOUD_CONTEXT: &str = "CloudContext";
+/// Shared account invalidation subscription. Never transports executable actions.
+pub const CLOUD_EVENTS: &str = "CloudEvents";
 pub const CLOUD_CREATE: &str = "CloudCreate";
 pub const CLOUD_ENVIRONMENT: &str = "CloudEnvironment";
 pub const CLOUD_RPC: &str = "CloudRpc";
@@ -275,6 +277,11 @@ pub const CLOUD_SYNC_STATUS: &str = "CloudSyncStatus";
 pub const CLOUD_SYNC_CONFIGURE: &str = "CloudSyncConfigure";
 pub const CLOUD_SYNC_RETRY: &str = "CloudSyncRetry";
 pub const CLOUD_PAUSE: &str = "CloudPause";
+/// Explicit supervised repair; start and resolve retain uncertain delivery.
+pub const CLOUD_RUNTIME_REPAIR: &str = "CloudRuntimeRepair";
+pub const CLOUD_ALLOCATION_RETRY: &str = "CloudAllocationRetry";
+/// Verified backup followed by explicit replacement of the task computer.
+pub const CLOUD_COMPUTER_RECREATION: &str = "CloudComputerRecreation";
 pub const CLOUD_WORKSPACE: &str = "CloudWorkspace";
 pub const CLOUD_ACCOUNT_STATUS: &str = "CloudAccountStatus";
 pub const CLOUD_ACCOUNT_SIGN_IN: &str = "CloudAccountSignIn";
@@ -313,8 +320,13 @@ pub fn retryable_read(method: &str, params: &serde_json::Value) -> bool {
         | LIST_ACCOUNT_DEVICES
         | CLOUD_ACCOUNT_STATUS
         | CLOUD_CONTEXT
+        | CLOUD_EVENTS
         | CLOUD_PROJECTS
         | CLOUD_GITHUB
+        | CLOUD_CAPABILITIES
+        | CLOUD_AGENT_CONNECTIONS
+        | CLOUD_AGENT_LOGIN_STATUS
+        | CLOUD_PROJECT_ENVIRONMENT
         | CLOUD_PREPAID_BALANCE
         | CLOUD_BILLING_ENTITLEMENTS
         | CLOUD_BILLING_SUMMARY
@@ -358,6 +370,10 @@ pub fn retryable_read(method: &str, params: &serde_json::Value) -> bool {
         | crate::project_creation::GITHUB_STATUS
         | crate::project_creation::GITHUB_REPOS
         | SEARCH_FILES => true,
+        CLOUD_ENVIRONMENT => {
+            params.get("interactiveResume") == Some(&serde_json::Value::Bool(false))
+        }
+        CLOUD_RUNTIME_REPAIR | CLOUD_COMPUTER_RECREATION => params["action"] == "status",
         PLUGINS => params["action"] == "list",
         _ => false,
     }
@@ -366,6 +382,23 @@ pub fn retryable_read(method: &str, params: &serde_json::Value) -> bool {
 #[cfg(test)]
 mod retry_tests {
     use super::*;
+    #[test]
+    fn only_explicit_passive_cloud_attachment_is_a_retryable_read() {
+        assert!(retryable_read(
+            CLOUD_ENVIRONMENT,
+            &serde_json::json!({"interactiveResume":false})
+        ));
+        for params in [
+            serde_json::Value::Null,
+            serde_json::json!({}),
+            serde_json::json!({"interactiveResume":true}),
+            serde_json::json!({"interactiveResume":null}),
+            serde_json::json!({"interactiveResume":"false"}),
+            serde_json::json!({"interactiveResume":0}),
+        ] {
+            assert!(!retryable_read(CLOUD_ENVIRONMENT, &params));
+        }
+    }
     #[test]
     fn privileged_actions_and_unknown_methods_keep_uncertain_delivery() {
         for method in [
@@ -386,6 +419,9 @@ mod retry_tests {
             MODEL_CONNECT,
             CLOUD_UNARCHIVE,
             CLOUD_PAUSE,
+            CLOUD_RUNTIME_REPAIR,
+            CLOUD_ALLOCATION_RETRY,
+            CLOUD_COMPUTER_RECREATION,
             CLOUD_LOCAL_TERMINAL,
             CLOUD_SYNC_CONFIGURE,
             CLOUD_SYNC_RETRY,
@@ -465,6 +501,19 @@ pub const CLOUD_PROJECTS: &str = "CloudProjects";
 pub const CLOUD_PROJECT_CONNECT: &str = "CloudProjectConnect";
 pub const CLOUD_PROJECT_REMOVE: &str = "CloudProjectRemove";
 pub const CLOUD_GITHUB: &str = "CloudGithubCatalog";
+pub const CLOUD_GITHUB_INSTALL: &str = "CloudGithubInstall";
+pub const CLOUD_CAPABILITIES: &str = "CloudCapabilities";
+pub const CLOUD_AGENT_CONNECTIONS: &str = "CloudAgentConnections";
+pub const CLOUD_AGENT_CONFIGURE: &str = "CloudAgentConfigure";
+pub const CLOUD_AGENT_LOGIN: &str = "CloudAgentLogin";
+pub const CLOUD_AGENT_LOGIN_STATUS: &str = "CloudAgentLoginStatus";
+pub const CLOUD_AGENT_LOGIN_CANCEL: &str = "CloudAgentLoginCancel";
+pub const CLOUD_AGENT_DISCONNECT: &str = "CloudAgentDisconnect";
+pub const CLOUD_PROJECT_ENVIRONMENT: &str = "CloudProjectEnvironment";
+pub const CLOUD_PROJECT_ENVIRONMENT_SAVE: &str = "CloudProjectEnvironmentSave";
+pub const CLOUD_PROJECT_SECRETS: &str = "CloudProjectSecrets";
+pub const CLOUD_PROJECT_SECRET_SAVE: &str = "CloudProjectSecretSave";
+pub const CLOUD_PROJECT_SECRET_REVOKE: &str = "CloudProjectSecretRevoke";
 pub const CLOUD_IMAGE: &str = "CloudImage";
 pub const CLOUD_IMAGE_BUILD: &str = "CloudImageBuild";
 pub const CLOUD_IMAGE_DELETE: &str = "CloudImageDelete";
@@ -473,3 +522,8 @@ pub const CLOUD_IMAGE_DELETE: &str = "CloudImageDelete";
 pub const OBSERVE_PR_WATCH: &str = "ObservePrWatch";
 pub const SET_PR_WATCH: &str = "SetPrWatch";
 pub const WATCH_PR_WATCHES: &str = "WatchPrWatches";
+/// Explicit controller admission; never a guest RPC fallback.
+pub const CLOUD_TASK_COMMAND: &str = "CloudTaskCommand";
+
+/// Scoped API-owned workspace asset transfer; does not acquire execution.
+pub const CLOUD_TASK_ASSET: &str = "CloudTaskAsset";

@@ -92,7 +92,7 @@ impl EngineRpc {
                                 "Push this branch before creating its pull request.".into(),
                             ));
                         }
-                        let resolver = crate::source_control::ChangeRequestResolver::new();
+                        let resolver = crate::source_control::ChangeRequestResolver::new().with_github(this.github.clone());
                         let source = resolver
                             .inspect_checkout(&actual.root)
                             .await

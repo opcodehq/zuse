@@ -10,6 +10,8 @@ use zuse_protocol::cloud::{
     CloudRuntimeBootstrap, CloudRuntimeStorage, RUST_RUNTIME_STORAGE_FORMAT,
 };
 
+mod boot;
+
 pub struct DataLock {
     _file: File,
 }
@@ -206,10 +208,15 @@ impl Storage {
                 let name = entry.file_name();
                 let name = name.to_string_lossy();
                 ensure!(
+                    !entry.file_type()?.is_symlink(),
+                    "runtime_storage_migration_required"
+                );
+                ensure!(
                     matches!(
                         name.as_ref(),
                         ".workspace-runtime.lock" | "engine.lock" | crate::identity::FILE
-                    ) || (name.starts_with(".runtime-write-") && name.ends_with(".next")),
+                    ) || (name.starts_with(".runtime-write-") && name.ends_with(".next"))
+                        || boot::recognized(directory, &name, bootstrap, incarnation)?,
                     "runtime_storage_migration_required"
                 );
             }

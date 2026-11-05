@@ -22,7 +22,12 @@ pub(super) async fn delay(ms: u32) {
     });
     let _ = JsFuture::from(promise).await;
 }
-async fn auth_status() -> Result<bool, ()> {
+enum SessionCheck {
+    Ready { changed: bool },
+    Denied,
+    Busy,
+}
+async fn auth_status() -> Result<SessionCheck, ()> {
     let controller = web_sys::AbortController::new().map_err(|_| ())?;
     let abort = controller.clone();
     let timeout = Closure::<dyn FnMut()>::new(move || abort.abort());
@@ -41,13 +46,25 @@ async fn auth_status() -> Result<bool, ()> {
     let response = JsFuture::from(window.fetch_with_request(&request)).await;
     window.clear_timeout_with_handle(timer);
     let response: Response = response.map_err(|_| ())?.dyn_into().map_err(|_| ())?;
+    let changed = response
+        .headers()
+        .get("x-zuse-browser-session-changed")
+        .ok()
+        .flatten()
+        .as_deref()
+        == Some("1");
     match response.status() {
-        200..=299 | 404 | 405 => Ok(true),
-        401 | 403 => Ok(false),
+        200..=299 | 404 | 405 => Ok(SessionCheck::Ready { changed }),
+        401 | 403 => Ok(SessionCheck::Denied),
+        429 => Ok(SessionCheck::Busy),
         _ => Err(()),
     }
 }
 fn local_action(frame: &Value, events: &Sender) -> bool {
+    if frame["ui"] == "hostedSessionRevoked" {
+        crate::history_cache::signed_out();
+        return true;
+    }
     if crate::account_connection::action(frame, events) {
         return true;
     }
@@ -249,9 +266,20 @@ pub(super) async fn run(mut outbound: mpsc::UnboundedReceiver<Value>, events: Se
     loop {
         if !paired {
             match auth_status().await {
-                Ok(false) => {
-                    let _ = events.unbounded_send(json!({"connection":"authRequired"}));
+                Ok(SessionCheck::Denied) => {
+                    crate::history_cache::signed_out();
+                    let _ = events.unbounded_send(
+                        json!({"connection":"authRequired","hostedSessionRevoked":true}),
+                    );
                     if !wait_offline(8_000, &mut outbound, &events).await {
+                        return;
+                    }
+                    continue;
+                }
+                Ok(SessionCheck::Busy) => {
+                    let _ = events
+                        .unbounded_send(json!({"connection":"retrying","controllerBusy":true}));
+                    if !wait_offline(3_000, &mut outbound, &events).await {
                         return;
                     }
                     continue;
@@ -264,7 +292,16 @@ pub(super) async fn run(mut outbound: mpsc::UnboundedReceiver<Value>, events: Se
                     attempt = attempt.saturating_add(1);
                     continue;
                 }
-                Ok(true) => {}
+                Ok(SessionCheck::Ready { changed }) => {
+                    if changed {
+                        // Only the controller's authoritative session replacement
+                        // revokes this actor's cached pages; a network retry does not.
+                        crate::history_cache::signed_out();
+                        let _ = events.unbounded_send(
+                            json!({"connection":"authRequired","hostedSessionRevoked":true}),
+                        );
+                    }
+                }
             }
         }
         let controller = if let Some(account) = account_target.clone() {
@@ -353,6 +390,11 @@ pub(super) async fn run(mut outbound: mpsc::UnboundedReceiver<Value>, events: Se
             .map(crate::attachments::UploadTarget::Account)
             .or_else(|| target.clone().map(crate::attachments::UploadTarget::Paired));
         let epoch = link.open();
+        crate::history_cache::opened(
+            socket
+                .account_origin()
+                .unwrap_or_else(|| location.origin().unwrap_or_default()),
+        );
         attempt = 0;
         let _ =
             events.unbounded_send(json!({"connection":"connected","epoch":epoch,"paired":paired && account_target.is_none(),"accountRemote":account_target.is_some()}));
@@ -369,12 +411,13 @@ pub(super) async fn run(mut outbound: mpsc::UnboundedReceiver<Value>, events: Se
             let frame = match next {
                 Next::Inbound(Ok(text)) => {
                     for line in text.lines() {
-                        if let Ok(frame) = serde_json::from_str::<Value>(line) {
+                        if let Ok(mut frame) = serde_json::from_str::<Value>(line) {
                             if let Some(id) = frame["id"].as_u64() {
                                 let terminal = frame.get("ok").is_some()
                                     || frame.get("err").is_some()
                                     || frame["done"] == true;
                                 if link.receive(epoch, id, terminal) {
+                                    crate::history_cache::incoming(&mut frame);
                                     let _ = events.unbounded_send(frame);
                                 }
                             }
@@ -433,6 +476,10 @@ pub(super) async fn run(mut outbound: mpsc::UnboundedReceiver<Value>, events: Se
             };
             if !admitted {
                 reject(&events, &frame);
+                continue;
+            }
+            if crate::history_cache::outgoing(&frame, &events).await {
+                link.receive(epoch, id, true);
                 continue;
             }
             let mut wire = frame;

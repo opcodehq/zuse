@@ -50,6 +50,8 @@ async fn serve(
 }
 fn plan(root: &Path, url: String) -> ImagePlan {
     ImagePlan {
+        managed_base: false,
+        rust_runtime_supervisor_version: None,
         build_id: "image-fixture".into(),
         template_version: "rust-fixture-v1".into(),
         configuration_digest: "config-original".into(),
@@ -76,6 +78,28 @@ fn token(plan: &ImagePlan) {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(file, fs::Permissions::from_mode(0o600)).unwrap();
     }
+}
+
+#[test]
+fn managed_base_is_empty_and_rejects_task_state_and_unconsumed_credentials() {
+    let root = tempfile::tempdir().unwrap();
+    let mut p = plan(root.path(), "https://github.com/example/repo.git".into());
+    p.managed_base = true;
+    assert!(
+        prepare(&p).is_err(),
+        "A reusable base must not contain customer repositories"
+    );
+    p.repositories.clear();
+    let manifest = prepare(&p).unwrap();
+    assert!(manifest.managed_base && manifest.credentials_removed);
+    assert!(manifest.repositories.is_empty());
+    assert_eq!(prepare(&p).unwrap().plan_digest, manifest.plan_digest);
+    fs::write(p.secrets_root.join("unexpected-secret"), "test-only").unwrap();
+    assert!(prepare(&p).is_err());
+    fs::remove_file(p.secrets_root.join("unexpected-secret")).unwrap();
+    fs::create_dir_all(p.home.join(".codex")).unwrap();
+    fs::write(p.home.join(".codex/auth.json"), "test-only").unwrap();
+    assert!(prepare(&p).is_err());
 }
 #[tokio::test]
 async fn private_git_image_manifest_is_journaled_and_tokens_are_removed_before_ready() {
@@ -218,5 +242,82 @@ fn enrolled_data_credentials_and_untrusted_repository_urls_cannot_become_images(
         let mut repo = plan.repositories[0].clone();
         repo.repository_url = url.into();
         assert!(validate_repo(&repo).is_err());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn supervisor_attestation_requires_a_private_idle_resident_endpoint() {
+    use std::{
+        io::{Read, Write},
+        os::unix::{fs::PermissionsExt, net::UnixListener},
+    };
+    for state in [
+        "idle",
+        "extensions",
+        "bound",
+        "runtime",
+        "recovery",
+        "version",
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let mut p = plan(root.path(), "https://github.com/example/repo.git".into());
+        p.managed_base = true;
+        p.repositories.clear();
+        p.rust_runtime_supervisor_version = Some(1);
+        let data = p.home.join(".zuse-data");
+        let ipc = data.join(".runtime-supervision");
+        fs::create_dir_all(&ipc).unwrap();
+        fs::set_permissions(&data, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::set_permissions(&ipc, fs::Permissions::from_mode(0o700)).unwrap();
+        let listener = UnixListener::bind(ipc.join("control.sock")).unwrap();
+        fs::set_permissions(ipc.join("control.sock"), fs::Permissions::from_mode(0o600)).unwrap();
+        let response = serde_json::json!({"version":if state=="version"{2}else{1},"bound":state=="bound","childAlive":state=="runtime","recoveryAlive":state=="recovery","repairVersion":if state=="extensions"{1}else{0},"recreationVersion":if state=="extensions"{1}else{0}});
+        let count = if state == "idle" || state == "extensions" {
+            2
+        } else {
+            1
+        };
+        let server = std::thread::spawn(move || {
+            for _ in 0..count {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = vec![];
+                loop {
+                    let mut byte = [0];
+                    stream.read_exact(&mut byte).unwrap();
+                    request.push(byte[0]);
+                    if byte[0] == b'\n' {
+                        break;
+                    }
+                }
+                assert_eq!(
+                    serde_json::from_slice::<serde_json::Value>(&request).unwrap(),
+                    serde_json::json!({"version":1,"action":"ping"})
+                );
+                stream
+                    .write_all(&serde_json::to_vec(&response).unwrap())
+                    .unwrap();
+            }
+        });
+        let result = prepare(&p);
+        server.join().unwrap();
+        if state == "idle" || state == "extensions" {
+            let manifest = result.unwrap();
+            assert_eq!(manifest.rust_runtime_supervisor_version, Some(1));
+            assert_eq!(
+                manifest.rust_runtime_repair_version,
+                (state == "extensions").then_some(1)
+            );
+            assert_eq!(
+                manifest.rust_recreation_version,
+                (state == "extensions").then_some(1)
+            );
+            assert!(
+                clean_home(&p.home, false).is_err(),
+                "legacy plans cannot infer supervisor certification"
+            );
+        } else {
+            assert!(result.is_err(), "{state}");
+        }
     }
 }

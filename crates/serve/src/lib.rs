@@ -20,6 +20,7 @@ use tower_http::{
 };
 use zuse_rpc::RpcService;
 mod access_token;
+pub mod hosted;
 pub mod managed;
 mod paired;
 pub mod relay;
@@ -319,11 +320,25 @@ async fn browser_socket(server: BrowserServer, socket: axum::extract::ws::WebSoc
     if server.shutdown.is_cancelled() {
         return;
     }
+    rpc_socket(
+        server.service,
+        socket,
+        server.shutdown.cancelled_owned(),
+        128,
+    )
+    .await;
+}
+
+pub(crate) async fn rpc_socket(
+    service: Arc<dyn RpcService>,
+    socket: axum::extract::ws::WebSocket,
+    closed: impl std::future::Future<Output = ()>,
+    capacity: usize,
+) {
     let (mut writer, mut reader) = socket.split();
-    let (out_tx, mut out_rx) = mpsc::channel::<String>(128);
-    let (in_tx, in_rx) = mpsc::channel::<String>(128);
-    let dispatch = tokio::spawn(zuse_rpc::serve_connection(server.service, out_tx, in_rx));
-    let shutdown = server.shutdown;
+    let (out_tx, mut out_rx) = mpsc::channel::<String>(capacity);
+    let (in_tx, in_rx) = mpsc::channel::<String>(capacity);
+    let dispatch = tokio::spawn(zuse_rpc::serve_connection(service, out_tx, in_rx));
     {
         let exchange = async {
             loop {
@@ -341,7 +356,7 @@ async fn browser_socket(server: BrowserServer, socket: axum::extract::ws::WebSoc
                 }
             }
         };
-        tokio::select! { biased; _ = shutdown.cancelled() => {}, _ = exchange => {} }
+        tokio::select! { biased; _ = closed => {}, _ = exchange => {} }
     }
     drop(in_tx);
     let _ = dispatch.await;

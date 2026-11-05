@@ -6,11 +6,13 @@ use std::sync::Arc;
 #[derive(Default)]
 pub(super) struct ToolResultView {
     page: Option<ResultPage>,
+    pages: std::collections::BTreeMap<usize, ResultPage>,
     history: Vec<usize>,
     busy: bool,
     requested_offset: usize,
     error: Option<String>,
 }
+#[derive(Clone)]
 struct ResultPage {
     text: String,
     offset: usize,
@@ -74,6 +76,21 @@ impl WorkspaceView {
         self.tool_results.clear();
     }
     fn read_tool_result(&mut self, reference: String, offset: usize, cx: &mut Context<Self>) {
+        if let Some(view) = self.tool_results.get_mut(&reference) {
+            if let Some(page) = view.pages.get(&offset).cloned() {
+                if let Some(previous) = &view.page {
+                    if offset > previous.offset {
+                        view.history.push(previous.offset);
+                    } else if view.history.last() == Some(&offset) {
+                        view.history.pop();
+                    }
+                }
+                view.page = Some(page);
+                view.error = None;
+                cx.notify();
+                return;
+            }
+        }
         if self
             .tool_results
             .get(&reference)
@@ -171,6 +188,13 @@ impl WorkspaceView {
                     } else if view.history.last() == Some(&offset) {
                         view.history.pop();
                     }
+                }
+                view.pages.insert(offset, page.clone());
+                while view.pages.len() > 4 {
+                    let Some(old) = view.pages.keys().copied().find(|key| *key != offset) else {
+                        break;
+                    };
+                    view.pages.remove(&old);
                 }
                 view.page = Some(page);
                 view.error = None;

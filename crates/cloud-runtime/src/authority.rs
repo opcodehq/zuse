@@ -149,6 +149,16 @@ impl Authority {
         credential: &str,
         body: &Value,
     ) -> Result<Value> {
+        let name = match suffix {
+            ["runtime", "bootstrap"] => Some("bootstrap-http"),
+            ["runtime", "bootstrap", "ack"] => Some("bootstrap-ack-http"),
+            ["runtime", "storage"] => Some("storage-http"),
+            ["runtime", "preparation", "ingress"] => Some("preparation-ingress-http"),
+            ["runtime", "providers", _, "grant"] => Some("agent-credential-http"),
+            ["ready"] => Some("readiness-http"),
+            _ => None,
+        };
+        let mut phase = name.map(|name| crate::startup::Phase::new(workspace, name));
         let mut url = self.origin.clone();
         url.path_segments_mut()
             .map_err(|_| anyhow::anyhow!("runtime_api_origin_invalid"))?
@@ -158,6 +168,19 @@ impl Authority {
         let mut response = self
             .client
             .post(url)
+            // Native OAuth refresh may take fifteen seconds plus checkpoint writes.
+            // Keep unrelated control calls at the original ten-second budget.
+            .timeout(Duration::from_secs(
+                if suffix.len() == 4
+                    && suffix[0] == "runtime"
+                    && suffix[1] == "providers"
+                    && suffix[3] == "grant"
+                {
+                    35
+                } else {
+                    10
+                },
+            ))
             .bearer_auth(credential)
             .json(body)
             .send()
@@ -202,6 +225,7 @@ impl Authority {
                 "cloud_workspace_launch_intent_unavailable",
                 "launch_intent_receipt_rejected",
                 "github_runtime_update_required",
+                "project_cache_runtime_update_required",
             ];
             let body: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
             let code = CODES
@@ -219,8 +243,12 @@ impl Authority {
             }
             .into());
         }
-        serde_json::from_slice(&bytes)
-            .map_err(|_| anyhow::anyhow!("runtime_authority_response_invalid"))
+        let value = serde_json::from_slice(&bytes)
+            .map_err(|_| anyhow::anyhow!("runtime_authority_response_invalid"))?;
+        if let Some(phase) = &mut phase {
+            phase.complete();
+        }
+        Ok(value)
     }
     pub async fn enroll(
         &self,
@@ -250,12 +278,13 @@ impl Authority {
             .bootstrap()
             .ok_or_else(|| anyhow::anyhow!("runtime_not_enrolled"))?;
         self.validate(current, binding)?;
+        let gateway_ack = current.extra.get("bootstrapAckMode") == Some(&json!("gateway-v1"));
         if identity.has_pending_renewal()
             || current.runtime_credential_expires_at <= now_ms() + 60000
         {
             self.renew(identity).await?;
         }
-        if !identity.acknowledged() {
+        if !identity.acknowledged() && !gateway_ack {
             let current = identity
                 .bootstrap()
                 .ok_or_else(|| anyhow::anyhow!("runtime_not_enrolled"))?;
@@ -330,6 +359,12 @@ impl Authority {
         identity.commit_renewal(&response)
     }
     pub async fn prepare_storage(&self, bootstrap: &CloudRuntimeBootstrap) -> Result<String> {
+        if bootstrap.extra.get("startupBindingVersion") == Some(&json!(2)) {
+            let enrollment = bootstrap.extra.get("storageEnrollmentId").and_then(Value::as_str)
+                .filter(|id| !id.is_empty() && id.len() <= 512)
+                .ok_or_else(||anyhow::anyhow!("runtime_storage_enrollment_rejected"))?;
+            return Ok(enrollment.to_owned());
+        }
         self.storage(bootstrap, None).await
     }
     pub async fn commit_storage(
@@ -337,6 +372,12 @@ impl Authority {
         bootstrap: &CloudRuntimeBootstrap,
         enrollment: &str,
     ) -> Result<()> {
+        if bootstrap.extra.get("startupBindingVersion") == Some(&json!(2)) {
+            ensure!(bootstrap.extra.get("storageEnrollmentId").and_then(Value::as_str) == Some(enrollment), "runtime_storage_enrollment_rejected");
+            // The caller committed local storage. The first authenticated gateway
+            // bind durably commits the same enrollment at the authority.
+            return Ok(());
+        }
         ensure!(
             self.storage(bootstrap, Some(enrollment)).await? == enrollment,
             "runtime_storage_enrollment_rejected"
@@ -348,32 +389,7 @@ impl Authority {
         bootstrap: &CloudRuntimeBootstrap,
         enrollment: Option<&str>,
     ) -> Result<String> {
-        use zuse_protocol::cloud::{CloudStorageEnrollment, CloudStoragePhase};
-        let body = CloudStorageEnrollment {
-            phase: if enrollment.is_some() {
-                CloudStoragePhase::Commit
-            } else {
-                CloudStoragePhase::Prepare
-            },
-            runtime_generation: bootstrap.runtime_generation,
-            gateway_epoch: bootstrap.gateway_epoch,
-            storage_incarnation_id: bootstrap
-                .runtime_storage
-                .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("runtime_storage_enrollment_required"))?
-                .storage_incarnation_id
-                .clone(),
-            enrollment_id: enrollment.map(str::to_owned),
-            capabilities: enrollment.map(|_| {
-                vec![
-                    "rust-rpc-v1".into(),
-                    "rust-session-commands-v1".into(),
-                    zuse_protocol::cloud_lifecycle::CAPABILITY.into(),
-                    "rust-transcript-projection-v1".into(),
-                    "rust-full-state-recovery-v1".into(),
-                ]
-            }),
-        };
+        let body = Self::storage_request(bootstrap, enrollment)?;
         let response = self
             .post(
                 &bootstrap.workspace_id,
@@ -403,8 +419,95 @@ impl Authority {
         .await?;
         Ok(())
     }
-    pub fn gateway(&self, bootstrap: &CloudRuntimeBootstrap) -> zuse_rpc::cloud::Grant {
-        zuse_rpc::cloud::Grant {
+    fn storage_request(bootstrap: &CloudRuntimeBootstrap, enrollment: Option<&str>) -> Result<zuse_protocol::cloud::CloudStorageEnrollment> {
+        use zuse_protocol::cloud::{CloudStorageEnrollment, CloudStoragePhase};
+        Ok(CloudStorageEnrollment {
+            phase: if enrollment.is_some() {
+                CloudStoragePhase::Commit
+            } else {
+                CloudStoragePhase::Prepare
+            },
+            runtime_generation: bootstrap.runtime_generation,
+            gateway_epoch: bootstrap.gateway_epoch,
+            storage_incarnation_id: bootstrap
+                .runtime_storage
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("runtime_storage_enrollment_required"))?
+                .storage_incarnation_id
+                .clone(),
+            enrollment_id: enrollment.map(str::to_owned),
+            capabilities: enrollment.map(|_| {
+                let mut capabilities = vec![
+                    "rust-rpc-v1".into(),
+                    "rust-session-commands-v1".into(),
+                    zuse_protocol::cloud_lifecycle::CAPABILITY.into(),
+                    zuse_protocol::cloud_lifecycle::MEMORY_CAPABILITY.into(),
+                    "rust-transcript-projection-v1".into(),
+                    "rust-full-state-recovery-v1".into(),
+                ];
+                if bootstrap.extra.get("commandDeliveryMode")
+                    == Some(&json!(zuse_protocol::cloud_task_commands::MODE))
+                    && bootstrap.extra.get("commandAdmissionVersion")
+                        == Some(&json!(zuse_protocol::cloud_task_commands::VERSION))
+                {
+                    capabilities.push(zuse_protocol::cloud_task_commands::CAPABILITY.into());
+                }
+                if bootstrap
+                    .extra
+                    .get("rustProjectCache")
+                    .is_some_and(|v| !v.is_null())
+                {
+                    capabilities.push(crate::project_cache::CAPABILITY.into());
+                }
+                if bootstrap.extra.get("rustRecreationVersion") == Some(&json!(1)) {
+                    capabilities.push(zuse_protocol::cloud_lifecycle::RECREATION_CAPABILITY.into());
+                }
+                if bootstrap.extra.get("rustOrganizationExecutionVersion") == Some(&json!(1)) {
+                    capabilities.push("rust-organization-execution-v1".into());
+                }
+                capabilities
+            }),
+        })
+    }
+    pub async fn early_agent_ready(
+        &self,
+        bootstrap: &CloudRuntimeBootstrap,
+        command: &str,
+    ) -> Result<()> {
+        self.post(
+            &bootstrap.workspace_id,
+            &["ready"],
+            &bootstrap.runtime_credential,
+            &json!({"phase":"agent-ready","launchCommandId":command,"sessionHeadVersion":0}),
+        )
+        .await?;
+        Ok(())
+    }
+    pub async fn preparation_ingress(&self, bootstrap: &CloudRuntimeBootstrap) -> Result<Value> {
+        self.post(
+            &bootstrap.workspace_id,
+            &["runtime", "preparation", "ingress"],
+            &bootstrap.runtime_credential,
+            &json!({"operationId":bootstrap.extra["rustAllocationOperationId"]}),
+        )
+        .await
+    }
+    pub async fn preparation(
+        &self,
+        bootstrap: &CloudRuntimeBootstrap,
+        update: &zuse_protocol::cloud_computers::RuntimePreparationUpdate,
+    ) -> Result<()> {
+        self.post(
+            &bootstrap.workspace_id,
+            &["runtime", "preparation"],
+            &bootstrap.runtime_credential,
+            &serde_json::to_value(update)?,
+        )
+        .await?;
+        Ok(())
+    }
+    pub fn gateway(&self, bootstrap: &CloudRuntimeBootstrap) -> Result<zuse_rpc::cloud::Grant> {
+        Ok(zuse_rpc::cloud::Grant {
             workspace_id: bootstrap.workspace_id.clone(),
             ws_url: bootstrap.gateway_url.clone(),
             protocol: bootstrap.gateway_protocol.clone(),
@@ -413,6 +516,11 @@ impl Authority {
             generation: bootstrap.runtime_generation,
             gateway_epoch: bootstrap.gateway_epoch,
             expires_at: bootstrap.runtime_credential_expires_at,
-        }
+            storage_binding: if bootstrap.extra.get("startupBindingVersion") == Some(&json!(2)) {
+                let id = bootstrap.extra.get("storageEnrollmentId").and_then(Value::as_str)
+                    .ok_or_else(||anyhow::anyhow!("runtime_storage_enrollment_rejected"))?;
+                Some(json!(Self::storage_request(bootstrap, Some(id))?))
+            } else { None },
+        })
     }
 }
