@@ -6,6 +6,7 @@ The first stable release of the native Zuse app since 0.25.0. It also includes e
 
 ### Added
 
+- Downloads for Windows (x86_64, portable zip), macOS (Apple silicon, signed and notarized) and Linux (x86_64). The Windows zip is not code-signed yet, so SmartScreen asks for confirmation on first launch.
 - Muse Code as a built-in agent provider: live model list, approvals, resume, interrupt, `/compact`, image attachments, and install and update through Meta's script.
 - Interface languages: English, French, German, Simplified Chinese, Traditional Chinese, Japanese and Korean across the desktop app, browser and CLI, following the system language by default and switchable without losing drafts.
 - Native Rust model harness: direct Responses, Messages, GenerateContent and Chat Completions transport, durable transition storage with recovery review, bounded child agents, concurrent independent reads, local skills and lazily pooled MCP connections. The production JavaScript model bridge is removed.

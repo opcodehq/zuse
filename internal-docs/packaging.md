@@ -2,17 +2,22 @@
 
 The source checkout is [opcodehq/zuse](https://github.com/opcodehq/zuse).
 
-Build on the target Mac or Linux machine, with the prerequisites from
+Build on the target Mac, Linux or Windows machine, with the prerequisites from
 [development.md](development.md) and Python 3.11 or newer:
 
 ```sh
 python3 scripts/package.py
 ```
 
+On Windows, run `python scripts/package.py` with Python 3.11 or newer and
+Git Bash installed.
+
 This builds the release browser and native executables from the checkout, then
-creates `dist/build/zuse-VERSION-PLATFORM-ARCH.tar.gz`. Keep the terminal open
+creates `dist/build/zuse-VERSION-PLATFORM-ARCH.tar.gz` (a `.zip` on Windows). Keep the terminal open
 until the command completes. The output directory must not already contain an
 archive with that name. `--profile dev` selects a development native build.
+For a preview of the workspace version, use `--version 0.26.0-preview.1`.
+The archive and manifest retain that suffix; macOS bundle versions remain numeric.
 
 To assemble executables already built on the target, use:
 
@@ -21,7 +26,8 @@ python3 scripts/package.py --binaries target/release --assets dist/web \
   --platform linux --arch x86_64 --output dist/build/local
 ```
 
-The three required executables are `zuse`, `zuse-server`, and `zuse-relay`.
+The three required executables are `zuse`, `zuse-server`, and `zuse-relay`
+(with `.exe` extensions on Windows).
 The packager checks their binary platform and architecture. Prebuilt inputs
 are labelled as such; their source revision and optimization level are not
 inferred. Browser assets must come from the matching source/protocol build.
@@ -69,9 +75,28 @@ Xvfb/software rendering checks do not establish physical GPU or Wayland support.
 Extract the archive and copy `Zuse.app` into Applications. The archive also
 includes command-line launchers in `bin/`; keep them alongside the app if used.
 The bundle includes its icon, URL scheme, microphone description and browser
-assets. A local package is unsigned: signing, hardened-runtime entitlements and
-notarization are separate release steps and are not performed by this command.
+assets. Local packages are unsigned unless `ZUSE_MACOS_SIGN_IDENTITY` is set;
+Apple account credentials additionally enable notarization. Tagged releases
+require both signing and notarization on a separate runner.
 Gatekeeper acceptance and microphone permission require verification on a Mac.
+
+## Windows
+
+Extract the zip anywhere you can write to and run `zuse.exe`. No installer or
+administrator rights are needed. `bin\zuse-server.cmd` and `bin\zuse-relay.cmd`
+start the helpers in `libexec\` with the packaged browser assets in `web\`;
+`--assets` or `ZUSE_WEB_ASSETS` overrides that default. Profiles default to
+`%LOCALAPPDATA%\Zuse`.
+
+The release zip is not code-signed, so SmartScreen warns on first launch:
+choose **More info**, then **Run anyway**. The embedded browser uses the
+[WebView2 Evergreen Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/),
+which is usually already installed on Windows 10 and 11. Install it if missing.
+The desktop executable also requires the
+[Microsoft Visual C++ v14 Redistributable (x64)](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist/);
+install it if Windows reports missing `MSVCP140.dll` or `VCRUNTIME140.dll`.
+A zip install does not
+update itself; the app links to the releases page when a new version is out.
 
 ## Provider requirements and profiles
 
@@ -80,6 +105,7 @@ need their own installation and provider login. Node, agent executables, provide
 credentials and optional speech model weights are not bundled. A package does
 not establish live-provider or multi-device acceptance.
 
-Profiles default to `~/.zuse-native` and can be selected with `ZUSE_DATA_DIR`.
+Desktop profiles default to `~/.zuse-native` on macOS/Linux and
+`%LOCALAPPDATA%\Zuse` on Windows, and can be selected with `ZUSE_DATA_DIR`.
 The packager copies only explicit executables, web assets and legal files; it
 does not copy development profiles, environment files or credentials.

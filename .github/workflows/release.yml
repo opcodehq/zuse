@@ -37,6 +37,10 @@ jobs:
         name: Match the tag to the workspace version and changelog
         run: |
           version="${TAG#v}"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]; then
+            echo "::error::Expected a version tag such as v0.26.0-preview.1"
+            exit 1
+          fi
           workspace=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml","rb"))["workspace"]["package"]["version"])')
           base="${version%%-*}"
           if [ "$base" != "$workspace" ]; then
@@ -62,7 +66,15 @@ jobs:
           - os: macos-latest
             platform: macos
             arch: aarch64
+          # Unsigned portable zip; Windows code signing is not set up yet.
+          - os: windows-latest
+            platform: windows
+            arch: x86_64
     runs-on: ${{ matrix.os }}
+    # Git Bash on Windows, so build-web.sh and the steps below run unchanged.
+    defaults:
+      run:
+        shell: bash
     env:
       HUGEICONS_LICENSE_KEY: ${{ secrets.HUGEICONS_LICENSE_KEY }}
       HUGEICONS_SOLID_VERSION: ${{ vars.HUGEICONS_SOLID_VERSION }}
@@ -91,15 +103,15 @@ jobs:
       # Dependency build scripts run on this runner, so it never receives the
       # signing certificate or Apple credentials.
       - name: Build
-        run: python3 scripts/package.py --platform ${{ matrix.platform }} --arch ${{ matrix.arch }} --build-only
+        run: python scripts/package.py --platform ${{ matrix.platform }} --arch ${{ matrix.arch }} --build-only
       - name: Package
-        if: runner.os == 'Linux'
-        run: python3 scripts/package.py --platform ${{ matrix.platform }} --arch ${{ matrix.arch }} --skip-build --output dist/release
-      - if: runner.os == 'Linux'
+        if: runner.os != 'macOS'
+        run: python scripts/package.py --platform ${{ matrix.platform }} --arch ${{ matrix.arch }} --version "${{ needs.verify.outputs.version }}" --skip-build --output dist/release
+      - if: runner.os != 'macOS'
         uses: actions/upload-artifact@v4
         with:
           name: zuse-${{ matrix.platform }}-${{ matrix.arch }}
-          path: dist/release/*.tar.gz
+          path: dist/release/zuse-*
           if-no-files-found: error
       # The macOS build is signed on a fresh runner by the sign-macos job.
       - if: runner.os == 'macOS'
@@ -131,15 +143,15 @@ jobs:
           name: unsigned-macos-aarch64
       # Downloads the pinned toolkit for its licence files; runs no dependency code.
       - run: cargo fetch --locked
-      # Without the secrets the macOS package is built unsigned, with a warning.
+      # Tagged releases must be signed; local packaging can still be unsigned.
       - name: Load the macOS signing certificate
         env:
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
         run: |
           if [ -z "$CSC_LINK" ]; then
-            echo "::warning::CSC_LINK is not set; the macOS package will be unsigned and not notarized"
-            exit 0
+            echo "::error::CSC_LINK is required for macOS releases"
+            exit 1
           fi
           keychain="$RUNNER_TEMP/zuse-signing.keychain-db"
           keychain_password=$(uuidgen)
@@ -168,7 +180,11 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: python3 scripts/package.py --platform macos --arch aarch64 --skip-build --output dist/release
+        run: |
+          : "${APPLE_ID:?Set the APPLE_ID repository secret for notarization}"
+          : "${APPLE_APP_SPECIFIC_PASSWORD:?Set the APPLE_APP_SPECIFIC_PASSWORD repository secret}"
+          : "${APPLE_TEAM_ID:?Set the APPLE_TEAM_ID repository secret}"
+          python scripts/package.py --platform macos --arch aarch64 --version "${{ needs.verify.outputs.version }}" --skip-build --output dist/release
       # Runs even when setup failed part-way, before the keychain was exported.
       - name: Remove the signing credentials
         if: always()
@@ -197,7 +213,7 @@ jobs:
       - name: Checksums and notes
         run: |
           cd dist/release
-          sha256sum *.tar.gz > SHA256SUMS
+          sha256sum zuse-* > SHA256SUMS
           cat SHA256SUMS
           cd ../..
           base="${{ needs.verify.outputs.version }}"
