@@ -291,6 +291,13 @@ impl Shell {
                             .cursor_pointer()
                             .role(gpui::Role::Button)
                             .aria_label(tr(cx, msg::commands::shortcuts_panel_close))
+                            .tab_index(0)
+                            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                    cx.stop_propagation();
+                                    this.close_shortcuts_panel(cx);
+                                }
+                            }))
                             .hover(|style| style.bg(theme.element_hover))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.close_shortcuts_panel(cx);
