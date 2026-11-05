@@ -153,7 +153,7 @@ impl crate::runtime::RuntimeControl {
             next["rustResolvedSource"] = json!({"version":1,"operationId":current_op["operation_id"],"repositoryIdentity":repository,"requestedRef":current["base_ref"],"commit":source.commit});
             next["rustRepositoryCheckout"]["baseRef"] = json!(source.commit);
             next["rustRepositoryCheckout"]["sourceCommit"] = json!(source.commit);
-            hit = super::selection::for_resolved_task_tx(
+            hit = if !super::enabled() { None } else { super::selection::for_resolved_task_tx(
                 &mut tx,
                 owner,
                 project,
@@ -165,10 +165,10 @@ impl crate::runtime::RuntimeControl {
                 &json!(source.recipe),
                 &source.recipe_source,
             )
-            .await?;
+            .await? };
             // A later task at a new commit gets its own source-pinned preparation
             // request while identical requests share the same immutable artifact.
-            if let Some(revision) = next["environmentRevision"].as_i64() {
+            if let Some(revision) = next["environmentRevision"].as_i64().filter(|_| super::enabled()) {
                 use sha2::Digest;
                 let configured: zuse_protocol::cloud_computers::EnvironmentRecipe =
                     serde_json::from_value(next["environmentRecipe"].clone())

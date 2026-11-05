@@ -14,6 +14,9 @@ impl crate::computers::ComputerControl {
         requested_ref: &str,
         now: i64,
     ) -> Result<(), ApiError> {
+        if !super::enabled() {
+            return Ok(());
+        }
         let ready = if let Some(value) = self.cache_schema_ready.get() {
             *value
         } else {
