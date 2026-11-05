@@ -10601,6 +10601,25 @@ impl Composer {
             || self.input.read(cx).read_only
     }
 
+    fn toggle_stash_list(&mut self, cx: &mut Context<Self>) {
+        if self.list_blocked(cx) {
+            return;
+        }
+        if matches!(self.list, Some(ComposerList::Stash { .. })) {
+            self.close_list(false, cx);
+        } else {
+            self.close_list(true, cx);
+            self.emoji = None;
+            self.reset_mention(None, cx);
+            self.reset_slash(None, cx);
+            self.list = Some(ComposerList::Stash { active: 0 });
+            self.list_scroll.scroll_to_item(0);
+            self.sync_mention_controls(cx);
+            cx.notify();
+        }
+        self.focus_pending = true;
+    }
+
     /// Ctrl+S: set the draft aside, or open the stash on an empty composer.
     fn on_stash_draft(&mut self, _: &StashDraft, _: &mut Window, cx: &mut Context<Self>) {
         if self.list_blocked(cx) {
@@ -10609,18 +10628,7 @@ impl Composer {
         }
         let text = self.input.read(cx).text().to_owned();
         if text.trim().is_empty() {
-            if matches!(self.list, Some(ComposerList::Stash { .. })) {
-                self.close_list(false, cx);
-            } else {
-                self.close_list(true, cx);
-                self.emoji = None;
-                self.reset_mention(None, cx);
-                self.reset_slash(None, cx);
-                self.list = Some(ComposerList::Stash { active: 0 });
-                self.list_scroll.scroll_to_item(0);
-                self.sync_mention_controls(cx);
-                cx.notify();
-            }
+            self.toggle_stash_list(cx);
             return;
         }
         // Staged files live only in memory; a stash outlives the app.
@@ -12636,6 +12644,42 @@ impl Render for Composer {
                         theme.text,
                     )),
             );
+        let stash_label = tr(cx, msg::native::stashed_drafts);
+        let stash_action = cx.entity().downgrade();
+        let stash = div()
+            .id("composer-stashed-drafts")
+            .debug_selector(|| "composer-stashed-drafts".into())
+            .size(px(28.0))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(7.0))
+            .cursor_pointer()
+            .opacity(beneath_voice)
+            .role(Role::Button)
+            .aria_label(stash_label.clone())
+            .tab_index(0)
+            .tooltip(crate::settings::widgets::text_tooltip(stash_label))
+            .hover(|style| style.bg(theme.muted_fill().opacity(0.6)))
+            .focus_visible(|style| style.border_1().border_color(theme.accent))
+            .on_click(cx.listener(|this, _, _, cx| this.toggle_stash_list(cx)))
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                    cx.stop_propagation();
+                    this.toggle_stash_list(cx);
+                }
+            }))
+            .on_a11y_action(gpui::AccessibleAction::Click, move |_, _, cx| {
+                stash_action
+                    .update(cx, |this, cx| this.toggle_stash_list(cx))
+                    .ok();
+            })
+            .child(
+                crate::icons::icon(crate::icons::BOOKMARK)
+                    .size(px(15.0))
+                    .text_color(theme.text_muted),
+            );
         // Editor on top (`px-4 pb-1 pt-4`); the toolbar row (2px top + 32px
         // controls + 8px bottom) is ABSOLUTE at the pill's stationary bottom,
         // `[+][access][plugins] … [mic][model][send]`. The editor viewport
@@ -12685,6 +12729,7 @@ impl Render for Composer {
                             .child(attach)
                             .child(permission)
                             .when(!self.side_chat, |el| el.child(plugins))
+                            .child(stash)
                             .children(voice_track),
                     )
                     .child(
@@ -13696,6 +13741,24 @@ mod tests {
         handle
             .read_with(cx, |composer, cx| {
                 assert!(composer.list.is_none());
+                assert!(Composer::stashed_prompts(cx).is_empty());
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn stash_button_opens_saved_drafts_without_stashing_current_text(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (_dir, handle) = recall_window(cx, &[]);
+        cx.simulate_input(handle.into(), "current draft");
+        handle
+            .update(cx, |composer, _, cx| composer.toggle_stash_list(cx))
+            .unwrap();
+        assert_eq!(composer_text(cx, handle), "current draft");
+        handle
+            .read_with(cx, |composer, cx| {
+                assert!(matches!(composer.list, Some(ComposerList::Stash { .. })));
                 assert!(Composer::stashed_prompts(cx).is_empty());
             })
             .unwrap();

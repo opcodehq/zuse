@@ -62,6 +62,7 @@ icon_assets![
     // A thread's earlier conversations (the tab strip's history menu) and
     // the counter-clockwise arrow that reopens one.
     (HISTORY, "history"),
+    (BOOKMARK, "bookmark"),
     (RESTORE, "restore"),
     (CALENDAR, "calendar"),
     (LIST, "list"),

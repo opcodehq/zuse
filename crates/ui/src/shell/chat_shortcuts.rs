@@ -28,11 +28,22 @@ pub(super) fn stop_press_confirms(
     })
 }
 
-const COMPOSER_COMMANDS: [Command; 4] = [
+const COMPOSER_COMMANDS: [Command; 15] = [
     Command::ComposerSubmit,
     Command::ComposerNewline,
     Command::ComposerForceSubmit,
     Command::ComposerTogglePlanMode,
+    Command::ComposerPreviousMessage,
+    Command::ComposerNextMessage,
+    Command::ComposerQueueSubmit,
+    Command::ComposerDeleteToStart,
+    Command::ComposerDeleteToEnd,
+    Command::ComposerDeleteWord,
+    Command::ComposerInterrupt,
+    Command::ComposerYank,
+    Command::ComposerYankPop,
+    Command::ComposerStash,
+    Command::ComposerSearchHistory,
 ];
 
 const CHAT_COMMANDS: [Command; 7] = [
