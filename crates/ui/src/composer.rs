@@ -10949,6 +10949,7 @@ impl Composer {
             tr(cx, msg::chat::history_search_results).into()
         };
         let mut card = crate::popover::completion_card(theme)
+            .id(format!("{id}-card"))
             .role(Role::Dialog)
             .aria_label(label.clone())
             .p(px(6.))
