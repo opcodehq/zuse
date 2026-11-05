@@ -45,6 +45,7 @@
 pub mod catalog;
 mod discovery;
 mod normalize;
+mod shell;
 mod wire;
 mod workflow;
 
@@ -641,6 +642,7 @@ impl ClaudeHarness {
             };
             environment.apply(&mut cmd);
         }
+        shell::apply(&mut cmd);
         if controls.interrupt.is_cancelled() {
             return Ok(interrupted_start(request.resume.clone()));
         }
