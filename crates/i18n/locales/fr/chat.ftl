@@ -1907,3 +1907,16 @@ chat-find_in_chat_no_results = Aucun résultat
 chat-find_in_chat_previous = Résultat précédent
 chat-find_in_chat_next = Résultat suivant
 chat-find_in_chat_close = Fermer la recherche
+
+chat-history_search_results = Messages envoyés
+chat-history_search_no_results = Aucun résultat
+chat-stash_title = Mis de côté
+chat-stash_open = Messages mis de côté : { $count }. Ouvrir la liste.
+chat-stash_list = Messages mis de côté
+chat-stash_empty = Rien de mis de côté pour l’instant. Appuyez sur { $shortcut } avec un brouillon pour le mettre de côté.
+chat-stash_delete = Supprimer le message mis de côté
+chat-history_search_empty = Aucun message envoyé dans cette conversation pour l’instant.
+chat-history_search_title = Recherche dans les messages envoyés
+chat-history_search_use = utiliser
+chat-history_search_cancel = annuler
+chat-stash_saved_notice = Brouillon mis de côté · <part0>{ $shortcut }</part0> pour afficher
