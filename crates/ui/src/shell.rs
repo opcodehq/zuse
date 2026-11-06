@@ -705,6 +705,27 @@ pub enum RightSurface {
     Files,
 }
 
+/// Stage `prompt` in `composer` without sending it, after the composer has
+/// swapped to its session's draft (which runs on a state observation the
+/// caller just queued). A draft already waiting there stays, above it.
+fn stage_prompt(composer: Entity<Composer>, prompt: String, cx: &mut App) {
+    cx.defer(move |cx| {
+        composer.update(cx, |composer, cx| {
+            composer.input.update(cx, |input, cx| {
+                let draft = input.text().trim_end();
+                let text = if draft.is_empty() {
+                    prompt
+                } else {
+                    format!("{draft}\n\n{prompt}")
+                };
+                input.set_text(text, cx)
+            });
+            composer.focus_pending = true;
+            cx.notify();
+        });
+    });
+}
+
 fn push_unique_right_surface(tabs: &mut Vec<RightSurface>, surface: RightSurface) -> bool {
     if tabs.contains(&surface) {
         false
@@ -14633,28 +14654,19 @@ impl Render for Shell {
                         this.open_add_space_on_device(&action.device, cx);
                         return;
                     }
+                    // On the chat's own pull request the session opens beside it
+                    // as a side chat tab: it shares the chat's checkout, which
+                    // is already on the pull request's branch. Any other pull
+                    // request gets a new session, so checking it out never
+                    // moves this chat's branch.
+                    if this.pull_request_is_selected_chats(action, cx)
+                        && let Some(composer) = this.open_side_chat_for_prompt(cx)
+                    {
+                        stage_prompt(composer, action.prompt.clone(), cx);
+                        return;
+                    }
                     this.open_new_session(Some(action.project_id.clone()), cx);
-                    // Stage after the composer has swapped to the new
-                    // session's draft, which runs on the state observation
-                    // `open_new_session` just queued. A draft already waiting
-                    // there stays, above the prompt.
-                    let composer = this.composer.clone();
-                    let prompt = action.prompt.clone();
-                    cx.defer(move |cx| {
-                        composer.update(cx, |composer, cx| {
-                            composer.input.update(cx, |input, cx| {
-                                let draft = input.text().trim_end();
-                                let text = if draft.is_empty() {
-                                    prompt
-                                } else {
-                                    format!("{draft}\n\n{prompt}")
-                                };
-                                input.set_text(text, cx)
-                            });
-                            composer.focus_pending = true;
-                            cx.notify();
-                        });
-                    });
+                    stage_prompt(this.composer.clone(), action.prompt.clone(), cx);
                 },
             ))
             // New session works from anywhere — `open_new_session` routes back
@@ -18027,6 +18039,7 @@ mod exit_regressions {
                         project_id: "pr-project".into(),
                         device: "remote".into(),
                         repository: "a/b".into(),
+                        url: "https://github.com/a/b/pull/7".into(),
                     }),
                     cx,
                 )

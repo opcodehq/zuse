@@ -337,7 +337,11 @@ impl PullRequestDetailPage {
         let spaces = state.spaces_sorted().into_iter().cloned().collect();
         // The engine's URL for the pull request it actually read, not the
         // link it was opened from.
-        let repo = repository(self.detail.as_ref().map_or(&self.url, |detail| &detail.url));
+        let url = self
+            .detail
+            .as_ref()
+            .map_or(self.url.clone(), |detail| detail.url.clone());
+        let repo = repository(&url);
         self.handoff_device = Some(device.clone());
         self.handoff_error = None;
         self.handoff_task = Some(cx.spawn_in(window, async move |this, cx| {
@@ -352,7 +356,7 @@ impl PullRequestDetailPage {
                 page.handoff_task = None;
                 match result {
                     Ok(Some(space)) => window.dispatch_action(Box::new(StartPullRequestSession {
-                        prompt, project_id: space.id, device: device.clone(), repository: repo.clone(),
+                        prompt, project_id: space.id, device: device.clone(), repository: repo.clone(), url: url.clone(),
                     }), cx),
                     Ok(None) => page.handoff_error = Some(format!(
                         "No checkout of {repo} is available on this device. Add its project, then try again.")),
@@ -380,7 +384,7 @@ impl PullRequestDetailPage {
                 .id(id)
                 .debug_selector(move || id.to_owned())
                 .role(gpui::Role::Button)
-                .aria_label(format!("{} in a new session", kind.label()))
+                .aria_label(format!("{} in a new chat", kind.label()))
                 .aria_description(summary)
                 .tab_index(0)
                 .flex_none()

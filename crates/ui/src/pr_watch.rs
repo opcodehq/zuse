@@ -148,65 +148,78 @@ impl Render for PrWatchControl {
         let ci = status
             .map(|s| s.ci.label())
             .unwrap_or("Connecting to CI watcher…");
-        let watch_button = div()
-            .id("pr-watch-toggle")
-            .role(gpui::Role::Button)
-            .tab_index(if ready { 0 } else { -1 })
-            .aria_label(if watching {
-                ("Pause CI watch").to_string()
-            } else {
-                crate::localization::text("projects-github_watch_ci", cx)
-            })
-            .rounded(px(5.0))
-            .px(px(6.0))
-            .py(px(3.0))
-            .text_color(if watching {
-                theme.accent
-            } else {
-                theme.text_muted
-            })
-            .focus_visible(move |el| el.border_1().border_color(theme.accent))
-            .when(ready, |el| {
-                el.cursor_pointer()
-                    .hover(|el| el.bg(theme.element_hover))
-                    .on_click(cx.listener(move |control, _, _, cx| {
-                        cx.stop_propagation();
-                        control.set(!watching, false, false, cx);
-                    }))
-                    .on_key_down(cx.listener(move |_, event: &gpui::KeyDownEvent, _, cx| {
-                        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                            // GPUI activates the focused control on key-up.
-                            cx.stop_propagation();
-                        }
-                    }))
-            })
-            .child(if watching {
-                ("Watching CI").to_string()
-            } else {
-                crate::localization::text("projects-github_watch_ci", cx)
+        // Each control is a labeled switch: on/off reads at a glance, where a
+        // text button left its state to its color.
+        let switch_row = |id: &'static str,
+                          on: bool,
+                          enabled: bool,
+                          label: SharedString,
+                          meta: Option<SharedString>| {
+            div()
+                .id(id)
+                .role(gpui::Role::Switch)
+                .aria_label(label.clone())
+                .aria_toggled(if on {
+                    gpui::Toggled::True
+                } else {
+                    gpui::Toggled::False
+                })
+                .tab_index(if enabled { 0 } else { -1 })
+                .h(px(24.0))
+                .flex()
+                .items_center()
+                .gap(px(6.0))
+                .px(px(4.0))
+                .rounded(px(5.0))
+                .text_color(if on { theme.text } else { theme.text_muted })
+                .when(!enabled, |row| row.opacity(0.45))
+                .focus_visible(move |row| row.bg(theme.element_hover))
+                .when(enabled, |row| {
+                    row.cursor_pointer()
+                        .hover(|row| row.text_color(theme.text))
+                        .on_key_down(|event: &gpui::KeyDownEvent, _, cx| {
+                            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                // GPUI activates the focused control on key-up.
+                                cx.stop_propagation();
+                            }
+                        })
+                })
+                .child(crate::settings::widgets::toggle_switch(&theme, on, id))
+                .child(label)
+                .children(meta.map(|meta| div().text_color(theme.text_muted).child(meta)))
+        };
+        let watch_label: SharedString =
+            crate::localization::text("projects-github_watch_ci", cx).into();
+        let watch_button =
+            switch_row("pr-watch-toggle", watching, ready, watch_label, None).when(ready, |row| {
+                row.on_click(cx.listener(move |control, _, _, cx| {
+                    cx.stop_propagation();
+                    control.set(!watching, false, false, cx);
+                }))
             });
         let fix_ready = ready && ((writable && status.is_some_and(|s| s.can_auto_fix)) || fixing);
-        let fix_label = if fixing {
-            format!("Auto-fix on · {attempts}/3")
-        } else if exhausted {
-            "Restart auto-fix · 3/3".into()
-        } else {
-            format!("Auto-fix · {attempts}/3")
-        };
-        let fix_button = div().id("pr-auto-fix-toggle").role(gpui::Role::Button).tab_index(if fix_ready { 0 } else { -1 })
-            .flex().items_center().gap(px(4.0))
-            .aria_label(fix_label.clone()).rounded(px(5.0)).px(px(6.0)).py(px(3.0))
-            .text_color(if fixing { theme.accent } else { theme.text_muted })
-            .when(!fix_ready, |el| el.opacity(0.45))
-            .focus_visible(move |el| el.border_1().border_color(theme.accent))
-            .tooltip(crate::settings::widgets::text_tooltip("Allow up to three CI repairs in this chat, including commits and normal pushes. Never force-push or merge. Restart grants a fresh budget after reviewing prior repairs."))
-            .when(fix_ready, |el| el.cursor_pointer().hover(|el| el.bg(theme.element_hover)).on_click(cx.listener(move |control, _, _, cx| {
-                cx.stop_propagation(); control.set(true, !fixing, exhausted && !fixing, cx);
-            })).on_key_down(cx.listener(move |_, event: &gpui::KeyDownEvent, _, cx| {
-                if matches!(event.keystroke.key.as_str(), "enter" | "space") { cx.stop_propagation(); }
-            })))
-            .child(crate::icons::icon(crate::icons::PR_REPAIR).size(px(12.0)))
-            .child(SharedString::from(fix_label));
+        // The repair budget only shows once a repair has run; a used-up
+        // budget turns the switch into a restart.
+        let fix_meta = (attempts > 0)
+            .then(|| SharedString::from(format!("{attempts} of {MAX_REPAIR_ATTEMPTS} used")));
+        let fix_button = switch_row(
+            "pr-auto-fix-toggle",
+            fixing,
+            fix_ready,
+            if exhausted && !fixing {
+                "Restart auto-fix".into()
+            } else {
+                "Auto-fix failures".into()
+            },
+            fix_meta,
+        )
+        .tooltip(crate::settings::widgets::text_tooltip("When CI fails, let this chat repair it up to three times, committing and pushing normally. It never force-pushes or merges. Restarting grants a fresh budget after you review earlier repairs."))
+        .when(fix_ready, |row| {
+            row.on_click(cx.listener(move |control, _, _, cx| {
+                cx.stop_propagation();
+                control.set(true, !fixing, exhausted && !fixing, cx);
+            }))
+        });
         let help = error.clone().unwrap_or_else(|| ci.to_string());
         div()
             .id("pr-watch-controls")
@@ -219,7 +232,7 @@ impl Render for PrWatchControl {
                 div()
                     .flex()
                     .items_center()
-                    .gap(px(4.0))
+                    .gap(px(8.0))
                     .child(watch_button)
                     .child(fix_button)
                     .when(!self.compact, |el| {
