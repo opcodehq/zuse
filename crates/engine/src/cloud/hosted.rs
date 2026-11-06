@@ -333,6 +333,8 @@ fn allowed(method: &str) -> bool {
             | methods::CLOUD_PROJECT_REMOVE
             | methods::CLOUD_PROJECT_ENVIRONMENT
             | methods::CLOUD_PROJECT_ENVIRONMENT_SAVE
+            | methods::CLOUD_MACHINE
+            | methods::CLOUD_MACHINE_SAVE
             | methods::CLOUD_PROJECT_SECRETS
             | methods::CLOUD_PROJECT_SECRET_SAVE
             | methods::CLOUD_PROJECT_SECRET_REVOKE

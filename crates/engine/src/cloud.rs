@@ -118,6 +118,8 @@ pub fn handles(method: &str) -> bool {
             | zuse_protocol::methods::CLOUD_AGENT_DISCONNECT
             | zuse_protocol::methods::CLOUD_PROJECT_ENVIRONMENT
             | zuse_protocol::methods::CLOUD_PROJECT_ENVIRONMENT_SAVE
+            | zuse_protocol::methods::CLOUD_MACHINE
+            | zuse_protocol::methods::CLOUD_MACHINE_SAVE
             | zuse_protocol::methods::CLOUD_PROJECT_SECRETS
             | zuse_protocol::methods::CLOUD_PROJECT_SECRET_SAVE
             | zuse_protocol::methods::CLOUD_PROJECT_SECRET_REVOKE
@@ -793,6 +795,8 @@ impl CloudApi {
             | zuse_protocol::methods::CLOUD_AGENT_DISCONNECT
             | zuse_protocol::methods::CLOUD_PROJECT_ENVIRONMENT
             | zuse_protocol::methods::CLOUD_PROJECT_ENVIRONMENT_SAVE
+            | zuse_protocol::methods::CLOUD_MACHINE
+            | zuse_protocol::methods::CLOUD_MACHINE_SAVE
             | zuse_protocol::methods::CLOUD_PROJECT_SECRETS
             | zuse_protocol::methods::CLOUD_PROJECT_SECRET_SAVE
             | zuse_protocol::methods::CLOUD_PROJECT_SECRET_REVOKE => {
@@ -942,6 +946,26 @@ impl CloudApi {
                             } else {
                                 reqwest::Method::GET
                             },
+                        )
+                        .await?
+                    }
+                    zuse_protocol::methods::CLOUD_MACHINE
+                    | zuse_protocol::methods::CLOUD_MACHINE_SAVE => {
+                        let save = method == zuse_protocol::methods::CLOUD_MACHINE_SAVE;
+                        let body = if save {
+                            let request: zuse_protocol::cloud_computers::SaveMachine =
+                                serde_json::from_value(input)?;
+                            Some(serde_json::to_value(request)?)
+                        } else {
+                            None
+                        };
+                        self.request_scoped_verb(
+                            &token,
+                            &["v1", "cloud", "machine"],
+                            body,
+                            org.as_deref(),
+                            &[],
+                            if save { reqwest::Method::PUT } else { reqwest::Method::GET },
                         )
                         .await?
                     }

@@ -7,14 +7,16 @@ pub(super) enum GuideStep {
     Github,
     Repositories,
     Agent,
+    Machine,
     Environment,
 }
 
 impl GuideStep {
-    pub(super) const ALL: [GuideStep; 4] = [
+    pub(super) const ALL: [GuideStep; 5] = [
         GuideStep::Github,
         GuideStep::Repositories,
         GuideStep::Agent,
+        GuideStep::Machine,
         GuideStep::Environment,
     ];
     fn index(self) -> usize {
@@ -25,6 +27,7 @@ impl GuideStep {
             GuideStep::Github => "github",
             GuideStep::Repositories => "repositories",
             GuideStep::Agent => "agent",
+            GuideStep::Machine => "machine",
             GuideStep::Environment => "environment",
         }
     }
@@ -33,7 +36,8 @@ impl GuideStep {
             GuideStep::Github => "Connect GitHub",
             GuideStep::Repositories => "Choose repositories",
             GuideStep::Agent => "Connect a coding agent",
-            GuideStep::Environment => "Prepare the computer",
+            GuideStep::Machine => "Customize your machine",
+            GuideStep::Environment => "Prepare a repository",
         }
     }
     fn summary(self) -> &'static str {
@@ -41,11 +45,12 @@ impl GuideStep {
             GuideStep::Github => "Install the Zuse app on the accounts whose code agents should work on.",
             GuideStep::Repositories => "Pick the repositories cloud computers can check out.",
             GuideStep::Agent => "Sign in with Codex, Claude or Grok so tasks run on your own plan.",
-            GuideStep::Environment => "Optional: setup commands and services that run before the agent starts.",
+            GuideStep::Machine => "Optional: tools, packages and instructions every repository gets, built into your image.",
+            GuideStep::Environment => "Optional: a repository's own setup commands and services.",
         }
     }
     fn optional(self) -> bool {
-        matches!(self, GuideStep::Environment)
+        matches!(self, GuideStep::Machine | GuideStep::Environment)
     }
 }
 
@@ -70,6 +75,7 @@ impl RepositoryPanel {
             GuideStep::Github => self.github_connected(),
             GuideStep::Repositories => !self.projects.is_empty(),
             GuideStep::Agent => self.agents.any_connected(),
+            GuideStep::Machine => self.machine.customized(),
             GuideStep::Environment => false,
         }
     }
@@ -159,7 +165,7 @@ impl RepositoryPanel {
                 div()
                     .mt(px(2.))
                     .child(s::description_text(
-                        "Four short steps. Tasks then start on a fresh computer with your repository and agent ready.",
+                        "Three required steps. Tasks then start on a fresh computer with your repository and agent ready.",
                     )),
             )
             .child(bar)
@@ -299,6 +305,7 @@ impl RepositoryPanel {
             GuideStep::Github => self.github_group(window, cx),
             GuideStep::Repositories => self.repositories(window, cx),
             GuideStep::Agent => self.render_agents(window, cx),
+            GuideStep::Machine => self.render_machine(cx),
             GuideStep::Environment => self.render_environment(cx),
         };
         let checklist = self.guide_checklist(current, cx);
@@ -347,6 +354,6 @@ fn waiting_copy(step: GuideStep) -> &'static str {
         GuideStep::Github => "Waiting for a GitHub installation",
         GuideStep::Repositories => "Add at least one repository",
         GuideStep::Agent => "Connect one coding agent",
-        GuideStep::Environment => "",
+        GuideStep::Machine | GuideStep::Environment => "",
     }
 }
