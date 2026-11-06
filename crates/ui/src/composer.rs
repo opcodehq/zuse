@@ -12373,9 +12373,39 @@ pub(crate) fn send_circle(
         )
 }
 
-/// The send key's dither ink: `rgb(151 183 76)`.
-const SEND_DITHER_RGB: [u8; 3] = [151, 183, 76];
-const SEND_BUTTON_RADIUS: f32 = 7.0;
+/// A labelled primary key (the question tray's Continue / Submit): the
+/// shared dithered primary button, resting on the muted fill while blocked.
+pub(crate) fn dither_key(
+    id: &'static str,
+    label: impl Into<SharedString>,
+    blocked: bool,
+    theme: &Theme,
+) -> gpui::Stateful<gpui::Div> {
+    let label: SharedString = label.into();
+    if blocked {
+        return div()
+            .id(id)
+            .debug_selector(move || id.into())
+            .h(px(SEND_BUTTON_SIZE))
+            .px(px(10.0))
+            .flex()
+            .flex_none()
+            .items_center()
+            .rounded(px(SEND_BUTTON_RADIUS))
+            .bg(theme.muted_fill())
+            .text_size(px(12.0))
+            .font_weight(gpui::FontWeight::MEDIUM)
+            .text_color(theme.text_muted)
+            .child(label);
+    }
+    crate::popover::btn_primary(theme, &label)
+        .id(id)
+        .debug_selector(move || id.into())
+}
+
+/// The send key's dither ink, shared with every primary button.
+const SEND_DITHER_RGB: [u8; 3] = crate::popover::DITHER_KEY_RGB;
+const SEND_BUTTON_RADIUS: f32 = crate::popover::DITHER_KEY_RADIUS;
 /// The Send / Stop key: a 28px square, matching the attach button.
 const SEND_BUTTON_SIZE: f32 = 28.0;
 

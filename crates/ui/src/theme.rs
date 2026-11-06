@@ -123,11 +123,9 @@ impl AccentColor {
             },
             selection: primary.opacity(if appearance.is_dark() { 0.35 } else { 0.24 }),
             caret: primary,
-            code_text: primary,
-            code_wash: primary.opacity(match appearance {
-                Appearance::Dark => 0.12,
-                Appearance::Light => 0.10,
-            }),
+            // Neutral plate: the accent text already marks the span, and an
+            // accent wash under accent text read as a loud double tint.
+            code_wash: wash_for(appearance, 0.08),
             activity: primary,
             glyph: GlyphPalette::for_accent(primary, strong, appearance),
         }
@@ -206,7 +204,6 @@ struct AccentTokens {
     wash: Hsla,
     selection: Hsla,
     caret: Hsla,
-    code_text: Hsla,
     code_wash: Hsla,
     activity: Hsla,
     glyph: GlyphPalette,
@@ -735,7 +732,7 @@ pub struct Theme {
     pub danger_strong: Hsla,
 
     // ---- paint: code & diff ----
-    /// Inline-code text in the selected accent family.
+    /// Inline-code text: neutral strong ink, not the accent.
     pub code_text: Hsla,
     /// Inline-code wash behind [`Self::code_text`].
     pub code_wash: Hsla,
@@ -1348,7 +1345,9 @@ impl Theme {
             cursor: hsla(0.0, 0.0, 1.0, 0.35),
             caret: accent.caret,
             danger_strong: oklch(0.58, 0.16, 25.0),
-            code_text: accent.code_text,
+            // Inline code stays neutral — the mono face and the faint plate
+            // mark it; an accent tint on every span read as noise.
+            code_text: grey(0xf4),
             code_wash: accent.code_wash,
             syntax: SyntaxPalette::for_appearance(
                 Appearance::Dark,
@@ -1443,7 +1442,7 @@ impl Theme {
             cursor: hsla(0.0, 0.0, 0.0, 0.55),
             caret: accent.caret,
             danger_strong: oklch(0.51, 0.20, 25.0),
-            code_text: accent.code_text,
+            code_text: grey(0x0f),
             code_wash: accent.code_wash,
             syntax: SyntaxPalette::for_appearance(
                 Appearance::Light,
@@ -1652,8 +1651,8 @@ impl Theme {
         theme.cursor = model_color(colors.cursor);
         theme.caret = model_color(accent.caret);
         theme.danger_strong = model_color(colors.danger);
-        theme.code_text = model_color(accent.primary);
-        theme.code_wash = model_color(accent.wash);
+        theme.code_text = theme.text_strong;
+        theme.code_wash = theme.wash(0.08);
         theme.syntax = SyntaxPalette::from_variant(variant, theme.syntax);
         theme.diff_add = model_color(colors.diff_add);
         theme.diff_del = model_color(colors.diff_delete);
@@ -2261,13 +2260,13 @@ mod tests {
         assert_eq!(dark.accent_color, AccentColor::Zuse);
         assert_eq!(dark.accent, hsla(83. / 360., 0.72, 0.46, 1.));
         assert_eq!(dark.accent_strong, hsla(83. / 360., 0.72, 0.46, 1.));
-        assert_eq!(dark.code_text, dark.accent);
+        assert_eq!(dark.code_text, dark.text_strong);
         assert_eq!(dark.busy, dark.accent);
         assert_eq!(dark.glyph.mid, dark.accent);
         assert_eq!(dark.caret, dark.accent);
         assert_eq!(light.accent, hsla(83. / 360., 0.74, 0.43, 1.));
         assert_eq!(light.accent_strong, hsla(83. / 360., 0.74, 0.43, 1.));
-        assert_eq!(light.code_text, light.accent);
+        assert_eq!(light.code_text, light.text_strong);
         assert_eq!(light.busy, light.accent);
         assert_eq!(light.glyph.mid, light.accent);
         assert_eq!(light.caret, light.accent);
@@ -2525,7 +2524,7 @@ mod tests {
                 );
                 assert!(contrast_ratio(theme.code_text, theme.bg) >= minimum);
                 assert!(contrast_ratio(theme.busy, theme.bg) >= minimum.min(3.0));
-                assert_eq!(theme.code_text, theme.accent);
+                assert_eq!(theme.code_text, theme.text_strong);
                 assert_eq!(theme.busy, theme.accent);
                 assert_eq!(theme.glyph.mid, theme.accent);
                 assert_ne!(theme.glyph.light, theme.glyph.mid);
@@ -2549,7 +2548,6 @@ mod tests {
                 assert_eq!(theme.diff_add, baseline.diff_add);
                 assert_eq!(theme.diff_del, baseline.diff_del);
                 if accent != AccentColor::Zuse {
-                    assert_ne!(theme.code_text, baseline.code_text);
                     assert_ne!(theme.busy, baseline.busy);
                     assert_ne!(theme.selection, baseline.selection);
                 }

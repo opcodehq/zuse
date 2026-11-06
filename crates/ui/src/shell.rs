@@ -9099,13 +9099,11 @@ impl Shell {
                         .items_center()
                         .justify_center()
                         .child(match status_glyph {
-                            // Running reads as the ring the Threads view
-                            // badges its avatar with.
-                            Some(_) if working => loaders::ring_spinner(
+                            // Running reads as the terminal spinner the
+                            // Threads view badges its avatar with.
+                            Some(_) if working => loaders::terminal_spinner(
                                 SharedString::from(format!("{row_id}-working-ring")),
-                                13.0,
-                                1.5,
-                                theme.text.opacity(0.15),
+                                14.0,
                                 theme.text.opacity(0.85),
                             ),
                             Some(glyph) => glyph,
@@ -9176,11 +9174,9 @@ impl Shell {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .child(loaders::ring_spinner(
+                            .child(loaders::terminal_spinner(
                                 SharedString::from(format!("{row_id}-working")),
                                 10.0,
-                                1.5,
-                                theme.text.opacity(0.15),
                                 theme.text.opacity(0.85),
                             )),
                     )

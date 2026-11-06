@@ -104,12 +104,14 @@ const CHIP_HEADER_HEIGHT: f32 = CHIP_CARD_HEIGHT - 2.0;
 /// Child labels and expanded text share one edge beneath the compact summary.
 /// The child gutter reserves room for
 /// a longer elbow, a 4px break before the icon, and an 8px icon-to-text gap.
-const ACTIVITY_GUTTER_WIDTH: f32 = 48.0;
+const ACTIVITY_GUTTER_WIDTH: f32 = 37.5;
 const ACTIVITY_TEXT_GAP: f32 = 8.0;
-const ACTIVITY_TRUNK_X: f32 = 12.5;
+/// The trunk drops just inside the transcript's text edge, under the group
+/// summary's first letter.
+const ACTIVITY_TRUNK_X: f32 = 2.0;
 const ACTIVITY_BEND_RADIUS: f32 = 6.0;
-const ACTIVITY_BRANCH_END_X: f32 = 28.0;
-const ACTIVITY_ICON_LEFT: f32 = 32.0;
+const ACTIVITY_BRANCH_END_X: f32 = 17.5;
+const ACTIVITY_ICON_LEFT: f32 = 21.5;
 const ACTIVITY_ICON_SIZE: f32 = 16.0;
 const TOOL_TEXT_SIZE: f32 = 12.0;
 const TOOL_LABEL_SIZE: f32 = TOOL_TEXT_SIZE;
@@ -2958,7 +2960,6 @@ struct FoldState {
     /// tween made every once-collapsed group flash open→closed on each
     /// reappearance (user report).
     toggled_at: Option<Instant>,
-    disclosure_at: Option<Instant>,
     /// Per-toggle duration. User bubbles scale this with travel distance;
     /// existing tool folds leave it at zero and keep their catalog constants.
     duration_ms: u64,
@@ -3067,19 +3068,6 @@ fn activity_branch_points(progress: f32) -> Vec<Point<f32>> {
         remaining -= length;
     }
     visible
-}
-
-fn tool_disclosure_progress(open: bool, fold: FoldState, now: Instant) -> f32 {
-    let Some(start) = fold.disclosure_at else {
-        return if open { 1.0 } else { 0.0 };
-    };
-    let raw = now
-        .checked_duration_since(start)
-        .unwrap_or_default()
-        .as_secs_f32()
-        / TOOL_FOLD.total().as_secs_f32();
-    let progress = TOOL_FOLD.curve.eval(raw);
-    if open { progress } else { 1.0 - progress }
 }
 
 /// The compact work fold's animated body budget: `fold.from` lerps toward
@@ -5361,7 +5349,6 @@ impl Transcript {
             self.tool_group_reveals.clear();
             for fold in self.folds.values_mut() {
                 fold.toggled_at = None;
-                fold.disclosure_at = None;
             }
         }
         let previous_tools: HashMap<SharedString, HashMap<String, Option<Instant>>> = self
@@ -5418,7 +5405,6 @@ impl Transcript {
                 reveal.rendered_open = None;
                 if let Some(fold) = self.folds.get_mut(&row.id) {
                     fold.toggled_at = None;
-                    fold.disclosure_at = None;
                 }
             }
             reveal.shimmer_started_at.get_or_insert(now);
@@ -5973,7 +5959,6 @@ impl Transcript {
             entry.open = Some(!currently_open);
             entry.epoch += 1;
             entry.toggled_at = Some(Instant::now());
-            entry.disclosure_at = entry.toggled_at;
             !currently_open
         };
         if shell_ix.is_none() {
@@ -8703,7 +8688,7 @@ impl Transcript {
         // accordion, spawn chips included.
         let collapses = self.compact_mode || tool_group_collapses(tools);
         // Several subagents get the delegation header: their provider marks
-        // stacked, how they stand, and the chevron trailing.
+        // stacked beside how they stand.
         let agent_group = !self.compact_mode && tools.len() > 1 && tools.iter().all(is_agent_tool);
         let agent_count = tools.len();
         // Groups start collapsed, the live tail included: the header names
@@ -8730,7 +8715,6 @@ impl Transcript {
             {
                 fold.from = reveal.rendered_height;
                 fold.toggled_at = Some(Instant::now());
-                fold.disclosure_at = fold.toggled_at;
                 self.folds.insert(row_id.clone(), fold);
             }
             reveal.rendered_open = Some(open);
@@ -9024,11 +9008,6 @@ impl Transcript {
         } else {
             None
         };
-        let disclosure_progress = if reduce_motion {
-            if open { 1.0 } else { 0.0 }
-        } else {
-            tool_disclosure_progress(open, fold, now)
-        };
 
         // The summary rolls as the group grows ("Ran 2 commands" → "Ran 3
         // commands"), like the working indicator's word.
@@ -9046,18 +9025,8 @@ impl Transcript {
             .and_then(|chat| chat.config.as_ref())
             .map(|config| crate::pickers::harness_brand_icon(config.harness));
         let toggle_id = row_id.clone();
-        let chevron = |slot: gpui::Div| {
-            slot.child(
-                crate::icons::icon(crate::icons::ALT_ARROW_DOWN)
-                    .size(px(14.0))
-                    .with_transformation(gpui::Transformation::rotate(gpui::radians(
-                        -std::f32::consts::FRAC_PI_2 * (1.0 - disclosure_progress),
-                    )))
-                    .text_color(theme.text_muted),
-            )
-        };
-        // A quiet summary sits above the activity rail; its chevron occupies
-        // the same gutter as the rounded task-tree elbows below it.
+        // A quiet summary sits above the activity rail. No disclosure arrow:
+        // the whole row is the toggle, and it brightens on hover.
         let header = div()
             .id(SharedString::from(format!("{row_id}-hdr")))
             .relative()
@@ -9082,20 +9051,8 @@ impl Transcript {
                 this.toggle_fold(toggle_id.clone(), viewport_height, effective_auto_open, cx);
                 cx.notify();
             }))
-            .map(|header| {
-                if agent_group {
-                    header.child(agent_avatar_stack(agent_count, agent_brand, theme))
-                } else {
-                    header.child(chevron(
-                        div()
-                            // Keep the title adjacent to its disclosure affordance.
-                            .w(px(22.0))
-                            .h(px(18.0))
-                            .flex_none()
-                            .pl(px(ACTIVITY_TRUNK_X - 7.0))
-                            .pt(px(2.0)),
-                    ))
-                }
+            .when(agent_group, |header| {
+                header.child(agent_avatar_stack(agent_count, agent_brand, theme))
             })
             .child(
                 div()
@@ -9116,15 +9073,12 @@ impl Transcript {
                             tool_group_title(summary.clone(), shimmer_phase, theme)
                         }),
                     }),
-            )
-            .when(agent_group, |header| {
-                header.child(chevron(div().flex_none()))
-            });
+            );
 
         if compact_shell {
             let view = cx.entity_id();
-            // The sibling body rows tween under TOOL_FOLD — keep frames (and
-            // the chevron's disclosure rotation) pumping until it lands.
+            // The sibling body rows tween under TOOL_FOLD — keep frames
+            // pumping until it lands.
             if !reduce_motion
                 && fold
                     .toggled_at
@@ -11720,7 +11674,6 @@ mod tests {
                             open: Some(false),
                             from: 120.0,
                             toggled_at: Some(Instant::now()),
-                            disclosure_at: Some(Instant::now()),
                             ..Default::default()
                         },
                     );
@@ -12335,17 +12288,6 @@ mod tests {
                 assert_eq!(reveal.rendered_open, Some(false));
             });
         });
-    }
-
-    #[test]
-    fn resizing_details_does_not_restart_group_disclosure() {
-        let now = Instant::now();
-        let fold = FoldState {
-            toggled_at: Some(now),
-            ..Default::default()
-        };
-        assert_eq!(tool_disclosure_progress(true, fold, now), 1.0);
-        assert_eq!(tool_disclosure_progress(false, fold, now), 0.0);
     }
 
     #[test]
