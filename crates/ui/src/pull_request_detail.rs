@@ -39,8 +39,8 @@ pub struct ClosePullRequest;
 pub struct OpenPrImage(pub String);
 
 /// Start a session with this prompt staged in its composer (not sent): a
-/// side chat tab when the current chat is already on this pull request's
-/// branch, else a new session.
+/// side chat tab off `own_chat` when this is that chat's own pull request,
+/// else a new session.
 #[derive(Clone, PartialEq, Action)]
 #[action(namespace = shell, no_json)]
 pub struct StartPullRequestSession {
@@ -48,8 +48,8 @@ pub struct StartPullRequestSession {
     pub project_id: String,
     pub device: String,
     pub repository: String,
-    /// The pull request's URL, to recognize the current chat's own one.
-    pub url: String,
+    /// The chat whose checkout resolved to this pull request, if any.
+    pub own_chat: Option<String>,
 }
 
 #[derive(Clone, PartialEq, Action)]

@@ -18039,7 +18039,7 @@ mod exit_regressions {
                         project_id: "pr-project".into(),
                         device: "remote".into(),
                         repository: "a/b".into(),
-                        url: "https://github.com/a/b/pull/7".into(),
+                        own_chat: None,
                     }),
                     cx,
                 )

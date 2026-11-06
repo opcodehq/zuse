@@ -1,7 +1,9 @@
 //! Compact chat/PR permission controls, backed by the owning engine's watch.
+use crate::localization::message as tr;
 use crate::{state::AppState, theme::Theme};
 use gpui::{Context, Entity, SharedString, Task, Window, div, prelude::*, px};
 use std::time::Duration;
+use zuse_i18n::messages as msg;
 use zuse_protocol::pr_watch::{
     MAX_REPAIR_ATTEMPTS, PrWatchRequest, PrWatchStatus, SetPrWatchRequest,
 };
@@ -200,20 +202,26 @@ impl Render for PrWatchControl {
         let fix_ready = ready && ((writable && status.is_some_and(|s| s.can_auto_fix)) || fixing);
         // The repair budget only shows once a repair has run; a used-up
         // budget turns the switch into a restart.
-        let fix_meta = (attempts > 0)
-            .then(|| SharedString::from(format!("{attempts} of {MAX_REPAIR_ATTEMPTS} used")));
+        let fix_meta = (attempts > 0).then(|| {
+            SharedString::from(tr(cx, |l| {
+                msg::native::pr_watch_repairs_used(l, attempts, MAX_REPAIR_ATTEMPTS)
+            }))
+        });
         let fix_button = switch_row(
             "pr-auto-fix-toggle",
             fixing,
             fix_ready,
             if exhausted && !fixing {
-                "Restart auto-fix".into()
+                tr(cx, msg::native::pr_watch_restart_auto_fix).into()
             } else {
-                "Auto-fix failures".into()
+                tr(cx, msg::native::pr_watch_auto_fix).into()
             },
             fix_meta,
         )
-        .tooltip(crate::settings::widgets::text_tooltip("When CI fails, let this chat repair it up to three times, committing and pushing normally. It never force-pushes or merges. Restarting grants a fresh budget after you review earlier repairs."))
+        .tooltip(crate::settings::widgets::text_tooltip(tr(
+            cx,
+            msg::native::pr_watch_auto_fix_help,
+        )))
         .when(fix_ready, |row| {
             row.on_click(cx.listener(move |control, _, _, cx| {
                 cx.stop_propagation();

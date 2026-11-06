@@ -242,29 +242,17 @@ impl Shell {
     }
 
     /// Whether a pull request hand-off targets the selected chat's own pull
-    /// request: same device and project, and the chat's branch is the pull
-    /// request's head, so a side chat sharing its checkout is already on it.
+    /// request: the hand-off resolved that chat's checkout to it, and the
+    /// chat is still selected, so a side chat sharing its checkout is
+    /// already on the pull request's branch.
     pub(super) fn pull_request_is_selected_chats(
         &self,
         action: &crate::pull_request_detail::StartPullRequestSession,
         cx: &App,
     ) -> bool {
-        if !matches!(self.route, Route::Chat) {
-            return false;
-        }
-        let state = self.state.read(cx);
-        let Some(chat) = state.selected_chat_row() else {
-            return false;
-        };
-        let same_url = |url: &str| {
-            url.trim_end_matches('/')
-                .eq_ignore_ascii_case(action.url.trim_end_matches('/'))
-        };
-        chat.device_id == action.device
-            && chat.space_id.as_deref() == Some(action.project_id.as_str())
-            && state
-                .change_request_for_chat(chat)
-                .is_some_and(|summary| same_url(&summary.url))
+        matches!(self.route, Route::Chat)
+            && action.own_chat.is_some()
+            && self.state.read(cx).selected_chat.as_deref() == action.own_chat.as_deref()
     }
 
     /// Open a new side chat tab off the selected chat and return its
