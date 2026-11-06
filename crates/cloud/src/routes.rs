@@ -260,6 +260,10 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
             post(project_preparation_source_credential),
         )
         .route(
+            "/v1/cloud/machine",
+            get(machine).put(save_machine).layer(DefaultBodyLimit::max(1536 * 1024)),
+        )
+        .route(
             "/v1/cloud/projects/{id}/environment",
             get(project_environment)
                 .put(save_project_environment)
@@ -1124,6 +1128,27 @@ async fn computer_capabilities(
             .push("cloud_workspace_creation_disabled".into());
     }
     Ok(Json(capabilities))
+}
+async fn machine(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<zuse_protocol::cloud_computers::MachineVersion>, ApiError> {
+    let access = state.access(&headers, AccessKind::Content).await?;
+    Ok(Json(state.store.machine(&access.owner_id).await?))
+}
+async fn save_machine(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Json<zuse_protocol::cloud_computers::SaveMachine>, JsonRejection>,
+) -> Result<Json<zuse_protocol::cloud_computers::MachineVersion>, ApiError> {
+    let access = state.access(&headers, AccessKind::Administration).await?;
+    let Json(request) = body.map_err(|_| ApiError::bad_request("invalid_machine_recipe"))?;
+    Ok(Json(
+        state
+            .store
+            .save_machine_scoped(&access, request, chrono::Utc::now().timestamp_millis())
+            .await?,
+    ))
 }
 async fn project_environment(
     State(state): State<AppState>,

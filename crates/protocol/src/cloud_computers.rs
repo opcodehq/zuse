@@ -301,6 +301,151 @@ pub struct SaveEnvironment {
     pub recipe: EnvironmentRecipe,
 }
 
+/// One account's machine: what every cloud computer for this account has
+/// before any repository is checked out. Built into the account's image, so
+/// nothing here may be a secret; secrets stay in the secret store.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MachineRecipe {
+    #[serde(default = "version_one")]
+    pub version: u32,
+    /// Runs once per image build as `zuse` with sudo: apt packages, tool
+    /// installs (bun, pnpm, uv…), global packages, warming package stores.
+    #[serde(default)]
+    pub setup_script: String,
+    /// Skills copied into every agent's skills directory.
+    #[serde(default)]
+    pub skills: Vec<MachineSkill>,
+    /// User-level instructions given to every agent (AGENTS.md / CLAUDE.md).
+    #[serde(default)]
+    pub instructions: String,
+    /// Small text files placed under the home directory (.gitconfig, .npmrc…).
+    #[serde(default)]
+    pub files: Vec<MachineFile>,
+    #[serde(default = "default_machine_timeout")]
+    pub setup_timeout_seconds: u32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MachineSkill {
+    pub name: String,
+    /// The skill's SKILL.md.
+    pub content: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MachineFile {
+    /// Relative to the home directory, e.g. `.gitconfig`.
+    pub path: String,
+    pub content: String,
+}
+
+fn default_machine_timeout() -> u32 {
+    1800
+}
+
+impl Default for MachineRecipe {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            setup_script: String::new(),
+            skills: vec![],
+            instructions: String::new(),
+            files: vec![],
+            setup_timeout_seconds: default_machine_timeout(),
+        }
+    }
+}
+
+/// Home paths a recipe may never write: credentials, runtime state and the
+/// agents' own login stores.
+const MACHINE_PROTECTED: &[&str] = &[
+    ".ssh", ".gnupg", ".zuse-data", ".zuse", ".config/zuse", ".codex/auth.json",
+    ".claude/.credentials.json", ".claude.json", ".aws", ".docker", ".kube",
+    ".netrc", ".git-credentials", ".npmrc.token",
+];
+const MACHINE_TEXT_LIMIT: usize = 64 * 1024;
+
+impl MachineRecipe {
+    /// True when the recipe adds nothing; such accounts use the shared base.
+    pub fn is_empty(&self) -> bool {
+        self.setup_script.trim().is_empty()
+            && self.skills.is_empty()
+            && self.instructions.trim().is_empty()
+            && self.files.is_empty()
+    }
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.version != 1 || !(60..=3600).contains(&self.setup_timeout_seconds) {
+            return Err("invalid_machine_recipe");
+        }
+        if self.setup_script.len() > MACHINE_TEXT_LIMIT || self.instructions.len() > MACHINE_TEXT_LIMIT {
+            return Err("machine_recipe_text_too_large");
+        }
+        if self.skills.len() > 64 || self.files.len() > 32 {
+            return Err("machine_recipe_too_many_entries");
+        }
+        let mut names = std::collections::BTreeSet::new();
+        for skill in &self.skills {
+            let valid = !skill.name.is_empty()
+                && skill.name.len() <= 64
+                && skill
+                    .name
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_')
+                && !skill.name.starts_with('-');
+            if !valid || skill.content.len() > MACHINE_TEXT_LIMIT || !names.insert(skill.name.as_str()) {
+                return Err("invalid_machine_skill");
+            }
+        }
+        let mut paths = std::collections::BTreeSet::new();
+        for file in &self.files {
+            let path = file.path.trim_start_matches("./");
+            let segments: Vec<&str> = path.split('/').collect();
+            let valid = !path.is_empty()
+                && path.len() <= 200
+                && !path.starts_with('/')
+                && segments.iter().all(|s| !s.is_empty() && *s != "." && *s != "..")
+                && path.bytes().all(|b| b.is_ascii_graphic())
+                && !MACHINE_PROTECTED
+                    .iter()
+                    .any(|p| path == *p || path.starts_with(&format!("{p}/")));
+            if !valid || file.content.len() > MACHINE_TEXT_LIMIT || !paths.insert(path.to_owned()) {
+                return Err("invalid_machine_file");
+            }
+        }
+        let total = self.setup_script.len()
+            + self.instructions.len()
+            + self.skills.iter().map(|s| s.content.len()).sum::<usize>()
+            + self.files.iter().map(|f| f.content.len()).sum::<usize>();
+        if total > 1024 * 1024 {
+            return Err("machine_recipe_too_large");
+        }
+        Ok(())
+    }
+}
+
+/// The account's current recipe and the state of its image.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MachineVersion {
+    pub revision: i64,
+    pub recipe: MachineRecipe,
+    pub created_at: i64,
+    /// `none` (uses the shared base), `queued`, `building`, `ready`, `failed`.
+    pub image_state: String,
+    #[serde(default)]
+    pub image_error: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SaveMachine {
+    pub expected_revision: i64,
+    pub recipe: MachineRecipe,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StagingCandidate {
@@ -377,5 +522,30 @@ mod tests {
         recipe.startup.pop();
         recipe.startup[0].timeout_seconds = 0;
         assert_eq!(recipe.validate(), Err("invalid_startup_service"));
+    }
+}
+
+#[cfg(test)]
+mod machine_recipe_tests {
+    use super::*;
+
+    #[test]
+    fn machine_recipe_rejects_credential_paths_and_bad_names() {
+        let mut recipe = MachineRecipe {
+            setup_script: "sudo apt-get install -y ffmpeg".into(),
+            skills: vec![MachineSkill { name: "release-notes".into(), content: "# Release notes".into() }],
+            files: vec![MachineFile { path: ".gitconfig".into(), content: "[user]\n".into() }],
+            ..Default::default()
+        };
+        assert_eq!(recipe.validate(), Ok(()));
+        assert!(!recipe.is_empty());
+        for path in [".ssh/config", ".claude/.credentials.json", "../etc/passwd", "/root/x", "a//b", ".codex/auth.json"] {
+            recipe.files = vec![MachineFile { path: path.into(), content: String::new() }];
+            assert_eq!(recipe.validate(), Err("invalid_machine_file"), "{path}");
+        }
+        recipe.files = vec![];
+        recipe.skills = vec![MachineSkill { name: "Bad Name".into(), content: String::new() }];
+        assert_eq!(recipe.validate(), Err("invalid_machine_skill"));
+        assert!(MachineRecipe::default().is_empty());
     }
 }

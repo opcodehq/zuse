@@ -329,6 +329,7 @@ pub fn retryable_read(method: &str, params: &serde_json::Value) -> bool {
         | CLOUD_AGENT_CONNECTIONS
         | CLOUD_AGENT_LOGIN_STATUS
         | CLOUD_PROJECT_ENVIRONMENT
+        | CLOUD_MACHINE
         | CLOUD_PREPAID_BALANCE
         | CLOUD_BILLING_ENTITLEMENTS
         | CLOUD_BILLING_SUMMARY
@@ -513,6 +514,9 @@ pub const CLOUD_AGENT_LOGIN_CANCEL: &str = "CloudAgentLoginCancel";
 pub const CLOUD_AGENT_DISCONNECT: &str = "CloudAgentDisconnect";
 pub const CLOUD_PROJECT_ENVIRONMENT: &str = "CloudProjectEnvironment";
 pub const CLOUD_PROJECT_ENVIRONMENT_SAVE: &str = "CloudProjectEnvironmentSave";
+/// The account machine recipe every cloud computer's image is built from.
+pub const CLOUD_MACHINE: &str = "CloudMachine";
+pub const CLOUD_MACHINE_SAVE: &str = "CloudMachineSave";
 pub const CLOUD_PROJECT_SECRETS: &str = "CloudProjectSecrets";
 pub const CLOUD_PROJECT_SECRET_SAVE: &str = "CloudProjectSecretSave";
 pub const CLOUD_PROJECT_SECRET_REVOKE: &str = "CloudProjectSecretRevoke";

@@ -501,3 +501,81 @@ async fn environments_are_scoped_revisioned_and_available_without_compute_entitl
         .unwrap();
     admin.close().await;
 }
+
+#[tokio::test]
+#[ignore = "requires explicit isolated localhost PostgreSQL"]
+async fn machine_recipes_are_revisioned_validated_and_report_image_state() {
+    let url = std::env::var("ZUSE_CLOUD_TEST_DATABASE_URL").expect("isolated PostgreSQL required");
+    assert!(url.contains("127.0.0.1") || url.contains("localhost"));
+    let admin = PgPool::connect(&url).await.unwrap();
+    let schema = format!("machine_{}", uuid::Uuid::new_v4().simple());
+    sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+    let copy = schema.clone();
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(6)
+        .after_connect(move |connection, _| {
+            let schema = copy.clone();
+            Box::pin(async move {
+                sqlx::query(&format!("SET search_path={schema}")).execute(connection).await?;
+                Ok(())
+            })
+        })
+        .connect(&url)
+        .await
+        .unwrap();
+    for sql in [
+        include_str!("../../tests/fixtures/legacy-catalog.sql"),
+        include_str!("../../tests/fixtures/projects.sql"),
+        include_str!("../../migrations/0009_computers.sql"),
+        include_str!("../../migrations/0031_machine_images.sql"),
+    ] {
+        sqlx::raw_sql(sql).execute(&pool).await.unwrap();
+    }
+    let store = Store::from_pool(pool.clone())
+        .with_connections(crate::connections::ConnectionControl::from_pool(
+            pool.clone(),
+            crate::crypto::MasterKey::parse("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap(),
+            vec!["user-alice".into()],
+        ))
+        .with_computer_control(ComputerControl::from_pool(pool.clone(), vec!["user-alice".into()]));
+    let app = router(
+        AppState {
+            store,
+            identity: Arc::new(TestIdentity),
+            organizations_enabled: true,
+            organization_ids: Arc::new(vec!["org-team".into()]),
+            runtime: None,
+            gateway: Arc::new(Hub::default()),
+        },
+        vec![],
+    );
+    let path = "/v1/cloud/machine";
+    assert_eq!(call(&app, "GET", path, "invalid", false, Value::Null).await.0, StatusCode::UNAUTHORIZED);
+    let initial = call(&app, "GET", path, "alice", false, Value::Null).await;
+    assert_eq!(initial.0, StatusCode::OK);
+    assert_eq!(initial.1["revision"], 0);
+    assert_eq!(initial.1["imageState"], "none");
+    let change = json!({"expectedRevision":0,"recipe":{"setupScript":"npm i -g pnpm","instructions":"Prefer pnpm."}});
+    let (a, b) = tokio::join!(
+        call(&app, "PUT", path, "alice", false, change.clone()),
+        call(&app, "PUT", path, "alice", false, change.clone())
+    );
+    assert!([a.0, b.0].contains(&StatusCode::OK));
+    assert!([a.0, b.0].contains(&StatusCode::CONFLICT));
+    let saved = call(&app, "GET", path, "alice", false, Value::Null).await.1;
+    assert_eq!(saved["revision"], 1);
+    assert_eq!(saved["recipe"]["setupScript"], "npm i -g pnpm");
+    // Nothing builds it yet, so a customized machine reports queued.
+    assert_eq!(saved["imageState"], "queued");
+    let credential = json!({"expectedRevision":1,"recipe":{"files":[{"path":".ssh/id_ed25519","content":"never"}]}});
+    let rejected = call(&app, "PUT", path, "alice", false, credential).await;
+    assert_eq!(rejected.0, StatusCode::BAD_REQUEST);
+    assert!(!rejected.1.to_string().contains("never"));
+    // Writes stay closed for accounts without computer setup enabled.
+    let bob = call(&app, "PUT", path, "bob", false, json!({"expectedRevision":0,"recipe":{"setupScript":"x"}})).await;
+    assert_eq!(bob.0, StatusCode::FORBIDDEN);
+    let cleared = call(&app, "PUT", path, "alice", false, json!({"expectedRevision":1,"recipe":{}})).await;
+    assert_eq!(cleared.0, StatusCode::OK);
+    assert_eq!(cleared.1["imageState"], "none");
+    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE")).execute(&admin).await.unwrap();
+}

@@ -5,6 +5,7 @@ use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use std::{collections::HashSet, sync::Arc};
 use zuse_protocol::cloud_computers::*;
+mod machine;
 #[cfg(test)]
 mod tests;
 

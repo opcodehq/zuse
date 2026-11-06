@@ -588,12 +588,14 @@ impl Render for RepositoryPanel {
         let github = self.github_group(window, cx);
         let agents = self.render_agents(window, cx);
         let environment = self.render_environment(cx);
+        let machine = self.render_machine(cx);
         let mut root = column().gap(px(16.)).when_some(entry, |root, entry| root.child(entry));
         if self.agent_recovery_open() {
             return root
                 .child(agents)
                 .child(github)
                 .child(repos)
+                .child(machine)
                 .child(environment);
         }
         if self.github_connected() {
@@ -601,6 +603,6 @@ impl Render for RepositoryPanel {
         } else {
             root = root.child(github).child(repos);
         }
-        root.child(agents).child(environment)
+        root.child(agents).child(machine).child(environment)
     }
 }

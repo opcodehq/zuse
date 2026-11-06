@@ -20,6 +20,7 @@ mod agents;
 mod environment;
 mod github;
 mod guide;
+mod machine;
 mod images;
 mod presentation;
 mod secrets;
@@ -46,6 +47,7 @@ struct Pending {
 pub struct RepositoryPanel {
     agents: agents::AgentView,
     environment: environment::EnvironmentView,
+    machine: machine::MachineView,
     secrets: secrets::SecretsView,
     image: images::ImageView,
     owner: Option<Owner>,
@@ -93,6 +95,7 @@ impl RepositoryPanel {
         Self {
             agents: agents::AgentView::new(window, cx),
             environment: environment::EnvironmentView::new(window, cx),
+            machine: machine::MachineView::new(window, cx),
             secrets: secrets::SecretsView::new(window, cx),
             image: Default::default(),
             owner: None,
@@ -135,6 +138,7 @@ impl RepositoryPanel {
         self.image = Default::default();
         self.agents.reset(cx);
         self.environment.reset(cx);
+        self.machine.reset(cx);
         self.secrets.reset(cx);
         self.storage_usage = None;
         self.owner = owner;
@@ -200,6 +204,7 @@ impl RepositoryPanel {
         self.call("list", methods::CLOUD_PROJECTS, json!({}), cx);
         self.call("github", methods::CLOUD_GITHUB, json!({}), cx);
         self.call("agents", methods::CLOUD_AGENT_CONNECTIONS, json!({}), cx);
+        self.load_machine(cx);
         self.refresh_image(cx);
         cx.notify();
     }
@@ -224,6 +229,11 @@ impl RepositoryPanel {
                 }
                 if pending.kind.starts_with("environment") {
                     self.environment.error = Some(e);
+                    cx.notify();
+                    return;
+                }
+                if pending.kind.starts_with("machine") {
+                    self.machine.error = Some(e);
                     cx.notify();
                     return;
                 }
@@ -254,6 +264,10 @@ impl RepositoryPanel {
         }
         if pending.kind.starts_with("environment") {
             self.receive_environment(data, cx);
+            return;
+        }
+        if pending.kind.starts_with("machine") {
+            self.receive_machine(data, cx);
             return;
         }
         if pending.kind.starts_with("agent") {
