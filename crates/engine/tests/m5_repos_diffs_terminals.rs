@@ -2284,6 +2284,32 @@ async fn rpc_dispatch_for_m5_methods() {
         Some(&*tmp.path().to_string_lossy())
     );
 
+    // CreateFolder makes one new folder and refuses to reuse or escape.
+    let created = client
+        .call(
+            methods::CREATE_FOLDER,
+            serde_json::json!({ "parent": tmp.path().to_string_lossy(), "name": "Fresh" }),
+        )
+        .await
+        .expect("CreateFolder");
+    assert!(tmp.path().join("Fresh").is_dir());
+    assert_eq!(
+        created["path"].as_str(),
+        Some(&*tmp.path().join("Fresh").to_string_lossy())
+    );
+    for name in ["Fresh", "../escape", ".hidden", ""] {
+        assert!(
+            client
+                .call(
+                    methods::CREATE_FOLDER,
+                    serde_json::json!({ "parent": tmp.path().to_string_lossy(), "name": name }),
+                )
+                .await
+                .is_err(),
+            "CreateFolder must reject {name:?}"
+        );
+    }
+
     // A legacy CreateWorktree caller does not trigger setup, even when one is
     // configured for the project.
     core.project_actions
