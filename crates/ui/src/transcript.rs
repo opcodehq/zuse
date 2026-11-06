@@ -2643,6 +2643,14 @@ pub fn format_elapsed(secs: i64) -> String {
     }
 }
 
+/// The trailer's word once the turn has settled but its subagents still run.
+fn waiting_for_subagents_label(count: u32) -> String {
+    match count {
+        1 => "Waiting for 1 subagent".to_owned(),
+        n => format!("Waiting for {n} subagents"),
+    }
+}
+
 fn worked_for_label(secs: i64) -> String {
     format!("Worked for {}", format_elapsed(secs))
 }
@@ -7809,79 +7817,86 @@ impl Transcript {
         // `turn` (the turn's start, ms) keys the rolling word and timer, so a
         // new turn's labels appear fresh instead of rolling from the last
         // turn's final values.
-        let (sending, queued, elapsed_secs, turn) = if let Some(doc_id) = &self.doc_override {
-            // A subagent doc has no Session row — `indicator_for` would read
-            // the PARENT chat's live state into this tab. Liveness rides the
-            // doc itself instead: the sink's assistant entry streams until
-            // the subagent settles (run teardown finalizes abandoned sinks),
-            // and a trailing USER entry is a steer still awaiting its reply
-            // segment. Frozen snapshots never spin, whatever they claim.
-            if !self.doc_live {
-                return None;
-            }
-            let state = self.state.read(cx);
-            let last = state.sub_transcript(doc_id).last()?;
-            let live =
-                last.status == Some(MessageStatus::Streaming) || last.role == MessageRole::User;
-            if !live {
-                return None;
-            }
-            let elapsed = ((now.timestamp_millis() - last.created_at).max(0) / 1000) as i64;
-            (false, false, elapsed, last.created_at)
-        } else {
-            let chat_id = self.chat_id.clone()?;
-            // Failed-send state first: past the grace window the trailer IS
-            // the retry affordance, whatever the indicator fell back to.
-            if self.state.read(cx).send_undelivered(&chat_id, now) {
-                let theme = Theme::of(cx).clone();
-                return Some(
-                    div()
-                        .id("undelivered-retry")
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .gap(px(Theme::SPACE_SM))
-                        .pt(px(Theme::SPACE_LG))
-                        .text_size(crate::typography::text_xs())
-                        .text_color(theme.danger)
-                        .cursor_pointer()
-                        .on_click(cx.listener(|this, _, _, cx| this.retry_send(cx)))
-                        .child(SharedString::from("Not delivered — click to retry"))
-                        .into_any_element(),
-                );
-            }
-            let (sending, queued, elapsed, turn) = {
-                let state = self.state.read(cx);
-                if state.indicator_for(&chat_id, now) != crate::state::Indicator::Working {
+        let (sending, queued, waiting, elapsed_secs, turn) =
+            if let Some(doc_id) = &self.doc_override {
+                // A subagent doc has no Session row — `indicator_for` would read
+                // the PARENT chat's live state into this tab. Liveness rides the
+                // doc itself instead: the sink's assistant entry streams until
+                // the subagent settles (run teardown finalizes abandoned sinks),
+                // and a trailing USER entry is a steer still awaiting its reply
+                // segment. Frozen snapshots never spin, whatever they claim.
+                if !self.doc_live {
                     return None;
                 }
-                // During the send→turn window the session row's `started_at`
-                // still belongs to the PREVIOUS turn — a timer based on the
-                // send counted the round-trip and then restarted when the
-                // turn actually began (user report). Bridge it as "Sending…"
-                // with no timer instead; the word + timer start with the
-                // turn.
+                let state = self.state.read(cx);
+                let last = state.sub_transcript(doc_id).last()?;
+                let live =
+                    last.status == Some(MessageStatus::Streaming) || last.role == MessageRole::User;
+                if !live {
+                    return None;
+                }
+                let elapsed = ((now.timestamp_millis() - last.created_at).max(0) / 1000) as i64;
+                (false, false, 0, elapsed, last.created_at)
+            } else {
+                let chat_id = self.chat_id.clone()?;
+                // Failed-send state first: past the grace window the trailer IS
+                // the retry affordance, whatever the indicator fell back to.
+                if self.state.read(cx).send_undelivered(&chat_id, now) {
+                    let theme = Theme::of(cx).clone();
+                    return Some(
+                        div()
+                            .id("undelivered-retry")
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(Theme::SPACE_SM))
+                            .pt(px(Theme::SPACE_LG))
+                            .text_size(crate::typography::text_xs())
+                            .text_color(theme.danger)
+                            .cursor_pointer()
+                            .on_click(cx.listener(|this, _, _, cx| this.retry_send(cx)))
+                            .child(SharedString::from("Not delivered — click to retry"))
+                            .into_any_element(),
+                    );
+                }
+                let state = self.state.read(cx);
                 let turn_started = state.session_for(&chat_id).and_then(|s| s.started_at);
-                let send_started = state.pending_send_started(&chat_id, now);
-                let sending = sending_bridge(send_started, turn_started);
-                // Degraded delivery path: the send is a durable local write
-                // waiting on connectivity — say so instead of faking
-                // progress. (The overlay holds while degraded, so this line
-                // owns the surface until the ack or the failed state.)
-                let queued = sending && state.chat_delivery_degraded(&chat_id);
-                let elapsed = turn_started
-                    .map(|t| now.signed_duration_since(t).num_seconds().max(0))
-                    .unwrap_or(0);
-                // While sending, the session row still carries the PREVIOUS
-                // turn: the bridge keys on its own send instead, so it never
-                // rolls out of that turn's word or an earlier send's.
-                let turn = if sending { send_started } else { turn_started }
-                    .map_or(0, |t| t.timestamp_millis());
-                (sending, queued, elapsed, turn)
+                if state.indicator_for(&chat_id, now) != crate::state::Indicator::Working {
+                    // The turn settled but subagents it spawned still stream:
+                    // the agent resumes when they report, so the trailer holds
+                    // as "Waiting for …" instead of reading the chat as done.
+                    let waiting = crate::state::running_subagents(state.session_for(&chat_id), now);
+                    if waiting == 0 {
+                        return None;
+                    }
+                    let turn = turn_started.map_or(0, |t| t.timestamp_millis());
+                    (false, false, waiting, 0, turn)
+                } else {
+                    // During the send→turn window the session row's `started_at`
+                    // still belongs to the PREVIOUS turn — a timer based on the
+                    // send counted the round-trip and then restarted when the
+                    // turn actually began (user report). Bridge it as "Sending…"
+                    // with no timer instead; the word + timer start with the
+                    // turn.
+                    let send_started = state.pending_send_started(&chat_id, now);
+                    let sending = sending_bridge(send_started, turn_started);
+                    // Degraded delivery path: the send is a durable local write
+                    // waiting on connectivity — say so instead of faking
+                    // progress. (The overlay holds while degraded, so this line
+                    // owns the surface until the ack or the failed state.)
+                    let queued = sending && state.chat_delivery_degraded(&chat_id);
+                    let elapsed = turn_started
+                        .map(|t| now.signed_duration_since(t).num_seconds().max(0))
+                        .unwrap_or(0);
+                    // While sending, the session row still carries the PREVIOUS
+                    // turn: the bridge keys on its own send instead, so it never
+                    // rolls out of that turn's word or an earlier send's.
+                    let turn = if sending { send_started } else { turn_started }
+                        .map_or(0, |t| t.timestamp_millis());
+                    (sending, queued, 0, elapsed, turn)
+                }
             };
-            (sending, queued, elapsed, turn)
-        };
-        if self.compact_mode && !sending && !queued && elapsed_secs > 0 {
+        if self.compact_mode && !sending && !queued && waiting == 0 && elapsed_secs > 0 {
             let entry_id = if let Some(doc_id) = &self.doc_override {
                 self.state
                     .read(cx)
@@ -7915,6 +7930,8 @@ impl Transcript {
             "Queued — will send automatically".to_owned()
         } else if sending {
             "Sending…".to_owned()
+        } else if waiting > 0 {
+            waiting_for_subagents_label(waiting)
         } else {
             format!("{agent} is working")
         };
@@ -7946,7 +7963,7 @@ impl Transcript {
                             cx.reduce_motion(),
                         )),
                 )
-                .when(!sending, |el| {
+                .when(!sending && waiting == 0, |el| {
                     // The timer ticks every second; its digits roll in place
                     // (the unit suffix holds).
                     el.child(
@@ -17521,6 +17538,12 @@ mod tests {
         ] {
             assert_eq!(format_elapsed(secs), expected, "elapsed seconds: {secs}");
         }
+    }
+
+    #[test]
+    fn waiting_label_counts_running_subagents() {
+        assert_eq!(waiting_for_subagents_label(1), "Waiting for 1 subagent");
+        assert_eq!(waiting_for_subagents_label(3), "Waiting for 3 subagents");
     }
 
     #[test]
