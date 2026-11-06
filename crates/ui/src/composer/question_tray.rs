@@ -198,10 +198,8 @@ impl Composer {
                         )
                     })
                     .child(
-                        crate::popover::btn_primary(&theme, title)
-                            .id("question-send")
-                            .when(!can_submit, |d| d.opacity(0.4))
-                            .on_click(cx.listener(move |this, _, _, cx| {
+                        dither_key("question-send", title, !can_submit, &theme).on_click(
+                            cx.listener(move |this, _, _, cx| {
                                 if !can_submit {
                                     return;
                                 }
@@ -210,7 +208,8 @@ impl Composer {
                                 } else {
                                     this.wizard_advance(cx);
                                 }
-                            })),
+                            }),
+                        ),
                     ),
             );
         let panel = div()

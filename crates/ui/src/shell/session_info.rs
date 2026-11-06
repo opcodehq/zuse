@@ -769,7 +769,7 @@ impl Shell {
         let (header, open) = self.session_info_section(
             "agents",
             true,
-            row_glyph(icons::SUMMARY_AGENTS, theme),
+            row_glyph(icons::TOOL_AGENT, theme),
             "Agents",
             Some(meta.into()),
             theme,
