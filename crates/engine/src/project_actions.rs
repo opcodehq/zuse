@@ -298,6 +298,14 @@ impl ProjectActionsStore {
         lock(&self.inner.worktree_progress).remove(command_id);
     }
 
+    /// Clears `command_id`'s worktree progress when dropped.
+    pub fn worktree_progress_scope(&self, command_id: &str) -> WorktreeProgressScope {
+        WorktreeProgressScope {
+            store: self.clone(),
+            command_id: command_id.to_string(),
+        }
+    }
+
     pub fn worktree_progress(
         &self,
         command_id: &str,
@@ -307,6 +315,17 @@ impl ProjectActionsStore {
             .get(command_id)
             .filter(|(owner, _)| owner == chat_id)
             .map(|(_, progress)| progress.clone())
+    }
+}
+
+pub struct WorktreeProgressScope {
+    store: ProjectActionsStore,
+    command_id: String,
+}
+
+impl Drop for WorktreeProgressScope {
+    fn drop(&mut self) {
+        self.store.clear_worktree_progress(&self.command_id);
     }
 }
 

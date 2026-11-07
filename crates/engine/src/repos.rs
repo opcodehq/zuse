@@ -77,7 +77,8 @@ async fn fetch_branch(repo_path: &Path, remote: &str, branch: &str) -> bool {
         use std::os::windows::process::CommandExt;
         cmd.as_std_mut().creation_flags(0x08000000);
     }
-    cmd.args(["fetch", "--quiet", "--no-tags", remote, branch])
+    // `--` keeps a hostile name (`--upload-pack=…`) from parsing as an option.
+    cmd.args(["fetch", "--quiet", "--no-tags", "--", remote, branch])
         .current_dir(repo_path)
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GCM_INTERACTIVE", "never")
@@ -1520,6 +1521,16 @@ impl Repos {
         else {
             return unchanged();
         };
+        // The base arrives over RPC; only a well-formed branch name is ever
+        // handed to `git fetch`.
+        if branch.starts_with('-')
+            || self
+                .git(&["check-ref-format", "--branch", &branch], Some(repo_path))
+                .await
+                .is_err()
+        {
+            return unchanged();
+        }
         let local_ref = format!("refs/heads/{branch}");
         let remote_ref = format!("refs/remotes/{remote}/{branch}");
         progress(zuse_protocol::WorktreeProgress::Fetching {
@@ -1597,7 +1608,9 @@ impl Repos {
             let remote = self.branch_remote(repo_path, base, remotes).await?;
             return Some((remote, base.to_string()));
         }
-        // A remote-tracking base such as `origin/main`.
+        // A remote-tracking base such as `origin/main`, when that ref exists.
+        self.commit_of(repo_path, &format!("refs/remotes/{base}"))
+            .await?;
         remotes.iter().find_map(|remote| {
             base.strip_prefix(&format!("{remote}/"))
                 .filter(|branch| !branch.is_empty())

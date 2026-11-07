@@ -5709,15 +5709,8 @@ impl DocHost {
                 let worktree_spec = request.worktree.take();
                 let fresh_worktree = match &worktree_spec {
                     Some(spec) => {
-                        let materialized =
-                            self.materialize_worktree(&entry.id, chat_id, spec).await;
-                        if materialized.is_err()
-                            && let Some((project_actions, _)) =
-                                self.inner.project_action_runtime.get()
-                        {
-                            project_actions.clear_worktree_progress(&entry.id);
-                        }
-                        let (cwd, fresh) = materialized?;
+                        let (cwd, fresh) =
+                            self.materialize_worktree(&entry.id, chat_id, spec).await?;
                         request.cwd = cwd;
                         fresh
                     }
@@ -6146,6 +6139,10 @@ impl DocHost {
             .get()
             .filter(|_| spec.space_id.is_some())
             .map(|(project_actions, _)| project_actions);
+        // Phases only describe this call; any exit (error, cancellation,
+        // success) clears them so the sender never polls a stale one.
+        let _progress_scope =
+            project_actions.map(|store| store.worktree_progress_scope(command_id));
         let worktree = repos
             .create_worktree_with_progress(
                 std::path::Path::new(&spec.repo_path),
