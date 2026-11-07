@@ -10323,11 +10323,19 @@ impl Composer {
                                 .await
                                 {
                                     Ok(value) if value.get("ready").and_then(|v| v.as_bool()) == Some(false) => {
+                                        // A newer host's unknown phase hides the
+                                        // pill rather than showing a wrong one.
                                         let progress = value
                                             .get("progress")
                                             .cloned()
                                             .filter(|value| !value.is_null())
-                                            .and_then(|value| serde_json::from_value(value).ok());
+                                            .and_then(|value| {
+                                                serde_json::from_value(value)
+                                                    .inspect_err(|error| {
+                                                        tracing::debug!(%error, "unreadable worktree progress")
+                                                    })
+                                                    .ok()
+                                            });
                                         this.update(cx, |composer, cx| {
                                             composer.set_worktree_progress(&poll_chat_id, progress, cx)
                                         })
