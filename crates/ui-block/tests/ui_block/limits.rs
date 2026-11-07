@@ -510,3 +510,17 @@ fn reference_chains_count_toward_depth() {
     let reversed: Vec<&str> = long.lines().rev().collect();
     rejects(&reversed.join("\n"), "too complex");
 }
+
+#[test]
+fn canonical_source_respects_the_length_cap() {
+    // A key-value tuple re-prints as a labelled object, so a spec at the cap
+    // would be stored longer than the cap and fail when read back.
+    let prefix = r#"root = Card([KeyValue([["k", "v"]]), Text(""#;
+    let suffix = "\")])";
+    let body = MAX_SOURCE_CHARS - prefix.len() - suffix.len();
+    let source = format!("{prefix}{}{suffix}", text_of(body));
+    assert_eq!(source.len(), MAX_SOURCE_CHARS);
+    rejects(&source, "the limit is 32768");
+    let roomy = format!("{prefix}{}{suffix}", text_of(body - 100));
+    ok(&roomy);
+}

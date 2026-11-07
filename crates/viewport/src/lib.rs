@@ -952,6 +952,7 @@ impl WorkspaceView {
     }
 
     fn receive(&mut self, frame: Value, cx: &mut Context<Self>) {
+        self.receive_ui_block_reply(&frame, cx);
         if self.receive_creation_source(&frame, cx) {
             return;
         }

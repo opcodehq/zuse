@@ -186,6 +186,18 @@ impl UiBlockView {
         }
     }
 
+    /// Ask to send `text`, as a follow-up or form submit would.
+    #[cfg(test)]
+    pub(crate) fn test_send(&mut self, text: &str, cx: &mut Context<Self>) {
+        self.send(text.into(), cx);
+    }
+
+    /// The send state's name: `Idle`, `Sending` or `Sent`.
+    #[cfg(test)]
+    pub(crate) fn test_status(&self) -> String {
+        format!("{:?}", self.status)
+    }
+
     fn disabled(&self) -> bool {
         !self.interactive || self.status != Status::Idle
     }

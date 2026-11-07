@@ -10078,8 +10078,11 @@ fn lift_file_mentions(
         }
     }
     out.push_str(&text[at..]);
-    let lead = out.len() - out.trim_start().len();
-    let trimmed = out.trim().to_owned();
+    // Only plain spaces and newlines: a chip's own padding (no-break spaces)
+    // stays, so a chip left at either edge keeps its range.
+    let blank = [' ', '\n'];
+    let lead = out.len() - out.trim_start_matches(blank).len();
+    let trimmed = out.trim_matches(blank).to_owned();
     for span in &mut kept {
         span.range = span.range.start - lead..span.range.end - lead;
     }
@@ -16985,6 +16988,23 @@ mod tests {
         assert_eq!(kept.len(), 1);
         assert_eq!(kept[0].kind, crate::composer::ChipKind::Directory);
         assert!(text[kept[0].range.clone()].contains("docs"));
+    }
+
+    #[test]
+    fn a_chip_left_at_either_edge_keeps_its_padding_and_range() {
+        let raw = "[a.rs](zuse-file:src/a.rs) [docs](zuse-file:docs/) [b.rs](zuse-file:src/b.rs)";
+        let (display, spans) = crate::composer::sent_mention_display(raw).unwrap();
+        let (text, kept, files) = lift_file_mentions(&display, spans);
+        assert_eq!(files.len(), 2);
+        assert_eq!(kept.len(), 1);
+        let range = kept[0].range.clone();
+        assert!(range.end <= text.len(), "{range:?} outside {text:?}");
+        assert_eq!(
+            &text[range.clone()],
+            text.as_str(),
+            "the chip is all that is left"
+        );
+        assert!(text[range].contains("docs"));
     }
 
     #[test]

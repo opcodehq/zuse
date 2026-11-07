@@ -69,22 +69,32 @@ pub fn parse(source: &str) -> Result<Spec, SpecError> {
             "The spec is empty. Start with `root = Component(...)`.",
         )));
     }
-    let length = source.encode_utf16().count();
-    if length > MAX_SOURCE_CHARS {
-        return Err(SpecError::single(Issue::general(format!(
-            "The spec is {length} characters; the limit is {MAX_SOURCE_CHARS}. Show less data or split it into several blocks."
-        ))));
-    }
+    check_length(source)?;
     let tokens = lexer::tokenize(source).map_err(SpecError::new)?;
     let mut statements = syntax::parse_statements(&tokens).map_err(SpecError::new)?;
     let normalized = resolve::normalize(&mut statements);
     let canonical = normalized.then(|| resolve::print(&statements));
+    // The canonical re-print is what gets stored and parsed again, and it can
+    // run longer than the submitted text (expanded pairs, escapes).
+    if let Some(canonical) = &canonical {
+        check_length(canonical)?;
+    }
     let program = resolve::resolve(statements).map_err(SpecError::new)?;
     let root = build::build(&program).map_err(SpecError::new)?;
     Ok(Spec {
         root,
         source: canonical.unwrap_or_else(|| source.to_string()),
     })
+}
+
+fn check_length(source: &str) -> Result<(), SpecError> {
+    let length = source.encode_utf16().count();
+    if length > MAX_SOURCE_CHARS {
+        return Err(SpecError::single(Issue::general(format!(
+            "The spec is {length} characters; the limit is {MAX_SOURCE_CHARS}. Show less data or split it into several blocks."
+        ))));
+    }
+    Ok(())
 }
 
 /// Validate a spec without keeping the tree.

@@ -9655,11 +9655,8 @@ impl Composer {
         if text.trim().is_empty() || self.send_blocked(cx) {
             return false;
         }
-        match self.button_mode(cx) {
-            SendButtonMode::Send => self.send(text, false, false, true, cx),
-            SendButtonMode::Queue | SendButtonMode::Stop => self.send(text, true, false, true, cx),
-        }
-        true
+        let queue = self.button_mode(cx) != SendButtonMode::Send;
+        self.send(text, queue, false, true, cx)
     }
 
     /// Queue a Run doc command with an optimistic echo — or, with the agent
@@ -9669,7 +9666,8 @@ impl Composer {
     /// reasoning / options on the Run request itself (§1.7).
     ///
     /// `keep_draft` sends `text` alone, leaving the input, staged files and
-    /// review comments untouched (a reply from a UI block form).
+    /// review comments untouched (a reply from a UI block form). Returns
+    /// false when it stopped before dispatching anything.
     fn send(
         &mut self,
         text: String,
@@ -9677,20 +9675,20 @@ impl Composer {
         steer: bool,
         keep_draft: bool,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
         if self
             .state
             .read(cx)
             .selected_project_creation()
             .is_some_and(|op| op.blocks_execution())
         {
-            return;
+            return false;
         }
         if self.pickers.read(cx).preparing_source(cx) {
-            return;
+            return false;
         }
         if self.send_cloud(text.clone(), cx) {
-            return;
+            return true;
         }
         if self
             .state
@@ -9701,22 +9699,22 @@ impl Composer {
             self.failure = Some("Unarchive this thread before sending another message.".into());
             self.failure_key = self.state.read(cx).selected_chat.clone();
             cx.notify();
-            return;
+            return false;
         }
         if self.permission_blocked(cx) {
             self.failure = Some("Confirm this chat’s saved choices before sending. Open the access menu to refresh them.".into());
             self.failure_key = self.state.read(cx).selected_chat.clone();
             cx.notify();
-            return;
+            return false;
         }
         if !self.check_reference_delivery(&text, cx) {
-            return;
+            return false;
         }
         let Some(engine) = self.state.read(cx).engine().cloned() else {
             self.failure = Some("Engine not connected".into());
             self.failure_key = None; // global — meaningful on every chat
             cx.notify();
-            return;
+            return false;
         };
         // Chat id: existing selection, or client-minted for the new-chat canvas
         // (the chat then appears from the doc host once the doc materializes).
@@ -9807,7 +9805,7 @@ impl Composer {
                 self.failure =
                     Some("Update the chat's engine to queue messages during a response.".into());
                 cx.notify();
-                return;
+                return false;
             }
         }
         // Snapshot-and-clear NOW (use-attachments.ts takeAttachments): the
@@ -10596,6 +10594,7 @@ impl Composer {
             })
             .ok();
         }));
+        true
     }
 
     // ---- composer lists: stash, sent-message search, emoji ----
