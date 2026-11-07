@@ -2462,7 +2462,10 @@ impl AppState {
             .filter(|(_, chat)| chat.thread_id.is_none() && in_filter(chat))
             .map(|(status, chat)| {
                 (
-                    thread_status.get(chat.id.as_str()).copied().unwrap_or(status),
+                    thread_status
+                        .get(chat.id.as_str())
+                        .copied()
+                        .unwrap_or(status),
                     chat,
                 )
             })
