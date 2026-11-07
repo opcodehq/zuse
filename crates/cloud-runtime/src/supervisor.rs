@@ -11,7 +11,10 @@ pub async fn serve(
     cancel: CancellationToken,
     credentials: tokio::sync::watch::Sender<zuse_protocol::cloud::CloudRuntimeBootstrap>,
 ) -> Result<()> {
-    let mut backoff = 1u64;
+    // Milliseconds. A dropped gateway reconnects almost at once; repeated
+    // failures back off to at most 5s, with jitter so a restarted API is not
+    // hit by every runtime in the same instant.
+    let mut backoff = RECONNECT_START_MS;
     let mut initial_connection = !identity.acknowledged()
         && identity.bootstrap().is_some_and(|boot| {
             boot.launch_intent.is_some()
@@ -33,8 +36,8 @@ pub async fn serve(
             match renewed {
                 Ok(()) => {}
                 Err(error) if retryable(&error) => {
-                    wait(&cancel, backoff).await;
-                    backoff = (backoff * 2).min(10);
+                    wait_ms(&cancel, jittered(backoff)).await;
+                    backoff = (backoff * 2).min(RECONNECT_MAX_MS);
                     continue;
                 }
                 Err(error) => return Err(error),
@@ -65,8 +68,8 @@ pub async fn serve(
                     bail!("runtime_quiescence_requested")
                 }
                 Err(error) if retryable(&error) => {
-                    wait(&cancel, backoff).await;
-                    backoff = (backoff * 2).min(10);
+                    wait_ms(&cancel, jittered(backoff)).await;
+                    backoff = (backoff * 2).min(RECONNECT_MAX_MS);
                     continue;
                 }
                 Err(error) => return Err(error),
@@ -127,7 +130,7 @@ pub async fn serve(
                         let renewed = authority.renew(identity).await;
                         publish(identity, &credentials);
                         match renewed {
-                            Ok(())=>backoff=1,Err(error) if retryable(&error)=>{},Err(error)=>return Err(error),
+                            Ok(())=>backoff=RECONNECT_START_MS,Err(error) if retryable(&error)=>{},Err(error)=>return Err(error),
                         }
                     }
                     if identity.bootstrap().is_none_or(|b|b.runtime_credential_expires_at<=now_ms()) {link_cancel.cancel();let _=(&mut socket).await;break;}
@@ -135,10 +138,10 @@ pub async fn serve(
             }
         }
         if connection_started.elapsed() >= Duration::from_secs(30) {
-            backoff = 1;
+            backoff = RECONNECT_START_MS;
         }
-        wait(&cancel, backoff).await;
-        backoff = (backoff * 2).min(10);
+        wait_ms(&cancel, jittered(backoff)).await;
+        backoff = (backoff * 2).min(RECONNECT_MAX_MS);
     }
 }
 /// Hand consumers whatever credential the identity now holds, whether or not
@@ -155,6 +158,32 @@ fn publish(
 pub fn retryable(error: &anyhow::Error) -> bool {
     error.downcast_ref::<Failure>().is_some_and(|e| e.retryable)
 }
+const RECONNECT_START_MS: u64 = 200;
+const RECONNECT_MAX_MS: u64 = 5_000;
+/// 75%..125% of `ms`, from the clock's sub-second noise (no RNG needed).
+fn jittered(ms: u64) -> u64 {
+    let noise = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos() as u64)
+        .unwrap_or(0);
+    ms * 3 / 4 + noise % (ms / 2 + 1)
+}
+async fn wait_ms(cancel: &CancellationToken, ms: u64) {
+    tokio::select! {_=cancel.cancelled()=>{},_=tokio::time::sleep(Duration::from_millis(ms.min(10_000)))=>{}}
+}
 pub async fn wait(cancel: &CancellationToken, seconds: u64) {
     tokio::select! {_=cancel.cancelled()=>{},_=tokio::time::sleep(Duration::from_secs(seconds.min(10)))=>{}}
+}
+
+#[cfg(test)]
+mod reconnect_tests {
+    #[test]
+    fn reconnect_jitter_stays_within_a_quarter_of_the_backoff() {
+        for ms in [super::RECONNECT_START_MS, 1_000, super::RECONNECT_MAX_MS] {
+            for _ in 0..64 {
+                let value = super::jittered(ms);
+                assert!(value >= ms * 3 / 4 && value <= ms * 5 / 4 + 1, "{ms} -> {value}");
+            }
+        }
+    }
 }
