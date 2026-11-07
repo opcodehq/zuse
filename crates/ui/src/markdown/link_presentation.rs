@@ -117,10 +117,11 @@ pub fn truncate(
         }
         let label = &flat.text[range.clone()];
         let runs = slice_runs(&flat.runs, range.clone());
-        // A web link's favicon slot shares the row with its label.
+        // A link's favicon or file icon slot shares the row with its label.
         let width = flat
             .favicons
             .iter()
+            .chain(&flat.file_glyphs)
             .find(|(slot, _)| slot.end == range.start)
             .map_or(width, |(slot, _)| {
                 width
@@ -191,7 +192,11 @@ pub fn truncate(
             .map(|(r, url)| (shown(r), url.clone()))
             .collect(),
         code_ranges: flat.code_ranges.iter().map(shown).collect(),
-        file_glyphs: flat.file_glyphs.iter().map(shown).collect(),
+        file_glyphs: flat
+            .file_glyphs
+            .iter()
+            .map(|(range, path)| (shown(range), path.clone()))
+            .collect(),
         favicons: flat
             .favicons
             .iter()
@@ -211,8 +216,7 @@ use super::render::{INLINE_CODE_INSET_Y, RenderOptions, range_rects};
 use crate::theme::Theme;
 use gpui::{
     AnyElement, App, AvailableSpace, Bounds, Element, ElementId, GlobalElementId,
-    InspectorElementId, LayoutId, Pixels, Size, TextLayout, Window, div, point, prelude::*, px,
-    size,
+    InspectorElementId, LayoutId, Pixels, Size, TextLayout, Window, point, prelude::*, px, size,
 };
 use std::rc::Rc;
 
@@ -244,13 +248,12 @@ pub(super) fn present(
     })
 }
 
-/// The slot reserved after a resolved file link for its trailing open glyph:
-/// four NBSPs of text advance, holding a 12px glyph 4px in — a reserved slot
-/// the shaped text never notices. Copy and selection map the slot back to the
-/// link end, so the raw text survives and nothing reflows on hover.
-const FILE_GLYPH_SLOT: &str = "\u{00A0}\u{00A0}\u{00A0}\u{00A0}";
-pub(crate) const FILE_GLYPH_SIZE: f32 = 12.0;
-pub(crate) const FILE_GLYPH_GAP: f32 = 4.0;
+/// The slot reserved before a resolved file link for its file-type icon:
+/// five NBSPs of text advance, holding a 14px icon — a reserved slot the
+/// shaped text never notices. Copy and selection map the slot back to the
+/// link start, so the raw text survives and nothing reflows on hover.
+const FILE_GLYPH_SLOT: &str = "\u{00A0}\u{00A0}\u{00A0}\u{00A0}\u{00A0}";
+pub(crate) const FILE_GLYPH_SIZE: f32 = 14.0;
 
 /// The slot reserved before a web link for its favicon: five NBSPs, holding
 /// the 1em icon with the reference's `.3em` gap before the label. Copy and
@@ -258,32 +261,35 @@ pub(crate) const FILE_GLYPH_GAP: f32 = 4.0;
 const FAVICON_SLOT: &str = "\u{00A0}\u{00A0}\u{00A0}\u{00A0}\u{00A0}";
 pub(crate) const FAVICON_SIZE: f32 = 14.0;
 
-/// Reserve a slot after every file link the surface's roots resolve, and one
-/// before every web link for its favicon. Web links that no root owns, and
+/// Reserve a slot before every file link the surface's roots resolve for its
+/// file-type icon, and one before every web link for its favicon. Web links that no root owns, and
 /// targets no known root owns, keep their shape apart from the favicon, as
 /// does a paragraph that is nothing but one file link — that renders as the
 /// sole file row with its own icon tile.
+/// What a link's leading slot paints.
+enum LeadIcon {
+    Favicon(String),
+    File(String),
+}
+
 fn with_file_link_glyphs(flat: &FlatText, opts: &RenderOptions) -> FlatText {
     if flat.links.is_empty() {
         return flat.clone();
     }
-    // `(at, slot, favicon url)`: a favicon slot opens its link, a glyph
-    // slot closes its file link.
-    let mut insertions: Vec<(usize, &str, Option<String>)> = flat
+    // `(at, slot, icon)`: both kinds of slot open their link.
+    let mut insertions: Vec<(usize, &str, LeadIcon)> = flat
         .links
         .iter()
         .filter(|(_, target)| super::render::is_web_link(target))
-        .map(|(range, url)| (range.start, FAVICON_SLOT, Some(url.clone())))
+        .map(|(range, url)| (range.start, FAVICON_SLOT, LeadIcon::Favicon(url.clone())))
         .collect();
     if let Some(ui) = opts.link.as_ref().filter(|ui| ui.file_roots.is_some())
         && !paragraph_is_sole_file_link(flat, opts.workspace_root.as_deref())
     {
-        insertions.extend(
-            flat.links
-                .iter()
-                .filter(|(_, target)| ui.file_link(target).is_some())
-                .map(|(range, _)| (range.end, FILE_GLYPH_SLOT, None)),
-        );
+        insertions.extend(flat.links.iter().filter_map(|(range, target)| {
+            let link = ui.file_link(target)?;
+            Some((range.start, FILE_GLYPH_SLOT, LeadIcon::File(link.path)))
+        }));
     }
     if insertions.is_empty() {
         return flat.clone();
@@ -339,7 +345,7 @@ fn with_file_link_glyphs(flat: &FlatText, opts: &RenderOptions) -> FlatText {
     let mut glyphs = Vec::new();
     let mut favicons = Vec::new();
     let mut at = 0;
-    for (ix, (insert_at, slot, favicon)) in insertions.iter().enumerate() {
+    for (ix, (insert_at, slot, icon)) in insertions.iter().enumerate() {
         text.push_str(&flat.text[at..*insert_at]);
         runs.extend(slice_runs(&flat.runs, at..*insert_at));
         let start = text.len();
@@ -348,9 +354,9 @@ fn with_file_link_glyphs(flat: &FlatText, opts: &RenderOptions) -> FlatText {
         offsets
             .omissions
             .push((*insert_at..*insert_at, start..text.len()));
-        match favicon {
-            Some(url) => favicons.push((start..text.len(), url.clone())),
-            None => glyphs.push(start..text.len()),
+        match icon {
+            LeadIcon::Favicon(url) => favicons.push((start..text.len(), url.clone())),
+            LeadIcon::File(path) => glyphs.push((start..text.len(), path.clone())),
         }
         at = *insert_at;
     }
@@ -488,14 +494,15 @@ impl Element for ResponsiveText {
     }
 }
 
-/// Paints the trailing open glyph of every resolved file link over the
+/// Paints the leading file-type icon of every resolved file link over the
 /// shaped text — the same reserved-slot overlay pattern, so the NBSP slots
 /// keep layout, selection and copy stable.
 pub(crate) struct FileLinkGlyphs {
     pub id: SharedString,
     pub child: AnyElement,
     pub layout: TextLayout,
-    pub slots: Vec<Range<usize>>,
+    /// Leading file icon slots of resolved file links, with their paths.
+    pub slots: Vec<(Range<usize>, String)>,
     /// Leading favicon slots of web links, with their URLs.
     pub favicons: Vec<(Range<usize>, String)>,
 }
@@ -541,28 +548,26 @@ impl Element for FileLinkGlyphs {
         self.child.prepaint(window, cx);
         let theme = Theme::of(cx).clone();
         let mut overlays = Vec::new();
-        for slot in &self.slots {
+        for (slot, path) in &self.slots {
             let Some(rect) = range_rects(&self.layout, slot, 0.0, INLINE_CODE_INSET_Y)
                 .first()
                 .copied()
             else {
                 continue;
             };
-            let mut icon_el = div()
-                .w(px(FILE_GLYPH_SIZE))
-                .h(rect.size.height)
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(
-                    crate::icons::icon(crate::icons::ARROW_UP_RIGHT)
-                        .size(px(FILE_GLYPH_SIZE))
-                        .text_color(theme.text_faint),
-                )
-                .into_any_element();
+            let side = px(FILE_GLYPH_SIZE).min(rect.size.height);
+            let mut icon_el = crate::file_icons::icon(
+                crate::file_icons::FileIconIdentity::file(path),
+                theme.appearance,
+            )
+            .size(side)
+            .into_any_element();
             icon_el.prepaint_as_root(
-                point(rect.origin.x + px(FILE_GLYPH_GAP), rect.origin.y),
-                size(px(FILE_GLYPH_SIZE), rect.size.height).map(AvailableSpace::Definite),
+                point(
+                    rect.origin.x + px(1.0),
+                    rect.origin.y + (rect.size.height - side) / 2.0,
+                ),
+                size(side, side).map(AvailableSpace::Definite),
                 window,
                 cx,
             );
@@ -676,18 +681,17 @@ mod tests {
         // Only the resolved file link grows a slot: the web link and the
         // escaped target keep their shape.
         assert_eq!(shown.file_glyphs.len(), 1);
-        assert_eq!(&shown.text[shown.file_glyphs[0].clone()], FILE_GLYPH_SLOT);
+        assert_eq!(&shown.text[shown.file_glyphs[0].0.clone()], FILE_GLYPH_SLOT);
         assert_eq!(shown.links.len(), 3);
-        // The reserved slot sits right after the link and never reaches copy
-        // or selection — both glyph ends map back to the link's end.
-        let slot = &shown.file_glyphs[0];
-        assert_eq!(slot.start, shown.links[0].0.end);
+        // The reserved slot sits right before the link and never reaches
+        // copy or selection — both icon ends map back to the link's start.
+        let slot = &shown.file_glyphs[0].0;
+        assert_eq!(slot.end, shown.links[0].0.start);
         let map = &shown.original.as_ref().unwrap().offsets;
         assert_eq!(map.original(slot.start), map.original(slot.end));
-        assert_eq!(map.original(slot.start), map.original(slot.start - 1) + 1);
 
         // A paragraph that is nothing but one file link stays the sole-file
-        // row (icon tile), never the trailing glyph.
+        // row (icon tile), never the inline icon.
         let sole = flatten_runs(
             &[run("src/lib.rs", Some("src/lib.rs"))],
             &Theme::dark(),

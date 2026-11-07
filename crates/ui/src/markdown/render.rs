@@ -980,9 +980,9 @@ pub struct FlatText {
     pub runs: Vec<TextRun>,
     pub links: Vec<(Range<usize>, String)>,
     pub code_ranges: Vec<Range<usize>>,
-    /// Reserved slots after resolved file links — displayed-text
-    /// coordinates. Each slot paints the trailing open glyph.
-    pub file_glyphs: Vec<Range<usize>>,
+    /// Reserved slots before resolved file links, with each link's path —
+    /// displayed-text coordinates. Each slot paints the file-type icon.
+    pub file_glyphs: Vec<(Range<usize>, String)>,
     /// Reserved slots before web links, with each link's URL — displayed-
     /// text coordinates. Each slot paints the site's favicon.
     pub favicons: Vec<(Range<usize>, String)>,
@@ -996,7 +996,7 @@ pub(crate) fn is_web_link(url: &str) -> bool {
         && crate::site_links::host(url).is_some()
 }
 
-/// Inline-code tint: a text-safe use of the selected accent identity.
+/// Inline-code ink: neutral strong text over a faint plate.
 pub fn inline_code_text(theme: &Theme) -> Hsla {
     theme.code_text
 }
@@ -1088,7 +1088,7 @@ fn flatten_runs_weighted(runs: &[InlineRun], theme: &Theme, base_weight: FontWei
         if web && !run.style.code && f.weight.0 < FontWeight::MEDIUM.0 {
             f.weight = FontWeight::MEDIUM;
         }
-        // Inline code uses the spectrum's code tone; everything else
+        // Inline code uses the neutral code ink; everything else
         // stays the monochrome foreground.
         let color = if run.style.code {
             inline_code_text(theme)
@@ -1333,18 +1333,11 @@ pub(super) fn flat_text_presented_element(
     if flat.links.is_empty() {
         return child;
     }
-    // A resolved file link's hit range covers its reserved glyph slot,
-    // so the trailing open glyph activates the link too.
-    let glyph_end = |range: &std::ops::Range<usize>| {
-        flat.file_glyphs
-            .iter()
-            .find(|slot| slot.start == range.end)
-            .map_or(range.end, |slot| slot.end)
-    };
-    // A web link's favicon slot activates the link too.
+    // A link's leading favicon or file icon slot activates the link too.
     let favicon_start = |range: &std::ops::Range<usize>| {
         flat.favicons
             .iter()
+            .chain(&flat.file_glyphs)
             .find(|(slot, _)| slot.end == range.start)
             .map_or(range.start, |(slot, _)| slot.start)
     };
@@ -1365,7 +1358,7 @@ pub(super) fn flat_text_presented_element(
             .iter()
             .map(|(range, url)| {
                 (
-                    favicon_start(range)..glyph_end(range),
+                    favicon_start(range)..range.end,
                     LinkTarget::new(
                         flat.original
                             .as_ref()
@@ -1381,8 +1374,8 @@ pub(super) fn flat_text_presented_element(
         ui: opts.link.clone(),
     }
     .into_any_element();
-    // Trailing open glyphs of resolved file links and leading favicons of
-    // web links paint over the shaped text.
+    // Leading file icons of resolved file links and favicons of web links
+    // paint over the shaped text.
     if flat.file_glyphs.is_empty() && flat.favicons.is_empty() {
         return child;
     }

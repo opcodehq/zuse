@@ -833,6 +833,15 @@ pub(crate) struct CanvasTarget {
     device: Option<String>,
 }
 
+/// Local archive intent stays visible until both the RPC and registry agree.
+struct PendingChatArchive {
+    request_id: u64,
+    archived: bool,
+    authoritative: bool,
+    observed: bool,
+    accepted: bool,
+}
+
 /// Root application state. Reducer methods (`apply_*`, [`Self::session_for`], …)
 /// are plain `&mut self` functions so tests construct the struct directly; gpui
 /// glue ([`Self::bootstrap`], [`Self::select_chat`]) layers subscriptions on top.
@@ -865,6 +874,8 @@ pub struct AppState {
     pub spaces: Vec<Space>,
     /// Sorted (see [`sort_chats`]); includes archived rows — views filter.
     pub chats: Vec<Chat>,
+    pending_chat_archives: HashMap<String, PendingChatArchive>,
+    next_archive_request_id: u64,
     pub(crate) chat_configuration: crate::chat_configuration::ChatConfiguration,
     /// Fork RPC may arrive ahead of its registry row on a remote device.
     pending_side_chat: Option<Chat>,
@@ -1038,6 +1049,8 @@ impl AppState {
             connectivity_observed: false,
             spaces: Vec::new(),
             chats: Vec::new(),
+            pending_chat_archives: HashMap::new(),
+            next_archive_request_id: 0,
             chat_configuration: Default::default(),
             pending_side_chat: None,
             unsaved_side_chat: false,
@@ -1332,6 +1345,81 @@ impl AppState {
         true
     }
 
+    /// Apply intent synchronously. One worker per chat serializes rapid toggles;
+    /// archiving different chats never cancels an earlier request.
+    pub(crate) fn begin_chat_archive(&mut self, chat_id: &str, archived: bool) -> Option<u64> {
+        let chat = self.chats.iter_mut().find(|chat| chat.id == chat_id)?;
+        if chat.archived == archived {
+            return None;
+        }
+        let previous = chat.archived;
+        chat.archived = archived;
+        self.next_archive_request_id = self.next_archive_request_id.wrapping_add(1);
+        let request_id = self.next_archive_request_id;
+        if let Some(pending) = self.pending_chat_archives.get_mut(chat_id) {
+            pending.archived = archived;
+            pending.observed = false;
+            // An accepted write has no running worker; start another one.
+            if !std::mem::replace(&mut pending.accepted, false) {
+                return None;
+            }
+            pending.request_id = request_id;
+        } else {
+            self.pending_chat_archives.insert(
+                chat_id.to_owned(),
+                PendingChatArchive {
+                    request_id,
+                    archived,
+                    authoritative: previous,
+                    observed: false,
+                    accepted: false,
+                },
+            );
+        }
+        Some(request_id)
+    }
+
+    /// A restore on another surface supersedes this projection. Its own RPC
+    /// and watch updates now own the row, including any failure recovery.
+    pub(crate) fn clear_chat_archive_intent(&mut self, chat_id: &str) {
+        if let Some(pending) = self.pending_chat_archives.remove(chat_id)
+            && let Some(chat) = self.chats.iter_mut().find(|chat| chat.id == chat_id)
+        {
+            chat.archived = pending.authoritative;
+        }
+    }
+
+    /// Finish a write, returning newer intent for the same worker to send next.
+    pub(crate) fn finish_chat_archive(
+        &mut self,
+        chat_id: &str,
+        request_id: u64,
+        sent: bool,
+        succeeded: bool,
+    ) -> Option<bool> {
+        let pending = self.pending_chat_archives.get_mut(chat_id)?;
+        if pending.request_id != request_id {
+            return None;
+        }
+        if pending.archived != sent {
+            if succeeded {
+                pending.authoritative = sent;
+            }
+            pending.observed = false;
+            return Some(pending.archived);
+        }
+        if succeeded {
+            pending.accepted = true;
+            if !pending.observed {
+                return None;
+            }
+        } else if let Some(chat) = self.chats.iter_mut().find(|chat| chat.id == chat_id) {
+            chat.archived = pending.authoritative;
+        }
+        self.pending_chat_archives.remove(chat_id);
+        None
+    }
+
     /// Returns whether anything observable changed. The engine re-publishes
     /// identical lists (presence and sync churn elsewhere in the doc), and
     /// each notify re-renders the whole shell.
@@ -1345,6 +1433,18 @@ impl AppState {
                 chats.push(pending.clone());
             }
         }
+        self.pending_chat_archives.retain(|id, pending| {
+            let Some(chat) = chats.iter_mut().find(|chat| &chat.id == id) else {
+                return false;
+            };
+            pending.authoritative = chat.archived;
+            pending.observed = chat.archived == pending.archived;
+            if pending.accepted && pending.observed {
+                return false;
+            }
+            chat.archived = pending.archived;
+            true
+        });
         self.overlay_chat_configuration(&mut chats);
         sort_chats(&mut chats);
         if !self.chats_synced || self.chats != chats {
@@ -2650,6 +2750,7 @@ impl AppState {
         self.session_presence_presentation.clear();
         self.spaces.clear();
         self.chats.clear();
+        self.pending_chat_archives.clear();
         self.pending_side_chat = None;
         self.unsaved_side_chat = false;
         self.sessions.clear();
@@ -5767,6 +5868,134 @@ mod tests {
         state.apply_chats(vec![archived, chat("b", 1, None)]);
         let visible: Vec<&str> = state.visible_chats().map(|c| c.id.as_str()).collect();
         assert_eq!(visible, ["b"]);
+    }
+
+    #[test]
+    fn archive_is_immediate_and_stale_frames_cannot_restore_the_row() {
+        let mut state = AppState::new();
+        state.apply_chats(vec![chat("a", 0, None), chat("b", 1, None)]);
+        state.selected_chat = Some("a".into());
+        let request = state.begin_chat_archive("a", true).unwrap();
+        assert_eq!(
+            state
+                .visible_chats()
+                .map(|c| c.id.as_str())
+                .collect::<Vec<_>>(),
+            ["b"]
+        );
+        assert!(state.selected_chat_row().unwrap().archived);
+        assert_eq!(state.archivable_selected_chat(), None);
+        state.apply_chats(vec![chat("a", 0, None), chat("b", 1, None)]);
+        assert!(state.selected_chat_row().unwrap().archived);
+        assert_eq!(state.finish_chat_archive("a", request, true, true), None);
+        // RPC success alone does not retire the overlay.
+        state.apply_chats(vec![chat("a", 0, None), chat("b", 1, None)]);
+        assert!(state.selected_chat_row().unwrap().archived);
+        let mut confirmed = chat("a", 0, None);
+        confirmed.archived = true;
+        state.apply_chats(vec![confirmed, chat("b", 1, None)]);
+        assert!(state.pending_chat_archives.is_empty());
+        // Once confirmed, edits from another device remain authoritative.
+        state.apply_chats(vec![chat("a", 0, None), chat("b", 1, None)]);
+        assert!(!state.selected_chat_row().unwrap().archived);
+    }
+
+    #[test]
+    fn archive_confirmation_can_arrive_before_the_rpc_reply() {
+        let mut state = AppState::new();
+        state.apply_chats(vec![chat("a", 0, None)]);
+        let request = state.begin_chat_archive("a", true).unwrap();
+        let mut confirmed = chat("a", 0, None);
+        confirmed.archived = true;
+        state.apply_chats(vec![confirmed]);
+        assert_eq!(state.pending_chat_archives.len(), 1);
+        assert_eq!(state.finish_chat_archive("a", request, true, true), None);
+        assert!(state.pending_chat_archives.is_empty());
+    }
+
+    #[test]
+    fn archive_failure_restores_only_the_archive_flag() {
+        let mut state = AppState::new();
+        state.apply_chats(vec![chat("a", 0, None), chat("b", 1, None)]);
+        let request = state.begin_chat_archive("a", true).unwrap();
+        assert!(state.begin_chat_archive("b", true).is_some());
+        let mut renamed = chat("a", 0, None);
+        renamed.title = Some("Updated title".into());
+        state.apply_chats(vec![renamed, chat("b", 1, None)]);
+        assert_eq!(state.finish_chat_archive("a", request, true, false), None);
+        let restored = state.chats.iter().find(|c| c.id == "a").unwrap();
+        assert!(!restored.archived);
+        assert_eq!(restored.title.as_deref(), Some("Updated title"));
+        assert!(state.chats.iter().find(|c| c.id == "b").unwrap().archived);
+        assert_eq!(state.pending_chat_archives.len(), 1);
+    }
+
+    #[test]
+    fn archive_rapid_toggles_share_one_worker_and_send_latest_intent() {
+        let mut state = AppState::new();
+        state.apply_chats(vec![chat("a", 0, None)]);
+        let request = state.begin_chat_archive("a", true).unwrap();
+        assert!(state.begin_chat_archive("a", false).is_none());
+        assert!(!state.chats[0].archived);
+        assert_eq!(
+            state.finish_chat_archive("a", request, true, true),
+            Some(false)
+        );
+        assert_eq!(state.finish_chat_archive("a", request, false, true), None);
+        state.apply_chats(vec![chat("a", 0, None)]);
+        assert!(state.pending_chat_archives.is_empty());
+    }
+
+    #[test]
+    fn archive_new_write_waits_for_its_own_watch_confirmation() {
+        let mut state = AppState::new();
+        state.apply_chats(vec![chat("a", 0, None)]);
+        let archive = state.begin_chat_archive("a", true).unwrap();
+        assert_eq!(state.finish_chat_archive("a", archive, true, true), None);
+        let restore = state.begin_chat_archive("a", false).unwrap();
+        assert_ne!(archive, restore);
+        assert_eq!(state.finish_chat_archive("a", restore, false, true), None);
+        assert!(!state.pending_chat_archives.is_empty());
+        let mut stale = chat("a", 0, None);
+        stale.archived = true;
+        state.apply_chats(vec![stale]);
+        assert!(!state.chats[0].archived);
+        state.apply_chats(vec![chat("a", 0, None)]);
+        assert!(state.pending_chat_archives.is_empty());
+    }
+
+    #[test]
+    fn archive_followup_failure_rolls_back_to_the_successful_write() {
+        let mut state = AppState::new();
+        state.apply_chats(vec![chat("a", 0, None)]);
+        let request = state.begin_chat_archive("a", true).unwrap();
+        assert!(state.begin_chat_archive("a", false).is_none());
+        assert_eq!(
+            state.finish_chat_archive("a", request, true, true),
+            Some(false)
+        );
+        assert_eq!(state.finish_chat_archive("a", request, false, false), None);
+        assert!(state.chats[0].archived);
+    }
+
+    #[test]
+    fn archive_superseded_reply_cannot_roll_back_a_newer_write() {
+        let mut state = AppState::new();
+        state.apply_chats(vec![chat("a", 0, None)]);
+        let old_request = state.begin_chat_archive("a", true).unwrap();
+        state.clear_chat_archive_intent("a");
+        assert!(!state.chats[0].archived);
+        let new_request = state.begin_chat_archive("a", true).unwrap();
+        assert_eq!(
+            state.finish_chat_archive("a", old_request, true, false),
+            None
+        );
+        assert!(state.chats[0].archived);
+        assert_eq!(
+            state.finish_chat_archive("a", new_request, true, false),
+            None
+        );
+        assert!(!state.chats[0].archived);
     }
 
     #[test]

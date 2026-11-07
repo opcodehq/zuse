@@ -206,10 +206,6 @@ impl Composer {
                         .role(Role::Button)
                         .tab_index(0)
                         .ml(px(4.))
-                        .h(px(28.))
-                        .px(px(10.))
-                        .py(px(4.))
-                        .rounded(px(6.))
                         .text_size(px(11.))
                         .tooltip(crate::settings::widgets::text_tooltip(
                             "⌘ / Ctrl + Enter".to_owned(),

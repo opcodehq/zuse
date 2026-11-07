@@ -1801,6 +1801,38 @@ impl Repos {
         }
     }
 
+    // ── CreateFolder ────────────────────────────────────────────────────────
+
+    /// Make one empty folder named `name` inside the existing folder
+    /// `parent`. The name is a single path segment; an existing entry fails
+    /// rather than being reused. Same disposable worker + wall-clock ceiling
+    /// as `ListFolders`, so a wedged mount fails the call, not the runtime.
+    pub async fn create_folder(&self, parent: String, name: String) -> Result<String, EngineError> {
+        validate_folder_name(&name)?;
+        let parent = absolutize(Path::new(parent.trim()));
+        let worker = disposable_worker("folder-create", move || {
+            if !parent.is_dir() {
+                return Err("The parent folder no longer exists".to_owned());
+            }
+            let target = parent.join(&name);
+            std::fs::create_dir(&target).map_err(|error| match error.kind() {
+                std::io::ErrorKind::AlreadyExists => format!("“{name}” already exists here"),
+                std::io::ErrorKind::PermissionDenied => {
+                    "You don't have permission to create a folder here".to_owned()
+                }
+                _ => format!("Could not create “{name}”: {error}"),
+            })?;
+            Ok(target.to_string_lossy().into_owned())
+        });
+        match tokio::time::timeout(FOLDER_LIST_TIMEOUT, worker).await {
+            Ok(Some(result)) => result.map_err(EngineError::Other),
+            Ok(None) => Err(EngineError::Other("folder creation worker exited".into())),
+            Err(_) => Err(EngineError::Other(
+                "folder creation timed out on the device".into(),
+            )),
+        }
+    }
+
     // ── ListDrives ──────────────────────────────────────────────────────────
 
     /// Mounted drives/volumes — the browse roots beyond home. Same disposable
@@ -2411,6 +2443,29 @@ fn parse_history_refs(output: &str) -> HashMap<String, Vec<GitHistoryRef>> {
         });
     }
     refs_by_sha
+}
+
+/// A new folder's name: one visible path segment the common filesystems accept.
+fn validate_folder_name(name: &str) -> Result<(), EngineError> {
+    let invalid = |reason: &str| Err(EngineError::Other(reason.to_owned()));
+    if name.trim().is_empty() {
+        return invalid("Name the folder");
+    }
+    if name != name.trim() {
+        return invalid("Folder names can't start or end with a space");
+    }
+    if name == "." || name == ".." || name.starts_with('.') {
+        return invalid("Folder names can't start with a dot");
+    }
+    if name.len() > 255 {
+        return invalid("That folder name is too long");
+    }
+    if name.chars().any(|c| {
+        matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') || c.is_control()
+    }) {
+        return invalid("Folder names can't contain / \\ : * ? \" < > |");
+    }
+    Ok(())
 }
 
 /// Absolute form of a possibly-relative path (no filesystem access).

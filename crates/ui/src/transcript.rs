@@ -93,7 +93,9 @@ const SELECTION_SCROLL_MAX_STEP_PX: f32 = 24.0;
 /// Activity row height / gap — analytic, so fold heights need no measurement.
 /// Ordinary tools place their icon on the rail; subagents retain a 30px card.
 /// Rows stack without a gap so the rail continues alongside expanded output.
-pub const CHIP_HEIGHT: f32 = 38.0;
+/// A lone card's row matches [`TOOL_TREE_ROW_HEIGHT`], so stacked subagent
+/// cards sit as close as the rows of a task tree.
+pub const CHIP_HEIGHT: f32 = TOOL_TREE_ROW_HEIGHT;
 pub const CHIP_GAP: f32 = 0.0;
 pub const CHIP_CARD_HEIGHT: f32 = 30.0;
 /// Inner height of the chip header: [`CHIP_CARD_HEIGHT`] is the card's
@@ -104,12 +106,14 @@ const CHIP_HEADER_HEIGHT: f32 = CHIP_CARD_HEIGHT - 2.0;
 /// Child labels and expanded text share one edge beneath the compact summary.
 /// The child gutter reserves room for
 /// a longer elbow, a 4px break before the icon, and an 8px icon-to-text gap.
-const ACTIVITY_GUTTER_WIDTH: f32 = 48.0;
+const ACTIVITY_GUTTER_WIDTH: f32 = 37.5;
 const ACTIVITY_TEXT_GAP: f32 = 8.0;
-const ACTIVITY_TRUNK_X: f32 = 12.5;
+/// The trunk drops just inside the transcript's text edge, under the group
+/// summary's first letter.
+const ACTIVITY_TRUNK_X: f32 = 2.0;
 const ACTIVITY_BEND_RADIUS: f32 = 6.0;
-const ACTIVITY_BRANCH_END_X: f32 = 28.0;
-const ACTIVITY_ICON_LEFT: f32 = 32.0;
+const ACTIVITY_BRANCH_END_X: f32 = 17.5;
+const ACTIVITY_ICON_LEFT: f32 = 21.5;
 const ACTIVITY_ICON_SIZE: f32 = 16.0;
 const TOOL_TEXT_SIZE: f32 = 12.0;
 const TOOL_LABEL_SIZE: f32 = TOOL_TEXT_SIZE;
@@ -859,6 +863,16 @@ const OUTPUT_BODY_PAD: f32 = 12.0;
 
 /// The hairline between an expanded chip's header row and its detail body.
 const DETAIL_SEPARATOR: f32 = 1.0;
+/// An open tool call's command and output sit in a soft tonal card; this is
+/// the room the card keeps below it before the next row.
+const DETAIL_CARD_GAP: f32 = 6.0;
+const DETAIL_CARD_INSET: f32 = 10.0;
+
+/// Whether an open chip frames its body in the detail card: ordinary tool
+/// calls do, while thoughts read as prose and subagents keep their own card.
+fn detail_carded(tool: &ToolItem) -> bool {
+    tool.kind == ToolItemKind::Call && !is_agent_tool(tool)
+}
 
 /// Build a tool part's expandable detail. A diff wins over raw output (it is
 /// the more structured record of the same action); post-strip docs carry diff
@@ -923,17 +937,29 @@ fn output_line(line: &str) -> SharedString {
 /// so the budget is sized to fit the narrowest useful transcript pane.
 pub const CALL_WRAP_COLS: usize = 80;
 
-/// Soft-wrap one raw line into [`CALL_WRAP_COLS`]-char chunks so a long
-/// single-line command stays fully readable instead of ellipsizing.
+/// Soft-wrap one raw line into chunks of at most `cols` chars so a long
+/// single-line command stays fully readable instead of ellipsizing. Breaks
+/// after the last space within the budget when one sits in its back half,
+/// else cuts at the budget (a path or token longer than a line).
 fn wrap_cols(line: &str, cols: usize) -> Vec<SharedString> {
-    if line.chars().count() <= cols {
-        return vec![SharedString::from(line.to_owned())];
+    let cols = cols.max(1);
+    let chars: Vec<char> = line.chars().collect();
+    let mut out = Vec::new();
+    let mut start = 0;
+    while chars.len() - start > cols {
+        let window = &chars[start..start + cols];
+        let cut = window
+            .iter()
+            .rposition(|c| c.is_whitespace())
+            .filter(|&ix| ix + 1 >= cols / 2)
+            .map_or(cols, |ix| ix + 1);
+        out.push(SharedString::from(window[..cut].iter().collect::<String>()));
+        start += cut;
     }
-    line.chars()
-        .collect::<Vec<_>>()
-        .chunks(cols)
-        .map(|chunk| SharedString::from(chunk.iter().collect::<String>()))
-        .collect()
+    out.push(SharedString::from(
+        chars[start..].iter().collect::<String>(),
+    ));
+    out
 }
 
 /// Build a chip's full-invocation block — the complete tool call the header
@@ -2160,7 +2186,9 @@ pub fn top_gap_for(prev: Option<&Row>, row: &Row) -> f32 {
     } else if matches!(row.kind, RowKind::ToolGroup { .. })
         || prev.is_some_and(|row| matches!(row.kind, RowKind::ToolGroup { .. }))
     {
-        Theme::SPACE_MD
+        // A tool group's summary row already pads its label, so it sits
+        // close to the prose around it, reading as part of the same reply.
+        Theme::SPACE_XS
     } else {
         Theme::SPACE_SM
     }
@@ -2643,6 +2671,14 @@ pub fn format_elapsed(secs: i64) -> String {
     }
 }
 
+/// The trailer's word once the turn has settled but its subagents still run.
+fn waiting_for_subagents_label(count: u32) -> String {
+    match count {
+        1 => "Waiting for 1 subagent".to_owned(),
+        n => format!("Waiting for {n} subagents"),
+    }
+}
+
 fn worked_for_label(secs: i64) -> String {
     format!("Worked for {}", format_elapsed(secs))
 }
@@ -2958,7 +2994,6 @@ struct FoldState {
     /// tween made every once-collapsed group flash open→closed on each
     /// reappearance (user report).
     toggled_at: Option<Instant>,
-    disclosure_at: Option<Instant>,
     /// Per-toggle duration. User bubbles scale this with travel distance;
     /// existing tool folds leave it at zero and keep their catalog constants.
     duration_ms: u64,
@@ -3067,19 +3102,6 @@ fn activity_branch_points(progress: f32) -> Vec<Point<f32>> {
         remaining -= length;
     }
     visible
-}
-
-fn tool_disclosure_progress(open: bool, fold: FoldState, now: Instant) -> f32 {
-    let Some(start) = fold.disclosure_at else {
-        return if open { 1.0 } else { 0.0 };
-    };
-    let raw = now
-        .checked_duration_since(start)
-        .unwrap_or_default()
-        .as_secs_f32()
-        / TOOL_FOLD.total().as_secs_f32();
-    let progress = TOOL_FOLD.curve.eval(raw);
-    if open { progress } else { 1.0 - progress }
 }
 
 /// The compact work fold's animated body budget: `fold.from` lerps toward
@@ -3563,12 +3585,6 @@ pub struct Transcript {
     /// identity, so the virtual list must explicitly discard cached heights.
     typography_generation: u32,
     content_width: f32,
-    /// Width held free at the column's right for a docked side card; the
-    /// reading column centers in what remains.
-    right_reserve: f32,
-    /// Room the shell keeps clear at the top right (a docked session card),
-    /// so the outline control steps left of it.
-    outline_inset: f32,
     /// Review fixture: every work group renders open.
     #[cfg(feature = "browser-fixture")]
     fixture_open_groups: bool,
@@ -3981,8 +3997,6 @@ impl Transcript {
             rendered_rows: HashSet::new(),
             typography_generation: crate::typography::generation(cx),
             content_width: crate::settings::transcript_width(cx),
-            right_reserve: 0.0,
-            outline_inset: 0.0,
             #[cfg(feature = "browser-fixture")]
             fixture_open_groups: false,
             code_fences_generation: crate::settings::code_fences_generation(cx),
@@ -4047,22 +4061,6 @@ impl Transcript {
 
     // ---- rail plumbing (rendering lives in crate::rail) ----
 
-    /// Shell-driven width gate: the rail hides below 48rem of container width.
-    /// Shell-driven: hold `reserve` px free on the right of the reading
-    /// column (a docked side card), so the column and card center together.
-    pub fn set_right_reserve(&mut self, reserve: f32, cx: &mut Context<Self>) {
-        let reserve = reserve.max(0.0);
-        if (self.right_reserve - reserve).abs() > 0.25 {
-            self.right_reserve = reserve;
-            // Rows rewrap at the new width, including virtual ones offscreen.
-            self.list.remeasure();
-            if self.pinned {
-                self.wake_spring();
-            }
-            cx.notify();
-        }
-    }
-
     /// Review fixture: show `entry_id`'s hover footer (timestamp, copy,
     /// fork) as if the pointer rested on it.
     #[cfg(feature = "browser-fixture")]
@@ -4085,18 +4083,6 @@ impl Transcript {
             active: Some(0),
         });
         cx.notify();
-    }
-
-    pub fn set_outline_inset(&mut self, inset: f32, cx: &mut Context<Self>) {
-        let inset = inset.max(0.0);
-        if (self.outline_inset - inset).abs() > 0.25 {
-            self.outline_inset = inset;
-            cx.notify();
-        }
-    }
-
-    pub(crate) fn outline_inset(&self) -> f32 {
-        self.outline_inset
     }
 
     pub fn set_rail_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
@@ -5361,7 +5347,6 @@ impl Transcript {
             self.tool_group_reveals.clear();
             for fold in self.folds.values_mut() {
                 fold.toggled_at = None;
-                fold.disclosure_at = None;
             }
         }
         let previous_tools: HashMap<SharedString, HashMap<String, Option<Instant>>> = self
@@ -5418,7 +5403,6 @@ impl Transcript {
                 reveal.rendered_open = None;
                 if let Some(fold) = self.folds.get_mut(&row.id) {
                     fold.toggled_at = None;
-                    fold.disclosure_at = None;
                 }
             }
             reveal.shimmer_started_at.get_or_insert(now);
@@ -5973,7 +5957,6 @@ impl Transcript {
             entry.open = Some(!currently_open);
             entry.epoch += 1;
             entry.toggled_at = Some(Instant::now());
-            entry.disclosure_at = entry.toggled_at;
             !currently_open
         };
         if shell_ix.is_none() {
@@ -7167,8 +7150,7 @@ impl Transcript {
             .map(|config| crate::pickers::harness_brand_icon(config.harness).0);
         let list_width = f32::from(self.list.viewport_bounds().size.width);
         let column = if list_width > 0.0 {
-            self.content_width
-                .min((list_width - self.right_reserve).max(1.0))
+            self.content_width.min(list_width.max(1.0))
         } else {
             self.content_width
         };
@@ -7809,79 +7791,86 @@ impl Transcript {
         // `turn` (the turn's start, ms) keys the rolling word and timer, so a
         // new turn's labels appear fresh instead of rolling from the last
         // turn's final values.
-        let (sending, queued, elapsed_secs, turn) = if let Some(doc_id) = &self.doc_override {
-            // A subagent doc has no Session row — `indicator_for` would read
-            // the PARENT chat's live state into this tab. Liveness rides the
-            // doc itself instead: the sink's assistant entry streams until
-            // the subagent settles (run teardown finalizes abandoned sinks),
-            // and a trailing USER entry is a steer still awaiting its reply
-            // segment. Frozen snapshots never spin, whatever they claim.
-            if !self.doc_live {
-                return None;
-            }
-            let state = self.state.read(cx);
-            let last = state.sub_transcript(doc_id).last()?;
-            let live =
-                last.status == Some(MessageStatus::Streaming) || last.role == MessageRole::User;
-            if !live {
-                return None;
-            }
-            let elapsed = ((now.timestamp_millis() - last.created_at).max(0) / 1000) as i64;
-            (false, false, elapsed, last.created_at)
-        } else {
-            let chat_id = self.chat_id.clone()?;
-            // Failed-send state first: past the grace window the trailer IS
-            // the retry affordance, whatever the indicator fell back to.
-            if self.state.read(cx).send_undelivered(&chat_id, now) {
-                let theme = Theme::of(cx).clone();
-                return Some(
-                    div()
-                        .id("undelivered-retry")
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .gap(px(Theme::SPACE_SM))
-                        .pt(px(Theme::SPACE_LG))
-                        .text_size(crate::typography::text_xs())
-                        .text_color(theme.danger)
-                        .cursor_pointer()
-                        .on_click(cx.listener(|this, _, _, cx| this.retry_send(cx)))
-                        .child(SharedString::from("Not delivered — click to retry"))
-                        .into_any_element(),
-                );
-            }
-            let (sending, queued, elapsed, turn) = {
-                let state = self.state.read(cx);
-                if state.indicator_for(&chat_id, now) != crate::state::Indicator::Working {
+        let (sending, queued, waiting, elapsed_secs, turn) =
+            if let Some(doc_id) = &self.doc_override {
+                // A subagent doc has no Session row — `indicator_for` would read
+                // the PARENT chat's live state into this tab. Liveness rides the
+                // doc itself instead: the sink's assistant entry streams until
+                // the subagent settles (run teardown finalizes abandoned sinks),
+                // and a trailing USER entry is a steer still awaiting its reply
+                // segment. Frozen snapshots never spin, whatever they claim.
+                if !self.doc_live {
                     return None;
                 }
-                // During the send→turn window the session row's `started_at`
-                // still belongs to the PREVIOUS turn — a timer based on the
-                // send counted the round-trip and then restarted when the
-                // turn actually began (user report). Bridge it as "Sending…"
-                // with no timer instead; the word + timer start with the
-                // turn.
+                let state = self.state.read(cx);
+                let last = state.sub_transcript(doc_id).last()?;
+                let live =
+                    last.status == Some(MessageStatus::Streaming) || last.role == MessageRole::User;
+                if !live {
+                    return None;
+                }
+                let elapsed = ((now.timestamp_millis() - last.created_at).max(0) / 1000) as i64;
+                (false, false, 0, elapsed, last.created_at)
+            } else {
+                let chat_id = self.chat_id.clone()?;
+                // Failed-send state first: past the grace window the trailer IS
+                // the retry affordance, whatever the indicator fell back to.
+                if self.state.read(cx).send_undelivered(&chat_id, now) {
+                    let theme = Theme::of(cx).clone();
+                    return Some(
+                        div()
+                            .id("undelivered-retry")
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(Theme::SPACE_SM))
+                            .pt(px(Theme::SPACE_LG))
+                            .text_size(crate::typography::text_xs())
+                            .text_color(theme.danger)
+                            .cursor_pointer()
+                            .on_click(cx.listener(|this, _, _, cx| this.retry_send(cx)))
+                            .child(SharedString::from("Not delivered — click to retry"))
+                            .into_any_element(),
+                    );
+                }
+                let state = self.state.read(cx);
                 let turn_started = state.session_for(&chat_id).and_then(|s| s.started_at);
-                let send_started = state.pending_send_started(&chat_id, now);
-                let sending = sending_bridge(send_started, turn_started);
-                // Degraded delivery path: the send is a durable local write
-                // waiting on connectivity — say so instead of faking
-                // progress. (The overlay holds while degraded, so this line
-                // owns the surface until the ack or the failed state.)
-                let queued = sending && state.chat_delivery_degraded(&chat_id);
-                let elapsed = turn_started
-                    .map(|t| now.signed_duration_since(t).num_seconds().max(0))
-                    .unwrap_or(0);
-                // While sending, the session row still carries the PREVIOUS
-                // turn: the bridge keys on its own send instead, so it never
-                // rolls out of that turn's word or an earlier send's.
-                let turn = if sending { send_started } else { turn_started }
-                    .map_or(0, |t| t.timestamp_millis());
-                (sending, queued, elapsed, turn)
+                if state.indicator_for(&chat_id, now) != crate::state::Indicator::Working {
+                    // The turn settled but subagents it spawned still stream:
+                    // the agent resumes when they report, so the trailer holds
+                    // as "Waiting for …" instead of reading the chat as done.
+                    let waiting = crate::state::running_subagents(state.session_for(&chat_id), now);
+                    if waiting == 0 {
+                        return None;
+                    }
+                    let turn = turn_started.map_or(0, |t| t.timestamp_millis());
+                    (false, false, waiting, 0, turn)
+                } else {
+                    // During the send→turn window the session row's `started_at`
+                    // still belongs to the PREVIOUS turn — a timer based on the
+                    // send counted the round-trip and then restarted when the
+                    // turn actually began (user report). Bridge it as "Sending…"
+                    // with no timer instead; the word + timer start with the
+                    // turn.
+                    let send_started = state.pending_send_started(&chat_id, now);
+                    let sending = sending_bridge(send_started, turn_started);
+                    // Degraded delivery path: the send is a durable local write
+                    // waiting on connectivity — say so instead of faking
+                    // progress. (The overlay holds while degraded, so this line
+                    // owns the surface until the ack or the failed state.)
+                    let queued = sending && state.chat_delivery_degraded(&chat_id);
+                    let elapsed = turn_started
+                        .map(|t| now.signed_duration_since(t).num_seconds().max(0))
+                        .unwrap_or(0);
+                    // While sending, the session row still carries the PREVIOUS
+                    // turn: the bridge keys on its own send instead, so it never
+                    // rolls out of that turn's word or an earlier send's.
+                    let turn = if sending { send_started } else { turn_started }
+                        .map_or(0, |t| t.timestamp_millis());
+                    (sending, queued, 0, elapsed, turn)
+                }
             };
-            (sending, queued, elapsed, turn)
-        };
-        if self.compact_mode && !sending && !queued && elapsed_secs > 0 {
+        if self.compact_mode && !sending && !queued && waiting == 0 && elapsed_secs > 0 {
             let entry_id = if let Some(doc_id) = &self.doc_override {
                 self.state
                     .read(cx)
@@ -7915,6 +7904,8 @@ impl Transcript {
             "Queued — will send automatically".to_owned()
         } else if sending {
             "Sending…".to_owned()
+        } else if waiting > 0 {
+            waiting_for_subagents_label(waiting)
         } else {
             format!("{agent} is working")
         };
@@ -7948,7 +7939,7 @@ impl Transcript {
                             cx.reduce_motion(),
                         )),
                 )
-                .when(!sending, |el| {
+                .when(!sending && waiting == 0, |el| {
                     // The timer ticks every second; its digits roll in place
                     // (the unit suffix holds).
                     el.child(
@@ -8445,10 +8436,8 @@ impl Transcript {
             .justify_center()
             .pt(px(top_gap))
             .pb(px(bottom_pad))
-            // Keep side gutters as the configurable column shrinks to fit;
-            // a docked side card's room comes off the right.
-            .pl(px(48.0))
-            .pr(px(48.0 + self.right_reserve))
+            // Keep side gutters as the configurable column shrinks to fit.
+            .px(px(48.0))
             .child(
                 div()
                     .w_full()
@@ -8705,7 +8694,7 @@ impl Transcript {
         // accordion, spawn chips included.
         let collapses = self.compact_mode || tool_group_collapses(tools);
         // Several subagents get the delegation header: their provider marks
-        // stacked, how they stand, and the chevron trailing.
+        // stacked beside how they stand.
         let agent_group = !self.compact_mode && tools.len() > 1 && tools.iter().all(is_agent_tool);
         let agent_count = tools.len();
         // Groups start collapsed, the live tail included: the header names
@@ -8732,7 +8721,6 @@ impl Transcript {
             {
                 fold.from = reveal.rendered_height;
                 fold.toggled_at = Some(Instant::now());
-                fold.disclosure_at = fold.toggled_at;
                 self.folds.insert(row_id.clone(), fold);
             }
             reveal.rendered_open = Some(open);
@@ -8950,6 +8938,11 @@ impl Transcript {
                             } else {
                                 0.0
                             }
+                            + if detail_carded(tool) {
+                                DETAIL_CARD_GAP
+                            } else {
+                                0.0
+                            }
                     } else {
                         base_row_height
                     };
@@ -9026,11 +9019,6 @@ impl Transcript {
         } else {
             None
         };
-        let disclosure_progress = if reduce_motion {
-            if open { 1.0 } else { 0.0 }
-        } else {
-            tool_disclosure_progress(open, fold, now)
-        };
 
         // The summary rolls as the group grows ("Ran 2 commands" → "Ran 3
         // commands"), like the working indicator's word.
@@ -9048,18 +9036,8 @@ impl Transcript {
             .and_then(|chat| chat.config.as_ref())
             .map(|config| crate::pickers::harness_brand_icon(config.harness));
         let toggle_id = row_id.clone();
-        let chevron = |slot: gpui::Div| {
-            slot.child(
-                crate::icons::icon(crate::icons::ALT_ARROW_DOWN)
-                    .size(px(14.0))
-                    .with_transformation(gpui::Transformation::rotate(gpui::radians(
-                        -std::f32::consts::FRAC_PI_2 * (1.0 - disclosure_progress),
-                    )))
-                    .text_color(theme.text_muted),
-            )
-        };
-        // A quiet summary sits above the activity rail; its chevron occupies
-        // the same gutter as the rounded task-tree elbows below it.
+        // A quiet summary sits above the activity rail. No disclosure arrow:
+        // the whole row is the toggle, and it brightens on hover.
         let header = div()
             .id(SharedString::from(format!("{row_id}-hdr")))
             .relative()
@@ -9084,20 +9062,8 @@ impl Transcript {
                 this.toggle_fold(toggle_id.clone(), viewport_height, effective_auto_open, cx);
                 cx.notify();
             }))
-            .map(|header| {
-                if agent_group {
-                    header.child(agent_avatar_stack(agent_count, agent_brand, theme))
-                } else {
-                    header.child(chevron(
-                        div()
-                            // Keep the title adjacent to its disclosure affordance.
-                            .w(px(22.0))
-                            .h(px(18.0))
-                            .flex_none()
-                            .pl(px(ACTIVITY_TRUNK_X - 7.0))
-                            .pt(px(2.0)),
-                    ))
-                }
+            .when(agent_group, |header| {
+                header.child(agent_avatar_stack(agent_count, agent_brand, theme))
             })
             .child(
                 div()
@@ -9118,15 +9084,12 @@ impl Transcript {
                             tool_group_title(summary.clone(), shimmer_phase, theme)
                         }),
                     }),
-            )
-            .when(agent_group, |header| {
-                header.child(chevron(div().flex_none()))
-            });
+            );
 
         if compact_shell {
             let view = cx.entity_id();
-            // The sibling body rows tween under TOOL_FOLD — keep frames (and
-            // the chevron's disclosure rotation) pumping until it lands.
+            // The sibling body rows tween under TOOL_FOLD — keep frames
+            // pumping until it lands.
             if !reduce_motion
                 && fold
                     .toggled_at
@@ -9287,6 +9250,7 @@ impl Transcript {
                 // Invocation first (what was asked), then output/diff (what
                 // came back), separated by a small gap.
                 if open || animating {
+                    let carded = detail_carded(tool);
                     let mut panel = div()
                         .flex_none()
                         .min_w_0()
@@ -9295,6 +9259,13 @@ impl Transcript {
                         .overflow_hidden()
                         .when(flat_thought, |panel| {
                             panel.ml(px(ACTIVITY_ICON_SIZE + ACTIVITY_TEXT_GAP))
+                        })
+                        .when(carded, |panel| {
+                            panel
+                                .mb(px(DETAIL_CARD_GAP))
+                                .px(px(DETAIL_CARD_INSET))
+                                .rounded(px(8.0))
+                                .bg(theme.ink(0.035))
                         });
                     if let Some(invocation) = invocation.as_deref() {
                         panel = panel
@@ -9314,21 +9285,23 @@ impl Transcript {
                         );
                     }
                     if let Some(detail) = detail.as_deref() {
-                        panel = panel
-                            .child(
-                                div()
-                                    .h(px(DETAIL_SEPARATOR))
-                                    .flex_none()
-                                    .when(!collapses && is_agent_tool(tool), |line| {
-                                        line.bg(crate::theme::hairline(0.06))
-                                    }),
-                            )
-                            .child(detail_body(
-                                detail,
-                                detail_highlights[ix].clone(),
-                                &format!("{key}-out"),
-                                theme,
-                            ));
+                        // In the card, a hairline parts the command from
+                        // what came back.
+                        let parted = carded && invocation.is_some();
+                        panel =
+                            panel
+                                .child(
+                                    div().h(px(DETAIL_SEPARATOR)).flex_none().when(
+                                        parted || (!collapses && is_agent_tool(tool)),
+                                        |line| line.bg(crate::theme::hairline(0.06)),
+                                    ),
+                                )
+                                .child(detail_body(
+                                    detail,
+                                    detail_highlights[ix].clone(),
+                                    &format!("{key}-out"),
+                                    theme,
+                                ));
                     }
                     if let Some(ChipAffordance { blob_ref, label }) = affordance {
                         let loading = matches!(
@@ -10378,16 +10351,14 @@ fn chip_header_row(
     } else if detail.is_empty() {
         None
     } else if code_detail {
-        // Commands and MCP calls read as code: a mono chip on a faint wash.
+        // Commands and MCP calls read as code: quiet mono text, no pill, so
+        // a run of them scans as one list rather than a stack of boxes.
         Some(
             div()
                 .min_w_0()
                 .h(px(20.0))
                 .flex()
                 .items_center()
-                .px(px(6.0))
-                .rounded(px(4.0))
-                .bg(theme.ink(0.06))
                 .font_family(theme.font_mono.clone())
                 .text_size(px(TOOL_TEXT_SIZE - 1.0))
                 .text_color(theme.text_muted)
@@ -11292,8 +11263,7 @@ impl Render for Transcript {
             let mut released = diagrams.begin_frame(crate::theme::style_generation());
             let list_width = f32::from(self.list.viewport_bounds().size.width);
             let column = if list_width > 0.0 {
-                self.content_width
-                    .min((list_width - self.right_reserve).max(1.0))
+                self.content_width.min(list_width.max(1.0))
             } else {
                 self.content_width
             };
@@ -11722,7 +11692,6 @@ mod tests {
                             open: Some(false),
                             from: 120.0,
                             toggled_at: Some(Instant::now()),
-                            disclosure_at: Some(Instant::now()),
                             ..Default::default()
                         },
                     );
@@ -12337,17 +12306,6 @@ mod tests {
                 assert_eq!(reveal.rendered_open, Some(false));
             });
         });
-    }
-
-    #[test]
-    fn resizing_details_does_not_restart_group_disclosure() {
-        let now = Instant::now();
-        let fold = FoldState {
-            toggled_at: Some(now),
-            ..Default::default()
-        };
-        assert_eq!(tool_disclosure_progress(true, fold, now), 1.0);
-        assert_eq!(tool_disclosure_progress(false, fold, now), 0.0);
     }
 
     #[test]
@@ -14138,9 +14096,10 @@ mod tests {
         // Sibling markdown blocks from the same part: md block gap.
         assert_eq!(top_gap_for(Some(&rows[0]), &rows[1]), render::MD_BLOCK_GAP);
         assert_eq!(top_gap_for(Some(&rows[1]), &rows[2]), render::MD_BLOCK_GAP);
-        // Markdown → tool group and tool group → next part: larger boundary.
-        assert_eq!(top_gap_for(Some(&rows[2]), &rows[3]), Theme::SPACE_MD);
-        assert_eq!(top_gap_for(Some(&rows[3]), &rows[4]), Theme::SPACE_MD);
+        // Markdown → tool group and tool group → next part: a tight
+        // boundary, since the group's summary row pads itself.
+        assert_eq!(top_gap_for(Some(&rows[2]), &rows[3]), Theme::SPACE_XS);
+        assert_eq!(top_gap_for(Some(&rows[3]), &rows[4]), Theme::SPACE_XS);
         // Turn starts get the turn gap regardless.
         assert_eq!(top_gap_for(None, &rows[0]), Theme::SPACE_LG);
     }
@@ -17277,6 +17236,22 @@ mod tests {
         assert_eq!(lines.len(), 3);
         assert!(lines.iter().all(|l| l.chars().count() <= CALL_WRAP_COLS));
 
+        // A command with spaces breaks between words, never inside one, and
+        // keeps every character.
+        let command = "grep -rn \"Cloud could\\|Restart\\|reconnect in Settings\" packages/i18n/locales/en apps/renderer/src | head";
+        let Some(ToolDetail::Output { lines, .. }) = call_block(&ToolCall::Exec {
+            command: command.into(),
+        }) else {
+            panic!("expected an output block")
+        };
+        assert!(lines.len() > 1);
+        assert!(lines.iter().all(|l| l.chars().count() <= CALL_WRAP_COLS));
+        assert!(lines[..lines.len() - 1].iter().all(|l| l.ends_with(' ')));
+        assert_eq!(
+            lines.iter().map(|l| l.as_ref()).collect::<String>(),
+            command
+        );
+
         // MCP input pretty-prints under the `server · tool` line.
         let Some(ToolDetail::Output { lines, .. }) = call_block(&ToolCall::Mcp {
             server: "gh".into(),
@@ -17523,6 +17498,12 @@ mod tests {
         ] {
             assert_eq!(format_elapsed(secs), expected, "elapsed seconds: {secs}");
         }
+    }
+
+    #[test]
+    fn waiting_label_counts_running_subagents() {
+        assert_eq!(waiting_for_subagents_label(1), "Waiting for 1 subagent");
+        assert_eq!(waiting_for_subagents_label(3), "Waiting for 3 subagents");
     }
 
     #[test]
