@@ -155,6 +155,7 @@ impl BrowserServer {
             .route("/api/rpc", get(socket))
             .route("/api/paired-rpc/{pair_id}", get(paired::upgrade))
             .route("/api/account-rpc", get(managed::upgrade))
+            .route("/api/control", get(control_socket))
             .route("/api/attachments", post(upload))
             .fallback_service(
                 ServeDir::new(&assets).not_found_service(ServeFile::new(assets.join("index.html"))),
@@ -422,6 +423,49 @@ async fn browser_socket(server: BrowserServer, socket: axum::extract::ws::WebSoc
     let _ = dispatch.await;
 }
 
+/// Control clients authenticate every operation inside its envelope. Browser
+/// cookies never grant access to this endpoint and raw engine methods are denied.
+struct ControlOnly(Arc<dyn RpcService>);
+#[async_trait::async_trait]
+impl RpcService for ControlOnly {
+    async fn handle(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<zuse_rpc::RpcReply, zuse_rpc::RpcError> {
+        if method != "ControlCall" {
+            return Err(zuse_rpc::RpcError::Capability(
+                "control.unauthorized".into(),
+            ));
+        }
+        self.0.handle(method, params).await
+    }
+}
+async fn control_socket(State(server): State<BrowserServer>, ws: WebSocketUpgrade) -> Response {
+    ws.max_message_size(2 * 1024 * 1024).on_upgrade(move |socket| async move {
+        let (mut writer, mut reader) = socket.split();
+        let (out, mut replies) = mpsc::channel::<String>(128);
+        let (requests, inbound) = mpsc::channel::<String>(128);
+        let dispatch = tokio::spawn(zuse_rpc::serve_connection(Arc::new(ControlOnly(server.service)), out, inbound));
+        loop {
+            tokio::select! {
+                reply = replies.recv() => match reply {
+                    Some(reply) => if writer.send(Message::Text(reply.into())).await.is_err() { break; },
+                    None => break,
+                },
+                frame = reader.next() => match frame {
+                    Some(Ok(Message::Text(text))) => if requests.send(text.to_string()).await.is_err() { break; },
+                    Some(Ok(Message::Ping(data))) => if writer.send(Message::Pong(data)).await.is_err() { break; },
+                    Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
+                    _ => {},
+                }
+            }
+        }
+        drop(requests);
+        dispatch.abort();
+    }).into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -439,6 +483,21 @@ mod tests {
 
     fn server() -> BrowserServer {
         BrowserServer::new(Arc::new(FixtureService), "a".repeat(64), None).unwrap()
+    }
+
+    #[tokio::test]
+    async fn control_transport_never_forwards_raw_engine_operations() {
+        let service = ControlOnly(Arc::new(FixtureService));
+        assert!(matches!(
+            service.handle("Mutate", serde_json::json!({})).await,
+            Err(RpcError::Capability(_))
+        ));
+        assert!(
+            service
+                .handle("ControlCall", serde_json::json!({"method":"ControlInfo"}))
+                .await
+                .is_ok()
+        );
     }
 
     #[tokio::test]

@@ -297,6 +297,7 @@ struct Inner {
     /// dispatch or accepted steer) — the diff sync snapshots the checkout tree
     /// for the Changes pane's "Latest turn" scope. Absent in bare tests.
     turn_listener: OnceLock<TurnListener>,
+    zots: OnceLock<crate::zots::Zots>,
 }
 
 struct FilesystemAdmission {
@@ -427,6 +428,7 @@ impl SessionsEngine {
                 generated_images: OnceLock::new(),
                 scratch_root: OnceLock::new(),
                 turn_listener: OnceLock::new(),
+                zots: OnceLock::new(),
             }),
         }
     }
@@ -435,10 +437,19 @@ impl SessionsEngine {
         self.inner.voice.clone()
     }
 
+    pub fn set_zots(&self, zots: crate::zots::Zots) {
+        let _ = self.inner.zots.set(zots);
+    }
+
     /// Record the loopback IPC port this engine serves. Runs started after
     /// this carry Zuse's MCP server (see [`Inner::zuse_mcp`]); until then —
     /// or with 0 — agents get no Zuse tools rather than a dead server.
     pub fn set_ipc_port(&self, port: u16) {
+        if let Some(zots) = self.inner.zots.get() {
+            if let Err(error) = zots.publish_discovery(port) {
+                tracing::warn!(%error, "control discovery publication failed");
+            }
+        }
         self.inner
             .ipc_port
             .store(port, std::sync::atomic::Ordering::Relaxed);
@@ -820,7 +831,7 @@ impl SessionsEngine {
     async fn dispatch_inner(
         &self,
         chat_id: &str,
-        harness_id: HarnessId,
+        mut harness_id: HarnessId,
         mut request: RunRequest,
         mut message_id: Option<String>,
         startup_retry: bool,
@@ -830,6 +841,19 @@ impl SessionsEngine {
         self.require_unarchived(chat_id)?;
         let _activity = self.claim_filesystem_admission(chat_id);
         drop(admission);
+        if let Some(zots) = self.inner.zots.get() {
+            zots.prepare_request(chat_id, &mut request)
+                .map_err(|e| EngineError::Other(e.to_string()))?;
+            if zots
+                .coordinator(chat_id)
+                .map_err(|e| EngineError::Other(e.to_string()))?
+                .is_some()
+            {
+                if let Some(selected) = request.harness {
+                    harness_id = selected;
+                }
+            }
+        }
         // Project-less chats store a home-relative cwd (the creating device
         // can't know the host's home); expand it here, on the host, where the
         // run spawns, creating a new chat's scratch folder.
@@ -2259,6 +2283,17 @@ impl Inner {
                 ("ZUSE_DEVICE_ID".to_owned(), self.device_id.clone()),
             ]
             .into_iter()
+            .chain(
+                self.zots
+                    .get()
+                    .map(|zots| ("ZUSE_CONTROL_TOKEN".to_owned(), zots.grant(chat_id))),
+            )
+            .chain(
+                self.zots
+                    .get()
+                    .and_then(|zots| zots.coordinator(chat_id).ok().flatten())
+                    .map(|zot| ("ZUSE_ZOT_ID".into(), zot.id)),
+            )
             .collect(),
         })
     }

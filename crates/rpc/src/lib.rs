@@ -27,10 +27,12 @@ mod paired;
 pub mod paired_link;
 pub mod reconnect;
 pub use paired::{connect_paired, connect_paired_channel};
+#[cfg(feature = "relay")]
 pub mod device_room;
 mod server;
 
 pub use client::{RpcClient, RpcForward, RpcSubscription, connect_ws};
+#[cfg(feature = "relay")]
 pub use device_room::{
     DeviceFrameHeader, DeviceLink, HostRelay, HostRelayConfig, LinkCache, LinkCacheConfig,
     NudgeHandler, PeerLiveness, PeerLivenessProbe, StaticToken, TokenError, TokenSource,

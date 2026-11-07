@@ -109,6 +109,7 @@ mod thread_search;
 mod usage_dashboard;
 mod workspace_layout;
 mod workspace_storage;
+mod zots;
 use side_chats::SideChatTab;
 mod cloud_info;
 mod tabs;
@@ -2041,6 +2042,7 @@ fn dismiss_update_prompt(cx: &mut App) {
 pub struct Shell {
     update_restart: Option<update_restart::RestartPlan>,
     update_restart_task: Option<Task<()>>,
+    zot_ui: zots::ZotUi,
     state: Entity<AppState>,
     desktop_import: Entity<crate::desktop_import::Onboarding>,
     sidebar_pane: Entity<SidebarPane>,
@@ -2685,6 +2687,7 @@ impl Shell {
         Self {
             state: state.clone(),
             desktop_import,
+            zot_ui: zots::ZotUi::default(),
             sidebar_pane,
             sidebar_controls,
             workspace_sidebar_focus: cx.focus_handle().tab_stop(true),
@@ -10211,6 +10214,7 @@ impl Shell {
             .child(self.render_sidebar_nav(theme, cx))
             .child(self.render_sidebar_modes(theme, cx))
             .child(filter_row)
+            .child(self.render_zot_sidebar(theme, cx))
             .child(sidebar_lists)
             // Global connection pill (durable-by-design UI truth): appears
             // whenever the edge posture is degraded; hidden while healthy —
@@ -10452,6 +10456,25 @@ impl Shell {
     fn render_update_pill(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
         use crate::app_update::{Flow, StripAction};
         let update = crate::app_update::AppUpdate::global(cx)?;
+        if let Some(problem) = update.read(cx).control_problem() {
+            return Some(
+                div()
+                    .id("control-update-retry")
+                    .mx(px(8.0))
+                    .p(px(8.0))
+                    .text_size(crate::typography::ui_rems(12.0))
+                    .text_color(theme.danger)
+                    .cursor_pointer()
+                    .tooltip(crate::settings::widgets::text_tooltip(problem))
+                    .child("Control tools update failed · Retry")
+                    .on_click(cx.listener(|_, _, _, cx| {
+                        if let Some(update) = crate::app_update::AppUpdate::global(cx) {
+                            update.update(cx, |update, cx| update.retry_control(cx));
+                        }
+                    }))
+                    .into_any_element(),
+            );
+        }
         let (status, action) = update.read(cx).strip()?;
         let flow = update.read(cx).flow().clone();
         let notes = update
@@ -12213,6 +12236,10 @@ impl Shell {
         let theme_owned = Theme::of(cx).clone();
         let theme = &theme_owned;
         let (border, text, faint) = (theme.border, theme.text, theme.text_faint);
+
+        if self.zot_ui.form.is_some() {
+            return self.render_zot_form(theme, cx);
+        }
 
         if matches!(self.route, Route::PullRequests) {
             if self.pull_requests_page.is_none() {
@@ -15216,7 +15243,9 @@ impl Render for Shell {
                         .then(|| self.pull_request_pane_handle(cx))
                         .flatten()
                 });
-                let right: AnyElement = if on_chat {
+                let right: AnyElement = if on_chat && self.selected_zot(cx).is_some() {
+                    self.render_zot_inspector(cx)
+                } else if on_chat {
                     self.render_right_pane(window, cx)
                 } else if on_pull_requests {
                     self.render_pull_request_pane(window, cx)

@@ -120,6 +120,13 @@ impl WorkspaceView {
                     && c["threadId"].is_null()
             })
             .filter(|c| {
+                !self
+                    .zots
+                    .items
+                    .iter()
+                    .any(|z| Some(z.coordinator_chat_id.as_str()) == c["id"].as_str())
+            })
+            .filter(|c| {
                 query.is_empty()
                     || ["title", "cwd", "branch", "lastMessagePreview"]
                         .iter()
@@ -150,6 +157,7 @@ impl WorkspaceView {
             .bg(rgb(BG))
             .rounded(px(crate::workspace_style::RADIUS))
             .overflow_hidden()
+            .child(self.zot_sidebar(cx))
             .child(
                 row()
                     .h(px(36.))

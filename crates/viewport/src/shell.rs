@@ -1256,7 +1256,9 @@ impl Render for WorkspaceView {
             panel.set_target(target, cx);
         });
 
-        let panel_width = if !self.right_open || self.settings || self.project_picker {
+        let panel_width = if self.selected_zot().is_some() && !self.settings && !self.project_picker {
+            320.
+        } else if !self.right_open || self.settings || self.project_picker {
             0.
         } else if self.right_tab == "browser" {
             (f32::from(window.viewport_size().width)
@@ -1506,8 +1508,15 @@ impl Render for WorkspaceView {
                     && !self.settings
                     && !self.project_picker
                     && self.project_archive.project.is_none()
-                    && !self.usage_open,
+                    && !self.usage_open
+                    && self.selected_zot().is_none(),
                 |d| d.child(self.workspace_panel(panel_width, cx)),
+            )
+            .when(
+                self.selected_zot().is_some()
+                    && !self.settings
+                    && !self.project_picker,
+                |d| d.child(self.zot_panel(cx)),
             )
             .when(self.preview_open.is_some() && !self.settings, |d| {
                 d.child(self.preview_overlay(window, cx))

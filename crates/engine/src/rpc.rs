@@ -60,6 +60,7 @@ mod simulators;
 mod visuals;
 mod voice_chat;
 mod voice_remote;
+mod zots;
 use async_trait::async_trait;
 use base64::Engine as _;
 use futures::StreamExt;
@@ -737,6 +738,7 @@ pub struct EngineRpc {
     browser_access: Option<crate::browser_access::BrowserAccess>,
     relay_access: Option<crate::relay_access::RelayAccess>,
     direct_access: Option<crate::direct_access::DirectAccess>,
+    zots: Option<crate::zots::Zots>,
     model_connections: Option<crate::model_connections::ModelConnections>,
     account: Option<crate::account::Account>,
     managed_access: Option<crate::managed_access::AccountClient>,
@@ -803,6 +805,7 @@ impl EngineRpc {
             browser_access: None,
             relay_access: None,
             direct_access: None,
+            zots: None,
             model_connections: None,
             account: None,
             managed_access: None,
@@ -863,6 +866,11 @@ impl EngineRpc {
 
     pub(crate) fn with_visuals(mut self, visuals: crate::visuals::Visuals) -> Self {
         self.visuals = visuals;
+        self
+    }
+
+    pub fn with_zots(mut self, zots: crate::zots::Zots) -> Self {
+        self.zots = Some(zots);
         self
     }
 
@@ -1491,9 +1499,16 @@ impl EngineRpc {
             }
             MutateParams::SetChatConfig {
                 chat_id,
-                config,
+                mut config,
                 expected_config,
             } => {
+                if self
+                    .zots
+                    .as_ref()
+                    .is_some_and(|zots| zots.coordinator(&chat_id).ok().flatten().is_some())
+                {
+                    config.sandbox = zuse_protocol::SandboxLevel::ReadOnly;
+                }
                 if let Some(expected) = expected_config {
                     if expected.device_id != self.doc_host.device_id()
                         || !self
@@ -1513,11 +1528,39 @@ impl EngineRpc {
                     }
                 } else {
                     self.voice.retire_chat(&chat_id);
-                    return self
-                        .workspace
+                    self.workspace
                         .set_chat_config(&chat_id, &config)
                         .map_err(failed)
-                        .map(drop);
+                        .map(drop)?;
+                }
+                if let Some(zots) = &self.zots {
+                    if let Some(mut zot) = zots
+                        .coordinator(&chat_id)
+                        .map_err(|e| RpcError::Failed(e.to_string()))?
+                    {
+                        let harness = serde_json::to_value(config.harness)
+                            .map_err(|e| RpcError::BadParams(e.to_string()))?
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_owned();
+                        if zot.config.coordinator_model.harness != harness
+                            || zot.config.coordinator_model.model != config.model
+                        {
+                            zot.config.coordinator_model = zuse_protocol::zots::ZotModel {
+                                harness,
+                                model: config.model.clone(),
+                            };
+                            zots.command(zuse_protocol::zots::ZotCommand {
+                                command_id: uuid::Uuid::new_v4().to_string(),
+                                zot_id: zot.id,
+                                expected_revision: Some(zot.revision),
+                                action: zuse_protocol::zots::ZotAction::Configure {
+                                    config: zot.config,
+                                },
+                            })
+                            .map_err(|e| RpcError::Failed(e.to_string()))?;
+                        }
+                    }
                 }
                 self.voice.retire_chat(&chat_id);
                 Ok(())
@@ -1716,6 +1759,20 @@ fn forwardable_request(method: &str, params: &serde_json::Value) -> bool {
 }
 
 fn forwardable(method: &str) -> bool {
+    if method == "BindZotWorker" {
+        return true;
+    }
+    if matches!(
+        method,
+        zuse_protocol::control::API_INFO
+            | zuse_protocol::control::ZOT_COMMAND
+            | zuse_protocol::control::WATCH_ZOTS
+            | zuse_protocol::control::ZOT_FILES
+            | zuse_protocol::control::ZOT_EVENTS
+            | zuse_protocol::control::ACK_ZOT_EVENTS
+    ) {
+        return true;
+    }
     if simulators::handles(method) || voice_remote::handles(method) {
         return true;
     }
@@ -1867,6 +1924,9 @@ fn forwardable(method: &str) -> bool {
 
 /// Forwardable methods whose reply is a stream (proxied item-by-item).
 fn is_stream_method(method: &str) -> bool {
+    if method == zuse_protocol::control::WATCH_ZOTS {
+        return true;
+    }
     if method == methods::SIMULATOR_FRAMES || method == methods::OWN_VOICE_V2 {
         return true;
     }
@@ -2540,6 +2600,73 @@ impl RpcService for EngineRpc {
 
         // Device-addressed routing: forward calls that target another device over its
         // relay. The target compares the id to its own, so forwards cannot loop.
+        if method == zuse_protocol::control::CALL {
+            let zots = self
+                .zots
+                .as_ref()
+                .ok_or_else(|| RpcError::Capability("control.v1".into()))?;
+            let token = params
+                .get("token")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let operation = params
+                .get("method")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let mut operation_params = params
+                .get("params")
+                .cloned()
+                .unwrap_or(serde_json::json!({}));
+            if !zots.authorize(token) {
+                let denied = || RpcError::Capability("control.unauthorized".into());
+                let chat = zots.grant_owner(token).ok_or_else(denied)?;
+                if !self.sessions.turn_in_flight(&chat) {
+                    return Err(denied());
+                }
+                let zot = zots
+                    .coordinator(&chat)
+                    .map_err(|e| RpcError::Failed(e.to_string()))?
+                    .ok_or_else(denied)?;
+                let args = operation_params.clone();
+                if operation != zuse_protocol::control::API_INFO
+                    && args.get("zotId").and_then(|v| v.as_str()) != Some(zot.id.as_str())
+                {
+                    return Err(denied());
+                }
+                if operation == zuse_protocol::control::ZOT_COMMAND {
+                    let mut command: zuse_protocol::zots::ZotCommand = parse_params(args)?;
+                    if matches!(
+                        command.action,
+                        zuse_protocol::zots::ZotAction::Create { .. }
+                            | zuse_protocol::zots::ZotAction::Configure { .. }
+                            | zuse_protocol::zots::ZotAction::Delete
+                            | zuse_protocol::zots::ZotAction::SetStatus { .. }
+                            | zuse_protocol::zots::ZotAction::AdoptWorker { .. }
+                    ) {
+                        return Err(denied());
+                    }
+                    if let zuse_protocol::zots::ZotAction::MessageWorker { automatic, .. } =
+                        &mut command.action
+                    {
+                        *automatic = true;
+                    }
+                    operation_params = serde_json::to_value(command)
+                        .map_err(|e| RpcError::BadParams(e.to_string()))?;
+                } else if !matches!(
+                    operation,
+                    zuse_protocol::control::API_INFO
+                        | zuse_protocol::control::ZOT_FILES
+                        | zuse_protocol::control::ZOT_EVENTS
+                        | zuse_protocol::control::ACK_ZOT_EVENTS
+                ) {
+                    return Err(denied());
+                }
+            }
+            if !zuse_protocol::control::METHODS.contains(&operation) {
+                return Err(RpcError::Capability("control.unsupported_operation".into()));
+            }
+            return Box::pin(self.handle(operation, operation_params)).await;
+        }
         if forwardable_request(method, &params)
             && let Some(target) = params.get("targetDeviceId").and_then(|v| v.as_str())
             && target != self.doc_host.device_id()
@@ -2749,6 +2876,97 @@ impl RpcService for EngineRpc {
                 usage
                     .handle(method, request, &spaces, self.doc_host.device_id())
                     .await
+            }
+            zuse_protocol::control::API_INFO => {
+                RpcReply::value(&zuse_protocol::control::ControlInfo {
+                    api_version: zuse_protocol::control::API_VERSION,
+                    app_version: env!("CARGO_PKG_VERSION").into(),
+                    schemas: serde_json::json!({"ZotCommand":zuse_protocol::zots::command_schema()}),
+                    capabilities: if self.zots.is_some() {
+                        vec![zuse_protocol::zots::CAPABILITY.into()]
+                    } else {
+                        vec![]
+                    },
+                    methods: zuse_protocol::control::METHODS
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect(),
+                })
+            }
+            "ControlUpdateStatus" => RpcReply::value(
+                &zuse_update::control::status().map_err(|e| RpcError::Failed(e.to_string()))?,
+            ),
+            "RetryControlUpdate" => RpcReply::value(
+                &zuse_update::control::synchronize_bundled()
+                    .await
+                    .map_err(|e| RpcError::Failed(e.to_string()))?,
+            ),
+            "BindZotWorker" => {
+                let binding: crate::zots::WorkerBinding = parse_params(params)?;
+                self.zots
+                    .as_ref()
+                    .ok_or_else(|| RpcError::Capability("zots.v1".into()))?
+                    .bind_worker(&binding)
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(&serde_json::json!({"ok":true}))
+            }
+            zuse_protocol::control::WATCH_ZOTS => {
+                let zots = self
+                    .zots
+                    .clone()
+                    .ok_or_else(|| RpcError::Capability("zots.v1".into()))?;
+                let rx = zots.watch();
+                let stream =
+                    futures::stream::unfold((zots, rx, true), |(zots, mut rx, first)| async move {
+                        if !first {
+                            rx.changed().await.ok()?;
+                        }
+                        rx.borrow_and_update();
+                        let value = serde_json::to_value(zots.list().ok()?).ok()?;
+                        Some((value, (zots, rx, false)))
+                    });
+                Ok(RpcReply::Stream(stream.boxed()))
+            }
+            zuse_protocol::control::ZOT_COMMAND => self.zot_command(params).await,
+            zuse_protocol::control::ZOT_FILES
+            | zuse_protocol::control::ZOT_EVENTS
+            | zuse_protocol::control::ACK_ZOT_EVENTS => {
+                let zots = self
+                    .zots
+                    .as_ref()
+                    .ok_or_else(|| RpcError::Capability("zots.v1".into()))?;
+                let id = params
+                    .get("zotId")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| RpcError::BadParams("zotId is required".into()))?;
+                let failure = |e: anyhow::Error| RpcError::Failed(e.to_string());
+                match method {
+                    zuse_protocol::control::ZOT_FILES => RpcReply::value(
+                        &zots
+                            .files(
+                                id,
+                                params
+                                    .get("history")
+                                    .and_then(|v| v.as_bool())
+                                    .unwrap_or(false),
+                            )
+                            .map_err(failure)?,
+                    ),
+                    zuse_protocol::control::ZOT_EVENTS => {
+                        RpcReply::value(&zots.events(id).map_err(failure)?)
+                    }
+                    _ => {
+                        let ids: Vec<String> = serde_json::from_value(
+                            params
+                                .get("eventIds")
+                                .cloned()
+                                .unwrap_or(serde_json::json!([])),
+                        )
+                        .map_err(|e| RpcError::BadParams(e.to_string()))?;
+                        zots.acknowledge(id, &ids).map_err(failure)?;
+                        RpcReply::value(&serde_json::json!({"ok":true}))
+                    }
+                }
             }
             methods::INSPECT_RECOVERY | methods::RESOLVE_RECOVERY => {
                 let profile = self.repos.data_dir().to_path_buf();

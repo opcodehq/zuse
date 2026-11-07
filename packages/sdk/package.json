@@ -1,0 +1,18 @@
+{
+  "name": "@zuse/sdk",
+  "version": "0.25.1",
+  "description": "Typed client and command-line control for local and cloud Zuse engines",
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "files": ["dist", "bin", "README.md"],
+  "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
+  "bin": { "zuse-control": "bin/zuse-control.mjs" },
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --experimental-strip-types --test test/*.test.ts",
+    "test:engine": "npm run build && node test/engine-smoke.mjs",
+    "prepack": "npm run build"
+  },
+  "devDependencies": { "typescript": "5.9.3", "@types/node": "22.19.0" }
+}
