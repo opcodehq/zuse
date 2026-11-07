@@ -545,6 +545,10 @@ pub const SUBAGENT_INPUT_KEEP: [&str; 5] = [
     "subagent_type",
 ];
 
+/// Largest UI block spec ([`AgentEvent::UiBlock`]) in bytes: the spec
+/// crate caps the source at 32,768 UTF-16 units, at most 3 bytes each.
+pub const UI_BLOCK_MAX_BYTES: usize = 3 * 32_768;
+
 /// Bounds on an agent's inline visual ([`AgentEvent::Visual`]): a Luau
 /// script Zuse runs in a sandbox and renders natively.
 pub const VISUAL_MAX_BYTES: usize = 256 * 1024;
@@ -742,6 +746,13 @@ pub enum AgentEvent {
         id: String,
         path: String,
         title: String,
+    },
+    /// An agent-authored UI block shown in the reply: a declarative
+    /// component spec (`zuse-ui-block`), stored inline. The engine emits it
+    /// when the agent calls Zuse's `show_ui` MCP tool.
+    UiBlock {
+        id: String,
+        spec: String,
     },
     ReasoningDelta {
         text: String,

@@ -530,6 +530,20 @@ struct PublishVisualParams {
     assets: std::collections::BTreeMap<String, String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PublishUiBlockParams {
+    chat_id: String,
+    spec: String,
+}
+
+fn no_turn_for_ui_block() -> RpcError {
+    RpcError::Failed(
+        "This chat has no running turn on this device; show_ui only works from inside a turn."
+            .into(),
+    )
+}
+
 fn no_turn_for_visual() -> RpcError {
     RpcError::Failed(
         "This chat has no running turn on this device; show_visual only works from inside a turn."
@@ -5471,6 +5485,24 @@ impl RpcService for EngineRpc {
                     "checkedInteractions": report.interactions,
                     "printed": report.logs,
                 }))
+            }
+            methods::PUBLISH_UI_BLOCK => {
+                let p: PublishUiBlockParams = parse_params(params)?;
+                if p.spec.len() > zuse_protocol::UI_BLOCK_MAX_BYTES {
+                    return Err(RpcError::BadParams("spec is too long".into()));
+                }
+                // Validated before anyone sees it; readers validate again.
+                let spec = zuse_ui_block::parse(&p.spec)
+                    .map_err(|e| RpcError::BadParams(format!("invalid UI block: {e}")))?;
+                let id = format!("ui:{}", crate::new_id());
+                let event = AgentEvent::UiBlock {
+                    id: id.clone(),
+                    spec: spec.source,
+                };
+                if !self.sessions.inject_event(&p.chat_id, event) {
+                    return Err(no_turn_for_ui_block());
+                }
+                RpcReply::value(&serde_json::json!({ "id": id }))
             }
             methods::FETCH_TOOL_BLOB => {
                 let p: FetchToolBlobParams = parse_params(params)?;

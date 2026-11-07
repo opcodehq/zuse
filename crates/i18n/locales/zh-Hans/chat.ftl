@@ -1841,6 +1841,10 @@ chat-tool_group_failed = { $count } 个失败
 chat-tool_group_agents_done = { $count } 个已完成
 # Variables: count
 chat-tool_group_notes = 写了 { $count } 条笔记
+# Variables: count
+chat-tool_group_tool_calls = { $count } 次工具调用
+# Variables: count
+chat-tool_group_messages = { $count } 条消息
 
 chat-find_in_chat_placeholder = 在对话中查找
 chat-find_in_chat_count = 第 { $current } 个，共 { $total } 个

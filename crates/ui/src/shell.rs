@@ -4550,6 +4550,12 @@ impl Shell {
                 }
             }
             TranscriptEvent::FindClosed => self.focus_transcript_composer(&transcript, cx),
+            TranscriptEvent::SendUiBlockReply { row_id, text } => {
+                let sent = self.send_transcript_reply(&transcript, text.clone(), cx);
+                transcript.update(cx, |transcript, cx| {
+                    transcript.ui_block_reply_sent(row_id, sent, cx)
+                });
+            }
         }
     }
 
@@ -14576,6 +14582,14 @@ impl Render for Shell {
                 },
             ))
             .on_action(cx.listener(
+                |this, action: &crate::pull_request_card::SendContextToChat, _, cx| {
+                    let (text, context) = (action.text.clone(), action.context.clone());
+                    this.composer.update(cx, |composer, cx| {
+                        composer.send_with_context(text, context, cx)
+                    });
+                },
+            ))
+            .on_action(cx.listener(
                 |this, action: &crate::pull_request_detail::OpenPullRequest, window, cx| {
                     // From a chat (a sidebar badge, the composer's badge), the
                     // pull request opens beside the focused session, so
@@ -14640,8 +14654,12 @@ impl Render for Shell {
                     // there stays, above the prompt.
                     let composer = this.composer.clone();
                     let prompt = action.prompt.clone();
+                    let context = action.context.clone();
                     cx.defer(move |cx| {
                         composer.update(cx, |composer, cx| {
+                            if let Some(context) = context {
+                                composer.stage_context(context, cx);
+                            }
                             composer.input.update(cx, |input, cx| {
                                 let draft = input.text().trim_end();
                                 let text = if draft.is_empty() {
@@ -18024,6 +18042,7 @@ mod exit_regressions {
                 window.dispatch_action(
                     Box::new(crate::pull_request_detail::StartPullRequestSession {
                         prompt: "Review pull request #7".into(),
+                        context: None,
                         project_id: "pr-project".into(),
                         device: "remote".into(),
                         repository: "a/b".into(),

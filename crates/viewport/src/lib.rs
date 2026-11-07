@@ -33,6 +33,7 @@ pub mod creation_sources;
 pub mod creation_style;
 mod custom_acp;
 pub mod dither;
+mod ui_block_parts;
 mod draft_journal;
 mod environment;
 pub mod git_controls;
@@ -85,6 +86,7 @@ mod thread_actions;
 mod title_settings;
 mod tool_results;
 mod transcript;
+pub mod ui_block;
 pub mod usage_dashboard;
 mod usage_host;
 mod visuals;
@@ -138,6 +140,7 @@ pub struct WorkspaceView {
     environment: environment::Environment,
     browser: browser::Browser,
     visuals: visuals::Visuals,
+    ui_blocks: ui_block_parts::UiBlocks,
     git_controls: Entity<git_controls::GitControls>,
     pull_requests: pull_requests::PullRequests,
     git_requests: HashMap<u64, u64>,
@@ -886,6 +889,7 @@ impl WorkspaceView {
             composer_generation: 0,
             voice: voice::Voice::default(),
             visuals: visuals::Visuals::default(),
+            ui_blocks: ui_block_parts::UiBlocks::default(),
             git_controls,
             pull_requests,
             git_requests: HashMap::new(),

@@ -283,7 +283,33 @@ fn catalog() -> Vec<ToolDef> {
             "required": ["script", "title"]
         }),
     });
+    tools.push(ToolDef {
+        name: SHOW_UI,
+        description: show_ui_description(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "spec": {
+                    "type": "string",
+                    "description": "UI block spec text. Must define `root = Component(...)`."
+                }
+            },
+            "required": ["spec"]
+        }),
+    });
     tools
+}
+
+/// Shows a UI block in the CALLING chat; offered only inside a chat, like
+/// [`SHOW_VISUAL`].
+const SHOW_UI: &str = "show_ui";
+
+/// The spec crate words the tool from its own catalogue, so the prompt and
+/// the validator never drift.
+fn show_ui_description() -> &'static str {
+    static DESCRIPTION: std::sync::LazyLock<String> =
+        std::sync::LazyLock::new(zuse_ui_block::tool_description);
+    DESCRIPTION.as_str()
 }
 
 /// Shows a page in the CALLING chat, so it is offered only to an agent that
@@ -486,6 +512,11 @@ async fn read_visual_assets(
 }
 
 // ---- argument shapes ---------------------------------------------------------
+
+#[derive(Deserialize)]
+struct ShowUiArgs {
+    spec: String,
+}
 
 #[derive(Deserialize)]
 struct ShowVisualArgs {
@@ -710,6 +741,7 @@ impl Tools {
                 in_chat
                     || (tool.name != "request_secret"
                         && tool.name != SHOW_VISUAL
+                        && tool.name != SHOW_UI
                         && !tool.name.starts_with("plugins_")
                         && !tool.name.starts_with("device_"))
             })
@@ -755,6 +787,7 @@ impl Tools {
             "respond_to_input" => self.respond_to_input(parse(args)?).await,
             "archive_chat" => self.archive_chat(parse(args)?).await,
             SHOW_VISUAL => self.show_visual(parse(args)?).await,
+            SHOW_UI => self.show_ui(parse(args)?).await,
             other => return Err(format!("unknown tool: {other}")),
         };
         result.map_err(|e| format!("{e:#}"))
@@ -1334,6 +1367,30 @@ impl Tools {
         }))
     }
 
+    async fn show_ui(&self, args: ShowUiArgs) -> anyhow::Result<Value> {
+        let chat_id = self
+            .zuse
+            .origin()
+            .chat_id
+            .clone()
+            .context("show_ui only works from an agent Zuse launched in a chat")?;
+        // Checked here first so the agent gets every problem with line
+        // numbers without a round trip; the engine checks again.
+        zuse_ui_block::validate(&args.spec).map_err(|e| anyhow::anyhow!("{e}"))?;
+        let shown = self
+            .zuse
+            .call(
+                zuse_rpc::methods::PUBLISH_UI_BLOCK,
+                json!({ "chatId": chat_id, "spec": args.spec }),
+            )
+            .await?;
+        Ok(json!({
+            "ok": true,
+            "id": shown["id"],
+            "message": "Shown below your reply. Don't restate it; reply with only what it doesn't already say.",
+        }))
+    }
+
     async fn interrupt_chat(&self, args: ChatArgs) -> anyhow::Result<Value> {
         let chat = self.zuse.resolve_chat(&args.chat).await?;
         let command_id = self
@@ -1728,6 +1785,13 @@ mod tests {
                         .push((method.to_owned(), params.clone()));
                     RpcReply::Value(json!({ "id": "v:1", "title": params["title"] }))
                 }
+                methods::PUBLISH_UI_BLOCK => {
+                    self.writes
+                        .lock()
+                        .unwrap()
+                        .push((method.to_owned(), params.clone()));
+                    RpcReply::Value(json!({ "id": "ui:1" }))
+                }
                 methods::MUTATE | methods::QUEUE_COMMAND | methods::QUEUE_MESSAGE => {
                     self.writes
                         .lock()
@@ -1890,6 +1954,45 @@ mod tests {
                 .unwrap();
         let report = zuse_visual::check(&SHOW_VISUAL_DESCRIPTION[start..end], 1).unwrap();
         assert_eq!(report.interactions, 2, "both tabs");
+    }
+
+    #[tokio::test]
+    async fn show_ui_is_offered_only_inside_a_chat_and_validates_first() {
+        let world = Arc::new(World::default());
+        let outside = tools(world.clone(), Origin::default());
+        assert!(!outside.has("show_ui"));
+
+        let inside = tools(
+            world.clone(),
+            Origin {
+                chat_id: Some("chat-alpha-1".into()),
+                device_id: Some("dev-local".into()),
+            },
+        );
+        assert!(inside.has("show_ui"));
+        let invalid = inside
+            .call("show_ui", json!({ "spec": "root = Nope()" }))
+            .await
+            .unwrap_err();
+        assert!(invalid.contains("Nope"), "{invalid}");
+        assert!(world.writes.lock().unwrap().is_empty(), "nothing published");
+
+        let spec = r#"root = Stat("Requests", "3,000")"#;
+        let shown = inside.call("show_ui", json!({ "spec": spec })).await.unwrap();
+        assert_eq!(shown["id"], "ui:1");
+        let writes = world.writes.lock().unwrap();
+        let (method, params) = writes.last().unwrap();
+        assert_eq!(method, methods::PUBLISH_UI_BLOCK);
+        assert_eq!(params["chatId"], "chat-alpha-1");
+        assert_eq!(params["spec"], spec);
+    }
+
+    #[test]
+    fn the_show_ui_examples_pass_their_own_check() {
+        for (_, spec) in zuse_ui_block::EXAMPLES {
+            zuse_ui_block::validate(spec).unwrap();
+            assert!(show_ui_description().contains(spec));
+        }
     }
 
     #[tokio::test]

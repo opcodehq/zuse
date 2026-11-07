@@ -1841,6 +1841,10 @@ chat-tool_group_failed = { $count } 件失敗
 chat-tool_group_agents_done = { $count } 件完了
 # Variables: count
 chat-tool_group_notes = { $count } 件のメモを作成
+# Variables: count
+chat-tool_group_tool_calls = { $count } 件のツール呼び出し
+# Variables: count
+chat-tool_group_messages = { $count } 件のメッセージ
 
 chat-find_in_chat_placeholder = チャット内を検索
 chat-find_in_chat_count = { $current } / { $total }

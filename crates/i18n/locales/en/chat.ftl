@@ -2878,6 +2878,18 @@ chat-tool_group_notes =
        [one] Wrote a note
        *[other] Wrote { $count } notes
     }
+# Variables: count
+chat-tool_group_tool_calls =
+    { $count ->
+       [one] { $count } tool call
+       *[other] { $count } tool calls
+    }
+# Variables: count
+chat-tool_group_messages =
+    { $count ->
+       [one] { $count } message
+       *[other] { $count } messages
+    }
 
 chat-find_in_chat_placeholder = Find in chat
 chat-find_in_chat_count = { $current } of { $total }

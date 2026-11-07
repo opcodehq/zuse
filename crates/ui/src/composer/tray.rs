@@ -621,7 +621,7 @@ impl Composer {
         rows.extend(self.live_cloud_row(&theme, cx).map(TrayRow::Pill));
         rows.extend(self.connection_row(cx).map(TrayRow::Pill));
         rows.extend(self.project_creation_row(&theme, cx).map(TrayRow::Pill));
-        rows.extend(self.attachment_row(&theme, cx).map(TrayRow::Element));
+        rows.extend(self.attachment_row(&theme, window, cx).map(TrayRow::Element));
         let (sign_in, error) = self.provider_rows(&theme, cx);
         rows.extend(sign_in.map(TrayRow::Pill));
         rows.extend(error.map(TrayRow::Pill));
@@ -706,7 +706,12 @@ impl Composer {
 
     /// Staged annotations (one pill) and attachments without a chip in the
     /// draft (compact thumbnails), wrapping in one row.
-    fn attachment_row(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
+    fn attachment_row(
+        &mut self,
+        theme: &Theme,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         let comments = self.staged_comments(cx);
         let tiles: Vec<StagedTile> = self
             .tiled_attachments(cx)
@@ -720,9 +725,15 @@ impl Composer {
         if comments.is_empty() {
             self.tray.annotations = AnnotationPreview::default();
         }
-        if comments.is_empty() && tiles.is_empty() {
+        let contexts = self.staged_contexts(cx);
+        if comments.is_empty() && tiles.is_empty() && contexts.is_empty() {
             return None;
         }
+        let context_pills: Vec<AnyElement> = contexts
+            .iter()
+            .enumerate()
+            .map(|(ix, context)| self.context_pill(ix, context, theme, window, cx))
+            .collect();
         let pill = (!comments.is_empty()).then(|| self.annotation_pill(&comments, theme, cx));
         Some(
             div()
@@ -733,6 +744,7 @@ impl Composer {
                 .gap(px(6.0))
                 .px(px(8.0))
                 .py(px(6.0))
+                .children(context_pills)
                 .children(pill)
                 .children(
                     tiles
@@ -835,6 +847,62 @@ impl Composer {
                     ),
             ))
             .into_any_element()
+    }
+
+    /// One staged context item: the message badge it will become (hover or
+    /// click shows its Markdown), with a remove ×.
+    fn context_pill(
+        &mut self,
+        ix: usize,
+        context: &crate::context_items::ContextItem,
+        theme: &Theme,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let badge = crate::badges::MessageBadge {
+            icon: icons::CHAT_ROUND_LINE,
+            label: context.label.clone().into(),
+            details: Vec::new(),
+            markdown: Some(context.body.clone().into()),
+        };
+        let hover = theme.element_hover;
+        let id = context.id.clone();
+        let label = context.label.clone();
+        let remove = div()
+            .id(("tray-context-remove", ix))
+            .size(px(20.0))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded_full()
+            .cursor_pointer()
+            .hover(move |s| s.bg(hover))
+            .role(gpui::Role::Button)
+            .aria_label(format!("Remove {label}"))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                cx.stop_propagation();
+                let key = this.current_key.clone();
+                this.state.update(cx, |state, cx| {
+                    state.remove_context_item(&key, &id);
+                    cx.notify();
+                });
+                cx.notify();
+            }))
+            .child(
+                icon(icons::CLOSE)
+                    .size(px(12.0))
+                    .text_color(theme.text_muted),
+            )
+            .into_any_element();
+        crate::badges::render_with(
+            format!("tray-context-{}", context.id),
+            &badge,
+            theme,
+            Some(remove),
+            window,
+            cx,
+        )
     }
 
     /// `ContextPill`: "{n} Annotations" with a clear-all ×; hovering opens
@@ -1291,7 +1359,7 @@ impl Composer {
         let draft_empty = !composer_has_content(
             self.input.read(cx).text(),
             self.staged().len() + self.staged_appshots().len(),
-            self.staged_comments(cx).len(),
+            self.staged_note_count(cx),
         );
         if let Some(prompt) =
             entries_prompt.filter(|_| draft_empty && kind != ProviderErrorKind::Reconnecting)
@@ -1305,7 +1373,7 @@ impl Composer {
                             .dismissed_errors
                             .insert(retry_chat.clone(), retry_id.clone());
                         let queue = this.run_live(cx);
-                        this.send(prompt.clone(), queue, false, cx);
+                        this.send(prompt.clone(), queue, false, false, cx);
                     }))
                     .into_any_element(),
             );

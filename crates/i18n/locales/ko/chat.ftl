@@ -1841,6 +1841,10 @@ chat-tool_group_failed = { $count }개 실패
 chat-tool_group_agents_done = { $count }개 완료
 # Variables: count
 chat-tool_group_notes = 메모 { $count }개 작성
+# Variables: count
+chat-tool_group_tool_calls = 도구 호출 { $count }회
+# Variables: count
+chat-tool_group_messages = 메시지 { $count }개
 
 chat-find_in_chat_placeholder = 채팅에서 찾기
 chat-find_in_chat_count = { $current } / { $total }

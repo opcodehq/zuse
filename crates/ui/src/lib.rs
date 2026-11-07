@@ -27,6 +27,7 @@ mod chat_configuration;
 pub(crate) mod chat_find;
 mod comment_ui;
 pub mod comments;
+pub mod context_items;
 pub mod composer;
 mod composer_dock;
 mod composer_markdown;
