@@ -152,6 +152,8 @@ pub const GET_WORKTREE_SETTINGS: &str = "GetWorktreeSettings";
 pub const SET_WORKTREE_SETTINGS: &str = "SetWorktreeSettings";
 /// The device's browse roots: home plus mounted drives/volumes.
 pub const LIST_DRIVES: &str = "ListDrives";
+/// Make one empty folder inside an existing one (new-project picker).
+pub const CREATE_FOLDER: &str = "CreateFolder";
 /// Folders under the host's home by name (new-project picker).
 pub const SEARCH_HOME_FOLDERS: &str = "SearchHomeFolders";
 /// The new-project picker closed: drop the host's home index if unpinned.

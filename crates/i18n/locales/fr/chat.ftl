@@ -1933,3 +1933,6 @@ chat-history_search_use = utiliser
 chat-history_search_cancel = annuler
 chat-stash_saved_notice = Brouillon mis de côté · <part0>{ $shortcut }</part0> pour afficher
 chat-chat_composer_press_esc_again_to_clear = Appuyez à nouveau sur <part0>Échap</part0> pour effacer
+chat-worktree_fetching = Récupération de la dernière version de { $branch }…
+chat-worktree_creating = Création du worktree depuis { $branch }…
+chat-worktree_offline = Dépôt distant injoignable · utilisation de { $branch } en local

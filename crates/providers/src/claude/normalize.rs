@@ -2,7 +2,7 @@
 //! decoding, error-code mapping).
 
 use serde_json::Value;
-use zuse_protocol::{AgentEvent, DoneStatus, HarnessId, TodoItem, TodoStatus, ToolCall};
+use zuse_protocol::{AgentEvent, DoneStatus, HarnessId, TodoItem, TodoStatus, ToolCall, ToolDiff};
 
 use super::wire::{ContentBlock, Frame, SystemFrame};
 
@@ -65,6 +65,33 @@ fn str_field(input: &Value, key: &str) -> String {
 
 fn opt_str_field(input: &Value, key: &str) -> Option<String> {
     input.get(key).and_then(Value::as_str).map(str::to_owned)
+}
+
+/// The diff a Write/Edit call's input describes: a Write is the whole new
+/// file, an Edit its replaced span. Capped like the other harnesses' diffs.
+fn file_diff(name: &str, input: &Value) -> Option<ToolDiff> {
+    const LIMIT: usize = 64 * 1024;
+    let cap = |text: &str| match text.char_indices().nth(LIMIT) {
+        Some((at, _)) => text[..at].to_owned(),
+        None => text.to_owned(),
+    };
+    let path = str_field(input, "file_path");
+    if path.is_empty() {
+        return None;
+    }
+    match name {
+        "Write" => Some(ToolDiff {
+            path,
+            old_text: None,
+            new_text: cap(input.get("content")?.as_str()?),
+        }),
+        "Edit" => Some(ToolDiff {
+            path,
+            old_text: Some(cap(input.get("old_string")?.as_str()?)),
+            new_text: cap(input.get("new_string")?.as_str()?),
+        }),
+        _ => None,
+    }
 }
 
 /// Decode a Claude `tool_use` block (name + input) into a typed [`ToolCall`].
@@ -244,6 +271,10 @@ pub(crate) struct Normalizer {
     workflow_tasks: std::collections::HashMap<String, String>,
     /// Started workflow runs by launching tool_use id.
     workflow_runs: std::collections::HashMap<String, WorkflowRun>,
+    /// Write/Edit tool_use id → the diff its input describes. The wire's
+    /// tool_result carries only a one-line confirmation, so the chip's diff
+    /// is rebuilt from the call and attached when the result lands.
+    file_diffs: std::collections::HashMap<String, ToolDiff>,
     /// Rotates at each assistant-frame close and at each steer; SessionStarted
     /// carries the first value so folds can attribute deltas from the start.
     assistant_message_id: String,
@@ -262,6 +293,7 @@ impl Normalizer {
             workflow_inputs: std::collections::HashMap::new(),
             workflow_tasks: std::collections::HashMap::new(),
             workflow_runs: std::collections::HashMap::new(),
+            file_diffs: std::collections::HashMap::new(),
             assistant_message_id: new_message_id(),
             session_id: None,
         }
@@ -605,6 +637,13 @@ impl Normalizer {
             }
 
             Frame::Assistant(f) => {
+                for b in f.message.blocks() {
+                    if b.kind == "tool_use"
+                        && let Some(diff) = file_diff(&b.name, &b.input)
+                    {
+                        self.file_diffs.insert(b.id.clone(), diff);
+                    }
+                }
                 if let Some(parent) = &f.parent_tool_use_id {
                     let parent = self.agent_tool_spawns.get(parent).unwrap_or(parent);
                     // Subagent content, attributed. The 2.1.x wire streams NO
@@ -744,6 +783,17 @@ impl Normalizer {
             }
 
             Frame::User(f) => {
+                // A settled Write/Edit takes the diff its call described;
+                // a failed one changed nothing.
+                let mut diffs = std::collections::HashMap::new();
+                for b in f.message.blocks() {
+                    if b.kind == "tool_result"
+                        && let Some(diff) = self.file_diffs.remove(&b.tool_use_id)
+                        && !b.is_error.unwrap_or(false)
+                    {
+                        diffs.insert(b.tool_use_id.clone(), diff);
+                    }
+                }
                 if let Some(parent) = &f.parent_tool_use_id {
                     let parent = self.agent_tool_spawns.get(parent).unwrap_or(parent);
                     // A subagent's tool results echo on the main channel too;
@@ -759,7 +809,7 @@ impl Normalizer {
                                     id: b.tool_use_id.clone(),
                                     is_error: b.is_error.unwrap_or(false),
                                     output: crate::tool_output::text(&b.content),
-                                    diff: None,
+                                    diff: diffs.remove(&b.tool_use_id),
                                 },
                             )
                         })
@@ -792,7 +842,7 @@ impl Normalizer {
                         id: b.tool_use_id.clone(),
                         is_error,
                         output: crate::tool_output::text(&b.content),
-                        diff: None,
+                        diff: diffs.remove(&b.tool_use_id),
                     });
                     // A rejected workflow launch never starts a task, so no
                     // notification will settle it: settle it here.
@@ -1644,6 +1694,41 @@ mod context_tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn write_and_edit_results_carry_the_diff_their_call_described() {
+        let events = run_frames(
+            &mut Normalizer::new(),
+            &[
+                r#"{"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"tool_use","id":"w1","name":"Write","input":{"file_path":"/repo/plan.md","content":"Plan\n"}},{"type":"tool_use","id":"e1","name":"Edit","input":{"file_path":"/repo/a.rs","old_string":"old","new_string":"new"}},{"type":"tool_use","id":"e2","name":"Edit","input":{"file_path":"/repo/b.rs","old_string":"x","new_string":"y"}}]}}"#,
+                r#"{"type":"user","parent_tool_use_id":null,"message":{"content":[{"type":"tool_result","tool_use_id":"w1","content":"File created"},{"type":"tool_result","tool_use_id":"e1","content":"Updated"},{"type":"tool_result","tool_use_id":"e2","content":"String not found","is_error":true}]}}"#,
+            ],
+        );
+        let diff = |want: &str| {
+            events.iter().find_map(|event| match event {
+                AgentEvent::ToolResult { id, diff, .. } if id == want => Some(diff.clone()),
+                _ => None,
+            })
+        };
+        assert_eq!(
+            diff("w1"),
+            Some(Some(ToolDiff {
+                path: "/repo/plan.md".into(),
+                old_text: None,
+                new_text: "Plan\n".into(),
+            }))
+        );
+        assert_eq!(
+            diff("e1"),
+            Some(Some(ToolDiff {
+                path: "/repo/a.rs".into(),
+                old_text: Some("old".into()),
+                new_text: "new".into(),
+            }))
+        );
+        // A failed edit changed nothing, so it shows no diff.
+        assert_eq!(diff("e2"), Some(None));
     }
 
     #[test]

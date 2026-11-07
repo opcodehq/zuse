@@ -337,6 +337,13 @@ struct ListFoldersParams {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct CreateFolderParams {
+    parent: String,
+    name: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct FileSearchParams {
     query: String,
     #[serde(default)]
@@ -1756,6 +1763,7 @@ fn forwardable(method: &str) -> bool {
             | methods::GET_WORKTREE_SETTINGS
             | methods::SET_WORKTREE_SETTINGS
             | methods::LIST_DRIVES
+            | methods::CREATE_FOLDER
             | methods::SEARCH_HOME_FOLDERS
             | methods::RELEASE_HOME_FOLDER_SEARCH
             | methods::SEARCH_FILES
@@ -3277,7 +3285,12 @@ impl RpcService for EngineRpc {
                         "setupAction": outcome.setup_action,
                         "setupError": outcome.setup_error,
                     })),
-                    None => RpcReply::value(&serde_json::json!({ "ready": false })),
+                    None => RpcReply::value(&serde_json::json!({
+                        "ready": false,
+                        "progress": self
+                            .project_actions
+                            .worktree_progress(&p.command_id, &p.chat_id),
+                    })),
                 }
             }
             methods::RETRY_DELIVERY => {
@@ -4842,6 +4855,15 @@ impl RpcService for EngineRpc {
             methods::RELEASE_HOME_FOLDER_SEARCH => {
                 self.repos.release_home_folder_search();
                 RpcReply::value(&serde_json::json!({}))
+            }
+            methods::CREATE_FOLDER => {
+                let p: CreateFolderParams = parse_params(params)?;
+                let path = self
+                    .repos
+                    .create_folder(p.parent, p.name)
+                    .await
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(&serde_json::json!({ "path": path }))
             }
             methods::LIST_DRIVES => {
                 let drives = self

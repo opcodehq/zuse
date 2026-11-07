@@ -20,6 +20,8 @@ impl Composer {
         }) {
             return;
         }
+        self.state
+            .update(cx, |state, _| state.clear_chat_archive_intent(&chat.id));
         let id = chat.id;
         let params = serde_json::json!({"op":"setChatArchived","chatId":id,"archived":false,"targetDeviceId":chat.device_id});
         self.unarchiving = Some(id.clone());

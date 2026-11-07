@@ -488,6 +488,38 @@ pub fn ring_spinner(
         .into_any_element()
 }
 
+/// Braille frames of the classic terminal "dots" spinner.
+const TERMINAL_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+/// One full lap of [`TERMINAL_FRAMES`]: 80ms a frame, as in the terminal.
+const TERMINAL_LAP_MS: u64 = 800;
+
+/// An indeterminate terminal-style spinner: a braille glyph stepping through
+/// the "dots" frames, centered in a fixed `size` box so the frames never
+/// nudge the layout — the running mark on sidebar session rows.
+pub fn terminal_spinner(id: impl Into<gpui::ElementId>, size: f32, tint: gpui::Hsla) -> AnyElement {
+    use gpui::AnimationExt as _;
+    div()
+        .size(px(size))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .font_family("Menlo")
+        .text_size(px(size))
+        .line_height(px(size))
+        .text_color(tint)
+        .with_animation(
+            id,
+            gpui::Animation::new(std::time::Duration::from_millis(TERMINAL_LAP_MS)).repeat(),
+            |el, t| {
+                let frame =
+                    ((t * TERMINAL_FRAMES.len() as f32) as usize).min(TERMINAL_FRAMES.len() - 1);
+                el.child(TERMINAL_FRAMES[frame])
+            },
+        )
+        .into_any_element()
+}
+
 /// A full track plus an arc of `sweep` turns starting `start` turns
 /// clockwise from 12 o'clock, filling its parent.
 fn arc_canvas(

@@ -416,6 +416,21 @@ pub struct WorktreeSpec {
     pub space_id: Option<String>,
 }
 
+/// Where a host is while materializing a [`WorktreeSpec`], reported through
+/// the non-durable setup handoff so the sender can show it above the
+/// composer. `branch` names the base the worktree is created from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "phase", rename_all = "camelCase")]
+pub enum WorktreeProgress {
+    /// Fetching `branch` from its remote.
+    #[serde(rename_all = "camelCase")]
+    Fetching { branch: String },
+    /// Checking out the worktree. `offline` when the fetch failed and the
+    /// local ref stands in.
+    #[serde(rename_all = "camelCase")]
+    Creating { branch: String, offline: bool },
+}
+
 /// The session-scoped singleton id for the live plan/todo chip. ACP plan
 /// updates carry no wire id; adapters emit every update under this one id so
 /// the fold refreshes the same chip in place. Consumers that de-duplicate

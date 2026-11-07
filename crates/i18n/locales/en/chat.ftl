@@ -2911,3 +2911,6 @@ chat-history_search_use = use
 chat-history_search_cancel = cancel
 chat-stash_saved_notice = Draft stashed · <part0>{ $shortcut }</part0> to view
 chat-chat_composer_press_esc_again_to_clear = Press <part0>Esc</part0> again to clear
+chat-worktree_fetching = Fetching latest { $branch }…
+chat-worktree_creating = Creating worktree from { $branch }…
+chat-worktree_offline = Couldn't reach the remote · using local { $branch }
