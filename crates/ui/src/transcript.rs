@@ -7927,10 +7927,12 @@ impl Transcript {
                 .gap(px(Theme::SPACE_SM))
                 .pt(px(Theme::SPACE_LG))
                 .text_size(crate::typography::text_xs())
-                .child(crate::loaders::working_mark(
+                .child(crate::loaders::mini_glyph_spinner(
                     format!("working-mark-{}", cx.entity_id()),
-                    14.0,
-                    theme.text,
+                    2.5,
+                    theme.glyph,
+                    cx.entity_id(),
+                    cx,
                 ))
                 .child(
                     div()
