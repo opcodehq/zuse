@@ -621,7 +621,10 @@ impl Composer {
         rows.extend(self.live_cloud_row(&theme, cx).map(TrayRow::Pill));
         rows.extend(self.connection_row(cx).map(TrayRow::Pill));
         rows.extend(self.project_creation_row(&theme, cx).map(TrayRow::Pill));
-        rows.extend(self.attachment_row(&theme, window, cx).map(TrayRow::Element));
+        rows.extend(
+            self.attachment_row(&theme, window, cx)
+                .map(TrayRow::Element),
+        );
         let (sign_in, error) = self.provider_rows(&theme, cx);
         rows.extend(sign_in.map(TrayRow::Pill));
         rows.extend(error.map(TrayRow::Pill));

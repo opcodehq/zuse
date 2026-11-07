@@ -25,8 +25,8 @@ impl WorkspaceView {
             .filter(|view| view.read(cx).source() == spec)
             .cloned();
         let view = existing.unwrap_or_else(|| {
-            let view =
-                cx.new(|cx| UiBlockView::new(spec, UiBlockPalette::reference(true), interactive, cx));
+            let view = cx
+                .new(|cx| UiBlockView::new(spec, UiBlockPalette::reference(true), interactive, cx));
             let block = id.clone();
             cx.subscribe(&view, move |this, view, event: &UiBlockEvent, cx| {
                 let UiBlockEvent::Send { text } = event;

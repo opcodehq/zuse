@@ -27,7 +27,9 @@ fn tool(id: &str, call: ToolCall, output: &str) -> serde_json::Value {
 
 /// One settled turn: work that folds, a reply, then the block.
 fn turn(ix: usize, device: &str, title: &str, spec: &str) -> serde_json::Value {
-    let exec = |command: &str| ToolCall::Exec { command: command.into() };
+    let exec = |command: &str| ToolCall::Exec {
+        command: command.into(),
+    };
     let read = |path: &str| ToolCall::ReadFile { path: path.into() };
     json!([
         {"id": format!("u{ix}"), "role": "user", "createdAt": 1788900000000_i64, "deviceId": device,
@@ -89,7 +91,12 @@ fn context_chips_turn(device: &str, image: &str) -> serde_json::Value {
     ])
 }
 
-fn click(window: gpui::AnyWindowHandle, cx: &mut gpui::AsyncApp, x: f32, y: f32) -> anyhow::Result<()> {
+fn click(
+    window: gpui::AnyWindowHandle,
+    cx: &mut gpui::AsyncApp,
+    x: f32,
+    y: f32,
+) -> anyhow::Result<()> {
     window.update(cx, |_, w, cx| {
         let position = gpui::point(px(x), px(y));
         w.dispatch_event(
@@ -122,7 +129,12 @@ fn click(window: gpui::AnyWindowHandle, cx: &mut gpui::AsyncApp, x: f32, y: f32)
     Ok(())
 }
 
-fn capture(window: gpui::AnyWindowHandle, cx: &mut gpui::AsyncApp, dir: &Path, name: &str) -> anyhow::Result<()> {
+fn capture(
+    window: gpui::AnyWindowHandle,
+    cx: &mut gpui::AsyncApp,
+    dir: &Path,
+    name: &str,
+) -> anyhow::Result<()> {
     window.update(cx, |_, w, cx| {
         w.draw(cx).clear();
         if let Ok(image) = w.render_to_image() {
@@ -154,8 +166,7 @@ fn main() -> anyhow::Result<()> {
         None,
         Some(cwd.clone()),
     )?;
-    core.workspace
-        .rename_chat("ui-blocks", "UI blocks")?;
+    core.workspace.rename_chat("ui-blocks", "UI blocks")?;
     let ipc_port = port();
     let _ipc = runtime.block_on(zuse_engine::serve_ipc(ipc_port, core.rpc_service()))?;
     let data = temp.path().join("ui");
@@ -216,7 +227,11 @@ fn main() -> anyhow::Result<()> {
             );
             theme_library::init(data.clone(), cx);
             appearance::init(
-                if light { appearance::AppearanceMode::Light } else { appearance::AppearanceMode::Dark },
+                if light {
+                    appearance::AppearanceMode::Light
+                } else {
+                    appearance::AppearanceMode::Dark
+                },
                 settings.theme_selection,
                 settings.accent,
                 settings.surface,
@@ -313,7 +328,12 @@ fn main() -> anyhow::Result<()> {
                     };
                     std::fs::create_dir_all(dir).ok();
                     pause(cx, 1200).await;
-                    let name = format!("{ix:02}-{}", title.to_lowercase().replace(|c: char| !c.is_alphanumeric(), "-"));
+                    let name = format!(
+                        "{ix:02}-{}",
+                        title
+                            .to_lowercase()
+                            .replace(|c: char| !c.is_alphanumeric(), "-")
+                    );
                     capture(window.into(), cx, dir, &name).ok();
                 }
                 cx.update(|cx| cx.quit());

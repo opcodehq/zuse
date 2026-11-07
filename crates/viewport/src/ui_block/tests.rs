@@ -12,9 +12,7 @@ fn open<'a>(
     source: &str,
     dark: bool,
 ) -> (Entity<UiBlockView>, &'a mut VisualTestContext) {
-    cx.add_window_view(|_, cx| {
-        UiBlockView::new(source, UiBlockPalette::reference(dark), true, cx)
-    })
+    cx.add_window_view(|_, cx| UiBlockView::new(source, UiBlockPalette::reference(dark), true, cx))
 }
 
 #[gpui::test]

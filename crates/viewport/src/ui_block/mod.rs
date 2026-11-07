@@ -258,12 +258,9 @@ impl UiBlockView {
                 points,
                 unit,
             } => self.donut_chart(title, points, unit.as_deref(), path),
-            Component::Callout { text, tone, title } => callout(
-                &p,
-                text,
-                tone.unwrap_or(Tone::Neutral),
-                title.as_deref(),
-            ),
+            Component::Callout { text, tone, title } => {
+                callout(&p, text, tone.unwrap_or(Tone::Neutral), title.as_deref())
+            }
             Component::Steps { items } => steps(&p, items, path, cx),
             Component::Flow { nodes, caption } => self.flow(nodes, caption.as_deref(), path, cx),
             Component::Tabs { tabs } => self.tabs(tabs, path, form, window, cx),
@@ -350,12 +347,16 @@ impl UiBlockView {
                     .when(row_index == last, |d| d.rounded_b(px(12.)))
                     .when(row_index == 0, |d| d.rounded_t(px(12.)))
                     .hover(|style| style.bg(p.row_hover()))
-                    .children(lines.into_iter().map(|line| match line {
-                        NarrowLine::Full(index) => div().flex().child(cell_at(index).w_full()),
-                        NarrowLine::Pair(left, right) => div()
-                            .flex()
-                            .child(cell_at(left).w(relative(0.5)))
-                            .when_some(right, |d, right| d.child(cell_at(right).w(relative(0.5)))),
+                    .children(lines.into_iter().map(|line| {
+                        match line {
+                            NarrowLine::Full(index) => div().flex().child(cell_at(index).w_full()),
+                            NarrowLine::Pair(left, right) => div()
+                                .flex()
+                                .child(cell_at(left).w(relative(0.5)))
+                                .when_some(right, |d, right| {
+                                    d.child(cell_at(right).w(relative(0.5)))
+                                }),
+                        }
                     }))
             }))
         } else {
@@ -393,7 +394,9 @@ impl UiBlockView {
                             body_cell(index == 0)
                                 .child(text.clone())
                                 .flex_none()
-                                .w(relative(weights.get(index).copied().unwrap_or(12.0) / total))
+                                .w(relative(
+                                    weights.get(index).copied().unwrap_or(12.0) / total,
+                                ))
                         }))
                 }))
         };
@@ -589,28 +592,16 @@ impl UiBlockView {
                     }))
                     .child(div().truncate().child(tab.label.clone()))
             }));
-        let panel = tabs.get(active).map(|tab| {
-            self.node(
-                &tab.content,
-                &format!("{path}.{active}"),
-                form,
-                window,
-                cx,
-            )
-        });
+        let panel = tabs
+            .get(active)
+            .map(|tab| self.node(&tab.content, &format!("{path}.{active}"), form, window, cx));
         div()
             .flex()
             .flex_col()
             .gap(px(12.))
             .min_w_0()
             .child(div().flex().child(bar))
-            .child(
-                div()
-                    .min_w_0()
-                            .flex()
-                    .flex_col()
-                    .children(panel),
-            )
+            .child(div().min_w_0().flex().flex_col().children(panel))
             .into_any_element()
     }
 
@@ -836,7 +827,9 @@ fn key_value(p: &UiBlockPalette, pairs: &[zuse_ui_block::KeyValuePair]) -> AnyEl
                 .py(px(8.))
                 .text_size(px(12.))
                 .line_height(px(20.))
-                .when(index > 0, |d| d.border_t_1().border_color(p.border.opacity(0.4)))
+                .when(index > 0, |d| {
+                    d.border_t_1().border_color(p.border.opacity(0.4))
+                })
                 .child(
                     div()
                         .flex_1()

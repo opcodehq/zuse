@@ -104,74 +104,78 @@ impl UiBlockView {
         let caches: Vec<_> = (0..points.len())
             .map(|index| self.raster_cache(format!("{path}#bar{index}")))
             .collect();
-        let rows = points.iter().zip(spans).zip(caches).map(|((point, span), cache)| {
-            let track = div()
-                .relative()
-                .h(px(16.))
-                .rounded(px(4.))
-                .overflow_hidden()
-                .bg(p.muted)
-                .child(
-                    div()
-                        .absolute()
-                        .top_0()
-                        .bottom_0()
-                        .w(px(1.))
-                        .left(relative(zero as f32))
-                        .bg(p.foreground.opacity(0.3)),
-                )
-                .child(
-                    canvas(
-                        |_, _, _| {},
-                        move |bounds, _, window, cx| {
-                            let (cols, rows) = backing_size(
-                                f32::from(bounds.size.width) as f64,
-                                f32::from(bounds.size.height) as f64,
-                            );
-                            let raster = bar_fill(cols, rows, span.start, span.fraction, green);
-                            if raster.is_empty() {
-                                return;
-                            }
-                            paint_rounded(
-                                bounds,
-                                &raster,
-                                &mut cache.borrow_mut(),
-                                px(4.),
-                                window,
-                                cx,
-                            );
-                        },
+        let rows = points
+            .iter()
+            .zip(spans)
+            .zip(caches)
+            .map(|((point, span), cache)| {
+                let track = div()
+                    .relative()
+                    .h(px(16.))
+                    .rounded(px(4.))
+                    .overflow_hidden()
+                    .bg(p.muted)
+                    .child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .bottom_0()
+                            .w(px(1.))
+                            .left(relative(zero as f32))
+                            .bg(p.foreground.opacity(0.3)),
                     )
-                    .absolute()
-                    .inset_0(),
-                );
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(4.))
-                .min_w_0()
-                .child(
-                    div()
-                        .flex()
-                        .justify_between()
-                        .gap(px(12.))
-                        .text_size(px(12.))
-                        .line_height(px(16.))
-                        .child(
-                            div()
-                                .min_w_0()
-                                .text_color(p.muted_foreground)
-                                .child(point.label.clone()),
+                    .child(
+                        canvas(
+                            |_, _, _| {},
+                            move |bounds, _, window, cx| {
+                                let (cols, rows) = backing_size(
+                                    f32::from(bounds.size.width) as f64,
+                                    f32::from(bounds.size.height) as f64,
+                                );
+                                let raster = bar_fill(cols, rows, span.start, span.fraction, green);
+                                if raster.is_empty() {
+                                    return;
+                                }
+                                paint_rounded(
+                                    bounds,
+                                    &raster,
+                                    &mut cache.borrow_mut(),
+                                    px(4.),
+                                    window,
+                                    cx,
+                                );
+                            },
                         )
-                        .child(
-                            div()
-                                .flex_none()
-                                .font_features(tabular())
-                                .child(chart_value(point.value, unit)),
-                        ),
-                )
-                .child(track)
-        });
+                        .absolute()
+                        .inset_0(),
+                    );
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.))
+                    .min_w_0()
+                    .child(
+                        div()
+                            .flex()
+                            .justify_between()
+                            .gap(px(12.))
+                            .text_size(px(12.))
+                            .line_height(px(16.))
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .text_color(p.muted_foreground)
+                                    .child(point.label.clone()),
+                            )
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .font_features(tabular())
+                                    .child(chart_value(point.value, unit)),
+                            ),
+                    )
+                    .child(track)
+            });
         figure(&p, 12.0, title)
             .child(div().flex().flex_col().gap(px(10.)).children(rows))
             .into_any_element()
@@ -331,7 +335,8 @@ impl UiBlockView {
     ) -> AnyElement {
         let p = self.palette.clone();
         let values: Rc<Vec<f64>> = Rc::new(points.iter().map(|point| point.value).collect());
-        let labels: Rc<Vec<String>> = Rc::new(points.iter().map(|point| point.label.clone()).collect());
+        let labels: Rc<Vec<String>> =
+            Rc::new(points.iter().map(|point| point.label.clone()).collect());
         let len = values.len();
         let domain = line_domain(&values);
         let hover = self.line_hover.get(path).copied();
@@ -409,7 +414,15 @@ impl UiBlockView {
                         hover_column(&mut raster, col, top, blue);
                     }
                 }
-                stars(&mut raster, &bands, len, tick, intensity, reduce_motion, 1.0);
+                stars(
+                    &mut raster,
+                    &bands,
+                    len,
+                    tick,
+                    intensity,
+                    reduce_motion,
+                    1.0,
+                );
                 paint_raster(plot, &raster, &mut cache.borrow_mut(), window, cx);
 
                 for value in &tick_values {
@@ -446,8 +459,8 @@ impl UiBlockView {
             let plot_width = f32::from(chart.size.width) - margin_left - margin_right;
             let left = tooltip_left(hover.cursor_x, plot_width, margin_left);
             let plot_height = (LINE_CHART_HEIGHT - margin_top - margin_bottom) as f64;
-            let top = (margin_top + 44.0)
-                .max(margin_top + y_pixel(value, domain, plot_height) as f32);
+            let top =
+                (margin_top + 44.0).max(margin_top + y_pixel(value, domain, plot_height) as f32);
             Some(
                 div()
                     .absolute()

@@ -1978,7 +1978,10 @@ mod tests {
         assert!(world.writes.lock().unwrap().is_empty(), "nothing published");
 
         let spec = r#"root = Stat("Requests", "3,000")"#;
-        let shown = inside.call("show_ui", json!({ "spec": spec })).await.unwrap();
+        let shown = inside
+            .call("show_ui", json!({ "spec": spec }))
+            .await
+            .unwrap();
         assert_eq!(shown["id"], "ui:1");
         let writes = world.writes.lock().unwrap();
         let (method, params) = writes.last().unwrap();

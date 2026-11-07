@@ -9653,9 +9653,7 @@ impl Composer {
         }
         match self.button_mode(cx) {
             SendButtonMode::Send => self.send(text, false, false, true, cx),
-            SendButtonMode::Queue | SendButtonMode::Stop => {
-                self.send(text, true, false, true, cx)
-            }
+            SendButtonMode::Queue | SendButtonMode::Stop => self.send(text, true, false, true, cx),
         }
         true
     }

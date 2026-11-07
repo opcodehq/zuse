@@ -161,7 +161,9 @@ pub fn grid_columns(width: f32, columns: u8, minimum: f32, children: usize) -> u
     }
     let count = requested as f32;
     let track = width.min(minimum.max((width - (count - 1.0) * GRID_GAP) / count));
-    let fit = ((width + GRID_GAP + 0.01) / (track + GRID_GAP)).floor().max(1.0) as usize;
+    let fit = ((width + GRID_GAP + 0.01) / (track + GRID_GAP))
+        .floor()
+        .max(1.0) as usize;
     fit.min(children).max(1)
 }
 
@@ -279,7 +281,11 @@ pub fn ticks(start: f64, stop: f64, count: usize) -> Vec<f64> {
         return vec![start];
     }
     let reverse = stop < start;
-    let (lo, hi) = if reverse { (stop, start) } else { (start, stop) };
+    let (lo, hi) = if reverse {
+        (stop, start)
+    } else {
+        (start, stop)
+    };
     let (i1, i2, inc) = tick_spec(lo, hi, count);
     if i2 < i1 {
         return Vec::new();
@@ -321,7 +327,11 @@ pub fn nice(start: f64, stop: f64, count: usize) -> (f64, f64) {
         }
         previous = Some(step);
     }
-    if reverse { (stop, start) } else { (start, stop) }
+    if reverse {
+        (stop, start)
+    } else {
+        (start, stop)
+    }
 }
 
 /// Line chart value domain: always includes zero, an all-zero series spans
@@ -399,7 +409,8 @@ fn decimal_places(value: f64) -> usize {
     if let Some((_, exponent)) = text.split_once("e-") {
         return exponent.parse().unwrap_or(0);
     }
-    text.split_once('.').map_or(0, |(_, fraction)| fraction.len())
+    text.split_once('.')
+        .map_or(0, |(_, fraction)| fraction.len())
 }
 
 #[cfg(test)]
@@ -410,7 +421,13 @@ mod tests {
     fn bars_scale_by_the_largest_magnitude() {
         let (zero, spans) = bar_spans(&[820.0, 540.0]);
         assert_eq!(zero, 0.0);
-        assert_eq!(spans[0], BarSpan { start: 0.0, fraction: 1.0 });
+        assert_eq!(
+            spans[0],
+            BarSpan {
+                start: 0.0,
+                fraction: 1.0
+            }
+        );
         assert!((spans[1].fraction - 540.0 / 820.0).abs() < 1e-12);
     }
 
@@ -426,8 +443,20 @@ mod tests {
         assert!((spans[2].start - zero).abs() < 1e-12);
         let (zero, spans) = bar_spans(&[-4.0, -2.0]);
         assert_eq!(zero, 1.0);
-        assert_eq!(spans[0], BarSpan { start: 0.0, fraction: 1.0 });
-        assert_eq!(spans[1], BarSpan { start: 0.5, fraction: 0.5 });
+        assert_eq!(
+            spans[0],
+            BarSpan {
+                start: 0.0,
+                fraction: 1.0
+            }
+        );
+        assert_eq!(
+            spans[1],
+            BarSpan {
+                start: 0.5,
+                fraction: 0.5
+            }
+        );
     }
 
     #[test]
@@ -520,7 +549,10 @@ mod tests {
     fn nice_ticks_match_d3() {
         assert_eq!(ticks(0.0, 1.0, 4), vec![0.0, 0.2, 0.4, 0.6, 0.8, 1.0]);
         assert_eq!(ticks(0.0, 70.0, 4), vec![0.0, 20.0, 40.0, 60.0]);
-        assert_eq!(ticks(-20.0, 100.0, 4), vec![-20.0, 0.0, 20.0, 40.0, 60.0, 80.0, 100.0]);
+        assert_eq!(
+            ticks(-20.0, 100.0, 4),
+            vec![-20.0, 0.0, 20.0, 40.0, 60.0, 80.0, 100.0]
+        );
         assert_eq!(ticks(0.0, 0.3, 4), vec![0.0, 0.1, 0.2, 0.3]);
         assert_eq!(nice(0.0, 73.0, 10), (0.0, 80.0));
         assert_eq!(nice(0.0, 70.0, 10), (0.0, 70.0));

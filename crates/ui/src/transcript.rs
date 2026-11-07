@@ -1091,7 +1091,9 @@ pub enum RowKind {
     },
     /// An agent's `show_ui` block: a component spec rendered natively by
     /// [`zuse_viewport::ui_block`].
-    UiBlock { spec: Arc<str> },
+    UiBlock {
+        spec: Arc<str>,
+    },
     User {
         /// Visible prompt (attachment-ref trailer already stripped). When the
         /// prompt carries file mentions this is the *projected* display text —
@@ -2049,8 +2051,7 @@ fn is_show_ui_call(call: &ToolCall) -> bool {
 /// always folds, leaving only its reply; compact mode also folds live turns.
 pub(crate) fn folds_turn(entry: &SessionMessageEntry, compact_mode: bool) -> bool {
     compact_mode
-        || (entry.role == MessageRole::Assistant
-            && entry.status != Some(MessageStatus::Streaming))
+        || (entry.role == MessageRole::Assistant && entry.status != Some(MessageStatus::Streaming))
 }
 
 fn is_compact_work_part(ix: usize, part: &MessagePart, reply_start: Option<usize>) -> bool {
@@ -2958,15 +2959,16 @@ impl TranscriptPreparation {
                     false,
                     folds_turn(entry, false),
                     &mut |key, text| {
-                    parse_for_row(
-                        streaming,
-                        key,
-                        text,
-                        &mut self.live_parsers,
-                        &mut self.tree_cache,
-                    )
-                    .0
-                }));
+                        parse_for_row(
+                            streaming,
+                            key,
+                            text,
+                            &mut self.live_parsers,
+                            &mut self.tree_cache,
+                        )
+                        .0
+                    },
+                ));
                 self.cache.insert(entry.id.clone(), built.clone());
                 built
             };
@@ -7581,7 +7583,10 @@ impl Transcript {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let interactive = self.doc_override.is_none()
-            && self.rows.last().is_some_and(|row| &row.entry_id == entry_id);
+            && self
+                .rows
+                .last()
+                .is_some_and(|row| &row.entry_id == entry_id);
         let palette = ui_block_palette(Theme::of(cx));
         // A replaced part keeps its row id; a new spec gets a fresh view.
         let cached = self
@@ -7629,7 +7634,12 @@ impl Transcript {
 
     /// The shell's answer to [`TranscriptEvent::SendUiBlockReply`]: lock the
     /// block as sent, or unlock it with a toast when nothing went out.
-    pub fn ui_block_reply_sent(&mut self, row_id: &SharedString, sent: bool, cx: &mut Context<Self>) {
+    pub fn ui_block_reply_sent(
+        &mut self,
+        row_id: &SharedString,
+        sent: bool,
+        cx: &mut Context<Self>,
+    ) {
         let Some(view) = self.ui_blocks.get(row_id).cloned() else {
             return;
         };
@@ -7856,12 +7866,10 @@ impl Transcript {
                 .flex_none()
                 .rounded(px(4.0))
                 .overflow_hidden();
-            let mut chip = crate::badges::pill(
-                SharedString::from(format!("{row_id}#att{aix}")),
-                &theme,
-            )
-            .pl(px(6.0))
-            .tooltip(crate::settings::widgets::text_tooltip(att.name.clone()));
+            let mut chip =
+                crate::badges::pill(SharedString::from(format!("{row_id}#att{aix}")), &theme)
+                    .pl(px(6.0))
+                    .tooltip(crate::settings::widgets::text_tooltip(att.name.clone()));
             let thumb: AnyElement = match state {
                 AttachmentSnapshot::Loaded(image) => {
                     let preview = crate::attachments::PreviewImage::new(
@@ -8427,15 +8435,7 @@ impl Transcript {
                 summary,
                 compact_shell,
                 ..
-            } => self.render_tool_group(
-                &row.id,
-                tools,
-                summary,
-                *live,
-                *compact_shell,
-                &theme,
-                cx,
-            ),
+            } => self.render_tool_group(&row.id, tools, summary, *live, *compact_shell, &theme, cx),
             RowKind::WorkflowRun { tool } => self.render_workflow_run(&row.id, tool, &theme, cx),
             RowKind::InputChip { header, resolved } => {
                 input_chip(header.clone(), *resolved, &theme)
@@ -8945,8 +8945,7 @@ impl Transcript {
                 || live_agents
                 || (compact_shell && tools.iter().any(|t| !t.resolved)));
         // A settled turn's header previews the kinds of work it folds.
-        let preview_icons: Vec<&'static str> = if matches!(summary, ToolGroupSummary::Turn { .. })
-        {
+        let preview_icons: Vec<&'static str> = if matches!(summary, ToolGroupSummary::Turn { .. }) {
             let mut icons = Vec::new();
             for tool in tools.iter().filter(|t| t.kind == ToolItemKind::Call) {
                 let icon = tool_icon_path(&tool.call);
@@ -11837,15 +11836,8 @@ mod tests {
                 unreachable!()
             };
             assert!(!live);
-            let _ = this.render_tool_group(
-                &row.id,
-                tools,
-                summary,
-                *live,
-                false,
-                &Theme::dark(),
-                cx,
-            );
+            let _ =
+                this.render_tool_group(&row.id, tools, summary, *live, false, &Theme::dark(), cx);
             let reveal = &this.tool_group_reveals[&row.id];
             assert_eq!(
                 reveal.rendered_open,
@@ -17003,7 +16995,10 @@ mod tests {
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].as_ref(), "crates/ui/src/composer.rs");
         assert_eq!(
-            rows[0].copy_text.as_deref().map(|copy| copy.contains("composer.rs")),
+            rows[0]
+                .copy_text
+                .as_deref()
+                .map(|copy| copy.contains("composer.rs")),
             Some(true)
         );
         assert_eq!(rows[0].version, (raw.len() as u64) << 1);

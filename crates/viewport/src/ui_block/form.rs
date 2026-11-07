@@ -134,7 +134,12 @@ fn outline_button(
 ) -> Stateful<Div> {
     let (border, bg, hover_border, hover_bg) = if selected {
         let primary = p.primary;
-        (primary, primary.opacity(0.15), primary, primary.opacity(0.2))
+        (
+            primary,
+            primary.opacity(0.15),
+            primary,
+            primary.opacity(0.2),
+        )
     } else {
         (p.border, p.card, p.input, p.muted)
     };
@@ -297,7 +302,8 @@ impl UiBlockView {
                 placeholder,
                 ..
             } => {
-                let control = self.text_field(&form, name, false, placeholder.as_deref(), window, cx);
+                let control =
+                    self.text_field(&form, name, false, placeholder.as_deref(), window, cx);
                 labeled(&p, label, control)
             }
             Component::TextArea {
@@ -306,7 +312,8 @@ impl UiBlockView {
                 placeholder,
                 ..
             } => {
-                let control = self.text_field(&form, name, true, placeholder.as_deref(), window, cx);
+                let control =
+                    self.text_field(&form, name, true, placeholder.as_deref(), window, cx);
                 labeled(&p, label, control)
             }
             Component::Select {
@@ -324,9 +331,7 @@ impl UiBlockView {
                 options,
                 ..
             } => self.radio_group(&form, name, label, options, path, cx),
-            Component::Checkbox { name, label, .. } => {
-                self.checkbox(&form, name, label, path, cx)
-            }
+            Component::Checkbox { name, label, .. } => self.checkbox(&form, name, label, path, cx),
             Component::Slider {
                 name,
                 label,
@@ -334,7 +339,16 @@ impl UiBlockView {
                 max,
                 step,
                 ..
-            } => self.slider(&form, name, label, *min, *max, step.unwrap_or(1.0), path, cx),
+            } => self.slider(
+                &form,
+                name,
+                label,
+                *min,
+                *max,
+                step.unwrap_or(1.0),
+                path,
+                cx,
+            ),
             _ => Empty.into_any_element(),
         }
     }
@@ -475,7 +489,11 @@ impl UiBlockView {
                     .inset_0(),
             )
             .child(div().flex_1().min_w_0().truncate().child(current.clone()))
-            .child(icon("alt-arrow-down", 14.0, p.foreground).opacity(0.8).mr(px(-4.)))
+            .child(
+                icon("alt-arrow-down", 14.0, p.foreground)
+                    .opacity(0.8)
+                    .mr(px(-4.)),
+            )
             .when(disabled, |d| d.opacity(DISABLED_OPACITY))
             .when(!disabled, |d| {
                 d.cursor_pointer()
@@ -543,14 +561,16 @@ impl UiBlockView {
                         .shadow_md()
                         .font_family(p.font_sans.clone())
                         .role(Role::ListBox)
-                        .on_mouse_down_out(cx.listener(move |this, event: &MouseDownEvent, _, cx| {
-                            // A press on the trigger toggles it closed itself.
-                            if close_bounds.get().contains(&event.position) {
-                                return;
-                            }
-                            this.open_select = None;
-                            cx.notify();
-                        }))
+                        .on_mouse_down_out(cx.listener(
+                            move |this, event: &MouseDownEvent, _, cx| {
+                                // A press on the trigger toggles it closed itself.
+                                if close_bounds.get().contains(&event.position) {
+                                    return;
+                                }
+                                this.open_select = None;
+                                cx.notify();
+                            },
+                        ))
                         .children(items),
                 ),
             ))
@@ -652,9 +672,11 @@ impl UiBlockView {
                     .border_1()
                     .map(|d| {
                         if checked {
-                            d.border_color(p.primary)
-                                .bg(p.primary)
-                                .child(icon("check", 12.0, p.primary_foreground))
+                            d.border_color(p.primary).bg(p.primary).child(icon(
+                                "check",
+                                12.0,
+                                p.primary_foreground,
+                            ))
                         } else {
                             d.border_color(p.input).bg(p.background)
                         }
@@ -740,7 +762,8 @@ impl UiBlockView {
                     move |b, _, _| measured.set(b),
                     move |b, _, window, _| {
                         let y = b.center().y;
-                        let line = Bounds::new(point(b.left(), y - px(2.)), size(b.size.width, px(4.)));
+                        let line =
+                            Bounds::new(point(b.left(), y - px(2.)), size(b.size.width, px(4.)));
                         window.paint_quad(quad(
                             line,
                             px(2.),

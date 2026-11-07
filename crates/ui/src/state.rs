@@ -4667,10 +4667,22 @@ mod tests {
     fn staged_context_items_replace_by_source_and_stay_per_draft() {
         use crate::context_items::ContextItem;
         let mut state = AppState::new();
-        state.add_context_item("c", ContextItem::new("pr:checks", "PR #1 · Failing checks", "old"));
-        state.add_context_item("c", ContextItem::new("pr:comments", "PR #1 · Comments", "b"));
-        state.add_context_item("c", ContextItem::new("pr:checks", "PR #1 · Failing checks", "new"));
-        state.add_context_item("", ContextItem::new("pr:checks", "PR #1 · Failing checks", "x"));
+        state.add_context_item(
+            "c",
+            ContextItem::new("pr:checks", "PR #1 · Failing checks", "old"),
+        );
+        state.add_context_item(
+            "c",
+            ContextItem::new("pr:comments", "PR #1 · Comments", "b"),
+        );
+        state.add_context_item(
+            "c",
+            ContextItem::new("pr:checks", "PR #1 · Failing checks", "new"),
+        );
+        state.add_context_item(
+            "",
+            ContextItem::new("pr:checks", "PR #1 · Failing checks", "x"),
+        );
         let staged = state.context_items("c");
         assert_eq!(staged.len(), 2);
         assert_eq!(staged[0].body, "new");

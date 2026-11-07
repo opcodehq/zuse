@@ -208,11 +208,10 @@ pub fn render_with(
             .child(body)
             .into_any_element();
     }
-    let popover = window.use_keyed_state(
-        SharedString::from(format!("{id}-popover")),
-        cx,
-        |_, _| BadgePopover::default(),
-    );
+    let popover =
+        window.use_keyed_state(SharedString::from(format!("{id}-popover")), cx, |_, _| {
+            BadgePopover::default()
+        });
     let open = popover.read(cx).open;
     let card = open.then(|| card(&id, badge, &popover, theme, window, cx));
     let hover_state = popover.clone();
@@ -237,9 +236,9 @@ pub fn render_with(
                 })
                 .child(body),
         )
-        .children(card.map(|card| {
-            crate::popover::anchored_menu_above(format!("{id}-card"), card, None)
-        }))
+        .children(
+            card.map(|card| crate::popover::anchored_menu_above(format!("{id}-card"), card, None)),
+        )
         .into_any_element()
 }
 
