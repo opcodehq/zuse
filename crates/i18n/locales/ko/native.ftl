@@ -1217,7 +1217,16 @@ native-composer_plan_chip = 계획
 # Context: composer add menu and plan mode toggle.
 native-composer_cloud_plan_unavailable = 계획 모드는 클라우드 실행에서 사용할 수 없습니다. 시작하기 전에 끄세요.
 
-native-pr_watch_auto_fix = 실패 자동 수정
-native-pr_watch_restart_auto_fix = 자동 수정 다시 시작
-native-pr_watch_repairs_used = { $limit }회 중 { $used }회 사용
-native-pr_watch_auto_fix_help = CI가 실패하면 이 채팅이 최대 세 번까지 수정하며 평소와 같이 커밋하고 푸시합니다. 강제 푸시나 병합은 절대 하지 않습니다. 이전 수정을 검토한 뒤 다시 시작하면 횟수가 새로 주어집니다.
+# Draft English fallback; translation pending review.
+# Context: pull request CI watch switch that lets the chat repair failing checks.
+native-pr_watch_auto_fix = Auto-fix failures
+
+# Context: the same switch once all repairs are used; turning it on grants a fresh budget.
+native-pr_watch_restart_auto_fix = Restart auto-fix
+
+# Context: CI repairs already made out of the allowed number, beside the auto-fix switch.
+# $used (number): repairs made. $limit (number): repairs allowed.
+native-pr_watch_repairs_used = { $used } of { $limit } used
+
+# Context: tooltip for the auto-fix switch.
+native-pr_watch_auto_fix_help = When CI fails, let this chat repair it up to three times, committing and pushing normally. It never force-pushes or merges. Restarting grants a fresh budget after you review earlier repairs.
