@@ -241,6 +241,34 @@ impl Shell {
         self.open_side_chat_tab(chat, key, true, cx);
     }
 
+    /// Whether a pull request hand-off targets the selected chat's own pull
+    /// request: the hand-off resolved that chat's checkout to it, and the
+    /// chat is still selected, so a side chat sharing its checkout is
+    /// already on the pull request's branch.
+    pub(super) fn pull_request_is_selected_chats(
+        &self,
+        action: &crate::pull_request_detail::StartPullRequestSession,
+        cx: &App,
+    ) -> bool {
+        matches!(self.route, Route::Chat)
+            && action.own_chat.is_some()
+            && self.state.read(cx).selected_chat.as_deref() == action.own_chat.as_deref()
+    }
+
+    /// Open a new side chat tab off the selected chat and return its
+    /// composer, or `None` when none could be created.
+    pub(super) fn open_side_chat_for_prompt(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<Composer>> {
+        let before = self.side_chat_seq;
+        self.create_child_chat(None, cx);
+        (self.side_chat_seq != before)
+            .then(|| self.side_chats.get(&self.side_chat_seq))
+            .flatten()
+            .map(|tab| tab.composer.clone())
+    }
+
     /// Open an existing side chat (a footer row) in the right pane.
     pub(super) fn open_child_chat_tab(&mut self, chat_id: &str, cx: &mut Context<Self>) {
         let Some(chat) = self
