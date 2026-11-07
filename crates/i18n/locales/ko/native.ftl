@@ -1216,3 +1216,8 @@ native-composer_plan_chip = 계획
 
 # Context: composer add menu and plan mode toggle.
 native-composer_cloud_plan_unavailable = 계획 모드는 클라우드 실행에서 사용할 수 없습니다. 시작하기 전에 끄세요.
+
+native-pr_watch_auto_fix = 실패 자동 수정
+native-pr_watch_restart_auto_fix = 자동 수정 다시 시작
+native-pr_watch_repairs_used = { $limit }회 중 { $used }회 사용
+native-pr_watch_auto_fix_help = CI가 실패하면 이 채팅이 최대 세 번까지 수정하며 평소처럼 커밋하고 푸시합니다. 강제 푸시나 병합은 절대 하지 않습니다. 이전 수정을 검토한 뒤 다시 시작하면 횟수가 새로 주어집니다.

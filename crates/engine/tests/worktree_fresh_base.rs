@@ -191,3 +191,28 @@ async fn repository_without_remotes_skips_the_fetch() {
         }]
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn option_shaped_base_is_never_fetched() {
+    let f = fixture();
+    let marker = f.root.join("injected");
+    let base = format!("origin/--upload-pack=touch {}", marker.display());
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let sink = seen.clone();
+
+    let result = f
+        .repos
+        .create_worktree_with_progress(&f.repo, &base, move |progress| {
+            sink.lock().unwrap().push(progress)
+        })
+        .await;
+
+    assert!(result.is_err());
+    assert!(!marker.exists());
+    assert!(
+        seen.lock()
+            .unwrap()
+            .iter()
+            .all(|progress| !matches!(progress, WorktreeProgress::Fetching { .. }))
+    );
+}

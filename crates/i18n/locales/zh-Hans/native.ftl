@@ -1216,3 +1216,8 @@ native-composer_plan_chip = 计划
 
 # Context: composer add menu and plan mode toggle.
 native-composer_cloud_plan_unavailable = 云端启动不支持计划模式。请在开始前将其关闭。
+
+native-pr_watch_auto_fix = 自动修复失败
+native-pr_watch_restart_auto_fix = 重新开始自动修复
+native-pr_watch_repairs_used = 已用 { $used }/{ $limit }
+native-pr_watch_auto_fix_help = CI 失败时，允许此聊天最多修复三次，并正常提交和推送。它从不强制推送或合并。在你审阅之前的修复后，重新开始会重置次数。

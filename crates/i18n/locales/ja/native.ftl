@@ -1216,3 +1216,8 @@ native-composer_plan_chip = プラン
 
 # Context: composer add menu and plan mode toggle.
 native-composer_cloud_plan_unavailable = プランモードはクラウドでの起動には使用できません。開始する前にオフにしてください。
+
+native-pr_watch_auto_fix = 失敗を自動修正
+native-pr_watch_restart_auto_fix = 自動修正を再開
+native-pr_watch_repairs_used = { $limit } 回中 { $used } 回使用
+native-pr_watch_auto_fix_help = CI が失敗したとき、このチャットが最大 3 回まで修正し、通常どおりコミットとプッシュを行います。強制プッシュやマージは行いません。以前の修正を確認したあとに再開すると、回数がリセットされます。

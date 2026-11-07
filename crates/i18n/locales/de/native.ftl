@@ -1216,3 +1216,8 @@ native-composer_plan_chip = Plan
 
 # Context: composer add menu and plan mode toggle.
 native-composer_cloud_plan_unavailable = Der Planmodus ist für Cloud-Starts nicht verfügbar. Schalten Sie ihn vor dem Start aus.
+
+native-pr_watch_auto_fix = Fehler automatisch beheben
+native-pr_watch_restart_auto_fix = Automatische Behebung neu starten
+native-pr_watch_repairs_used = { $used } von { $limit } genutzt
+native-pr_watch_auto_fix_help = Wenn CI fehlschlägt, darf dieser Chat bis zu dreimal reparieren und dabei normal committen und pushen. Er erzwingt nie einen Push und führt nie einen Merge durch. Ein Neustart gewährt ein neues Kontingent, nachdem du frühere Reparaturen geprüft hast.

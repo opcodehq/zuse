@@ -1216,3 +1216,8 @@ native-composer_plan_chip = Plan
 
 # Context: composer add menu and plan mode toggle.
 native-composer_cloud_plan_unavailable = Le mode plan n’est pas disponible pour les lancements cloud. Désactivez-le avant de commencer.
+
+native-pr_watch_auto_fix = Corriger automatiquement les échecs
+native-pr_watch_restart_auto_fix = Relancer la correction automatique
+native-pr_watch_repairs_used = { $used } sur { $limit } utilisées
+native-pr_watch_auto_fix_help = Quand la CI échoue, ce chat peut la réparer jusqu’à trois fois, en committant et poussant normalement. Il ne force jamais un push et ne fusionne jamais. Relancer accorde un nouveau quota après examen des réparations précédentes.
