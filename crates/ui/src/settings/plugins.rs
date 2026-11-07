@@ -615,7 +615,7 @@ impl PluginsCard {
             card = card.child(widgets::card_row(theme, true).child(widgets::row_copy(
                 theme,
                 "Looking for MCP servers…",
-                "Checking Claude, Codex and Cursor settings on this computer.",
+                "Checking the agent apps on this computer.",
             )));
         } else if let Some(error) = &import.error {
             card = card.child(widgets::card_row(theme, true).child(widgets::row_copy(theme, "Couldn't read local settings", error)));
@@ -623,7 +623,7 @@ impl PluginsCard {
             card = card.child(widgets::card_row(theme, true).child(widgets::row_copy(
                 theme,
                 "No MCP servers found",
-                "Nothing is configured in Claude, Codex or Cursor on this computer yet.",
+                "None of the agent apps on this computer has an MCP server configured yet.",
             )));
         } else {
             for (index, server) in import.servers.iter().enumerate() {
@@ -723,7 +723,7 @@ impl PluginsCard {
             widgets::group(
                 theme,
                 "Import from this computer",
-                "MCP servers already set up in Claude, Codex or Cursor. Choose which ones agents should get in every chat.",
+                "MCP servers already set up in the agent apps on this computer. Choose which ones agents should get in every chat.",
             )
             .child(card.child(footer))
             .into_any_element(),
