@@ -145,6 +145,8 @@ jobs:
         run: |
           cargo test -p zuse-ui --lib state::account_connection::tests
           cargo test -p zuse-ui --lib native_paired_reconnect_uses_fresh_encryption
+      - name: Instant session archive and rollback
+        run: cargo test -p zuse-ui --lib archive_
       - name: Language persistence, drafts and offline font coverage
         run: |
           cargo test -p zuse-ui --lib localization::tests

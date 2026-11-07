@@ -6597,10 +6597,48 @@ impl Shell {
         if archived {
             motion::set_hover(&format!("chat-{chat_id}-hover"), false, true);
         }
-        self.mutate(
-            serde_json::json!({ "op": "setChatArchived", "chatId": chat_id, "archived": archived }),
-            cx,
-        );
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            self.show_notice(crate::toast::ToastKind::Error, "Engine not connected", cx);
+            cx.notify();
+            return;
+        };
+        let start = self.state.update(cx, |state, cx| {
+            let start = state.begin_chat_archive(&chat_id, archived);
+            cx.notify();
+            start
+        });
+        if let Some(request_id) = start {
+            let state = self.state.clone();
+            cx.spawn(async move |this, cx| {
+                let mut archived = archived;
+                loop {
+                    let result = engine.client().call(methods::MUTATE,
+                        serde_json::json!({ "op": "setChatArchived", "chatId": chat_id, "archived": archived }),
+                    ).await;
+                    let next = state.update(cx, |state, cx| {
+                        if !state.engine().is_some_and(|current| current.same_connection(&engine)) {
+                            return None;
+                        }
+                        let next = state.finish_chat_archive(&chat_id, request_id, archived, result.is_ok());
+                        cx.notify();
+                        next
+                    });
+                    if let Err(error) = result {
+                        let _ = this.update(cx, |shell, cx| {
+                            if !shell.state.read(cx).engine().is_some_and(|current| current.same_connection(&engine)) {
+                                return;
+                            }
+                            shell.show_notice(crate::toast::ToastKind::Error, format!("{error}"), cx);
+                            cx.notify();
+                        });
+                    }
+                    match next {
+                        Ok(Some(next)) => archived = next,
+                        _ => break,
+                    }
+                }
+            }).detach();
+        }
         cx.notify();
     }
 
