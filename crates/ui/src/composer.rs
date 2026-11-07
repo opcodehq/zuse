@@ -6704,6 +6704,9 @@ pub struct Composer {
     /// A short status pill above the composer ("Draft stashed").
     flash: Option<SharedString>,
     flash_seq: u64,
+    /// The host's latest worktree phase for a just-sent chat (fetching the
+    /// base, creating the checkout), shown above the composer while it runs.
+    worktree_progress: Option<(String, zuse_protocol::WorktreeProgress)>,
 }
 
 /// Drafts cleared with Escape twice that Up can still bring back.
@@ -7224,6 +7227,7 @@ impl Composer {
             emoji_dismissed: None,
             flash: None,
             flash_seq: 0,
+            worktree_progress: None,
         };
         // Dev knob: pre-stage attachments (drop/paste can't be synthesized on
         // a rig) — `ZUSE_ATTACH=/path/a.png[,/path/b.png]`, and
@@ -10318,6 +10322,17 @@ impl Composer {
                                 )
                                 .await
                                 {
+                                    Ok(value) if value.get("ready").and_then(|v| v.as_bool()) == Some(false) => {
+                                        let progress = value
+                                            .get("progress")
+                                            .cloned()
+                                            .filter(|value| !value.is_null())
+                                            .and_then(|value| serde_json::from_value(value).ok());
+                                        this.update(cx, |composer, cx| {
+                                            composer.set_worktree_progress(&poll_chat_id, progress, cx)
+                                        })
+                                        .ok();
+                                    }
                                     Ok(value) if value.get("ready").and_then(|v| v.as_bool()) == Some(true) => {
                                         let setup_action = value
                                             .get("setupAction")
@@ -10328,7 +10343,8 @@ impl Composer {
                                             .get("setupError")
                                             .and_then(|value| value.as_str())
                                             .map(str::to_string);
-                                        this.update(cx, |_, cx| {
+                                        this.update(cx, |composer, cx| {
+                                            composer.set_worktree_progress(&poll_chat_id, None, cx);
                                             cx.emit(ComposerEvent::WorktreeSetup {
                                                 chat_id: poll_chat_id.clone(),
                                                 setup_action,
@@ -10351,6 +10367,10 @@ impl Composer {
                                 command = %command_id,
                                 "worktree setup handoff timed out"
                             );
+                            this.update(cx, |composer, cx| {
+                                composer.set_worktree_progress(&poll_chat_id, None, cx)
+                            })
+                            .ok();
                         })
                         .detach();
                     })
@@ -10479,6 +10499,90 @@ impl Composer {
         })
         .detach();
         cx.notify();
+    }
+
+    /// Replace (or with `None`, clear) the worktree phase shown for `chat_id`.
+    fn set_worktree_progress(
+        &mut self,
+        chat_id: &str,
+        progress: Option<zuse_protocol::WorktreeProgress>,
+        cx: &mut Context<Self>,
+    ) {
+        let next = progress.map(|progress| (chat_id.to_string(), progress));
+        let owned = self
+            .worktree_progress
+            .as_ref()
+            .is_none_or(|(owner, _)| owner == chat_id);
+        if owned && self.worktree_progress != next {
+            self.worktree_progress = next;
+            cx.notify();
+        }
+    }
+
+    fn render_worktree_progress(
+        &self,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::AnyElement> {
+        let (chat_id, progress) = self.worktree_progress.as_ref()?;
+        if self.flash.is_some()
+            || self.list.is_some()
+            || self.emoji.is_some()
+            || self.slash.token.is_some()
+            || self.mention.token.is_some()
+            || self.state.read(cx).selected_chat.as_deref() != Some(chat_id.as_str())
+        {
+            return None;
+        }
+        let text = match progress {
+            zuse_protocol::WorktreeProgress::Fetching { branch } => {
+                tr(cx, |l10n| msg::chat::worktree_fetching(l10n, branch))
+            }
+            zuse_protocol::WorktreeProgress::Creating {
+                branch,
+                offline: false,
+            } => tr(cx, |l10n| msg::chat::worktree_creating(l10n, branch)),
+            zuse_protocol::WorktreeProgress::Creating {
+                branch,
+                offline: true,
+            } => tr(cx, |l10n| msg::chat::worktree_offline(l10n, branch)),
+        };
+        let theme = theme.for_popup();
+        Some(
+            div()
+                .absolute()
+                .bottom_full()
+                .left_0()
+                .right_0()
+                .mb(px(8.))
+                .flex()
+                .justify_center()
+                .child(
+                    crate::popover::popover_card(&theme)
+                        .id("composer-worktree-progress")
+                        .debug_selector(|| "composer-worktree-progress".into())
+                        .role(gpui::Role::Status)
+                        .rounded_full()
+                        .h(px(28.))
+                        .max_w_full()
+                        .min_w_0()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .px(px(12.))
+                        .text_size(crate::typography::text_xs())
+                        .text_color(theme.text_muted)
+                        .child(crate::loaders::mini_glyph_spinner(
+                            "composer-worktree-progress-spinner",
+                            1.5,
+                            theme.glyph,
+                            cx.entity_id(),
+                            cx,
+                        ))
+                        .child(div().min_w_0().truncate().child(text)),
+                )
+                .into_any_element(),
+        )
     }
 
     fn clear_flash(&mut self, cx: &mut Context<Self>) {
@@ -13215,7 +13319,8 @@ impl Render for Composer {
             .children(self.render_slash_popup(&theme, cx))
             .children(self.render_emoji_popup(&theme, cx))
             .children(self.render_composer_list(&theme, cx))
-            .children(self.render_flash(&theme, cx));
+            .children(self.render_flash(&theme, cx))
+            .children(self.render_worktree_progress(&theme, cx));
         // The context tray: a tonal tab tucked behind the card's top edge,
         // one step narrower than the card (`w-14/15`), carrying the
         // destination and checkout chips. It reaches down under the card so

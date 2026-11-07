@@ -3263,7 +3263,12 @@ impl RpcService for EngineRpc {
                         "setupAction": outcome.setup_action,
                         "setupError": outcome.setup_error,
                     })),
-                    None => RpcReply::value(&serde_json::json!({ "ready": false })),
+                    None => RpcReply::value(&serde_json::json!({
+                        "ready": false,
+                        "progress": self
+                            .project_actions
+                            .worktree_progress(&p.command_id, &p.chat_id),
+                    })),
                 }
             }
             methods::RETRY_DELIVERY => {
