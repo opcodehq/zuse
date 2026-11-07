@@ -1862,3 +1862,6 @@ chat-history_search_use = 使用
 chat-history_search_cancel = キャンセル
 chat-stash_saved_notice = 下書きを保留しました · <part0>{ $shortcut }</part0> で表示
 chat-chat_composer_press_esc_again_to_clear = もう一度 <part0>Esc</part0> を押すとクリアします
+chat-worktree_fetching = 最新の { $branch } を取得しています…
+chat-worktree_creating = { $branch } からワークツリーを作成しています…
+chat-worktree_offline = リモートに接続できません · ローカルの { $branch } を使用します

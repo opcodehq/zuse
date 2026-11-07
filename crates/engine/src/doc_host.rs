@@ -5709,7 +5709,8 @@ impl DocHost {
                 let worktree_spec = request.worktree.take();
                 let fresh_worktree = match &worktree_spec {
                     Some(spec) => {
-                        let (cwd, fresh) = self.materialize_worktree(chat_id, &spec).await?;
+                        let (cwd, fresh) =
+                            self.materialize_worktree(&entry.id, chat_id, spec).await?;
                         request.cwd = cwd;
                         fresh
                     }
@@ -6112,6 +6113,7 @@ impl DocHost {
 
     async fn materialize_worktree(
         &self,
+        command_id: &str,
         chat_id: &str,
         spec: &zuse_protocol::WorktreeSpec,
     ) -> Result<(String, Option<zuse_protocol::Worktree>), EngineError> {
@@ -6130,8 +6132,27 @@ impl DocHost {
             .repos
             .get()
             .ok_or_else(|| EngineError::Other("repos engine not wired".into()))?;
+        // Phases ride the setup handoff the sender already polls for.
+        let project_actions = self
+            .inner
+            .project_action_runtime
+            .get()
+            .filter(|_| spec.space_id.is_some())
+            .map(|(project_actions, _)| project_actions);
+        // Phases only describe this call; any exit (error, cancellation,
+        // success) clears them so the sender never polls a stale one.
+        let _progress_scope =
+            project_actions.map(|store| store.worktree_progress_scope(command_id));
         let worktree = repos
-            .create_worktree(std::path::Path::new(&spec.repo_path), &spec.base)
+            .create_worktree_with_progress(
+                std::path::Path::new(&spec.repo_path),
+                &spec.base,
+                |progress| {
+                    if let Some(project_actions) = project_actions {
+                        project_actions.set_worktree_progress(command_id, chat_id, progress);
+                    }
+                },
+            )
             .await?;
         tracing::info!(
             chat = %chat_id,
