@@ -1153,7 +1153,7 @@ impl Shell {
         // Open in, the environment summary, then the bottom terminal; the
         // right pane's toggle anchors the far edge.
         let session_info_toggle = (!takeover && !on_canvas).then(|| {
-            let open = self.session_info_visible(cx);
+            let open = self.session_info_visible();
             header_icon_button(
                 "toggle-session-info",
                 icons::LIST,

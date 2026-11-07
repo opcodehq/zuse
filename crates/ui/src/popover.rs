@@ -1340,19 +1340,45 @@ pub fn btn_ghost(theme: &Theme, label: &str, fade_key: impl Into<SharedString>) 
     btn
 }
 
-/// Primary button (`btnPrimary`): white fill, near-black text.
+/// Ink of the dithered olive key — the composer's send key and every
+/// primary button: `rgb(151 183 76)`.
+pub(crate) const DITHER_KEY_RGB: [u8; 3] = [151, 183, 76];
+pub(crate) const DITHER_KEY_RADIUS: f32 = 7.0;
+
+/// Primary button: the send key's dithered olive plate with a white label,
+/// 28px tall so it sits level with the composer keys.
 pub fn btn_primary(theme: &Theme, label: &str) -> gpui::Div {
     div()
-        .px(px(12.0))
-        .py(px(6.0))
-        .rounded(px(8.0))
-        .bg(theme.text)
-        .text_size(crate::typography::text_sm())
+        .relative()
+        .h(px(28.0))
+        .px(px(10.0))
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .rounded(px(DITHER_KEY_RADIUS))
+        // The texture is tuned for a dark plate; a light card gets a deep
+        // olive base so the white label keeps its contrast.
+        .when(theme.appearance == crate::theme::Appearance::Light, |el| {
+            el.bg(gpui::hsla(80.0 / 360.0, 0.28, 0.2, 1.0))
+        })
+        .border_1()
+        .border_color(theme.accent.opacity(0.4))
+        .text_size(px(12.0))
         .font_weight(gpui::FontWeight::MEDIUM)
-        .text_color(theme.on_solid)
+        .text_color(gpui::white())
         .cursor_pointer()
-        .hover(|s| s.opacity(0.9))
-        .child(SharedString::from(label.to_string()))
+        .hover(|s| s.opacity(0.88))
+        .child(zuse_viewport::dither::fill(
+            DITHER_KEY_RGB,
+            DITHER_KEY_RADIUS,
+        ))
+        // Above the absolutely positioned dither fill.
+        .child(
+            div()
+                .relative()
+                .child(SharedString::from(label.to_string())),
+        )
 }
 
 /// Destructive button (`btnDestructive`): the muted red fill.
