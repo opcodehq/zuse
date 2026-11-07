@@ -997,6 +997,20 @@ pub(crate) struct TranscriptTextChanged {
 
 impl gpui::EventEmitter<TranscriptTextChanged> for AppState {}
 
+/// The status a thread row shows when its conversations disagree: whichever
+/// asks more of the user (input, then live work, then a failure, then an
+/// unseen finish).
+fn louder_indicator(a: ChatIndicator, b: ChatIndicator) -> ChatIndicator {
+    let rank = |status| match status {
+        ChatIndicator::AwaitingInput => 4,
+        ChatIndicator::Working => 3,
+        ChatIndicator::Errored => 2,
+        ChatIndicator::Completed => 1,
+        ChatIndicator::Idle => 0,
+    };
+    if rank(b) > rank(a) { b } else { a }
+}
+
 fn is_text_append(frame: &TranscriptFrame) -> bool {
     matches!(frame, TranscriptFrame::Delta { upsert, append, remove, .. }
         if upsert.is_empty() && remove.is_empty() && !append.is_empty())
@@ -2434,9 +2448,27 @@ impl AppState {
         space_filter: Option<&str>,
     ) -> Vec<(ChatIndicator, &Chat)> {
         let in_filter = self.project_filter(space_filter);
-        self.overview_chats(now)
-            .into_iter()
+        let rows = self.overview_chats(now);
+        // A row stands for its whole thread: a sibling conversation working
+        // (or waiting on input) in another tab lights the row too.
+        let mut thread_status: HashMap<&str, ChatIndicator> = HashMap::new();
+        for (status, chat) in &rows {
+            thread_status
+                .entry(chat.thread_id())
+                .and_modify(|rolled| *rolled = louder_indicator(*rolled, *status))
+                .or_insert(*status);
+        }
+        rows.into_iter()
             .filter(|(_, chat)| chat.thread_id.is_none() && in_filter(chat))
+            .map(|(status, chat)| {
+                (
+                    thread_status
+                        .get(chat.id.as_str())
+                        .copied()
+                        .unwrap_or(status),
+                    chat,
+                )
+            })
             .collect()
     }
 
@@ -5996,6 +6028,22 @@ mod tests {
             None
         );
         assert!(!state.chats[0].archived);
+    }
+
+    #[test]
+    fn sidebar_row_shows_a_sibling_conversation_working() {
+        let now = Utc::now();
+        let mut state = AppState::new();
+        let mut sibling = chat("sibling", 1, None);
+        sibling.thread_id = Some("root".into());
+        state.apply_chats(vec![chat("root", 0, None), sibling]);
+        let status = |state: &AppState| state.sidebar_chats(now, None)[0].0;
+        assert_eq!(status(&state), ChatIndicator::Idle);
+        state.begin_pending_send("sibling", "m1", now);
+        let rows = state.sidebar_chats(now, None);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].1.id, "root");
+        assert_eq!(status(&state), ChatIndicator::Working);
     }
 
     #[test]

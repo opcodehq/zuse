@@ -9151,13 +9151,6 @@ impl Shell {
                         .items_center()
                         .justify_center()
                         .child(match status_glyph {
-                            // Running reads as the terminal spinner the
-                            // Threads view badges its avatar with.
-                            Some(_) if working => loaders::terminal_spinner(
-                                SharedString::from(format!("{row_id}-working-ring")),
-                                14.0,
-                                theme.text.opacity(0.85),
-                            ),
                             Some(glyph) => glyph,
                             None => icon(icons::GIT_BRANCH)
                                 .size(px(14.0))
@@ -9226,10 +9219,12 @@ impl Shell {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .child(loaders::terminal_spinner(
-                                SharedString::from(format!("{row_id}-working")),
-                                10.0,
-                                theme.text.opacity(0.85),
+                            .child(loaders::mini_glyph_spinner(
+                                format!("{row_id}-working"),
+                                1.5,
+                                theme.glyph,
+                                self.sidebar_pane.entity_id(),
+                                cx,
                             )),
                     )
                     .into_any_element()
@@ -12841,10 +12836,12 @@ impl Shell {
                 .child(SharedString::from("Run failed"))
                 .into_any_element(),
             Indicator::None if sending => strip
-                .child(loaders::working_mark(
+                .child(loaders::mini_glyph_spinner(
                     format!("sending-indicator-{}", cx.entity_id()),
-                    14.0,
-                    theme.text,
+                    2.5,
+                    theme.glyph,
+                    cx.entity_id(),
+                    cx,
                 ))
                 .child(
                     div()
