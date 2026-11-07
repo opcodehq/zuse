@@ -15015,7 +15015,16 @@ mod tests {
                     state.set_test_engine(crate::state::EngineHandle::from_test_client(
                         zuse_rpc::RpcClient::new(out, inbound),
                     ));
+                    state.chats = vec![
+                        serde_json::from_value(serde_json::json!({
+                            "id": "literal-draft", "deviceId": "local", "cwd": "/tmp/literal",
+                            "archived": false, "createdAt": chrono::Utc::now(),
+                            "config": { "harness": "codex", "sandbox": "workspace-write" },
+                        }))
+                        .unwrap(),
+                    ];
                     state.selected_chat = Some("literal-draft".into());
+                    state.confirm_selected_chat_configuration_for_test();
                 });
                 let composer = cx.new(|cx| Composer::new(state, cx));
                 composer.update(cx, |composer, cx| {
@@ -15052,7 +15061,9 @@ mod tests {
                     assert!(submitted.is_none(), "whitespace alone must not submit");
                     assert_eq!(discarded, editing_queue);
                 } else {
-                    let submitted = submitted.expect("submission must reach the engine RPC");
+                    let submitted = submitted.unwrap_or_else(|| {
+                        panic!("{raw:?} (editing queue: {editing_queue}) must reach the engine RPC")
+                    });
                     assert_eq!(submitted, raw);
                     assert!(zuse_protocol::invocation::leading_command(&submitted).is_none());
                     assert!(zuse_protocol::invocation::invocation_links(&submitted).is_empty());

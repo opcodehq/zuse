@@ -16870,6 +16870,7 @@ mod tests {
             text,
             mentions,
             attachments,
+            files,
             ..
         } = &rows[0].kind
         else {
@@ -16878,8 +16879,10 @@ mod tests {
         assert!(!text.contains("zuse-") && !text.contains("Attached images"));
         assert_eq!(
             mentions.iter().map(|m| m.kind).collect::<Vec<_>>(),
-            [ChipKind::Image, ChipKind::File, ChipKind::File]
+            [ChipKind::Image, ChipKind::File]
         );
+        // A workspace file is not an upload: it lifts out of the bubble.
+        assert_eq!(files.as_slice(), ["crates/ui/src/composer.rs"]);
         let labels: Vec<String> = mentions
             .iter()
             .map(|m| {
@@ -16888,7 +16891,7 @@ mod tests {
                     .replace('\u{a0}', " ")
             })
             .collect();
-        assert_eq!(labels, ["Image 1", "notes.md", "composer.rs"]);
+        assert_eq!(labels, ["Image 1", "notes.md"]);
         // Chips stand in for their attachments: only the unchipped image is
         // left in the strip, and each attachment chip carries its upload.
         assert_eq!(
@@ -16906,7 +16909,6 @@ mod tests {
             [
                 Some("/uploads/ab12cd34-Image_1.png"),
                 Some("/uploads/ef56ab78-notes.md"),
-                None
             ]
         );
 
