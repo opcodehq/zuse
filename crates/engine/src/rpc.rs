@@ -1507,7 +1507,8 @@ impl EngineRpc {
                     .as_ref()
                     .is_some_and(|zots| zots.coordinator(&chat_id).ok().flatten().is_some())
                 {
-                    config.sandbox = zuse_protocol::SandboxLevel::ReadOnly;
+                    config.sandbox = zuse_protocol::SandboxLevel::WorkspaceWrite;
+                    config.plan = true;
                 }
                 if let Some(expected) = expected_config {
                     if expected.device_id != self.doc_host.device_id()

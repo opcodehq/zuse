@@ -118,6 +118,7 @@ mod tests {
                     "message-queue-clean-attachment-text-v1",
                     "message-queue-edit-lease-v1",
                     "harness-updates-v1",
+                    "pr-watch-v1",
                     "checkout-archives-v1",
                     "custom-acp-agents-v1",
                     "projectless-scratch-v1",

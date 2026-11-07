@@ -2542,6 +2542,7 @@ impl AppState {
         let mut chats: Vec<&Chat> = self
             .visible_chats()
             .filter(|c| c.space_id.as_deref() == Some(space_id))
+            .filter(|c| !zuse_protocol::presentation::zot_panel::zot_owns_chat(&self.zots, &c.id))
             .collect();
         sort_tabs(&mut chats);
         chats
@@ -2635,11 +2636,9 @@ impl AppState {
         }
         rows.into_iter()
             .filter(|(_, chat)| chat.thread_id.is_none() && in_filter(chat))
+            // Zots list their own threads; projects don't repeat them.
             .filter(|(_, chat)| {
-                !self.zots.iter().any(|z| {
-                    z.coordinator_chat_id == chat.id
-                        || z.previous_coordinator_chats.contains(&chat.id)
-                })
+                !zuse_protocol::presentation::zot_panel::zot_owns_chat(&self.zots, &chat.id)
             })
             .map(|(status, chat)| {
                 (

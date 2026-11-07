@@ -119,12 +119,12 @@ impl WorkspaceView {
                     && c["parentChatId"].is_null()
                     && c["threadId"].is_null()
             })
+            // Zots list their own threads; projects don't repeat them.
             .filter(|c| {
-                !self
-                    .zots
-                    .items
-                    .iter()
-                    .any(|z| Some(z.coordinator_chat_id.as_str()) == c["id"].as_str())
+                !zuse_protocol::presentation::zot_panel::zot_owns_chat(
+                    &self.zots.items,
+                    c["id"].as_str().unwrap_or_default(),
+                )
             })
             .filter(|c| {
                 query.is_empty()
@@ -157,7 +157,6 @@ impl WorkspaceView {
             .bg(rgb(BG))
             .rounded(px(crate::workspace_style::RADIUS))
             .overflow_hidden()
-            .child(self.zot_sidebar(cx))
             .child(
                 row()
                     .h(px(36.))
@@ -208,6 +207,7 @@ impl WorkspaceView {
                         )
                     }),
             )
+            .child(self.zot_sidebar(cx))
             .when(self.search_open, |d| {
                 d.child(
                     row()

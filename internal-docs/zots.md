@@ -22,7 +22,7 @@ them. Instructions, worker rules, notes and digest are separate versioned files.
 Files and decisions remain in private storage after deleting the coordinator;
 worker conversations and repository files are preserved.
 
-The coordinator runs read-only in its private workspace. It delegates repository
+The coordinator runs in plan mode in its private workspace. It delegates repository
 writes through scoped Zot tools. Worker requests use the existing conversation
 queue, isolated worktree creation and provider permissions. Model reports cannot
 grant authority. Agent follow-ups always debit the configured automatic limit;

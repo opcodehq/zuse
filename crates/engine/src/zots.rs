@@ -426,7 +426,8 @@ impl Zots {
                 );
                 request.cwd = self.workspace(&zot.id)?.to_string_lossy().into_owned();
                 request.worktree = None;
-                request.sandbox = zuse_protocol::SandboxLevel::ReadOnly;
+                request.sandbox = zuse_protocol::SandboxLevel::WorkspaceWrite;
+                request.plan = true;
                 request.harness = Some(serde_json::from_value(serde_json::json!(
                     zot.config.coordinator_model.harness
                 ))?);

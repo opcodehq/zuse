@@ -106,7 +106,8 @@ impl EngineRpc {
                         model: zot.config.coordinator_model.model.clone(),
                         reasoning: None,
                         model_options: Default::default(),
-                        sandbox: zuse_protocol::SandboxLevel::ReadOnly,
+                        sandbox: zuse_protocol::SandboxLevel::WorkspaceWrite,
+                        plan: true,
                     }),
                     Some(cwd),
                     None,
@@ -123,11 +124,13 @@ impl EngineRpc {
                     model: None,
                     reasoning: None,
                     model_options: Default::default(),
-                    sandbox: zuse_protocol::SandboxLevel::ReadOnly,
+                    sandbox: zuse_protocol::SandboxLevel::WorkspaceWrite,
+                    plan: true,
                 });
             config.harness = harness;
             config.model = zot.config.coordinator_model.model.clone();
-            config.sandbox = zuse_protocol::SandboxLevel::ReadOnly;
+            config.sandbox = zuse_protocol::SandboxLevel::WorkspaceWrite;
+            config.plan = true;
             self.workspace
                 .set_chat_config(&zot.coordinator_chat_id, &config)
                 .map_err(|e| RpcError::Failed(e.to_string()))?;
@@ -324,10 +327,7 @@ mod tests {
         );
         let coordinator = first["coordinatorChatId"].as_str().unwrap();
         let row = core.workspace.chat(coordinator).unwrap().unwrap();
-        assert_eq!(
-            row.config.unwrap().sandbox,
-            zuse_protocol::SandboxLevel::ReadOnly
-        );
+        assert!(row.config.unwrap().plan, "coordinators run in plan mode");
         let grant = core.zots.grant(coordinator);
         assert!(service.handle(zuse_protocol::control::CALL,serde_json::json!({"token":grant,"method":"ZotFiles","params":{"zotId":"release"}})).await.is_err(),"idle sessions cannot use retained credentials");
         let files = value(

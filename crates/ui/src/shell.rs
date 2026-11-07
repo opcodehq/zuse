@@ -10212,9 +10212,9 @@ impl Shell {
             // (No titlebar strip: the unified window titlebar spans the whole
             // window above this column.)
             .child(self.render_sidebar_nav(theme, cx))
+            .child(self.render_zot_sidebar(theme, cx))
             .child(self.render_sidebar_modes(theme, cx))
             .child(filter_row)
-            .child(self.render_zot_sidebar(theme, cx))
             .child(sidebar_lists)
             // Global connection pill (durable-by-design UI truth): appears
             // whenever the edge posture is degraded; hidden while healthy —
