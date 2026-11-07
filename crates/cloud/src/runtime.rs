@@ -1122,6 +1122,7 @@ impl RuntimeControl {
                     .unwrap_or(0)
                     <= now
             {
+                log_fence("gateway", id, &early, credential, now);
                 return Err(ApiError::unauthorized("workspace_runtime_fenced"));
             }
         }
@@ -1435,9 +1436,53 @@ async fn locked_workspace_with(
         .as_i64()
         .unwrap_or(generation);
     if owner_generation != generation || generation < 1 || epoch < 1 {
+        tracing::warn!(
+            workspace = %id,
+            site = "locked_workspace",
+            reason = "generation_mismatch",
+            owner_generation,
+            generation,
+            epoch,
+            "Cloud runtime fenced"
+        );
         return Err(ApiError::unauthorized("workspace_runtime_fenced"));
     }
     Ok((row, generation, epoch))
+}
+/// The first runtime-authentication check a row fails, for logs only: a
+/// stable code, never a credential, hash or config value.
+pub(super) fn fence_reason(row: &Value, credential: &str, now: i64) -> &'static str {
+    if blocked(row) {
+        "workspace_blocked"
+    } else if row["desired_state"] != "ready" {
+        "desired_state_not_ready"
+    } else if row["runtime_credential_hash"].is_null() {
+        "credential_missing"
+    } else if row["runtime_credential_hash"]
+        .as_str()
+        .is_none_or(|h| !equal(h, &hash(credential)))
+    {
+        "credential_mismatch"
+    } else if row["request_config"]["runtimeCredentialExpiresAtMs"].as_i64().unwrap_or(0) <= now {
+        "credential_expired"
+    } else if !enrollment_matches(row) {
+        "bootstrap_receipt_mismatch"
+    } else {
+        "other_fence"
+    }
+}
+/// Record why a runtime was fenced so intermittent startup failures are
+/// diagnosable from one log line.
+pub(super) fn log_fence(site: &'static str, id: &str, row: &Value, credential: &str, now: i64) {
+    tracing::warn!(
+        workspace = %id,
+        site,
+        reason = fence_reason(row, credential, now),
+        generation = row["request_config"]["runtimeGeneration"].as_i64().unwrap_or(0),
+        state = row["state"].as_str().unwrap_or(""),
+        runtime_state = row["runtime_state"].as_str().unwrap_or(""),
+        "Cloud runtime fenced"
+    );
 }
 fn required<'a>(row: &'a Value, key: &str) -> Result<&'a str, ApiError> {
     row[key].as_str().ok_or_else(rejected)

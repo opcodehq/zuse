@@ -455,6 +455,7 @@ pub(super) fn runtime_auth(row: &Value, credential: &str, now: i64) -> Result<()
         || row["request_config"]["cloudMailboxLifecyclePending"]["action"] == "delete"
         || row["request_config"]["cloudMailboxLifecycleDelivered"]["action"] == "delete"
     {
+        super::log_fence("runtime_auth", row["workspace_id"].as_str().unwrap_or(""), row, credential, now);
         return Err(ApiError::unauthorized("workspace_runtime_fenced"));
     }
     Ok(())

@@ -148,6 +148,11 @@ impl RuntimeControl {
             || generation != request.runtime_generation
             || !enrollment_matches(&row)
         {
+            if generation != request.runtime_generation {
+                tracing::warn!(workspace = %id, site = "provider_grant", reason = "request_generation_mismatch", generation, requested = request.runtime_generation, "Cloud runtime fenced");
+            } else {
+                super::log_fence("provider_grant", id, &row, credential, now);
+            }
             return Err(ApiError::unauthorized("workspace_runtime_fenced"));
         }
         if !storage_enrolled(&row) {

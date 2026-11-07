@@ -32,6 +32,13 @@ impl RuntimeControl {
             || !enrollment_matches(&row)
             || !git_storage_prepared(&row)
         {
+            if generation != request.runtime_generation {
+                tracing::warn!(workspace = %id, site = "github_grant", reason = "request_generation_mismatch", generation, requested = request.runtime_generation, "Cloud runtime fenced");
+            } else if !git_storage_prepared(&row) {
+                tracing::warn!(workspace = %id, site = "github_grant", reason = "storage_not_prepared", "Cloud runtime fenced");
+            } else {
+                super::log_fence("github_grant", id, &row, credential, now);
+            }
             return Err(ApiError::unauthorized("workspace_runtime_fenced"));
         }
         let thumb = credential_thumbprint(&request.credential_public_jwk)
