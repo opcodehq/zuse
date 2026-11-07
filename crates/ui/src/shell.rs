@@ -6633,7 +6633,7 @@ impl Shell {
                         });
                     }
                     match next {
-                        Ok(Some(next)) => archived = next,
+                        Some(next) => archived = next,
                         _ => break,
                     }
                 }
