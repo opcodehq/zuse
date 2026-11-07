@@ -439,24 +439,23 @@ pub(crate) fn desired_watch_targets(
         .iter()
         .filter(|chat| !chat.archived)
         .filter(|chat| !is_unsupported(&chat.device_id))
-        .filter_map(|chat| {
-            let source = chat.source_context.as_ref()?;
-            let (cwd, branch, checkout_id) = (
-                source.repo_root.as_str(),
-                source.branch.as_str(),
-                Some(source.checkout_id.clone()),
-            );
-            if branch.trim().is_empty() {
-                return None;
-            }
-            Some(ChangeRequestWatchKey {
-                device_id: chat.device_id.clone(),
-                cwd: cwd.to_owned(),
-                branch: branch.to_owned(),
-                checkout_id,
-            })
-        })
+        .filter_map(watch_target)
         .collect()
+}
+
+/// The checkout a chat's pull request resolves from: its conversation-owned
+/// source context, when that names a branch.
+pub(crate) fn watch_target(chat: &Chat) -> Option<ChangeRequestWatchKey> {
+    let source = chat.source_context.as_ref()?;
+    if source.branch.trim().is_empty() {
+        return None;
+    }
+    Some(ChangeRequestWatchKey {
+        device_id: chat.device_id.clone(),
+        cwd: source.repo_root.clone(),
+        branch: source.branch.clone(),
+        checkout_id: Some(source.checkout_id.clone()),
+    })
 }
 
 pub(crate) fn watch_params(
