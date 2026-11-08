@@ -913,6 +913,8 @@
     "chat-tool_group_failed": "35084ed68e380b1ea6ec127cbdcfc3e1dcbf5b14edc73d5f9a996f05a16cfaae",
     "chat-tool_group_agents_done": "e78856e5ddf3fc69a8ce6760f1d261b7302a7631f0cc408a50f63922ed069b5b",
     "chat-tool_group_notes": "bacaa28f2dcf7e6ea96a03323005ab24c0d39bc5e1ffa3b17bb6fea0bce1c34f",
+    "chat-tool_group_tool_calls": "db2a649a0e4032715e29d017299adfe08ba423c97b6a0510b0d270fbc4c0d17b",
+    "chat-tool_group_messages": "e3f20e6f43855d7b967085d3c2722a16c0d3d54b848da2819635c6e59b39ae52",
     "chat-find_in_chat_placeholder": "df9554cb01902ce23765ff9352c3b69cd5b023ca05c820405746103b41c416b1",
     "chat-find_in_chat_count": "bc1f62d15048d711851f15289fd3c4345ea7c7f169853d6f971309d4a95d36c3",
     "chat-find_in_chat_no_results": "a43619f321175f57a27f2a38da381fd367f6806093031b1f82960bcbf542729d",

@@ -1877,6 +1877,18 @@ chat-tool_group_notes =
        [one] Eine Notiz geschrieben
        *[other] { $count } Notizen geschrieben
     }
+# Variables: count
+chat-tool_group_tool_calls =
+    { $count ->
+       [one] { $count } Tool-Aufruf
+       *[other] { $count } Tool-Aufrufe
+    }
+# Variables: count
+chat-tool_group_messages =
+    { $count ->
+       [one] { $count } Nachricht
+       *[other] { $count } Nachrichten
+    }
 
 chat-find_in_chat_placeholder = Im Chat suchen
 chat-find_in_chat_count = { $current } von { $total }

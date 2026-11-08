@@ -956,6 +956,8 @@ pub struct AppState {
     /// revision that has not reached disk yet. A chat remains blocked until
     /// every surface waiting on a workspace write has finished or cancelled.
     review_comment_flushes: HashMap<String, HashSet<u64>>,
+    /// Context items staged per composer draft key, sent ahead of the text.
+    context_items: HashMap<String, Vec<crate::context_items::ContextItem>>,
     /// This engine's device id (best-effort `LocalDevice` probe; `None` until
     /// the engine serves it — views degrade gracefully).
     pub local_device_id: Option<String>,
@@ -1094,6 +1096,7 @@ impl AppState {
             transfers: HashMap::new(),
             review_comments: HashMap::new(),
             review_comment_flushes: HashMap::new(),
+            context_items: HashMap::new(),
             local_device_id: None,
             harness_updates: Vec::new(),
             data_dir: None,
@@ -1320,9 +1323,36 @@ impl AppState {
         self.review_comments.remove(key).unwrap_or_default()
     }
 
+    pub fn context_items(&self, key: &str) -> &[crate::context_items::ContextItem] {
+        self.context_items
+            .get(key)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// Stage `item` on `key`'s draft; an item from the same source replaces
+    /// the earlier one in place.
+    pub fn add_context_item(&mut self, key: &str, item: crate::context_items::ContextItem) {
+        crate::context_items::upsert(self.context_items.entry(key.to_string()).or_default(), item);
+    }
+
+    pub fn remove_context_item(&mut self, key: &str, id: &str) {
+        if let Some(list) = self.context_items.get_mut(key) {
+            list.retain(|item| item.id != id);
+            if list.is_empty() {
+                self.context_items.remove(key);
+            }
+        }
+    }
+
+    pub fn take_context_items(&mut self, key: &str) -> Vec<crate::context_items::ContextItem> {
+        self.context_items.remove(key).unwrap_or_default()
+    }
+
     pub fn purge_review_comments(&mut self, key: &str) {
         self.review_comment_flushes.remove(key);
         self.review_comments.remove(key);
+        self.context_items.remove(key);
     }
 
     pub fn begin_review_comment_flush(&mut self, key: &str, source: u64) {
@@ -4764,6 +4794,38 @@ mod tests {
                 "byte budget applies even to one whale"
             );
         });
+    }
+
+    #[test]
+    fn staged_context_items_replace_by_source_and_stay_per_draft() {
+        use crate::context_items::ContextItem;
+        let mut state = AppState::new();
+        state.add_context_item(
+            "c",
+            ContextItem::new("pr:checks", "PR #1 · Failing checks", "old"),
+        );
+        state.add_context_item(
+            "c",
+            ContextItem::new("pr:comments", "PR #1 · Comments", "b"),
+        );
+        state.add_context_item(
+            "c",
+            ContextItem::new("pr:checks", "PR #1 · Failing checks", "new"),
+        );
+        state.add_context_item(
+            "",
+            ContextItem::new("pr:checks", "PR #1 · Failing checks", "x"),
+        );
+        let staged = state.context_items("c");
+        assert_eq!(staged.len(), 2);
+        assert_eq!(staged[0].body, "new");
+        let comments_id = staged[1].id.clone();
+        state.remove_context_item("c", &comments_id);
+        assert_eq!(state.context_items("c").len(), 1);
+        let taken = state.take_context_items("c");
+        assert_eq!(taken.len(), 1);
+        assert!(state.context_items("c").is_empty());
+        assert_eq!(state.context_items("").len(), 1);
     }
 
     #[test]

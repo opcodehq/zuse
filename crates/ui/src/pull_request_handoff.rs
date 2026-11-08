@@ -16,6 +16,16 @@ pub(super) enum Handoff {
 }
 
 impl Handoff {
+    fn scope(self) -> crate::context_items::PullRequestScope {
+        use crate::context_items::PullRequestScope as Scope;
+        match self {
+            Self::Review => Scope::Review,
+            Self::AddressFeedback => Scope::Comments,
+            Self::FixChecks => Scope::Checks,
+            Self::ResolveConflicts => Scope::Conflicts,
+        }
+    }
+
     fn label(self) -> &'static str {
         match self {
             Self::Review => "Review",
@@ -349,7 +359,13 @@ fn same_pull_request(a: &str, b: &str) -> bool {
 }
 
 impl PullRequestDetailPage {
-    fn prepare_handoff(&mut self, prompt: String, window: &mut Window, cx: &mut Context<Self>) {
+    fn prepare_handoff(
+        &mut self,
+        prompt: String,
+        context: Option<crate::context_items::ContextItem>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.handoff_task.is_some() {
             return;
         }
@@ -413,7 +429,7 @@ impl PullRequestDetailPage {
                 page.handoff_task = None;
                 match result {
                     Ok(Some((space, own_chat))) => window.dispatch_action(Box::new(StartPullRequestSession {
-                        prompt, project_id: space.id, device: device.clone(), repository: repo.clone(), own_chat,
+                        prompt, context, project_id: space.id, device: device.clone(), repository: repo.clone(), own_chat,
                     }), cx),
                     Ok(None) => page.handoff_error = Some(format!(
                         "No checkout of {repo} is available on this device. Add its project, then try again.")),
@@ -434,7 +450,14 @@ impl PullRequestDetailPage {
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
         let buttons = handoffs(detail).into_iter().map(|kind| {
-            let prompt = prompt(kind, detail, &self.url, self.verification_platform);
+            let brief = prompt(kind, detail, &self.url, self.verification_platform);
+            let prompt = crate::context_items::repair_instruction(detail.number, kind.scope());
+            let context = crate::context_items::pull_request_context(
+                &self.url,
+                detail.number,
+                kind.scope(),
+                brief,
+            );
             let id = kind.id();
             let summary = kind.summary();
             widgets::action_button(theme, widgets::ActionTone::Outlined)
@@ -458,7 +481,7 @@ impl PullRequestDetailPage {
                 .child(kind.label())
                 .tooltip(widgets::text_tooltip(summary))
                 .on_click(cx.listener(move |page, _, window, cx| {
-                    page.prepare_handoff(prompt.clone(), window, cx)
+                    page.prepare_handoff(prompt.clone(), Some(context.clone()), window, cx)
                 }))
         });
         let mut rows = vec![

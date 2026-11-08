@@ -52,6 +52,26 @@ impl Shell {
         }
     }
 
+    /// Send `text` through the composer that belongs to `transcript`, leaving
+    /// its draft alone. False when that composer can't send it.
+    pub(super) fn send_transcript_reply(
+        &mut self,
+        transcript: &Entity<Transcript>,
+        text: String,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let composer = match self
+            .side_chats
+            .values()
+            .find(|side| side.transcript == *transcript)
+        {
+            Some(side) => side.composer.clone(),
+            None if *transcript == self.transcript => self.composer.clone(),
+            None => return false,
+        };
+        composer.update(cx, |composer, cx| composer.send_reply(text, cx))
+    }
+
     pub(super) fn close_empty_right_pane(&mut self, key: &str, cx: &mut Context<Self>) {
         let empty = if key == self.panel_key(cx) {
             self.right_surface_rows(cx).is_empty()

@@ -182,11 +182,6 @@ pub const USER_LINE_HEIGHT: f32 = 22.0;
 pub const USER_COLLAPSE_CHARS: usize = 400;
 /// Vertical separation before the plain expand/collapse link.
 const USER_TOGGLE_GAP: f32 = 8.0;
-/// User-bubble attachment thumbnails (user-attachments.tsx): 112×80 thumbs in
-/// a wrapping strip. Fixed thumbnail sizes keep load-state flips from
-/// shifting the virtualizer.
-pub const ATT_THUMB_W: f32 = 112.0;
-pub const ATT_THUMB_H: f32 = 80.0;
 
 // ---------------------------------------------------------------------------
 // Stick-to-bottom spring (mugen §1e — same constants as its DEFAULT_SPRING,
@@ -1120,6 +1115,11 @@ pub enum RowKind {
         path: String,
         title: String,
     },
+    /// An agent's `show_ui` block: a component spec rendered natively by
+    /// [`zuse_viewport::ui_block`].
+    UiBlock {
+        spec: Arc<str>,
+    },
     User {
         /// Visible prompt (attachment-ref trailer already stripped). When the
         /// prompt carries file mentions this is the *projected* display text —
@@ -1134,6 +1134,9 @@ pub enum RowKind {
         attachments: Arc<Vec<crate::attachments::UserImageAttachment>>,
         /// Context the prompt folded in as text, lifted back out by `badges`.
         badges: Arc<Vec<crate::badges::MessageBadge>>,
+        /// Workspace files the prompt mentioned, lifted out of `text` to
+        /// render as chips above the bubble.
+        files: Arc<Vec<SharedString>>,
         /// Optimistic echo not yet confirmed by a doc frame.
         pending: bool,
     },
@@ -1474,6 +1477,7 @@ pub fn rows_for_entry(
         });
         let copy_text = (!text.trim().is_empty())
             .then(|| SharedString::from(crate::composer::display_with_link_urls(&text, &mentions)));
+        let (text, mentions, files) = lift_file_mentions(&text, mentions);
         let mut rows = Vec::new();
         for part in &entry.parts {
             if let MessagePart::AgentContext {
@@ -1507,6 +1511,7 @@ pub fn rows_for_entry(
                 mentions: Arc::new(mentions),
                 attachments: Arc::new(attachments),
                 badges: Arc::new(badges),
+                files: Arc::new(files),
                 pending,
             },
             entry_id,
@@ -1597,6 +1602,11 @@ pub fn rows_for_entry(
                 subagent_tail,
                 ..
             } => {
+                // A published UI block is the visible output; its call only
+                // shows when it failed, so the agent's error stays legible.
+                if *resolved && !*is_error && is_show_ui_call(call) {
+                    continue;
+                }
                 let item = ToolItem {
                     part_id: part.id().to_owned(),
                     call: call.clone(),
@@ -1805,6 +1815,20 @@ pub fn rows_for_entry(
                             },
                         });
                     }
+                    MessagePart::UiBlock { id: part_id, spec } => {
+                        rows.push(Row {
+                            id: format!("{}#{}", entry.id, part_id).into(),
+                            version: fnv1a(spec.as_bytes()),
+                            turn_start: false,
+                            entry_id: entry_id.clone(),
+                            timestamp: None,
+                            copy_text: None,
+                            compact_fold: None,
+                            kind: RowKind::UiBlock {
+                                spec: Arc::from(spec.as_str()),
+                            },
+                        });
+                    }
                     MessagePart::Input {
                         id: part_id,
                         questions,
@@ -1923,7 +1947,11 @@ pub fn rows_for_entry(
                 version: tool_fingerprint(&tools, streaming),
                 turn_start: false,
                 kind: RowKind::ToolGroup {
-                    summary: tool_group_summary(&tools, streaming),
+                    summary: if streaming {
+                        tool_group_summary(&tools, streaming)
+                    } else {
+                        turn_summary(&tools)
+                    },
                     tools: Arc::new(tools),
                     live: false,
                     worked_secs: (!streaming)
@@ -1994,6 +2022,15 @@ pub fn rows_for_entry(
         );
     }
 
+    // A folded turn's visuals render after its reply, outside the fold, so
+    // the summary of the work reads first; the timestamp closes the turn.
+    if compact {
+        let (rest, visuals): (Vec<Row>, Vec<Row>) = std::mem::take(&mut rows)
+            .into_iter()
+            .partition(|row| !is_trailing_visual(row));
+        rows = rest;
+        rows.extend(visuals);
+    }
     if let Some(first) = rows.first_mut() {
         first.turn_start = true;
     }
@@ -2010,6 +2047,37 @@ pub fn rows_for_entry(
         last.version ^= 1 << 62;
     }
     rows
+}
+
+/// UI blocks keep the reference look (tonal surfaces, lime primary, dithered
+/// charts) while their text, rules and fonts follow the chat around them.
+fn ui_block_palette(theme: &Theme) -> zuse_viewport::ui_block::UiBlockPalette {
+    zuse_viewport::ui_block::UiBlockPalette {
+        foreground: theme.text,
+        muted_foreground: theme.text_muted,
+        border: theme.border,
+        font_sans: theme.font_sans.clone(),
+        font_mono: theme.font_mono.clone(),
+        ..zuse_viewport::ui_block::UiBlockPalette::reference(theme.appearance.is_dark())
+    }
+}
+
+/// Rows a folded turn lifts below its reply.
+fn is_trailing_visual(row: &Row) -> bool {
+    row.compact_fold.is_none()
+        && matches!(row.kind, RowKind::Visual { .. } | RowKind::UiBlock { .. })
+}
+
+/// Zuse's own `show_ui` tool, however the harness names the call.
+fn is_show_ui_call(call: &ToolCall) -> bool {
+    matches!(call, ToolCall::Mcp { server, tool, .. } if server == "zuse" && tool == "show_ui")
+}
+
+/// Whether `entry`'s work folds under one header. A settled assistant turn
+/// always folds, leaving only its reply; compact mode also folds live turns.
+pub(crate) fn folds_turn(entry: &SessionMessageEntry, compact_mode: bool) -> bool {
+    compact_mode
+        || (entry.role == MessageRole::Assistant && entry.status != Some(MessageStatus::Streaming))
 }
 
 fn is_compact_work_part(ix: usize, part: &MessagePart, reply_start: Option<usize>) -> bool {
@@ -2181,8 +2249,22 @@ pub fn top_gap_for(prev: Option<&Row>, row: &Row) -> f32 {
     let same_part_markdown = prev.is_some_and(|p| {
         is_md(&p.kind) && is_md(&row.kind) && part_prefix(&p.id) == part_prefix(&row.id)
     });
+    let fold_header = |k: &RowKind| {
+        matches!(
+            k,
+            RowKind::ToolGroup {
+                compact_shell: true,
+                ..
+            }
+        )
+    };
     if same_part_markdown {
         render::MD_BLOCK_GAP
+    } else if prev.is_some_and(|p| fold_header(&p.kind)) && row.compact_fold.is_none() {
+        // The fold header reads as the reply's caption.
+        Theme::SPACE_XS
+    } else if matches!(row.kind, RowKind::UiBlock { .. } | RowKind::Visual { .. }) {
+        Theme::SPACE_MD
     } else if matches!(row.kind, RowKind::ToolGroup { .. })
         || prev.is_some_and(|row| matches!(row.kind, RowKind::ToolGroup { .. }))
     {
@@ -2302,6 +2384,13 @@ pub enum ToolGroupSummary {
         counts: Vec<(ToolActivity, usize)>,
         failed: usize,
     },
+    /// A settled turn's folded work: "12 tool calls · 3 messages".
+    /// Messages are the narration notes and thoughts the fold hides.
+    Turn {
+        calls: usize,
+        messages: usize,
+        failed: usize,
+    },
 }
 
 impl ToolGroupSummary {
@@ -2351,7 +2440,33 @@ impl ToolGroupSummary {
                 }
                 summary
             }
+            Self::Turn {
+                calls,
+                messages,
+                failed,
+            } => [
+                (*calls > 0).then(|| msg::chat::tool_group_tool_calls(l10n, *calls)),
+                (*messages > 0).then(|| msg::chat::tool_group_messages(l10n, *messages)),
+                (*failed > 0).then(|| msg::chat::tool_group_failed(l10n, *failed)),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(&status_separator()),
         }
+    }
+}
+
+/// A settled turn's fold header: every call and every hidden message counted.
+pub fn turn_summary(tools: &[ToolItem]) -> ToolGroupSummary {
+    let count = |kind: ToolItemKind| tools.iter().filter(|t| t.kind == kind).count();
+    ToolGroupSummary::Turn {
+        calls: count(ToolItemKind::Call),
+        messages: count(ToolItemKind::Note) + count(ToolItemKind::Thought),
+        failed: tools
+            .iter()
+            .filter(|t| t.kind == ToolItemKind::Call && t.is_error)
+            .count(),
     }
 }
 
@@ -2679,57 +2794,6 @@ fn waiting_for_subagents_label(count: u32) -> String {
     }
 }
 
-fn worked_for_label(secs: i64) -> String {
-    format!("Worked for {}", format_elapsed(secs))
-}
-
-/// Compact-mode header: the live tool summary crossfades into "Worked for".
-/// `t` is 0 = summary, 1 = duration.
-fn compact_work_title(
-    summary: SharedString,
-    worked: SharedString,
-    t: f32,
-    shimmer_phase: Option<f32>,
-    theme: &Theme,
-) -> AnyElement {
-    if t >= 1.0 {
-        return tool_group_title(worked, None, theme);
-    }
-    if t <= 0.0 {
-        return tool_group_title(summary, shimmer_phase, theme);
-    }
-    div()
-        .relative()
-        .min_w_0()
-        .w_full()
-        .h(px(TOOL_LABEL_LINE_HEIGHT))
-        .child(
-            div()
-                .absolute()
-                .left_0()
-                .right_0()
-                .top_0()
-                .h(px(TOOL_LABEL_LINE_HEIGHT))
-                .flex()
-                .items_center()
-                .overflow_hidden()
-                .opacity(1.0 - t)
-                .child(tool_group_title(summary, None, theme)),
-        )
-        .child(
-            div()
-                .relative()
-                .top(px(4.0 * (1.0 - t)))
-                .h(px(TOOL_LABEL_LINE_HEIGHT))
-                .flex()
-                .items_center()
-                .overflow_hidden()
-                .opacity(t)
-                .child(tool_group_title(worked, None, theme)),
-        )
-        .into_any_element()
-}
-
 // ---------------------------------------------------------------------------
 // Highlight store (background, time-sliced, paint-only)
 // ---------------------------------------------------------------------------
@@ -2926,16 +2990,21 @@ impl TranscriptPreparation {
                 rows.clone()
             } else {
                 let streaming = entry.status == Some(MessageStatus::Streaming);
-                let built = Arc::new(rows_for_entry(entry, false, false, &mut |key, text| {
-                    parse_for_row(
-                        streaming,
-                        key,
-                        text,
-                        &mut self.live_parsers,
-                        &mut self.tree_cache,
-                    )
-                    .0
-                }));
+                let built = Arc::new(rows_for_entry(
+                    entry,
+                    false,
+                    folds_turn(entry, false),
+                    &mut |key, text| {
+                        parse_for_row(
+                            streaming,
+                            key,
+                            text,
+                            &mut self.live_parsers,
+                            &mut self.tree_cache,
+                        )
+                        .0
+                    },
+                ));
                 self.cache.insert(entry.id.clone(), built.clone());
                 built
             };
@@ -2949,9 +3018,12 @@ impl TranscriptPreparation {
             {
                 historical.insert(
                     entry.id.clone(),
-                    rows_for_entry(&prefix, false, false, &mut |_, text| {
-                        Arc::new(parse_full(text))
-                    }),
+                    rows_for_entry(
+                        &prefix,
+                        false,
+                        folds_turn(&prefix, false),
+                        &mut |_, text| Arc::new(parse_full(text)),
+                    ),
                 );
             }
             bytes += std::mem::size_of::<SessionMessageEntry>()
@@ -3595,15 +3667,9 @@ pub struct Transcript {
     /// Compact mode as last applied to this instance's row split. Render
     /// polls the setting each frame; a flip rebuilds every row.
     compact_mode: bool,
-    /// Compact work-group entry ids that were live this session — the
-    /// "Worked for" subtitle fades in only for those, not historical rows.
-    compact_live_entries: HashSet<SharedString>,
     /// Last live elapsed (seconds) per assistant entry, used if `duration_ms`
     /// has not landed on the doc yet when the turn settles.
     compact_last_elapsed: HashMap<String, i64>,
-    /// When a compact work group first settled this session, so "Worked for"
-    /// can fade in without replaying on later paints.
-    compact_worked_fade_at: HashMap<SharedString, Instant>,
     /// Natural heights of compact-fold body rows, written by each row's
     /// prepaint probe without notifying. The work fold's TOOL_FOLD tween
     /// clips the sibling rows against one shared budget without knowing
@@ -3611,6 +3677,9 @@ pub struct Transcript {
     compact_fold_heights: HashMap<SharedString, Rc<Cell<f32>>>,
     /// Post-tween sweep that drops a closed work fold's retained body rows.
     compact_fold_settle: Option<Task<()>>,
+    /// Settled turns' worked duration in seconds, by entry id, shown beside
+    /// the reply's timestamp.
+    turn_worked_secs: HashMap<SharedString, i64>,
     highlights: HighlightStore,
     show_jump_button: bool,
     /// Distance from the bottom at the last observation (wheel event or spring
@@ -3705,6 +3774,8 @@ pub struct Transcript {
     attachment_loads: HashMap<crate::attachments::AttachmentKey, Task<()>>,
     /// Inline `show_visual` visuals, keyed by row id.
     visuals: HashMap<SharedString, Entity<crate::visuals::VisualFrame>>,
+    /// Inline `show_ui` blocks, keyed by row id.
+    ui_blocks: HashMap<SharedString, Entity<zuse_viewport::ui_block::UiBlockView>>,
     /// Live pull request cards by row id, like [`Self::visuals`].
     pull_request_cards: HashMap<SharedString, Entity<crate::pull_request_card::PullRequestCard>>,
     /// Scheduled retry wake-ups for errored sources (the 2s→15s ladder).
@@ -3751,6 +3822,10 @@ pub enum TranscriptEvent {
     ForkChat { chat_id: String, target: ForkTarget },
     /// The find bar closed; focus returns to the composer.
     FindClosed,
+    /// A UI block's form or follow-up: send `text` as the user's next
+    /// message through this transcript's composer, then report back with
+    /// [`Transcript::ui_block_reply_sent`].
+    SendUiBlockReply { row_id: SharedString, text: String },
 }
 
 /// Where a reply's Fork menu sends the copy.
@@ -4001,11 +4076,10 @@ impl Transcript {
             fixture_open_groups: false,
             code_fences_generation: crate::settings::code_fences_generation(cx),
             compact_mode: crate::settings::transcript_compact_mode(cx),
-            compact_live_entries: HashSet::new(),
             compact_last_elapsed: HashMap::new(),
-            compact_worked_fade_at: HashMap::new(),
             compact_fold_heights: HashMap::new(),
             compact_fold_settle: None,
+            turn_worked_secs: HashMap::new(),
             highlights: HighlightStore::default(),
             show_jump_button: false,
             last_scroll_distance: 0.0,
@@ -4047,6 +4121,7 @@ impl Transcript {
             image_copy: None,
             attachment_loads: HashMap::new(),
             visuals: HashMap::new(),
+            ui_blocks: HashMap::new(),
             pull_request_cards: HashMap::new(),
             attachment_retries: HashMap::new(),
             blob_details: HashMap::new(),
@@ -5224,7 +5299,10 @@ impl Transcript {
                 if !self.compact_mode
                     && let Some(rows) = prepared.and_then(|p| p.rows.get(&entry.id))
                 {
-                    new_rows.extend(rows.iter().cloned());
+                    let mut rows = rows.to_vec();
+                    self.stamp_worked_secs(entry, &mut rows);
+                    self.hide_closed_folds(&mut rows);
+                    new_rows.extend(rows);
                 } else {
                     new_rows.extend(self.rows_for(entry, false));
                 }
@@ -5295,7 +5373,7 @@ impl Transcript {
                 historical_rows.extend(rows_for_entry(
                     &historical,
                     false,
-                    self.compact_mode,
+                    folds_turn(&historical, self.compact_mode),
                     &mut |_, text| Arc::new(parse_full(text)),
                 ));
             }
@@ -5381,7 +5459,14 @@ impl Transcript {
             };
             // Agent/spawn groups are standalone cards, not task trees —
             // except under compact mode, where they collapse like the rest.
-            if !self.compact_mode && !tool_group_collapses(tools) {
+            let compact_shell = matches!(
+                row.kind,
+                RowKind::ToolGroup {
+                    compact_shell: true,
+                    ..
+                }
+            );
+            if !compact_shell && !tool_group_collapses(tools) {
                 continue;
             }
             live_tool_groups.insert(row.id.clone());
@@ -5607,7 +5692,7 @@ impl Transcript {
     }
 
     fn compact_worked_secs_for(&self, entry: &SessionMessageEntry) -> Option<i64> {
-        if !self.compact_mode || entry.role != MessageRole::Assistant {
+        if entry.role != MessageRole::Assistant {
             return None;
         }
         if entry.status == Some(MessageStatus::Streaming) {
@@ -5648,21 +5733,14 @@ impl Transcript {
                 // rows whose content hash changed are spliced — the reparsed tail).
                 parse_for_row(streaming, key, text, live_parsers, tree_cache).0
             };
-            rows_for_entry(entry, pending, self.compact_mode, &mut parse)
+            rows_for_entry(
+                entry,
+                pending,
+                folds_turn(entry, self.compact_mode),
+                &mut parse,
+            )
         };
-        if let Some(secs) = self.compact_worked_secs_for(entry) {
-            for row in &mut rows {
-                if let RowKind::ToolGroup {
-                    worked_secs,
-                    compact_shell: true,
-                    ..
-                } = &mut row.kind
-                {
-                    *worked_secs = Some(secs);
-                }
-            }
-        }
-
+        self.stamp_worked_secs(entry, &mut rows);
         if !streaming {
             self.row_cache.insert(
                 entry.id.clone(),
@@ -5672,6 +5750,31 @@ impl Transcript {
                 },
             );
         }
+        self.hide_closed_folds(&mut rows);
+        rows
+    }
+
+    /// Stamp a settled turn's duration on its fold header and remember it for
+    /// the reply's timestamp strip.
+    fn stamp_worked_secs(&mut self, entry: &SessionMessageEntry, rows: &mut [Row]) {
+        let Some(secs) = self.compact_worked_secs_for(entry) else {
+            return;
+        };
+        self.turn_worked_secs.insert(entry.id.clone().into(), secs);
+        for row in rows {
+            if let RowKind::ToolGroup {
+                worked_secs,
+                compact_shell: true,
+                ..
+            } = &mut row.kind
+            {
+                *worked_secs = Some(secs);
+            }
+        }
+    }
+
+    /// Drop folded work rows whose fold is closed (and not tweening shut).
+    fn hide_closed_folds(&self, rows: &mut Vec<Row>) {
         rows.retain(|row| match &row.compact_fold {
             None => true,
             // A closing fold keeps its body mounted through the TOOL_FOLD
@@ -5684,7 +5787,6 @@ impl Transcript {
                         .is_some_and(|at| at.elapsed() < FOLD_TWEEN_WINDOW)
             }
         });
-        rows
     }
 
     /// Fetch a sidecar blob (full tool output or diff) and build its upgraded
@@ -7453,11 +7555,98 @@ impl Transcript {
         div().w_full().child(frame).into_any_element()
     }
 
+    /// A `show_ui` block. Only blocks in the transcript's latest entry take
+    /// input; a reply goes out through this chat's composer.
+    fn render_ui_block(
+        &mut self,
+        row_id: &SharedString,
+        entry_id: &SharedString,
+        spec: &str,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let interactive = self.doc_override.is_none()
+            && self
+                .rows
+                .last()
+                .is_some_and(|row| &row.entry_id == entry_id);
+        let palette = ui_block_palette(Theme::of(cx));
+        // A replaced part keeps its row id; a new spec gets a fresh view.
+        let cached = self
+            .ui_blocks
+            .get(row_id)
+            .filter(|view| view.read(cx).source() == spec)
+            .cloned();
+        let view = match cached {
+            Some(view) => view,
+            None => {
+                let view = cx.new(|cx| {
+                    let mut view = zuse_viewport::ui_block::UiBlockView::new(
+                        spec,
+                        palette.clone(),
+                        interactive,
+                        cx,
+                    );
+                    // The reply column already supplies the gutter.
+                    view.set_padded(false, cx);
+                    view
+                });
+                let id = row_id.clone();
+                cx.subscribe(
+                    &view,
+                    move |_, _, event: &zuse_viewport::ui_block::UiBlockEvent, cx| match event {
+                        zuse_viewport::ui_block::UiBlockEvent::Send { text } => {
+                            cx.emit(TranscriptEvent::SendUiBlockReply {
+                                row_id: id.clone(),
+                                text: text.clone(),
+                            });
+                        }
+                    },
+                )
+                .detach();
+                self.ui_blocks.insert(row_id.clone(), view.clone());
+                view
+            }
+        };
+        view.update(cx, |view, cx| {
+            view.set_palette(palette, cx);
+            view.set_interactive(interactive, cx);
+        });
+        div().w_full().child(view).into_any_element()
+    }
+
+    /// The shell's answer to [`TranscriptEvent::SendUiBlockReply`]: lock the
+    /// block as sent, or unlock it with a toast when nothing went out.
+    pub fn ui_block_reply_sent(
+        &mut self,
+        row_id: &SharedString,
+        sent: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(view) = self.ui_blocks.get(row_id).cloned() else {
+            return;
+        };
+        view.update(cx, |view, cx| {
+            if sent {
+                view.mark_sent(cx);
+            } else {
+                view.mark_send_failed(cx);
+            }
+        });
+        if !sent {
+            crate::toast::show(
+                cx,
+                crate::toast::ToastKind::Error,
+                "Couldn't send your response. Open this chat to send it.",
+            );
+        }
+    }
+
     /// The right-aligned thumbnail strip above a user bubble.
     fn render_user_attachments(
         &mut self,
         row_id: &SharedString,
         atts: &[crate::attachments::UserImageAttachment],
+        files: &[SharedString],
         _window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -7472,14 +7661,32 @@ impl Transcript {
             .flex_row()
             .flex_wrap()
             .justify_end()
-            .items_start()
-            .gap(px(8.0))
-            .px(px(4.0))
-            .pt(px(4.0))
+            .items_center()
+            .gap(px(6.0))
             .pb(px(6.0));
+        for (fix, path) in files.iter().enumerate() {
+            let name = path.rsplit('/').next().unwrap_or(path.as_ref());
+            strip = strip.child(
+                div()
+                    .id(SharedString::from(format!("{row_id}#mention{fix}")))
+                    .max_w_full()
+                    .min_w_0()
+                    .flex()
+                    .tooltip(crate::settings::widgets::text_tooltip(path.clone()))
+                    .child(user_file_pill(
+                        SharedString::from(format!("{row_id}#mention-pill{fix}")),
+                        name,
+                        Theme::of(cx),
+                    )),
+            );
+        }
         for (aix, att) in atts.iter().enumerate() {
             if !crate::attachments::is_image_path(&att.path) {
-                strip = strip.child(user_file_pill(&att.name, Theme::of(cx)));
+                strip = strip.child(user_file_pill(
+                    SharedString::from(format!("{row_id}#file{aix}")),
+                    &att.name,
+                    Theme::of(cx),
+                ));
                 continue;
             }
             let state = self.attachment_state(&device_ids, &att.path, None, cx);
@@ -7633,12 +7840,18 @@ impl Transcript {
                 strip = strip.child(card);
                 continue;
             }
-            let frame = div()
+            // A chip: a small rounded thumbnail and the file name. Click opens
+            // the full image; right-click offers the image menu.
+            let theme = Theme::of(cx).clone();
+            let thumb_frame = div()
+                .size(px(USER_CHIP_THUMB))
                 .flex_none()
-                .w(px(ATT_THUMB_W))
-                .h(px(ATT_THUMB_H))
-                .rounded(px(8.0))
+                .rounded(px(4.0))
                 .overflow_hidden();
+            let mut chip =
+                crate::badges::pill(SharedString::from(format!("{row_id}#att{aix}")), &theme)
+                    .pl(px(6.0))
+                    .tooltip(crate::settings::widgets::text_tooltip(att.name.clone()));
             let thumb: AnyElement = match state {
                 AttachmentSnapshot::Loaded(image) => {
                     let preview = crate::attachments::PreviewImage::new(
@@ -7646,8 +7859,7 @@ impl Transcript {
                         image.image.clone(),
                     );
                     let (menu_path, menu_devices) = (att.path.clone(), device_ids.clone());
-                    frame
-                        .id(SharedString::from(format!("{row_id}#att{aix}")))
+                    chip = chip
                         .on_mouse_down(
                             gpui::MouseButton::Right,
                             cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
@@ -7661,81 +7873,54 @@ impl Transcript {
                                 );
                             }),
                         )
-                        .relative()
-                        .border_1()
-                        .border_color(crate::theme::hairline(0.11))
-                        .bg(crate::theme::ink(0.035))
                         .cursor_pointer()
+                        .role(gpui::Role::Button)
+                        .aria_label(format!("Preview {}", att.name))
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.attachment_preview_return_focus = window.focused(cx);
                             preview.viewer.reset();
                             this.attachment_preview = Some(preview.clone());
                             window.focus(&this.attachment_preview_focus, cx);
                             cx.notify();
-                        }))
-                        .child(
-                            img(image.image.clone())
-                                // EXPLICIT dims, not size_full: img layout
-                                // honors the intrinsic aspect ratio over a
-                                // percent height (gpui f8d8a90 repoint), so
-                                // size_full let a tall photo grow past the
-                                // frame and the rectangular overflow clip
-                                // squared the bottom corners (2026-08-19).
-                                .w(px(ATT_THUMB_W - 2.0))
-                                .h(px(ATT_THUMB_H - 2.0))
-                                // The IMG needs its own radii: the frame's
-                                // rounding only clips rectangularly, so the
-                                // sprite must round its own corners (7 = the
-                                // frame's 8 minus its 1px border).
-                                .rounded(px(7.0))
-                                .object_fit(ObjectFit::Cover),
-                        )
-                        .when(sending, |el| {
-                            // The pulse read registers this entity for frames,
-                            // so the overlay stays live even once the trailer's
-                            // 30s pending-send bridge has lapsed.
-                            let pulse = motion::pulse_wave(motion::pulse_delta(
-                                &motion::ZUSE_PULSE,
-                                cx.entity_id(),
-                                cx,
-                            ));
-                            let indicator: AnyElement = match uploading {
-                                Some(pct) => crate::loaders::upload_progress_ring(pct, 34.0),
+                        }));
+                    if sending {
+                        // The in-flight send's progress stays on the chip.
+                        thumb_frame
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(match uploading {
+                                Some(pct) => crate::loaders::upload_progress_ring(pct, 16.0),
                                 None => crate::loaders::mini_glyph_spinner(
                                     format!("att-sending-{row_id}-{aix}"),
-                                    3.0,
+                                    2.0,
                                     glyph,
                                     cx.entity_id(),
                                     cx,
                                 )
                                 .into_any_element(),
-                            };
-                            el.child(
-                                div()
-                                    .absolute()
-                                    .inset_0()
-                                    .rounded(px(7.0))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .bg(gpui::hsla(0.0, 0.0, 0.0, 0.38 + 0.05 * pulse))
-                                    .child(indicator),
+                            })
+                            .into_any_element()
+                    } else {
+                        thumb_frame
+                            .child(
+                                // Explicit dims: img honours the intrinsic
+                                // aspect over a percent height.
+                                img(image.image.clone())
+                                    .size(px(USER_CHIP_THUMB))
+                                    .rounded(px(4.0))
+                                    .object_fit(ObjectFit::Cover),
                             )
-                        })
-                        .into_any_element()
+                            .into_any_element()
+                    }
                 }
-                // Errored/unavailable: the dashed "missing" thumb.
-                AttachmentSnapshot::Error { .. } => frame
+                AttachmentSnapshot::Error { .. } => thumb_frame
                     .border_1()
                     .border_dashed()
                     .border_color(crate::theme::hairline(0.14))
-                    .bg(crate::theme::ink(0.025))
                     .into_any_element(),
-                // Loading: the pulsing skeleton (same wash as popover skeletons).
-                AttachmentSnapshot::Loading => frame
-                    .border_1()
-                    .border_color(crate::theme::hairline(0.08))
-                    .bg(crate::theme::ink(0.055))
+                AttachmentSnapshot::Loading => thumb_frame
+                    .bg(crate::theme::ink(0.08))
                     .opacity(
                         0.35 + 0.4
                             * motion::pulse_wave(motion::pulse_delta(
@@ -7746,6 +7931,15 @@ impl Transcript {
                     )
                     .into_any_element(),
             };
+            let thumb = chip
+                .child(thumb)
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .child(SharedString::from(user_chip_name(&att.name))),
+                )
+                .into_any_element();
             strip = strip.child(thumb);
         }
         strip.into_any_element()
@@ -8009,26 +8203,33 @@ impl Transcript {
                 mentions,
                 attachments,
                 badges,
+                files,
                 pending,
             } => {
                 let attachments = attachments.clone();
                 let badges = badges.clone();
+                let files = files.clone();
                 let text = text.clone();
                 let mentions = mentions.clone();
                 let pending = *pending;
-                // Attachment thumbnails ride ABOVE the bubble, right-aligned
-                // (chat-view.tsx RowView: UserAttachmentStrip then the text
-                // HStack); image-only sends show no bubble at all.
+                // Chips ride ABOVE the bubble, right-aligned: context pills
+                // first, then attachments and mentioned files. A message with
+                // no text of its own shows no bubble at all.
                 let mut column = div().w_full().flex().flex_col();
-                if !attachments.is_empty() {
-                    column = column.child(self.render_user_attachments(
-                        &row.id,
-                        &attachments,
-                        window,
-                        cx,
-                    ));
-                }
                 if !badges.is_empty() {
+                    let pills: Vec<AnyElement> = badges
+                        .iter()
+                        .enumerate()
+                        .map(|(bix, badge)| {
+                            crate::badges::render(
+                                SharedString::from(format!("{}#badge{bix}", row.id)),
+                                badge,
+                                &theme,
+                                window,
+                                cx,
+                            )
+                        })
+                        .collect();
                     column = column.child(
                         div()
                             .w_full()
@@ -8039,14 +8240,17 @@ impl Transcript {
                             .items_center()
                             .gap(px(6.0))
                             .pb(px(6.0))
-                            .children(badges.iter().enumerate().map(|(bix, badge)| {
-                                crate::badges::render(
-                                    SharedString::from(format!("{}#badge{bix}", row.id)),
-                                    badge,
-                                    &theme,
-                                )
-                            })),
+                            .children(pills),
                     );
+                }
+                if !attachments.is_empty() || !files.is_empty() {
+                    column = column.child(self.render_user_attachments(
+                        &row.id,
+                        &attachments,
+                        &files,
+                        window,
+                        cx,
+                    ));
                 }
                 if !text.is_empty() {
                     // `min_w_0` is load-bearing: gpui text answers min/max-content
@@ -8222,18 +8426,9 @@ impl Transcript {
                 tools,
                 live,
                 summary,
-                worked_secs,
                 compact_shell,
-            } => self.render_tool_group(
-                &row.id,
-                tools,
-                summary,
-                *live,
-                *worked_secs,
-                *compact_shell,
-                &theme,
-                cx,
-            ),
+                ..
+            } => self.render_tool_group(&row.id, tools, summary, *live, *compact_shell, &theme, cx),
             RowKind::WorkflowRun { tool } => self.render_workflow_run(&row.id, tool, &theme, cx),
             RowKind::InputChip { header, resolved } => {
                 input_chip(header.clone(), *resolved, &theme)
@@ -8247,6 +8442,7 @@ impl Transcript {
             RowKind::Visual { owner, path, title } => {
                 self.render_visual(&row.id, owner, path, title, cx)
             }
+            RowKind::UiBlock { spec } => self.render_ui_block(&row.id, &row.entry_id, spec, cx),
             RowKind::AgentSwitch { from, to } => {
                 zuse_viewport::activity::agent_switch_notice(from, to, theme.text_muted)
                     .into_any_element()
@@ -8285,11 +8481,15 @@ impl Transcript {
             .fork_menu
             .get()
             .is_some_and(|menu| menu.entry_id == row.entry_id);
+        let worked_secs = self.turn_worked_secs.get(&row.entry_id).copied();
         let strip = row.timestamp.map(|ms| {
             let timestamp = div()
+                .flex()
+                .gap(px(Theme::SPACE_MD))
                 .text_size(crate::typography::text_xs())
                 .text_color(theme.text_muted.opacity(0.55))
-                .child(SharedString::from(format_timestamp(ms, &chrono::Local)));
+                .child(SharedString::from(format_timestamp(ms, &chrono::Local)))
+                .children(worked_secs.map(|secs| SharedString::from(format_elapsed(secs))));
             let copy = copy_text.map(|text| {
                 let entry_id = copy_entry_id.clone();
                 let fade_key = format!("copy-message-hover-{entry_id}");
@@ -8681,7 +8881,6 @@ impl Transcript {
         tools: &Arc<Vec<ToolItem>>,
         summary: &ToolGroupSummary,
         live: bool,
-        worked_secs: Option<i64>,
         compact_shell: bool,
         theme: &Theme,
         cx: &mut Context<Self>,
@@ -8692,10 +8891,10 @@ impl Transcript {
         // no "Called N tools" header — a running subagent stays visible.
         // Compact mode is the exception: EVERYTHING sits under the one work
         // accordion, spawn chips included.
-        let collapses = self.compact_mode || tool_group_collapses(tools);
+        let collapses = compact_shell || tool_group_collapses(tools);
         // Several subagents get the delegation header: their provider marks
         // stacked beside how they stand.
-        let agent_group = !self.compact_mode && tools.len() > 1 && tools.iter().all(is_agent_tool);
+        let agent_group = !compact_shell && tools.len() > 1 && tools.iter().all(is_agent_tool);
         let agent_count = tools.len();
         // Groups start collapsed, the live tail included: the header names
         // what the group is doing, and opening it is the user's call.
@@ -8734,33 +8933,24 @@ impl Transcript {
         let active = collapses
             && (summary.is_running()
                 || live_agents
-                || (self.compact_mode && tools.iter().any(|t| !t.resolved)));
-        let summary = SharedString::from(summary.text(&crate::localization::localizer(cx)));
-        if self.compact_mode && active {
-            self.compact_live_entries.insert(row_id.clone());
-        }
-        let worked_secs = worked_secs.filter(|_| self.compact_mode);
-        if worked_secs.is_some() && self.compact_live_entries.remove(row_id) {
-            self.compact_worked_fade_at
-                .insert(row_id.clone(), Instant::now());
-        }
-        let animate_worked = self
-            .compact_worked_fade_at
-            .get(row_id)
-            .is_some_and(|at| at.elapsed() < motion::FADE_IN.total());
-        let worked_fade_t = match worked_secs {
-            Some(_) if animate_worked && !cx.reduce_motion() => self
-                .compact_worked_fade_at
-                .get(row_id)
-                .map(|at| {
-                    motion::FADE_IN.progress(
-                        at.elapsed().as_secs_f32() / motion::FADE_IN.total().as_secs_f32(),
-                    )
-                })
-                .unwrap_or(1.0),
-            Some(_) => 1.0,
-            None => 0.0,
+                || (compact_shell && tools.iter().any(|t| !t.resolved)));
+        // A settled turn's header previews the kinds of work it folds.
+        let preview_icons: Vec<&'static str> = if matches!(summary, ToolGroupSummary::Turn { .. }) {
+            let mut icons = Vec::new();
+            for tool in tools.iter().filter(|t| t.kind == ToolItemKind::Call) {
+                let icon = tool_icon_path(&tool.call);
+                if !icons.contains(&icon) {
+                    icons.push(icon);
+                }
+                if icons.len() == TURN_PREVIEW_ICONS {
+                    break;
+                }
+            }
+            icons
+        } else {
+            Vec::new()
         };
+        let summary = SharedString::from(summary.text(&crate::localization::localizer(cx)));
 
         // A settled collapsed group has no visible body. Do not construct or
         // format thousands of hidden chips merely to clip them to zero height.
@@ -9072,19 +9262,16 @@ impl Transcript {
                     .flex()
                     .items_center()
                     .overflow_hidden()
-                    .child(match worked_secs {
-                        Some(secs) => compact_work_title(
-                            summary.clone(),
-                            SharedString::from(worked_for_label(secs)),
-                            worked_fade_t,
-                            shimmer_phase,
-                            theme,
-                        ),
-                        None => rolled_summary.unwrap_or_else(|| {
-                            tool_group_title(summary.clone(), shimmer_phase, theme)
-                        }),
-                    }),
-            );
+                    .child(rolled_summary.unwrap_or_else(|| {
+                        tool_group_title(summary.clone(), shimmer_phase, theme)
+                    })),
+            )
+            .children(preview_icons.into_iter().map(|path| {
+                crate::icons::icon(path)
+                    .size(px(13.0))
+                    .flex_none()
+                    .text_color(theme.text_muted.opacity(0.7))
+            }));
 
         if compact_shell {
             let view = cx.entity_id();
@@ -9103,7 +9290,7 @@ impl Transcript {
                 .flex_col()
                 .font_family(theme.font_sans_fixed.clone())
                 .child(header)
-                .when(motion_active || animate_worked, |group| {
+                .when(motion_active, |group| {
                     group.child(
                         canvas(
                             |_, _, _| (),
@@ -9408,7 +9595,7 @@ impl Transcript {
                 ))
             })
             .child(body)
-            .when(motion_active || animate_worked, |group| {
+            .when(motion_active, |group| {
                 group.child(
                     canvas(
                         |_, _, _| (),
@@ -9799,45 +9986,109 @@ impl gpui::Element for ChipOverlays {
 /// A sent message's non-image attachment: the file's icon and name on the
 /// same soft pill the transcript uses for file badges. Its bytes are never
 /// read back to the transcript, so there is no thumbnail to wait for.
-fn user_file_pill(name: &str, theme: &Theme) -> AnyElement {
+fn user_file_pill(id: SharedString, name: &str, theme: &Theme) -> AnyElement {
     let name = crate::attachments::attachment_display_name(name);
-    div()
-        .h(px(28.0))
-        .max_w(px(260.0))
-        .min_w_0()
-        .flex()
-        .items_center()
-        .gap(px(6.0))
-        .rounded(px(7.0))
-        .bg(theme.ink(0.06))
-        .pl(px(2.0))
-        .pr(px(10.0))
-        .text_size(px(13.0))
-        .text_color(theme.text)
+    crate::badges::pill(id, theme)
         .child(
-            div()
-                .size(px(24.0))
-                .flex_none()
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(5.0))
-                .bg(crate::file_icons::well_bg(theme))
-                .child(
-                    crate::file_icons::icon(
-                        crate::file_icons::FileIconIdentity::file(name),
-                        theme.appearance,
-                    )
-                    .size(px(16.0)),
-                ),
+            crate::file_icons::icon(
+                crate::file_icons::FileIconIdentity::file(name),
+                theme.appearance,
+            )
+            .flex_none()
+            .size(px(14.0)),
         )
         .child(
             div()
                 .min_w_0()
                 .truncate()
-                .child(SharedString::from(name.to_owned())),
+                .child(SharedString::from(user_chip_name(name))),
         )
         .into_any_element()
+}
+
+/// The thumbnail inside an image chip above a user bubble.
+const USER_CHIP_THUMB: f32 = 16.0;
+const USER_CHIP_NAME_MAX: usize = 28;
+
+/// A chip's file name: at most 28 characters, long names cut to their first
+/// 25 plus "...".
+fn user_chip_name(name: &str) -> String {
+    if name.chars().count() <= USER_CHIP_NAME_MAX {
+        return name.to_owned();
+    }
+    let mut short: String = name.chars().take(USER_CHIP_NAME_MAX - 3).collect();
+    short.push_str("...");
+    short
+}
+
+/// Lift file mentions out of a user message's display text: their chips ride
+/// above the bubble instead, so each leaves the text (its surrounding spaces
+/// collapsed) and its path joins the returned list. Other mentions keep their
+/// place, re-ranged over the new text.
+fn lift_file_mentions(
+    text: &str,
+    mut spans: Vec<crate::composer::SentMentionSpan>,
+) -> (
+    String,
+    Vec<crate::composer::SentMentionSpan>,
+    Vec<SharedString>,
+) {
+    let lifted = |span: &crate::composer::SentMentionSpan| {
+        span.kind == crate::composer::ChipKind::File && span.attachment.is_none()
+    };
+    if !spans.iter().any(lifted) {
+        return (text.to_owned(), spans, Vec::new());
+    }
+    spans.sort_by_key(|span| span.range.start);
+    let mut out = String::with_capacity(text.len());
+    let mut kept = Vec::new();
+    let mut files: Vec<SharedString> = Vec::new();
+    let mut at = 0;
+    for span in spans {
+        if span.range.start < at
+            || span.range.end > text.len()
+            || !text.is_char_boundary(span.range.start)
+            || !text.is_char_boundary(span.range.end)
+        {
+            continue;
+        }
+        out.push_str(&text[at..span.range.start]);
+        at = span.range.end;
+        if lifted(&span) {
+            if !files.contains(&span.path) {
+                files.push(span.path.clone());
+            }
+            while out.ends_with(' ') {
+                out.pop();
+            }
+            let rest = text[at..].trim_start_matches(' ');
+            at = text.len() - rest.len();
+            if !out.is_empty()
+                && !out.ends_with('\n')
+                && !rest.is_empty()
+                && !rest.starts_with(['\n', '.', ',', ';', ':', '!', '?', ')'])
+            {
+                out.push(' ');
+            }
+        } else {
+            let start = out.len();
+            out.push_str(&text[span.range.clone()]);
+            kept.push(crate::composer::SentMentionSpan {
+                range: start..out.len(),
+                ..span
+            });
+        }
+    }
+    out.push_str(&text[at..]);
+    // Only plain spaces and newlines: a chip's own padding (no-break spaces)
+    // stays, so a chip left at either edge keeps its range.
+    let blank = [' ', '\n'];
+    let lead = out.len() - out.trim_start_matches(blank).len();
+    let trimmed = out.trim_matches(blank).to_owned();
+    for span in &mut kept {
+        span.range = span.range.start - lead..span.range.end - lead;
+    }
+    (trimmed, kept, files)
 }
 
 /// The transcript ErrorChip — the shared [`notice_chip`] in its tile
@@ -9975,6 +10226,9 @@ fn input_chip(header: SharedString, resolved: bool, theme: &Theme) -> AnyElement
 /// terminal for commands, a page for reads, a pencil for edits and writes, a
 /// magnifier for searches, a globe for the web, a puzzle piece for MCP, a
 /// robot for subagents and a wrench for anything unrecognized.
+/// Distinct tool-kind icons a settled turn's fold header previews.
+const TURN_PREVIEW_ICONS: usize = 5;
+
 fn tool_icon_path(call: &ToolCall) -> &'static str {
     match call {
         ToolCall::Exec { .. } => crate::icons::TERMINAL,
@@ -11178,6 +11432,10 @@ fn entry_fingerprint(entry: &SessionMessageEntry, pending: bool) -> u64 {
                 acc.push(0);
             }
         }
+        if let MessagePart::UiBlock { spec, .. } = part {
+            acc.extend_from_slice(spec.as_bytes());
+            acc.push(0);
+        }
         if let MessagePart::Input { resolved, .. } = part {
             acc.push(0x10 | *resolved as u8);
         }
@@ -11550,16 +11808,8 @@ mod tests {
                 unreachable!()
             };
             assert!(!live);
-            let _ = this.render_tool_group(
-                &row.id,
-                tools,
-                summary,
-                *live,
-                None,
-                false,
-                &Theme::dark(),
-                cx,
-            );
+            let _ =
+                this.render_tool_group(&row.id, tools, summary, *live, false, &Theme::dark(), cx);
             let reveal = &this.tool_group_reveals[&row.id];
             assert_eq!(
                 reveal.rendered_open,
@@ -11600,7 +11850,6 @@ mod tests {
                         tools,
                         summary,
                         *live,
-                        None,
                         false,
                         &Theme::dark(),
                         cx,
@@ -12227,7 +12476,7 @@ mod tests {
         with_tool_group_navigation(cx, |state, transcript, cx| {
             transcript.update(cx, |this, _| {
                 this.folds.insert(
-                    "tools#g0".into(),
+                    "tools#work".into(),
                     FoldState {
                         open: Some(true),
                         ..Default::default()
@@ -12240,33 +12489,29 @@ mod tests {
             replay_tool_group(&state, &transcript, "chat-a", cx);
             transcript.update(cx, |this, cx| {
                 let row = this.rows[0].clone();
+                // A settled turn folds under its work header; the user's
+                // pin on that header survives the replay.
                 let RowKind::ToolGroup {
                     tools,
                     live,
                     summary,
+                    compact_shell,
                     ..
                 } = &row.kind
                 else {
                     panic!("expected tools")
                 };
+                assert!(*compact_shell);
                 let _ = this.render_tool_group(
                     &row.id,
                     tools,
                     summary,
                     *live,
-                    None,
-                    false,
+                    *compact_shell,
                     &Theme::dark(),
                     cx,
                 );
                 assert_eq!(this.folds[&row.id].open, Some(true));
-                assert_eq!(this.tool_group_reveals[&row.id].rendered_open, Some(true));
-                assert!(
-                    this.tool_group_reveals[&row.id]
-                        .starts
-                        .iter()
-                        .all(Option::is_none)
-                );
             });
             state.update(cx, |state, _| {
                 state.transcript.push(assistant(
@@ -12294,7 +12539,6 @@ mod tests {
                     tools,
                     summary,
                     *live,
-                    None,
                     false,
                     &Theme::dark(),
                     cx,
@@ -13563,8 +13807,7 @@ mod tests {
             panic!("expected a tool group");
         };
         assert_eq!(*worked_secs, Some(310));
-        assert_eq!(worked_for_label(310), "Worked for 5m 10s");
-        assert_eq!(worked_for_label(95), "Worked for 1m 35s");
+        assert_eq!(format_elapsed(310), "5m 10s");
 
         let streaming = assistant("a1", MessageStatus::Streaming, vec![tool_part("t0", "ls")]);
         let mut streaming = streaming;
@@ -13721,6 +13964,87 @@ mod tests {
             unreachable!();
         };
         assert_eq!(tools.len(), 2, "the error didn't split the work group");
+    }
+
+    fn visual_part(id: &str) -> MessagePart {
+        MessagePart::Visual {
+            id: id.into(),
+            path: format!("/visuals/{id}.luau"),
+            title: "Chart".into(),
+        }
+    }
+
+    #[test]
+    fn settled_turns_fold_and_live_turns_stay_open() {
+        let parts = vec![tool_part("t0", "ls"), text_part("r0", "done")];
+        let settled = assistant("a1", MessageStatus::Complete, parts.clone());
+        let live = assistant("a2", MessageStatus::Streaming, parts);
+        assert!(folds_turn(&settled, false));
+        assert!(!folds_turn(&live, false));
+        assert!(folds_turn(&live, true), "compact mode folds live turns too");
+    }
+
+    #[test]
+    fn settled_turn_header_counts_calls_and_messages() {
+        let entry = assistant(
+            "a1",
+            MessageStatus::Complete,
+            vec![
+                reasoning_part("r0", "thinking"),
+                tool_part("t1", "ls"),
+                text_part("n1", "checking"),
+                tool_part("t2", "pwd"),
+                text_part("r1", "the answer"),
+            ],
+        );
+        let rows = rows_for_entry(&entry, false, true, &mut parse);
+        let RowKind::ToolGroup { summary, .. } = &rows[0].kind else {
+            panic!("expected the work header");
+        };
+        assert_eq!(
+            *summary,
+            ToolGroupSummary::Turn {
+                calls: 2,
+                messages: 2,
+                failed: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn folded_turn_lifts_visuals_below_the_reply() {
+        let entry = assistant(
+            "a1",
+            MessageStatus::Complete,
+            vec![
+                tool_part("t0", "ls"),
+                visual_part("v0"),
+                tool_part("t1", "pwd"),
+                text_part("r0", "the answer"),
+            ],
+        );
+        let rows = rows_for_entry(&entry, false, true, &mut parse);
+        let visible = compact_visible(&rows);
+        assert_eq!(visible.len(), 3);
+        assert!(matches!(visible[0].kind, RowKind::ToolGroup { .. }));
+        assert!(matches!(visible[1].kind, RowKind::Markdown { .. }));
+        assert!(matches!(visible[2].kind, RowKind::Visual { .. }));
+        assert!(visible[1].timestamp.is_none());
+        assert!(visible[2].timestamp.is_some(), "the strip closes the turn");
+        assert!(visible[0].turn_start);
+
+        // Unfolded turns keep visuals where the agent published them.
+        let rows = rows_for_entry(&entry, false, false, &mut parse);
+        assert!(matches!(rows[1].kind, RowKind::Visual { .. }));
+    }
+
+    #[test]
+    fn a_visual_only_turn_keeps_its_timestamp() {
+        let entry = assistant("a1", MessageStatus::Complete, vec![visual_part("v0")]);
+        let rows = rows_for_entry(&entry, false, true, &mut parse);
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].turn_start);
+        assert!(rows[0].timestamp.is_some());
     }
 
     #[test]
@@ -16551,6 +16875,7 @@ mod tests {
             text,
             mentions,
             attachments,
+            files,
             ..
         } = &rows[0].kind
         else {
@@ -16559,8 +16884,10 @@ mod tests {
         assert!(!text.contains("zuse-") && !text.contains("Attached images"));
         assert_eq!(
             mentions.iter().map(|m| m.kind).collect::<Vec<_>>(),
-            [ChipKind::Image, ChipKind::File, ChipKind::File]
+            [ChipKind::Image, ChipKind::File]
         );
+        // A workspace file is not an upload: it lifts out of the bubble.
+        assert_eq!(files.as_slice(), ["crates/ui/src/composer.rs"]);
         let labels: Vec<String> = mentions
             .iter()
             .map(|m| {
@@ -16569,7 +16896,7 @@ mod tests {
                     .replace('\u{a0}', " ")
             })
             .collect();
-        assert_eq!(labels, ["Image 1", "notes.md", "composer.rs"]);
+        assert_eq!(labels, ["Image 1", "notes.md"]);
         // Chips stand in for their attachments: only the unchipped image is
         // left in the strip, and each attachment chip carries its upload.
         assert_eq!(
@@ -16587,7 +16914,6 @@ mod tests {
             [
                 Some("/uploads/ab12cd34-Image_1.png"),
                 Some("/uploads/ef56ab78-notes.md"),
-                None
             ]
         );
 
@@ -16613,19 +16939,31 @@ mod tests {
         entry.status = None;
         entry.parts = vec![text_part("t0", raw)];
         let rows = rows_for_entry(&entry, false, false, &mut parse);
-        let RowKind::User { text, mentions, .. } = &rows[0].kind else {
+        let RowKind::User {
+            text,
+            mentions,
+            files,
+            ..
+        } = &rows[0].kind
+        else {
             panic!("expected a user row");
         };
         assert!(
             !text.contains("zuse-file:"),
             "raw link left visible: {text}"
         );
-        assert!(text.contains("composer.rs"));
-        assert_eq!(mentions.len(), 1);
-        assert_eq!(mentions[0].kind, crate::composer::ChipKind::File);
-        assert_eq!(mentions[0].path.as_ref(), "crates/ui/src/composer.rs");
-        let chip = &text[mentions[0].range.clone()];
-        assert!(chip.starts_with('\u{00A0}') && chip.contains("composer.rs"));
+        // The file mention rides above the bubble as a chip, out of the text.
+        assert_eq!(text.as_ref(), "look at please");
+        assert!(mentions.is_empty());
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].as_ref(), "crates/ui/src/composer.rs");
+        assert_eq!(
+            rows[0]
+                .copy_text
+                .as_deref()
+                .map(|copy| copy.contains("composer.rs")),
+            Some(true)
+        );
         assert_eq!(rows[0].version, (raw.len() as u64) << 1);
 
         entry.parts = vec![text_part("t0", "no mentions here")];
@@ -16635,6 +16973,104 @@ mod tests {
         };
         assert_eq!(text.as_ref(), "no mentions here");
         assert!(mentions.is_empty());
+    }
+
+    #[test]
+    fn file_mentions_lift_out_while_other_chips_keep_their_place() {
+        let raw = "[a.rs](zuse-file:src/a.rs) then [docs](zuse-file:docs/) and [b.rs](zuse-file:src/b.rs)";
+        let (display, spans) = crate::composer::sent_mention_display(raw).unwrap();
+        let (text, kept, files) = lift_file_mentions(&display, spans);
+        assert_eq!(
+            files.iter().map(|f| f.as_ref()).collect::<Vec<_>>(),
+            ["src/a.rs", "src/b.rs"]
+        );
+        assert!(!text.starts_with(' ') && !text.ends_with(' '));
+        assert!(!text.contains("  "), "double space left: {text:?}");
+        assert!(text.starts_with("then"));
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].kind, crate::composer::ChipKind::Directory);
+        assert!(text[kept[0].range.clone()].contains("docs"));
+    }
+
+    #[test]
+    fn a_chip_left_at_either_edge_keeps_its_padding_and_range() {
+        let raw = "[a.rs](zuse-file:src/a.rs) [docs](zuse-file:docs/) [b.rs](zuse-file:src/b.rs)";
+        let (display, spans) = crate::composer::sent_mention_display(raw).unwrap();
+        let (text, kept, files) = lift_file_mentions(&display, spans);
+        assert_eq!(files.len(), 2);
+        assert_eq!(kept.len(), 1);
+        let range = kept[0].range.clone();
+        assert!(range.end <= text.len(), "{range:?} outside {text:?}");
+        assert_eq!(
+            &text[range.clone()],
+            text.as_str(),
+            "the chip is all that is left"
+        );
+        assert!(text[range].contains("docs"));
+    }
+
+    #[test]
+    fn a_lifted_mention_before_punctuation_leaves_no_gap() {
+        let raw = "Start with [total.ts](zuse-file:src/total.ts).";
+        let (display, spans) = crate::composer::sent_mention_display(raw).unwrap();
+        let (text, _, files) = lift_file_mentions(&display, spans);
+        assert_eq!(text, "Start with.");
+        assert_eq!(files.len(), 1);
+    }
+
+    #[test]
+    fn a_text_without_file_mentions_is_untouched() {
+        let (text, kept, files) = lift_file_mentions("plain words", Vec::new());
+        assert_eq!(text, "plain words");
+        assert!(kept.is_empty() && files.is_empty());
+    }
+
+    #[test]
+    fn chip_names_truncate_past_28_characters() {
+        assert_eq!(user_chip_name("short.png"), "short.png");
+        let exact = "a".repeat(28);
+        assert_eq!(user_chip_name(&exact), exact);
+        let long = format!("{}.png", "b".repeat(40));
+        let short = user_chip_name(&long);
+        assert_eq!(short, format!("{}...", "b".repeat(25)));
+        assert_eq!(short.chars().count(), 28);
+    }
+
+    #[test]
+    fn user_rows_lift_context_items_above_the_bubble() {
+        let contexts = vec![crate::context_items::pull_request_context(
+            "https://github.com/a/b/pull/9",
+            9,
+            crate::context_items::PullRequestScope::Comments,
+            "Pull request #9 brief".into(),
+        )];
+        let mut entry = assistant("u9", MessageStatus::Complete, vec![]);
+        entry.role = MessageRole::User;
+        entry.status = None;
+        entry.parts = vec![text_part(
+            "t0",
+            &crate::context_items::with_contexts("Fix them", &contexts),
+        )];
+        let rows = rows_for_entry(&entry, false, false, &mut parse);
+        let RowKind::User { text, badges, .. } = &rows[0].kind else {
+            panic!("expected a user row");
+        };
+        assert_eq!(text.as_ref(), "Fix them");
+        assert_eq!(badges.len(), 1);
+        assert_eq!(badges[0].label.as_ref(), "PR #9 · Comments");
+        assert_eq!(badges[0].markdown.as_deref(), Some("Pull request #9 brief"));
+
+        // Context only: no bubble text at all.
+        entry.parts = vec![text_part(
+            "t0",
+            &crate::context_items::with_contexts("", &contexts),
+        )];
+        let rows = rows_for_entry(&entry, false, false, &mut parse);
+        let RowKind::User { text, badges, .. } = &rows[0].kind else {
+            panic!("expected a user row");
+        };
+        assert!(text.is_empty());
+        assert_eq!(badges.len(), 1);
     }
 
     #[test]

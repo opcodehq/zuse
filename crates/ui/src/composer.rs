@@ -7104,7 +7104,7 @@ impl Composer {
                     && composer_has_content(
                         this.input.read(cx).text(),
                         this.staged().len() + this.staged_appshots().len(),
-                        this.staged_comments(cx).len(),
+                        this.staged_note_count(cx),
                     )
                 {
                     this.on_submit(cx);
@@ -7427,7 +7427,7 @@ impl Composer {
         composer_has_content(
             self.input.read(cx).text(),
             self.staged().len() + self.staged_appshots().len(),
-            self.staged_comments(cx).len(),
+            self.staged_note_count(cx),
         )
     }
 
@@ -7783,6 +7783,38 @@ impl Composer {
             .read(cx)
             .review_comments(&self.current_key)
             .to_vec()
+    }
+
+    /// Context items staged on this draft (a pull request brief), sent ahead
+    /// of the text.
+    pub(crate) fn staged_contexts(&self, cx: &App) -> Vec<crate::context_items::ContextItem> {
+        self.state
+            .read(cx)
+            .context_items(&self.current_key)
+            .to_vec()
+    }
+
+    /// Staged review comments plus context items: content that makes a draft
+    /// sendable without any text.
+    fn staged_note_count(&self, cx: &App) -> usize {
+        let state = self.state.read(cx);
+        state.review_comments(&self.current_key).len()
+            + state.context_items(&self.current_key).len()
+    }
+
+    /// Stage `context` on the current draft for the user to review and send.
+    pub(crate) fn stage_context(
+        &mut self,
+        context: crate::context_items::ContextItem,
+        cx: &mut Context<Self>,
+    ) {
+        let key = self.current_key.clone();
+        self.state.update(cx, |state, cx| {
+            state.add_context_item(&key, context);
+            cx.notify();
+        });
+        self.focus_pending = true;
+        cx.notify();
     }
 
     fn render_appshot_strip(
@@ -9443,7 +9475,7 @@ impl Composer {
             || composer_has_content(
                 self.input.read(cx).text(),
                 self.staged().len() + self.staged_appshots().len(),
-                self.staged_comments(cx).len(),
+                self.staged_note_count(cx),
             );
         send_button_mode(self.run_live(cx), has_text)
     }
@@ -9469,11 +9501,45 @@ impl Composer {
     /// Resolve): as if typed and submitted into an empty composer, queued
     /// behind a running turn. A draft in progress is kept: the text goes
     /// after it for the user to review and send.
+    /// [`Self::send_prompt`] with `context` staged first: the brief travels as
+    /// a context item and `text` is the short message the bubble shows.
+    pub(crate) fn send_with_context(
+        &mut self,
+        text: String,
+        context: crate::context_items::ContextItem,
+        cx: &mut Context<Self>,
+    ) {
+        let drafted = composer_has_content(
+            self.input.read(cx).text(),
+            self.staged().len() + self.staged_appshots().len(),
+            self.staged_note_count(cx),
+        );
+        self.stage_context(context, cx);
+        if drafted {
+            if !text.is_empty() {
+                self.input.update(cx, |input, cx| {
+                    let draft = input.text().trim_end().to_owned();
+                    let text = if draft.is_empty() {
+                        text
+                    } else {
+                        format!("{draft}\n\n{text}")
+                    };
+                    input.set_text(text, cx)
+                });
+            }
+            return;
+        }
+        self.input.update(cx, |input, cx| input.set_text(text, cx));
+        let focus_pending = self.focus_pending;
+        self.on_submit(cx);
+        self.focus_pending = focus_pending;
+    }
+
     pub(crate) fn send_prompt(&mut self, text: String, cx: &mut Context<Self>) {
         let drafted = composer_has_content(
             self.input.read(cx).text(),
             self.staged().len() + self.staged_appshots().len(),
-            self.staged_comments(cx).len(),
+            self.staged_note_count(cx),
         );
         if drafted {
             self.input.update(cx, |input, cx| {
@@ -9533,7 +9599,7 @@ impl Composer {
         let no_content = !composer_has_content(
             &text,
             self.staged().len() + self.staged_appshots().len(),
-            self.staged_comments(cx).len(),
+            self.staged_note_count(cx),
         );
         match self.button_mode(cx) {
             // Enter never stops a run: Stop mode implies an empty composer,
@@ -9545,14 +9611,14 @@ impl Composer {
             _ if no_content => {}
             _ if self.send_blocked(cx) => {}
             SendButtonMode::Send => {
-                self.send(text, false, false, cx);
+                self.send(text, false, false, false, cx);
                 self.focus_pending = true;
             }
             // Busy: keep the message queued until the current turn ends, or
             // steer it into the live turn when this submit asks for that.
             SendButtonMode::Queue => {
                 let steer = submit_steers(intent, crate::settings::direct_steer_enabled(cx));
-                self.send(text, true, steer, cx);
+                self.send(text, true, steer, false, cx);
                 self.focus_pending = true;
             }
         }
@@ -9574,7 +9640,7 @@ impl Composer {
         let has_content = composer_has_content(
             self.input.read(cx).text(),
             self.staged().len() + self.staged_appshots().len(),
-            self.staged_comments(cx).len(),
+            self.staged_note_count(cx),
         );
         match modified_submit_target(has_content) {
             ModifiedSubmitTarget::SubmitContent => self.submit_with(SubmitIntent::Steer, cx),
@@ -9582,25 +9648,47 @@ impl Composer {
         }
     }
 
+    /// Send `text` as the user's next message without touching the draft:
+    /// queued behind a running turn, like a normal busy send. Returns false
+    /// when nothing was sent.
+    pub(crate) fn send_reply(&mut self, text: String, cx: &mut Context<Self>) -> bool {
+        if text.trim().is_empty() || self.send_blocked(cx) {
+            return false;
+        }
+        let queue = self.button_mode(cx) != SendButtonMode::Send;
+        self.send(text, queue, false, true, cx)
+    }
+
     /// Queue a Run doc command with an optimistic echo — or, with the agent
     /// busy, park the message on the chat's pending queue instead. New chats
     /// thread the picked config in: worktree creation (when the isolated toggle
     /// is on), `Mutate createChat` with the `ChatConfig` + cwd, and the model /
     /// reasoning / options on the Run request itself (§1.7).
-    fn send(&mut self, text: String, queue: bool, steer: bool, cx: &mut Context<Self>) {
+    ///
+    /// `keep_draft` sends `text` alone, leaving the input, staged files and
+    /// review comments untouched (a reply from a UI block form). Returns
+    /// false when it stopped before dispatching anything.
+    fn send(
+        &mut self,
+        text: String,
+        queue: bool,
+        steer: bool,
+        keep_draft: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
         if self
             .state
             .read(cx)
             .selected_project_creation()
             .is_some_and(|op| op.blocks_execution())
         {
-            return;
+            return false;
         }
         if self.pickers.read(cx).preparing_source(cx) {
-            return;
+            return false;
         }
         if self.send_cloud(text.clone(), cx) {
-            return;
+            return true;
         }
         if self
             .state
@@ -9611,22 +9699,22 @@ impl Composer {
             self.failure = Some("Unarchive this thread before sending another message.".into());
             self.failure_key = self.state.read(cx).selected_chat.clone();
             cx.notify();
-            return;
+            return false;
         }
         if self.permission_blocked(cx) {
             self.failure = Some("Confirm this chat’s saved choices before sending. Open the access menu to refresh them.".into());
             self.failure_key = self.state.read(cx).selected_chat.clone();
             cx.notify();
-            return;
+            return false;
         }
         if !self.check_reference_delivery(&text, cx) {
-            return;
+            return false;
         }
         let Some(engine) = self.state.read(cx).engine().cloned() else {
             self.failure = Some("Engine not connected".into());
             self.failure_key = None; // global — meaningful on every chat
             cx.notify();
-            return;
+            return false;
         };
         // Chat id: existing selection, or client-minted for the new-chat canvas
         // (the chat then appears from the doc host once the doc materializes).
@@ -9717,18 +9805,23 @@ impl Composer {
                 self.failure =
                     Some("Update the chat's engine to queue messages during a response.".into());
                 cx.notify();
-                return;
+                return false;
             }
         }
         // Snapshot-and-clear NOW (use-attachments.ts takeAttachments): the
         // strip empties the instant you hit send; a failure hands the files
         // back into the chat's stash.
-        let mut ordinary_staged = self
-            .attachments
-            .remove(&self.current_key)
-            .unwrap_or_default();
-        self.attachment_drafts.remove(&self.current_key);
-        let staged_appshots = self.appshots.remove(&self.current_key).unwrap_or_default();
+        let (mut ordinary_staged, staged_appshots) = if keep_draft {
+            (Vec::new(), Vec::new())
+        } else {
+            self.attachment_drafts.remove(&self.current_key);
+            (
+                self.attachments
+                    .remove(&self.current_key)
+                    .unwrap_or_default(),
+                self.appshots.remove(&self.current_key).unwrap_or_default(),
+            )
+        };
         if is_new {
             if let Some((number, markdown)) = self.pickers.read(cx).source_issue(cx) {
                 ordinary_staged.push(StagedAttachment::from_file(
@@ -9748,7 +9841,20 @@ impl Composer {
         // input as literal text.
         let key = self.current_key.clone();
         let comments = self.state.update(cx, |state, cx| {
+            if keep_draft {
+                return Vec::new();
+            }
             let taken = state.take_review_comments(&key);
+            if !taken.is_empty() {
+                cx.notify();
+            }
+            taken
+        });
+        let contexts = self.state.update(cx, |state, cx| {
+            if keep_draft {
+                return Vec::new();
+            }
+            let taken = state.take_context_items(&key);
             if !taken.is_empty() {
                 cx.notify();
             }
@@ -9762,6 +9868,7 @@ impl Composer {
             .collect();
         let text = zuse_protocol::attachment_mentions::demote_unattached_mentions(&text, &attached);
         let text = crate::comments::with_comments(&text, &comments);
+        let text = crate::context_items::with_contexts(&text, &contexts);
         self.preview = None;
         let message_id = uuid::Uuid::new_v4().to_string();
         let created_at = chrono::Utc::now().timestamp_millis();
@@ -9902,8 +10009,10 @@ impl Composer {
             cx.notify();
         });
 
-        self.input.update(cx, |input, cx| input.set_text("", cx));
-        self.drafts.remove(&self.current_key);
+        if !keep_draft {
+            self.input.update(cx, |input, cx| input.set_text("", cx));
+            self.drafts.remove(&self.current_key);
+        }
         self.recall.reset();
         self.escape_presses.reset();
         self.failure = None;
@@ -10441,9 +10550,15 @@ impl Composer {
                         for comment in &comments {
                             s.add_review_comment(&restore_key, comment.clone());
                         }
+                        for context in &contexts {
+                            s.add_context_item(&restore_key, context.clone());
+                        }
                         cx.notify();
                     });
-                    if is_new && composer.current_key != restore_key {
+                    if keep_draft {
+                        // The draft was never taken; the failure banner says
+                        // the reply did not go out.
+                    } else if is_new && composer.current_key != restore_key {
                         // A re-key swap to the canvas is pending (the
                         // select_chat(None) above); it loads this draft into
                         // the input on flush — setting the input directly
@@ -10479,6 +10594,7 @@ impl Composer {
             })
             .ok();
         }));
+        true
     }
 
     // ---- composer lists: stash, sent-message search, emoji ----
@@ -12416,7 +12532,7 @@ impl Composer {
                     && !composer_has_content(
                         self.input.read(cx).text(),
                         self.staged().len() + self.staged_appshots().len(),
-                        self.staged_comments(cx).len(),
+                        self.staged_note_count(cx),
                     );
                 send_circle("composer-send", blocked || empty, theme)
                     .when(!blocked, |el| {
@@ -12562,7 +12678,7 @@ impl Render for Composer {
             self.input
                 .update(cx, |input, cx| input.set_text(text.clone(), cx));
             if send && !text.trim().is_empty() {
-                self.send(text, false, false, cx);
+                self.send(text, false, false, false, cx);
             }
         }
         let archived = self
@@ -12730,7 +12846,7 @@ impl Render for Composer {
             && !composer_has_content(
                 self.input.read(cx).text(),
                 self.staged().len() + self.staged_appshots().len(),
-                self.staged_comments(cx).len(),
+                self.staged_note_count(cx),
             );
         // The attached tray: every notice and staging row in one surface
         // tucked behind the card's top edge (`w-14/15`), or flush on the
@@ -14898,7 +15014,16 @@ mod tests {
                     state.set_test_engine(crate::state::EngineHandle::from_test_client(
                         zuse_rpc::RpcClient::new(out, inbound),
                     ));
+                    state.chats = vec![
+                        serde_json::from_value(serde_json::json!({
+                            "id": "literal-draft", "deviceId": "local", "cwd": "/tmp/literal",
+                            "archived": false, "createdAt": chrono::Utc::now(),
+                            "config": { "harness": "codex", "sandbox": "workspace-write" },
+                        }))
+                        .unwrap(),
+                    ];
                     state.selected_chat = Some("literal-draft".into());
+                    state.confirm_selected_chat_configuration_for_test();
                 });
                 let composer = cx.new(|cx| Composer::new(state, cx));
                 composer.update(cx, |composer, cx| {
@@ -14935,7 +15060,9 @@ mod tests {
                     assert!(submitted.is_none(), "whitespace alone must not submit");
                     assert_eq!(discarded, editing_queue);
                 } else {
-                    let submitted = submitted.expect("submission must reach the engine RPC");
+                    let submitted = submitted.unwrap_or_else(|| {
+                        panic!("{raw:?} (editing queue: {editing_queue}) must reach the engine RPC")
+                    });
                     assert_eq!(submitted, raw);
                     assert!(zuse_protocol::invocation::leading_command(&submitted).is_none());
                     assert!(zuse_protocol::invocation::invocation_links(&submitted).is_empty());
@@ -16984,7 +17111,7 @@ mod tests {
                 })).unwrap()];
                 });
                 assert!(!composer.reference_delivery_supported(cx));
-                composer.send(draft.clone(), false, false, cx);
+                composer.send(draft.clone(), false, false, false, cx);
                 assert!(
                     composer
                         .failure

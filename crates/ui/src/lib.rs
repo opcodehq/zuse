@@ -30,6 +30,7 @@ pub mod comments;
 pub mod composer;
 mod composer_dock;
 mod composer_markdown;
+pub mod context_items;
 mod context_usage;
 pub mod desktop_import;
 mod dictation;

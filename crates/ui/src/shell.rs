@@ -708,9 +708,17 @@ pub enum RightSurface {
 /// Stage `prompt` in `composer` without sending it, after the composer has
 /// swapped to its session's draft (which runs on a state observation the
 /// caller just queued). A draft already waiting there stays, above it.
-fn stage_prompt(composer: Entity<Composer>, prompt: String, cx: &mut App) {
+fn stage_prompt(
+    composer: Entity<Composer>,
+    prompt: String,
+    context: Option<crate::context_items::ContextItem>,
+    cx: &mut App,
+) {
     cx.defer(move |cx| {
         composer.update(cx, |composer, cx| {
+            if let Some(context) = context {
+                composer.stage_context(context, cx);
+            }
             composer.input.update(cx, |input, cx| {
                 let draft = input.text().trim_end();
                 let text = if draft.is_empty() {
@@ -4564,6 +4572,12 @@ impl Shell {
                 }
             }
             TranscriptEvent::FindClosed => self.focus_transcript_composer(&transcript, cx),
+            TranscriptEvent::SendUiBlockReply { row_id, text } => {
+                let sent = self.send_transcript_reply(&transcript, text.clone(), cx);
+                transcript.update(cx, |transcript, cx| {
+                    transcript.ui_block_reply_sent(row_id, sent, cx)
+                });
+            }
         }
     }
 
@@ -14599,6 +14613,14 @@ impl Render for Shell {
                 },
             ))
             .on_action(cx.listener(
+                |this, action: &crate::pull_request_card::SendContextToChat, _, cx| {
+                    let (text, context) = (action.text.clone(), action.context.clone());
+                    this.composer.update(cx, |composer, cx| {
+                        composer.send_with_context(text, context, cx)
+                    });
+                },
+            ))
+            .on_action(cx.listener(
                 |this, action: &crate::pull_request_detail::OpenPullRequest, window, cx| {
                     // From a chat (a sidebar badge, the composer's badge), the
                     // pull request opens beside the focused session, so
@@ -14664,11 +14686,16 @@ impl Render for Shell {
                     if this.pull_request_is_selected_chats(action, cx)
                         && let Some(composer) = this.open_side_chat_for_prompt(cx)
                     {
-                        stage_prompt(composer, action.prompt.clone(), cx);
+                        stage_prompt(composer, action.prompt.clone(), action.context.clone(), cx);
                         return;
                     }
                     this.open_new_session(Some(action.project_id.clone()), cx);
-                    stage_prompt(this.composer.clone(), action.prompt.clone(), cx);
+                    stage_prompt(
+                        this.composer.clone(),
+                        action.prompt.clone(),
+                        action.context.clone(),
+                        cx,
+                    );
                 },
             ))
             // New session works from anywhere — `open_new_session` routes back
@@ -18038,6 +18065,7 @@ mod exit_regressions {
                 window.dispatch_action(
                     Box::new(crate::pull_request_detail::StartPullRequestSession {
                         prompt: "Review pull request #7".into(),
+                        context: None,
                         project_id: "pr-project".into(),
                         device: "remote".into(),
                         repository: "a/b".into(),
