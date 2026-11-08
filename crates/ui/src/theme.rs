@@ -826,7 +826,7 @@ impl Theme {
     /// see [`Self::glass_overlay`], where light coverage steps up to keep menu
     /// text legible over an unknown backdrop.
     pub const GLASS_ALPHA_LIGHT: f32 = if cfg!(any(target_os = "macos", target_os = "windows")) {
-        0.72
+        0.80
     } else {
         1.0
     };
