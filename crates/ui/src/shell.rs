@@ -12438,18 +12438,24 @@ impl Shell {
                         .absolute()
                         .inset_0()
                         .child(crate::terminal::dock::above_terminal(
-                            crate::edge_fade::edge_faded(
-                                Theme::TRANSCRIPT_FADE_BAND,
-                                true,
-                                true,
-                                div().size_full().child(outlet),
-                            )
-                            // Fully faded BY the titlebar's bottom edge (the
-                            // title text is opaque — overlap read as collision),
-                            // ramping in the band just below it.
-                            .inset_top(Theme::TITLEBAR_HEIGHT)
-                            .band_top(Theme::TRANSCRIPT_FADE_BAND)
-                            .band_bottom(bottom_band),
+                            if has_selection || departing_transcript {
+                                // The transcript fades its scrolling content;
+                                // its find bar retains normal clipping and stacking.
+                                self.transcript.update(cx, |transcript, cx| {
+                                    transcript.set_chrome_fade_bottom(bottom_band, cx);
+                                });
+                                div().size_full().child(outlet).into_any_element()
+                            } else {
+                                crate::edge_fade::edge_faded(
+                                    Theme::TRANSCRIPT_FADE_BAND,
+                                    true,
+                                    true,
+                                    div().size_full().child(outlet),
+                                )
+                                .inset_top(Theme::TITLEBAR_HEIGHT)
+                                .band_bottom(bottom_band)
+                                .into_any_element()
+                            },
                             terminal_geometry.clone(),
                         ))
                 },

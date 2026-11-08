@@ -313,10 +313,7 @@ impl Transcript {
                 .absolute()
                 .top(px(Theme::TITLEBAR_HEIGHT + 8.0))
                 .right(px(12.0))
-                // Paint after the transcript's ancestor EdgeFade scope has
-                // ended, keeping the entire search bar opaque. The default
-                // deferred priority leaves menus and dialogs above it.
-                .child(gpui::deferred(bar))
+                .child(bar)
                 .into_any_element(),
         )
     }
