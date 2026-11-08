@@ -23,6 +23,7 @@ pub(super) struct PullRequests {
     reads: HashMap<u64, Read>,
     watch: Option<u64>,
     watch_seeded: bool,
+    watch_error: bool,
     selected: Option<String>,
     detail: Option<ChangeRequestDetail>,
     patch: Arc<Vec<String>>,
@@ -47,6 +48,7 @@ impl PullRequests {
             reads: HashMap::new(),
             watch: None,
             watch_seeded: false,
+            watch_error: false,
             selected: None,
             detail: None,
             patch: Arc::new(vec![]),
@@ -282,8 +284,16 @@ impl WorkspaceView {
                         self.pull_requests.detail = None;
                         self.pull_requests.patch = Arc::new(vec![]);
                     }
-                    if let Some(error) = status.error {
-                        self.pull_requests.error = Some(error);
+                    match status.error {
+                        Some(error) => {
+                            self.pull_requests.error = Some(error);
+                            self.pull_requests.watch_error = true;
+                        }
+                        None if self.pull_requests.watch_error => {
+                            self.pull_requests.error = None;
+                            self.pull_requests.watch_error = false;
+                        }
+                        None => {}
                     }
                     if status.refreshing {
                         cx.notify();
@@ -296,9 +306,12 @@ impl WorkspaceView {
                             return true;
                         }
                     }
+                    let selected = self.pull_requests.selected.clone();
+                    let mut revisions_changed = false;
                     if let Some(mut detail) = status
                         .snapshot
                         .and_then(|v| serde_json::from_value::<ChangeRequestDetail>(v).ok())
+                        .filter(|detail| Some(&detail.url) == selected.as_ref())
                     {
                         if let Some(old) = &self.pull_requests.detail {
                             if old.head_ref_oid == detail.head_ref_oid
@@ -306,6 +319,7 @@ impl WorkspaceView {
                             {
                                 detail.review_threads = old.review_threads.clone();
                             } else {
+                                revisions_changed = true;
                                 self.pull_requests.patch = Arc::new(vec![]);
                                 let stale: Vec<_> = self
                                     .pull_requests
@@ -321,6 +335,9 @@ impl WorkspaceView {
                             }
                         }
                         self.pull_requests.detail = Some(detail);
+                        if revisions_changed && self.pull_requests.tab == "diff" {
+                            self.pr_tab("diff", cx);
+                        }
                     }
                 }
             }
@@ -596,6 +613,9 @@ impl WorkspaceView {
                                     return;
                                 }
                                 this.save_pr_draft(cx);
+                                if let Some(id) = this.pull_requests.watch.take() {
+                                    this.cancel(id);
+                                }
                                 for id in std::mem::take(&mut this.pull_requests.reads).into_keys()
                                 {
                                     this.cancel(id);

@@ -122,6 +122,41 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
+    async fn file_events_during_a_read_never_discard_it() {
+        let hub = RefreshHub::default();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counter = calls.clone();
+        let mut rx = hub.watch("worktree:a".into(), move || {
+            let call = counter.fetch_add(1, Ordering::SeqCst);
+            async move {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                Ok((serde_json::json!(call), Duration::from_secs(120)))
+            }
+        });
+        settled(&mut rx).await;
+        let events = hub.clone();
+        let burst = tokio::spawn(async move {
+            loop {
+                events.touch("worktree:a");
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        });
+        let published = tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                rx.changed().await.unwrap();
+                if rx.borrow().snapshot.as_ref().and_then(|v| v.as_u64()) >= Some(1)
+                    && !rx.borrow().refreshing
+                {
+                    break;
+                }
+            }
+        })
+        .await;
+        burst.abort();
+        assert!(published.is_ok(), "status keeps publishing through a build");
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn continuous_changes_cannot_starve_capture() {
         let hub = RefreshHub::default();
         let (started, mut starts) = tokio::sync::mpsc::unbounded_channel();
@@ -215,9 +250,21 @@ impl RefreshHub {
         }
     }
 
+    /// Schedule another read without discarding one in flight. File events
+    /// use this: during a build they arrive faster than a read finishes, and
+    /// only a mutation makes a running read wrong.
+    pub fn touch(&self, prefix: &str) {
+        for (key, entry) in self.entries.lock().unwrap().iter() {
+            if key.starts_with(prefix) {
+                entry.kick.notify_one();
+            }
+        }
+    }
+
     async fn run(&self, key: String, entry: Arc<Entry>, load: Loader) {
         let mut failures = 0u32;
         let mut captured_epoch = None;
+        let mut kicked = false;
         loop {
             if entry.tx.receiver_count() == 0 {
                 tokio::time::sleep(LINGER).await;
@@ -239,7 +286,9 @@ impl RefreshHub {
                     return;
                 }
             }
-            if captured_epoch.is_some_and(|epoch| epoch != entry.epoch.load(Ordering::Acquire)) {
+            if std::mem::take(&mut kicked)
+                || captured_epoch.is_some_and(|epoch| epoch != entry.epoch.load(Ordering::Acquire))
+            {
                 let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
                 loop {
                     if tokio::time::Instant::now() >= deadline {
@@ -337,7 +386,7 @@ impl RefreshHub {
                 Duration::from_millis(hash.finish() % ((delay.as_millis() as u64 / 10).max(1)));
             tokio::select! {
                 _ = tokio::time::sleep(delay + jitter) => {},
-                _ = entry.kick.notified() => {},
+                _ = entry.kick.notified() => kicked = true,
                 _ = entry.tx.closed() => {},
             }
         }

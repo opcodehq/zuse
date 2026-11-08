@@ -939,21 +939,23 @@ async fn sync_entry(inner: &Arc<DiffSyncInner>, entry: &Arc<CheckoutEntry>) {
     )
     .await;
     let status_available = status.is_ok();
-    if let Ok(status) = status {
+    if let Ok(status) = &status {
         let (files, complete) = git_status::parse(&status.stdout, status.truncated);
         git_status::publish(inner, entry, files, complete);
     }
-    let snapshot = match capture_diff(&inner.repos, &entry.identity.root).await {
-        Ok(snapshot) => snapshot,
-        Err(err) => {
-            tracing::debug!(checkout = %entry.identity.root.display(), error = %err,
+    let snapshot =
+        match capture_diff_with_status(&inner.repos, &entry.identity.root, None, status.ok()).await
+        {
+            Ok(snapshot) => snapshot,
+            Err(err) => {
+                tracing::debug!(checkout = %entry.identity.root.display(), error = %err,
                 "diff-sync: capture failed");
-            if !status_available {
-                git_status::publish(inner, entry, Vec::new(), false);
+                if !status_available {
+                    git_status::publish(inner, entry, Vec::new(), false);
+                }
+                return;
             }
-            return;
-        }
-    };
+        };
 
     if let Some((files, complete)) = &snapshot.git_status {
         git_status::publish(inner, entry, files.clone(), *complete);
@@ -1525,6 +1527,16 @@ pub async fn capture_diff_against(
     root: &Path,
     base_override: Option<&str>,
 ) -> Result<DiffSnapshot, EngineError> {
+    capture_diff_with_status(repos, root, base_override, None).await
+}
+
+/// The capture, reusing a status the caller already read.
+async fn capture_diff_with_status(
+    repos: &Repos,
+    root: &Path,
+    base_override: Option<&str>,
+    status: Option<Capture>,
+) -> Result<DiffSnapshot, EngineError> {
     let head = capture_git(root, &["rev-parse", "--verify", "HEAD"], 256)
         .await
         .map(|c| String::from_utf8_lossy(&c.stdout).trim().to_string())
@@ -1567,18 +1579,23 @@ pub async fn capture_diff_against(
     .await?;
     // Untracked listing via porcelain status; `--no-optional-locks` keeps this
     // read-only (a status-triggered index refresh would re-kick our own watcher).
-    let status = capture_git(
-        root,
-        &[
-            "--no-optional-locks",
-            "status",
-            "--porcelain=v1",
-            "-z",
-            "--untracked-files=all",
-        ],
-        2 * 1024 * 1024,
-    )
-    .await?;
+    let status = match status {
+        Some(status) => status,
+        None => {
+            capture_git(
+                root,
+                &[
+                    "--no-optional-locks",
+                    "status",
+                    "--porcelain=v1",
+                    "-z",
+                    "--untracked-files=all",
+                ],
+                2 * 1024 * 1024,
+            )
+            .await?
+        }
+    };
 
     let mut files = parse_name_status(&names.stdout);
     apply_numstat(&mut files, &nums.stdout);

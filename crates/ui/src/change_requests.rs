@@ -298,10 +298,8 @@ fn render_badge_model(
     let composer = surface == ChangeRequestBadgeSurface::Composer;
     let inline = surface == ChangeRequestBadgeSurface::SidebarInline;
     let accessible_label = format!(
-        "Open {} pull request #{}: {}",
-        model.state_label.to_lowercase(),
-        model.number,
-        model.title
+        "{} pull request #{}: {}",
+        model.state_label, model.number, model.title
     );
 
     div()

@@ -4705,10 +4705,15 @@ impl RpcService for EngineRpc {
                 if p.fetch {
                     // Compatibility for explicit older callers; cards use local
                     // graphs and repository subscription owns automatic fetches.
-                    self.repos
-                        .fetch_all(std::path::Path::new(&p.cwd))
-                        .await
-                        .map_err(|e| RpcError::Failed(e.to_string()))?;
+                    // Best effort: the local graph is correct without it.
+                    let fetched = tokio::time::timeout(
+                        std::time::Duration::from_secs(20),
+                        self.repos.fetch_all(std::path::Path::new(&p.cwd)),
+                    )
+                    .await;
+                    if !matches!(fetched, Ok(Ok(()))) {
+                        tracing::debug!("branch graph continues without a fresh fetch");
+                    }
                     self.source_control_refresh.invalidate("worktree:");
                     self.diff_sync.sync_all();
                     p.fetch = false;

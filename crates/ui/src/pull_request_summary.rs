@@ -492,6 +492,7 @@ impl PullRequestDetailPage {
             params["targetDeviceId"] = target.clone().into();
         }
         self.merge_options = false;
+        self.update_notice = None;
         self.task = None;
         self.loading = false;
         self.error = None;
@@ -523,7 +524,7 @@ impl PullRequestDetailPage {
             let _ = this.update(cx, |page, cx| {
                 page.updating_pr = false;
                 page.refresh(cx);
-                page.error = match result {
+                page.update_notice = match result {
                     Ok(value) => value["refusal"].as_str().map(str::to_owned),
                     Err(error) => Some(error),
                 };
@@ -877,106 +878,94 @@ impl PullRequestDetailPage {
                 )
         });
 
-        let mut feedback: Vec<_> = detail
-            .activity_comments()
-            .filter(|comment| {
-                !comment
-                    .author
-                    .login
-                    .eq_ignore_ascii_case(&detail.author.login)
-            })
-            .collect();
-        feedback.sort_by_key(|comment| {
-            std::cmp::Reverse(if comment.created_at.is_empty() {
-                comment.submitted_at.as_str()
-            } else {
-                comment.created_at.as_str()
-            })
-        });
+        let feedback = feedback_items(detail);
         let feedback_count = feedback.len();
-        let all_context = all_feedback_context(detail, &self.url, &feedback);
-        let feedback_section = (feedback_count > 0).then(|| {
-            let toggle = section_toggle(
-                "pr-feedback-toggle",
-                "Feedback".to_owned(),
-                Some(feedback_count),
-                self.feedback_collapsed,
-                theme,
-            )
-            .on_click(cx.listener(|page, _, _, cx| {
-                page.feedback_collapsed = !page.feedback_collapsed;
-                cx.notify();
-            }));
-            let rows =
-                (!self.feedback_collapsed).then(|| {
-                    div()
-                        .id("pr-review-preview")
-                        .flex()
-                        .flex_col()
-                        .children(feedback.iter().take(FEEDBACK_PREVIEW).enumerate().map(
-                            |(index, comment)| self.feedback_row(index, detail, comment, theme),
-                        ))
-                        .when(feedback_count > FEEDBACK_PREVIEW, |el| {
-                            el.child(
+        let feedback_section =
+            (feedback_count > 0).then(|| {
+                let toggle = section_toggle(
+                    "pr-feedback-toggle",
+                    "Feedback".to_owned(),
+                    Some(feedback_count),
+                    self.feedback_collapsed,
+                    theme,
+                )
+                .on_click(cx.listener(|page, _, _, cx| {
+                    page.feedback_collapsed = !page.feedback_collapsed;
+                    cx.notify();
+                }));
+                let rows =
+                    (!self.feedback_collapsed).then(|| {
+                        div()
+                            .id("pr-review-preview")
+                            .flex()
+                            .flex_col()
+                            .children(feedback.iter().take(FEEDBACK_PREVIEW).map(
+                                |(index, comment)| self.feedback_row(*index, comment, theme, cx),
+                            ))
+                            .when(feedback_count > FEEDBACK_PREVIEW, |el| {
+                                el.child(
+                                    div()
+                                        .id("pr-view-reviews")
+                                        .debug_selector(|| "pr-view-reviews".into())
+                                        .role(gpui::Role::Button)
+                                        .tab_index(0)
+                                        .mt(px(4.0))
+                                        .px(px(8.0))
+                                        .text_size(crate::typography::text_sm())
+                                        .text_color(theme.text_muted)
+                                        .cursor_pointer()
+                                        .hover(|style| style.text_color(theme.text))
+                                        .child(format!("View all {feedback_count}"))
+                                        .on_click(cx.listener(|page, _, _, cx| {
+                                            page.select_tab(Tab::Activity, cx)
+                                        })),
+                                )
+                            })
+                    });
+                div()
+                    .flex()
+                    .flex_col()
+                    .child(section_divider(theme))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(toggle)
+                            .child(
                                 div()
-                                    .id("pr-view-reviews")
-                                    .debug_selector(|| "pr-view-reviews".into())
+                                    .id("pr-add-all-feedback")
+                                    .debug_selector(|| "pr-add-all-feedback".into())
                                     .role(gpui::Role::Button)
                                     .tab_index(0)
-                                    .mt(px(4.0))
-                                    .px(px(8.0))
+                                    .mr(px(8.0))
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(5.0))
                                     .text_size(crate::typography::text_sm())
                                     .text_color(theme.text_muted)
                                     .cursor_pointer()
                                     .hover(|style| style.text_color(theme.text))
-                                    .child(format!("View all {feedback_count}"))
-                                    .on_click(cx.listener(|page, _, _, cx| {
-                                        page.select_tab(Tab::Activity, cx)
-                                    })),
-                            )
-                        })
-                });
-            div()
-                .flex()
-                .flex_col()
-                .child(section_divider(theme))
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .child(toggle)
-                        .child(
-                            div()
-                                .id("pr-add-all-feedback")
-                                .debug_selector(|| "pr-add-all-feedback".into())
-                                .role(gpui::Role::Button)
-                                .tab_index(0)
-                                .mr(px(8.0))
-                                .flex()
-                                .items_center()
-                                .gap(px(5.0))
-                                .text_size(crate::typography::text_sm())
-                                .text_color(theme.text_muted)
-                                .cursor_pointer()
-                                .hover(|style| style.text_color(theme.text))
-                                .child(
-                                    crate::icons::icon(crate::icons::PR_ADD_TO_CHAT)
-                                        .size(px(14.0))
-                                        .flex_none()
-                                        .text_color(theme.text_muted),
-                                )
-                                .child("Add all")
-                                .on_click(move |_, window, cx| {
-                                    window.dispatch_action(
-                                        Box::new(AddPullRequestContext(all_context.clone())),
-                                        cx,
+                                    .child(
+                                        crate::icons::icon(crate::icons::PR_ADD_TO_CHAT)
+                                            .size(px(14.0))
+                                            .flex_none()
+                                            .text_color(theme.text_muted),
                                     )
-                                }),
-                        ),
-                )
-                .children(rows)
-        });
+                                    .child("Add all")
+                                    .on_click(cx.listener(|page, _, window, cx| {
+                                        if let Some(detail) = &page.detail {
+                                            let context = all_feedback_context(detail, &page.url);
+                                            window.dispatch_action(
+                                                Box::new(AddPullRequestContext(context)),
+                                                cx,
+                                            );
+                                        }
+                                    })),
+                            ),
+                    )
+                    .children(rows)
+            });
 
         let agent_toggle = section_toggle(
             "pr-agent-toggle",
@@ -1113,11 +1102,11 @@ impl PullRequestDetailPage {
     fn feedback_row(
         &self,
         index: usize,
-        detail: &ChangeRequestDetail,
         comment: &zuse_protocol::ChangeRequestComment,
         theme: &Theme,
+        cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
-        let context = review_context(detail, &self.url, comment);
+        let id = comment.id.clone();
         let link = comment.url.clone();
         let state = (!comment.state.is_empty()).then(|| status_style(&comment.state).0);
         let time = if comment.created_at.is_empty() {
@@ -1169,14 +1158,18 @@ impl PullRequestDetailPage {
                             .child(activity_time(time)),
                     )
                     .child(div().flex_1())
-                    .child(action("pr-review-add", "Add to chat", theme).on_click(
-                        move |_, window, cx| {
-                            window.dispatch_action(
-                                Box::new(AddPullRequestContext(context.clone())),
-                                cx,
-                            )
-                        },
-                    ))
+                    .child(
+                        action("pr-review-add", "Add to chat", theme).on_click(cx.listener(
+                            move |page, _, window, cx| {
+                                if let Some(context) = page.feedback_context(index, &id) {
+                                    window.dispatch_action(
+                                        Box::new(AddPullRequestContext(context)),
+                                        cx,
+                                    );
+                                }
+                            },
+                        )),
+                    )
                     .when(!link.is_empty(), |el| {
                         el.child(
                             action("pr-review-open", "Open on GitHub", theme)

@@ -14678,23 +14678,7 @@ impl Render for Shell {
             .on_action(cx.listener(
                 |this, action: &crate::pull_request_detail::AddPullRequestContext, _, cx| {
                     this.set_route(Route::Chat, cx);
-                    let composer = this.composer.clone();
-                    let context = action.0.clone();
-                    cx.defer(move |cx| {
-                        composer.update(cx, |composer, cx| {
-                            composer.input.update(cx, |input, cx| {
-                                let draft = input.text().trim_end();
-                                let text = if draft.is_empty() {
-                                    context
-                                } else {
-                                    format!("{draft}\n\n{context}")
-                                };
-                                input.set_text(text, cx);
-                            });
-                            composer.focus_pending = true;
-                            cx.notify();
-                        });
-                    });
+                    stage_prompt(this.composer.clone(), action.0.clone(), None, cx);
                 },
             ))
             .on_action(cx.listener(

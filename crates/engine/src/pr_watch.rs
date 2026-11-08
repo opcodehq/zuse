@@ -194,7 +194,9 @@ impl CiProvider for GitHubCli {
         }
     }
     async fn fresh_snapshot(&self, url: &str) -> Result<ChangeRequestDetail, EngineError> {
-        self.ci_snapshot(url).await.map_err(other)
+        // Failure keys compare against the summary, so this must be the same
+        // read shape; only the cache is skipped.
+        serde_json::from_value(self.uncached_summary(url).await.map_err(other)?).map_err(other)
     }
     async fn checkout_matches(
         &self,

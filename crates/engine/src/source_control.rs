@@ -412,6 +412,11 @@ impl GitHubCli {
                     .map(PathBuf::from)
                     .map(|p| p.join("gh"))
             })
+            .or_else(|| {
+                std::env::var_os("APPDATA")
+                    .filter(|_| cfg!(windows))
+                    .map(|p| PathBuf::from(p).join("GitHub CLI"))
+            })
             .or_else(|| Some(crate::repos::home_dir().join(".config/gh")));
         if let Some(config) = config {
             if let Ok(file) = tokio::fs::File::open(config.join("hosts.yml")).await {
@@ -421,6 +426,11 @@ impl GitHubCli {
             }
         }
         crate::repos::hex(&hash.finalize())
+    }
+
+    pub(crate) async fn uncached_summary(&self, url: &str) -> PrResult {
+        let url = validated_pull_request_url(url)?;
+        self.fetch_summary_data(&url, false).await
     }
 
     pub(crate) async fn summary_request(&self, url: &str, refresh: bool) -> PrResult {

@@ -135,7 +135,7 @@ impl EngineRpc {
                             let discovery = discovery.clone();
                             crate::fs_watch::FsWatchHub::global().watch(&path, mode, move |event| {
                                 if !matches!(event.kind, notify::EventKind::Access(_)) {
-                                    hub.invalidate(&key);
+                                    hub.touch(&key);
                                     if event.paths.iter().any(|path| {
                                         path.file_name().is_some_and(|name| {
                                             name == "HEAD"
@@ -173,7 +173,7 @@ impl EngineRpc {
                                 tokio::select! { result = status.changed() => { result.ok()?; }, result = remote.changed() => { result.ok()?; }, result = chats.changed() => { result.ok()?; }, result = files.changed() => {
                                     result.ok()?;
                                     let next = files.borrow_and_update().iter().find(|s| s.checkout_id == checkout_id).map(|s| s.revision.clone());
-                                    if next != file_revision { file_revision = next; refresh.invalidate(&worktree_key); }
+                                    if next != file_revision { file_revision = next; refresh.touch(&worktree_key); }
                                 } }
                             }
                             let chat = workspace.chat(&chat_id).ok().flatten()?;

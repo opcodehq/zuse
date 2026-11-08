@@ -101,30 +101,17 @@ impl Fetches {
                 inner
                     .attempts
                     .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                crate::git_workspace::git(
-                    Path::new(&common),
-                    &[
-                        "--git-dir",
-                        &common,
-                        "fetch",
-                        "--quiet",
-                        "--no-tags",
-                        "--no-auto-gc",
-                        // Git writes FETCH_HEAD unlocked; a background fetch
-                        // must not corrupt a pull running beside it.
-                        if explicit {
-                            "--write-fetch-head"
-                        } else {
-                            "--no-write-fetch-head"
-                        },
-                        "--",
-                        &remote,
-                    ],
-                    &[],
-                )
-                .await
-                .map(|_| ())
-                .map_err(|e| e.to_string())
+                let mut args = vec!["--git-dir", &common, "fetch", "--quiet", "--no-auto-gc"];
+                if !explicit {
+                    // Git writes FETCH_HEAD unlocked; a background fetch must
+                    // not disturb a pull running beside it.
+                    args.extend(["--no-tags", "--no-write-fetch-head"]);
+                }
+                args.extend(["--", &remote]);
+                crate::git_workspace::git(Path::new(&common), &args, &[])
+                    .await
+                    .map(|_| ())
+                    .map_err(|e| e.to_string())
             })
             .catch_unwind()
             .await

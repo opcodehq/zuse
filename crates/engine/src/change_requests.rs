@@ -307,7 +307,7 @@ impl CheckoutChangeRequests {
         let mut state = entry.state.lock().await;
         let now = Instant::now();
         let epoch = self.inner.epoch.load(Ordering::Acquire);
-        let account = self.inner.lookup.persistence_scope().await;
+
         let persistent_key = serde_json::to_string(&(
             &key.checkout_id,
             &key.branch,
@@ -317,7 +317,7 @@ impl CheckoutChangeRequests {
         .unwrap();
         if !state.hydrated {
             state.hydrated = true;
-            if let Some(account) = &account {
+            if let Some(account) = &self.inner.lookup.persistence_scope().await {
                 if let Some(snapshot) = self
                     .inner
                     .store
@@ -357,7 +357,7 @@ impl CheckoutChangeRequests {
                     change_request,
                     updated_at: chrono::Utc::now(),
                 };
-                if let Some(account) = account {
+                if let Some(account) = self.inner.lookup.persistence_scope().await {
                     self.inner
                         .store
                         .save_branch_link(account, persistent_key, &snapshot)

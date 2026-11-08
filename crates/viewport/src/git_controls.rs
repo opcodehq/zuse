@@ -180,7 +180,9 @@ impl GitControls {
         if self.pending.is_some_and(|(_, mutation)| mutation) {
             return;
         }
-        if let Some(value) = frame.snapshot.filter(|_| !frame.refreshing)
+        // A refreshing frame still seeds an empty panel on reopen.
+        let usable = !frame.refreshing || self.snapshot.is_none();
+        if let Some(value) = frame.snapshot.filter(|_| usable)
             && let Ok(snapshot) = serde_json::from_value::<GitWorkspace>(value)
             && self
                 .target
@@ -1015,8 +1017,11 @@ fn primary_action(snapshot: &GitWorkspace, created: Option<&str>) -> Option<Prim
     if snapshot.upstream.is_none() {
         return snapshot.head_sha.as_ref().map(|_| PrimaryAction::Publish);
     }
-    // Pull comes first: a diverged branch cannot push until it integrates.
-    if snapshot.behind > 0 {
+    // A diverged branch has no one-click step: fast-forward pulls and
+    // plain pushes both refuse it.
+    if snapshot.behind > 0 && snapshot.ahead > 0 {
+        None
+    } else if snapshot.behind > 0 {
         Some(PrimaryAction::Pull)
     } else if snapshot.ahead > 0 {
         Some(PrimaryAction::Push)
@@ -1062,8 +1067,12 @@ mod tests {
         );
         assert_eq!(
             primary_action(&base(origin, 2, 1), None),
-            Some(PrimaryAction::Pull),
-            "a diverged branch integrates before it can push"
+            None,
+            "a diverged branch has no step that can succeed"
+        );
+        assert_eq!(
+            primary_action(&base(origin, 0, 1), None),
+            Some(PrimaryAction::Pull)
         );
         assert_eq!(
             primary_action(&base(origin, 2, 0), None),
