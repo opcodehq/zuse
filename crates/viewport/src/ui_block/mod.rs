@@ -85,6 +85,17 @@ pub struct UiBlockView {
 
 impl EventEmitter<UiBlockEvent> for UiBlockView {}
 
+/// What a reader did with a block, kept while its view is released: form
+/// answers (typed text included), open tabs, the chosen follow-up and
+/// whether the answer was sent.
+#[derive(Clone, Debug)]
+pub struct UiBlockMemory {
+    status: Status,
+    forms: HashMap<String, Vec<(String, FieldValue)>>,
+    tabs: HashMap<String, usize>,
+    chosen_follow_up: Option<(String, usize)>,
+}
+
 impl UiBlockView {
     /// Parse `source` and render it; an invalid spec renders the fallback
     /// with the raw source. `interactive` enables forms and follow-ups.
@@ -125,6 +136,35 @@ impl UiBlockView {
             _ticker: None,
             _subscriptions: Vec::new(),
         }
+    }
+
+    /// Whether a sent answer still waits on the host.
+    pub fn is_sending(&self) -> bool {
+        self.status == Status::Sending
+    }
+
+    /// The reader's state, to restore into a fresh view of the same spec.
+    pub fn memory(&self) -> UiBlockMemory {
+        UiBlockMemory {
+            status: self.status,
+            forms: self.forms.clone(),
+            tabs: self.tabs.clone(),
+            chosen_follow_up: self.chosen_follow_up.clone(),
+        }
+    }
+
+    /// Restore [`Self::memory`] into a view that has not rendered yet. A
+    /// send still in flight comes back unlocked: its answer was never
+    /// settled.
+    pub fn restore(&mut self, memory: UiBlockMemory, cx: &mut Context<Self>) {
+        self.status = match memory.status {
+            Status::Sending => Status::Idle,
+            status => status,
+        };
+        self.forms = memory.forms;
+        self.tabs = memory.tabs;
+        self.chosen_follow_up = memory.chosen_follow_up;
+        cx.notify();
     }
 
     /// The spec source this view was created with.

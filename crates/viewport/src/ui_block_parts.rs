@@ -1,7 +1,7 @@
 //! `show_ui` blocks in the browser transcript: the shared renderer, with
 //! form replies sent as the selected chat's next message.
 use super::*;
-use crate::ui_block::{UiBlockEvent, UiBlockPalette, UiBlockView};
+use crate::ui_block::{UiBlockEvent, UiBlockMemory, UiBlockPalette, UiBlockView};
 use std::cell::RefCell;
 
 /// The transcript renders through `&self`; block views are created lazily.
@@ -11,6 +11,8 @@ pub(super) struct UiBlocks {
     /// Replies the engine has not answered yet, by request id. Each block
     /// stays "Sending" until its request comes back.
     replies: HashMap<u64, Entity<UiBlockView>>,
+    /// Released views' reader state, by block id, with the spec it belongs to.
+    memory: RefCell<HashMap<String, (String, UiBlockMemory)>>,
 }
 
 impl WorkspaceView {
@@ -41,8 +43,19 @@ impl WorkspaceView {
             .filter(|view| view.read(cx).source() == spec)
             .cloned();
         let view = existing.unwrap_or_else(|| {
-            let view = cx
-                .new(|cx| UiBlockView::new(spec, UiBlockPalette::reference(true), interactive, cx));
+            let memory = self
+                .ui_blocks
+                .memory
+                .borrow_mut()
+                .remove(&id)
+                .filter(|(source, _)| source == spec);
+            let view = cx.new(|cx| {
+                let mut view = UiBlockView::new(spec, UiBlockPalette::reference(true), interactive, cx);
+                if let Some((_, memory)) = memory {
+                    view.restore(memory, cx);
+                }
+                view
+            });
             let block = id.clone();
             cx.subscribe(&view, move |this, view, event: &UiBlockEvent, cx| {
                 let UiBlockEvent::Send { text } = event;
@@ -141,6 +154,22 @@ impl WorkspaceView {
             } else {
                 view.mark_send_failed(cx);
             }
+        });
+    }
+
+    /// Release every block view a new transcript will not reuse: their text
+    /// fields, subscriptions and chart images go, and what the reader did
+    /// stays to restore when the block shows again. A view whose answer is
+    /// still in flight stays alive so its reply can settle it.
+    pub(super) fn release_ui_blocks(&mut self, cx: &mut Context<Self>) {
+        let mut memory = self.ui_blocks.memory.borrow_mut();
+        self.ui_blocks.views.borrow_mut().retain(|id, view| {
+            let view = view.read(cx);
+            if view.is_sending() {
+                return true;
+            }
+            memory.insert(id.clone(), (view.source().to_owned(), view.memory()));
+            false
         });
     }
 
@@ -277,5 +306,40 @@ mod tests {
                 );
             })
             .unwrap();
+    }
+
+    #[gpui::test]
+    fn switching_chats_releases_views_but_keeps_what_the_reader_did(cx: &mut TestAppContext) {
+        let (window, block, mut requests, _events) = open(cx);
+        block
+            .update(cx, |block, cx| block.test_send("Retry the build", cx))
+            .unwrap();
+        cx.run_until_parked();
+        let id = reply_request(&mut requests);
+        // Still in flight: the view must outlive a switch to settle.
+        window
+            .update(cx, |view, _, cx| view.release_ui_blocks(cx))
+            .unwrap();
+        cx.run_until_parked();
+        assert!(block.upgrade().is_some(), "a sending view stays alive");
+        window
+            .update(cx, |view, _, cx| {
+                view.receive(json!({"id": id, "ok": {}}), cx);
+                view.release_ui_blocks(cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert!(block.upgrade().is_none(), "a settled view is released");
+        let again = window
+            .update(cx, |view, _, cx| {
+                view.ui_block_view(&json!({"id": "block", "spec": SPEC}), true, cx)
+                    .downgrade()
+            })
+            .unwrap();
+        assert_eq!(
+            again.read_with(cx, |b, _| b.test_status()).unwrap(),
+            "Sent",
+            "coming back shows the answer as sent"
+        );
     }
 }
