@@ -398,6 +398,12 @@ pub fn direct_steer_enabled(cx: &App) -> bool {
         .is_some_and(|store| store.current.direct_steer_enabled)
 }
 
+pub fn quit_gesture(cx: &App) -> QuitGesture {
+    cx.try_global::<SettingsStore>()
+        .map(|store| store.current.quit_gesture)
+        .unwrap_or_default()
+}
+
 pub fn compact_model_picker(cx: &App) -> bool {
     cx.try_global::<SettingsStore>()
         .is_some_and(|store| store.current.compact_model_picker)
@@ -678,6 +684,17 @@ pub enum ComposerSendBehavior {
     ModEnter,
 }
 
+/// What ⌘Q takes to quit. Anything but a single press guards against a stray
+/// tap; the Quit menu item always quits at once.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum QuitGesture {
+    #[default]
+    Press,
+    DoublePress,
+    Hold,
+}
+
 /// Persist the latest revision. Safe to call at shutdown.
 pub fn flush(cx: &mut App) {
     if !cx.has_global::<SettingsStore>() {
@@ -849,6 +866,7 @@ pub struct UiSettings {
     pub window_geometry: Option<WindowGeometry>,
     /// Submit using Enter or the platform modifier plus Enter.
     pub composer_send_behavior: ComposerSendBehavior,
+    pub quit_gesture: QuitGesture,
     pub default_model: Option<zuse_protocol::presentation::DefaultModelSelection>,
     pub default_permission_mode: zuse_protocol::presentation::PermissionMode,
     /// Legacy global opt-in; per-harness preferences take precedence.
@@ -1113,6 +1131,7 @@ impl Default for UiSettings {
             prompt_stash: Vec::new(),
             settings_section: crate::shell::SettingsSection::default(),
             composer_send_behavior: ComposerSendBehavior::default(),
+            quit_gesture: QuitGesture::default(),
             default_model: None,
             default_permission_mode: Default::default(),
             skills_in_slash_menu: false,
@@ -1970,6 +1989,7 @@ impl UiSettings {
             dictation_input,
             window_geometry,
             composer_send_behavior,
+            quit_gesture,
             default_model,
             default_permission_mode,
             skills_in_slash_menu,
@@ -3090,6 +3110,7 @@ mod tests {
             }],
             settings_section: crate::shell::SettingsSection::Shortcuts,
             composer_send_behavior: ComposerSendBehavior::ModEnter,
+            quit_gesture: QuitGesture::Hold,
             skills_in_slash_menu: true,
             skill_completion_by_harness: Default::default(),
             compact_model_picker: true,

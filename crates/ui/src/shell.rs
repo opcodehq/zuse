@@ -89,6 +89,8 @@ mod panel_layout;
 mod panel_menu;
 mod pr_watch;
 mod project_setup;
+mod update_notes;
+mod update_restart;
 use panel_layout::{AuxiliaryPanel, FitInputs, HorizontalPanelFit, panel_content_tween};
 mod archives;
 #[cfg(test)]
@@ -1982,6 +1984,10 @@ enum UpdatePromptButton {
     CheckAgain,
     Download,
     Restart,
+    /// "Restart now" beside the safer choice, so it isn't the primary button.
+    RestartAnyway,
+    RestartWhenIdle,
+    CancelRestart,
     OpenDownloads,
 }
 
@@ -1993,7 +1999,15 @@ enum PendingExit {
     InstallUpdate(PathBuf),
 }
 
+fn dismiss_update_prompt(cx: &mut App) {
+    if let Some(update) = crate::app_update::AppUpdate::global(cx) {
+        update.update(cx, |update, cx| update.dismiss_prompt(cx));
+    }
+}
+
 pub struct Shell {
+    update_restart: Option<update_restart::RestartPlan>,
+    update_restart_task: Option<Task<()>>,
     state: Entity<AppState>,
     desktop_import: Entity<crate::desktop_import::Onboarding>,
     sidebar_pane: Entity<SidebarPane>,
@@ -2807,6 +2821,8 @@ impl Shell {
             harness_update_scroll: settings::widgets::PageScroll::default(),
             user_menu: popover::Popup::default(),
             sidebar_notice: None,
+            update_restart: None,
+            update_restart_task: None,
             _app_update_observation: crate::app_update::AppUpdate::global(cx)
                 .map(|update| cx.observe(&update, |_, _, cx| cx.notify())),
             org: None,
@@ -6117,6 +6133,7 @@ impl Shell {
                                 ShortcutsEvent::ComposerSendBehaviorChanged(behavior) => {
                                     this.settings.composer_send_behavior = *behavior;
                                 }
+                                ShortcutsEvent::QuitGestureChanged => this.pull_settings(cx),
                                 ShortcutsEvent::AppshotsChanged {
                                     enabled,
                                     sound_enabled,
@@ -6134,6 +6151,9 @@ impl Shell {
                                 &this.settings.keymap,
                                 this.settings.composer_send_behavior,
                             );
+                            // The menu's ⌘Q label follows the binding.
+                            let menus = crate::app_menus::app_menus(cx);
+                            cx.set_menus(menus);
                             this.schedule_save(cx);
                             cx.notify();
                         },
@@ -10099,10 +10119,7 @@ impl Shell {
         )
         .fade_overflow_y(&self.sidebar_scroll);
 
-        let update_strip = self.render_update_strip(theme, cx);
-        // Stacked above the update strip, the banner needs its own gap; alone
-        // it leans on the user-menu block's padding like the strip does.
-        let github_star_banner = self.render_github_star_banner(update_strip.is_some(), theme, cx);
+        let github_star_banner = self.render_github_star_banner(theme, cx);
 
         div()
             .w(px(
@@ -10123,10 +10140,9 @@ impl Shell {
             .when_some(self.render_connection_pill(theme, cx), |el, pill| {
                 el.child(pill)
             })
-            // "Star on GitHub" banner until dismissed (persisted), then the
-            // update strip — both above the user menu, below the lists.
+            // "Star on GitHub" banner until dismissed (persisted), above the
+            // footer, below the lists. App updates live in the footer itself.
             .when_some(github_star_banner, |el, banner| el.child(banner))
-            .when_some(update_strip, |el, strip| el.child(strip))
             .child(
                 div()
                     .px(px(8.))
@@ -10149,6 +10165,7 @@ impl Shell {
         let new_chat_hint: SharedString =
             crate::settings::badge_combo(self.settings.keymap.get(ShortcutId::NewSession)).into();
         let plugins_open = matches!(self.route, Route::Plugins);
+        let pull_requests_open = matches!(self.route, Route::PullRequests);
         let row = |id: &'static str, glyph: &'static str, label: &'static str, active: bool| {
             let fade = format!("{id}-hover");
             div()
@@ -10248,15 +10265,29 @@ impl Shell {
                     .on_click(cx.listener(|this, _, _, cx| this.open_plugins_page(cx))),
                 )
             })
+            // Pull requests span every chat, so the entry lives with the
+            // other global destinations rather than in a chat's top bar.
+            .child(
+                row(
+                    "sidebar-pull-requests-row",
+                    icons::PULL_REQUEST,
+                    "Pull requests",
+                    pull_requests_open,
+                )
+                .aria_label(tr(cx, msg::native::pull_requests))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.settings_focus_pending = false;
+                    this.open_pull_requests(cx);
+                })),
+            )
             .into_any_element()
     }
 
-    /// "Star on GitHub" banner, styled like the update strip. Clicking it
+    /// "Star on GitHub" banner: a low-emphasis accent chip. Clicking it
     /// opens the repository; either that or the close button dismisses it for
     /// good — the choice is persisted so it never returns on the next launch.
     fn render_github_star_banner(
         &self,
-        above_update_strip: bool,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
@@ -10270,7 +10301,6 @@ impl Shell {
             div()
                 .id("github-star-banner")
                 .mx(px(Theme::SPACE_SM))
-                .when(above_update_strip, |el| el.mb(px(Theme::SPACE_XS)))
                 .pl(px(Theme::SPACE_SM))
                 .pr(px(Theme::SPACE_XS))
                 .py(px(4.0))
@@ -10334,53 +10364,165 @@ impl Shell {
         cx.notify();
     }
 
-    /// Update strip: shown above the user menu whenever this app's release
-    /// checker ([`crate::app_update`]) has found a newer version. Self-updating
-    /// installs (macOS bundles, Windows installs, Linux managed installs) show
-    /// the background download and then "restart to apply"; installs that
+    /// App update pill: sits in the footer beside the running-agent count
+    /// whenever this app's release checker ([`crate::app_update`]) has found a
+    /// newer version. Self-updating installs (macOS bundles, Windows installs,
+    /// Linux managed installs) go Update → Updating → Restart; installs that
     /// can't replace themselves explain why; advisory installs point at
-    /// `zuse update` or the GitHub releases page and dismiss per version.
-    fn render_update_strip(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
+    /// `zuse update` or the GitHub releases page and dismiss per version. The
+    /// full status line lives in the tooltip so the footer stays one row.
+    fn render_update_pill(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
+        use crate::app_update::{Flow, StripAction};
         let update = crate::app_update::AppUpdate::global(cx)?;
-        let (label, action) = update.read(cx).strip()?;
-        let failed = matches!(
-            update.read(cx).flow(),
-            crate::app_update::Flow::Failed { .. }
-        );
-        let tone = if failed { theme.danger } else { theme.accent };
-        // Follow the selected spectrum with a low-emphasis glass tint rather
-        // than painting the bright text accent as a solid slab.
-        let (chip_bg, chip_bg_hover) = if failed {
-            (theme.danger.opacity(0.14), theme.danger.opacity(0.22))
-        } else {
-            (theme.accent_wash, theme.accent.opacity(0.16))
-        };
+        let (status, action) = update.read(cx).strip()?;
+        let flow = update.read(cx).flow().clone();
+        let notes = update
+            .read(cx)
+            .release_notes()
+            .map(|(version, sections)| (version.to_owned(), sections.to_vec()));
+        let working = self.working_agent_count(cx);
 
-        let mut strip = div()
-            .id("update-strip")
-            .mx(px(Theme::SPACE_SM))
-            // No bottom margin: the user-menu block below carries its own
-            // SPACE_SM padding — doubling it read as a hole (user report).
-            .px(px(Theme::SPACE_SM))
-            .py(px(6.0))
-            .rounded(px(Theme::CONTROL_RADIUS))
-            .bg(chip_bg)
-            .flex()
-            .flex_row()
-            .items_center()
-            .text_size(crate::typography::text_xs())
-            .font_weight(gpui::FontWeight::MEDIUM)
-            .text_color(tone)
-            .child(div().flex_1().min_w_0().child(label));
-        if action != crate::app_update::StripAction::None {
-            strip = strip
-                .cursor_pointer()
-                .hover(move |s| s.bg(chip_bg_hover))
-                .on_click(
-                    cx.listener(move |this, _, _, cx| this.on_update_strip_click(action, cx)),
-                );
+        enum Tone {
+            Quiet,
+            Accent,
+            Solid,
+            Danger,
         }
-        Some(strip.into_any_element())
+        let (glyph, label, tone, tip): (Option<&'static str>, &'static str, Tone, SharedString) =
+            match (&flow, action) {
+                (Flow::Installed, _) => (None, "Restarting", Tone::Quiet, status),
+                (Flow::Downloading { .. }, _) => (
+                    None,
+                    "Updating",
+                    Tone::Quiet,
+                    format!("{status} You can keep working.").into(),
+                ),
+                (_, StripAction::Restart) => (
+                    Some(icons::RESTART),
+                    "Restart",
+                    Tone::Solid,
+                    match working {
+                        0 => format!("{status} — restart to apply").into(),
+                        1 => format!("{status} — 1 running agent resumes after restart").into(),
+                        n => format!("{status} — {n} running agents resume after restart").into(),
+                    },
+                ),
+                (Flow::Failed { .. }, _) => (Some(icons::RESTART), "Retry", Tone::Danger, status),
+                (_, StripAction::None) => (None, "Updating", Tone::Quiet, status),
+                _ => (Some(icons::ARROW_DOWN), "Update", Tone::Accent, status),
+            };
+        let (glyph, label, tone, tip, action) =
+            match self.update_restart.as_ref().map(|plan| plan.stage()) {
+                Some(update_restart::RestartStage::WaitingForAgents) => (
+                    None,
+                    "Waiting",
+                    Tone::Quiet,
+                    SharedString::from("Restarts when your agents finish. Click for options."),
+                    StripAction::Restart,
+                ),
+                Some(update_restart::RestartStage::UpdatingAgents) => (
+                    None,
+                    "Updating",
+                    Tone::Quiet,
+                    SharedString::from("Updating agents, then restarting."),
+                    StripAction::None,
+                ),
+                None => (glyph, label, tone, tip, action),
+            };
+        let (bg, bg_hover, fg) = match tone {
+            Tone::Quiet => (theme.glass_hover(), theme.glass_hover(), theme.text_muted),
+            Tone::Accent => (theme.accent_wash, theme.accent.opacity(0.18), theme.accent),
+            Tone::Solid => (theme.text, theme.text.opacity(0.85), theme.on_solid),
+            Tone::Danger => (
+                theme.danger.opacity(0.14),
+                theme.danger.opacity(0.22),
+                theme.danger,
+            ),
+        };
+        let interactive = action != StripAction::None;
+        let focus_ring = theme.accent;
+        let lead = match glyph {
+            Some(glyph) => icon(glyph)
+                .size(px(12.0))
+                .flex_none()
+                .text_color(fg)
+                .into_any_element(),
+            None => loaders::mini_glyph_spinner(
+                "sidebar-update-progress",
+                1.5,
+                theme.glyph,
+                cx.entity_id(),
+                cx,
+            )
+            .into_any_element(),
+        };
+        Some(
+            div()
+                .id("sidebar-update")
+                .debug_selector(|| "sidebar-update".into())
+                .role(if interactive {
+                    gpui::Role::Button
+                } else {
+                    gpui::Role::Status
+                })
+                .aria_label(tip.clone())
+                .h(px(22.0))
+                .px(px(8.0))
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap(px(4.0))
+                .rounded_full()
+                .border_1()
+                .border_color(gpui::transparent_black())
+                .bg(bg)
+                .text_size(crate::typography::text_xs())
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(fg)
+                .map(|el| match notes {
+                    // Hoverable so the pointer can reach the card's link. It
+                    // sits at the window's bottom edge, so gpui flips it up.
+                    Some((version, sections)) => el.hoverable_tooltip(move |_, cx| {
+                        cx.new(|_| update_notes::UpdateNotesCard {
+                            status: tip.clone(),
+                            version: version.clone(),
+                            sections: sections.clone(),
+                        })
+                        .into()
+                    }),
+                    None => el.tooltip(crate::settings::widgets::text_tooltip_above(tip)),
+                })
+                .when(interactive, |el| {
+                    el.tab_index(0)
+                        .cursor_pointer()
+                        .focus_visible(move |el| el.border_color(focus_ring))
+                        .hover(move |el| el.bg(bg_hover))
+                        .on_click(
+                            cx.listener(move |this, _, _, cx| {
+                                this.on_update_strip_click(action, cx)
+                            }),
+                        )
+                        .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
+                            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                cx.stop_propagation();
+                                this.on_update_strip_click(action, cx);
+                            }
+                        }))
+                })
+                .child(lead)
+                .child(label)
+                .into_any_element(),
+        )
+    }
+
+    /// Chats with a turn in flight — the same count the footer shows.
+    fn working_agent_count(&self, cx: &App) -> usize {
+        self.state
+            .read(cx)
+            .sidebar_chats(Utc::now(), None)
+            .into_iter()
+            .filter(|(indicator, _)| *indicator == zuse_protocol::ChatIndicator::Working)
+            .count()
     }
 
     /// Download → the background stage; Restart → swap + relaunch; Explain →
@@ -10398,11 +10540,7 @@ impl Shell {
         match action {
             StripAction::None => {}
             StripAction::Download => update.update(cx, |update, cx| update.start_download(cx)),
-            StripAction::Restart => {
-                if let Some(staged) = update.read(cx).staged() {
-                    self.apply_staged_update(staged, cx);
-                }
-            }
+            StripAction::Restart => self.request_update_restart(cx),
             StripAction::Explain => update.update(cx, |update, cx| update.show_result(cx)),
             StripAction::Advise { open_releases } => {
                 if open_releases {
@@ -10423,11 +10561,24 @@ impl Shell {
         let Some(update) = crate::app_update::AppUpdate::global(cx) else {
             return;
         };
+        let engine = self.state.read(cx).engine().cloned();
+        if let Some(engine) = &engine
+            && let Err(error) = engine.prepare_update_restart()
+        {
+            self.show_notice(
+                crate::toast::ToastKind::Error,
+                format!("Could not save running agents: {error}"),
+                cx,
+            );
+            return;
+        }
         if update
             .update(cx, |update, cx| update.install_for_restart(&staged, cx))
             .is_ok()
         {
             crate::app_menus::quit_after_save(cx);
+        } else if let Some(engine) = engine {
+            engine.cancel_update_restart();
         }
     }
 
@@ -10442,6 +10593,16 @@ impl Shell {
         let update = AppUpdate::global(cx)?;
         let theme = Theme::of(cx).for_popup();
         let current = zuse_update::current_version();
+        let working = self.restart_blockers(cx);
+        let waiting_for_agents = self
+            .update_restart
+            .as_ref()
+            .is_some_and(|plan| plan.stage() == update_restart::RestartStage::WaitingForAgents);
+        let agent_updates = match self.agent_update_count() {
+            0 => String::new(),
+            1 => " 1 agent update is included.".to_owned(),
+            n => format!(" {n} agent updates are included."),
+        };
         let (title, body, buttons): (SharedString, SharedString, Vec<UpdatePromptButton>) = {
             let update = update.read(cx);
             match update.prompt()? {
@@ -10485,16 +10646,45 @@ impl Shell {
                                         UpdatePromptButton::Download,
                                     ],
                                 ),
-                                Flow::Downloading { .. } | Flow::Installed => (
+                                Flow::Downloading { .. } => (
                                     title,
-                                    "Downloading the update in the background — you can keep working."
+                                    "Downloading in the background — keep working. You'll get a Restart button when it's ready."
                                         .into(),
                                     vec![UpdatePromptButton::Close("Hide")],
                                 ),
+                                Flow::Installed => (
+                                    "Restarting Zuse…".into(),
+                                    "Your update is installed. Zuse will reopen shortly.".into(),
+                                    vec![],
+                                ),
+                                Flow::Ready { version, .. } if waiting_for_agents => (
+                                    "Waiting for agents to finish".into(),
+                                    format!("Zuse restarts to {version} as soon as they're done. Keep working in the meantime.").into(),
+                                    vec![
+                                        UpdatePromptButton::CancelRestart,
+                                        UpdatePromptButton::Close("Keep waiting"),
+                                        UpdatePromptButton::Restart,
+                                    ],
+                                ),
+                                Flow::Ready { version, .. } if working > 0 => (
+                                    format!("Zuse {version} is ready").into(),
+                                    format!(
+                                        "{}. Restart when {} done, or restart now and {} pick up where {} left off. Background tasks stop either way.{agent_updates}",
+                                        if working == 1 { "1 agent is active".to_owned() } else { format!("{working} agents are active") },
+                                        if working == 1 { "it's" } else { "they're" },
+                                        if working == 1 { "it will" } else { "they'll" },
+                                        if working == 1 { "it" } else { "they" },
+                                    )
+                                    .into(),
+                                    vec![
+                                        UpdatePromptButton::Close("Later"),
+                                        UpdatePromptButton::RestartAnyway,
+                                        UpdatePromptButton::RestartWhenIdle,
+                                    ],
+                                ),
                                 Flow::Ready { version, .. } => (
                                     format!("Zuse {version} is ready").into(),
-                                    "Restart to finish updating. If you don't, it installs the next time you quit Zuse."
-                                        .into(),
+                                    format!("Restart to finish updating — it only takes a moment.{agent_updates}").into(),
                                     vec![
                                         UpdatePromptButton::Close("Later"),
                                         UpdatePromptButton::Restart,
@@ -10557,25 +10747,43 @@ impl Shell {
                             update.update(cx, |update, cx| update.check_for_updates(cx));
                         }
                     })),
-                UpdatePromptButton::Download => popover::btn_primary(&theme, "Download")
+                UpdatePromptButton::Download => popover::btn_primary(&theme, "Update")
                     .id("update-prompt-download")
                     .on_click(cx.listener(|_, _, _, cx| {
                         if let Some(update) = crate::app_update::AppUpdate::global(cx) {
                             update.update(cx, |update, cx| update.start_download(cx));
                         }
                     })),
-                UpdatePromptButton::Restart => popover::btn_primary(&theme, "Restart to update")
+                UpdatePromptButton::Restart => popover::btn_primary(&theme, "Restart now")
                     .id("update-prompt-restart")
                     .on_click(cx.listener(|this, _, _, cx| {
-                        let Some(update) = crate::app_update::AppUpdate::global(cx) else {
-                            return;
-                        };
-                        let staged = update.read(cx).staged();
-                        update.update(cx, |update, cx| update.dismiss_prompt(cx));
-                        if let Some(staged) = staged {
-                            this.apply_staged_update(staged, cx);
-                        }
+                        dismiss_update_prompt(cx);
+                        this.begin_update_restart(false, cx);
                     })),
+                UpdatePromptButton::RestartAnyway => {
+                    popover::btn_ghost(&theme, "Restart now", "update-prompt-restart")
+                        .id("update-prompt-restart")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            dismiss_update_prompt(cx);
+                            this.begin_update_restart(false, cx);
+                        }))
+                }
+                UpdatePromptButton::RestartWhenIdle => {
+                    popover::btn_primary(&theme, "When agents finish")
+                        .id("update-prompt-when-idle")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            dismiss_update_prompt(cx);
+                            this.begin_update_restart(true, cx);
+                        }))
+                }
+                UpdatePromptButton::CancelRestart => {
+                    popover::btn_ghost(&theme, "Don't restart", "update-prompt-cancel")
+                        .id("update-prompt-cancel")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            dismiss_update_prompt(cx);
+                            this.cancel_update_restart_plan(cx);
+                        }))
+                }
                 UpdatePromptButton::OpenDownloads => {
                     popover::btn_primary(&theme, "Open download page")
                         .id("update-prompt-downloads")
@@ -10666,11 +10874,12 @@ impl Shell {
             .into_any_element()
     }
 
-    /// General-account plan and provider limits, followed by native voice,
-    /// Pull requests and Settings actions.
+    /// General-account plan, provider limits and the running-agent count,
+    /// then the app update pill (beside that count, so "restart" reads
+    /// against how many agents it would pause) and Settings.
     fn render_sidebar_footer(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         self.update_sidebar_controls(cx);
-        let pull_requests = self.render_pull_requests_button(theme, cx);
+        let update = self.render_update_pill(theme, cx);
         let settings = self.render_settings_trigger(theme, cx);
         div()
             .w_full()
@@ -10683,9 +10892,7 @@ impl Shell {
                     .min_w_0()
                     .child(self.sidebar_controls.clone()),
             )
-            // Pull requests span every chat, so the entry lives here rather
-            // than in a chat's top bar.
-            .child(pull_requests)
+            .when_some(update, |el, update| el.child(update))
             .child(settings)
             .into_any_element()
     }
@@ -17428,7 +17635,7 @@ mod exit_regressions {
     }
 
     #[gpui::test]
-    fn settings_footer_keeps_the_pull_requests_entry(cx: &mut TestAppContext) {
+    fn sidebar_footer_leaves_pull_requests_to_the_nav(cx: &mut TestAppContext) {
         // Chat and Settings both render this row; host it alone so the full
         // shell's pages don't cover it.
         struct FooterRow(Entity<Shell>);
@@ -17473,21 +17680,12 @@ mod exit_regressions {
             shell.open_settings(SettingsSection::General, cx)
         });
         cx.update(|window, cx| window.draw(cx).clear());
-        let row = cx.debug_bounds("sidebar-footer-row").unwrap();
-        let entry = cx
-            .debug_bounds("open-pull-requests")
-            .expect("Settings keeps the Pull requests entry");
-        let gear = cx.debug_bounds("settings-trigger").unwrap();
-        // Just left of Settings, in the same action group.
-        assert!(entry.right() <= gear.left() && entry.left() >= row.left());
-        assert!((entry.center().y - gear.center().y).abs() < px(1.0));
-        cx.simulate_click(entry.center(), gpui::Modifiers::default());
-        shell.read_with(cx, |shell, _| {
-            assert!(
-                matches!(shell.route, Route::PullRequests),
-                "it opens the board straight from Settings"
-            )
-        });
+        assert!(cx.debug_bounds("sidebar-footer-row").is_some());
+        assert!(cx.debug_bounds("settings-trigger").is_some());
+        assert!(
+            cx.debug_bounds("open-pull-requests").is_none(),
+            "Pull requests moved to the sidebar nav"
+        );
     }
 
     /// A ready Shell with no engine, for the Pull requests route.

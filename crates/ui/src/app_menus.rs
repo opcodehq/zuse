@@ -12,10 +12,13 @@
 //! `shell::apply_keymap`, which clears every binding first), and
 //! [`app_menus`] builds the menu bar handed to `cx.set_menus` in `run_app`.
 
-use gpui::{App, KeyBinding, Menu, MenuItem, OsAction, SystemMenuType, Window, actions};
+use std::time::{Duration, Instant};
+
+use gpui::{App, Global, KeyBinding, Menu, MenuItem, OsAction, SystemMenuType, Window, actions};
 
 use crate::appearance::{self, AppearanceMode};
 use crate::composer;
+use crate::settings::QuitGesture;
 use crate::shell;
 
 actions!(
@@ -24,6 +27,7 @@ actions!(
         About,
         CheckForUpdates,
         Quit,
+        QuitShortcut,
         Hide,
         HideOthers,
         ShowAll,
@@ -42,6 +46,7 @@ pub fn init(cx: &mut App) {
     #[cfg(all(target_os = "macos", not(test)))]
     native_quit::init(cx);
     cx.on_action(quit);
+    cx.on_action(quit_shortcut);
     #[cfg(target_os = "macos")]
     cx.on_action(|_: &About, _| about_panel::show());
     // Global, not per-window: it must work with every window closed, and the
@@ -75,6 +80,78 @@ fn with_active_window(cx: &mut App, f: impl FnOnce(&mut Window)) {
 /// All app-owned quit paths must flush file buffers before GPUI destroys windows.
 fn quit(_: &Quit, cx: &mut App) {
     request_quit(cx);
+}
+
+/// How long after the first ⌘Q a second one still quits.
+const DOUBLE_PRESS_WINDOW: Duration = Duration::from_millis(1200);
+const HOLD_TO_QUIT: Duration = Duration::from_millis(800);
+/// Longer than the usual delay before a held key starts repeating; a gap
+/// beyond it means the key was let go.
+const HOLD_RELEASE_GAP: Duration = Duration::from_millis(600);
+
+#[derive(Debug, PartialEq, Eq)]
+enum QuitPress {
+    Quit,
+    Hint,
+    Wait,
+}
+
+/// ⌘Q presses so far. A held key arrives as repeated presses.
+#[derive(Default)]
+struct QuitPresses {
+    started: Option<Instant>,
+    last: Option<Instant>,
+}
+
+impl Global for QuitPresses {}
+
+impl QuitPresses {
+    fn press(&mut self, gesture: QuitGesture, now: Instant) -> QuitPress {
+        let since_last = self.last.map(|last| now.saturating_duration_since(last));
+        self.last = Some(now);
+        match gesture {
+            QuitGesture::Press => QuitPress::Quit,
+            QuitGesture::DoublePress => {
+                if since_last.is_some_and(|gap| gap <= DOUBLE_PRESS_WINDOW) {
+                    self.last = None;
+                    QuitPress::Quit
+                } else {
+                    QuitPress::Hint
+                }
+            }
+            QuitGesture::Hold => {
+                if !since_last.is_some_and(|gap| gap <= HOLD_RELEASE_GAP) {
+                    self.started = Some(now);
+                    return QuitPress::Hint;
+                }
+                if self
+                    .started
+                    .is_some_and(|started| now.saturating_duration_since(started) >= HOLD_TO_QUIT)
+                {
+                    self.started = None;
+                    self.last = None;
+                    QuitPress::Quit
+                } else {
+                    QuitPress::Wait
+                }
+            }
+        }
+    }
+}
+
+fn quit_shortcut(_: &QuitShortcut, cx: &mut App) {
+    let gesture = crate::settings::quit_gesture(cx);
+    match cx
+        .default_global::<QuitPresses>()
+        .press(gesture, Instant::now())
+    {
+        QuitPress::Quit => request_quit(cx),
+        QuitPress::Hint if gesture == QuitGesture::Hold => {
+            crate::toast::info(cx, "Keep holding ⌘Q to quit")
+        }
+        QuitPress::Hint => crate::toast::info(cx, "Press ⌘Q again to quit"),
+        QuitPress::Wait => {}
+    }
 }
 
 pub(crate) fn request_quit(cx: &mut App) {
@@ -137,6 +214,7 @@ fn close_active_window(cx: &mut App) {
 /// the platform convention everywhere (Cmd+, on macOS, Ctrl+, elsewhere);
 /// window/application lifecycle shortcuts remain macOS-only.
 pub fn bind_keys(cx: &mut App) {
+    let guarded_quit = crate::settings::quit_gesture(cx) != QuitGesture::Press;
     // Settings and Close tab are rebindable desktop commands.
     cx.bind_keys(
         app_key_bindings(cfg!(target_os = "macos"))
@@ -144,8 +222,13 @@ pub fn bind_keys(cx: &mut App) {
             .filter(|binding| {
                 !binding.action().as_any().is::<shell::OpenSettings>()
                     && !binding.action().as_any().is::<CloseWindow>()
+                    && !(guarded_quit && binding.action().as_any().is::<Quit>())
             }),
     );
+    // A separate action, so clicking Quit in the menu still quits at once.
+    if guarded_quit && cfg!(target_os = "macos") {
+        cx.bind_keys([KeyBinding::new("cmd-q", QuitShortcut, None)]);
+    }
 }
 
 /// The binding table behind [`bind_keys`] — `KeyBinding` construction is pure
@@ -271,6 +354,61 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn a_single_press_quits_at_once_by_default() {
+        let mut presses = QuitPresses::default();
+        assert_eq!(
+            presses.press(QuitGesture::Press, Instant::now()),
+            QuitPress::Quit
+        );
+    }
+
+    #[test]
+    fn double_press_needs_two_presses_close_together() {
+        let now = Instant::now();
+        let mut presses = QuitPresses::default();
+        assert_eq!(
+            presses.press(QuitGesture::DoublePress, now),
+            QuitPress::Hint
+        );
+        let too_late = now + DOUBLE_PRESS_WINDOW + Duration::from_millis(1);
+        assert_eq!(
+            presses.press(QuitGesture::DoublePress, too_late),
+            QuitPress::Hint
+        );
+        assert_eq!(
+            presses.press(
+                QuitGesture::DoublePress,
+                too_late + Duration::from_millis(300)
+            ),
+            QuitPress::Quit
+        );
+    }
+
+    #[test]
+    fn hold_quits_only_after_an_unbroken_hold() {
+        let now = Instant::now();
+        let at = |ms| now + Duration::from_millis(ms);
+        let mut presses = QuitPresses::default();
+        assert_eq!(presses.press(QuitGesture::Hold, at(0)), QuitPress::Hint);
+        // The key starts repeating after the usual delay.
+        assert_eq!(presses.press(QuitGesture::Hold, at(500)), QuitPress::Wait);
+        assert_eq!(presses.press(QuitGesture::Hold, at(590)), QuitPress::Wait);
+        assert_eq!(presses.press(QuitGesture::Hold, at(680)), QuitPress::Wait);
+        assert_eq!(presses.press(QuitGesture::Hold, at(770)), QuitPress::Wait);
+        assert_eq!(presses.press(QuitGesture::Hold, at(860)), QuitPress::Quit);
+    }
+
+    #[test]
+    fn letting_go_restarts_the_hold() {
+        let now = Instant::now();
+        let at = |ms| now + Duration::from_millis(ms);
+        let mut presses = QuitPresses::default();
+        assert_eq!(presses.press(QuitGesture::Hold, at(0)), QuitPress::Hint);
+        assert_eq!(presses.press(QuitGesture::Hold, at(2000)), QuitPress::Hint);
+        assert_eq!(presses.press(QuitGesture::Hold, at(2100)), QuitPress::Wait);
     }
 
     #[test]

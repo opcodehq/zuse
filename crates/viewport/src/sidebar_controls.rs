@@ -750,6 +750,8 @@ impl Render for SidebarControls {
                 |v| v.child(account),
             )
             .child(div().flex_1())
+            .child(usage)
+            // Last, so the host's update pill lands right beside the count.
             .child(
                 div()
                     .id("sidebar-working-agents")
@@ -771,7 +773,6 @@ impl Render for SidebarControls {
                         "—".into()
                     }),
             )
-            .child(usage)
     }
 }
 fn providers() -> [(HarnessId, &'static str, &'static str); 5] {

@@ -157,6 +157,10 @@ trait EngineBackend: Send + Sync {
     async fn media_client(&self) -> Result<RpcClient, RpcError> {
         Err(RpcError::Failed("voice media unavailable".into()))
     }
+    fn prepare_update_restart(&self) -> Result<(), String> {
+        Ok(())
+    }
+    fn cancel_update_restart(&self) {}
     /// Graceful teardown (drains runs / flushes docs for the in-process engine).
     async fn shutdown(&self);
 }
@@ -186,6 +190,27 @@ impl EngineBackend for InProcessEngine {
     }
     fn signs_in_on_this_machine(&self) -> bool {
         true
+    }
+    fn prepare_update_restart(&self) -> Result<(), String> {
+        let runtime = self
+            .runtime
+            .try_lock()
+            .map_err(|_| "The engine is busy. Try restarting again in a moment.".to_owned())?;
+        if let Some(runtime) = runtime.as_ref() {
+            let sessions = &runtime.core().sessions;
+            if let Err(error) = sessions.checkpoint_for_update() {
+                sessions.cancel_update_restart();
+                return Err(error.to_string());
+            }
+        }
+        Ok(())
+    }
+    fn cancel_update_restart(&self) {
+        if let Ok(runtime) = self.runtime.try_lock()
+            && let Some(runtime) = runtime.as_ref()
+        {
+            runtime.core().sessions.cancel_update_restart();
+        }
     }
     async fn shutdown(&self) {
         self.boot_task.abort();
@@ -639,6 +664,14 @@ impl EngineHandle {
 
     fn deferred_state(&self) -> Option<tokio::sync::watch::Receiver<DeferredEngineState>> {
         self.deferred_state.clone()
+    }
+
+    pub fn prepare_update_restart(&self) -> Result<(), String> {
+        self.inner.prepare_update_restart()
+    }
+
+    pub fn cancel_update_restart(&self) {
+        self.inner.cancel_update_restart();
     }
 
     pub async fn shutdown(&self) {

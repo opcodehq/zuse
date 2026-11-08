@@ -26,7 +26,7 @@ const SUMMARY_HEIGHT: f32 = CHIP_HEIGHT - 2.0;
 const ROW_HEIGHT: f32 = 64.0;
 const MAX_VISIBLE_ROWS: f32 = 3.5;
 const LIST_FADE_BAND: f32 = 32.0;
-const LIST_WIDTH: f32 = 360.0;
+const LIST_WIDTH: f32 = 420.0;
 const MARK_SIZE: f32 = 22.0;
 const MARK_STEP: f32 = 14.0;
 const MAX_MARKS: usize = 3;
@@ -36,6 +36,7 @@ pub(super) struct DeviceUpdates {
     online: bool,
     connected: bool,
     statuses: Vec<HarnessUpdateStatus>,
+    applying: std::collections::HashSet<HarnessId>,
     watch: Option<Task<()>>,
 }
 
@@ -44,6 +45,7 @@ struct UpdateRow {
     device_id: String,
     device_name: String,
     connected: bool,
+    applying: bool,
     status: HarnessUpdateStatus,
 }
 
@@ -84,6 +86,7 @@ fn visible_rows(
                     device_id: id.clone(),
                     device_name: name.clone(),
                     connected: updates.online && updates.connected,
+                    applying: updates.applying.contains(&status.harness),
                     status: status.clone(),
                 })
         })
@@ -113,6 +116,35 @@ fn action(status: &HarnessUpdateStatus) -> Option<(&'static str, Option<&'static
         Phase::Failed => Some(("Check again", Some(methods::CHECK_HARNESS_UPDATES))),
         _ => None,
     }
+}
+
+fn bulk_targets(rows: &[UpdateRow]) -> Vec<(String, HarnessId)> {
+    rows.iter()
+        .filter(|row| {
+            row.connected
+                && !row.applying
+                && row.status.phase == Phase::Available
+                && row.status.can_apply
+        })
+        .map(|row| (row.device_id.clone(), row.status.harness))
+        .collect()
+}
+
+/// Nothing is mid-install, so a restart won't cut an agent CLI update short.
+/// Failed, manual and idle-waiting updates are skipped, not waited for.
+fn updates_settled(devices: &std::collections::BTreeMap<String, DeviceUpdates>) -> bool {
+    devices
+        .values()
+        .filter(|updates| updates.online && updates.connected)
+        .all(|updates| {
+            updates.statuses.iter().all(|status| match status.phase {
+                Phase::Preparing | Phase::Downloading | Phase::Installing | Phase::Verifying => {
+                    false
+                }
+                Phase::Available => !updates.applying.contains(&status.harness),
+                _ => true,
+            })
+        })
 }
 
 fn right_inset(has_button: bool) -> f32 {
@@ -267,7 +299,9 @@ impl Shell {
         let harness = status.harness;
         // The settings/details link is local UI and remains usable offline.
         let available = method.is_none() || row.connected;
-        let enabled = interactive && available;
+        let enabled = interactive
+            && available
+            && !(row.applying && method == Some(methods::APPLY_HARNESS_UPDATE));
         let primary = method == Some(methods::APPLY_HARNESS_UPDATE);
         Some(
             div()
@@ -290,11 +324,7 @@ impl Shell {
                 } else {
                     theme.element_hover
                 })
-                .text_color(if primary {
-                    theme.on_solid
-                } else {
-                    theme.text_muted
-                })
+                .text_color(if primary { theme.on_solid } else { theme.text })
                 .opacity(if available { 1.0 } else { 0.45 })
                 .role(gpui::Role::Button)
                 .aria_label(format!(
@@ -332,7 +362,11 @@ impl Shell {
                             }
                         }))
                 })
-                .child(label)
+                .child(if row.applying && primary {
+                    "Starting…"
+                } else {
+                    label
+                })
                 .into_any_element(),
         )
     }
@@ -402,9 +436,7 @@ impl Shell {
             .map(|row| &row.device_id)
             .collect::<std::collections::BTreeSet<_>>()
             .len();
-        if device_count == 1 {
-            title = format!("{title} · {}", row.device_name);
-        } else {
+        if device_count > 1 {
             title = format!("{title} · {device_count} devices");
         }
         if statuses.iter().any(|row| !row.connected) {
@@ -446,8 +478,43 @@ impl Shell {
             .then(|| action(status))
             .flatten()
             .map(|(label, _)| label);
+        let targets = bulk_targets(statuses);
+        let has_bulk = multiple && !targets.is_empty();
         let compact_action = if multiple {
-            None
+            has_bulk.then(|| {
+                div()
+                    .id("harness-update-all")
+                    .h(px(24.0))
+                    .px(px(9.0))
+                    .flex_none()
+                    .rounded_full()
+                    .bg(theme.glass_hover())
+                    .text_color(theme.text)
+                    .text_size(crate::typography::text_xs())
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .flex()
+                    .items_center()
+                    .cursor_pointer()
+                    .role(gpui::Role::Button)
+                    .aria_label("Update all available agents")
+                    .tab_index(0)
+                    .border_1()
+                    .border_color(gpui::transparent_black())
+                    .focus_visible(move |el| el.border_color(theme.accent))
+                    .hover(move |el| el.bg(theme.accent_wash).text_color(theme.accent))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.update_all_harnesses(cx);
+                    }))
+                    .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                            cx.stop_propagation();
+                            this.update_all_harnesses(cx);
+                        }
+                    }))
+                    .child("Update all")
+                    .into_any_element()
+            })
         } else {
             self.render_harness_update_action(row, true, cx)
         };
@@ -460,6 +527,11 @@ impl Shell {
             MARK_SIZE + MARK_STEP * marks.len().min(MAX_MARKS).saturating_sub(1) as f32;
         let controls_width = if multiple {
             24.0 + 8.0
+                + if has_bulk {
+                    text_width("Update all", crate::typography::TEXT_XS, window, &theme) + 28.0
+                } else {
+                    0.0
+                }
         } else {
             action_label
                 .map(|label| {
@@ -866,6 +938,21 @@ impl Shell {
         }
     }
 
+    pub(super) fn agent_update_count(&self) -> usize {
+        bulk_targets(&visible_rows(&self.harness_update_devices, str::to_owned)).len()
+    }
+
+    pub(super) fn agent_updates_settled(&self) -> bool {
+        updates_settled(&self.harness_update_devices)
+    }
+
+    pub(super) fn update_all_harnesses(&mut self, cx: &mut Context<Self>) {
+        let rows = visible_rows(&self.harness_update_devices, str::to_owned);
+        for (device, harness) in bulk_targets(&rows) {
+            self.run_harness_update_action(device, methods::APPLY_HARNESS_UPDATE, harness, cx);
+        }
+    }
+
     fn run_harness_update_action(
         &mut self,
         device: String,
@@ -886,12 +973,28 @@ impl Shell {
         {
             return;
         }
+        if method == methods::APPLY_HARNESS_UPDATE
+            && !self
+                .harness_update_devices
+                .get_mut(&device)
+                .unwrap()
+                .applying
+                .insert(harness)
+        {
+            return;
+        }
+        cx.notify();
         let params = serde_json::json!({ "harness": harness, "targetDeviceId": device });
         // Each request owns its lifetime: acting on a second device must not
         // cancel the first device's RPC. Progress comes from independent watches.
         cx.spawn(async move |this, cx| {
             let result = engine.client().call(method, params).await;
             this.update(cx, |shell, cx| {
+                if method == methods::APPLY_HARNESS_UPDATE
+                    && let Some(updates) = shell.harness_update_devices.get_mut(&device)
+                {
+                    updates.applying.remove(&harness);
+                }
                 if let Err(error) = result
                     && !matches!(&error, zuse_rpc::RpcError::Failed(message)
                         if method == methods::APPLY_HARNESS_UPDATE && message == "update cancelled")
@@ -937,8 +1040,74 @@ mod tests {
             online: true,
             connected: true,
             statuses: vec![status(phase)],
+            applying: Default::default(),
             watch: None,
         }
+    }
+
+    #[test]
+    fn restart_only_waits_for_updates_actually_installing() {
+        let settled =
+            |phase| updates_settled(&BTreeMap::from([("host".to_owned(), device(phase))]));
+        for phase in [
+            Phase::Preparing,
+            Phase::Downloading,
+            Phase::Installing,
+            Phase::Verifying,
+        ] {
+            assert!(!settled(phase), "{phase:?}");
+        }
+        for phase in [
+            Phase::Available,
+            Phase::WaitingForIdle,
+            Phase::Updated,
+            Phase::Failed,
+            Phase::ManualActionRequired,
+        ] {
+            assert!(settled(phase), "{phase:?}");
+        }
+        let mut requested = device(Phase::Available);
+        requested.applying.insert(HarnessId::Codex);
+        assert!(!updates_settled(&BTreeMap::from([(
+            "host".to_owned(),
+            requested
+        )])));
+        // An offline machine can't hold the restart.
+        let mut offline = device(Phase::Installing);
+        offline.connected = false;
+        assert!(updates_settled(&BTreeMap::from([(
+            "host".to_owned(),
+            offline
+        )])));
+    }
+
+    #[test]
+    fn update_all_only_targets_connected_automatic_updates() {
+        let mut devices = BTreeMap::from([
+            ("automatic".into(), device(Phase::Available)),
+            ("manual".into(), device(Phase::Available)),
+            ("offline".into(), device(Phase::Available)),
+            ("installing".into(), device(Phase::Installing)),
+            ("failed".into(), device(Phase::Failed)),
+        ]);
+        devices.get_mut("manual").unwrap().statuses[0].can_apply = false;
+        devices.get_mut("offline").unwrap().connected = false;
+        assert_eq!(
+            bulk_targets(&visible_rows(&devices, str::to_owned)),
+            vec![("automatic".into(), HarnessId::Codex)]
+        );
+        devices
+            .get_mut("automatic")
+            .unwrap()
+            .applying
+            .insert(HarnessId::Codex);
+        assert!(bulk_targets(&visible_rows(&devices, str::to_owned)).is_empty());
+        devices.get_mut("automatic").unwrap().applying.clear();
+        devices.insert("second-device".into(), device(Phase::Available));
+        assert_eq!(
+            bulk_targets(&visible_rows(&devices, str::to_owned)).len(),
+            2
+        );
     }
 
     #[test]
