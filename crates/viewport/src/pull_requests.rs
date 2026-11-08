@@ -21,6 +21,8 @@ pub(super) struct PullRequests {
     next: Option<String>,
     total: Option<u64>,
     reads: HashMap<u64, Read>,
+    watch: Option<u64>,
+    watch_seeded: bool,
     selected: Option<String>,
     detail: Option<ChangeRequestDetail>,
     patch: Arc<Vec<String>>,
@@ -43,6 +45,8 @@ impl PullRequests {
             next: None,
             total: None,
             reads: HashMap::new(),
+            watch: None,
+            watch_seeded: false,
             selected: None,
             detail: None,
             patch: Arc::new(vec![]),
@@ -107,6 +111,9 @@ impl WorkspaceView {
         self.pull_requests.notice = None;
     }
     pub(super) fn interrupt_pull_requests(&mut self) {
+        if let Some(id) = self.pull_requests.watch.take() {
+            self.cancel(id);
+        }
         for id in std::mem::take(&mut self.pull_requests.reads).into_keys() {
             self.cancel(id);
         }
@@ -171,6 +178,15 @@ impl WorkspaceView {
         for id in std::mem::take(&mut self.pull_requests.reads).into_keys() {
             self.cancel(id);
         }
+        if let Some(id) = self.pull_requests.watch.take() {
+            self.cancel(id);
+        }
+        let watch = self.call(
+            methods::WATCH_CHANGE_REQUEST,
+            self.pr_params(json!({"url":item.url})),
+        );
+        self.pull_requests.watch = Some(watch);
+        self.pull_requests.watch_seeded = false;
         self.pull_requests.selected = Some(item.url.clone());
         self.pull_requests.detail = None;
         self.pull_requests.patch = Arc::new(vec![]);
@@ -199,6 +215,13 @@ impl WorkspaceView {
         let Some(url) = self.pull_requests.selected.clone() else {
             return;
         };
+        if self.pull_requests.watch.is_none() && self.connected {
+            let id = self.call(
+                methods::WATCH_CHANGE_REQUEST,
+                self.pr_params(json!({"url":url})),
+            );
+            self.pull_requests.watch = Some(id);
+        }
         self.pr_read(
             Read::Detail,
             methods::GET_CHANGE_REQUEST,
@@ -249,6 +272,67 @@ impl WorkspaceView {
         frame: &Value,
         cx: &mut Context<Self>,
     ) -> bool {
+        if self.pull_requests.watch == Some(id) {
+            if let Some(value) = frame.get("item").or_else(|| frame.get("ok")) {
+                if let Ok(status) = serde_json::from_value::<
+                    zuse_protocol::git_workspace::SourceControlFrame,
+                >(value.clone())
+                {
+                    if status.reset {
+                        self.pull_requests.detail = None;
+                        self.pull_requests.patch = Arc::new(vec![]);
+                    }
+                    if let Some(error) = status.error {
+                        self.pull_requests.error = Some(error);
+                    }
+                    if status.refreshing {
+                        cx.notify();
+                        return true;
+                    }
+                    if !self.pull_requests.watch_seeded && status.snapshot.is_some() {
+                        self.pull_requests.watch_seeded = true;
+                        if self.pull_requests.detail.is_some() {
+                            cx.notify();
+                            return true;
+                        }
+                    }
+                    if let Some(mut detail) = status
+                        .snapshot
+                        .and_then(|v| serde_json::from_value::<ChangeRequestDetail>(v).ok())
+                    {
+                        if let Some(old) = &self.pull_requests.detail {
+                            if old.head_ref_oid == detail.head_ref_oid
+                                && old.base_ref_oid == detail.base_ref_oid
+                            {
+                                detail.review_threads = old.review_threads.clone();
+                            } else {
+                                self.pull_requests.patch = Arc::new(vec![]);
+                                let stale: Vec<_> = self
+                                    .pull_requests
+                                    .reads
+                                    .iter()
+                                    .filter(|(_, read)| matches!(read, Read::Diff | Read::Detail))
+                                    .map(|(id, _)| *id)
+                                    .collect();
+                                for stale in stale {
+                                    self.pull_requests.reads.remove(&stale);
+                                    self.cancel(stale);
+                                }
+                            }
+                        }
+                        self.pull_requests.detail = Some(detail);
+                    }
+                }
+            }
+            if frame.get("err").is_some() || frame["done"] == true {
+                self.pull_requests.watch = None;
+                self.pending.remove(&id);
+                self.pull_requests.error =
+                    Some("Live PR updates disconnected. Refresh to reconnect.".into());
+            }
+            cx.notify();
+            return true;
+        }
         let write = self
             .pull_requests
             .posting

@@ -29,7 +29,11 @@ pub(crate) async fn drain(
     }
     Ok((bytes, truncated))
 }
-async fn git(root: &Path, args: &[&str], input: &[u8]) -> Result<(Vec<u8>, bool), EngineError> {
+pub(crate) async fn git(
+    root: &Path,
+    args: &[&str],
+    input: &[u8],
+) -> Result<(Vec<u8>, bool), EngineError> {
     let mut command = tokio::process::Command::new("git");
     command
         .arg("--literal-pathspecs")
@@ -71,7 +75,7 @@ async fn git(root: &Path, args: &[&str], input: &[u8]) -> Result<(Vec<u8>, bool)
         .await
         .map_err(|_| error("Git timed out. Refresh its state before trying again."))?
 }
-async fn text(root: &Path, args: &[&str]) -> Result<String, EngineError> {
+pub(crate) async fn text(root: &Path, args: &[&str]) -> Result<String, EngineError> {
     let (bytes, partial) = git(root, args, &[]).await?;
     if partial {
         return Err(error("Git metadata exceeds the display limit."));
@@ -80,51 +84,96 @@ async fn text(root: &Path, args: &[&str]) -> Result<String, EngineError> {
         .map(|s| s.trim().into())
         .map_err(|_| error("Git metadata is not UTF-8."))
 }
+#[derive(Debug, PartialEq, Eq)]
+struct BranchHeader {
+    branch: String,
+    upstream: Option<String>,
+    ahead: u32,
+    behind: u32,
+}
+
+/// The `## branch...upstream [ahead 1, behind 2]` line of `status --branch`.
+fn parse_branch_header(line: &str) -> Option<BranchHeader> {
+    let line = line.strip_prefix("## ")?;
+    if line.starts_with("HEAD (no branch)") {
+        return Some(BranchHeader {
+            branch: "HEAD".into(),
+            upstream: None,
+            ahead: 0,
+            behind: 0,
+        });
+    }
+    let line = line
+        .strip_prefix("No commits yet on ")
+        .or_else(|| line.strip_prefix("Initial commit on "))
+        .unwrap_or(line);
+    let (names, tracking) = line.split_once(' ').unwrap_or((line, ""));
+    let (branch, upstream) = match names.split_once("...") {
+        Some((branch, upstream)) => (branch, Some(upstream)),
+        None => (names, None),
+    };
+    if branch.is_empty() {
+        return None;
+    }
+    let count = |word: &str| {
+        tracking
+            .trim_matches(['[', ']'])
+            .split(", ")
+            .find_map(|part| part.strip_prefix(word)?.trim().parse().ok())
+            .unwrap_or(0)
+    };
+    // A deleted remote branch cannot be pulled or pushed to as tracked.
+    let gone = tracking.contains("gone");
+    Some(BranchHeader {
+        branch: branch.to_owned(),
+        upstream: upstream.filter(|_| !gone).map(str::to_owned),
+        ahead: count("ahead"),
+        behind: count("behind"),
+    })
+}
+
 pub(crate) async fn snapshot(
     repos: &Repos,
     root: &Path,
     chat: &str,
 ) -> Result<GitWorkspace, EngineError> {
     let identity = repos.checkout_identity(root).await?;
-    let (bytes, partial) = git(
-        &identity.root,
-        &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
-        &[],
-    )
-    .await?;
-    let (files, complete) = crate::diff_sync::git_status::parse(&bytes, partial);
-    let branch = repos.current_branch(&identity.root).await?;
-    let head_sha = repos.head_sha(&identity.root).await?;
-    let upstream = text(
-        root,
-        &[
-            "rev-parse",
-            "--abbrev-ref",
-            "--symbolic-full-name",
-            "@{upstream}",
-        ],
-    )
-    .await
-    .ok();
-    let (ahead, behind) = if upstream.is_some() {
-        let counts = text(
+    // One status carries the branch, upstream and divergence with the files.
+    let (status, head_sha, index) = tokio::try_join!(
+        git(
+            &identity.root,
+            &[
+                "status",
+                "--porcelain=v1",
+                "-z",
+                "--branch",
+                "--untracked-files=all"
+            ],
+            &[],
+        ),
+        repos.head_sha(&identity.root),
+        text(
             root,
-            &["rev-list", "--left-right", "--count", "HEAD...@{upstream}"],
-        )
-        .await?;
-        let mut parts = counts.split_whitespace();
-        (
-            parts.next().and_then(|v| v.parse().ok()).unwrap_or(0),
-            parts.next().and_then(|v| v.parse().ok()).unwrap_or(0),
-        )
-    } else {
-        (0, 0)
-    };
-    let index = text(
-        root,
-        &["rev-parse", "--path-format=absolute", "--git-path", "index"],
-    )
-    .await?;
+            &["rev-parse", "--path-format=absolute", "--git-path", "index"]
+        ),
+    )?;
+    let (bytes, partial) = status;
+    let header_end = bytes
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(bytes.len());
+    let header = parse_branch_header(&String::from_utf8_lossy(&bytes[..header_end]))
+        .ok_or_else(|| error("Git returned an unreadable branch status."))?;
+    let (files, complete) = crate::diff_sync::git_status::parse(
+        bytes.get(header_end + 1..).unwrap_or_default(),
+        partial,
+    );
+    let BranchHeader {
+        branch,
+        upstream,
+        ahead,
+        behind,
+    } = header;
     let mut hash = Sha256::new();
     hash.update(
         serde_json::to_vec(&(
@@ -174,6 +223,7 @@ pub(crate) async fn snapshot(
     })
 }
 pub(crate) async fn apply(
+    repos: &Repos,
     root: &Path,
     current: &GitWorkspace,
     operation: &GitOperation,
@@ -260,6 +310,7 @@ pub(crate) async fn apply(
             }
             git(root, &["commit", "--file=-"], message.as_bytes()).await?;
         }
+        GitOperation::Fetch => repos.fetch_all(root).await?,
         GitOperation::Push => {
             if current.branch == "HEAD" {
                 return Err(error("Create or switch to a branch before pushing."));
@@ -288,4 +339,44 @@ pub(crate) async fn apply(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod branch_header_tests {
+    use super::*;
+
+    fn header(branch: &str, upstream: Option<&str>, ahead: u32, behind: u32) -> BranchHeader {
+        BranchHeader {
+            branch: branch.into(),
+            upstream: upstream.map(str::to_owned),
+            ahead,
+            behind,
+        }
+    }
+
+    #[test]
+    fn every_status_branch_form_parses() {
+        for (line, expected) in [
+            ("## main", header("main", None, 0, 0)),
+            (
+                "## main...origin/main",
+                header("main", Some("origin/main"), 0, 0),
+            ),
+            (
+                "## a/b...origin/a/b [ahead 2]",
+                header("a/b", Some("origin/a/b"), 2, 0),
+            ),
+            ("## a...o/a [behind 3]", header("a", Some("o/a"), 0, 3)),
+            (
+                "## a...o/a [ahead 1, behind 4]",
+                header("a", Some("o/a"), 1, 4),
+            ),
+            ("## a...o/a [gone]", header("a", None, 0, 0)),
+            ("## HEAD (no branch)", header("HEAD", None, 0, 0)),
+            ("## No commits yet on main", header("main", None, 0, 0)),
+        ] {
+            assert_eq!(parse_branch_header(line), Some(expected), "{line}");
+        }
+        assert_eq!(parse_branch_header("M file"), None);
+    }
 }

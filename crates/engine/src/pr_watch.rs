@@ -171,6 +171,9 @@ impl Store {
 #[async_trait::async_trait]
 trait CiProvider: Send + Sync {
     async fn snapshot(&self, url: &str) -> Result<ChangeRequestDetail, EngineError>;
+    async fn fresh_snapshot(&self, url: &str) -> Result<ChangeRequestDetail, EngineError> {
+        self.snapshot(url).await
+    }
     async fn checkout_matches(&self, cwd: &Path, branch: &str, sha: &str, repository: &str)
     -> bool;
     async fn failure_logs(&self, detail: &ChangeRequestDetail) -> Result<String, EngineError>;
@@ -178,6 +181,19 @@ trait CiProvider: Send + Sync {
 #[async_trait::async_trait]
 impl CiProvider for GitHubCli {
     async fn snapshot(&self, url: &str) -> Result<ChangeRequestDetail, EngineError> {
+        let mut rx = self.watch_detail(url).await.map_err(other)?;
+        loop {
+            let frame = rx.borrow_and_update().clone();
+            if let Some(error) = frame.error {
+                return Err(other(error));
+            }
+            if let Some(snapshot) = frame.snapshot {
+                return serde_json::from_value(snapshot).map_err(other);
+            }
+            rx.changed().await.map_err(other)?;
+        }
+    }
+    async fn fresh_snapshot(&self, url: &str) -> Result<ChangeRequestDetail, EngineError> {
         self.ci_snapshot(url).await.map_err(other)
     }
     async fn checkout_matches(
@@ -200,6 +216,7 @@ struct Inner {
     workspace: WorkspaceHost,
     host: DocHost,
     github: Arc<dyn CiProvider>,
+    github_client: Option<GitHubCli>,
     shutdown: CancellationToken,
 }
 
@@ -210,6 +227,7 @@ pub struct PrWatches {
 
 impl PrWatches {
     pub fn open(root: &Path, workspace: WorkspaceHost, host: DocHost) -> Result<Self, EngineError> {
+        let github = GitHubCli::new();
         let store = Store::open(&root.join("pr-watches.sqlite"))?;
         let statuses = store.records.iter().map(|r| r.status.clone()).collect();
         Ok(Self {
@@ -218,10 +236,15 @@ impl PrWatches {
                 updates: watch::channel(statuses).0,
                 workspace,
                 host,
-                github: Arc::new(GitHubCli::new()),
+                github: Arc::new(github.clone()),
+                github_client: Some(github),
                 shutdown: CancellationToken::new(),
             }),
         })
+    }
+
+    pub(crate) fn github(&self) -> Option<GitHubCli> {
+        self.inner.github_client.clone()
     }
 
     pub fn start(&self) {
@@ -229,10 +252,31 @@ impl PrWatches {
         let cancel = self.inner.shutdown.clone();
         tokio::spawn(async move {
             let mut due: HashMap<String, (Instant, u32, String)> = HashMap::new();
+            let mut summaries: HashMap<
+                String,
+                watch::Receiver<zuse_protocol::git_workspace::SourceControlFrame>,
+            > = HashMap::new();
             loop {
                 let Some(inner) = weak.upgrade() else { return };
                 let service = Self { inner };
                 let records = service.store().records.clone();
+                // Durable observation retains the same provider resource as a
+                // visible PR. This loop processes policy, not provider polling.
+                summaries.retain(|url, rx| {
+                    records
+                        .iter()
+                        .any(|r| r.status.enabled && r.status.url == *url)
+                        && rx.has_changed().is_ok()
+                });
+                if let Some(github) = &service.inner.github_client {
+                    for record in records.iter().filter(|r| r.status.enabled) {
+                        if !summaries.contains_key(&record.status.url) {
+                            if let Ok(rx) = github.watch_detail(&record.status.url).await {
+                                summaries.insert(record.status.url.clone(), rx);
+                            }
+                        }
+                    }
+                }
                 due.retain(|id, _| {
                     records
                         .iter()
@@ -537,7 +581,7 @@ impl PrWatches {
             return Ok(detail.ci.state);
         }
         let logs = self.inner.github.failure_logs(&detail).await?;
-        let fresh = self.inner.github.snapshot(&record.status.url).await?;
+        let fresh = self.inner.github.fresh_snapshot(&record.status.url).await?;
         if failure_key(&fresh).as_ref() != Some(&key) {
             return Ok(fresh.ci.state);
         }
@@ -952,6 +996,7 @@ mod tests {
             checkout,
         });
         Arc::get_mut(&mut watches.inner).unwrap().github = fixture.clone();
+        Arc::get_mut(&mut watches.inner).unwrap().github_client = None;
         (temp, watches, fixture, sessions)
     }
     fn request() -> PrWatchRequest {

@@ -1637,7 +1637,6 @@ struct CommentDraft {
 /// The Changes pane entity. Lazy: no RPC until [`Changes::ensure_watch`] runs
 /// (the shell calls it when the pane first opens).
 pub struct Changes {
-    pub(crate) review_mode: bool,
     git_controls: Entity<crate::git_controls::GitPanel>,
     state: Entity<AppState>,
     diffs: Vec<CheckoutDiff>,
@@ -1753,7 +1752,6 @@ impl Changes {
         let settings = crate::settings::current(cx);
         let mode = DiffMode::from_split(settings.diff_split);
         Self {
-            review_mode: false,
             git_controls,
             state,
             mode,
@@ -2303,6 +2301,24 @@ impl Changes {
     /// Everything the pane needs kicked when (re)shown: the watch plus the
     /// scope-specific loads (branches, scoped/commit capture, history) — the
     /// shell's hook for freshly-mounted surface tabs.
+    #[cfg(feature = "browser-fixture")]
+    pub(crate) fn fixture_seed_git(&mut self, frame: serde_json::Value, cx: &mut Context<Self>) {
+        let target = zuse_viewport::git_controls::Target {
+            chat_id: "fixture-git".into(),
+            cwd: "/tmp/fieldnotes".into(),
+            device_id: "local".into(),
+            archived: false,
+        };
+        self.git_controls
+            .update(cx, |panel, _| panel.fixture_seed(target, frame));
+    }
+
+    pub(crate) fn set_git_active(&mut self, active: bool, cx: &mut Context<Self>) {
+        self.git_controls.update(cx, |panel, cx| {
+            panel.set_active(active && self.commit.is_none(), cx)
+        });
+    }
+
     pub fn ensure_content(&mut self, cx: &mut Context<Self>) {
         self.sync(cx);
     }
@@ -5295,7 +5311,7 @@ impl Render for Changes {
                         .child(message),
                 )
             })
-            .when(self.commit.is_none() && !self.review_mode, |d| {
+            .when(self.commit.is_none(), |d| {
                 d.child(self.git_controls.clone())
             })
             .child(content)

@@ -152,7 +152,11 @@ impl Shell {
                 self.focus_composer(cx);
             }
             Command::NextChat | Command::PrevChat => {
-                self.step_desktop_chat(command == Command::NextChat, cx)
+                if self.pull_request_pane_open() && self.navigation_focus.in_right(window, cx) {
+                    self.cycle_pull_request_tabs(command == Command::NextChat, window, cx);
+                } else {
+                    self.step_desktop_chat(command == Command::NextChat, cx);
+                }
             }
             Command::NewTab => self.add_thread_conversation(cx),
             Command::NextTab | Command::PrevTab => {

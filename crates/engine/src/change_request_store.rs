@@ -38,6 +38,33 @@ struct Inner {
 }
 
 impl ChangeRequestStore {
+    pub(crate) async fn branch_link(
+        &self,
+        account: String,
+        key: String,
+    ) -> Option<zuse_protocol::CheckoutChangeRequestStatus> {
+        let inner = self.inner.clone();
+        tokio::task::spawn_blocking(move || inner.with_conn(|conn| {
+            conn.query_row("SELECT snapshot FROM branch_links WHERE account=?1 AND key=?2 AND fetched_at>?3", params![account, key, Utc::now().timestamp_millis() - 30*24*60*60*1000], |row| row.get::<_, String>(0)).optional()
+        })).await.ok().flatten().flatten().and_then(|json| serde_json::from_str(&json).ok())
+    }
+
+    pub(crate) async fn save_branch_link(
+        &self,
+        account: String,
+        key: String,
+        snapshot: &zuse_protocol::CheckoutChangeRequestStatus,
+    ) {
+        let Ok(json) = serde_json::to_string(snapshot) else {
+            return;
+        };
+        let inner = self.inner.clone();
+        let _ = tokio::task::spawn_blocking(move || inner.with_conn(|conn| {
+            conn.execute("INSERT OR REPLACE INTO branch_links(account,key,fetched_at,snapshot) VALUES(?1,?2,?3,?4)", params![account,key,Utc::now().timestamp_millis(),json])?;
+            conn.execute("DELETE FROM branch_links WHERE rowid NOT IN (SELECT rowid FROM branch_links ORDER BY fetched_at DESC LIMIT 1000)", [])?;
+            Ok(())
+        })).await;
+    }
     pub(crate) fn new(data_dir: &Path) -> Self {
         Self {
             inner: Arc::new(Inner {
@@ -272,7 +299,8 @@ fn open(path: &Path) -> rusqlite::Result<Connection> {
         )?;
     }
     conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS pull_requests (
+        "CREATE TABLE IF NOT EXISTS branch_links(account TEXT NOT NULL,key TEXT NOT NULL,fetched_at INTEGER NOT NULL,snapshot TEXT NOT NULL,PRIMARY KEY(account,key));
+         CREATE TABLE IF NOT EXISTS pull_requests (
              account TEXT NOT NULL,
              url TEXT NOT NULL,
              fetched_at INTEGER NOT NULL,
@@ -316,6 +344,42 @@ mod tests {
     use super::*;
     use chrono::DateTime;
     use zuse_protocol::{ChangeRequestMergeability, ChangeRequestState};
+
+    #[tokio::test]
+    async fn confirmed_branch_links_survive_reopen_and_are_account_scoped() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ChangeRequestStore::new(dir.path());
+        let snapshot = zuse_protocol::CheckoutChangeRequestStatus {
+            error: None,
+            checkout_id: "checkout".into(),
+            device_id: "host".into(),
+            cwd: "/repo".into(),
+            branch: "feature".into(),
+            change_request: None,
+            updated_at: Utc::now(),
+        };
+        store
+            .save_branch_link("account-a".into(), "branch".into(), &snapshot)
+            .await;
+        drop(store);
+        let store = ChangeRequestStore::new(dir.path());
+        assert_eq!(
+            store.branch_link("account-a".into(), "branch".into()).await,
+            Some(snapshot)
+        );
+        assert!(
+            store
+                .branch_link("account-b".into(), "branch".into())
+                .await
+                .is_none()
+        );
+        assert!(
+            store
+                .branch_link("account-a".into(), "other".into())
+                .await
+                .is_none()
+        );
+    }
 
     fn item(number: u64, title: &str) -> ChangeRequestListItem {
         ChangeRequestListItem {

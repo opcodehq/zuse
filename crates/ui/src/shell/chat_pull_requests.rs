@@ -120,14 +120,13 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let page = self.chat_pull_requests.get(&id)?.page.clone();
-        let theme = Theme::of(cx).clone();
         let toolbar = page.update(cx, |page, cx| page.toolbar(cx));
         Some(
             div()
                 .size_full()
                 .flex()
                 .flex_col()
-                .child(crate::surface_chrome::toolbar(&theme).child(toolbar))
+                .child(crate::surface_chrome::flowing_header().child(toolbar))
                 .child(div().flex_1().min_h_0().child(page))
                 .into_any_element(),
         )

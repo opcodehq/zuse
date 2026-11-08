@@ -8502,6 +8502,15 @@ impl Shell {
         } else {
             format!("chat-{id}")
         };
+        let pr_error = {
+            let state = self.state.read(cx);
+            state
+                .chats
+                .iter()
+                .find(|chat| chat.id == id)
+                .and_then(|chat| state.change_request_error_for_chat(chat))
+                .map(str::to_owned)
+        };
         let pr_device = self
             .state
             .read(cx)
@@ -9431,6 +9440,13 @@ impl Shell {
                                     )
                                 }
                             }))
+                            .children(pr_error.clone().filter(|_| !preview).map(|error| {
+                                crate::change_requests::unavailable_badge(
+                                    format!("{row_id}-pr-error").into(),
+                                    error,
+                                    theme,
+                                )
+                            }))
                             .child(
                                 div()
                                     .id(SharedString::from(format!("{row_id}-corner")))
@@ -9552,7 +9568,14 @@ impl Shell {
                                         theme,
                                     )
                                 })
-                            }),
+                            })
+                            .children(pr_error.clone().filter(|_| !preview).map(|error| {
+                                crate::change_requests::unavailable_badge(
+                                    format!("{row_id}-pr-error").into(),
+                                    error,
+                                    theme,
+                                )
+                            })),
                     )
                 })
         };
@@ -12835,7 +12858,7 @@ impl Shell {
     /// default, drag-resizable. Content is the ACTIVE surface — the Diff
     /// page (its options row + the lazy [`Changes`] viewer), workspace Files,
     /// an embedded terminal, or the surface picker when no tabs exist.
-    fn render_right_pane(&mut self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+    fn render_right_pane(&mut self, _window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let exiting = self.fit_exit_width(1).is_some();
         let visible = self.horizontal_fit().right || exiting;
         let showing =
@@ -12969,10 +12992,10 @@ impl Shell {
         } else {
             gpui::Empty.into_any_element()
         };
-        // Flush panel (user request — the inset card is gone): full window
-        // height with a left hairline, glass-friendly like the terminal dock
-        // (translucent over the frost; solid otherwise). The resize grabber
-        // lives outside this clipped container, on the root layout's seam.
+        // An inset card matching the conversation's, glass-friendly like the
+        // terminal dock (translucent over the frost; solid otherwise). The
+        // resize grabber lives outside this clipped container, on the root
+        // layout's seam.
         let panel_bg = theme.panel_bg();
         let panel = div()
             .id("right-pane-focus")
@@ -12985,33 +13008,27 @@ impl Shell {
             .size_full()
             .flex()
             .flex_col()
-            // In takeover the panel's left edge IS the sidebar seam, which
-            // already carries the sidebar tone's right hairline — a second
-            // border there doubled up (user report).
-            .when(!self.right_pane_expanded, |el| {
-                el.border_l_1().border_color(theme.border)
-            })
-            // With the explorer undocked the panel's right edge IS the
-            // window's right edge: it carries the CSD window's rounded corners
-            // directly (gpui cannot clip children rounded — each full-bleed
-            // layer rounds itself; see [`Self::window_corner_radius`]). Docked,
-            // the explorer column is the rightmost layer and rounds instead.
-            .when(
-                Self::window_corner_radius(window) > 0.0 && self.files_visible_width(cx) <= 0.0,
-                |el| {
-                    let corner = Self::window_corner_radius(window);
-                    el.rounded_tr(px(corner)).rounded_br(px(corner))
-                },
-            )
+            .rounded(px(zuse_viewport::workspace_style::RADIUS))
+            .border_1()
+            .border_color(crate::theme::hairline(0.05))
             .bg(panel_bg)
             .overflow_hidden()
             // The titlebar is a glass overlay over the full-height content
             // row; the panel's own chrome starts below it.
             .when(
                 !matches!(self.resolved_right_active(cx), RightSurface::SideChat(_)),
-                |el| el.pt(px(Theme::TITLEBAR_HEIGHT)),
+                |el| {
+                    el.pt(px(
+                        Theme::TITLEBAR_HEIGHT - zuse_viewport::workspace_style::GUTTER
+                    ))
+                },
             )
             .child(content);
+        let panel = div()
+            .size_full()
+            .py(px(zuse_viewport::workspace_style::GUTTER))
+            .pr(px(zuse_viewport::workspace_style::GUTTER))
+            .child(panel);
         let target = self.right_target(cx);
         let edge_offset = self.eval_resize_edge_bounce(
             self.right_edge_bounce,
@@ -14214,6 +14231,25 @@ impl Render for Shell {
                 )
             });
         }
+        let source_control_active = window.is_window_active();
+        let active_review = self.active_main_diff(cx);
+        for (id, changes) in &self.diffs {
+            changes.update(cx, |changes, cx| {
+                changes.set_git_active(
+                    source_control_active
+                        && (active_review == Some(*id)
+                            || (simulator_active && selected == RightSurface::Diff(*id))),
+                    cx,
+                )
+            });
+        }
+        let active_pr = self.pull_request_pane.active_index();
+        let pr_visible = source_control_active && self.pull_request_pane_open();
+        for (index, tab) in self.pull_request_pane.tabs.iter().enumerate() {
+            tab.page.update(cx, |page, cx| {
+                page.set_active(pr_visible && active_pr == Some(index), cx)
+            });
+        }
         let now = Utc::now();
         let wake = shell_clock_wake(self.state.read(cx), now);
         self.clock
@@ -14573,6 +14609,28 @@ impl Render for Shell {
                     let text = action.0.clone();
                     this.composer
                         .update(cx, |composer, cx| composer.send_prompt(text, cx));
+                },
+            ))
+            .on_action(cx.listener(
+                |this, action: &crate::pull_request_detail::AddPullRequestContext, _, cx| {
+                    this.set_route(Route::Chat, cx);
+                    let composer = this.composer.clone();
+                    let context = action.0.clone();
+                    cx.defer(move |cx| {
+                        composer.update(cx, |composer, cx| {
+                            composer.input.update(cx, |input, cx| {
+                                let draft = input.text().trim_end();
+                                let text = if draft.is_empty() {
+                                    context
+                                } else {
+                                    format!("{draft}\n\n{context}")
+                                };
+                                input.set_text(text, cx);
+                            });
+                            composer.focus_pending = true;
+                            cx.notify();
+                        });
+                    });
                 },
             ))
             .on_action(cx.listener(
@@ -17874,7 +17932,7 @@ mod exit_regressions {
         click(cx, "expand-pull-request-pane");
         let covering = cx.debug_bounds("pull-request-pane").unwrap();
         assert!(covering.size.width > pane.size.width);
-        assert!(covering.left() <= board.left());
+        assert!(covering.left() <= board.left() + px(zuse_viewport::workspace_style::GUTTER));
         click(cx, "expand-pull-request-pane");
         assert_eq!(cx.debug_bounds("pull-request-pane").unwrap(), pane);
         // The toggle hides the pane and keeps its tabs.
@@ -18051,6 +18109,106 @@ mod exit_regressions {
                 assert_eq!(
                     composer.input.read(cx).text(),
                     "half-written reply\n\nReview pull request #7",
+                    "a draft already on the canvas stays above the prompt"
+                );
+                assert!(composer.focus_pending);
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn pull_request_context_appends_to_the_draft_without_sending(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        cx.update(|cx| {
+            gpui_base::init(cx);
+            cx.set_global(Theme::default());
+            crate::app_menus::init(cx);
+            crate::history::init(
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                cx,
+            );
+            settings::init(settings::UiSettings::default(), dir.path(), cx);
+        });
+        let window = cx.add_window(|_, cx| {
+            let state = cx.new(|_| AppState::new());
+            Shell::new(
+                state,
+                EngineBootConfig {
+                    target: None,
+                    data_dir: dir.path().into(),
+                    ipc_port: 0,
+                    edge_url: "http://127.0.0.1:1".into(),
+                    edge_token: None,
+                    org_id: None,
+                    workos_client_id: None,
+                    default_harness: zuse_protocol::HarnessId::Mock,
+                },
+                cx,
+            )
+        });
+        window
+            .update(cx, |shell, _, cx| {
+                let space = |id: &str, device: &str| zuse_protocol::Space {
+                    id: id.into(),
+                    device_id: device.into(),
+                    path: format!("/{id}"),
+                    name: None,
+                    git_detected: true,
+                    git_checked_at: None,
+                    checkout_id: None,
+                    repository_id: None,
+                    remote_repository: None,
+                    created_at: Utc::now(),
+                };
+                shell.state.update(cx, |state, cx| {
+                    state.local_device_id = Some("local".into());
+                    state.apply_spaces(vec![
+                        space("unrelated", "local"),
+                        space("pr-project", "remote"),
+                    ]);
+                    state.select_space(Some("unrelated".into()), cx);
+                });
+                shell.settings.space_filter = Some("unrelated".into());
+                shell.composer.update(cx, |composer, cx| {
+                    composer
+                        .input
+                        .update(cx, |input, cx| input.set_text("half-written reply", cx))
+                });
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |_, window, cx| {
+                window.dispatch_action(
+                    Box::new(crate::pull_request_detail::AddPullRequestContext(
+                        "Review feedback snapshot".into(),
+                    )),
+                    cx,
+                )
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, cx| {
+                assert!(
+                    shell.state.read(cx).selected_chat.is_none(),
+                    "a new session opens"
+                );
+                assert_eq!(
+                    shell.state.read(cx).selected_space.as_deref(),
+                    Some("unrelated")
+                );
+                assert!(
+                    shell.state.read(cx).chats.is_empty(),
+                    "adding context never creates or sends a chat"
+                );
+                let composer = shell.composer.read(cx);
+                assert_eq!(
+                    composer.input.read(cx).text(),
+                    "half-written reply\n\nReview feedback snapshot",
                     "a draft already on the canvas stays above the prompt"
                 );
                 assert!(composer.focus_pending);
@@ -19370,6 +19528,7 @@ impl Shell {
             {
                 let chat = chat.clone();
                 state.fixture_sidebar_change_request(zuse_protocol::CheckoutChangeRequestStatus {
+                    error: None,
                     checkout_id: "fixture-checkout".into(),
                     device_id: chat.device_id.clone(),
                     cwd: "/tmp/fieldnotes".into(),
@@ -19412,6 +19571,30 @@ impl Shell {
         });
         match route {
             "panel/launcher" => self.set_surfaces_open(true, cx),
+            "panel/git" => {
+                self.open_review_tab(window, cx);
+                let frame = serde_json::json!({"refreshing": false, "snapshot": {
+                    "chatId": "fixture-git", "checkoutId": "fixture-checkout", "cwd": "/tmp/fieldnotes",
+                    "branch": "alex/connection-handoff", "headSha": "abc1234",
+                    "upstream": "origin/alex/connection-handoff", "ahead": 2, "behind": 0,
+                    "complete": true, "revision": "r1",
+                    "files": [
+                        {"path": "apps/desktop/src/handoff.rs", "oldPath": null, "index": "modified", "worktree": "unchanged"},
+                        {"path": "apps/desktop/src/session.rs", "oldPath": null, "index": "modified", "worktree": "modified"},
+                        {"path": "crates/engine/src/connection.rs", "oldPath": null, "index": "unchanged", "worktree": "modified"},
+                        {"path": "crates/engine/src/retry.rs", "oldPath": null, "index": "unchanged", "worktree": "untracked"},
+                        {"path": "README.md", "oldPath": null, "index": "unchanged", "worktree": "modified"},
+                    ],
+                }});
+                if let Some(id) = self.active_main_diff(cx)
+                    && let Some(changes) = self.diffs.get(&id).cloned()
+                {
+                    changes.update(cx, |changes, cx| {
+                        changes.fixture_seed_diff(FIXTURE_REVIEW_PATCH, cx);
+                        changes.fixture_seed_git(frame, cx);
+                    });
+                }
+            }
             "panel/files" => {
                 self.add_files_surface(window, cx);
                 if let Some(files) = self.files.get(&self.panel_key(cx)).cloned() {

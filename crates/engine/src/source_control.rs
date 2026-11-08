@@ -92,7 +92,7 @@ struct PrRequestCache {
     /// finishing read whether a write has replaced or dropped it meanwhile.
     in_flight: std::collections::HashMap<String, (u64, PrFetch)>,
     next_fetch: u64,
-    rate_limited_at: Option<Instant>,
+    rate_limited_at: Option<(String, Instant)>,
 }
 
 /// Repository identity extracted from a Git remote URL.
@@ -167,6 +167,15 @@ pub trait ChangeRequestProvider: Send + Sync {
 /// Checkout inspection plus provider resolution, injectable for cache/service tests.
 #[async_trait]
 pub trait CheckoutChangeRequestLookup: Send + Sync {
+    fn share_checkout_inspection(&self) -> bool {
+        false
+    }
+    async fn credential_scope(&self) -> String {
+        String::new()
+    }
+    async fn persistence_scope(&self) -> Option<String> {
+        None
+    }
     async fn inspect_checkout(
         &self,
         cwd: &Path,
@@ -337,6 +346,15 @@ impl Default for ChangeRequestResolver {
 
 #[async_trait]
 impl CheckoutChangeRequestLookup for ChangeRequestResolver {
+    fn share_checkout_inspection(&self) -> bool {
+        true
+    }
+    async fn credential_scope(&self) -> String {
+        self.github.credential_scope().await
+    }
+    async fn persistence_scope(&self) -> Option<String> {
+        self.github.store_account().await
+    }
     async fn inspect_checkout(
         &self,
         cwd: &Path,
@@ -362,9 +380,108 @@ pub struct GitHubCli {
     store: Option<crate::change_request_store::ChangeRequestStore>,
     /// The active `gh` account and when it was read, keying the store.
     account: Arc<tokio::sync::Mutex<Option<(Instant, Option<String>)>>>,
+    account_scope: Arc<tokio::sync::Mutex<String>>,
+    refresh: crate::source_control_refresh::RefreshHub,
+    read_slots: Arc<tokio::sync::Semaphore>,
 }
 
 impl GitHubCli {
+    /// Opaque, memory-only namespace. Never store credentials or share results
+    /// across an external `gh auth switch` or environment-token change.
+    pub(crate) async fn credential_scope(&self) -> String {
+        use sha2::{Digest, Sha256};
+        let mut hash = Sha256::new();
+        for name in [
+            "GH_TOKEN",
+            "GITHUB_TOKEN",
+            "GH_HOST",
+            "GH_CONFIG_DIR",
+            "XDG_CONFIG_HOME",
+        ] {
+            hash.update(name);
+            hash.update([0]);
+            if let Some(value) = std::env::var_os(name) {
+                hash.update(value.to_string_lossy().as_bytes());
+            }
+            hash.update([0]);
+        }
+        let config = std::env::var_os("GH_CONFIG_DIR")
+            .map(PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("XDG_CONFIG_HOME")
+                    .map(PathBuf::from)
+                    .map(|p| p.join("gh"))
+            })
+            .or_else(|| Some(crate::repos::home_dir().join(".config/gh")));
+        if let Some(config) = config {
+            if let Ok(file) = tokio::fs::File::open(config.join("hosts.yml")).await {
+                let mut bytes = Vec::new();
+                let _ = file.take(1024 * 1024).read_to_end(&mut bytes).await;
+                hash.update(bytes);
+            }
+        }
+        crate::repos::hex(&hash.finalize())
+    }
+
+    pub(crate) async fn summary_request(&self, url: &str, refresh: bool) -> PrResult {
+        let url = validated_pull_request_url(url)?;
+        let github = self.clone();
+        self.cached_pr_request(format!("summary:{url}"), refresh, async move {
+            github.fetch_summary_data(&url, false).await
+        })
+        .await
+    }
+
+    pub(crate) async fn watch_detail(
+        &self,
+        url: &str,
+    ) -> Result<
+        tokio::sync::watch::Receiver<zuse_protocol::git_workspace::SourceControlFrame>,
+        ChangeRequestError,
+    > {
+        let url = validated_pull_request_url(url)?;
+        let scope = self.credential_scope().await;
+        let github = self.clone();
+        Ok(self.refresh.watch(format!("pr:{url}:{scope}"), move || {
+            let github = github.clone();
+            let url = url.clone();
+            let scope = scope.clone();
+            async move {
+                if github.credential_scope().await != scope {
+                    return Err(
+                        "Account changed. Reopen this pull request to load the current account."
+                            .into(),
+                    );
+                }
+                let value = github
+                    .summary_request(&url, true)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                if github.credential_scope().await != scope {
+                    return Err(
+                        "Account changed. Reopen this pull request to load the current account."
+                            .into(),
+                    );
+                }
+                let detail: zuse_protocol::ChangeRequestDetail =
+                    serde_json::from_value(value.clone()).map_err(|e| e.to_string())?;
+                let seconds = if detail.state != "OPEN" {
+                    600
+                } else if detail.ci.state
+                    == zuse_protocol::change_request_assessment::CiState::Pending
+                {
+                    15
+                } else {
+                    60
+                };
+                Ok((value, Duration::from_secs(seconds)))
+            }
+        }))
+    }
+
+    pub(crate) fn invalidate_watches(&self) {
+        self.refresh.invalidate("pr:");
+    }
     pub async fn project_auth_status(
         &self,
     ) -> zuse_protocol::project_creation::GithubProjectStatus {
@@ -412,6 +529,8 @@ impl GitHubCli {
         F: std::future::Future<Output = PrResult> + Send + 'static,
     {
         use futures::FutureExt;
+        let scope = self.credential_scope().await;
+        let key = format!("{key}:auth:{scope}");
         let mut cache = self.pr_cache.lock().await;
         if let Some(index) = cache.entries.iter().position(|entry| entry.0 == key) {
             let entry = cache.entries.remove(index);
@@ -430,10 +549,9 @@ impl GitHubCli {
                 return result;
             }
         }
-        if cache
-            .rate_limited_at
-            .is_some_and(|at| at.elapsed() < Duration::from_secs(15 * 60))
-        {
+        if cache.rate_limited_at.as_ref().is_some_and(|(account, at)| {
+            account == &scope && at.elapsed() < Duration::from_secs(15 * 60)
+        }) {
             return Err(ChangeRequestError::RateLimited);
         }
         let pending = match cache.in_flight.get(&key) {
@@ -450,7 +568,7 @@ impl GitHubCli {
                         .unwrap_or(Err(ChangeRequestError::CommandFailed));
                     let mut cache = shared.lock().await;
                     if matches!(result, Err(ChangeRequestError::RateLimited)) {
-                        cache.rate_limited_at = Some(Instant::now());
+                        cache.rate_limited_at = Some((scope, Instant::now()));
                     }
                     if cache
                         .in_flight
@@ -462,7 +580,7 @@ impl GitHubCli {
                         cache
                             .entries
                             .push((task_key, Instant::now(), result.clone()));
-                        if cache.entries.len() > 24 {
+                        if cache.entries.len() > 256 {
                             let _ = cache.entries.remove(0);
                         }
                     }
@@ -519,11 +637,12 @@ impl GitHubCli {
         let revisions = head
             .zip(base)
             .map(|(head, base)| (head.to_owned(), base.to_owned()));
+        let share_summary = head.is_none();
         self.cached_pr_request(key, refresh, async move {
             if diff && let Some((head, base)) = revisions {
                 return github.fetch_revision_diff(&url, &head, &base).await;
             }
-            github.fetch_detail(&url, diff).await
+            github.fetch_detail(&url, diff, share_summary).await
         })
         .await
     }
@@ -537,14 +656,27 @@ impl GitHubCli {
         url: &str,
         update: zuse_protocol::ChangeRequestUpdate,
     ) -> Result<Option<String>, ChangeRequestError> {
+        self.update_pull_request_at_head(url, update, None).await
+    }
+
+    pub async fn update_pull_request_at_head(
+        &self,
+        url: &str,
+        update: zuse_protocol::ChangeRequestUpdate,
+        head: Option<&str>,
+    ) -> Result<Option<String>, ChangeRequestError> {
         use zuse_protocol::{ChangeRequestMergeMethod as Method, ChangeRequestUpdate as Update};
         let url = validated_pull_request_url(url)?;
+        if head.is_some_and(|head| !zuse_protocol::change_request_assessment::valid_head_oid(head))
+        {
+            return Err(ChangeRequestError::Decode);
+        }
         let method_flag = |method: Method| match method {
             Method::Squash => "--squash",
             Method::Merge => "--merge",
             Method::Rebase => "--rebase",
         };
-        let args: Vec<String> = match update {
+        let mut args: Vec<String> = match update {
             Update::Merge { method } => {
                 vec!["merge".into(), url.clone(), method_flag(method).into()]
             }
@@ -560,6 +692,13 @@ impl GitHubCli {
             Update::Close => vec!["close".into(), url.clone()],
             Update::Reopen => vec!["reopen".into(), url.clone()],
         };
+        if matches!(
+            update,
+            Update::Merge { .. } | Update::EnableAutoMerge { .. }
+        ) && let Some(head) = head
+        {
+            args.extend(["--match-head-commit".into(), head.into()]);
+        }
         let output = self
             .runner
             .run(ProcessRequest {
@@ -573,6 +712,7 @@ impl GitHubCli {
         cache.entries.retain(|entry| !entry.0.contains(&url));
         cache.in_flight.retain(|entry, _| !entry.contains(&url));
         drop(cache);
+        self.invalidate_watches();
         let output = output.map_err(classify_run_error)?;
         if output.success {
             return Ok(None);
@@ -621,11 +761,11 @@ impl GitHubCli {
             .await;
         // A lost receipt may still represent an accepted write. Evict on every
         // attempt, including timeouts, and retire reads that predate it.
-        let key = format!("false:{url}:");
         let mut cache = self.pr_cache.lock().await;
-        cache.entries.retain(|entry| !entry.0.starts_with(&key));
-        cache.in_flight.retain(|entry, _| !entry.starts_with(&key));
+        cache.entries.retain(|entry| !entry.0.contains(&url));
+        cache.in_flight.retain(|entry, _| !entry.contains(&url));
         drop(cache);
+        self.invalidate_watches();
         let output = output.map_err(classify_run_error)?;
         if !output.success {
             return Err(classify_github_failure(&output.stderr));
@@ -652,6 +792,11 @@ impl GitHubCli {
     }
 
     async fn fetch_revision_diff(&self, url: &str, head: &str, base: &str) -> PrResult {
+        let _slot = self
+            .read_slots
+            .acquire()
+            .await
+            .map_err(|_| ChangeRequestError::CommandFailed)?;
         let parsed = reqwest::Url::parse(url).map_err(|_| ChangeRequestError::Decode)?;
         let parts: Vec<_> = parsed.path().trim_matches('/').split('/').collect();
         let output = self
@@ -683,7 +828,29 @@ impl GitHubCli {
         &self,
         url: &str,
         diff: bool,
+        share_summary: bool,
     ) -> Result<serde_json::Value, ChangeRequestError> {
+        let url = validated_pull_request_url(url)?;
+        if !diff {
+            let value = if share_summary {
+                self.summary_request(&url, true).await?
+            } else {
+                self.fetch_summary_data(&url, false).await?
+            };
+            let mut detail: zuse_protocol::ChangeRequestDetail =
+                serde_json::from_value(value).map_err(|_| ChangeRequestError::Decode)?;
+            detail.review_threads = self.fetch_review_threads(&url).await.ok();
+            return serde_json::to_value(detail).map_err(|_| ChangeRequestError::Decode);
+        }
+        self.fetch_summary_data(&url, diff).await
+    }
+
+    async fn fetch_summary_data(&self, url: &str, diff: bool) -> PrResult {
+        let _slot = self
+            .read_slots
+            .acquire()
+            .await
+            .map_err(|_| ChangeRequestError::CommandFailed)?;
         let url = validated_pull_request_url(url)?;
         let mut args = vec![
             "pr".into(),
@@ -693,7 +860,7 @@ impl GitHubCli {
         if diff {
             args.push("--color=never".into());
         } else {
-            args.extend(["--json".into(), "title,body,url,number,author,baseRefName,headRefName,headRefOid,baseRefOid,state,isDraft,reviewDecision,mergeable,additions,deletions,comments,reviews,files,statusCheckRollup,autoMergeRequest".into()]);
+            args.extend(["--json".into(), "title,body,url,number,author,baseRefName,headRefName,headRefOid,baseRefOid,state,isDraft,reviewDecision,mergeable,additions,deletions,comments,reviews,files,statusCheckRollup,autoMergeRequest,headRepository".into()]);
         }
         let output = self
             .runner
@@ -750,7 +917,6 @@ impl GitHubCli {
                     detail.status_check_rollup.clear();
                 }
             }
-            detail.review_threads = self.fetch_review_threads(&url).await.ok();
             serde_json::to_value(detail).map_err(|_| ChangeRequestError::Decode)
         }
     }
@@ -870,6 +1036,9 @@ impl GitHubCli {
             pr_cache: Default::default(),
             store: None,
             account: Default::default(),
+            account_scope: Default::default(),
+            refresh: Default::default(),
+            read_slots: Arc::new(tokio::sync::Semaphore::new(4)),
         }
     }
 
@@ -892,7 +1061,14 @@ impl GitHubCli {
         {
             return None;
         }
+        let scope = self.credential_scope().await;
+        let mut previous_scope = self.account_scope.lock().await;
         let mut account = self.account.lock().await;
+        if *previous_scope != scope {
+            *account = None;
+            *previous_scope = scope;
+        }
+        drop(previous_scope);
         if let Some((read_at, login)) = account.as_ref()
             && read_at.elapsed() < Duration::from_secs(30)
         {
@@ -1021,6 +1197,11 @@ impl GitHubCli {
         filter: zuse_protocol::ChangeRequestFilter,
         after: Option<&str>,
     ) -> Result<(zuse_protocol::ChangeRequestPage, Option<String>), ChangeRequestError> {
+        let _slot = self
+            .read_slots
+            .acquire()
+            .await
+            .map_err(|_| ChangeRequestError::CommandFailed)?;
         let (owner, name) = repository
             .split_once('/')
             .ok_or(ChangeRequestError::UnsupportedRepository)?;
@@ -1124,6 +1305,11 @@ impl GitHubCli {
         source: &CheckoutSourceContext,
         selector: &str,
     ) -> Result<Vec<GhPullRequest>, ChangeRequestError> {
+        let _slot = self
+            .read_slots
+            .acquire()
+            .await
+            .map_err(|_| ChangeRequestError::CommandFailed)?;
         let request = ProcessRequest {
             program: "gh".into(),
             args: vec![
@@ -1234,26 +1420,25 @@ impl ChangeRequestProvider for GitHubCli {
             return Ok(None);
         }
 
-        for selector in &source.branch.head_selectors {
-            let candidates = self.list_for_selector(source, selector).await?;
-            if candidates.is_empty() {
-                continue;
-            }
-            let default_branch = match source.default_branch.clone() {
-                Some(branch) => Some(branch),
-                None if needs_default_branch(source, &candidates) => {
-                    self.default_branch(source).await
-                }
-                None => None,
-            };
-            return select_pull_request(
-                self.provider(),
-                source,
-                default_branch.as_deref(),
-                candidates,
-            );
+        // `gh pr list --head` accepts a branch, not owner:branch. Source
+        // ownership is checked on the returned candidates below.
+        let candidates = self
+            .list_for_selector(source, &source.branch.head_branch)
+            .await?;
+        if candidates.is_empty() {
+            return Ok(None);
         }
-        Ok(None)
+        let default_branch = match source.default_branch.clone() {
+            Some(branch) => Some(branch),
+            None if needs_default_branch(source, &candidates) => self.default_branch(source).await,
+            None => None,
+        };
+        select_pull_request(
+            self.provider(),
+            source,
+            default_branch.as_deref(),
+            candidates,
+        )
     }
 }
 
@@ -3307,7 +3492,7 @@ mod tests {
                 "pr",
                 "list",
                 "--head",
-                "acme:feature/status",
+                "feature/status",
                 "--state",
                 "all",
                 "--limit",
@@ -3319,6 +3504,55 @@ mod tests {
         assert_eq!(requests[0].env, [("GH_PROMPT_DISABLED".into(), "1".into())]);
         assert_eq!(requests[0].timeout, GITHUB_TIMEOUT);
         assert_eq!(requests[0].output_limit, GITHUB_OUTPUT_LIMIT);
+    }
+
+    #[tokio::test]
+    async fn merge_requires_the_displayed_head_when_supplied() {
+        use zuse_protocol::{ChangeRequestMergeMethod, ChangeRequestUpdate};
+        let runner = FakeProcessRunner::with_responses([command_success(Vec::new())]);
+        let github = GitHubCli::with_runner(runner.clone());
+        let head = "a".repeat(40);
+        let update = ChangeRequestUpdate::Merge {
+            method: ChangeRequestMergeMethod::Squash,
+        };
+        assert_eq!(
+            github
+                .update_pull_request_at_head(
+                    "https://github.com/acme/app/pull/1",
+                    update,
+                    Some(&head)
+                )
+                .await
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            runner.requests()[0].args,
+            [
+                "pr",
+                "merge",
+                "https://github.com/acme/app/pull/1",
+                "--squash",
+                "--match-head-commit",
+                &head
+            ]
+        );
+        assert_eq!(
+            github
+                .update_pull_request_at_head(
+                    "https://github.com/acme/app/pull/1",
+                    update,
+                    Some("invalid")
+                )
+                .await
+                .unwrap_err(),
+            ChangeRequestError::Decode
+        );
+        assert_eq!(
+            runner.requests().len(),
+            1,
+            "invalid head never reaches the provider"
+        );
     }
 
     #[tokio::test]
@@ -3444,6 +3678,7 @@ mod tests {
         // A fresh engine (a relaunch) serves the stored page without GitHub.
         let relaunched = GitHubCli::with_runner(runner.clone()).with_store(dir.path());
         *relaunched.account.lock().await = Some((Instant::now(), Some("me".into())));
+        *relaunched.account_scope.lock().await = relaunched.credential_scope().await;
         let stored = relaunched
             .list_page("acme/zuse", filter, None, false, true)
             .await
@@ -3712,7 +3947,7 @@ mod tests {
     #[tokio::test]
     async fn pr_cache_is_bounded_and_repository_filter_cannot_be_broadened() {
         let runner = FakeProcessRunner::with_responses(
-            (0..26).map(|_| command_success(search_response(vec![]))),
+            (0..258).map(|_| command_success(search_response(vec![]))),
         );
         let github = GitHubCli::with_runner(runner.clone());
         for invalid in ["", "acme", "a/b repo:c/d", "a/*", "a/b/c", "a/.."] {
@@ -3722,24 +3957,24 @@ mod tests {
             );
         }
         assert!(runner.requests().is_empty());
-        for index in 0..26 {
+        for index in 0..258 {
             authored(&github, &format!("a/repo-{index}"), false)
                 .await
                 .unwrap();
         }
         let cache = github.pr_cache.lock().await;
-        assert_eq!(cache.entries.len(), 24);
+        assert_eq!(cache.entries.len(), 256);
         assert!(
             cache
                 .entries
                 .iter()
-                .all(|entry| entry.0 != "list:a/repo-0:Authored:")
+                .all(|entry| !entry.0.starts_with("list:a/repo-0:Authored:"))
         );
         assert!(
             cache
                 .entries
                 .iter()
-                .any(|entry| entry.0 == "list:a/repo-25:Authored:")
+                .any(|entry| entry.0.starts_with("list:a/repo-257:Authored:"))
         );
     }
 
@@ -4422,29 +4657,18 @@ printf '%s\n' '[{"number":90,"title":"Host-resolved pull request","url":"https:/
     }
 
     #[tokio::test]
-    async fn empty_specific_lookup_uses_the_next_safe_selector() {
+    async fn empty_branch_lookup_uses_one_supported_selector() {
         let source = source("feature/status", "acme", Some("main"));
-        let json = serde_json::to_vec(&vec![pull_request(
-            100,
-            "OPEN",
-            "acme",
-            "feature/status",
-            "2026-08-15T12:00:00Z",
-        )])
-        .unwrap();
-        let runner = FakeProcessRunner::with_responses([
-            command_success(b"[]".to_vec()),
-            command_success(json),
-        ]);
+        let runner = FakeProcessRunner::with_responses([command_success(b"[]".to_vec())]);
         let github = GitHubCli::with_runner(runner.clone());
-
-        let result = github.find_for_branch(&source).await.unwrap().unwrap();
-
-        assert_eq!(result.number, 100);
+        assert_eq!(github.find_for_branch(&source).await.unwrap(), None);
         let requests = runner.requests();
-        assert_eq!(requests.len(), 2);
-        assert_eq!(requests[0].args[3], "acme:feature/status");
-        assert_eq!(requests[1].args[3], "feature/status");
+        assert_eq!(
+            requests.len(),
+            1,
+            "an empty result must not repeat an equivalent branch lookup"
+        );
+        assert_eq!(requests[0].args[3], "feature/status");
     }
 
     #[tokio::test]

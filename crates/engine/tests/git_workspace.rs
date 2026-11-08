@@ -84,6 +84,62 @@ impl Fixture {
             .unwrap()
     }
 }
+
+#[tokio::test]
+async fn workspace_subscription_tracks_external_branch_changes_and_rejects_another_checkout() {
+    let f = Fixture::new().await;
+    std::fs::write(f.repo.join("file"), "initial").unwrap();
+    git(&f.repo, &["add", "."]);
+    git(&f.repo, &["commit", "-m", "Initial"]);
+    let mut stream = f
+        .client
+        .subscribe_checked(
+            methods::WATCH_GIT_WORKSPACE,
+            json!({"chatId":"chat","cwd":f.repo}),
+        )
+        .await
+        .unwrap();
+    let initial = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            let frame = stream.recv().await.unwrap();
+            if frame["snapshot"]["branch"] == "main" {
+                break frame;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(initial["snapshot"]["chatId"], "chat");
+    git(&f.repo, &["checkout", "-b", "external"]);
+    let changed = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            let frame = stream.recv().await.unwrap();
+            if frame["snapshot"]["branch"] == "external" {
+                break frame;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_ne!(
+        initial["snapshot"]["revision"],
+        changed["snapshot"]["revision"]
+    );
+    let other = f.root.path().join("other");
+    std::fs::create_dir(&other).unwrap();
+    git(&other, &["init", "-b", "main"]);
+    assert!(
+        f.client
+            .subscribe_checked(
+                methods::WATCH_GIT_WORKSPACE,
+                json!({"chatId":"chat","cwd":other})
+            )
+            .await
+            .is_err()
+    );
+    drop(stream);
+    f.core.shutdown().await;
+}
 #[tokio::test]
 async fn literal_staging_unborn_unstage_selective_commit_stale_index_and_archive_admission() {
     let f = Fixture::new().await;
@@ -206,6 +262,14 @@ async fn branch_push_pull_and_non_fast_forward_preserve_local_history() {
     git(&peer, &["add", "."]);
     git(&peer, &["commit", "-m", "Remote change"]);
     git(&peer, &["push"]);
+    let before_fetch = git(&f.repo, &["rev-parse", "HEAD"]);
+    let fetched = f.action(json!({"action":"fetch"})).await;
+    assert_eq!(fetched["behind"], 1, "fetch updates the upstream count");
+    assert_eq!(git(&f.repo, &["rev-parse", "HEAD"]), before_fetch);
+    assert!(
+        !f.repo.join("peer-file").exists(),
+        "fetch preserves the working tree"
+    );
     f.action(json!({"action":"pull"})).await;
     assert!(f.repo.join("peer-file").exists());
     std::fs::write(f.repo.join("local-file"), "local").unwrap();

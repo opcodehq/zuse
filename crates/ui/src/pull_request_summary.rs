@@ -1,13 +1,18 @@
-//! The Summary tab: a document-style header (title, author, checkout, refs
-//! and change totals over a hairline), compact property rows, and the
-//! description. Rows carry no card chrome; hairlines and spacing group them.
+//! The Summary tab: the title, branch/reviews/checks facts, then quiet
+//! sections for the description, checks, feedback and folded agent tools.
 use super::*;
 use crate::localization::message as tr;
 use zuse_i18n::messages as msg;
 
 /// Width of the property rows' label column (icon and name).
 pub(super) const PROPERTY_LABEL: f32 = 112.0;
-const PROPERTY_HEIGHT: f32 = 32.0;
+const PROPERTY_HEIGHT: f32 = 28.0;
+/// A description this long starts clamped behind Show more.
+const DESCRIPTION_LONG_BYTES: usize = 360;
+const DESCRIPTION_LONG_LINES: usize = 8;
+const DESCRIPTION_CLAMP: f32 = 132.0;
+/// Feedback rows shown before View all.
+const FEEDBACK_PREVIEW: usize = 5;
 
 /// What the header knows, from the loaded details or the board's row.
 pub(super) struct HeaderFacts {
@@ -23,7 +28,7 @@ pub(super) struct HeaderFacts {
     pub changes: Option<(Option<usize>, u64, u64)>,
 }
 
-/// The pull request's lifecycle state as a quiet bordered pill.
+/// The pull request's lifecycle state as a small tinted pill.
 pub(super) fn state_pill(state: &str, draft: bool, theme: &Theme) -> AnyElement {
     let state = if draft { "DRAFT" } else { state };
     let (label, glyph, color) = match state.to_ascii_uppercase().as_str() {
@@ -40,15 +45,14 @@ pub(super) fn state_pill(state: &str, draft: bool, theme: &Theme) -> AnyElement 
         .px(px(8.0))
         .flex()
         .items_center()
-        .gap(px(5.0))
-        .rounded(px(6.0))
-        .border_1()
-        .border_color(theme.border_strong)
+        .gap(px(4.0))
+        .rounded_full()
+        .bg(color.opacity(0.14))
         .text_size(crate::typography::text_xs())
-        .text_color(theme.text)
+        .text_color(color)
         .child(
             crate::icons::icon(glyph)
-                .size(px(13.0))
+                .size(px(12.0))
                 .flex_none()
                 .text_color(color),
         )
@@ -124,34 +128,7 @@ pub(super) fn detail_header(
                                 .child(age),
                         )
                 }),
-        )
-        .when_some(checkout, |el, (shown, copied)| {
-            el.child(
-                div()
-                    .id("pr-copy-checkout")
-                    .debug_selector(|| "pr-copy-checkout".into())
-                    .role(gpui::Role::Button)
-                    .aria_label(crate::localization::message(
-                        cx,
-                        zuse_i18n::messages::native::copy_checkout,
-                    ))
-                    .tab_index(0)
-                    .flex_none()
-                    .px(px(4.0))
-                    .rounded(px(4.0))
-                    .font_family(theme.font_mono.clone())
-                    .text_size(crate::typography::text_xs())
-                    .text_color(theme.text_muted)
-                    .cursor_pointer()
-                    .hover(|style| style.text_color(theme.text).bg(theme.glass_hover()))
-                    .tooltip(widgets::text_tooltip(format!("Copy {copied}")))
-                    .child(shown)
-                    .on_click(move |_, _, cx| {
-                        cx.stop_propagation();
-                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(copied.clone()));
-                    }),
-            )
-        });
+        );
     let refs_line = (refs.is_some() || changes.is_some()).then(|| {
         div()
             .min_w_0()
@@ -174,7 +151,32 @@ pub(super) fn detail_header(
                                     .flex_none()
                                     .text_color(theme.text_faint),
                             )
-                            .child(muted_mono(head))
+                            .child(match checkout {
+                                // The head branch copies its checkout command.
+                                Some((shown, copied)) => muted_mono(head)
+                                    .id("pr-copy-checkout")
+                                    .debug_selector(|| "pr-copy-checkout".into())
+                                    .role(gpui::Role::Button)
+                                    .aria_label(crate::localization::message(
+                                        cx,
+                                        zuse_i18n::messages::native::copy_checkout,
+                                    ))
+                                    .tab_index(0)
+                                    .rounded(px(4.0))
+                                    .cursor_pointer()
+                                    .hover(|style| {
+                                        style.text_color(theme.text).bg(theme.glass_hover())
+                                    })
+                                    .tooltip(widgets::text_tooltip(format!("Copy {shown}")))
+                                    .on_click(move |_, _, cx| {
+                                        cx.stop_propagation();
+                                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                            copied.clone(),
+                                        ));
+                                    })
+                                    .into_any_element(),
+                                None => muted_mono(head).into_any_element(),
+                            })
                     }),
             )
             .when_some(changes, |el, (files, additions, deletions)| {
@@ -217,8 +219,8 @@ pub(super) fn detail_header(
                 .debug_selector(|| "pr-detail-title".into())
                 .px(px(8.0))
                 .min_w_0()
-                .text_size(crate::typography::text_xl())
-                .line_height(crate::typography::ui_rems(26.0))
+                .text_size(crate::typography::text_lg())
+                .line_height(crate::typography::ui_rems(22.0))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(theme.text_strong)
                 .child(title),
@@ -228,19 +230,19 @@ pub(super) fn detail_header(
                 .id("pr-detail-meta")
                 .debug_selector(|| "pr-detail-meta".into())
                 .flex_none()
-                .mt(px(10.0))
+                .mt(px(6.0))
                 .px(px(8.0))
                 .flex()
                 .flex_col()
-                .gap(px(8.0))
-                .text_size(crate::typography::text_sm())
+                .gap(px(4.0))
+                .text_size(crate::typography::text_xs())
                 .child(byline)
                 .children(refs_line),
         )
         .child(
             div()
                 .debug_selector(|| "pr-detail-divider".into())
-                .mt(px(16.0))
+                .mt(px(12.0))
                 .h(px(1.0))
                 .flex_none()
                 .bg(theme.border),
@@ -252,6 +254,17 @@ pub(super) fn detail_header(
 pub(crate) fn property_row(
     id: &str,
     glyph: &'static str,
+    label: &str,
+    content: impl IntoElement,
+    theme: &Theme,
+) -> gpui::Stateful<gpui::Div> {
+    property_row_tinted(id, glyph, theme.text_muted, label, content, theme)
+}
+
+fn property_row_tinted(
+    id: &str,
+    glyph: &'static str,
+    tint: gpui::Hsla,
     label: &str,
     content: impl IntoElement,
     theme: &Theme,
@@ -278,7 +291,7 @@ pub(crate) fn property_row(
                     crate::icons::icon(glyph)
                         .size(px(14.0))
                         .flex_none()
-                        .text_color(theme.text_muted),
+                        .text_color(tint),
                 )
                 .child(div().min_w_0().truncate().child(label.to_owned())),
         )
@@ -324,7 +337,7 @@ fn checks_summary(
             _ => status_style(ci_status(detail)).0,
         }
     } else if passed == total {
-        format!("All {total} passing")
+        format!("All {total} passed")
     } else {
         let mut parts = Vec::new();
         if failed > 0 {
@@ -333,7 +346,9 @@ fn checks_summary(
         if pending > 0 {
             parts.push(format!("{pending} running"));
         }
-        parts.push(format!("{passed} of {total} passing"));
+        if passed > 0 {
+            parts.push(format!("{passed} passed"));
+        }
         parts.join(" · ")
     };
     let (glyph, color) = match state {
@@ -357,6 +372,168 @@ fn review_decision(raw: &str, theme: &Theme) -> Option<(String, gpui::Hsla)> {
 }
 
 impl PullRequestDetailPage {
+    /// Merge, in the pane's header. Choosing a method is the confirmation.
+    pub(super) fn merge_control(
+        &self,
+        detail: &ChangeRequestDetail,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        use zuse_protocol::{ChangeRequestMergeMethod as Method, ChangeRequestUpdate as Update};
+        if !detail.state.eq_ignore_ascii_case("open") {
+            return None;
+        }
+        let busy = self.updating_pr;
+        let mergeable = can_merge(detail);
+        let label = if busy {
+            "Updating…"
+        } else if detail.is_draft {
+            "Ready for review"
+        } else {
+            "Merge"
+        };
+        let enabled = !busy && (detail.is_draft || mergeable);
+        let button = widgets::action_button(
+            theme,
+            if enabled {
+                widgets::ActionTone::Solid
+            } else {
+                widgets::ActionTone::Filled
+            },
+        )
+        .id("pr-primary-merge")
+        .debug_selector(|| "pr-primary-merge".into())
+        .role(gpui::Role::Button)
+        .aria_label(label)
+        .tab_index(if enabled { 0 } else { -1 })
+        .flex_none()
+        .min_h(px(26.0))
+        .px(px(10.0))
+        .py_0()
+        .child(
+            crate::icons::icon(crate::icons::GIT_MERGE)
+                .size(px(13.0))
+                .text_color(if enabled {
+                    theme.on_solid
+                } else {
+                    theme.text_muted
+                }),
+        )
+        .child(label)
+        .when(!enabled, |el| el.opacity(0.6).cursor_default())
+        .when(enabled, |el| {
+            el.on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(|page, _, _, cx| {
+                    if page.detail.as_ref().is_some_and(|d| d.is_draft) {
+                        page.update_pr(Update::MarkReady, cx);
+                    } else {
+                        page.merge_options = !page.merge_options;
+                        cx.notify();
+                    }
+                }))
+        })
+        .when(!enabled && !busy, |el| {
+            el.tooltip(widgets::text_tooltip(merge_blocker(detail)))
+        });
+        let methods = (self.merge_options && mergeable && !busy).then(|| {
+            gpui::deferred(
+                crate::popover::popover_card(theme)
+                    .id("pr-merge-methods")
+                    .absolute()
+                    .top_full()
+                    .right_0()
+                    .mt(px(4.0))
+                    .w(px(192.0))
+                    .occlude()
+                    .on_mouse_down_out(cx.listener(|page, _, _, cx| {
+                        page.merge_options = false;
+                        cx.notify();
+                    }))
+                    .children(
+                        [
+                            ("pr-merge-squash", "Squash and merge", Method::Squash),
+                            ("pr-merge-commit", "Create a merge commit", Method::Merge),
+                            ("pr-merge-rebase", "Rebase and merge", Method::Rebase),
+                        ]
+                        .into_iter()
+                        .map(|(id, label, method)| {
+                            crate::popover::menu_row(theme, false, label)
+                                .id(id)
+                                .debug_selector(move || id.to_owned())
+                                .role(gpui::Role::MenuItem)
+                                .child(label)
+                                .on_click(cx.listener(move |page, _, _, cx| {
+                                    page.update_pr(Update::Merge { method }, cx)
+                                }))
+                        }),
+                    ),
+            )
+        });
+        Some(
+            div()
+                .relative()
+                .flex_none()
+                .child(button)
+                .children(methods)
+                .into_any_element(),
+        )
+    }
+
+    fn update_pr(&mut self, update: zuse_protocol::ChangeRequestUpdate, cx: &mut Context<Self>) {
+        if self.updating_pr {
+            return;
+        }
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            return;
+        };
+        let mut params = serde_json::json!({"url": self.url, "update": update,
+            "headRefOid": self.detail.as_ref().map(|detail| &detail.head_ref_oid).filter(|head| zuse_protocol::change_request_assessment::valid_head_oid(head))});
+        if let Some(target) = &self.target {
+            params["targetDeviceId"] = target.clone().into();
+        }
+        self.merge_options = false;
+        self.task = None;
+        self.loading = false;
+        self.error = None;
+        let method = if matches!(update, zuse_protocol::ChangeRequestUpdate::Merge { .. }) {
+            methods::UPDATE_CHANGE_REQUEST_AT_HEAD
+        } else {
+            methods::UPDATE_CHANGE_REQUEST
+        };
+        let (cache, target, url) = (self.cache.clone(), self.target.clone(), self.url.clone());
+        cache.borrow_mut().evict(&target, &url);
+        self.updating_pr = true;
+        // An admitted write and its cache retirement outlive the open page.
+        cx.spawn(async move |this, cx| {
+            let call = engine.client().call(method, params);
+            let deadline = cx.background_executor().timer(Duration::from_secs(60));
+            futures::pin_mut!(call, deadline);
+            let result = match futures::future::select(call, deadline).await {
+                futures::future::Either::Left((result, _)) => result.map_err(|error| {
+                    format!(
+                        "Couldn't confirm the update. {} Check GitHub before trying again.",
+                        failure_reason(&error)
+                    )
+                }),
+                futures::future::Either::Right(_) => {
+                    Err("The update timed out. Check GitHub before trying again.".into())
+                }
+            };
+            cache.borrow_mut().evict(&target, &url);
+            let _ = this.update(cx, |page, cx| {
+                page.updating_pr = false;
+                page.refresh(cx);
+                page.error = match result {
+                    Ok(value) => value["refusal"].as_str().map(str::to_owned),
+                    Err(error) => Some(error),
+                };
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
     /// The header's facts for loaded details.
     pub(super) fn header_facts(&self, detail: &ChangeRequestDetail) -> HeaderFacts {
         // The board knows when the pull request last changed; a chat-opened
@@ -399,7 +576,8 @@ impl PullRequestDetailPage {
         }
     }
 
-    /// Property rows, checks, hand-off, and the description.
+    /// The title, the branch/reviews/checks facts, then quiet sections for
+    /// the description, checks, feedback and agent tools.
     pub(super) fn summary_body(
         &self,
         detail: &ChangeRequestDetail,
@@ -407,6 +585,97 @@ impl PullRequestDetailPage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
+        let header = div()
+            .id("pr-detail-header")
+            .debug_selector(|| "pr-detail-header".into())
+            .min_w_0()
+            .px(px(8.0))
+            .flex()
+            .flex_col()
+            .gap(px(6.0))
+            .child(
+                div()
+                    .id("pr-detail-title")
+                    .debug_selector(|| "pr-detail-title".into())
+                    .min_w_0()
+                    .text_size(crate::typography::text_lg())
+                    .line_height(crate::typography::ui_rems(22.0))
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(theme.text_strong)
+                    .child(detail.title.clone()),
+            )
+            .child(
+                div()
+                    .id("pr-detail-meta")
+                    .debug_selector(|| "pr-detail-meta".into())
+                    .min_w_0()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .text_size(crate::typography::text_sm())
+                    .child(super::super::pull_request_media::avatar(
+                        &detail.author.login,
+                        "pr-author".into(),
+                        18.0,
+                        theme,
+                    ))
+                    .child(div().min_w_0().truncate().text_color(theme.text).child(
+                        if detail.author.login.is_empty() {
+                            "Deleted account".to_owned()
+                        } else {
+                            detail.author.login.clone()
+                        },
+                    ))
+                    .child(div().flex_none().text_color(theme.text_faint).child("·"))
+                    .child(
+                        div()
+                            .id("pr-header-changes")
+                            .debug_selector(|| "pr-header-changes".into())
+                            .flex_none()
+                            .child(super::code::counts(
+                                detail.additions,
+                                detail.deletions,
+                                12.0,
+                                theme,
+                            )),
+                    ),
+            );
+
+        let copied = handoff::checkout_command(detail, &self.url);
+        let shown = format!("gh pr checkout {}", detail.number);
+        let branch = div()
+            .id("pr-copy-checkout")
+            .debug_selector(|| "pr-copy-checkout".into())
+            .role(gpui::Role::Button)
+            .aria_label(tr(cx, msg::native::copy_checkout))
+            .tab_index(0)
+            .min_w_0()
+            .flex()
+            .items_center()
+            .gap(px(6.0))
+            .cursor_pointer()
+            .font_family(theme.font_mono.clone())
+            .text_size(crate::typography::text_xs())
+            .tooltip(widgets::text_tooltip(format!("Copy {shown}")))
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(theme.text)
+                    .child(detail.head_ref_name.clone()),
+            )
+            .child(div().flex_none().text_color(theme.text_faint).child("›"))
+            .child(
+                div()
+                    .flex_none()
+                    .text_color(theme.text_muted)
+                    .child(detail.base_ref_name.clone()),
+            )
+            .on_click(move |_, _, cx| {
+                cx.stop_propagation();
+                cx.write_to_clipboard(gpui::ClipboardItem::new_string(copied.clone()));
+            });
+
         // Reviewers in the order they first reviewed, the author excluded.
         let mut reviewers: Vec<&str> = Vec::new();
         for review in &detail.reviews {
@@ -418,367 +687,707 @@ impl PullRequestDetailPage {
                 reviewers.push(login);
             }
         }
-        let decision = review_decision(&detail.review_decision, theme);
-        let reviewers_row = property_row(
-            "reviewers",
-            crate::icons::EYE,
-            "Reviewers",
-            div()
-                .min_w_0()
-                .flex()
-                .flex_wrap()
-                .items_center()
-                .gap(px(6.0))
-                .when(reviewers.is_empty(), |el| {
-                    el.child(
-                        div()
-                            .text_color(theme.text_muted)
-                            .child(tr(cx, msg::native::none)),
-                    )
-                })
-                .children(reviewers.iter().enumerate().map(|(index, login)| {
-                    div()
-                        .id(SharedString::from(format!("pr-reviewer-{index}")))
-                        .flex_none()
-                        .tooltip(widgets::text_tooltip(login.to_string()))
-                        .child(super::super::pull_request_media::avatar(
-                            login,
-                            format!("pr-reviewer-avatar-{index}").into(),
-                            20.0,
-                            theme,
-                        ))
-                }))
-                .when_some(decision, |el, (label, color)| {
-                    el.child(
-                        div()
-                            .ml(px(4.0))
-                            .text_size(crate::typography::text_xs())
-                            .text_color(color)
-                            .child(label),
-                    )
-                }),
-            theme,
-        );
-
-        let (glyph, color, phrase) = checks_summary(detail, theme);
-        let total = Facts::from_detail(detail)
-            .assess()
-            .ci
-            .total_count
-            .max(detail.status_check_rollup.len() as u64);
-        let expandable = !detail.status_check_rollup.is_empty() || self.checks_expanded;
-        let toggle = div()
-            .id("pr-checks-toggle")
-            .debug_selector(|| "pr-checks-toggle".into())
+        let (review_label, review_color) = review_decision(&detail.review_decision, theme)
+            .unwrap_or_else(|| match detail.reviews.last() {
+                Some(review) if !reviewers.is_empty() => {
+                    (status_style(&review.state).0, theme.text_muted)
+                }
+                _ => ("No reviews".to_owned(), theme.text_muted),
+            });
+        let reviews_value = div()
+            .id("pr-review-summary")
+            .debug_selector(|| "pr-review-summary".into())
             .role(gpui::Role::Button)
             .tab_index(0)
-            .aria_label(format!("Checks, {total}, {phrase}"))
-            .aria_expanded(self.checks_expanded)
-            .h(px(26.0))
-            .ml(px(-6.0))
-            .px(px(6.0))
-            .rounded(px(6.0))
+            .aria_label(format!("Reviews, {review_label}"))
+            .min_w_0()
             .flex()
             .items_center()
             .gap(px(6.0))
             .cursor_pointer()
-            .hover(|style| style.bg(theme.glass_hover()))
-            .child(
-                crate::icons::icon(glyph)
-                    .size(px(14.0))
+            .children(reviewers.iter().take(4).enumerate().map(|(index, login)| {
+                div()
+                    .id(SharedString::from(format!("pr-reviewer-{index}")))
                     .flex_none()
-                    .text_color(color),
-            )
+                    .tooltip(widgets::text_tooltip(login.to_string()))
+                    .child(super::super::pull_request_media::avatar(
+                        login,
+                        format!("pr-reviewer-avatar-{index}").into(),
+                        18.0,
+                        theme,
+                    ))
+            }))
             .child(
                 div()
                     .min_w_0()
                     .truncate()
-                    .text_color(theme.text)
-                    .child(phrase),
+                    .text_color(review_color)
+                    .child(review_label),
             )
-            .when(expandable, |el| {
-                el.child(
-                    crate::icons::icon(if self.checks_expanded {
-                        crate::icons::ALT_ARROW_DOWN
-                    } else {
-                        crate::icons::ALT_ARROW_RIGHT
-                    })
-                    .size(px(12.0))
-                    .flex_none()
-                    .text_color(theme.text_muted),
-                )
-            })
-            .on_click(cx.listener(|page, _, _, cx| {
-                page.checks_expanded = !page.checks_expanded;
-                cx.notify();
-            }));
-        let mut checks = div()
-            .id("pr-checks-card")
-            .debug_selector(|| "pr-checks-card".into())
-            .min_w_0()
+            .on_click(cx.listener(|page, _, _, cx| page.select_tab(Tab::Activity, cx)));
+
+        let (glyph, color, phrase) = checks_summary(detail, theme);
+        let properties = div()
+            .id("pr-properties")
+            .debug_selector(|| "pr-properties".into())
+            .mt(px(10.0))
+            .px(px(8.0))
             .flex()
             .flex_col()
             .child(property_row(
+                "branch",
+                crate::icons::GIT_BRANCH,
+                "Branch",
+                branch,
+                theme,
+            ))
+            .child(property_row(
+                "reviews",
+                crate::icons::EYE,
+                "Reviews",
+                reviews_value,
+                theme,
+            ))
+            .child(property_row_tinted(
                 "checks",
-                crate::icons::CHECKLIST,
+                glyph,
+                color,
                 "Checks",
-                toggle,
+                div().min_w_0().truncate().text_color(color).child(phrase),
                 theme,
             ));
-        if self.checks_expanded {
-            let mut list = div()
-                .id("pr-checks-list")
-                .debug_selector(|| "pr-checks-list".into())
-                .ml(px(PROPERTY_LABEL + 12.0))
-                .mb(px(6.0))
-                .flex()
-                .flex_col()
-                .rounded(px(8.0))
-                .border_1()
-                .border_color(theme.border)
-                .overflow_hidden();
-            if detail.status_check_rollup.is_empty() {
-                list = list.child(
-                    div()
-                        .px(px(12.0))
-                        .py(px(8.0))
-                        .text_color(theme.text_muted)
-                        .child(assessment_ci_empty_copy(detail)),
-                );
-            }
-            for (index, check) in detail.status_check_rollup.iter().enumerate() {
-                let name = if check.name.is_empty() {
-                    &check.context
-                } else {
-                    &check.name
-                };
-                let status = check_status(check);
-                let (label, glyph, tone) = status_style(if status.is_empty() {
-                    "PENDING"
-                } else {
-                    &status
-                });
-                let tone = match tone {
-                    StatusTone::Positive => theme.success,
-                    StatusTone::Warning => theme.warning,
-                    StatusTone::Negative => theme.danger,
-                    StatusTone::Neutral | StatusTone::Merged => theme.text_muted,
-                };
-                // Status integrations set these links, so only web pages
-                // open: never file:, smb: or app schemes.
-                let link = if check.details_url.is_empty() {
-                    &check.target_url
-                } else {
-                    &check.details_url
-                };
-                let link = url::Url::parse(link)
-                    .ok()
-                    .filter(|url| {
-                        url.scheme() == "https"
-                            && url.username().is_empty()
-                            && url.password().is_none()
-                    })
-                    .map(String::from)
-                    .unwrap_or_default();
-                list = list.child(
-                    div()
-                        .id(SharedString::from(format!("pr-check-{index}")))
-                        .debug_selector(move || format!("pr-check-{index}"))
-                        .min_h(px(32.0))
-                        .px(px(12.0))
-                        .py(px(4.0))
-                        .flex()
-                        .items_center()
-                        .gap(px(8.0))
-                        .when(index > 0, |el| el.border_t_1().border_color(theme.border))
-                        .child(
-                            crate::icons::icon(glyph)
-                                .size(px(13.0))
-                                .flex_none()
-                                .text_color(tone),
-                        )
-                        .child(
-                            div()
-                                .id(SharedString::from(format!("pr-check-name-{index}")))
-                                .debug_selector(move || format!("pr-check-name-{index}"))
-                                .flex_1()
-                                .min_w_0()
-                                .truncate()
-                                .text_size(crate::typography::text_xs())
-                                .child(name.clone()),
-                        )
-                        .child(
-                            div()
-                                .flex_none()
-                                .text_size(crate::typography::text_xs())
-                                .text_color(theme.text_muted)
-                                .child(label),
-                        )
-                        .when(!link.is_empty(), |el| {
-                            el.cursor_pointer()
-                                .role(gpui::Role::Link)
-                                .tab_index(0)
-                                .aria_label(format!("Open {name}"))
-                                .hover(|style| style.bg(theme.glass_hover()))
-                                .on_click(move |_, _, cx| cx.open_url(&link))
-                        }),
-                );
-            }
-            checks = checks.child(list);
-        }
-
-        let assessment = Facts::from_detail(detail).assess();
-        let status_row = property_row(
-            "status",
-            crate::icons::INFO_CIRCLE,
-            "Status",
-            div()
-                .id("pr-assessment")
-                .debug_selector(|| "pr-assessment".into())
-                .min_w_0()
-                .py(px(6.0))
-                .flex()
-                .flex_col()
-                .gap(px(2.0))
-                .child(
-                    div()
-                        .text_color(if assessment.blockers.is_empty() {
-                            theme.text
-                        } else {
-                            theme.warning
-                        })
-                        .child(if assessment.blockers.is_empty() {
-                            if assessment.missing.is_empty() {
-                                "No blockers reported".to_owned()
-                            } else {
-                                "Assessment incomplete".to_owned()
-                            }
-                        } else {
-                            assessment
-                                .blockers
-                                .iter()
-                                .map(|blocker| blocker.label())
-                                .collect::<Vec<_>>()
-                                .join(" · ")
-                        }),
-                )
-                .children(assessment.actions.first().map(|action| {
-                    div()
-                        .text_size(crate::typography::text_xs())
-                        .text_color(theme.text_muted)
-                        .child(format!("Next: {}", action.label()))
-                }))
-                .children(assessment.missing.iter().map(|missing| {
-                    div()
-                        .text_size(crate::typography::text_xs())
-                        .text_color(theme.text_muted)
-                        .child(missing.label())
-                })),
-            theme,
-        );
-        let commit_row = property_row(
-            "commit",
-            crate::icons::GIT_BRANCH,
-            "Commit",
-            div()
-                .id("pr-head-commit")
-                .min_w_0()
-                .truncate()
-                .tooltip(widgets::text_tooltip(if detail.head_ref_oid.is_empty() {
-                    "Current commit unavailable".to_owned()
-                } else {
-                    detail.head_ref_oid.clone()
-                }))
-                .font_family(theme.font_mono.clone())
-                .text_size(crate::typography::text_xs())
-                .text_color(theme.text_muted)
-                .child(if detail.head_ref_oid.is_empty() {
-                    crate::localization::text("chat-cloud_setup_unavailable", cx).to_owned()
-                } else {
-                    (detail.head_ref_oid.chars().take(7).collect::<String>()).to_string()
-                }),
-            theme,
-        );
 
         let collapsed = self.description_collapsed;
-        let description_toggle = div()
-            .id("pr-description-toggle")
-            .debug_selector(|| "pr-description-toggle".into())
-            .role(gpui::Role::Button)
-            .tab_index(0)
-            .aria_label(tr(cx, msg::projects::pr_pane_description))
-            .aria_expanded(!collapsed)
-            .mt(px(20.0))
-            .h(px(26.0))
-            .px(px(8.0))
-            .flex()
-            .items_center()
-            .gap(px(4.0))
-            .rounded(px(6.0))
-            .text_size(crate::typography::text_sm())
-            .font_weight(gpui::FontWeight::MEDIUM)
-            .text_color(theme.text_muted)
-            .cursor_pointer()
-            .hover(|style| style.text_color(theme.text))
-            .child(tr(cx, msg::projects::pr_pane_description))
-            .child(
-                crate::icons::icon(if collapsed {
-                    crate::icons::ALT_ARROW_RIGHT
-                } else {
-                    crate::icons::ALT_ARROW_DOWN
-                })
-                .size(px(12.0))
-                .flex_none()
-                .text_color(theme.text_muted),
-            )
-            .on_click(cx.listener(|page, _, _, cx| {
-                page.description_collapsed = !page.description_collapsed;
-                cx.notify();
-            }));
+        let description_toggle = section_toggle(
+            "pr-description-toggle",
+            tr(cx, msg::projects::pr_pane_description),
+            None,
+            collapsed,
+            theme,
+        )
+        .on_click(cx.listener(|page, _, _, cx| {
+            page.description_collapsed = !page.description_collapsed;
+            cx.notify();
+        }));
+        let long = detail.body.len() > DESCRIPTION_LONG_BYTES
+            || detail.body.lines().count() > DESCRIPTION_LONG_LINES;
+        let clamped = long && !self.description_expanded;
         let description = (!collapsed).then(|| {
             div()
-                .id("pr-description")
-                .debug_selector(|| "pr-description".into())
-                .mt(px(4.0))
-                .px(px(8.0))
-                .when(detail.body.is_empty(), |el| {
-                    el.text_color(theme.text_muted)
-                        .child(tr(cx, msg::projects::pr_pane_no_description))
-                })
-                .when_some(
-                    self.body.as_ref().filter(|_| !detail.body.is_empty()),
-                    |el, body| {
-                        el.child(rich_text(
-                            body,
-                            format!("{}description", self.selection_prefix),
-                            &self.url,
-                            theme,
-                            window,
-                            cx.weak_entity(),
-                        ))
-                    },
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .id("pr-description")
+                        .debug_selector(|| "pr-description".into())
+                        .relative()
+                        .px(px(8.0))
+                        .when(clamped, |el| {
+                            el.max_h(px(DESCRIPTION_CLAMP)).overflow_hidden()
+                        })
+                        .when(detail.body.is_empty(), |el| {
+                            el.text_color(theme.text_muted)
+                                .child(tr(cx, msg::projects::pr_pane_no_description))
+                        })
+                        .when_some(
+                            self.body.as_ref().filter(|_| !detail.body.is_empty()),
+                            |el, body| {
+                                el.child(rich_text(
+                                    body,
+                                    format!("{}description", self.selection_prefix),
+                                    &self.url,
+                                    theme,
+                                    window,
+                                    cx.weak_entity(),
+                                ))
+                            },
+                        )
+                        .when(clamped, |el| {
+                            el.child(
+                                div()
+                                    .absolute()
+                                    .left_0()
+                                    .right_0()
+                                    .bottom_0()
+                                    .h(px(48.0))
+                                    .bg(gpui::linear_gradient(
+                                        180.0,
+                                        gpui::linear_color_stop(theme.panel_bg().opacity(0.0), 0.0),
+                                        gpui::linear_color_stop(theme.panel_bg(), 1.0),
+                                    )),
+                            )
+                        }),
                 )
+                .when(long, |el| {
+                    el.child(
+                        div()
+                            .id("pr-description-more")
+                            .debug_selector(|| "pr-description-more".into())
+                            .role(gpui::Role::Button)
+                            .tab_index(0)
+                            .mt(px(6.0))
+                            .px(px(8.0))
+                            .text_size(crate::typography::text_sm())
+                            .text_color(theme.text_muted)
+                            .cursor_pointer()
+                            .hover(|style| style.text_color(theme.text))
+                            .child(if clamped { "Show more" } else { "Show less" })
+                            .on_click(cx.listener(|page, _, _, cx| {
+                                page.description_expanded = !page.description_expanded;
+                                cx.notify();
+                            })),
+                    )
+                })
+        });
+
+        let total = detail.status_check_rollup.len();
+        let checks_toggle = section_toggle(
+            "pr-checks-toggle",
+            "Checks".to_owned(),
+            Some(total),
+            !self.checks_expanded,
+            theme,
+        )
+        .on_click(cx.listener(|page, _, _, cx| {
+            page.checks_expanded = !page.checks_expanded;
+            cx.notify();
+        }));
+        let checks_list = self.checks_expanded.then(|| {
+            let mut ordered: Vec<_> = detail.status_check_rollup.iter().collect();
+            ordered.sort_by_key(|check| check_rank(&check_status(check)));
+            div()
+                .id("pr-checks-list")
+                .debug_selector(|| "pr-checks-list".into())
+                .flex()
+                .flex_col()
+                .when(ordered.is_empty(), |el| {
+                    el.child(
+                        div()
+                            .px(px(8.0))
+                            .py(px(4.0))
+                            .text_color(theme.text_muted)
+                            .child(assessment_ci_empty_copy(detail)),
+                    )
+                })
+                .children(
+                    ordered
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, check)| self.check_row(index, check, theme)),
+                )
+        });
+
+        let mut feedback: Vec<_> = detail
+            .activity_comments()
+            .filter(|comment| {
+                !comment
+                    .author
+                    .login
+                    .eq_ignore_ascii_case(&detail.author.login)
+            })
+            .collect();
+        feedback.sort_by_key(|comment| {
+            std::cmp::Reverse(if comment.created_at.is_empty() {
+                comment.submitted_at.as_str()
+            } else {
+                comment.created_at.as_str()
+            })
+        });
+        let feedback_count = feedback.len();
+        let all_context = all_feedback_context(detail, &self.url, &feedback);
+        let feedback_section = (feedback_count > 0).then(|| {
+            let toggle = section_toggle(
+                "pr-feedback-toggle",
+                "Feedback".to_owned(),
+                Some(feedback_count),
+                self.feedback_collapsed,
+                theme,
+            )
+            .on_click(cx.listener(|page, _, _, cx| {
+                page.feedback_collapsed = !page.feedback_collapsed;
+                cx.notify();
+            }));
+            let rows =
+                (!self.feedback_collapsed).then(|| {
+                    div()
+                        .id("pr-review-preview")
+                        .flex()
+                        .flex_col()
+                        .children(feedback.iter().take(FEEDBACK_PREVIEW).enumerate().map(
+                            |(index, comment)| self.feedback_row(index, detail, comment, theme),
+                        ))
+                        .when(feedback_count > FEEDBACK_PREVIEW, |el| {
+                            el.child(
+                                div()
+                                    .id("pr-view-reviews")
+                                    .debug_selector(|| "pr-view-reviews".into())
+                                    .role(gpui::Role::Button)
+                                    .tab_index(0)
+                                    .mt(px(4.0))
+                                    .px(px(8.0))
+                                    .text_size(crate::typography::text_sm())
+                                    .text_color(theme.text_muted)
+                                    .cursor_pointer()
+                                    .hover(|style| style.text_color(theme.text))
+                                    .child(format!("View all {feedback_count}"))
+                                    .on_click(cx.listener(|page, _, _, cx| {
+                                        page.select_tab(Tab::Activity, cx)
+                                    })),
+                            )
+                        })
+                });
+            div()
+                .flex()
+                .flex_col()
+                .child(section_divider(theme))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(toggle)
+                        .child(
+                            div()
+                                .id("pr-add-all-feedback")
+                                .debug_selector(|| "pr-add-all-feedback".into())
+                                .role(gpui::Role::Button)
+                                .tab_index(0)
+                                .mr(px(8.0))
+                                .flex()
+                                .items_center()
+                                .gap(px(5.0))
+                                .text_size(crate::typography::text_sm())
+                                .text_color(theme.text_muted)
+                                .cursor_pointer()
+                                .hover(|style| style.text_color(theme.text))
+                                .child(
+                                    crate::icons::icon(crate::icons::PR_ADD_TO_CHAT)
+                                        .size(px(14.0))
+                                        .flex_none()
+                                        .text_color(theme.text_muted),
+                                )
+                                .child("Add all")
+                                .on_click(move |_, window, cx| {
+                                    window.dispatch_action(
+                                        Box::new(AddPullRequestContext(all_context.clone())),
+                                        cx,
+                                    )
+                                }),
+                        ),
+                )
+                .children(rows)
+        });
+
+        let agent_toggle = section_toggle(
+            "pr-agent-toggle",
+            "Agent".to_owned(),
+            None,
+            !self.agent_expanded,
+            theme,
+        )
+        .on_click(cx.listener(|page, _, _, cx| {
+            page.agent_expanded = !page.agent_expanded;
+            cx.notify();
+        }));
+        let agent = self.agent_expanded.then(|| {
+            div()
+                .id("pr-agent")
+                .px(px(8.0))
+                .flex()
+                .flex_col()
+                .children(self.handoff_rows(detail, theme, cx))
+                .when_some(self.watch_control.clone(), |el, control| {
+                    el.child(property_row(
+                        "auto-fix",
+                        crate::icons::PR_REPAIR,
+                        "Auto-fix CI",
+                        control,
+                        theme,
+                    ))
+                })
         });
 
         div()
             .id("pr-overview")
             .debug_selector(|| "pr-overview".into())
-            .mt(px(12.0))
             .min_w_0()
             .flex()
             .flex_col()
-            .child(
-                div()
-                    .px(px(8.0))
-                    .flex()
-                    .flex_col()
-                    .child(reviewers_row)
-                    .child(checks)
-                    .child(status_row)
-                    .child(commit_row)
-                    .children(self.handoff_rows(detail, theme, cx)),
-            )
+            .child(header)
+            .child(properties)
+            .child(section_divider(theme))
             .child(description_toggle)
             .children(description)
+            .child(section_divider(theme))
+            .child(checks_toggle)
+            .children(checks_list)
+            .children(feedback_section)
+            .child(section_divider(theme))
+            .child(agent_toggle)
+            .children(agent)
+    }
+
+    fn check_row(
+        &self,
+        index: usize,
+        check: &zuse_protocol::ChangeRequestCheck,
+        theme: &Theme,
+    ) -> gpui::Stateful<gpui::Div> {
+        let name = if check.name.is_empty() {
+            &check.context
+        } else {
+            &check.name
+        };
+        let status = check_status(check);
+        let (label, glyph, tone) = status_style(if status.is_empty() {
+            "PENDING"
+        } else {
+            &status
+        });
+        let (glyph, color, label_color) = match tone {
+            StatusTone::Positive => (crate::icons::CHECK_CIRCLE, theme.success, theme.text_muted),
+            StatusTone::Warning => (glyph, theme.warning, theme.text_muted),
+            StatusTone::Negative => (crate::icons::CLOSE_CIRCLE, theme.danger, theme.danger),
+            StatusTone::Neutral | StatusTone::Merged => (
+                crate::icons::INFO_CIRCLE,
+                theme.text_faint,
+                theme.text_muted,
+            ),
+        };
+        // Status integrations set these links, so only web pages open: never
+        // file:, smb: or app schemes.
+        let link = if check.details_url.is_empty() {
+            &check.target_url
+        } else {
+            &check.details_url
+        };
+        let link = url::Url::parse(link)
+            .ok()
+            .filter(|url| {
+                url.scheme() == "https" && url.username().is_empty() && url.password().is_none()
+            })
+            .map(String::from)
+            .unwrap_or_default();
+        div()
+            .id(SharedString::from(format!("pr-check-{index}")))
+            .debug_selector(move || format!("pr-check-{index}"))
+            .min_h(px(28.0))
+            .px(px(8.0))
+            .rounded(px(6.0))
+            .flex()
+            .items_center()
+            .gap(px(8.0))
+            .child(
+                crate::icons::icon(glyph)
+                    .size(px(15.0))
+                    .flex_none()
+                    .text_color(color),
+            )
+            .child(
+                div()
+                    .id(SharedString::from(format!("pr-check-name-{index}")))
+                    .debug_selector(move || format!("pr-check-name-{index}"))
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(crate::typography::text_sm())
+                    .child(name.clone()),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .text_size(crate::typography::text_xs())
+                    .text_color(label_color)
+                    .child(label),
+            )
+            .when(!link.is_empty(), |el| {
+                el.cursor_pointer()
+                    .role(gpui::Role::Link)
+                    .tab_index(0)
+                    .aria_label(format!("Open {name}"))
+                    .hover(|style| style.bg(theme.glass_hover()))
+                    .on_click(move |_, _, cx| cx.open_url(&link))
+            })
+    }
+
+    fn feedback_row(
+        &self,
+        index: usize,
+        detail: &ChangeRequestDetail,
+        comment: &zuse_protocol::ChangeRequestComment,
+        theme: &Theme,
+    ) -> gpui::Stateful<gpui::Div> {
+        let context = review_context(detail, &self.url, comment);
+        let link = comment.url.clone();
+        let state = (!comment.state.is_empty()).then(|| status_style(&comment.state).0);
+        let time = if comment.created_at.is_empty() {
+            &comment.submitted_at
+        } else {
+            &comment.created_at
+        };
+        let snippet = review_snippet(&comment.body);
+        div()
+            .id(SharedString::from(format!("pr-review-preview-{index}")))
+            .min_w_0()
+            .px(px(8.0))
+            .py(px(5.0))
+            .flex()
+            .flex_col()
+            .gap(px(2.0))
+            .child(
+                div()
+                    .min_w_0()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .text_size(crate::typography::text_sm())
+                    .child(super::super::pull_request_media::avatar(
+                        &comment.author.login,
+                        format!("pr-review-avatar-{index}").into(),
+                        18.0,
+                        theme,
+                    ))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .child(comment.author.login.clone()),
+                    )
+                    .children(state.map(|state| {
+                        div()
+                            .flex_none()
+                            .text_size(crate::typography::text_xs())
+                            .text_color(theme.text_muted)
+                            .child(state)
+                    }))
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_size(crate::typography::text_xs())
+                            .text_color(theme.text_muted)
+                            .child(activity_time(time)),
+                    )
+                    .child(div().flex_1())
+                    .child(action("pr-review-add", "Add to chat", theme).on_click(
+                        move |_, window, cx| {
+                            window.dispatch_action(
+                                Box::new(AddPullRequestContext(context.clone())),
+                                cx,
+                            )
+                        },
+                    ))
+                    .when(!link.is_empty(), |el| {
+                        el.child(
+                            action("pr-review-open", "Open on GitHub", theme)
+                                .on_click(move |_, _, cx| cx.open_url(&link)),
+                        )
+                    }),
+            )
+            .when(!snippet.is_empty(), |el| {
+                el.child(
+                    div()
+                        .pl(px(26.0))
+                        .min_w_0()
+                        .truncate()
+                        .text_size(crate::typography::text_sm())
+                        .text_color(theme.text)
+                        .child(snippet),
+                )
+            })
+    }
+}
+
+/// Failures first, then what is still running, then the settled rest.
+fn check_rank(status: &str) -> u8 {
+    if check_failed(status) {
+        0
+    } else if matches!(status, "SUCCESS") {
+        2
+    } else if matches!(status, "NEUTRAL" | "SKIPPED") {
+        3
+    } else {
+        1
+    }
+}
+
+fn section_divider(theme: &Theme) -> gpui::Div {
+    div().my(px(10.0)).h(px(1.0)).flex_none().bg(theme.border)
+}
+
+/// A quiet section heading that folds what follows it.
+fn section_toggle(
+    id: &'static str,
+    label: String,
+    count: Option<usize>,
+    collapsed: bool,
+    theme: &Theme,
+) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .debug_selector(move || id.into())
+        .role(gpui::Role::Button)
+        .tab_index(0)
+        .aria_label(label.clone())
+        .aria_expanded(!collapsed)
+        .h(px(26.0))
+        .px(px(8.0))
+        .flex()
+        .items_center()
+        .gap(px(6.0))
+        .text_size(crate::typography::text_sm())
+        .font_weight(gpui::FontWeight::MEDIUM)
+        .text_color(theme.text)
+        .cursor_pointer()
+        .child(label)
+        .children(count.map(|count| {
+            div()
+                .font_weight(gpui::FontWeight::NORMAL)
+                .text_color(theme.text_muted)
+                .child(count.to_string())
+        }))
+        .child(
+            crate::icons::icon(if collapsed {
+                crate::icons::ALT_ARROW_RIGHT
+            } else {
+                crate::icons::ALT_ARROW_DOWN
+            })
+            .size(px(12.0))
+            .flex_none()
+            .text_color(theme.text_muted),
+        )
+}
+
+pub(super) fn can_merge(detail: &ChangeRequestDetail) -> bool {
+    let assessment = Facts::from_detail(detail).assess();
+    detail.state.eq_ignore_ascii_case("open")
+        && !detail.is_draft
+        && detail.mergeable == "MERGEABLE"
+        && zuse_protocol::change_request_assessment::valid_head_oid(&detail.head_ref_oid)
+        && assessment.blockers.is_empty()
+        && !matches!(
+            assessment.ci.state,
+            CiState::Pending | CiState::Failed | CiState::Unknown
+        )
+}
+
+/// Why Merge is unavailable, for its tooltip.
+fn merge_blocker(detail: &ChangeRequestDetail) -> &'static str {
+    let assessment = Facts::from_detail(detail).assess();
+    if let Some(blocker) = assessment.blockers.first() {
+        blocker.label()
+    } else if assessment.ci.state == CiState::Pending {
+        "Checks running"
+    } else {
+        "Merge status unknown"
+    }
+}
+
+/// A review's first line of prose, for a one-line preview.
+fn review_snippet(body: &str) -> String {
+    body.lines()
+        .map(|line| {
+            line.trim()
+                .trim_start_matches(['#', '>', '*', '-', '_', ' '])
+                .trim_end_matches(['*', '_', ' '])
+        })
+        .find(|line| !line.is_empty() && !line.starts_with('<') && !line.starts_with('!'))
+        .unwrap_or_default()
+        .to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pull_request_test_support::{self as fixture, ScriptedRpc};
+    use std::sync::Mutex;
+
+    #[test]
+    fn review_snippet_skips_markup_for_the_first_line_of_prose() {
+        assert_eq!(
+            review_snippet("<!-- bot -->\n\n## **Summary**\nDetails"),
+            "Summary"
+        );
+        assert_eq!(review_snippet("![badge](x)\n> Looks good"), "Looks good");
+        assert_eq!(review_snippet("  \n"), "");
+    }
+
+    #[gpui::test]
+    fn pull_request_merge_keeps_its_receipt_and_retires_cache_after_closing(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let runtime = fixture::runtime();
+        let _runtime = runtime.enter();
+        fixture::init(cx);
+        let release = Arc::new(tokio::sync::Notify::new());
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let rpc = ScriptedRpc::new({
+            let release = release.clone();
+            let calls = calls.clone();
+            move |method, params| {
+                let release = release.clone();
+                let calls = calls.clone();
+                async move {
+                    assert_eq!(method, methods::UPDATE_CHANGE_REQUEST_AT_HEAD);
+                    calls.lock().unwrap().push(params);
+                    release.notified().await;
+                    zuse_rpc::RpcReply::value(&serde_json::json!({"refusal": null}))
+                }
+            }
+        });
+        let url = "https://github.com/acme/app/pull/1";
+        let snapshot = || DetailSnapshot {
+            discussion_loaded: true,
+            detail: ChangeRequestDetail {
+                url: url.into(),
+                head_ref_oid: "a".repeat(40),
+                ..Default::default()
+            },
+            body: crate::markdown::parse_full(""),
+            activity: vec![],
+            fetched: Instant::now(),
+            diff: None,
+            diff_refresh_owed: false,
+        };
+        let cache = Rc::new(RefCell::new(PullRequestCache::default()));
+        cache.borrow_mut().put(None, url.into(), snapshot());
+        let window = cx.add_window(|window, cx| {
+            PullRequestDetailPage::new(
+                fixture::state(cx, Some(rpc.client())),
+                url.into(),
+                None,
+                cache.clone(),
+                None,
+                window,
+                cx,
+            )
+        });
+        window
+            .update(cx, |page, _, cx| {
+                let update = zuse_protocol::ChangeRequestUpdate::Merge {
+                    method: zuse_protocol::ChangeRequestMergeMethod::Squash,
+                };
+                page.update_pr(update, cx);
+                page.update_pr(update, cx);
+            })
+            .unwrap();
+        rpc.settle(cx, &runtime, |_| calls.lock().unwrap().len() == 1);
+        assert!(cache.borrow_mut().get(&None, url).is_none());
+        assert_eq!(calls.lock().unwrap()[0]["headRefOid"], "a".repeat(40));
+        // A read from another view during the write must also be retired.
+        cache.borrow_mut().put(None, url.into(), snapshot());
+        window
+            .update(cx, |_, window, _| window.remove_window())
+            .unwrap();
+        cx.run_until_parked();
+        release.notify_one();
+        rpc.settle(cx, &runtime, |_| {
+            cache.borrow_mut().get(&None, url).is_none()
+        });
+        assert_eq!(
+            calls.lock().unwrap().len(),
+            1,
+            "closing never replays the write"
+        );
     }
 }

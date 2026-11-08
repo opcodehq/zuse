@@ -1,6 +1,6 @@
 //! A branch beside its base since they forked, plus a `git merge-tree`
 //! preview. Read-only: never touches the working tree, the index, HEAD or a
-//! local branch (a requested fetch only moves the base's remote-tracking ref).
+//! local branch. Remote refresh is coordinated by the RPC host.
 use crate::{EngineError, git_workspace::drain};
 use std::{collections::HashSet, path::Path, process::Stdio, time::Duration};
 use zuse_protocol::{
@@ -10,7 +10,6 @@ use zuse_protocol::{
 const LIMIT: usize = 2 * 1024 * 1024;
 const BLOB_LIMIT: usize = 512 * 1024;
 const WAIT: Duration = Duration::from_secs(30);
-const FETCH_WAIT: Duration = Duration::from_secs(20);
 const DEFAULT_COMMITS: usize = 24;
 const MAX_COMMITS: usize = 60;
 const MAX_FILES: usize = 6;
@@ -122,16 +121,6 @@ pub async fn branch_graph(
             remote = Some(name);
             break;
         }
-    }
-    if let (true, Some(remote)) = (request.fetch, &remote) {
-        // Best effort; the local remote-tracking ref stands in on failure.
-        let _ = run(
-            root,
-            &["fetch", "--quiet", "--no-tags", remote, base],
-            64 * 1024,
-            FETCH_WAIT,
-        )
-        .await;
     }
     let mut candidates = vec![];
     if let Some(remote) = &remote {
