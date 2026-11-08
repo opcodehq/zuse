@@ -949,7 +949,7 @@ impl Theme {
         self.bg.opacity(self.contrast_checked_tint_alpha(
             self.bg,
             Self::CARD_GLASS_ALPHA,
-            self.window_backdrop(),
+            flatten(self.glass(), self.window_backdrop()),
         ))
     }
 
