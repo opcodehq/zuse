@@ -191,6 +191,8 @@ pub async fn memory_sleep(
         .await
         .map_err(|_| anyhow::anyhow!("task_progress_flush_timeout"))??;
     }
+    // Preserving native Codex sockets across sleep is an optimisation. When it
+    // cannot be prepared, park the ordinary way: Codex reconnects on wake.
     let mut native_transport = match crate::memory_transport::PreparedTransport::prepare(
         &boot,
         broker.and_then(|brokers| brokers.codex()),
@@ -199,8 +201,8 @@ pub async fn memory_sleep(
     {
         Ok(transport) => transport,
         Err(_) => {
-            return memory_transport_attention(authority, &boot, &directive.operation_id, cancel)
-                .await;
+            tracing::warn!("runtime_native_transport_not_preserved; parking without it");
+            None
         }
     };
     let acknowledge = async {
@@ -293,16 +295,15 @@ pub async fn memory_sleep(
         if let Some(transport) = native_transport.take() {
             wake_trace::record(&mut timing, "transport-reset-start");
             if transport.after_wake(&current).await.is_err() {
-                wake_trace::record(&mut timing, "transport-recovery-required");
-                return memory_transport_attention(
-                    authority,
-                    &current,
-                    &resumed.operation_id,
-                    cancel,
-                )
-                .await;
+                // A long sleep can outlive the preserved native sessions (the
+                // process exits or its sockets go stale). Never strand the chat
+                // waiting for a manual repair: resume normally, and the engine
+                // starts or reconnects the agent for the next turn.
+                wake_trace::record(&mut timing, "transport-not-preserved");
+                tracing::warn!("runtime_native_transport_lost_during_sleep; resuming without it");
+            } else {
+                wake_trace::record(&mut timing, "transport-reset-complete");
             }
-            wake_trace::record(&mut timing, "transport-reset-complete");
         } else {
             wake_trace::record(&mut timing, "transport-not-required");
         }
@@ -338,36 +339,6 @@ pub async fn memory_sleep(
         wake_trace::record(&mut timing, "core-reopened");
         return Ok(true);
     }
-}
-
-#[cfg(unix)]
-async fn memory_transport_attention(
-    authority: &Authority,
-    boot: &CloudRuntimeBootstrap,
-    operation: &str,
-    cancel: &tokio_util::sync::CancellationToken,
-) -> Result<bool> {
-    loop {
-        if authority
-            .lifecycle(
-                boot,
-                RuntimeRequest::RecoveryRequired {
-                    operation_id: operation.into(),
-                    code: "codex_memory_transport_recovery_required".into(),
-                },
-            )
-            .await
-            .is_ok()
-        {
-            break;
-        }
-        tracing::warn!("runtime_native_transport_recovery_report_unconfirmed");
-        tokio::select! {_=cancel.cancelled()=>return Ok(false),_=tokio::time::sleep(std::time::Duration::from_secs(2))=>{}}
-    }
-    // Retain the parked graph and private kernel snapshot until an explicit
-    // repair stops this process. Never reopen admission or replay a prompt.
-    cancel.cancelled().await;
-    Ok(false)
 }
 
 #[cfg(unix)]
