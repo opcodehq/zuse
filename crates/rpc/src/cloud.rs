@@ -27,6 +27,48 @@ pub struct Grant {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub storage_binding: Option<serde_json::Value>,
 }
+/// How often the guest checks its gateway socket. The gateway pings every 15s
+/// and drops a runtime it has not heard from in 45s; the guest mirrors that so
+/// neither side keeps a half-open socket.
+const HEARTBEAT_TICK: Duration = Duration::from_secs(5);
+const PING_AFTER: Duration = Duration::from_secs(15);
+const SILENCE_LIMIT: Duration = Duration::from_secs(45);
+/// A tick arriving this late means the machine itself was paused (or starved):
+/// the gateway has certainly closed this socket, so don't wait for silence.
+const PAUSE_GAP: Duration = Duration::from_secs(20);
+
+#[derive(Debug, PartialEq, Eq)]
+enum Heartbeat {
+    Idle,
+    Ping,
+    Reconnect,
+}
+/// Pure liveness bookkeeping for the guest's gateway socket.
+struct Liveness {
+    received: std::time::Instant,
+    pinged: std::time::Instant,
+    ticked: std::time::Instant,
+}
+impl Liveness {
+    fn new(now: std::time::Instant) -> Self {
+        Self { received: now, pinged: now, ticked: now }
+    }
+    fn received(&mut self, now: std::time::Instant) {
+        self.received = now;
+    }
+    fn tick(&mut self, now: std::time::Instant) -> Heartbeat {
+        let gap = now.saturating_duration_since(self.ticked);
+        self.ticked = now;
+        if gap >= PAUSE_GAP || now.saturating_duration_since(self.received) >= SILENCE_LIMIT {
+            return Heartbeat::Reconnect;
+        }
+        if now.saturating_duration_since(self.pinged) >= PING_AFTER {
+            self.pinged = now;
+            return Heartbeat::Ping;
+        }
+        Heartbeat::Idle
+    }
+}
 fn rejected() -> RpcError {
     RpcError::Transport("Cloud workspace connection authorization failed".into())
 }
@@ -239,10 +281,21 @@ pub async fn serve_guest_connected(
     }
     let mut peers = HashMap::<String, Peer>::new();
     let (output, mut outgoing) = mpsc::channel::<(String, String)>(16);
+    let mut liveness = Liveness::new(std::time::Instant::now());
+    let mut heartbeat = tokio::time::interval(HEARTBEAT_TICK);
+    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    heartbeat.tick().await;
     loop {
         tokio::select! {biased;
             _=cancel.cancelled()=>break,
-            incoming=socket.next()=>match incoming {
+            _=heartbeat.tick()=>match liveness.tick(std::time::Instant::now()) {
+                Heartbeat::Idle=>{},
+                Heartbeat::Ping=>{tokio::time::timeout(Duration::from_secs(2),socket.send(Message::Ping(Vec::new().into()))).await.map_err(|_|RpcError::Closed)?.map_err(|_|RpcError::Closed)?;}
+                // A machine woken from a pause, or a peer that stopped answering,
+                // holds a socket the gateway has already dropped. Reconnect now.
+                Heartbeat::Reconnect=>return Err(RpcError::Closed),
+            },
+            incoming=socket.next()=>{liveness.received(std::time::Instant::now());match incoming {
                 Some(Ok(Message::Text(text)))=> {
                     let message:Control=serde_json::from_str(&text).map_err(|_|RpcError::Transport("Invalid cloud gateway control message".into()))?;
                     match message {
@@ -280,7 +333,7 @@ pub async fn serve_guest_connected(
                 Some(Ok(Message::Pong(_)))=>{},
                 Some(Ok(Message::Close(Some(frame)))) if u16::from(frame.code)==4101=>return Err(RpcError::Capability("cloud.runtime_fenced".into())),
                 _=>return Err(RpcError::Closed),
-            },
+            }},
             reply=outgoing.recv()=> {
                 let Some((id,payload))=reply else {return Err(RpcError::Closed);};
                 if !peers.contains_key(&id) {continue;}
@@ -292,4 +345,31 @@ pub async fn serve_guest_connected(
     peers.clear();
     let _ = tokio::time::timeout(Duration::from_secs(1), socket.close(None)).await;
     Ok(())
+}
+
+#[cfg(test)]
+mod liveness_tests {
+    use super::*;
+    #[test]
+    fn heartbeat_pings_quiet_sockets_and_reconnects_after_silence_or_a_pause() {
+        let start = std::time::Instant::now();
+        let at = |s: u64| start + Duration::from_secs(s);
+        let mut l = Liveness::new(start);
+        assert_eq!(l.tick(at(5)), Heartbeat::Idle);
+        assert_eq!(l.tick(at(10)), Heartbeat::Idle);
+        assert_eq!(l.tick(at(15)), Heartbeat::Ping);
+        l.received(at(16));
+        assert_eq!(l.tick(at(20)), Heartbeat::Idle);
+        // Silence: nothing received for 45s while ticking normally.
+        let mut quiet = Liveness::new(start);
+        for s in (5..45).step_by(5) {
+            assert_ne!(quiet.tick(at(s)), Heartbeat::Reconnect, "{s}");
+        }
+        assert_eq!(quiet.tick(at(45)), Heartbeat::Reconnect);
+        // A paused machine: the next tick arrives 30 minutes late.
+        let mut paused = Liveness::new(start);
+        paused.received(at(4));
+        assert_eq!(paused.tick(at(5)), Heartbeat::Idle);
+        assert_eq!(paused.tick(at(5 + 1800)), Heartbeat::Reconnect);
+    }
 }
