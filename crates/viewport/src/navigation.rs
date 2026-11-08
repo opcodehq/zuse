@@ -230,66 +230,73 @@ impl WorkspaceView {
                 )
             })
             .child(
+                // Section header shares the Zots header's quiet style; its
+                // controls stay out of the way until the header is hovered.
                 row()
-                    .px_4()
-                    .pb_2()
-                    .gap_2()
+                    .id("threads-header")
+                    .group("threads-header")
+                    .h(px(28.))
+                    .mx_2()
+                    .px_2()
+                    .gap_1()
                     .child(
-                        label(if self.show_archive {
-                            crate::localization::text("native-archived_threads", cx)
-                        } else if projects {
-                            crate::localization::text("projects-projects_sidebar_projects", cx)
-                        } else {
-                            crate::localization::text("projects-projects_sidebar_threads", cx)
-                        })
-                        .text_size(px(11.))
-                        .text_color(rgb(FAINT)),
-                    )
-                    .child(
-                        icon_button(
-                            "sidebar-view-switch",
-                            "alt-arrow-down",
-                            "Switch threads and projects",
-                        )
-                        .size(px(20.))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.preferences.sidebar_view = if projects {
-                                SidebarView::Threads
+                        row()
+                            .id("sidebar-view-switch")
+                            .role(Role::Button)
+                            .aria_label("Switch threads and projects")
+                            .cursor_pointer()
+                            .gap_1()
+                            .text_size(px(11.))
+                            .text_color(rgb(FAINT))
+                            .hover(|d| d.text_color(rgb(MUTED)))
+                            .child(if self.show_archive {
+                                crate::localization::text("native-archived_threads", cx)
+                            } else if projects {
+                                crate::localization::text("projects-projects_sidebar_projects", cx)
                             } else {
-                                SidebarView::Projects
-                            };
-                            this.save_preferences();
-                            cx.notify();
-                        })),
-                    )
-                    .child(
-                        label(rows.len().to_string())
-                            .text_size(px(10.))
-                            .text_color(rgb(FAINT)),
+                                crate::localization::text("projects-projects_sidebar_threads", cx)
+                            })
+                            .child(icon("alt-arrow-down").size(px(11.)))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.preferences.sidebar_view = if projects {
+                                    SidebarView::Threads
+                                } else {
+                                    SidebarView::Projects
+                                };
+                                this.save_preferences();
+                                cx.notify();
+                            })),
                     )
                     .child(div().flex_1())
-                    .when(projects, |d| {
-                        d.child(
-                            icon_button("add-sidebar-project", "plus", "Open project")
-                                .size(px(22.))
+                    .child(
+                        row()
+                            .gap(px(2.))
+                            .when(!self.show_archive, |d| {
+                                d.invisible().group_hover("threads-header", |d| d.visible())
+                            })
+                            .when(projects, |d| {
+                                d.child(
+                                    icon_button("add-sidebar-project", "plus", "Open project")
+                                        .size(px(20.))
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.project_picker = true;
+                                            cx.notify();
+                                        })),
+                                )
+                            })
+                            .child(
+                                icon_button(
+                                    "archive-view",
+                                    "archive-minimalistic",
+                                    if self.show_archive { "Back to threads" } else { "Show archived threads" },
+                                )
+                                .size(px(20.))
+                                .when(self.show_archive, |d| d.bg(rgb(RAISED)).text_color(rgb(TEXT)))
                                 .on_click(cx.listener(|this, _, _, cx| {
-                                    this.project_picker = true;
+                                    this.show_archive = !this.show_archive;
                                     cx.notify();
                                 })),
-                        )
-                    })
-                    .child(
-                        icon_button(
-                            "archive-view",
-                            "archive-minimalistic",
-                            "Toggle archived threads",
-                        )
-                        .size(px(22.))
-                        .when(self.show_archive, |d| d.bg(rgb(RAISED)))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.show_archive = !this.show_archive;
-                            cx.notify();
-                        })),
+                            ),
                     ),
             )
             .child(

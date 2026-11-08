@@ -4,6 +4,7 @@ use crate::localization::message as tr;
 use zuse_i18n::messages as msg;
 
 mod access;
+mod popover;
 pub mod account_settings;
 pub mod acp_catalog;
 pub mod acp_command;

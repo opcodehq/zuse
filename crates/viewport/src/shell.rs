@@ -1525,6 +1525,7 @@ impl Render for WorkspaceView {
             .when(self.thread_dialog.is_some(), |d| {
                 d.child(self.thread_dialog_view(cx))
             })
+            .when(self.zots.form.is_some(), |d| d.child(self.zot_form(cx)))
             .into_any_element()
     }
 }

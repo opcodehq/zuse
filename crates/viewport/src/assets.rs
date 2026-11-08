@@ -80,7 +80,9 @@ assets!(
     "document",
     "document-add",
     "settings",
-    "info-circle"
+    "info-circle",
+    "more-horizontal",
+    "restart"
 );
 
 pub(super) fn icon(name: &str) -> Svg {

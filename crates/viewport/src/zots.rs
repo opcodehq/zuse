@@ -1,9 +1,7 @@
 //! Browser coordinator views use the same commands as the native application.
 use super::*;
 use crate::assets::icon;
-use crate::shell::{
-    BORDER, FAINT, MUTED, RAISED, SURFACE, TEXT, column, control, icon_button, label, row,
-};
+use crate::shell::{BORDER, FAINT, MUTED, RAISED, TEXT, column, icon_button, row};
 use zuse_protocol::presentation::zot_panel::{ZotTab, ZotTabs, zot_owns_chat};
 use zuse_protocol::{control as api, zots::*};
 
@@ -23,6 +21,8 @@ pub(super) struct ZotView {
     retry: Option<ZotCommand>,
     file_request: Option<u64>,
     event_request: Option<u64>,
+    /// Thread whose actions menu is open, and where it was opened.
+    pub menu: Option<(String, Point<Pixels>)>,
 }
 pub(super) struct Form {
     id: String,
@@ -415,7 +415,18 @@ impl WorkspaceView {
         let inputs = values
             .into_iter()
             .map(|(name, value)| {
-                let input = cx.new(|cx| input::TextInput::multiline(name, window, cx));
+                // Free text gets room to wrap; names and numbers stay on one line.
+                let long = matches!(
+                    name,
+                    "Purpose" | "Content" | "Message" | "Objective" | "Your answer"
+                );
+                let input = cx.new(|cx| {
+                    if long {
+                        input::TextInput::multiline(name, window, cx)
+                    } else {
+                        input::TextInput::new(name, window, cx)
+                    }
+                });
                 input.update(cx, |i, cx| i.set_value(value, cx));
                 cx.observe(&input, |_, _, cx| cx.notify()).detach();
                 (name, input)
@@ -581,84 +592,330 @@ impl WorkspaceView {
             cx,
         );
     }
+    /// Zot forms open as a dialog over the workspace instead of replacing it.
     pub(super) fn zot_form(&self, cx: &mut Context<Self>) -> AnyElement {
+        use crate::popover::{self, Kind};
         let form = self.zots.form.as_ref().unwrap();
-        let mut view = column()
-            .id("zot-form")
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
-            .p_4()
-            .gap_3()
-            .child(label(match &form.kind {
-                FormKind::File(file) if file.version == 0 => "New document".to_owned(),
-                FormKind::File(file) => file.path.clone(),
-                FormKind::Config if form.zot.is_none() => "Create a Zot".to_owned(),
-                FormKind::Config => "Zot settings".to_owned(),
-                FormKind::Worker(Some(_)) => "Message thread".to_owned(),
-                FormKind::Worker(None) => "New thread".to_owned(),
-                FormKind::Decision(_) => "Answer decision".to_owned(),
-                FormKind::Delete => "Delete Zot".to_owned(),
-            }));
-        for (name, input) in &form.inputs {
-            view = view.child(label(*name)).child(input.clone());
+        let saving = self.zots.pending.is_some();
+        let name = |key: &str| {
+            form.inputs
+                .iter()
+                .find(|(n, _)| *n == key)
+                .map(|(_, i)| i.clone())
+        };
+        let title = match &form.kind {
+            FormKind::File(file) if file.version == 0 => "New document".to_owned(),
+            FormKind::File(file) => file.path.clone(),
+            FormKind::Config if form.zot.is_none() => "New Zot".to_owned(),
+            FormKind::Config => "Zot settings".to_owned(),
+            FormKind::Worker(Some(_)) => "Message thread".to_owned(),
+            FormKind::Worker(None) => "New thread".to_owned(),
+            FormKind::Decision(_) => "Answer".to_owned(),
+            FormKind::Delete => "Delete Zot?".to_owned(),
+        };
+        let close = cx.listener(|this, _, _, cx| {
+            this.zots.form = None;
+            cx.notify();
+        });
+        let mut body = column().px(px(20.)).pb(px(18.)).gap(px(14.));
+        match &form.kind {
+            FormKind::Config => {
+                let zot_name = form
+                    .zot
+                    .as_ref()
+                    .map(|z| z.config.name.clone())
+                    .unwrap_or_default();
+                body = body.child(
+                    column()
+                        .items_center()
+                        .gap(px(10.))
+                        .pt(px(4.))
+                        .pb(px(6.))
+                        .child(avatar(&zot_name, 56.))
+                        .when_some(name("Name"), |d, input| {
+                            d.child(
+                                div()
+                                    .w(px(260.))
+                                    .h(px(34.))
+                                    .px(px(10.))
+                                    .flex()
+                                    .items_center()
+                                    .rounded(px(8.))
+                                    .border_1()
+                                    .border_color(rgb(BORDER))
+                                    .child(input),
+                            )
+                        }),
+                );
+                if let Some(input) = name("Purpose") {
+                    body = body.child(field("Purpose", "What this Zot is responsible for", input));
+                }
+                let mut rows = column()
+                    .rounded(px(10.))
+                    .border_1()
+                    .border_color(rgb(BORDER));
+                let mut first = true;
+                for (key, label, hint) in [
+                    ("Agent", "Agent", "Provider for the coordinator"),
+                    ("Model", "Model", "Empty uses the agent default"),
+                    (
+                        "Concurrent workers",
+                        "Threads at once",
+                        "Running threads limit",
+                    ),
+                    (
+                        "Automatic follow-ups",
+                        "Automatic follow-ups",
+                        "Per thread, before asking you",
+                    ),
+                ] {
+                    if let Some(input) = name(key) {
+                        rows = rows.child(setting_row(
+                            label,
+                            hint,
+                            div()
+                                .w(px(190.))
+                                .h(px(30.))
+                                .px(px(10.))
+                                .flex()
+                                .items_center()
+                                .rounded(px(7.))
+                                .border_1()
+                                .border_color(rgb(BORDER))
+                                .child(input)
+                                .into_any_element(),
+                            first,
+                        ));
+                        first = false;
+                    }
+                }
+                rows = rows
+                    .child(setting_row(
+                        "Runs on",
+                        "Where the coordinator lives",
+                        self.zot_device_chips(form.home.clone(), true, form.zot.is_some(), cx),
+                        first,
+                    ))
+                    .child(setting_row(
+                        "Threads run on",
+                        "Default for new threads",
+                        self.zot_device_chips(form.worker_device.clone(), false, false, cx),
+                        false,
+                    ));
+                body = body.child(rows).child(
+                    column()
+                        .gap(px(6.))
+                        .child(caption("Repositories"))
+                        .child(self.zot_repository_chips(cx)),
+                );
+            }
+            FormKind::Delete => {
+                body = body.child(
+                    div()
+                        .text_size(px(12.5))
+                        .line_height(px(19.))
+                        .text_color(rgb(MUTED))
+                        .child("The coordinator stops and the Zot is removed. Its threads, documents and repository files are kept."),
+                );
+            }
+            _ => {
+                if let FormKind::Decision(decision) = &form.kind {
+                    body = body.child(
+                        div()
+                            .p(px(12.))
+                            .rounded(px(10.))
+                            .bg(rgb(RAISED))
+                            .text_size(px(13.))
+                            .line_height(px(19.))
+                            .text_color(rgb(TEXT))
+                            .child(decision.question.clone()),
+                    );
+                }
+                for (key, input) in &form.inputs {
+                    let label = match *key {
+                        "Base branch" => "Start from",
+                        other => other,
+                    };
+                    body = body.child(field(label, "", input.clone()));
+                }
+                if matches!(form.kind, FormKind::Worker(None)) {
+                    body = body.child(column().gap(px(6.)).child(caption("Runs on")).child(
+                        self.zot_device_chips(form.worker_device.clone(), false, false, cx),
+                    ));
+                }
+            }
         }
-        if matches!(form.kind, FormKind::Config | FormKind::Worker(None)) {
-            view = view.child(label("Home environment"));
-            for device in &self.zots.devices {
-                let id = device["id"].as_str().unwrap_or_default().to_owned();
-                let name = device["name"].as_str().unwrap_or(&id);
-                view = view.child(
-                    control(
-                        SharedString::from(format!("zot-home-{id}")),
-                        format!("{}{}", if form.home == id { "✓ " } else { "" }, name),
-                    )
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if let Some(form) = this.zots.form.as_mut() {
+        let delete = matches!(form.kind, FormKind::Delete);
+        let editing = matches!(form.kind, FormKind::Config) && form.zot.is_some();
+        let zot = form.zot.clone();
+        let mut footer = row()
+            .px(px(20.))
+            .py(px(14.))
+            .gap_2()
+            .border_t_1()
+            .border_color(rgb(BORDER));
+        if editing {
+            let z = zot.clone().unwrap();
+            let archive = z.clone();
+            footer = footer
+                .child(
+                    popover::button("zot-delete", "Delete", Kind::Destructive).on_click(
+                        cx.listener(move |this, _, window, cx| {
+                            this.open_zot_form(Some(z.clone()), FormKind::Delete, window, cx)
+                        }),
+                    ),
+                )
+                .child(
+                    popover::button("zot-archive", "Archive", Kind::Secondary).on_click(
+                        cx.listener(move |this, _, _, cx| {
+                            this.zot_action(
+                                &archive,
+                                ZotAction::SetStatus {
+                                    status: ZotStatus::Archived,
+                                },
+                                cx,
+                            );
+                            this.zots.form = None;
+                        }),
+                    ),
+                );
+        }
+        footer = footer
+            .child(div().flex_1())
+            .child(popover::button("cancel-zot", "Cancel", Kind::Secondary).on_click(close))
+            .child(
+                popover::button(
+                    "save-zot",
+                    if saving {
+                        "Saving…"
+                    } else if delete {
+                        "Delete Zot"
+                    } else if matches!(form.kind, FormKind::Worker(_)) {
+                        "Send"
+                    } else if matches!(form.kind, FormKind::Config) && form.zot.is_none() {
+                        "Create"
+                    } else {
+                        "Save"
+                    },
+                    if delete {
+                        Kind::Destructive
+                    } else {
+                        Kind::Primary
+                    },
+                )
+                .when(saving, |d| d.opacity(0.5))
+                .on_click(cx.listener(|this, _, _, cx| this.save_zot(cx))),
+            );
+        let (backdrop, card) = popover::dialog(
+            "zot-form",
+            title.clone(),
+            if matches!(form.kind, FormKind::Config) {
+                520.
+            } else {
+                440.
+            },
+        );
+        backdrop
+            .child(
+                card.child(
+                    row()
+                        .px(px(20.))
+                        .pt(px(16.))
+                        .pb(px(10.))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .text_size(px(15.))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(rgb(TEXT))
+                                .child(title),
+                        )
+                        .child(icon_button("close-zot-form", "close", "Close").on_click(
+                            cx.listener(|this, _, _, cx| {
+                                this.zots.form = None;
+                                cx.notify();
+                            }),
+                        )),
+                )
+                .child(
+                    div()
+                        .id("zot-form-body")
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scroll()
+                        .child(body),
+                )
+                .child(footer),
+            )
+            .into_any_element()
+    }
+    fn zot_device_chips(
+        &self,
+        selected: String,
+        home: bool,
+        locked: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let mut chips = row().flex_wrap().justify_end().gap_1();
+        for device in &self.zots.devices {
+            let id = device["id"].as_str().unwrap_or_default().to_owned();
+            let name = device["name"]
+                .as_str()
+                .filter(|n| !n.is_empty())
+                .map(str::to_owned)
+                .unwrap_or_else(|| {
+                    if self.device_id.as_deref() == Some(id.as_str()) {
+                        "This device".to_owned()
+                    } else {
+                        "Unnamed device".to_owned()
+                    }
+                });
+            let active = selected == id;
+            chips = chips.child(
+                chip(
+                    SharedString::from(format!("zot-device-{home}-{id}")),
+                    name,
+                    active,
+                )
+                .when(locked && !active, |d| d.opacity(0.4))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(form) = this.zots.form.as_mut() {
+                        if home {
                             if form.zot.is_none() {
                                 form.home = id.clone();
                             }
-                        }
-                        cx.notify();
-                    })),
-                );
-            }
-            view = view.child(label("Worker environment"));
-            for device in &self.zots.devices {
-                let id = device["id"].as_str().unwrap_or_default().to_owned();
-                let name = device["name"].as_str().unwrap_or(&id);
-                view = view.child(
-                    control(
-                        SharedString::from(format!("zot-device-{id}")),
-                        format!(
-                            "{}{}",
-                            if form.worker_device == id { "✓ " } else { "" },
-                            name
-                        ),
-                    )
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if let Some(form) = this.zots.form.as_mut() {
+                        } else {
                             form.worker_device = id.clone();
                         }
-                        cx.notify();
-                    })),
-                );
-            }
-            view = view.child(label("Repositories"));
-            for space in &self.zots.spaces {
-                let id = space["id"].as_str().unwrap_or_default().to_owned();
-                let device = space["deviceId"].as_str().unwrap_or_default().to_owned();
-                let name = space["name"]
-                    .as_str()
-                    .or_else(|| space["path"].as_str())
-                    .unwrap_or(&id);
-                let checked = form.repositories.iter().any(|r| r.space_id == id);
-                view = view.child(
-                    control(
-                        SharedString::from(format!("zot-repo-{id}")),
-                        format!("{}{}", if checked { "✓ " } else { "" }, name),
-                    )
-                    .on_click(cx.listener(move |this, _, _, cx| {
+                    }
+                    cx.notify();
+                })),
+            );
+        }
+        chips.into_any_element()
+    }
+    fn zot_repository_chips(&self, cx: &mut Context<Self>) -> AnyElement {
+        let Some(form) = &self.zots.form else {
+            return Empty.into_any_element();
+        };
+        let mut chips = row().flex_wrap().gap_1();
+        if self.zots.spaces.is_empty() {
+            return muted("Open a project first to give this Zot a repository.").into_any_element();
+        }
+        for space in &self.zots.spaces {
+            let id = space["id"].as_str().unwrap_or_default().to_owned();
+            let device = space["deviceId"].as_str().unwrap_or_default().to_owned();
+            let name = space["name"]
+                .as_str()
+                .or_else(|| space["path"].as_str())
+                .unwrap_or(&id)
+                .to_owned();
+            let checked = form.repositories.iter().any(|r| r.space_id == id);
+            chips = chips.child(
+                chip(SharedString::from(format!("zot-repo-{id}")), name, checked).on_click(
+                    cx.listener(move |this, _, _, cx| {
                         if let Some(form) = this.zots.form.as_mut() {
                             if form.repositories.iter().any(|r| r.space_id == id) {
                                 form.repositories.retain(|r| r.space_id != id);
@@ -670,37 +927,11 @@ impl WorkspaceView {
                             }
                         }
                         cx.notify();
-                    })),
-                );
-            }
-        }
-        if matches!(form.kind, FormKind::Delete) {
-            view = view.child(label(
-                "Delete this Zot? Worker conversations and files will be kept.",
-            ));
-        }
-        view.child(
-            row()
-                .gap_2()
-                .child(
-                    control(
-                        "save-zot",
-                        if self.zots.pending.is_some() {
-                            "Saving…"
-                        } else {
-                            "Save"
-                        },
-                    )
-                    .on_click(cx.listener(|this, _, _, cx| this.save_zot(cx))),
-                )
-                .child(
-                    control("cancel-zot", "Cancel").on_click(cx.listener(|this, _, _, cx| {
-                        this.zots.form = None;
-                        cx.notify();
-                    })),
+                    }),
                 ),
-        )
-        .into_any_element()
+            );
+        }
+        chips.into_any_element()
     }
     /// Live run state of one thread, ignoring rows a crashed host left behind.
     fn zot_thread_status(&self, chat: &str) -> &str {
@@ -721,6 +952,7 @@ impl WorkspaceView {
     fn open_zot_chat(&mut self, id: &str, cx: &mut Context<Self>) {
         if let Some(chat) = self.chats.iter().find(|c| c["id"] == id).cloned() {
             self.zots.form = None;
+            self.zots.menu = None;
             self.select(chat, cx);
         }
     }
@@ -731,20 +963,19 @@ impl WorkspaceView {
             let active = tab == tabs.active;
             let name = tab.label();
             let width = tab.label_width();
-            let color = rgb(if active { TEXT } else { MUTED });
+            let color = rgb(if active { TEXT } else { FAINT });
             let base = row()
                 .id(SharedString::from(format!("zot-tab-{name}")))
                 .role(Role::Tab)
                 .aria_label(name)
                 .h(px(28.))
                 .px(px(7.))
-                .rounded(px(7.))
+                .rounded(px(8.))
                 .cursor_pointer()
                 .text_size(px(12.5))
+                .font_weight(FontWeight::MEDIUM)
                 .text_color(color)
-                .when(!active, |d| {
-                    d.hover(|d| d.bg(rgb(RAISED)).text_color(rgb(TEXT)))
-                })
+                .when(!active, |d| d.hover(|d| d.text_color(rgb(MUTED))))
                 .child(icon(tab.icon()).size(px(15.)).text_color(color))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     if this.zots.tabs.select(tab) {
@@ -753,6 +984,7 @@ impl WorkspaceView {
                             this.zots.history = history;
                             this.refresh_zot();
                         }
+                        this.zots.menu = None;
                         cx.notify();
                     }
                 }));
@@ -774,7 +1006,7 @@ impl WorkspaceView {
             strip = strip.child(if animating {
                 base.with_animation(
                     SharedString::from(format!("zot-tab-{name}-{}", tabs.epoch)),
-                    Animation::new(std::time::Duration::from_millis(200)).with_easing(ease_in_out),
+                    Animation::new(std::time::Duration::from_millis(220)).with_easing(ease_in_out),
                     move |el, t| reveal(el, tabs.reveal(tab, t)),
                 )
                 .into_any_element()
@@ -787,14 +1019,12 @@ impl WorkspaceView {
         row()
             .h(px(44.))
             .flex_shrink_0()
-            .px_2()
-            .border_b_1()
-            .border_color(rgb(BORDER))
+            .px(px(8.))
             .child(strip)
             .child(div().flex_1())
             .when(tabs.active == ZotTab::Drive, |d| {
                 d.child(
-                    icon_button("zot-new-document", "document-add", "New document").on_click(
+                    quiet_icon("zot-new-document", "document-add", "New document").on_click(
                         cx.listener(move |this, _, window, cx| {
                             let file = ZotFile {
                                 path: String::new(),
@@ -806,8 +1036,18 @@ impl WorkspaceView {
                     ),
                 )
             })
+            .when(tabs.active == ZotTab::Threads, |d| {
+                let z = zot.clone();
+                d.child(
+                    quiet_icon("new-zot-worker", "plus", "New thread").on_click(cx.listener(
+                        move |this, _, window, cx| {
+                            this.open_zot_form(Some(z.clone()), FormKind::Worker(None), window, cx)
+                        },
+                    )),
+                )
+            })
             .child(
-                icon_button("zot-settings", "settings", "Zot settings").on_click(cx.listener(
+                quiet_icon("zot-settings", "settings", "Zot settings").on_click(cx.listener(
                     move |this, _, window, cx| {
                         this.open_zot_form(Some(settings.clone()), FormKind::Config, window, cx)
                     },
@@ -815,6 +1055,7 @@ impl WorkspaceView {
             )
             .into_any_element()
     }
+    /// The panel floats as its own rounded surface beside the conversation.
     pub(super) fn zot_panel(&self, cx: &mut Context<Self>) -> AnyElement {
         let Some(zot) = self.selected_zot() else {
             return Empty.into_any_element();
@@ -825,24 +1066,27 @@ impl WorkspaceView {
             ZotTab::Drive => self.zot_drive(&zot, cx),
             ZotTab::History => self.zot_history(&zot, cx),
         };
-        column()
-            .id("zot-panel")
-            .w(px(340.))
-            .h_full()
-            .flex_shrink_0()
-            .border_l_1()
-            .border_color(rgb(BORDER))
-            .child(self.zot_tab_bar(&zot, cx))
+        crate::workspace_style::column()
+            .w(px(336.))
+            .flex_none()
+            .pr(px(crate::workspace_style::GUTTER))
             .child(
-                column()
-                    .id("zot-panel-body")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .p_3()
-                    .gap(px(14.))
-                    .child(body),
+                crate::workspace_style::surface()
+                    .child(self.zot_tab_bar(&zot, cx))
+                    .child(
+                        column()
+                            .id("zot-panel-body")
+                            .flex_1()
+                            .min_h_0()
+                            .overflow_y_scroll()
+                            .px(px(12.))
+                            .pt(px(4.))
+                            .pb(px(16.))
+                            .gap(px(18.))
+                            .child(body),
+                    ),
             )
+            .children(self.zot_thread_menu(&zot, cx))
             .into_any_element()
     }
     fn zot_overview(&self, zot: &Zot, cx: &mut Context<Self>) -> AnyElement {
@@ -851,6 +1095,19 @@ impl WorkspaceView {
             .iter()
             .filter(|w| self.zot_thread_status(&w.chat_id) == "working")
             .count();
+        let decisions: Vec<_> = zot
+            .decisions
+            .iter()
+            .filter(|d| d.answer.is_none())
+            .cloned()
+            .collect();
+        let events: Vec<_> = self
+            .zots
+            .events
+            .iter()
+            .filter(|e| e.zot_id == zot.id && !e.acknowledged && e.kind != "settled")
+            .cloned()
+            .collect();
         let (color, status) = match zot.status {
             ZotStatus::Active => (GREEN, "Active"),
             ZotStatus::Paused => (AMBER, "Paused"),
@@ -863,68 +1120,86 @@ impl WorkspaceView {
             ZotStatus::Active
         };
         let z = zot.clone();
-        let mut view = column().gap(px(14.)).child(
-            column()
-                .gap(px(6.))
-                .child(
-                    div()
-                        .text_size(px(15.))
-                        .text_color(rgb(TEXT))
-                        .child(zot.config.name.clone()),
-                )
-                .when(!zot.config.purpose.is_empty(), |d| {
-                    d.child(
+        let hero = row()
+            .items_start()
+            .gap(px(12.))
+            .px(px(4.))
+            .pt(px(6.))
+            .child(avatar(&zot.config.name, 40.))
+            .child(
+                column()
+                    .flex_1()
+                    .min_w_0()
+                    .gap(px(3.))
+                    .child(
                         div()
-                            .text_size(px(12.5))
-                            .text_color(rgb(MUTED))
-                            .child(zot.config.purpose.clone()),
+                            .truncate()
+                            .text_size(px(15.))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(rgb(TEXT))
+                            .child(zot.config.name.clone()),
                     )
-                })
-                .child(
-                    row()
-                        .gap_2()
-                        .text_size(px(11.5))
-                        .text_color(rgb(FAINT))
-                        .child(div().size(px(6.)).rounded_full().bg(rgb(color)))
-                        .child(status)
-                        .child(format!(
-                            "· {} thread{} · {working} working",
-                            zot.workers.len(),
-                            if zot.workers.len() == 1 { "" } else { "s" }
-                        ))
-                        .child(div().flex_1())
-                        .when(
-                            matches!(zot.status, ZotStatus::Active | ZotStatus::Paused),
-                            |d| {
-                                d.child(
-                                    control(
-                                        "zot-pause",
-                                        if toggle == ZotStatus::Paused {
-                                            "Pause"
-                                        } else {
-                                            "Resume"
-                                        },
-                                    )
-                                    .on_click(cx.listener(
-                                        move |this, _, _, cx| {
-                                            this.zot_action(
-                                                &z,
-                                                ZotAction::SetStatus { status: toggle },
-                                                cx,
-                                            )
-                                        },
-                                    )),
-                                )
+                    .child(
+                        row()
+                            .gap(px(6.))
+                            .text_size(px(11.5))
+                            .text_color(rgb(MUTED))
+                            .child(div().size(px(6.)).rounded_full().bg(rgb(color)))
+                            .child(status),
+                    ),
+            )
+            .when(
+                matches!(zot.status, ZotStatus::Active | ZotStatus::Paused),
+                |d| {
+                    d.child(
+                        crate::popover::button(
+                            "zot-pause",
+                            if toggle == ZotStatus::Paused {
+                                "Pause"
+                            } else {
+                                "Resume"
                             },
-                        ),
-                ),
-        );
-        let mut needs = column().gap(px(2.)).child(section("Needs you"));
-        let mut empty = true;
-        for decision in zot.decisions.iter().filter(|d| d.answer.is_none()) {
-            empty = false;
+                            crate::popover::Kind::Secondary,
+                        )
+                        .h(px(26.))
+                        .px(px(10.))
+                        .text_size(px(12.))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.zot_action(&z, ZotAction::SetStatus { status: toggle }, cx)
+                        })),
+                    )
+                },
+            );
+        let stats = row()
+            .rounded(px(10.))
+            .border_1()
+            .border_color(rgb(BORDER))
+            .child(stat("Threads", zot.workers.len(), false))
+            .child(div().w(px(1.)).h(px(34.)).bg(rgb(BORDER)))
+            .child(stat("Working", working, false))
+            .child(div().w(px(1.)).h(px(34.)).bg(rgb(BORDER)))
+            .child(stat(
+                "Needs you",
+                decisions.len() + events.len(),
+                decisions.len() + events.len() > 0,
+            ));
+        let mut view = column()
+            .gap(px(16.))
+            .child(hero)
+            .when(!zot.config.purpose.is_empty(), |d| {
+                d.child(
+                    div()
+                        .px(px(4.))
+                        .text_size(px(12.5))
+                        .line_height(px(19.))
+                        .text_color(rgb(MUTED))
+                        .child(zot.config.purpose.clone()),
+                )
+            })
+            .child(stats);
+        let mut needs = group();
+        for decision in decisions.iter().cloned() {
             let z = zot.clone();
-            let decision = decision.clone();
             needs = needs.child(
                 list_row(
                     SharedString::from(format!("decision-{}", decision.id)),
@@ -943,13 +1218,7 @@ impl WorkspaceView {
                 })),
             );
         }
-        for event in self
-            .zots
-            .events
-            .iter()
-            .filter(|e| e.zot_id == zot.id && !e.acknowledged && e.kind != "settled")
-        {
-            empty = false;
+        for event in events.iter() {
             let id = event.worker_chat_id.clone();
             needs = needs.child(
                 list_row(
@@ -962,162 +1231,160 @@ impl WorkspaceView {
                 .on_click(cx.listener(move |this, _, _, cx| this.open_zot_chat(&id, cx))),
             );
         }
-        if empty {
-            needs = needs.child(muted("Nothing needs you right now."));
-        }
-        view = view.child(needs);
-        let mut manage = column().gap(px(2.)).child(section("Manage"));
-        for (key, name, kind) in [
-            ("fresh-zot", "Start a fresh conversation", 0),
-            ("zot-Stop Zot", "Stop Zot", 1),
-            ("zot-Archive Zot", "Archive Zot and threads", 2),
-        ] {
-            let z = zot.clone();
-            manage = manage.child(control(key, name).on_click(cx.listener(
-                move |this, _, _, cx| {
-                    let action = match kind {
-                        0 => ZotAction::FreshConversation,
-                        1 => ZotAction::SetStatus {
-                            status: ZotStatus::Stopped,
-                        },
-                        _ => ZotAction::SetStatus {
-                            status: ZotStatus::Archived,
-                        },
-                    };
-                    this.zot_action(&z, action, cx)
-                },
-            )));
-        }
-        let z = zot.clone();
-        manage = manage.child(control("delete-zot", "Delete…").on_click(cx.listener(
-            move |this, _, window, cx| {
-                this.open_zot_form(Some(z.clone()), FormKind::Delete, window, cx)
+        view = view.child(column().gap(px(6.)).child(section("Needs you")).child(
+            if decisions.is_empty() && events.is_empty() {
+                empty_state(
+                    "check-circle",
+                    "All clear",
+                    "Decisions and blocked threads show up here.",
+                )
+            } else {
+                needs.into_any_element()
             },
-        )));
-        view.child(manage).into_any_element()
-    }
-    fn zot_threads(&self, zot: &Zot, cx: &mut Context<Self>) -> AnyElement {
-        let z = zot.clone();
-        let mut threads = column().gap(px(2.)).child(
-            row()
-                .justify_between()
-                .child(section(format!("Threads · {}", zot.workers.len())))
-                .child(
-                    control("new-zot-worker", "New thread").on_click(cx.listener(
-                        move |this, _, window, cx| {
-                            this.open_zot_form(Some(z.clone()), FormKind::Worker(None), window, cx)
-                        },
-                    )),
-                ),
-        );
-        if zot.workers.is_empty() {
-            threads = threads.child(muted("Threads this Zot starts or adopts appear here."));
-        }
-        for worker in &zot.workers {
-            let id = worker.chat_id.clone();
-            let state = self.zot_thread_status(&id);
-            let (dot, status) = thread_state(state);
-            let open = id.clone();
-            let z = zot.clone();
-            let message = id.clone();
-            let mut actions = row().gap(px(2.)).pl(px(18.)).child(
-                control(SharedString::from(format!("message-{id}")), "Message").on_click(
-                    cx.listener(move |this, _, window, cx| {
-                        this.open_zot_form(
-                            Some(z.clone()),
-                            FormKind::Worker(Some(message.clone())),
-                            window,
-                            cx,
-                        )
-                    }),
-                ),
-            );
-            for (name, kind) in [("Stop", 0), ("Archive", 1), ("Release", 2)] {
-                let chat_id = id.clone();
-                let z = zot.clone();
-                actions = actions.child(
-                    control(SharedString::from(format!("worker-{kind}-{id}")), name).on_click(
-                        cx.listener(move |this, _, _, cx| {
-                            let chat_id = chat_id.clone();
-                            let action = match kind {
-                                0 => ZotAction::StopWorker { chat_id },
-                                1 => ZotAction::ArchiveWorker { chat_id },
-                                _ => ZotAction::ReleaseWorker { chat_id },
-                            };
-                            this.zot_action(&z, action, cx);
-                        }),
-                    ),
-                );
-            }
-            threads = threads.child(
-                column()
-                    .py_1()
+        ));
+        let current = zot.coordinator_chat_id.clone();
+        view.child(
+            column().gap(px(6.)).child(section("Coordinator")).child(
+                group()
                     .child(
-                        row()
-                            .id(SharedString::from(format!("worker-{id}")))
-                            .role(Role::Button)
-                            .aria_label(SharedString::from(worker.objective.clone()))
-                            .gap(px(10.))
-                            .px(px(6.))
-                            .py(px(5.))
-                            .rounded(px(6.))
-                            .cursor_pointer()
-                            .hover(|d| d.bg(rgb(RAISED)))
-                            .child(div().size(px(7.)).flex_none().rounded_full().bg(dot))
-                            .child(
-                                column()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .child(
-                                        div()
-                                            .truncate()
-                                            .text_size(px(13.))
-                                            .text_color(rgb(TEXT))
-                                            .child(worker.objective.clone()),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_size(px(11.))
-                                            .text_color(rgb(FAINT))
-                                            .child(status),
-                                    ),
+                        list_row(
+                            "zot-current-conversation",
+                            "chat-round-line",
+                            MUTED,
+                            "Current conversation".into(),
+                            None,
+                        )
+                        .on_click(
+                            cx.listener(move |this, _, _, cx| this.open_zot_chat(&current, cx)),
+                        ),
+                    )
+                    .children(zot.previous_coordinator_chats.iter().enumerate().rev().map(
+                        |(index, id)| {
+                            let id = id.clone();
+                            list_row(
+                                SharedString::from(format!("zot-old-{id}")),
+                                "history",
+                                FAINT,
+                                format!("Earlier conversation {}", index + 1),
+                                None,
                             )
                             .on_click(
-                                cx.listener(move |this, _, _, cx| this.open_zot_chat(&open, cx)),
-                            ),
+                                cx.listener(move |this, _, _, cx| this.open_zot_chat(&id, cx)),
+                            )
+                        },
+                    ))
+                    .child({
+                        let z = zot.clone();
+                        list_row(
+                            "fresh-zot",
+                            "restart",
+                            FAINT,
+                            "Start a fresh conversation".into(),
+                            None,
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.zot_action(&z, ZotAction::FreshConversation, cx)
+                        }))
+                    }),
+            ),
+        )
+        .into_any_element()
+    }
+    fn zot_threads(&self, zot: &Zot, cx: &mut Context<Self>) -> AnyElement {
+        let mut threads = group();
+        for worker in &zot.workers {
+            let id = worker.chat_id.clone();
+            let (dot, status) = thread_state(self.zot_thread_status(&id));
+            let title = self
+                .chats
+                .iter()
+                .find(|c| c["id"] == id)
+                .and_then(|c| c["title"].as_str())
+                .map(str::to_owned)
+                .unwrap_or_else(|| worker.objective.clone());
+            let open = id.clone();
+            let menu = id.clone();
+            let open_menu = self.zots.menu.as_ref().is_some_and(|(m, _)| m == &id);
+            threads = threads.child(
+                row()
+                    .id(SharedString::from(format!("worker-{id}")))
+                    .group(SharedString::from(format!("worker-row-{id}")))
+                    .role(Role::Button)
+                    .aria_label(SharedString::from(title.clone()))
+                    .h(px(40.))
+                    .px(px(10.))
+                    .gap(px(10.))
+                    .rounded(px(8.))
+                    .cursor_pointer()
+                    .hover(|d| d.bg(rgb(RAISED)))
+                    .when(open_menu, |d| d.bg(rgb(RAISED)))
+                    .child(div().size(px(7.)).flex_none().rounded_full().bg(dot))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(px(13.))
+                            .text_color(rgb(TEXT))
+                            .child(title),
                     )
-                    .child(actions),
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(rgb(FAINT))
+                            .when(!open_menu, |d| {
+                                d.group_hover(SharedString::from(format!("worker-row-{id}")), |d| {
+                                    d.invisible()
+                                })
+                            })
+                            .when(open_menu, |d| d.invisible())
+                            .child(status),
+                    )
+                    .child(
+                        quiet_icon(
+                            SharedString::from(format!("worker-menu-{id}")),
+                            "more-horizontal",
+                            "Thread actions",
+                        )
+                        .absolute()
+                        .right(px(6.))
+                        .when(!open_menu, |d| {
+                            d.invisible()
+                                .group_hover(SharedString::from(format!("worker-row-{id}")), |d| {
+                                    d.visible()
+                                })
+                        })
+                        .on_click(cx.listener(
+                            move |this, _, window, cx| {
+                                cx.stop_propagation();
+                                this.zots.menu =
+                                    if this.zots.menu.as_ref().is_some_and(|(m, _)| m == &menu) {
+                                        None
+                                    } else {
+                                        Some((menu.clone(), window.mouse_position()))
+                                    };
+                                cx.notify();
+                            },
+                        )),
+                    )
+                    .relative()
+                    .on_click(cx.listener(move |this, _, _, cx| this.open_zot_chat(&open, cx))),
             );
         }
-        let mut view = column().gap(px(14.)).child(threads);
-        let current = zot.coordinator_chat_id.clone();
-        let mut coordinator = column()
-            .gap(px(2.))
-            .child(section("Coordinator conversations"))
-            .child(
-                list_row(
-                    "zot-current-conversation",
-                    "chat-round-line",
-                    MUTED,
-                    "Current conversation".into(),
-                    None,
-                )
-                .on_click(cx.listener(move |this, _, _, cx| this.open_zot_chat(&current, cx))),
-            );
-        for (index, id) in zot.previous_coordinator_chats.iter().enumerate().rev() {
-            let id = id.clone();
-            coordinator = coordinator.child(
-                list_row(
-                    SharedString::from(format!("zot-old-{id}")),
-                    "history",
-                    FAINT,
-                    format!("Conversation {}", index + 1),
-                    None,
-                )
-                .on_click(cx.listener(move |this, _, _, cx| this.open_zot_chat(&id, cx))),
-            );
-        }
-        view = view.child(coordinator);
+        let mut view = column().gap(px(16.)).child(
+            column()
+                .gap(px(6.))
+                .child(section(format!("Threads · {}", zot.workers.len())))
+                .child(if zot.workers.is_empty() {
+                    empty_state(
+                        "chat-round-line",
+                        "No threads yet",
+                        "Threads this Zot starts or adopts appear here.",
+                    )
+                } else {
+                    threads.into_any_element()
+                }),
+        );
         let candidates = self
             .chats
             .iter()
@@ -1135,9 +1402,7 @@ impl WorkspaceView {
             .cloned()
             .collect::<Vec<_>>();
         if !candidates.is_empty() {
-            let mut adopt = column()
-                .gap(px(2.))
-                .child(section("Add an existing thread"));
+            let mut adopt = group();
             for chat in candidates {
                 let z = zot.clone();
                 let title = chat["title"].as_str().unwrap_or("Thread").to_owned();
@@ -1147,7 +1412,7 @@ impl WorkspaceView {
                         "plus",
                         FAINT,
                         title.clone(),
-                        None,
+                        Some("Add"),
                     )
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.zot_action(
@@ -1166,9 +1431,87 @@ impl WorkspaceView {
                     })),
                 );
             }
-            view = view.child(adopt);
+            view = view.child(
+                column()
+                    .gap(px(6.))
+                    .child(section("Add from this project"))
+                    .child(adopt),
+            );
         }
         view.into_any_element()
+    }
+    /// Per-thread actions float beside the row instead of crowding it.
+    fn zot_thread_menu(&self, zot: &Zot, cx: &mut Context<Self>) -> Option<AnyElement> {
+        use crate::popover;
+        let (id, at) = self.zots.menu.clone()?;
+        zot.workers.iter().any(|w| w.chat_id == id).then_some(())?;
+        let item = |key: &'static str,
+                    glyph,
+                    label,
+                    destructive,
+                    action: Option<fn(String) -> ZotAction>| {
+            let id = id.clone();
+            let z = zot.clone();
+            popover::item(
+                SharedString::from(format!("zot-thread-{key}")),
+                glyph,
+                label,
+                destructive,
+            )
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.zots.menu = None;
+                match action {
+                    Some(action) => this.zot_action(&z, action(id.clone()), cx),
+                    None => this.open_zot_form(
+                        Some(z.clone()),
+                        FormKind::Worker(Some(id.clone())),
+                        window,
+                        cx,
+                    ),
+                }
+                cx.notify();
+            }))
+        };
+        let open = id.clone();
+        let menu = popover::menu("zot-thread-menu", 200.)
+            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                this.zots.menu = None;
+                cx.notify();
+            }))
+            .child(
+                popover::item("zot-thread-open", "arrow-up-right", "Open thread", false)
+                    .on_click(cx.listener(move |this, _, _, cx| this.open_zot_chat(&open, cx))),
+            )
+            .child(item(
+                "message",
+                "chat-round-line",
+                "Send a message",
+                false,
+                None,
+            ))
+            .child(popover::separator())
+            .child(item(
+                "stop",
+                "stop",
+                "Stop",
+                false,
+                Some(|chat_id| ZotAction::StopWorker { chat_id }),
+            ))
+            .child(item(
+                "release",
+                "arrow-up-right",
+                "Release from Zot",
+                false,
+                Some(|chat_id| ZotAction::ReleaseWorker { chat_id }),
+            ))
+            .child(item(
+                "archive",
+                "archive-minimalistic",
+                "Archive",
+                true,
+                Some(|chat_id| ZotAction::ArchiveWorker { chat_id }),
+            ));
+        Some(popover::anchored_at(at - point(px(180.), px(-10.)), menu))
     }
     fn zot_drive(&self, zot: &Zot, cx: &mut Context<Self>) -> AnyElement {
         let files = if self.zots.history {
@@ -1176,58 +1519,56 @@ impl WorkspaceView {
         } else {
             self.zots.files.clone()
         };
-        let mut view = column()
-            .gap(px(8.))
-            .child(section(format!("Drive · {}", files.len())));
-        if files.is_empty() {
-            view = view.child(muted(
-                "Rules, notes and the digest this Zot keeps live here.",
-            ));
-        }
-        for file in files {
+        let mut list = group();
+        for file in files.iter().cloned() {
             let z = zot.clone();
-            let preview = file.content.lines().take(6).collect::<Vec<_>>().join("\n");
-            view = view.child(
-                column()
+            let preview = file
+                .content
+                .lines()
+                .map(|l| l.trim().trim_start_matches(['#', '-', '*', '>']).trim())
+                .find(|l| !l.is_empty())
+                .unwrap_or("Empty")
+                .to_owned();
+            list = list.child(
+                row()
                     .id(SharedString::from(format!("edit-{}", file.path)))
                     .role(Role::Button)
                     .aria_label(SharedString::from(file.path.clone()))
-                    .p(px(10.))
-                    .gap(px(6.))
+                    .px(px(10.))
+                    .py(px(8.))
+                    .gap(px(10.))
                     .rounded(px(8.))
-                    .border_1()
-                    .border_color(rgb(BORDER))
-                    .bg(rgb(SURFACE))
                     .cursor_pointer()
-                    .hover(|d| d.border_color(rgb(MUTED)))
+                    .hover(|d| d.bg(rgb(RAISED)))
                     .child(
                         row()
-                            .gap_2()
-                            .child(icon("document").size(px(14.)).text_color(rgb(MUTED)))
+                            .size(px(28.))
+                            .flex_none()
+                            .justify_center()
+                            .rounded(px(7.))
+                            .bg(rgb(RAISED))
+                            .child(icon("document").size(px(14.)).text_color(rgb(MUTED))),
+                    )
+                    .child(
+                        column()
+                            .flex_1()
+                            .min_w_0()
+                            .gap(px(1.))
                             .child(
                                 div()
-                                    .flex_1()
-                                    .min_w_0()
                                     .truncate()
-                                    .text_size(px(12.5))
+                                    .text_size(px(13.))
                                     .text_color(rgb(TEXT))
                                     .child(file.path.clone()),
                             )
                             .child(
                                 div()
-                                    .text_size(px(11.))
+                                    .truncate()
+                                    .text_size(px(11.5))
                                     .text_color(rgb(FAINT))
-                                    .child(format!("v{}", file.version)),
+                                    .child(preview),
                             ),
                     )
-                    .when(!preview.trim().is_empty(), |d| {
-                        d.child(
-                            div()
-                                .text_size(px(11.5))
-                                .text_color(rgb(MUTED))
-                                .child(preview),
-                        )
-                    })
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.open_zot_form(
                             Some(z.clone()),
@@ -1238,7 +1579,19 @@ impl WorkspaceView {
                     })),
             );
         }
-        view.into_any_element()
+        column()
+            .gap(px(6.))
+            .child(section(format!("Documents · {}", files.len())))
+            .child(if files.is_empty() {
+                empty_state(
+                    "folder-open",
+                    "Nothing here yet",
+                    "Rules, notes and the digest this Zot keeps.",
+                )
+            } else {
+                list.into_any_element()
+            })
+            .into_any_element()
     }
     fn zot_history(&self, zot: &Zot, cx: &mut Context<Self>) -> AnyElement {
         let mut files = if self.zots.history {
@@ -1247,64 +1600,99 @@ impl WorkspaceView {
             vec![]
         };
         files.sort_by(|a, b| a.path.cmp(&b.path).then(b.version.cmp(&a.version)));
-        let mut view = column().gap(px(2.)).child(section("Document versions"));
         if files.is_empty() {
-            view = view.child(muted("No versions yet."));
+            return empty_state(
+                "history",
+                "No history yet",
+                "Every edit to a document is kept here.",
+            );
         }
-        for file in files.clone() {
-            let current = files
-                .iter()
-                .filter(|f| f.path == file.path)
-                .map(|f| f.version)
-                .max()
-                .unwrap_or(file.version);
-            let z = zot.clone();
-            view = view.child(
-                row()
-                    .gap_2()
-                    .px(px(6.))
-                    .py(px(5.))
-                    .child(icon("document").size(px(13.)).text_color(rgb(FAINT)))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_size(px(12.5))
-                            .text_color(rgb(TEXT))
-                            .child(file.path.clone()),
-                    )
-                    .child(div().text_size(px(11.)).text_color(rgb(FAINT)).child(
-                        if current == file.version {
-                            format!("v{} · current", file.version)
-                        } else {
-                            format!("v{}", file.version)
-                        },
-                    ))
-                    .when(current > file.version, |d| {
-                        d.child(
-                            control(
-                                SharedString::from(format!(
-                                    "restore-{}-{}",
-                                    file.path, file.version
-                                )),
-                                "Restore",
-                            )
-                            .on_click(cx.listener(
-                                move |this, _, _, cx| {
-                                    this.zot_action(
-                                        &z,
-                                        ZotAction::RestoreFile {
-                                            path: file.path.clone(),
-                                            version: file.version,
-                                            expected_version: current,
-                                        },
-                                        cx,
-                                    )
-                                },
-                            )),
+        let mut view = column().gap(px(16.));
+        let mut paths: Vec<String> = files.iter().map(|f| f.path.clone()).collect();
+        paths.dedup();
+        for path in paths {
+            let versions: Vec<_> = files.iter().filter(|f| f.path == path).cloned().collect();
+            let current = versions.iter().map(|f| f.version).max().unwrap_or(0);
+            let mut list = group();
+            for file in versions {
+                let z = zot.clone();
+                let latest = file.version == current;
+                let group_id =
+                    SharedString::from(format!("version-{}-{}", file.path, file.version));
+                list = list.child(
+                    row()
+                        .id(group_id.clone())
+                        .group(group_id.clone())
+                        .h(px(34.))
+                        .px(px(10.))
+                        .gap(px(10.))
+                        .rounded(px(8.))
+                        .hover(|d| d.bg(rgb(RAISED)))
+                        .child(
+                            div()
+                                .size(px(7.))
+                                .flex_none()
+                                .rounded_full()
+                                .when(latest, |d| d.bg(rgb(GREEN)))
+                                .when(!latest, |d| d.border_1().border_color(rgb(FAINT))),
                         )
-                    }),
+                        .child(
+                            div()
+                                .flex_1()
+                                .text_size(px(12.5))
+                                .text_color(rgb(if latest { TEXT } else { MUTED }))
+                                .child(format!("Version {}", file.version)),
+                        )
+                        .when(latest, |d| {
+                            d.child(
+                                div()
+                                    .text_size(px(11.))
+                                    .text_color(rgb(FAINT))
+                                    .child("Current"),
+                            )
+                        })
+                        .when(!latest, |d| {
+                            d.child(
+                                crate::popover::button(
+                                    SharedString::from(format!(
+                                        "restore-{}-{}",
+                                        file.path, file.version
+                                    )),
+                                    "Restore",
+                                    crate::popover::Kind::Secondary,
+                                )
+                                .h(px(24.))
+                                .px(px(8.))
+                                .text_size(px(11.5))
+                                .invisible()
+                                .group_hover(group_id.clone(), |d| d.visible())
+                                .on_click(cx.listener(
+                                    move |this, _, _, cx| {
+                                        this.zot_action(
+                                            &z,
+                                            ZotAction::RestoreFile {
+                                                path: file.path.clone(),
+                                                version: file.version,
+                                                expected_version: current,
+                                            },
+                                            cx,
+                                        )
+                                    },
+                                )),
+                            )
+                        }),
+                );
+            }
+            view = view.child(
+                column()
+                    .gap(px(6.))
+                    .child(
+                        row()
+                            .gap(px(6.))
+                            .child(icon("document").size(px(12.)).text_color(rgb(FAINT)))
+                            .child(section(path)),
+                    )
+                    .child(list),
             );
         }
         view.into_any_element()
@@ -1317,26 +1705,170 @@ const RED: u32 = 0xe5a0a0;
 fn thread_state(state: &str) -> (Hsla, &'static str) {
     match state {
         "working" => (rgb(BLUE).into(), "Working"),
-        "awaitingInput" => (rgb(AMBER).into(), "Waiting for input"),
+        "awaitingInput" => (rgb(AMBER).into(), "Needs input"),
         "errored" => (rgb(RED).into(), "Failed"),
         "idle" => (rgb(FAINT).into(), "Idle"),
         _ => (Hsla::from(rgb(FAINT)).opacity(0.5), "Not running"),
     }
 }
+/// The Zot's mark: its initial on a soft tile.
+fn avatar(name: &str, size: f32) -> Div {
+    row()
+        .size(px(size))
+        .flex_none()
+        .justify_center()
+        .rounded(px(size * 0.28))
+        .bg(Hsla::from(rgb(AMBER)).opacity(0.16))
+        .text_size(px(size * 0.42))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(rgb(AMBER))
+        .child(
+            name.chars()
+                .next()
+                .unwrap_or('Z')
+                .to_uppercase()
+                .to_string(),
+        )
+}
 fn section(text: impl Into<SharedString>) -> Div {
     div()
-        .pb_1()
+        .px(px(4.))
         .text_size(px(11.))
+        .font_weight(FontWeight::MEDIUM)
         .text_color(rgb(FAINT))
         .child(text.into())
 }
+fn caption(text: &'static str) -> Div {
+    div().text_size(px(12.)).text_color(rgb(MUTED)).child(text)
+}
 fn muted(text: impl Into<SharedString>) -> Div {
     div()
-        .px(px(6.))
-        .py_1()
         .text_size(px(12.))
         .text_color(rgb(FAINT))
         .child(text.into())
+}
+/// Rows sharing one quiet container.
+fn group() -> Div {
+    column().gap(px(1.))
+}
+fn empty_state(glyph: &'static str, title: &'static str, body: &'static str) -> AnyElement {
+    column()
+        .items_center()
+        .gap(px(4.))
+        .py(px(22.))
+        .px(px(16.))
+        .rounded(px(10.))
+        .border_1()
+        .border_dashed()
+        .border_color(rgb(BORDER))
+        .child(icon(glyph).size(px(18.)).text_color(rgb(FAINT)))
+        .child(
+            div()
+                .pt(px(4.))
+                .text_size(px(12.5))
+                .text_color(rgb(MUTED))
+                .child(title),
+        )
+        .child(
+            div()
+                .text_size(px(11.5))
+                .text_color(rgb(FAINT))
+                .text_center()
+                .child(body),
+        )
+        .into_any_element()
+}
+fn stat(name: &'static str, value: usize, alert: bool) -> Div {
+    column()
+        .flex_1()
+        .py(px(8.))
+        .items_center()
+        .child(
+            div()
+                .text_size(px(16.))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(rgb(if alert { AMBER } else { TEXT }))
+                .child(value.to_string()),
+        )
+        .child(div().text_size(px(11.)).text_color(rgb(FAINT)).child(name))
+}
+fn quiet_icon(id: impl Into<ElementId>, glyph: &'static str, name: &'static str) -> Stateful<Div> {
+    row()
+        .id(id)
+        .role(Role::Button)
+        .aria_label(name)
+        .cursor_pointer()
+        .justify_center()
+        .size(px(26.))
+        .rounded(px(7.))
+        .text_color(rgb(FAINT))
+        .hover(|d| d.bg(rgb(RAISED)).text_color(rgb(TEXT)))
+        .child(icon(glyph).size(px(15.)))
+}
+fn chip(id: impl Into<ElementId>, name: String, active: bool) -> Stateful<Div> {
+    row()
+        .id(id)
+        .role(Role::CheckBox)
+        .aria_label(SharedString::from(name.clone()))
+        .cursor_pointer()
+        .h(px(26.))
+        .px(px(10.))
+        .gap(px(6.))
+        .rounded_full()
+        .border_1()
+        .text_size(px(12.))
+        .when(active, |d| {
+            d.border_color(rgb(MUTED))
+                .bg(rgb(RAISED))
+                .text_color(rgb(TEXT))
+        })
+        .when(!active, |d| {
+            d.border_color(rgb(BORDER))
+                .text_color(rgb(MUTED))
+                .hover(|d| d.text_color(rgb(TEXT)))
+        })
+        .when(active, |d| d.child(icon("check").size(px(11.))))
+        .child(name)
+}
+/// Label and hint on the left, control on the right, like a settings row.
+fn setting_row(name: &'static str, hint: &'static str, control: AnyElement, first: bool) -> Div {
+    row()
+        .px(px(12.))
+        .py(px(10.))
+        .gap(px(12.))
+        .when(!first, |d| d.border_t_1().border_color(rgb(BORDER)))
+        .child(
+            column()
+                .flex_none()
+                .w(px(170.))
+                .gap(px(1.))
+                .child(div().text_size(px(12.5)).text_color(rgb(TEXT)).child(name))
+                .child(div().text_size(px(11.)).text_color(rgb(FAINT)).child(hint)),
+        )
+        .child(row().flex_1().min_w_0().justify_end().child(control))
+}
+/// A labelled input with an outlined box.
+fn field(name: &'static str, hint: &'static str, input: Entity<input::TextInput>) -> Div {
+    column()
+        .gap(px(6.))
+        .child(
+            row()
+                .gap_2()
+                .child(caption(name))
+                .when(!hint.is_empty(), |d| {
+                    d.child(div().text_size(px(11.)).text_color(rgb(FAINT)).child(hint))
+                }),
+        )
+        .child(
+            div()
+                .min_h(px(34.))
+                .px(px(10.))
+                .py(px(7.))
+                .rounded(px(8.))
+                .border_1()
+                .border_color(rgb(BORDER))
+                .child(input),
+        )
 }
 fn list_row(
     id: impl Into<ElementId>,
@@ -1349,17 +1881,17 @@ fn list_row(
         .id(id)
         .role(Role::Button)
         .aria_label(SharedString::from(title.clone()))
-        .gap_2()
-        .px(px(6.))
-        .py(px(5.))
-        .rounded(px(6.))
+        .h(px(34.))
+        .px(px(10.))
+        .gap(px(10.))
+        .rounded(px(8.))
         .cursor_pointer()
-        .text_size(px(12.5))
+        .text_size(px(13.))
         .text_color(rgb(TEXT))
         .hover(|d| d.bg(rgb(RAISED)))
-        .child(icon(glyph).size(px(13.)).flex_none().text_color(rgb(tint)))
+        .child(icon(glyph).size(px(14.)).flex_none().text_color(rgb(tint)))
         .child(div().flex_1().min_w_0().truncate().child(title))
         .when_some(trailing, |d, t| {
-            d.child(div().text_size(px(11.)).text_color(rgb(FAINT)).child(t))
+            d.child(div().text_size(px(11.5)).text_color(rgb(FAINT)).child(t))
         })
 }

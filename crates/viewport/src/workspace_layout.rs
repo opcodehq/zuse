@@ -38,9 +38,7 @@ impl WorkspaceView {
                                 })
                         },
                     )
-                    .child(if self.zots.form.is_some() {
-                        self.zot_form(cx)
-                    } else if self.usage_open {
+                    .child(if self.usage_open {
                         self.usage_view(window, cx)
                     } else if self.plugins_browse {
                         self.plugins_page_view(cx)
