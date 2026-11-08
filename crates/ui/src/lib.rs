@@ -64,6 +64,7 @@ mod project_archive;
 pub mod pull_request_card;
 pub mod pull_request_detail;
 mod pull_request_media;
+mod pull_request_review_hunk;
 mod pull_request_skeleton;
 #[cfg(test)]
 mod pull_request_test_support;

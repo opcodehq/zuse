@@ -202,6 +202,7 @@ fn session_home_dir_with(
 }
 
 struct ReposInner {
+    fetches: crate::git_fetch::Fetches,
     git_workspace_gates:
         tokio::sync::Mutex<HashMap<String, std::sync::Arc<tokio::sync::Mutex<()>>>>,
     data_dir: PathBuf,
@@ -278,6 +279,7 @@ impl Repos {
         Self {
             inner: std::sync::Arc::new(ReposInner {
                 git_workspace_gates: Default::default(),
+                fetches: Default::default(),
                 data_dir: data_dir.to_path_buf(),
                 device_id: device_id.to_string(),
                 worktrees: crate::worktree_settings::WorktreePreferences::open(
@@ -459,9 +461,24 @@ impl Repos {
     /// Fetch every configured remote without pruning or integrating anything
     /// into the active branch. This intentionally updates refs only.
     pub async fn fetch_all(&self, repo_path: &Path) -> Result<(), EngineError> {
-        self.git(&["fetch", "--all", "--quiet"], Some(repo_path))
+        let remotes = crate::git_workspace::text(repo_path, &["remote"]).await?;
+        for remote in remotes.lines() {
+            self.fetch_remote(repo_path, remote, true).await?;
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn fetch_remote(
+        &self,
+        root: &Path,
+        remote: &str,
+        explicit: bool,
+    ) -> Result<(), EngineError> {
+        self.inner
+            .fetches
+            .fetch(root, remote, explicit)
             .await
-            .map(drop)
+            .map_err(EngineError::Other)
     }
 
     /// The absolute Git `HEAD` file for event-driven external branch reconciliation.

@@ -977,6 +977,7 @@ pub struct AppState {
     /// without their patches so sidebar rows can show a session's size.
     pub checkout_diff_stats: Vec<CheckoutDiffStat>,
     change_request_tasks: HashMap<ChangeRequestWatchKey, Task<()>>,
+    diff_stat_tasks: HashMap<Option<String>, Task<()>>,
     queue_task: Option<Task<()>>,
     change_requests_visible: bool,
     /// SUBAGENT transcripts keyed by subagent doc id (the right pane's
@@ -1107,6 +1108,7 @@ impl AppState {
             change_requests: ChangeRequestClientState::default(),
             checkout_diff_stats: Vec::new(),
             change_request_tasks: HashMap::new(),
+            diff_stat_tasks: HashMap::new(),
             queue_task: None,
             change_requests_visible: true,
             sub_transcripts: HashMap::new(),
@@ -2718,6 +2720,10 @@ impl AppState {
             .change_request_for_chat(chat, &self.spaces)
     }
 
+    pub(crate) fn change_request_error_for_chat(&self, chat: &Chat) -> Option<&str> {
+        self.change_requests.error_for_chat(chat, &self.spaces)
+    }
+
     /// A chat's last known diff size as (additions, deletions), resolved
     /// like the Changes pane: checkout id first, then device + cwd, then cwd.
     /// `None` until a diff for its checkout has been watched, or when clean.
@@ -2803,6 +2809,7 @@ impl AppState {
         self.project_creations.clear();
         self.transcript_task = None;
         self.change_request_tasks.clear();
+        self.diff_stat_tasks.clear();
         self.change_requests = ChangeRequestClientState::default();
         self.connection = ConnectionStatus::Connecting;
         self.workspace_scope = None;
@@ -3150,7 +3157,33 @@ impl AppState {
         cx.notify();
     }
 
+    /// Keep sidebar diff sizes live on every device with chats, whichever
+    /// panes happen to be open.
+    fn reconcile_diff_stat_watches(&mut self, cx: &mut Context<Self>) {
+        let Some(handle) = self.engine.clone() else {
+            self.diff_stat_tasks.clear();
+            return;
+        };
+        let local = self.local_device_id.clone();
+        let mut targets: HashSet<Option<String>> = self
+            .chats
+            .iter()
+            .filter(|chat| !chat.archived && local.as_deref() != Some(chat.device_id.as_str()))
+            .map(|chat| Some(chat.device_id.clone()))
+            .collect();
+        targets.insert(None);
+        self.diff_stat_tasks
+            .retain(|target, _| targets.contains(target));
+        for target in targets {
+            if !self.diff_stat_tasks.contains_key(&target) {
+                let task = spawn_diff_stat_watch(cx, handle.clone(), target.clone());
+                self.diff_stat_tasks.insert(target, task);
+            }
+        }
+    }
+
     fn reconcile_change_request_watches(&mut self, cx: &mut Context<Self>) {
+        self.reconcile_diff_stat_watches(cx);
         let Some(handle) = self.engine.clone() else {
             self.change_request_tasks.clear();
             return;
@@ -3598,6 +3631,50 @@ fn spawn_chats_watch(cx: &mut Context<AppState>, handle: EngineHandle) -> Task<(
 
 pub use zuse_protocol::version_triple;
 
+fn spawn_diff_stat_watch(
+    cx: &mut Context<AppState>,
+    handle: EngineHandle,
+    target: Option<String>,
+) -> Task<()> {
+    cx.spawn(async move |this, cx| {
+        let params = match &target {
+            Some(device) => serde_json::json!({ "summaryOnly": true, "targetDeviceId": device }),
+            None => serde_json::json!({ "summaryOnly": true }),
+        };
+        loop {
+            let mut stream = match handle
+                .client()
+                .subscribe_checked(methods::WATCH_CHECKOUT_DIFFS, params.clone())
+                .await
+            {
+                Ok(stream) => Some(stream),
+                Err(RpcError::UnknownMethod(_)) => return,
+                Err(_) => None,
+            };
+            let mut diffs = Vec::new();
+            while let Some(value) = match stream.as_mut() {
+                Some(stream) => stream.recv().await,
+                None => None,
+            } {
+                if !crate::changes::apply_diff_frame(&mut diffs, value) {
+                    continue;
+                }
+                let published = this.update(cx, |state, cx| {
+                    if state.publish_checkout_diff_stats(&diffs) {
+                        cx.notify();
+                    }
+                });
+                if published.is_err() {
+                    return;
+                }
+            }
+            cx.background_executor()
+                .timer(std::time::Duration::from_secs(2))
+                .await;
+        }
+    })
+}
+
 fn spawn_change_request_watch(
     cx: &mut Context<AppState>,
     handle: EngineHandle,
@@ -3773,6 +3850,7 @@ fn spawn_local_device_probe(cx: &mut Context<AppState>, handle: EngineHandle) ->
                 // Watches opened before this probe conservatively route through
                 // targetDeviceId. Recreate them now that local routing is known.
                 state.change_request_tasks.clear();
+                state.diff_stat_tasks.clear();
                 state.reconcile_change_request_watches(cx);
                 cx.notify();
             })
@@ -6817,5 +6895,46 @@ impl AppState {
 impl AppState {
     pub fn fixture_simulator_engine(&mut self, engine: EngineHandle) {
         self.engine = Some(engine);
+    }
+}
+
+#[cfg(test)]
+mod sidebar_diff_stat_tests {
+    use super::*;
+    use crate::pull_request_test_support::{self as fixture, ScriptedRpc};
+    use futures::StreamExt;
+
+    #[gpui::test]
+    fn sidebar_sizes_arrive_without_any_changes_view_open(cx: &mut gpui::TestAppContext) {
+        let runtime = fixture::runtime();
+        let _runtime = runtime.enter();
+        fixture::init(cx);
+        let rpc = ScriptedRpc::new(|method, params| async move {
+            assert_eq!(method, methods::WATCH_CHECKOUT_DIFFS);
+            assert_eq!(
+                params["summaryOnly"], true,
+                "the sidebar never asks for patches"
+            );
+            let frame = serde_json::json!([{
+                "checkoutId": "checkout", "deviceId": "local", "cwd": "/repo", "patch": "",
+                "files": [], "additions": 12, "deletions": 3, "truncated": false,
+                "checksum": "sum", "updatedAt": "2026-11-08T00:00:00Z",
+            }]);
+            Ok(zuse_rpc::RpcReply::Stream(
+                futures::stream::once(async move { frame })
+                    .chain(futures::stream::pending())
+                    .boxed(),
+            ))
+        });
+        let state = cx.update(|cx| fixture::state(cx, Some(rpc.client())));
+        state.update(cx, |state, cx| state.reconcile_diff_stat_watches(cx));
+        rpc.settle(cx, &runtime, |cx| {
+            state.read_with(cx, |state, _| {
+                state
+                    .checkout_diff_stats
+                    .iter()
+                    .any(|stat| stat.checkout_id == "checkout" && stat.additions == 12)
+            })
+        });
     }
 }

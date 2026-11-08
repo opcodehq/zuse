@@ -206,6 +206,8 @@ pub const POST_CHANGE_REQUEST_COMMENT: &str = "PostChangeRequestComment";
 /// device whose `gh` acts for the user. `{url, update}` →
 /// `{refusal?: string}`: GitHub's reason when it declined.
 pub const UPDATE_CHANGE_REQUEST: &str = "UpdateChangeRequest";
+/// A merge tied to the commit the user inspected. Older hosts reject this method.
+pub const UPDATE_CHANGE_REQUEST_AT_HEAD: &str = "UpdateChangeRequestAtHead";
 pub const GET_CHANGE_REQUEST_DIFF: &str = "GetChangeRequestDiff";
 pub const GET_CHECKOUT_DIFF: &str = "GetCheckoutDiff";
 /// Permanently restore one chat-owned checkout to its current HEAD and
@@ -306,6 +308,8 @@ pub const RESOLVE_RECOVERY: &str = "ResolveRecovery";
 pub fn retryable_read(method: &str, params: &serde_json::Value) -> bool {
     match method {
         GET_GIT_WORKSPACE
+        | WATCH_GIT_WORKSPACE
+        | WATCH_CHANGE_REQUEST
         | GET_BRANCH_GRAPH
         | RELAY_ACCESS_STATUS
         | BROWSER_ACCESS_STATUS
@@ -453,6 +457,8 @@ pub const SELECT_PLUGIN_WORKSPACE: &str = "SelectPluginWorkspace";
 
 /// User-owned Git workflow; only the workspace read may reconnect automatically.
 pub const GET_GIT_WORKSPACE: &str = "GetGitWorkspace";
+pub const WATCH_GIT_WORKSPACE: &str = "WatchGitWorkspace";
+pub const WATCH_CHANGE_REQUEST: &str = "WatchChangeRequest";
 pub const GIT_WORKSPACE_ACTION: &str = "GitWorkspaceAction";
 
 /// Account-scoped cloud administration; handled by the host authority.

@@ -210,6 +210,7 @@ impl PullRequestDetailPage {
                             page.target.clone(),
                             page.url.clone(),
                             DetailSnapshot {
+                                discussion_loaded: page.discussion_loaded,
                                 detail: detail.clone(),
                                 body: parsed.clone(),
                                 activity: page.activity_bodies.clone(),
@@ -464,9 +465,10 @@ impl PullRequestDetailPage {
             // The content column's gutter, so the dock lines up with the thread.
             .child(
                 widgets::page_column()
+                    .max_w(px(DETAIL_COLUMN_MAX))
                     .pt_0()
                     .pb_0()
-                    .when(narrow, |el| el.px(px(NARROW_PAD_X)))
+                    .px(px(if narrow { NARROW_PAD_X } else { DETAIL_PAD_X }))
                     .child(stack),
             )
             .into_any_element()
@@ -740,6 +742,7 @@ mod tests {
                 None,
                 url.into(),
                 DetailSnapshot {
+                    discussion_loaded: true,
                     detail: ChangeRequestDetail::default(),
                     body: crate::markdown::parse_full(""),
                     activity: Vec::new(),
@@ -829,6 +832,7 @@ mod tests {
                 target.clone(),
                 url.into(),
                 DetailSnapshot {
+                    discussion_loaded: true,
                     detail: ChangeRequestDetail::default(),
                     body: crate::markdown::parse_full(""),
                     activity: Vec::new(),

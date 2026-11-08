@@ -137,6 +137,19 @@ pub(crate) fn branch_state_color(
     }
 }
 
+pub(crate) fn unavailable_badge(id: SharedString, error: String, theme: &Theme) -> AnyElement {
+    div()
+        .id(id)
+        .flex_none()
+        .text_color(theme.warning)
+        .aria_label(format!("PR status unavailable: {error}"))
+        .tooltip(crate::settings::widgets::text_tooltip(format!(
+            "Could not refresh PR status. {error}"
+        )))
+        .child(crate::icons::icon(crate::icons::ALERT_CIRCLE).size(px(12.0)))
+        .into_any_element()
+}
+
 pub(crate) fn pull_request_badge(
     id: SharedString,
     summary: ChangeRequestSummary,
@@ -284,7 +297,10 @@ fn render_badge_model(
     let tooltip_model = model.clone();
     let composer = surface == ChangeRequestBadgeSurface::Composer;
     let inline = surface == ChangeRequestBadgeSurface::SidebarInline;
-    let accessible_label = format!("Open pull request {}: {}", model.number, model.title);
+    let accessible_label = format!(
+        "{} pull request #{}: {}",
+        model.state_label, model.number, model.title
+    );
 
     div()
         .id(id)
@@ -326,7 +342,7 @@ fn render_badge_model(
                 .tooltip_show_delay(std::time::Duration::from_millis(350))
         })
         .child(
-            crate::icons::icon(crate::icons::PULL_REQUEST)
+            crate::icons::icon(model.tone.glyph())
                 .size(px(if composer { 11.0 } else { 10.0 }))
                 .flex_none()
                 .text_color(color.opacity(0.85)),
@@ -335,7 +351,11 @@ fn render_badge_model(
         .child(
             div()
                 .font_family(theme.font_mono.clone())
-                .child(crate::popover::search_highlight(model.number, query, theme)),
+                .child(crate::popover::search_highlight(
+                    format!("#{}", model.number).into(),
+                    query,
+                    theme,
+                )),
         )
         .into_any_element()
 }
@@ -409,11 +429,17 @@ impl ChangeRequestClientState {
                 )
             })
         }
-        let changed = self.snapshots.get(&key).and_then(visible) != visible(&snapshot);
+        let changed = self.snapshots.get(&key).and_then(visible) != visible(&snapshot)
+            || self.snapshots.get(&key).and_then(|s| s.error.as_ref()) != snapshot.error.as_ref();
         // A new frame replaces the old branch/checkout context for this path.
         // Rendering validates the complete identity again before exposing it.
         self.snapshots.insert(key, snapshot);
         changed
+    }
+
+    pub(crate) fn error_for_chat(&self, chat: &Chat, spaces: &[Space]) -> Option<&str> {
+        snapshot_for_chat(chat, spaces, self.snapshots.values())
+            .and_then(|snapshot| snapshot.error.as_deref())
     }
 
     pub fn retain_targets(&mut self, targets: &HashSet<ChangeRequestWatchKey>) {
@@ -486,6 +512,14 @@ pub fn change_request_for_chat<'a>(
     spaces: &[Space],
     snapshots: impl IntoIterator<Item = &'a CheckoutChangeRequestStatus>,
 ) -> Option<&'a ChangeRequestSummary> {
+    snapshot_for_chat(chat, spaces, snapshots).and_then(|snapshot| snapshot.change_request.as_ref())
+}
+
+fn snapshot_for_chat<'a>(
+    chat: &Chat,
+    spaces: &[Space],
+    snapshots: impl IntoIterator<Item = &'a CheckoutChangeRequestStatus>,
+) -> Option<&'a CheckoutChangeRequestStatus> {
     let branch = conversation_branch(chat, spaces)?.trim();
     if branch.is_empty() {
         return None;
@@ -498,17 +532,14 @@ pub fn change_request_for_chat<'a>(
         .map(|source| source.checkout_id.as_str())
         .or(chat.checkout_id.as_deref());
 
-    snapshots
-        .into_iter()
-        .find(|snapshot| {
-            snapshot.device_id == chat.device_id
-                && snapshot.cwd == cwd
-                && snapshot.branch == branch
-                && checkout_id.is_none_or(|checkout_id| {
-                    !snapshot.checkout_id.is_empty() && snapshot.checkout_id == checkout_id
-                })
-        })
-        .and_then(|snapshot| snapshot.change_request.as_ref())
+    snapshots.into_iter().find(|snapshot| {
+        snapshot.device_id == chat.device_id
+            && snapshot.cwd == cwd
+            && snapshot.branch == branch
+            && checkout_id.is_none_or(|checkout_id| {
+                !snapshot.checkout_id.is_empty() && snapshot.checkout_id == checkout_id
+            })
+    })
 }
 
 /// Branch metadata safe to render for this conversation. Pre-source-context
@@ -569,6 +600,7 @@ mod tests {
 
     fn snapshot(device: &str, cwd: &str, checkout: &str) -> CheckoutChangeRequestStatus {
         CheckoutChangeRequestStatus {
+            error: None,
             checkout_id: checkout.into(),
             device_id: device.into(),
             cwd: cwd.into(),

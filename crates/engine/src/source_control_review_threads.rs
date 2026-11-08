@@ -4,11 +4,16 @@ use serde_json::{Value, json};
 use zuse_protocol::{ChangeRequestComment, ChangeRequestReviewThread};
 
 const COMMENT_FIELDS: &str =
-    "id url body createdAt author { login } viewerDidAuthor replyTo { id }";
+    "id url body createdAt diffHunk author { login } viewerDidAuthor replyTo { id }";
 const PAGE_INFO: &str = "pageInfo { hasNextPage endCursor }";
 
 impl GitHubCli {
     async fn review_query(&self, query: String, variables: Value, budget: &mut usize) -> PrResult {
+        let _slot = self
+            .read_slots
+            .acquire()
+            .await
+            .map_err(|_| ChangeRequestError::CommandFailed)?;
         let output = self
             .runner
             .run(ProcessRequest {
