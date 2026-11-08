@@ -356,30 +356,6 @@ impl WorkspaceView {
                         .map(|z| z.config.purpose.clone())
                         .unwrap_or_default(),
                 ),
-                (
-                    "Agent",
-                    zot.as_ref()
-                        .map(|z| z.config.coordinator_model.harness.clone())
-                        .unwrap_or_else(|| "claude-code".into()),
-                ),
-                (
-                    "Model",
-                    zot.as_ref()
-                        .and_then(|z| z.config.coordinator_model.model.clone())
-                        .unwrap_or_default(),
-                ),
-                (
-                    "Concurrent workers",
-                    zot.as_ref()
-                        .map(|z| z.config.max_concurrent_workers.to_string())
-                        .unwrap_or_else(|| "4".into()),
-                ),
-                (
-                    "Automatic follow-ups",
-                    zot.as_ref()
-                        .map(|z| z.config.max_followups.to_string())
-                        .unwrap_or_else(|| "3".into()),
-                ),
             ],
             FormKind::File(file) if file.version == 0 => {
                 vec![("Name", String::new()), ("Content", String::new())]
@@ -387,29 +363,9 @@ impl WorkspaceView {
             FormKind::File(file) => vec![("Content", file.content.clone())],
             FormKind::Decision(_) => vec![("Your answer", String::new())],
             FormKind::Worker(Some(_)) => vec![("Message", String::new())],
-            FormKind::Worker(None) => vec![
-                ("Objective", String::new()),
-                (
-                    "Agent",
-                    zot.as_ref()
-                        .unwrap()
-                        .config
-                        .coordinator_model
-                        .harness
-                        .clone(),
-                ),
-                (
-                    "Model",
-                    zot.as_ref()
-                        .unwrap()
-                        .config
-                        .coordinator_model
-                        .model
-                        .clone()
-                        .unwrap_or_default(),
-                ),
-                ("Base branch", "HEAD".into()),
-            ],
+            FormKind::Worker(None) => {
+                vec![("Objective", String::new()), ("Base branch", "HEAD".into())]
+            }
             FormKind::Delete => vec![],
         };
         let inputs = values
@@ -502,27 +458,49 @@ impl WorkspaceView {
             .iter()
             .map(|(_, i)| i.read(cx).value(cx))
             .collect::<Vec<_>>();
+        let get = |key: &str| {
+            form.inputs
+                .iter()
+                .find(|(n, _)| *n == key)
+                .map(|(_, i)| i.read(cx).value(cx))
+                .unwrap_or_default()
+        };
         let action = match &form.kind {
             FormKind::Config => {
-                let (Ok(max_concurrent_workers), Ok(max_followups)) =
-                    (values[4].parse(), values[5].parse())
-                else {
-                    self.error = Some("Enter valid worker limits".into());
+                let name = get("Name").trim().to_owned();
+                if name.is_empty() {
+                    self.error = Some("Name the Zot".into());
                     cx.notify();
                     return;
-                };
-                let config = ZotConfig {
-                    name: values[0].clone(),
-                    purpose: values[1].clone(),
-                    home_device_id: form.home.clone(),
-                    repositories: form.repositories.clone(),
-                    coordinator_model: ZotModel {
-                        harness: values[2].clone(),
-                        model: (!values[3].is_empty()).then(|| values[3].clone()),
+                }
+                // Model and limits aren't edited here: the coordinator's own
+                // conversation picks its model, and limits keep their values.
+                let composer = self.current_model_config();
+                let config = match &form.zot {
+                    Some(zot) => ZotConfig {
+                        name,
+                        purpose: get("Purpose"),
+                        home_device_id: form.home.clone(),
+                        repositories: form.repositories.clone(),
+                        worker_device_id: form.worker_device.clone(),
+                        ..zot.config.clone()
                     },
-                    worker_device_id: form.worker_device.clone(),
-                    max_concurrent_workers,
-                    max_followups,
+                    None => ZotConfig {
+                        name,
+                        purpose: get("Purpose"),
+                        home_device_id: form.home.clone(),
+                        repositories: form.repositories.clone(),
+                        coordinator_model: ZotModel {
+                            harness: composer
+                                .as_ref()
+                                .map(|c| c.provider.clone())
+                                .unwrap_or_else(|| "claude-code".into()),
+                            model: composer.and_then(|c| c.model),
+                        },
+                        worker_device_id: form.worker_device.clone(),
+                        max_concurrent_workers: 4,
+                        max_followups: 3,
+                    },
                 };
                 if form.zot.is_some() {
                     ZotAction::Configure { config }
@@ -572,14 +550,41 @@ impl WorkspaceView {
                         chat_id: String::new(),
                         device_id: repository.device_id.clone(),
                         space_id: repository.space_id.clone(),
-                        objective: values[0].clone(),
+                        objective: get("Objective"),
                         followups: 0,
                     },
-                    model: ZotModel {
-                        harness: values[1].clone(),
-                        model: (!values[2].is_empty()).then(|| values[2].clone()),
+                    // New threads start on the coordinator conversation's current model.
+                    model: self
+                        .chats
+                        .iter()
+                        .find(|c| {
+                            form.zot
+                                .as_ref()
+                                .is_some_and(|z| c["id"] == z.coordinator_chat_id)
+                        })
+                        .and_then(|c| {
+                            Some(ZotModel {
+                                harness: c["config"]["harness"].as_str()?.to_owned(),
+                                model: c["config"]["model"].as_str().map(str::to_owned),
+                            })
+                        })
+                        .or_else(|| {
+                            form.zot
+                                .as_ref()
+                                .map(|z| z.config.coordinator_model.clone())
+                        })
+                        .unwrap_or(ZotModel {
+                            harness: "claude-code".into(),
+                            model: None,
+                        }),
+                    base: {
+                        let base = get("Base branch");
+                        if base.trim().is_empty() {
+                            "HEAD".into()
+                        } else {
+                            base
+                        }
                     },
-                    base: values[3].clone(),
                 }
             }
             FormKind::Delete => ZotAction::Delete,
@@ -650,64 +655,38 @@ impl WorkspaceView {
                 if let Some(input) = name("Purpose") {
                     body = body.child(field("Purpose", "What this Zot is responsible for", input));
                 }
-                let mut rows = column()
-                    .rounded(px(10.))
-                    .border_1()
-                    .border_color(rgb(BORDER));
-                let mut first = true;
-                for (key, label, hint) in [
-                    ("Agent", "Agent", "Provider for the coordinator"),
-                    ("Model", "Model", "Empty uses the agent default"),
-                    (
-                        "Concurrent workers",
-                        "Threads at once",
-                        "Running threads limit",
-                    ),
-                    (
-                        "Automatic follow-ups",
-                        "Automatic follow-ups",
-                        "Per thread, before asking you",
-                    ),
-                ] {
-                    if let Some(input) = name(key) {
-                        rows = rows.child(setting_row(
-                            label,
-                            hint,
-                            div()
-                                .w(px(190.))
-                                .h(px(30.))
-                                .px(px(10.))
-                                .flex()
-                                .items_center()
-                                .rounded(px(7.))
-                                .border_1()
-                                .border_color(rgb(BORDER))
-                                .child(input)
-                                .into_any_element(),
-                            first,
-                        ));
-                        first = false;
-                    }
-                }
-                rows = rows
-                    .child(setting_row(
-                        "Runs on",
-                        "Where the coordinator lives",
-                        self.zot_device_chips(form.home.clone(), true, form.zot.is_some(), cx),
-                        first,
-                    ))
-                    .child(setting_row(
-                        "Threads run on",
-                        "Default for new threads",
-                        self.zot_device_chips(form.worker_device.clone(), false, false, cx),
-                        false,
-                    ));
-                body = body.child(rows).child(
+                body = body.child(
                     column()
                         .gap(px(6.))
                         .child(caption("Repositories"))
-                        .child(self.zot_repository_chips(cx)),
+                        .child(self.zot_repository_list(cx)),
                 );
+                // Device choice only matters once there is more than one.
+                if self.zots.devices.len() > 1 {
+                    body = body.child(
+                        column()
+                            .rounded(px(10.))
+                            .border_1()
+                            .border_color(rgb(BORDER))
+                            .child(setting_row(
+                                "Runs on",
+                                "Where the coordinator lives",
+                                self.zot_device_chips(
+                                    form.home.clone(),
+                                    true,
+                                    form.zot.is_some(),
+                                    cx,
+                                ),
+                                true,
+                            ))
+                            .child(setting_row(
+                                "Threads run on",
+                                "Default for new threads",
+                                self.zot_device_chips(form.worker_device.clone(), false, false, cx),
+                                false,
+                            )),
+                    );
+                }
             }
             FormKind::Delete => {
                 body = body.child(
@@ -738,7 +717,7 @@ impl WorkspaceView {
                     };
                     body = body.child(field(label, "", input.clone()));
                 }
-                if matches!(form.kind, FormKind::Worker(None)) {
+                if matches!(form.kind, FormKind::Worker(None)) && self.zots.devices.len() > 1 {
                     body = body.child(column().gap(px(6.)).child(caption("Runs on")).child(
                         self.zot_device_chips(form.worker_device.clone(), false, false, cx),
                     ));
@@ -896,26 +875,86 @@ impl WorkspaceView {
         }
         chips.into_any_element()
     }
-    fn zot_repository_chips(&self, cx: &mut Context<Self>) -> AnyElement {
+    /// Projects as a checklist: name, location and a tick on the right.
+    fn zot_repository_list(&self, cx: &mut Context<Self>) -> AnyElement {
         let Some(form) = &self.zots.form else {
             return Empty.into_any_element();
         };
-        let mut chips = row().flex_wrap().gap_1();
         if self.zots.spaces.is_empty() {
             return muted("Open a project first to give this Zot a repository.").into_any_element();
         }
+        let mut list = column()
+            .p(px(4.))
+            .gap(px(2.))
+            .rounded(px(10.))
+            .border_1()
+            .border_color(rgb(BORDER));
         for space in &self.zots.spaces {
             let id = space["id"].as_str().unwrap_or_default().to_owned();
             let device = space["deviceId"].as_str().unwrap_or_default().to_owned();
+            let path = space["path"].as_str().unwrap_or_default().to_owned();
             let name = space["name"]
                 .as_str()
-                .or_else(|| space["path"].as_str())
-                .unwrap_or(&id)
-                .to_owned();
+                .map(str::to_owned)
+                .unwrap_or_else(|| path.rsplit('/').next().unwrap_or(&path).to_owned());
             let checked = form.repositories.iter().any(|r| r.space_id == id);
-            chips = chips.child(
-                chip(SharedString::from(format!("zot-repo-{id}")), name, checked).on_click(
-                    cx.listener(move |this, _, _, cx| {
+            list = list.child(
+                row()
+                    .id(SharedString::from(format!("zot-repo-{id}")))
+                    .role(Role::CheckBox)
+                    .aria_label(SharedString::from(name.clone()))
+                    .h(px(40.))
+                    .px(px(8.))
+                    .gap(px(10.))
+                    .rounded(px(7.))
+                    .cursor_pointer()
+                    .hover(|d| d.bg(rgb(RAISED)))
+                    .child(
+                        row()
+                            .size(px(26.))
+                            .flex_none()
+                            .justify_center()
+                            .rounded(px(6.))
+                            .bg(rgb(RAISED))
+                            .child(icon("folder").size(px(13.)).text_color(rgb(MUTED))),
+                    )
+                    .child(
+                        column()
+                            .flex_1()
+                            .min_w_0()
+                            .child(
+                                div()
+                                    .truncate()
+                                    .text_size(px(13.))
+                                    .text_color(rgb(TEXT))
+                                    .child(name),
+                            )
+                            .when(!path.is_empty(), |d| {
+                                d.child(
+                                    div()
+                                        .truncate()
+                                        .text_size(px(11.))
+                                        .text_color(rgb(FAINT))
+                                        .child(path.clone()),
+                                )
+                            }),
+                    )
+                    .child(
+                        row()
+                            .size(px(18.))
+                            .flex_none()
+                            .justify_center()
+                            .rounded(px(5.))
+                            .when(checked, |d| {
+                                d.bg(rgb(TEXT)).child(
+                                    icon("check")
+                                        .size(px(12.))
+                                        .text_color(crate::settings_style::card_bg()),
+                                )
+                            })
+                            .when(!checked, |d| d.border_1().border_color(rgb(MUTED))),
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
                         if let Some(form) = this.zots.form.as_mut() {
                             if form.repositories.iter().any(|r| r.space_id == id) {
                                 form.repositories.retain(|r| r.space_id != id);
@@ -927,11 +966,10 @@ impl WorkspaceView {
                             }
                         }
                         cx.notify();
-                    }),
-                ),
+                    })),
             );
         }
-        chips.into_any_element()
+        list.into_any_element()
     }
     /// Live run state of one thread, ignoring rows a crashed host left behind.
     fn zot_thread_status(&self, chat: &str) -> &str {

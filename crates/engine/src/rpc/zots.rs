@@ -96,14 +96,21 @@ impl EngineRpc {
                 .map_err(failed)?
                 .to_string_lossy()
                 .into_owned();
+            let previous = old
+                .as_ref()
+                .filter(|o| o.coordinator_chat_id != zot.coordinator_chat_id)
+                .and_then(|o| self.workspace.chat_config(&o.coordinator_chat_id));
             self.workspace
                 .create_chat_with_parent(
                     &zot.coordinator_chat_id,
                     None,
                     Some(&zot.config.home_device_id),
                     Some(zuse_protocol::ChatConfig {
-                        harness,
-                        model: zot.config.coordinator_model.model.clone(),
+                        harness: previous.as_ref().map_or(harness, |c| c.harness),
+                        model: previous.as_ref().map_or_else(
+                            || zot.config.coordinator_model.model.clone(),
+                            |c| c.model.clone(),
+                        ),
                         reasoning: None,
                         model_options: Default::default(),
                         sandbox: zuse_protocol::SandboxLevel::WorkspaceWrite,
@@ -127,8 +134,17 @@ impl EngineRpc {
                     sandbox: zuse_protocol::SandboxLevel::WorkspaceWrite,
                     plan: true,
                 });
-            config.harness = harness;
-            config.model = zot.config.coordinator_model.model.clone();
+            // The conversation's own model picker chooses the model after
+            // creation; only an explicit model change through the API applies.
+            if let ZotAction::Configure { config: wanted } = &command.action {
+                if old
+                    .as_ref()
+                    .is_some_and(|o| o.config.coordinator_model != wanted.coordinator_model)
+                {
+                    config.harness = harness;
+                    config.model = zot.config.coordinator_model.model.clone();
+                }
+            }
             config.sandbox = zuse_protocol::SandboxLevel::WorkspaceWrite;
             config.plan = true;
             self.workspace

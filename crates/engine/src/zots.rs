@@ -428,10 +428,6 @@ impl Zots {
                 request.worktree = None;
                 request.sandbox = zuse_protocol::SandboxLevel::WorkspaceWrite;
                 request.plan = true;
-                request.harness = Some(serde_json::from_value(serde_json::json!(
-                    zot.config.coordinator_model.harness
-                ))?);
-                request.model = zot.config.coordinator_model.model.clone();
                 request.auto_approve = false;
                 let context = self
                     .files(&zot.id, false)?

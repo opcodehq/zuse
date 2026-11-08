@@ -82,9 +82,7 @@ fn reconcile(
         let mut selected = workspace
             .chat_config(&zot.coordinator_chat_id)
             .unwrap_or(config(&zot.config.coordinator_model, None)?);
-        let wanted = config(&zot.config.coordinator_model, None)?;
-        selected.harness = wanted.harness;
-        selected.model = wanted.model;
+        // Only plan mode is enforced; the conversation picks its own model.
         selected.sandbox = SandboxLevel::WorkspaceWrite;
         selected.plan = true;
         if workspace.chat_config(&zot.coordinator_chat_id).as_ref() != Some(&selected) {
