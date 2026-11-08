@@ -1306,6 +1306,46 @@ mod tests {
     }
 
     #[gpui::test]
+    fn pull_request_merge_outcome_survives_a_later_refresh(cx: &mut gpui::TestAppContext) {
+        fixture::init(cx);
+        let url = "https://github.com/acme/app/pull/1";
+        let window = cx.add_window(|window, cx| {
+            PullRequestDetailPage::new(
+                fixture::state(cx, None),
+                url.into(),
+                None,
+                Rc::new(RefCell::new(PullRequestCache::default())),
+                None,
+                window,
+                cx,
+            )
+        });
+        window
+            .update(cx, |page, _, cx| {
+                page.update_notice = Some("Merge refused".into());
+                page.error = Some("Stale read error".into());
+                page.accept_snapshot(
+                    Ok(DetailSnapshot {
+                        discussion_loaded: true,
+                        detail: ChangeRequestDetail {
+                            url: url.into(),
+                            ..Default::default()
+                        },
+                        body: crate::markdown::parse_full(""),
+                        activity: vec![],
+                        fetched: Instant::now(),
+                        diff: None,
+                        diff_refresh_owed: false,
+                    }),
+                    cx,
+                );
+                assert_eq!(page.error, None);
+                assert_eq!(page.update_notice.as_deref(), Some("Merge refused"));
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
     fn pull_request_merge_keeps_its_receipt_and_retires_cache_after_closing(
         cx: &mut gpui::TestAppContext,
     ) {

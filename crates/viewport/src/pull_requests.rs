@@ -23,7 +23,8 @@ pub(super) struct PullRequests {
     reads: HashMap<u64, Read>,
     watch: Option<u64>,
     watch_seeded: bool,
-    watch_error: bool,
+    /// The error the live watch last showed, so recovery clears only that.
+    watch_error: Option<String>,
     selected: Option<String>,
     detail: Option<ChangeRequestDetail>,
     patch: Arc<Vec<String>>,
@@ -48,7 +49,7 @@ impl PullRequests {
             reads: HashMap::new(),
             watch: None,
             watch_seeded: false,
-            watch_error: false,
+            watch_error: None,
             selected: None,
             detail: None,
             patch: Arc::new(vec![]),
@@ -284,17 +285,11 @@ impl WorkspaceView {
                         self.pull_requests.detail = None;
                         self.pull_requests.patch = Arc::new(vec![]);
                     }
-                    match status.error {
-                        Some(error) => {
-                            self.pull_requests.error = Some(error);
-                            self.pull_requests.watch_error = true;
-                        }
-                        None if self.pull_requests.watch_error => {
-                            self.pull_requests.error = None;
-                            self.pull_requests.watch_error = false;
-                        }
-                        None => {}
-                    }
+                    reconcile_watch_error(
+                        &mut self.pull_requests.error,
+                        &mut self.pull_requests.watch_error,
+                        status.error,
+                    );
                     if status.refreshing {
                         cx.notify();
                         return true;
@@ -825,8 +820,43 @@ impl WorkspaceView {
     }
 }
 
+fn reconcile_watch_error(
+    shown: &mut Option<String>,
+    from_watch: &mut Option<String>,
+    frame: Option<String>,
+) {
+    match frame {
+        Some(error) => {
+            *shown = Some(error.clone());
+            *from_watch = Some(error);
+        }
+        None => {
+            if from_watch
+                .take()
+                .is_some_and(|error| shown.as_ref() == Some(&error))
+            {
+                *shown = None;
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_recovered_watch_clears_only_its_own_error() {
+        let (mut shown, mut from_watch) = (None, None);
+        super::reconcile_watch_error(&mut shown, &mut from_watch, Some("offline".into()));
+        assert_eq!(shown.as_deref(), Some("offline"));
+        super::reconcile_watch_error(&mut shown, &mut from_watch, None);
+        assert_eq!(shown, None);
+
+        super::reconcile_watch_error(&mut shown, &mut from_watch, Some("offline".into()));
+        shown = Some("Comment failed to post".into());
+        super::reconcile_watch_error(&mut shown, &mut from_watch, None);
+        assert_eq!(shown.as_deref(), Some("Comment failed to post"));
+    }
+
     use super::*;
     use std::prelude::v1::test;
 
