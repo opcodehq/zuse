@@ -37,14 +37,20 @@ pub struct ClosePullRequest;
 #[action(namespace = shell, no_json)]
 pub struct OpenPrImage(pub String);
 
-/// Open a new session with this prompt staged in the composer (not sent).
+/// Start a session with this prompt staged in its composer (not sent): a
+/// side chat tab off `own_chat` when this is that chat's own pull request,
+/// else a new session.
 #[derive(Clone, PartialEq, Action)]
 #[action(namespace = shell, no_json)]
 pub struct StartPullRequestSession {
     pub prompt: String,
+    /// Staged alongside `prompt`: the brief the agent reads.
+    pub context: Option<crate::context_items::ContextItem>,
     pub project_id: String,
     pub device: String,
     pub repository: String,
+    /// The chat whose checkout resolved to this pull request, if any.
+    pub own_chat: Option<String>,
 }
 
 #[derive(Clone, PartialEq, Action)]
@@ -159,6 +165,50 @@ pub(crate) fn repair_prompt(
         PullRequestRepair::Review => handoff::Handoff::Review,
     };
     handoff::prompt(kind, detail, url, handoff::VerificationPlatform::Relevant)
+}
+
+impl PullRequestRepair {
+    pub(crate) fn scope(self) -> crate::context_items::PullRequestScope {
+        use crate::context_items::PullRequestScope as Scope;
+        match self {
+            Self::Feedback => Scope::Comments,
+            Self::Checks => Scope::Checks,
+            Self::Conflicts => Scope::Conflicts,
+            Self::Review => Scope::Review,
+        }
+    }
+}
+
+/// A repair as the chat sends it: the short instruction the bubble shows and
+/// the full [`repair_prompt`] brief riding as a context item.
+pub(crate) fn repair_message(
+    repair: PullRequestRepair,
+    detail: &ChangeRequestDetail,
+    url: &str,
+) -> (String, crate::context_items::ContextItem) {
+    let scope = repair.scope();
+    (
+        crate::context_items::repair_instruction(detail.number, scope),
+        crate::context_items::pull_request_context(
+            url,
+            detail.number,
+            scope,
+            repair_prompt(repair, detail, url),
+        ),
+    )
+}
+
+/// [`chat_context`] as a context item.
+pub(crate) fn chat_context_item(
+    detail: &ChangeRequestDetail,
+    url: &str,
+) -> crate::context_items::ContextItem {
+    crate::context_items::pull_request_context(
+        url,
+        detail.number,
+        crate::context_items::PullRequestScope::Everything,
+        chat_context(detail, url),
+    )
 }
 
 /// How many checks are failing on the pull request.

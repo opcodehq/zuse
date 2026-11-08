@@ -833,6 +833,15 @@ pub(crate) struct CanvasTarget {
     device: Option<String>,
 }
 
+/// Local archive intent stays visible until both the RPC and registry agree.
+struct PendingChatArchive {
+    request_id: u64,
+    archived: bool,
+    authoritative: bool,
+    observed: bool,
+    accepted: bool,
+}
+
 /// Root application state. Reducer methods (`apply_*`, [`Self::session_for`], …)
 /// are plain `&mut self` functions so tests construct the struct directly; gpui
 /// glue ([`Self::bootstrap`], [`Self::select_chat`]) layers subscriptions on top.
@@ -865,6 +874,8 @@ pub struct AppState {
     pub spaces: Vec<Space>,
     /// Sorted (see [`sort_chats`]); includes archived rows — views filter.
     pub chats: Vec<Chat>,
+    pending_chat_archives: HashMap<String, PendingChatArchive>,
+    next_archive_request_id: u64,
     pub(crate) chat_configuration: crate::chat_configuration::ChatConfiguration,
     /// Fork RPC may arrive ahead of its registry row on a remote device.
     pending_side_chat: Option<Chat>,
@@ -945,6 +956,8 @@ pub struct AppState {
     /// revision that has not reached disk yet. A chat remains blocked until
     /// every surface waiting on a workspace write has finished or cancelled.
     review_comment_flushes: HashMap<String, HashSet<u64>>,
+    /// Context items staged per composer draft key, sent ahead of the text.
+    context_items: HashMap<String, Vec<crate::context_items::ContextItem>>,
     /// This engine's device id (best-effort `LocalDevice` probe; `None` until
     /// the engine serves it — views degrade gracefully).
     pub local_device_id: Option<String>,
@@ -986,6 +999,20 @@ pub(crate) struct TranscriptTextChanged {
 }
 
 impl gpui::EventEmitter<TranscriptTextChanged> for AppState {}
+
+/// The status a thread row shows when its conversations disagree: whichever
+/// asks more of the user (input, then live work, then a failure, then an
+/// unseen finish).
+fn louder_indicator(a: ChatIndicator, b: ChatIndicator) -> ChatIndicator {
+    let rank = |status| match status {
+        ChatIndicator::AwaitingInput => 4,
+        ChatIndicator::Working => 3,
+        ChatIndicator::Errored => 2,
+        ChatIndicator::Completed => 1,
+        ChatIndicator::Idle => 0,
+    };
+    if rank(b) > rank(a) { b } else { a }
+}
 
 fn is_text_append(frame: &TranscriptFrame) -> bool {
     matches!(frame, TranscriptFrame::Delta { upsert, append, remove, .. }
@@ -1039,6 +1066,8 @@ impl AppState {
             connectivity_observed: false,
             spaces: Vec::new(),
             chats: Vec::new(),
+            pending_chat_archives: HashMap::new(),
+            next_archive_request_id: 0,
             chat_configuration: Default::default(),
             pending_side_chat: None,
             unsaved_side_chat: false,
@@ -1068,6 +1097,7 @@ impl AppState {
             transfers: HashMap::new(),
             review_comments: HashMap::new(),
             review_comment_flushes: HashMap::new(),
+            context_items: HashMap::new(),
             local_device_id: None,
             harness_updates: Vec::new(),
             data_dir: None,
@@ -1295,9 +1325,36 @@ impl AppState {
         self.review_comments.remove(key).unwrap_or_default()
     }
 
+    pub fn context_items(&self, key: &str) -> &[crate::context_items::ContextItem] {
+        self.context_items
+            .get(key)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// Stage `item` on `key`'s draft; an item from the same source replaces
+    /// the earlier one in place.
+    pub fn add_context_item(&mut self, key: &str, item: crate::context_items::ContextItem) {
+        crate::context_items::upsert(self.context_items.entry(key.to_string()).or_default(), item);
+    }
+
+    pub fn remove_context_item(&mut self, key: &str, id: &str) {
+        if let Some(list) = self.context_items.get_mut(key) {
+            list.retain(|item| item.id != id);
+            if list.is_empty() {
+                self.context_items.remove(key);
+            }
+        }
+    }
+
+    pub fn take_context_items(&mut self, key: &str) -> Vec<crate::context_items::ContextItem> {
+        self.context_items.remove(key).unwrap_or_default()
+    }
+
     pub fn purge_review_comments(&mut self, key: &str) {
         self.review_comment_flushes.remove(key);
         self.review_comments.remove(key);
+        self.context_items.remove(key);
     }
 
     pub fn begin_review_comment_flush(&mut self, key: &str, source: u64) {
@@ -1334,6 +1391,81 @@ impl AppState {
         true
     }
 
+    /// Apply intent synchronously. One worker per chat serializes rapid toggles;
+    /// archiving different chats never cancels an earlier request.
+    pub(crate) fn begin_chat_archive(&mut self, chat_id: &str, archived: bool) -> Option<u64> {
+        let chat = self.chats.iter_mut().find(|chat| chat.id == chat_id)?;
+        if chat.archived == archived {
+            return None;
+        }
+        let previous = chat.archived;
+        chat.archived = archived;
+        self.next_archive_request_id = self.next_archive_request_id.wrapping_add(1);
+        let request_id = self.next_archive_request_id;
+        if let Some(pending) = self.pending_chat_archives.get_mut(chat_id) {
+            pending.archived = archived;
+            pending.observed = false;
+            // An accepted write has no running worker; start another one.
+            if !std::mem::replace(&mut pending.accepted, false) {
+                return None;
+            }
+            pending.request_id = request_id;
+        } else {
+            self.pending_chat_archives.insert(
+                chat_id.to_owned(),
+                PendingChatArchive {
+                    request_id,
+                    archived,
+                    authoritative: previous,
+                    observed: false,
+                    accepted: false,
+                },
+            );
+        }
+        Some(request_id)
+    }
+
+    /// A restore on another surface supersedes this projection. Its own RPC
+    /// and watch updates now own the row, including any failure recovery.
+    pub(crate) fn clear_chat_archive_intent(&mut self, chat_id: &str) {
+        if let Some(pending) = self.pending_chat_archives.remove(chat_id)
+            && let Some(chat) = self.chats.iter_mut().find(|chat| chat.id == chat_id)
+        {
+            chat.archived = pending.authoritative;
+        }
+    }
+
+    /// Finish a write, returning newer intent for the same worker to send next.
+    pub(crate) fn finish_chat_archive(
+        &mut self,
+        chat_id: &str,
+        request_id: u64,
+        sent: bool,
+        succeeded: bool,
+    ) -> Option<bool> {
+        let pending = self.pending_chat_archives.get_mut(chat_id)?;
+        if pending.request_id != request_id {
+            return None;
+        }
+        if pending.archived != sent {
+            if succeeded {
+                pending.authoritative = sent;
+            }
+            pending.observed = false;
+            return Some(pending.archived);
+        }
+        if succeeded {
+            pending.accepted = true;
+            if !pending.observed {
+                return None;
+            }
+        } else if let Some(chat) = self.chats.iter_mut().find(|chat| chat.id == chat_id) {
+            chat.archived = pending.authoritative;
+        }
+        self.pending_chat_archives.remove(chat_id);
+        None
+    }
+
     /// Returns whether anything observable changed. The engine re-publishes
     /// identical lists (presence and sync churn elsewhere in the doc), and
     /// each notify re-renders the whole shell.
@@ -1347,6 +1479,18 @@ impl AppState {
                 chats.push(pending.clone());
             }
         }
+        self.pending_chat_archives.retain(|id, pending| {
+            let Some(chat) = chats.iter_mut().find(|chat| &chat.id == id) else {
+                return false;
+            };
+            pending.authoritative = chat.archived;
+            pending.observed = chat.archived == pending.archived;
+            if pending.accepted && pending.observed {
+                return false;
+            }
+            chat.archived = pending.archived;
+            true
+        });
         self.overlay_chat_configuration(&mut chats);
         sort_chats(&mut chats);
         if !self.chats_synced || self.chats != chats {
@@ -2336,9 +2480,27 @@ impl AppState {
         space_filter: Option<&str>,
     ) -> Vec<(ChatIndicator, &Chat)> {
         let in_filter = self.project_filter(space_filter);
-        self.overview_chats(now)
-            .into_iter()
+        let rows = self.overview_chats(now);
+        // A row stands for its whole thread: a sibling conversation working
+        // (or waiting on input) in another tab lights the row too.
+        let mut thread_status: HashMap<&str, ChatIndicator> = HashMap::new();
+        for (status, chat) in &rows {
+            thread_status
+                .entry(chat.thread_id())
+                .and_modify(|rolled| *rolled = louder_indicator(*rolled, *status))
+                .or_insert(*status);
+        }
+        rows.into_iter()
             .filter(|(_, chat)| chat.thread_id.is_none() && in_filter(chat))
+            .map(|(status, chat)| {
+                (
+                    thread_status
+                        .get(chat.id.as_str())
+                        .copied()
+                        .unwrap_or(status),
+                    chat,
+                )
+            })
             .collect()
     }
 
@@ -2657,6 +2819,7 @@ impl AppState {
         self.session_presence_presentation.clear();
         self.spaces.clear();
         self.chats.clear();
+        self.pending_chat_archives.clear();
         self.pending_side_chat = None;
         self.unsaved_side_chat = false;
         self.sessions.clear();
@@ -4712,6 +4875,38 @@ mod tests {
     }
 
     #[test]
+    fn staged_context_items_replace_by_source_and_stay_per_draft() {
+        use crate::context_items::ContextItem;
+        let mut state = AppState::new();
+        state.add_context_item(
+            "c",
+            ContextItem::new("pr:checks", "PR #1 · Failing checks", "old"),
+        );
+        state.add_context_item(
+            "c",
+            ContextItem::new("pr:comments", "PR #1 · Comments", "b"),
+        );
+        state.add_context_item(
+            "c",
+            ContextItem::new("pr:checks", "PR #1 · Failing checks", "new"),
+        );
+        state.add_context_item(
+            "",
+            ContextItem::new("pr:checks", "PR #1 · Failing checks", "x"),
+        );
+        let staged = state.context_items("c");
+        assert_eq!(staged.len(), 2);
+        assert_eq!(staged[0].body, "new");
+        let comments_id = staged[1].id.clone();
+        state.remove_context_item("c", &comments_id);
+        assert_eq!(state.context_items("c").len(), 1);
+        let taken = state.take_context_items("c");
+        assert_eq!(taken.len(), 1);
+        assert!(state.context_items("c").is_empty());
+        assert_eq!(state.context_items("").len(), 1);
+    }
+
+    #[test]
     fn transcript_revision_tracks_replay_echoes_and_subagent_content() {
         let mut state = AppState::new();
         state.selected_chat = Some("c".into());
@@ -5845,6 +6040,150 @@ mod tests {
         state.apply_chats(vec![archived, chat("b", 1, None)]);
         let visible: Vec<&str> = state.visible_chats().map(|c| c.id.as_str()).collect();
         assert_eq!(visible, ["b"]);
+    }
+
+    #[test]
+    fn archive_is_immediate_and_stale_frames_cannot_restore_the_row() {
+        let mut state = AppState::new();
+        state.apply_chats(vec![chat("a", 0, None), chat("b", 1, None)]);
+        state.selected_chat = Some("a".into());
+        let request = state.begin_chat_archive("a", true).unwrap();
+        assert_eq!(
+            state
+                .visible_chats()
+                .map(|c| c.id.as_str())
+                .collect::<Vec<_>>(),
+            ["b"]
+        );
+        assert!(state.selected_chat_row().unwrap().archived);
+        assert_eq!(state.archivable_selected_chat(), None);
+        state.apply_chats(vec![chat("a", 0, None), chat("b", 1, None)]);
+        assert!(state.selected_chat_row().unwrap().archived);
+        assert_eq!(state.finish_chat_archive("a", request, true, true), None);
+        // RPC success alone does not retire the overlay.
+        state.apply_chats(vec![chat("a", 0, None), chat("b", 1, None)]);
+        assert!(state.selected_chat_row().unwrap().archived);
+        let mut confirmed = chat("a", 0, None);
+        confirmed.archived = true;
+        state.apply_chats(vec![confirmed, chat("b", 1, None)]);
+        assert!(state.pending_chat_archives.is_empty());
+        // Once confirmed, edits from another device remain authoritative.
+        state.apply_chats(vec![chat("a", 0, None), chat("b", 1, None)]);
+        assert!(!state.selected_chat_row().unwrap().archived);
+    }
+
+    #[test]
+    fn archive_confirmation_can_arrive_before_the_rpc_reply() {
+        let mut state = AppState::new();
+        state.apply_chats(vec![chat("a", 0, None)]);
+        let request = state.begin_chat_archive("a", true).unwrap();
+        let mut confirmed = chat("a", 0, None);
+        confirmed.archived = true;
+        state.apply_chats(vec![confirmed]);
+        assert_eq!(state.pending_chat_archives.len(), 1);
+        assert_eq!(state.finish_chat_archive("a", request, true, true), None);
+        assert!(state.pending_chat_archives.is_empty());
+    }
+
+    #[test]
+    fn archive_failure_restores_only_the_archive_flag() {
+        let mut state = AppState::new();
+        state.apply_chats(vec![chat("a", 0, None), chat("b", 1, None)]);
+        let request = state.begin_chat_archive("a", true).unwrap();
+        assert!(state.begin_chat_archive("b", true).is_some());
+        let mut renamed = chat("a", 0, None);
+        renamed.title = Some("Updated title".into());
+        state.apply_chats(vec![renamed, chat("b", 1, None)]);
+        assert_eq!(state.finish_chat_archive("a", request, true, false), None);
+        let restored = state.chats.iter().find(|c| c.id == "a").unwrap();
+        assert!(!restored.archived);
+        assert_eq!(restored.title.as_deref(), Some("Updated title"));
+        assert!(state.chats.iter().find(|c| c.id == "b").unwrap().archived);
+        assert_eq!(state.pending_chat_archives.len(), 1);
+    }
+
+    #[test]
+    fn archive_rapid_toggles_share_one_worker_and_send_latest_intent() {
+        let mut state = AppState::new();
+        state.apply_chats(vec![chat("a", 0, None)]);
+        let request = state.begin_chat_archive("a", true).unwrap();
+        assert!(state.begin_chat_archive("a", false).is_none());
+        assert!(!state.chats[0].archived);
+        assert_eq!(
+            state.finish_chat_archive("a", request, true, true),
+            Some(false)
+        );
+        assert_eq!(state.finish_chat_archive("a", request, false, true), None);
+        state.apply_chats(vec![chat("a", 0, None)]);
+        assert!(state.pending_chat_archives.is_empty());
+    }
+
+    #[test]
+    fn archive_new_write_waits_for_its_own_watch_confirmation() {
+        let mut state = AppState::new();
+        state.apply_chats(vec![chat("a", 0, None)]);
+        let archive = state.begin_chat_archive("a", true).unwrap();
+        assert_eq!(state.finish_chat_archive("a", archive, true, true), None);
+        let restore = state.begin_chat_archive("a", false).unwrap();
+        assert_ne!(archive, restore);
+        assert_eq!(state.finish_chat_archive("a", restore, false, true), None);
+        assert!(!state.pending_chat_archives.is_empty());
+        let mut stale = chat("a", 0, None);
+        stale.archived = true;
+        state.apply_chats(vec![stale]);
+        assert!(!state.chats[0].archived);
+        state.apply_chats(vec![chat("a", 0, None)]);
+        assert!(state.pending_chat_archives.is_empty());
+    }
+
+    #[test]
+    fn archive_followup_failure_rolls_back_to_the_successful_write() {
+        let mut state = AppState::new();
+        state.apply_chats(vec![chat("a", 0, None)]);
+        let request = state.begin_chat_archive("a", true).unwrap();
+        assert!(state.begin_chat_archive("a", false).is_none());
+        assert_eq!(
+            state.finish_chat_archive("a", request, true, true),
+            Some(false)
+        );
+        assert_eq!(state.finish_chat_archive("a", request, false, false), None);
+        assert!(state.chats[0].archived);
+    }
+
+    #[test]
+    fn archive_superseded_reply_cannot_roll_back_a_newer_write() {
+        let mut state = AppState::new();
+        state.apply_chats(vec![chat("a", 0, None)]);
+        let old_request = state.begin_chat_archive("a", true).unwrap();
+        state.clear_chat_archive_intent("a");
+        assert!(!state.chats[0].archived);
+        let new_request = state.begin_chat_archive("a", true).unwrap();
+        assert_eq!(
+            state.finish_chat_archive("a", old_request, true, false),
+            None
+        );
+        assert!(state.chats[0].archived);
+        assert_eq!(
+            state.finish_chat_archive("a", new_request, true, false),
+            None
+        );
+        assert!(!state.chats[0].archived);
+    }
+
+    #[test]
+    fn sidebar_row_shows_a_sibling_conversation_working() {
+        let now = Utc::now();
+        let mut state = AppState::new();
+        let mut sibling = chat("sibling", 1, None);
+        sibling.thread_id = Some("root".into());
+        state.apply_chats(vec![chat("root", 0, None), sibling]);
+        let status = |state: &AppState| state.sidebar_chats(now, None)[0].0;
+        assert_eq!(status(&state), ChatIndicator::Idle);
+        state.begin_pending_send("sibling", "m1", now);
+        let rows = state.sidebar_chats(now, None);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].1.id, "root");
+        assert_eq!(status(&state), ChatIndicator::Working);
     }
 
     #[test]

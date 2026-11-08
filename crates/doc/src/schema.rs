@@ -59,6 +59,10 @@ struct DocPartJson {
     /// transcripts; on this field they degrade to an invisible empty part.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     reasoning: Option<String>,
+    /// UI block source for `kind: "uiBlock"` (additive), off `text` for the
+    /// same reason as `reasoning`: old readers show an empty part, not code.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    spec: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     call: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -138,6 +142,12 @@ fn to_doc_part(part: &MessagePart) -> Result<DocPartJson, DocError> {
             kind: "visual".into(),
             path: Some(path.clone()),
             name: Some(title.clone()),
+            ..Default::default()
+        },
+        MessagePart::UiBlock { id, spec } => DocPartJson {
+            id: id.clone(),
+            kind: "uiBlock".into(),
+            spec: Some(spec.clone()),
             ..Default::default()
         },
         MessagePart::Text { id, text } => DocPartJson {
@@ -247,6 +257,13 @@ fn from_doc_part(p: DocPartJson) -> MessagePart {
             None => MessagePart::Error {
                 id: p.id,
                 message: "Visual unavailable".into(),
+            },
+        },
+        "uiBlock" => match p.spec.filter(|spec| !spec.trim().is_empty()) {
+            Some(spec) => MessagePart::UiBlock { id: p.id, spec },
+            None => MessagePart::Error {
+                id: p.id,
+                message: "UI block unavailable".into(),
             },
         },
         "tool" => match p.call.and_then(|c| serde_json::from_value(c).ok()) {

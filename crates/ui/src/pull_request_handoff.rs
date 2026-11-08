@@ -16,6 +16,16 @@ pub(super) enum Handoff {
 }
 
 impl Handoff {
+    fn scope(self) -> crate::context_items::PullRequestScope {
+        use crate::context_items::PullRequestScope as Scope;
+        match self {
+            Self::Review => Scope::Review,
+            Self::AddressFeedback => Scope::Comments,
+            Self::FixChecks => Scope::Checks,
+            Self::ResolveConflicts => Scope::Conflicts,
+        }
+    }
+
     fn label(self) -> &'static str {
         match self {
             Self::Review => "Review",
@@ -286,12 +296,16 @@ pub(super) fn handoffs(detail: &ChangeRequestDetail) -> Vec<Handoff> {
 
 /// Resolve the actual remote on the selected device; registry repository IDs
 /// group checkouts but are not necessarily GitHub owner/name identities.
+/// `preferred` (the selected chat's project) is checked first, so a device
+/// with two checkouts of the repository resolves to the chat's own.
 async fn matching_checkout(
     engine: &crate::state::EngineHandle,
-    spaces: Vec<zuse_protocol::Space>,
+    mut spaces: Vec<zuse_protocol::Space>,
     device: &str,
     repository: &str,
+    preferred: Option<&str>,
 ) -> Result<Option<zuse_protocol::Space>, String> {
+    spaces.sort_by_key(|space| Some(space.id.as_str()) != preferred);
     let mut failed = false;
     for space in spaces.into_iter().filter(|space| space.device_id == device) {
         let result = engine
@@ -317,8 +331,41 @@ async fn matching_checkout(
     }
 }
 
+/// The pull request URL a chat's checkout currently resolves to, read from
+/// the host's first checkout status frame (sent once a lookup succeeds), so
+/// it holds whether or not the sidebar watches pull requests. `None` when
+/// the checkout has no pull request or the host can't say.
+async fn chat_pull_request_url(
+    engine: &crate::state::EngineHandle,
+    target: &crate::change_requests::ChangeRequestWatchKey,
+    local_device_id: Option<&str>,
+) -> Option<String> {
+    let params = crate::change_requests::watch_params(target, local_device_id);
+    let mut status = engine
+        .client()
+        .subscribe_checked(methods::WATCH_CHECKOUT_CHANGE_REQUEST, params)
+        .await
+        .ok()?;
+    let frame = status.recv().await?;
+    serde_json::from_value::<zuse_protocol::CheckoutChangeRequestStatus>(frame)
+        .ok()?
+        .change_request
+        .map(|summary| summary.url)
+}
+
+fn same_pull_request(a: &str, b: &str) -> bool {
+    a.trim_end_matches('/')
+        .eq_ignore_ascii_case(b.trim_end_matches('/'))
+}
+
 impl PullRequestDetailPage {
-    fn prepare_handoff(&mut self, prompt: String, window: &mut Window, cx: &mut Context<Self>) {
+    fn prepare_handoff(
+        &mut self,
+        prompt: String,
+        context: Option<crate::context_items::ContextItem>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.handoff_task.is_some() {
             return;
         }
@@ -335,13 +382,43 @@ impl PullRequestDetailPage {
             .or_else(|| state.local_device_id.clone())
             .unwrap_or_else(|| engine.engine_info().device_id.clone());
         let spaces = state.spaces_sorted().into_iter().cloned().collect();
+        // The selected chat on this device may own this pull request; its
+        // project is tried first and its checkout's pull request resolved.
+        let own = state
+            .selected_chat_row()
+            .filter(|chat| chat.device_id == device && !chat.archived)
+            .and_then(|chat| {
+                Some((
+                    chat.id.clone(),
+                    chat.space_id.clone()?,
+                    crate::change_requests::watch_target(chat)?,
+                ))
+            });
+        let local_device_id = state.local_device_id.clone();
         // The engine's URL for the pull request it actually read, not the
         // link it was opened from.
-        let repo = repository(self.detail.as_ref().map_or(&self.url, |detail| &detail.url));
+        let url = self
+            .detail
+            .as_ref()
+            .map_or(self.url.clone(), |detail| detail.url.clone());
+        let repo = repository(&url);
         self.handoff_device = Some(device.clone());
         self.handoff_error = None;
         self.handoff_task = Some(cx.spawn_in(window, async move |this, cx| {
-            let lookup = matching_checkout(&engine, spaces, &device, &repo);
+            let lookup = async {
+                let preferred = own.as_ref().map(|(_, space, _)| space.as_str());
+                let space = matching_checkout(&engine, spaces, &device, &repo, preferred).await?;
+                let own_chat = match (&space, &own) {
+                    (Some(space), Some((chat, own_space, target))) if &space.id == own_space => {
+                        chat_pull_request_url(&engine, target, local_device_id.as_deref())
+                            .await
+                            .filter(|own_url| same_pull_request(own_url, &url))
+                            .map(|_| chat.clone())
+                    }
+                    _ => None,
+                };
+                Ok::<_, String>(space.map(|space| (space, own_chat)))
+            };
             let deadline = cx.background_executor().timer(std::time::Duration::from_secs(15));
             futures::pin_mut!(lookup, deadline);
             let result = match futures::future::select(lookup, deadline).await {
@@ -351,8 +428,8 @@ impl PullRequestDetailPage {
             let _ = this.update_in(cx, |page, window, cx| {
                 page.handoff_task = None;
                 match result {
-                    Ok(Some(space)) => window.dispatch_action(Box::new(StartPullRequestSession {
-                        prompt, project_id: space.id, device: device.clone(), repository: repo.clone(),
+                    Ok(Some((space, own_chat))) => window.dispatch_action(Box::new(StartPullRequestSession {
+                        prompt, context, project_id: space.id, device: device.clone(), repository: repo.clone(), own_chat,
                     }), cx),
                     Ok(None) => page.handoff_error = Some(format!(
                         "No checkout of {repo} is available on this device. Add its project, then try again.")),
@@ -373,14 +450,21 @@ impl PullRequestDetailPage {
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
         let buttons = handoffs(detail).into_iter().map(|kind| {
-            let prompt = prompt(kind, detail, &self.url, self.verification_platform);
+            let brief = prompt(kind, detail, &self.url, self.verification_platform);
+            let prompt = crate::context_items::repair_instruction(detail.number, kind.scope());
+            let context = crate::context_items::pull_request_context(
+                &self.url,
+                detail.number,
+                kind.scope(),
+                brief,
+            );
             let id = kind.id();
             let summary = kind.summary();
             widgets::action_button(theme, widgets::ActionTone::Outlined)
                 .id(id)
                 .debug_selector(move || id.to_owned())
                 .role(gpui::Role::Button)
-                .aria_label(format!("{} in a new session", kind.label()))
+                .aria_label(format!("{} in a new chat", kind.label()))
                 .aria_description(summary)
                 .tab_index(0)
                 .flex_none()
@@ -397,7 +481,7 @@ impl PullRequestDetailPage {
                 .child(kind.label())
                 .tooltip(widgets::text_tooltip(summary))
                 .on_click(cx.listener(move |page, _, window, cx| {
-                    page.prepare_handoff(prompt.clone(), window, cx)
+                    page.prepare_handoff(prompt.clone(), Some(context.clone()), window, cx)
                 }))
         });
         let mut rows = vec![
@@ -576,18 +660,34 @@ mod tests {
             space("unrelated", "remote"),
             space("right", "remote"),
         ];
-        let found = matching_checkout(&engine, spaces.clone(), "remote", "a/b")
+        let found = matching_checkout(&engine, spaces.clone(), "remote", "a/b", None)
             .await
             .unwrap()
             .unwrap();
         assert_eq!(found.device_id, "remote");
         assert_eq!(found.path, "/right");
         assert!(
-            matching_checkout(&engine, spaces, "remote", "missing/repo")
+            matching_checkout(&engine, spaces.clone(), "remote", "missing/repo", None)
                 .await
                 .unwrap()
                 .is_none()
         );
+        // Two checkouts of the repository on the device: the selected chat's
+        // project wins over the first one listed.
+        let mut second = space("second", "remote");
+        second.path = "/right".into();
+        let mut spaces = spaces;
+        spaces.push(second);
+        let found = matching_checkout(&engine, spaces.clone(), "remote", "a/b", Some("second"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(found.id, "second");
+        let found = matching_checkout(&engine, spaces, "remote", "a/b", None)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(found.id, "right");
     }
 
     #[test]

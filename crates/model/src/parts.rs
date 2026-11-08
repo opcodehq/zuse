@@ -223,6 +223,13 @@ pub enum MessagePart {
         path: String,
         title: String,
     },
+    /// An agent-authored UI block (`show_ui`): a validated component spec,
+    /// rendered natively below the reply. Rides its own doc field (`spec`),
+    /// so older builds degrade to an invisible empty part.
+    UiBlock {
+        id: String,
+        spec: String,
+    },
     /// Model thinking. Carries its body in a dedicated doc field (`reasoning`,
     /// never `text`) so pre-reasoning desktop builds — whose unknown-kind
     /// fallback renders `text` as prose — degrade to an invisible empty text
@@ -316,6 +323,7 @@ impl MessagePart {
             | MessagePart::Text { id, .. }
             | MessagePart::Image { id, .. }
             | MessagePart::Visual { id, .. }
+            | MessagePart::UiBlock { id, .. }
             | MessagePart::Reasoning { id, .. }
             | MessagePart::Tool { id, .. }
             | MessagePart::Input { id, .. }
@@ -358,6 +366,7 @@ impl MessagePart {
                 mime_type,
             } => id.len() + path.len() + name.len() + mime_type.len(),
             MessagePart::Visual { id, path, title } => id.len() + path.len() + title.len(),
+            MessagePart::UiBlock { id, spec } => id.len() + spec.len(),
             MessagePart::Error { message, .. } => message.len(),
             MessagePart::Fork {
                 source_chat_id,
@@ -425,6 +434,17 @@ pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
                 *existing = visual;
             } else {
                 out.push(visual);
+            }
+        }
+        AgentEvent::UiBlock { id, spec } => {
+            let block = MessagePart::UiBlock {
+                id: id.clone(),
+                spec: spec.clone(),
+            };
+            if let Some(existing) = out.iter_mut().find(|p| p.id() == id) {
+                *existing = block;
+            } else {
+                out.push(block);
             }
         }
         AgentEvent::ReasoningDelta { text } => {

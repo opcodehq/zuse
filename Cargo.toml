@@ -34,6 +34,7 @@ members = [
     "crates/text",
     "crates/visual",
     "crates/visual-gpu",
+    "crates/ui-block",
     "apps/desktop",
     "apps/cli",
     "apps/relay",
@@ -85,6 +86,7 @@ zuse-mcp = { path = "crates/mcp" }
 zuse-text = { path = "crates/text" }
 zuse-visual = { path = "crates/visual" }
 zuse-visual-gpu = { path = "crates/visual-gpu" }
+zuse-ui-block = { path = "crates/ui-block" }
 zuse-serve = { path = "crates/serve" }
 zuse-viewport = { path = "crates/viewport" }
 zuse-model = { path = "crates/model" }
@@ -179,6 +181,8 @@ strip = "symbols"
 [profile.dev]
 # gpui is slow unoptimized; match zed's approach for deps
 opt-level = 0
+# Full debug info is most of target/'s size; file:line backtraces are enough.
+debug = "line-tables-only"
 
 [profile.dev.package."*"]
 opt-level = 2

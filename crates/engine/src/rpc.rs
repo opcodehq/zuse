@@ -337,6 +337,13 @@ struct ListFoldersParams {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct CreateFolderParams {
+    parent: String,
+    name: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct FileSearchParams {
     query: String,
     #[serde(default)]
@@ -528,6 +535,20 @@ struct PublishVisualParams {
     /// Files the script uses, base64 by name.
     #[serde(default)]
     assets: std::collections::BTreeMap<String, String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PublishUiBlockParams {
+    chat_id: String,
+    spec: String,
+}
+
+fn no_turn_for_ui_block() -> RpcError {
+    RpcError::Failed(
+        "This chat has no running turn on this device; show_ui only works from inside a turn."
+            .into(),
+    )
 }
 
 fn no_turn_for_visual() -> RpcError {
@@ -1762,6 +1783,7 @@ fn forwardable(method: &str) -> bool {
             | methods::GET_WORKTREE_SETTINGS
             | methods::SET_WORKTREE_SETTINGS
             | methods::LIST_DRIVES
+            | methods::CREATE_FOLDER
             | methods::SEARCH_HOME_FOLDERS
             | methods::RELEASE_HOME_FOLDER_SEARCH
             | methods::SEARCH_FILES
@@ -3290,7 +3312,12 @@ impl RpcService for EngineRpc {
                         "setupAction": outcome.setup_action,
                         "setupError": outcome.setup_error,
                     })),
-                    None => RpcReply::value(&serde_json::json!({ "ready": false })),
+                    None => RpcReply::value(&serde_json::json!({
+                        "ready": false,
+                        "progress": self
+                            .project_actions
+                            .worktree_progress(&p.command_id, &p.chat_id),
+                    })),
                 }
             }
             methods::RETRY_DELIVERY => {
@@ -4909,6 +4936,15 @@ impl RpcService for EngineRpc {
                 self.repos.release_home_folder_search();
                 RpcReply::value(&serde_json::json!({}))
             }
+            methods::CREATE_FOLDER => {
+                let p: CreateFolderParams = parse_params(params)?;
+                let path = self
+                    .repos
+                    .create_folder(p.parent, p.name)
+                    .await
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(&serde_json::json!({ "path": path }))
+            }
             methods::LIST_DRIVES => {
                 let drives = self
                     .repos
@@ -5551,6 +5587,24 @@ impl RpcService for EngineRpc {
                     "checkedInteractions": report.interactions,
                     "printed": report.logs,
                 }))
+            }
+            methods::PUBLISH_UI_BLOCK => {
+                let p: PublishUiBlockParams = parse_params(params)?;
+                if p.spec.len() > zuse_protocol::UI_BLOCK_MAX_BYTES {
+                    return Err(RpcError::BadParams("spec is too long".into()));
+                }
+                // Validated before anyone sees it; readers validate again.
+                let spec = zuse_ui_block::parse(&p.spec)
+                    .map_err(|e| RpcError::BadParams(format!("invalid UI block: {e}")))?;
+                let id = format!("ui:{}", crate::new_id());
+                let event = AgentEvent::UiBlock {
+                    id: id.clone(),
+                    spec: spec.source,
+                };
+                if !self.sessions.inject_event(&p.chat_id, event) {
+                    return Err(no_turn_for_ui_block());
+                }
+                RpcReply::value(&serde_json::json!({ "id": id }))
             }
             methods::FETCH_TOOL_BLOB => {
                 let p: FetchToolBlobParams = parse_params(params)?;
@@ -6996,14 +7050,7 @@ impl EngineRpc {
             }
         }
         for id in &family {
-            if self.sessions.archive_busy(id) {
-                return Err(RpcError::Failed(
-                    "Stop the thread and its active agents before archiving their worktree.".into(),
-                ));
-            }
-        }
-        for id in &family {
-            self.sessions.terminate(id).await.map_err(failed)?;
+            self.sessions.end_for_archive(id).await.map_err(failed)?;
         }
         let mark_archived = || -> Result<(), RpcError> {
             for id in &family {
@@ -7086,18 +7133,14 @@ impl EngineRpc {
                 "Another active thread uses this checkout, so its files were kept.",
             ));
         }
-        for row in &sharing {
-            if self.sessions.archive_busy(&row.id) {
-                return Err(RpcError::Failed(
-                    "Another agent is still using this worktree. Stop it before archiving.".into(),
-                ));
-            }
-        }
         if self.terminals.has_live_checkout(&checkout) {
             return Err(RpcError::Failed("Close the worktree’s terminals before archiving it. Running processes have not been stopped.".into()));
         }
         for row in &sharing {
-            self.sessions.terminate(&row.id).await.map_err(failed)?;
+            self.sessions
+                .end_for_archive(&row.id)
+                .await
+                .map_err(failed)?;
         }
         for row in &sharing {
             if let Some(path) = row.cwd.as_deref() {

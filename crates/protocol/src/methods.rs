@@ -152,6 +152,8 @@ pub const GET_WORKTREE_SETTINGS: &str = "GetWorktreeSettings";
 pub const SET_WORKTREE_SETTINGS: &str = "SetWorktreeSettings";
 /// The device's browse roots: home plus mounted drives/volumes.
 pub const LIST_DRIVES: &str = "ListDrives";
+/// Make one empty folder inside an existing one (new-project picker).
+pub const CREATE_FOLDER: &str = "CreateFolder";
 /// Folders under the host's home by name (new-project picker).
 pub const SEARCH_HOME_FOLDERS: &str = "SearchHomeFolders";
 /// The new-project picker closed: drop the host's home index if unpinned.
@@ -231,6 +233,8 @@ pub const DRAW_VISUAL: &str = "DrawVisual";
 /// Store an agent's sandboxed visual in its live turn (`show_visual`).
 /// Local only: the calling agent runs on this device.
 pub const PUBLISH_VISUAL: &str = "PublishVisual";
+/// Store an agent's UI block in its live turn (`show_ui`). Local only.
+pub const PUBLISH_UI_BLOCK: &str = "PublishUiBlock";
 /// Lazy full-tool-output fetch from the R2 sidecar by doc-resident ref
 /// (chat2-sync A3). Edge-direct from any device — never relay-forwarded.
 pub const FETCH_TOOL_BLOB: &str = "FetchToolBlob";

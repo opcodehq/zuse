@@ -416,6 +416,21 @@ pub struct WorktreeSpec {
     pub space_id: Option<String>,
 }
 
+/// Where a host is while materializing a [`WorktreeSpec`], reported through
+/// the non-durable setup handoff so the sender can show it above the
+/// composer. `branch` names the base the worktree is created from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "phase", rename_all = "camelCase")]
+pub enum WorktreeProgress {
+    /// Fetching `branch` from its remote.
+    #[serde(rename_all = "camelCase")]
+    Fetching { branch: String },
+    /// Checking out the worktree. `offline` when the fetch failed and the
+    /// local ref stands in.
+    #[serde(rename_all = "camelCase")]
+    Creating { branch: String, offline: bool },
+}
+
 /// The session-scoped singleton id for the live plan/todo chip. ACP plan
 /// updates carry no wire id; adapters emit every update under this one id so
 /// the fold refreshes the same chip in place. Consumers that de-duplicate
@@ -544,6 +559,10 @@ pub const SUBAGENT_INPUT_KEEP: [&str; 5] = [
     "subagent_model",
     "subagent_type",
 ];
+
+/// Largest UI block spec ([`AgentEvent::UiBlock`]) in bytes: the spec
+/// crate caps the source at 32,768 UTF-16 units, at most 3 bytes each.
+pub const UI_BLOCK_MAX_BYTES: usize = 3 * 32_768;
 
 /// Bounds on an agent's inline visual ([`AgentEvent::Visual`]): a Luau
 /// script Zuse runs in a sandbox and renders natively.
@@ -742,6 +761,13 @@ pub enum AgentEvent {
         id: String,
         path: String,
         title: String,
+    },
+    /// An agent-authored UI block shown in the reply: a declarative
+    /// component spec (`zuse-ui-block`), stored inline. The engine emits it
+    /// when the agent calls Zuse's `show_ui` MCP tool.
+    UiBlock {
+        id: String,
+        spec: String,
     },
     ReasoningDelta {
         text: String,

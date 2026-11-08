@@ -27,7 +27,7 @@ use zuse_rpc::methods;
 use crate::change_requests::ChangeRequestBadgeTone;
 use crate::icons::{self, icon};
 use crate::popover;
-use crate::pull_request_detail::{PullRequestRepair, failure_reason, repair_prompt};
+use crate::pull_request_detail::{PullRequestRepair, failure_reason, repair_message};
 use crate::state::AppState;
 use crate::theme::Theme;
 
@@ -39,6 +39,15 @@ pub const CREATE_PR_PROMPT: &str = "Create PR: commit what's left, push the bran
 #[derive(Clone, PartialEq, Action)]
 #[action(namespace = shell, no_json)]
 pub struct SendToChat(pub String);
+
+/// Send `text` to the focused chat's agent with `context` riding ahead of it:
+/// the bubble shows `text`, the context renders as a pill.
+#[derive(Clone, PartialEq, Action)]
+#[action(namespace = shell, no_json)]
+pub struct SendContextToChat {
+    pub text: String,
+    pub context: crate::context_items::ContextItem,
+}
 
 const ROW_HEIGHT: f32 = 26.0;
 const LANE_SPACING: f32 = 12.0;
@@ -796,10 +805,10 @@ impl PullRequestCard {
         let (Some(detail), Some(url)) = (&self.detail, &self.url) else {
             return;
         };
-        let prompt = repair_prompt(repair, detail, url);
+        let (text, context) = repair_message(repair, detail, url);
         self.resolving = repair == PullRequestRepair::Conflicts;
         self.conflicts_open = false;
-        window.dispatch_action(Box::new(SendToChat(prompt)), cx);
+        window.dispatch_action(Box::new(SendContextToChat { text, context }), cx);
         self.changed(cx);
     }
 

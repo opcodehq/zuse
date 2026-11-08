@@ -1,7 +1,9 @@
 //! Compact chat/PR permission controls, backed by the owning engine's watch.
+use crate::localization::message as tr;
 use crate::{state::AppState, theme::Theme};
 use gpui::{Context, Entity, SharedString, Subscription, Task, Window, div, prelude::*, px};
 use std::time::Duration;
+use zuse_i18n::messages as msg;
 use zuse_protocol::pr_watch::{
     MAX_REPAIR_ATTEMPTS, PrWatchRequest, PrWatchStatus, SetPrWatchRequest,
 };
@@ -259,25 +261,24 @@ impl Render for PrWatchControl {
         let fix_ready = ready && ((writable && status.is_some_and(|s| s.can_auto_fix)) || fixing);
         let toggle = div()
             .id("pr-auto-fix-toggle")
-            .role(gpui::Role::Button)
+            .role(gpui::Role::Switch)
+            .aria_toggled(if fixing {
+                gpui::Toggled::True
+            } else {
+                gpui::Toggled::False
+            })
             .tab_index(if fix_ready { 0 } else { -1 })
-            .aria_label(format!(
-                "Auto-fix CI: {}",
-                if fixing { "on" } else { "off" }
-            ))
+            .aria_label(tr(cx, msg::native::pr_watch_auto_fix))
             .flex()
             .items_center()
             .gap(px(6.0))
             .rounded(px(5.0))
             .when(!fix_ready, |el| el.opacity(0.45))
             .focus_visible(move |el| el.border_1().border_color(theme.accent))
-            .tooltip(crate::settings::widgets::text_tooltip(
-                if exhausted && !fixing {
-                    "Repair limit reached. Turn on to start over."
-                } else {
-                    "Lets the agent commit and push up to 3 CI fixes. Never force-pushes or merges."
-                },
-            ))
+            .tooltip(crate::settings::widgets::text_tooltip(tr(
+                cx,
+                msg::native::pr_watch_auto_fix_help,
+            )))
             .when(fix_ready, |el| {
                 el.cursor_pointer()
                     .on_click(cx.listener(move |control, _, _, cx| {
@@ -291,7 +292,13 @@ impl Render for PrWatchControl {
                         }
                     }))
             })
-            .when(self.compact, |el| el.child("Auto-fix CI"))
+            .when(self.compact, |el| {
+                el.child(if exhausted && !fixing {
+                    tr(cx, msg::native::pr_watch_restart_auto_fix)
+                } else {
+                    tr(cx, msg::native::pr_watch_auto_fix)
+                })
+            })
             .child(crate::settings::widgets::toggle_switch(
                 &theme,
                 fixing,

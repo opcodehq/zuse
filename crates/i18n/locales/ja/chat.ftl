@@ -1841,6 +1841,10 @@ chat-tool_group_failed = { $count } 件失敗
 chat-tool_group_agents_done = { $count } 件完了
 # Variables: count
 chat-tool_group_notes = { $count } 件のメモを作成
+# Variables: count
+chat-tool_group_tool_calls = { $count } 件のツール呼び出し
+# Variables: count
+chat-tool_group_messages = { $count } 件のメッセージ
 
 chat-find_in_chat_placeholder = チャット内を検索
 chat-find_in_chat_count = { $current } / { $total }
@@ -1862,3 +1866,6 @@ chat-history_search_use = 使用
 chat-history_search_cancel = キャンセル
 chat-stash_saved_notice = 下書きを保留しました · <part0>{ $shortcut }</part0> で表示
 chat-chat_composer_press_esc_again_to_clear = もう一度 <part0>Esc</part0> を押すとクリアします
+chat-worktree_fetching = 最新の { $branch } を取得しています…
+chat-worktree_creating = { $branch } からワークツリーを作成しています…
+chat-worktree_offline = リモートに接続できません · ローカルの { $branch } を使用します

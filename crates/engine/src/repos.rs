@@ -57,6 +57,56 @@ const HOME_FOLDER_PATH_CANDIDATES: usize = 2_000;
 const GITHUB_AVATAR_TIMEOUT: Duration = Duration::from_secs(6);
 pub const GIT_HISTORY_DEFAULT_LIMIT: usize = 100;
 pub const GIT_HISTORY_MAX_LIMIT: usize = 200;
+/// Bounds the pre-worktree fetch; a slow remote must not hold up the run.
+const WORKTREE_FETCH_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// A resolved worktree start point: `start` is handed to `worktree add`,
+/// `label` is the branch name shown to the user.
+struct WorktreeBase {
+    label: String,
+    start: String,
+    offline: bool,
+}
+
+/// Fetch one branch into its remote-tracking ref, never prompting for
+/// credentials. `false` on any failure, including the timeout.
+async fn fetch_branch(repo_path: &Path, remote: &str, branch: &str) -> bool {
+    let mut cmd = tokio::process::Command::new("git");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.as_std_mut().creation_flags(0x08000000);
+    }
+    // `--` keeps a hostile name (`--upload-pack=…`) from parsing as an option.
+    cmd.args(["fetch", "--quiet", "--no-tags", "--", remote, branch])
+        .current_dir(repo_path)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GCM_INTERACTIVE", "never")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
+    match tokio::time::timeout(WORKTREE_FETCH_TIMEOUT, cmd.output()).await {
+        Ok(Ok(output)) if output.status.success() => true,
+        Ok(Ok(output)) => {
+            tracing::info!(
+                remote,
+                branch,
+                stderr = %String::from_utf8_lossy(&output.stderr).trim(),
+                "worktree base fetch failed; using the local ref"
+            );
+            false
+        }
+        Ok(Err(error)) => {
+            tracing::info!(remote, branch, %error, "worktree base fetch did not start");
+            false
+        }
+        Err(_) => {
+            tracing::info!(remote, branch, "worktree base fetch timed out");
+            false
+        }
+    }
+}
 
 const ADJECTIVES: &[&str] = &[
     "swift", "calm", "bright", "bold", "keen", "brave", "clever", "lucky", "quiet", "warm", "cool",
@@ -1439,6 +1489,201 @@ impl Repos {
         repo_path: &Path,
         branch: &str,
     ) -> Result<Worktree, EngineError> {
+        self.create_worktree_with_progress(repo_path, branch, |_| {})
+            .await
+    }
+
+    /// [`Self::create_worktree`], first bringing `branch` up to date with its
+    /// remote (see [`Self::fresh_worktree_base`]) and reporting each phase.
+    pub async fn create_worktree_with_progress(
+        &self,
+        repo_path: &Path,
+        branch: &str,
+        progress: impl Fn(zuse_protocol::WorktreeProgress),
+    ) -> Result<Worktree, EngineError> {
+        let base = self.fresh_worktree_base(repo_path, branch, &progress).await;
+        progress(zuse_protocol::WorktreeProgress::Creating {
+            branch: base.label.clone(),
+            offline: base.offline,
+        });
+        self.add_worktree(repo_path, &base.start).await
+    }
+
+    /// The start point for a new worktree off `base`, fetched first so new
+    /// chats begin on the remote's latest commits. `HEAD` means the remote's
+    /// default branch (falling back to the current branch). The remote commit
+    /// wins only when the local branch is an ancestor of it, so unpushed local
+    /// commits are never dropped. Fetching is best effort: offline, a missing
+    /// remote, or auth failure falls back to the local ref without failing.
+    async fn fresh_worktree_base(
+        &self,
+        repo_path: &Path,
+        base: &str,
+        progress: &impl Fn(zuse_protocol::WorktreeProgress),
+    ) -> WorktreeBase {
+        let unchanged = || WorktreeBase {
+            label: base.to_string(),
+            start: base.to_string(),
+            offline: false,
+        };
+        let remotes: Vec<String> = self
+            .git(&["remote"], Some(repo_path))
+            .await
+            .unwrap_or_default()
+            .lines()
+            .map(|line| line.trim().to_string())
+            .filter(|line| !line.is_empty())
+            .collect();
+        let Some((remote, branch)) = self.worktree_base_branch(repo_path, base, &remotes).await
+        else {
+            return unchanged();
+        };
+        // The base arrives over RPC; only a well-formed branch name is ever
+        // handed to `git fetch`.
+        if branch.starts_with('-')
+            || self
+                .git(&["check-ref-format", "--branch", &branch], Some(repo_path))
+                .await
+                .is_err()
+        {
+            return unchanged();
+        }
+        let local_ref = format!("refs/heads/{branch}");
+        let remote_ref = format!("refs/remotes/{remote}/{branch}");
+        progress(zuse_protocol::WorktreeProgress::Fetching {
+            branch: branch.clone(),
+        });
+        let offline = !fetch_branch(repo_path, &remote, &branch).await;
+        let local = self.commit_of(repo_path, &local_ref).await;
+        let upstream = self.commit_of(repo_path, &remote_ref).await;
+        let start = match (local, upstream) {
+            (Some(local), Some(upstream)) if local != upstream => {
+                let behind = self
+                    .git(
+                        &["merge-base", "--is-ancestor", &local, &upstream],
+                        Some(repo_path),
+                    )
+                    .await
+                    .is_ok();
+                // A bare commit keeps `worktree add -b` from tracking the
+                // remote branch (autoSetupMerge), matching a local base.
+                if behind { upstream } else { branch.clone() }
+            }
+            (Some(_), _) => branch.clone(),
+            (None, Some(upstream)) => upstream,
+            (None, None) => return unchanged(),
+        };
+        WorktreeBase {
+            label: branch,
+            start,
+            offline,
+        }
+    }
+
+    /// The `(remote, branch)` behind a worktree base, or `None` when it names
+    /// no branch with a remote (a commit, a tag, detached HEAD, no remotes).
+    async fn worktree_base_branch(
+        &self,
+        repo_path: &Path,
+        base: &str,
+        remotes: &[String],
+    ) -> Option<(String, String)> {
+        if remotes.is_empty() {
+            return None;
+        }
+        if base == "HEAD" {
+            let mut ordered: Vec<&String> = remotes.iter().collect();
+            ordered.sort_by_key(|remote| *remote != "origin");
+            for remote in ordered {
+                if let Ok(default) = self
+                    .git(
+                        &[
+                            "symbolic-ref",
+                            "--quiet",
+                            "--short",
+                            &format!("refs/remotes/{remote}/HEAD"),
+                        ],
+                        Some(repo_path),
+                    )
+                    .await
+                    && let Some(branch) = default.strip_prefix(&format!("{remote}/"))
+                {
+                    return Some((remote.clone(), branch.to_string()));
+                }
+            }
+            let current = self
+                .git(
+                    &["symbolic-ref", "--quiet", "--short", "HEAD"],
+                    Some(repo_path),
+                )
+                .await
+                .ok()?;
+            let remote = self.branch_remote(repo_path, &current, remotes).await?;
+            return Some((remote, current));
+        }
+        if self.branch_exists(repo_path, base).await {
+            let remote = self.branch_remote(repo_path, base, remotes).await?;
+            return Some((remote, base.to_string()));
+        }
+        // A remote-tracking base such as `origin/main`, when that ref exists.
+        self.commit_of(repo_path, &format!("refs/remotes/{base}"))
+            .await?;
+        remotes.iter().find_map(|remote| {
+            base.strip_prefix(&format!("{remote}/"))
+                .filter(|branch| !branch.is_empty())
+                .map(|branch| (remote.clone(), branch.to_string()))
+        })
+    }
+
+    /// The remote a local branch follows: its configured upstream remote, or
+    /// a remote that already has the branch. A never-pushed branch has none,
+    /// so it is not fetched (and not reported as offline).
+    async fn branch_remote(
+        &self,
+        repo_path: &Path,
+        branch: &str,
+        remotes: &[String],
+    ) -> Option<String> {
+        if let Ok(remote) = self
+            .git(
+                &["config", "--get", &format!("branch.{branch}.remote")],
+                Some(repo_path),
+            )
+            .await
+            && remotes.contains(&remote)
+        {
+            return Some(remote);
+        }
+        let mut ordered: Vec<&String> = remotes.iter().collect();
+        ordered.sort_by_key(|remote| *remote != "origin");
+        for remote in ordered {
+            if self
+                .commit_of(repo_path, &format!("refs/remotes/{remote}/{branch}"))
+                .await
+                .is_some()
+            {
+                return Some(remote.clone());
+            }
+        }
+        None
+    }
+
+    async fn commit_of(&self, repo_path: &Path, reference: &str) -> Option<String> {
+        self.git(
+            &[
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                &format!("{reference}^{{commit}}"),
+            ],
+            Some(repo_path),
+        )
+        .await
+        .ok()
+        .filter(|sha| !sha.is_empty())
+    }
+
+    async fn add_worktree(&self, repo_path: &Path, branch: &str) -> Result<Worktree, EngineError> {
         let repo_name = repo_path
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
@@ -1814,6 +2059,38 @@ impl Repos {
             Ok(Err(_)) => Err(EngineError::Other("folder listing worker exited".into())),
             Err(_) => Err(EngineError::Other(
                 "folder listing timed out on the device".into(),
+            )),
+        }
+    }
+
+    // ── CreateFolder ────────────────────────────────────────────────────────
+
+    /// Make one empty folder named `name` inside the existing folder
+    /// `parent`. The name is a single path segment; an existing entry fails
+    /// rather than being reused. Same disposable worker + wall-clock ceiling
+    /// as `ListFolders`, so a wedged mount fails the call, not the runtime.
+    pub async fn create_folder(&self, parent: String, name: String) -> Result<String, EngineError> {
+        validate_folder_name(&name)?;
+        let parent = absolutize(Path::new(parent.trim()));
+        let worker = disposable_worker("folder-create", move || {
+            if !parent.is_dir() {
+                return Err("The parent folder no longer exists".to_owned());
+            }
+            let target = parent.join(&name);
+            std::fs::create_dir(&target).map_err(|error| match error.kind() {
+                std::io::ErrorKind::AlreadyExists => format!("“{name}” already exists here"),
+                std::io::ErrorKind::PermissionDenied => {
+                    "You don't have permission to create a folder here".to_owned()
+                }
+                _ => format!("Could not create “{name}”: {error}"),
+            })?;
+            Ok(target.to_string_lossy().into_owned())
+        });
+        match tokio::time::timeout(FOLDER_LIST_TIMEOUT, worker).await {
+            Ok(Some(result)) => result.map_err(EngineError::Other),
+            Ok(None) => Err(EngineError::Other("folder creation worker exited".into())),
+            Err(_) => Err(EngineError::Other(
+                "folder creation timed out on the device".into(),
             )),
         }
     }
@@ -2428,6 +2705,29 @@ fn parse_history_refs(output: &str) -> HashMap<String, Vec<GitHistoryRef>> {
         });
     }
     refs_by_sha
+}
+
+/// A new folder's name: one visible path segment the common filesystems accept.
+fn validate_folder_name(name: &str) -> Result<(), EngineError> {
+    let invalid = |reason: &str| Err(EngineError::Other(reason.to_owned()));
+    if name.trim().is_empty() {
+        return invalid("Name the folder");
+    }
+    if name != name.trim() {
+        return invalid("Folder names can't start or end with a space");
+    }
+    if name == "." || name == ".." || name.starts_with('.') {
+        return invalid("Folder names can't start with a dot");
+    }
+    if name.len() > 255 {
+        return invalid("That folder name is too long");
+    }
+    if name.chars().any(|c| {
+        matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') || c.is_control()
+    }) {
+        return invalid("Folder names can't contain / \\ : * ? \" < > |");
+    }
+    Ok(())
 }
 
 /// Absolute form of a possibly-relative path (no filesystem access).

@@ -1841,6 +1841,10 @@ chat-tool_group_failed = { $count }개 실패
 chat-tool_group_agents_done = { $count }개 완료
 # Variables: count
 chat-tool_group_notes = 메모 { $count }개 작성
+# Variables: count
+chat-tool_group_tool_calls = 도구 호출 { $count }회
+# Variables: count
+chat-tool_group_messages = 메시지 { $count }개
 
 chat-find_in_chat_placeholder = 채팅에서 찾기
 chat-find_in_chat_count = { $current } / { $total }
@@ -1862,3 +1866,6 @@ chat-history_search_use = 사용
 chat-history_search_cancel = 취소
 chat-stash_saved_notice = 초안을 보관했습니다 · <part0>{ $shortcut }</part0> 키로 보기
 chat-chat_composer_press_esc_again_to_clear = 지우려면 <part0>Esc</part0> 키를 한 번 더 누르세요
+chat-worktree_fetching = 최신 { $branch } 가져오는 중…
+chat-worktree_creating = { $branch }에서 워크트리 만드는 중…
+chat-worktree_offline = 원격에 연결할 수 없음 · 로컬 { $branch } 사용
