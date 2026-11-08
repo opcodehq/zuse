@@ -127,7 +127,9 @@ impl RuntimeControl {
             .ok_or_else(|| ApiError::unavailable("cloud_object_store_unavailable"))?;
         let empty = tokio::time::timeout(
             std::time::Duration::from_secs(30),
-            objects.purge_prefix(&key),
+            // The workspace is gone, so everything under it is retired; a bare
+            // object key is not a purgeable prefix.
+            objects.purge_prefix(&prefix),
         )
         .await
         .map_err(|_| ApiError::unavailable("object_write_cleanup_timeout"))??;

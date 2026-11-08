@@ -267,12 +267,16 @@ impl Objects for R2 {
     }
     async fn purge_prefix(&self, prefix: &str) -> Result<bool, ApiError> {
         use futures::{StreamExt, TryStreamExt};
+        // A directory inside one workspace: `workspaces/<id>/` or deeper, such
+        // as `workspaces/<id>/api-assets/`. Never a bucket-wide or partial name.
         let segments: Vec<_> = prefix.split('/').collect();
-        if segments.len() != 3
-            || segments[0] != "workspaces"
-            || segments[1].is_empty()
-            || segments[2] != ""
-            || matches!(segments[1], "." | "..")
+        let (last, dirs) = segments.split_last().unwrap_or((&"x", &[]));
+        if dirs.len() < 2
+            || dirs[0] != "workspaces"
+            || !last.is_empty()
+            || dirs[1..]
+                .iter()
+                .any(|segment| segment.is_empty() || matches!(*segment, "." | ".."))
         {
             return Err(ApiError::unavailable("cloud_object_purge_scope_invalid"));
         }
@@ -610,6 +614,11 @@ mod tests {
         let mut client = R2::new("https://fixture.invalid/", "bucket", "access", "secret").unwrap();
         client.endpoint = endpoint.parse().unwrap();
         assert!(client.purge_prefix("workspaces/").await.is_err());
+        for bad in ["workspaces//", "workspaces/../", "workspaces/w/../", "workspaces/w/key", "other/w/", "workspaces/w//x/"] {
+            assert!(client.purge_prefix(bad).await.is_err(), "{bad}");
+        }
+        // A directory inside a workspace is a valid scope (expired launch assets).
+        assert!(client.purge_prefix("workspaces/never-created/api-assets/").await.unwrap());
         mode.store(2, Ordering::SeqCst);
         assert!(client.purge_prefix(prefix).await.is_err());
         assert_eq!(map.lock().unwrap().len(), 103);
