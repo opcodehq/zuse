@@ -23,7 +23,7 @@ mod tests {
         let state=cx.new(|_|AppState::new());
         let pickers=cx.new(|cx|Pickers::new(state,cx));
         pickers.update(cx,|pickers,cx| {
-            let choice=ChatConfig {harness:HarnessId::Codex,model:Some("saved-model".into()),reasoning:Some(ReasoningLevel::High),model_options:Default::default(),sandbox:SandboxLevel::ReadOnly};
+            let choice=ChatConfig {harness:HarnessId::Codex,model:Some("saved-model".into()),reasoning:Some(ReasoningLevel::High),model_options:Default::default(),sandbox:SandboxLevel::WorkspaceWrite,plan:false};
             let target=crate::state::CloudTarget {controller,subject:"owner".into(),organization:Some("org".into()),workspace:"task".into(),initial_session:"session".into()};
             pickers.bind_cloud_task(target,"boxd".into(),Some(choice.clone()),cx);
             assert!(pickers.cloud_model_notice(cx).is_none(),"one conversation progress row while catalogue starts");

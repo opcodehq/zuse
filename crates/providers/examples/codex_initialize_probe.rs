@@ -53,6 +53,7 @@ async fn main() -> anyhow::Result<()> {
         model_options: Default::default(),
         cwd: args[2].clone(),
         sandbox: zuse_protocol::SandboxLevel::WorkspaceWrite,
+        plan: false,
         auto_approve: false,
         resume: None,
         attachments: vec![],

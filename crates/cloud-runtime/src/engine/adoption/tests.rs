@@ -152,6 +152,7 @@ async fn seeded_parent_and_initial_session_skip_real_title_generator_with_positi
             HarnessId::Codex,
             "The admitted first prompt",
             &dir.path().to_string_lossy(),
+            zuse_engine::titles::TitleTrigger::TurnCompleted,
         );
     }
     tokio::time::timeout(std::time::Duration::from_secs(3), async {

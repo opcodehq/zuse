@@ -942,6 +942,7 @@ mod project_selection_tests {
                 reasoning: None,
                 model_options: Default::default(),
                 sandbox: SandboxLevel::WorkspaceWrite,
+                plan: false,
             };
             p.bind_cloud_task(target.clone(), "e2b".into(), Some(choice.clone()), cx);
             p.choose_cloud_provider("boat".into(), cx);
@@ -1009,6 +1010,7 @@ mod project_selection_tests {
                 reasoning: None,
                 model_options: Default::default(),
                 sandbox: SandboxLevel::WorkspaceWrite,
+                plan: false,
             };
             pickers.bind_cloud_task(target.clone(), "boxd".into(), Some(seed.clone()), cx);
             // Retain an already-authorized account metadata cache. No guest or

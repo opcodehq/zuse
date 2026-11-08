@@ -32,6 +32,8 @@ fn secrets_filter_split_rotated_escaped_and_operational_input_boundaries() {
         question: "safe".into(),
         options: vec!["answer".into()],
         prefill: None,
+        approval_prompt: None,
+        approval: None,
     }];
     assert!(secrets.questions(&mut questions));
     assert_eq!(questions[0].options[0], "answer");

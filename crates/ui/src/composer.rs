@@ -6959,7 +6959,7 @@ impl Composer {
 
     #[cfg(test)]
     pub(crate) fn send_for_test(&mut self, text: String, queue: bool, cx: &mut Context<Self>) {
-        self.send(text, queue, cx);
+        self.send(text, queue, false, false, cx);
     }
     #[cfg(test)]
     pub(crate) fn seed_pending_cloud_creation_for_test(&mut self, request: serde_json::Value) {
