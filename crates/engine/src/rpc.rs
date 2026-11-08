@@ -6910,14 +6910,7 @@ impl EngineRpc {
             }
         }
         for id in &family {
-            if self.sessions.archive_busy(id) {
-                return Err(RpcError::Failed(
-                    "Stop the thread and its active agents before archiving their worktree.".into(),
-                ));
-            }
-        }
-        for id in &family {
-            self.sessions.terminate(id).await.map_err(failed)?;
+            self.sessions.end_for_archive(id).await.map_err(failed)?;
         }
         let mark_archived = || -> Result<(), RpcError> {
             for id in &family {
@@ -7000,18 +6993,14 @@ impl EngineRpc {
                 "Another active thread uses this checkout, so its files were kept.",
             ));
         }
-        for row in &sharing {
-            if self.sessions.archive_busy(&row.id) {
-                return Err(RpcError::Failed(
-                    "Another agent is still using this worktree. Stop it before archiving.".into(),
-                ));
-            }
-        }
         if self.terminals.has_live_checkout(&checkout) {
             return Err(RpcError::Failed("Close the worktree’s terminals before archiving it. Running processes have not been stopped.".into()));
         }
         for row in &sharing {
-            self.sessions.terminate(&row.id).await.map_err(failed)?;
+            self.sessions
+                .end_for_archive(&row.id)
+                .await
+                .map_err(failed)?;
         }
         for row in &sharing {
             if let Some(path) = row.cwd.as_deref() {
