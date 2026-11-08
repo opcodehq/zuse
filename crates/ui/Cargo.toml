@@ -53,6 +53,10 @@ name = "cloud-computer-fixture"
 required-features = ["cloud-computer-fixture"]
 
 [[example]]
+name = "settings-cloud-fixture"
+required-features = ["cloud-computer-fixture"]
+
+[[example]]
 name = "tool-images-fixture"
 required-features = ["appshots-fixture"]
 
