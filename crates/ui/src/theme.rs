@@ -808,9 +808,11 @@ impl Theme {
     /// scrim is 0.76 over `hsl(0 0% 3%)`, but it sits on Electron's
     /// `under-window` vibrancy MATERIAL, which pre-darkens the blur; our bare
     /// backdrop blur has no material layer, so the scrim runs heavier to land
-    /// on the same perceived tone (see [`Theme::glass`]).
+    /// on the same perceived tone (see [`Theme::glass`]). Since lightened so
+    /// the sidebar reads as glass rather than a tinted slab; the contrast
+    /// guard in [`Theme::glass`] still raises it where shell text needs it.
     pub const GLASS_ALPHA: f32 = if cfg!(any(target_os = "macos", target_os = "windows")) {
-        0.80
+        0.68
     } else {
         1.0
     };
@@ -824,7 +826,7 @@ impl Theme {
     /// see [`Self::glass_overlay`], where light coverage steps up to keep menu
     /// text legible over an unknown backdrop.
     pub const GLASS_ALPHA_LIGHT: f32 = if cfg!(any(target_os = "macos", target_os = "windows")) {
-        0.80
+        0.72
     } else {
         1.0
     };
@@ -883,7 +885,19 @@ impl Theme {
     /// appearance. A theme with unusually delicate contrast may therefore get
     /// denser glass, never silently broken text.
     fn contrast_checked_glass_alpha(&self, base: f32) -> f32 {
-        self.contrast_checked_tint_alpha(self.surface, base, self.adverse_backdrop())
+        self.contrast_checked_tint_alpha(self.surface, base, self.window_backdrop())
+    }
+
+    /// The desktop the window glass is guarded against. The compositor blurs
+    /// whatever sits behind the window before our tint lands, which averages
+    /// away pure white or black, so the shell checks a softened extreme. In-app
+    /// frosted surfaces keep [`Self::adverse_backdrop`]: their blur runs over
+    /// content we do not control the brightness of.
+    fn window_backdrop(&self) -> Hsla {
+        match self.appearance {
+            Appearance::Dark => grey(0xd8),
+            Appearance::Light => grey(0x28),
+        }
     }
 
     /// Increase tint coverage only as far as needed for Zuse's shared text
@@ -919,11 +933,24 @@ impl Theme {
         self.glass().a < 1.0
     }
 
-    /// Shared background for the editor host and the adjacent Files column:
-    /// the conversation panel's solid tone, so content panes read as one
-    /// plane beside the translucent sidebar.
+    /// Coverage of the content cards (conversation, right pane) over the
+    /// window glass: denser than the sidebar, so the desktop tints through
+    /// faintly and the cards still read as the working plane.
+    pub const CARD_GLASS_ALPHA: f32 = 0.82;
+
+    /// Shared background for the conversation card, the right pane and the
+    /// panes inside it, so content panes read as one plane beside the
+    /// sidebar. Over the window glass it is a faint frost (see
+    /// [`Self::CARD_GLASS_ALPHA`]); opaque, it is the solid panel tone.
     pub fn panel_bg(&self) -> Hsla {
-        self.bg
+        if !self.is_glass() {
+            return self.bg;
+        }
+        self.bg.opacity(self.contrast_checked_tint_alpha(
+            self.bg,
+            Self::CARD_GLASS_ALPHA,
+            self.window_backdrop(),
+        ))
     }
 
     /// Whether FLOATING surfaces (popovers, the composer pill) paint their
@@ -2393,17 +2420,12 @@ mod tests {
     fn forced_frost_preserves_shell_text_contrast_for_every_builtin() {
         let registry = ThemeRegistry::builtin();
         for variant in registry.families.iter().flat_map(|family| &family.variants) {
-            let appearance = model_appearance(variant.appearance);
             let theme = Theme::from_variant(
                 variant,
                 AccentSelection::ThemeDefault,
                 SurfacePreference::Frosted,
             );
-            let adverse_backdrop = match appearance {
-                Appearance::Dark => grey(0xff),
-                Appearance::Light => grey(0),
-            };
-            let composite = flatten(theme.glass(), adverse_backdrop);
+            let composite = flatten(theme.glass(), theme.window_backdrop());
             assert!(
                 painted_contrast(theme.text, composite) >= 4.5,
                 "{} primary shell text",

@@ -12969,11 +12969,14 @@ impl Shell {
         } else {
             gpui::Empty.into_any_element()
         };
-        // Flush panel (user request — the inset card is gone): full window
-        // height with a left hairline, glass-friendly like the terminal dock
-        // (translucent over the frost; solid otherwise). The resize grabber
-        // lives outside this clipped container, on the root layout's seam.
+        // Where the workspace runs a gutter the panel is an inset card that
+        // matches the conversation card: same radius, same hairline, the
+        // gutter on every outer side. Without a gutter it stays flush: full
+        // window height with a left hairline. The resize grabber lives outside
+        // this clipped container, on the root layout's seam.
         let panel_bg = theme.panel_bg();
+        let gutter = self.workspace_gutter();
+        let inset = gutter > 0.0;
         let panel = div()
             .id("right-pane-focus")
             .debug_selector(|| "right-pane".into())
@@ -12988,7 +12991,12 @@ impl Shell {
             // In takeover the panel's left edge IS the sidebar seam, which
             // already carries the sidebar tone's right hairline — a second
             // border there doubled up (user report).
-            .when(!self.right_pane_expanded, |el| {
+            .when(inset, |el| {
+                el.rounded(px(zuse_viewport::workspace_style::RADIUS))
+                    .border_1()
+                    .border_color(crate::theme::hairline(0.05))
+            })
+            .when(!inset && !self.right_pane_expanded, |el| {
                 el.border_l_1().border_color(theme.border)
             })
             // With the explorer undocked the panel's right edge IS the
@@ -12997,7 +13005,9 @@ impl Shell {
             // layer rounds itself; see [`Self::window_corner_radius`]). Docked,
             // the explorer column is the rightmost layer and rounds instead.
             .when(
-                Self::window_corner_radius(window) > 0.0 && self.files_visible_width(cx) <= 0.0,
+                !inset
+                    && Self::window_corner_radius(window) > 0.0
+                    && self.files_visible_width(cx) <= 0.0,
                 |el| {
                     let corner = Self::window_corner_radius(window);
                     el.rounded_tr(px(corner)).rounded_br(px(corner))
@@ -13021,7 +13031,12 @@ impl Shell {
             target,
             self.right_visible_width(cx),
             edge_offset,
-            div().h_full().relative().child(panel).into_any_element(),
+            div()
+                .h_full()
+                .relative()
+                .when(inset, |el| el.py(px(gutter)).pr(px(gutter)))
+                .child(panel)
+                .into_any_element(),
         )
     }
 
@@ -14979,15 +14994,15 @@ impl Render for Shell {
                     .opacity(under_stage)
                     .when(self.workspace_gutter() > 0., |view| {
                         view.rounded(px(zuse_viewport::workspace_style::RADIUS))
-                            .bg(Theme::of(cx).bg)
+                            .bg(Theme::of(cx).panel_bg())
                             .border_1()
                             .border_color(crate::theme::hairline(0.05))
                     })
                     // Flush, the conversation still reads as its own panel:
-                    // a solid content tone against the translucent sidebar,
+                    // the content tone against the translucent sidebar,
                     // parted by one hairline.
                     .when(self.workspace_gutter() <= 0., |view| {
-                        view.bg(Theme::of(cx).bg)
+                        view.bg(Theme::of(cx).panel_bg())
                             .when(self.sidebar_content_width() > 0., |view| {
                                 view.border_l_1().border_color(crate::theme::hairline(0.06))
                             })
