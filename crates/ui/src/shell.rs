@@ -97,6 +97,7 @@ pub(crate) mod project_icon;
 mod pull_request_pane;
 mod search_warm;
 mod session_info;
+mod settings_cloud;
 mod side_chats;
 mod sidebar_controls;
 mod sidebar_pins;
@@ -505,7 +506,17 @@ pub fn apply_keymap(
 /// The settings sections (feature-inventory §1.5 routes).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SettingsSection {
+    /// Cloud computer → Overview (slug `cloud`, the historical Cloud page).
     Cloud,
+    CloudRepositories,
+    CloudEnvironments,
+    CloudMachine,
+    /// Agent subscriptions cloud tasks sign in with.
+    CloudAgents,
+    /// Model usage on this computer's agents, plus Cloud compute.
+    Usage,
+    /// The Cloud plan, money left, credits and payment.
+    Billing,
     Devices,
     /// Which harnesses the composer offers (enable/disable toggles) —
     /// labeled "Providers".
@@ -528,23 +539,67 @@ pub enum SettingsSection {
 
 impl SettingsSection {
     /// Sections shown in Settings. `Agents` is a legacy Accounts route alias.
-    /// Ordered by what a person sets up first: the app, Cloud, the agents
-    /// that run in it, then integrations, devices and personal preferences.
-    pub const ALL: [SettingsSection; 13] = [
+    /// Grouped by where things run: agents on this computer, the cloud
+    /// computer, what it all costs, then the app itself. See [`Self::heading`].
+    pub const ALL: [SettingsSection; 19] = [
         SettingsSection::General,
-        SettingsSection::Cloud,
         SettingsSection::Harnesses,
         SettingsSection::Defaults,
         SettingsSection::Plugins,
-        SettingsSection::Devices,
+        SettingsSection::Cloud,
+        SettingsSection::CloudRepositories,
+        SettingsSection::CloudEnvironments,
+        SettingsSection::CloudMachine,
+        SettingsSection::CloudAgents,
+        SettingsSection::Usage,
+        SettingsSection::Billing,
         SettingsSection::Appearance,
         SettingsSection::Notifications,
         SettingsSection::Voice,
         SettingsSection::Shortcuts,
         SettingsSection::Files,
+        SettingsSection::Devices,
         SettingsSection::Appshots,
         SettingsSection::Archived,
     ];
+
+    /// The sidebar heading this section opens, if it starts a group.
+    fn heading(self) -> Option<&'static str> {
+        match self {
+            SettingsSection::Harnesses => Some("Local agents"),
+            SettingsSection::Cloud => Some("Cloud computer"),
+            SettingsSection::Usage => Some("Plan & usage"),
+            SettingsSection::Appearance => Some("App"),
+            _ => None,
+        }
+    }
+
+    /// The Cloud page a Cloud section shows.
+    fn cloud_view(self) -> Option<settings::cloud_billing::CloudView> {
+        use settings::cloud_billing::CloudView;
+        Some(match self {
+            SettingsSection::Cloud => CloudView::Overview,
+            SettingsSection::CloudRepositories => CloudView::Repositories,
+            SettingsSection::CloudEnvironments => CloudView::Environments,
+            SettingsSection::CloudMachine => CloudView::Machine,
+            SettingsSection::CloudAgents => CloudView::Agents,
+            SettingsSection::Billing => CloudView::Billing,
+            _ => return None,
+        })
+    }
+
+    fn from_cloud_view(view: settings::cloud_billing::CloudView) -> Self {
+        use settings::cloud_billing::CloudView;
+        match view {
+            CloudView::Overview => SettingsSection::Cloud,
+            CloudView::Repositories => SettingsSection::CloudRepositories,
+            CloudView::Environments => SettingsSection::CloudEnvironments,
+            CloudView::Machine => SettingsSection::CloudMachine,
+            CloudView::Agents => SettingsSection::CloudAgents,
+            CloudView::Compute => SettingsSection::Usage,
+            CloudView::Billing => SettingsSection::Billing,
+        }
+    }
 
     /// The former Accounts page is folded into Providers. Keep its route alias
     /// for old navigation entries and dev links without showing a hidden tab.
@@ -576,6 +631,12 @@ impl SettingsSection {
     fn slug(self) -> &'static str {
         match self {
             SettingsSection::Cloud => "cloud",
+            SettingsSection::CloudRepositories => "cloud-repositories",
+            SettingsSection::CloudEnvironments => "cloud-environments",
+            SettingsSection::CloudMachine => "cloud-machine",
+            SettingsSection::CloudAgents => "cloud-agents",
+            SettingsSection::Usage => "usage",
+            SettingsSection::Billing => "billing",
             SettingsSection::Devices => "devices",
             SettingsSection::Harnesses => "providers",
             SettingsSection::Defaults => "defaults",
@@ -596,6 +657,12 @@ impl SettingsSection {
     fn from_slug(slug: &str) -> Option<Self> {
         Some(match slug {
             "cloud" => SettingsSection::Cloud,
+            "cloud-repositories" | "repositories" => SettingsSection::CloudRepositories,
+            "cloud-environments" | "environments" => SettingsSection::CloudEnvironments,
+            "cloud-machine" | "machine" => SettingsSection::CloudMachine,
+            "cloud-agents" => SettingsSection::CloudAgents,
+            "usage" => SettingsSection::Usage,
+            "billing" => SettingsSection::Billing,
             "devices" => SettingsSection::Devices,
             "providers" | "harnesses" => SettingsSection::Harnesses,
             "defaults" | "default-models" => SettingsSection::Defaults,
@@ -617,9 +684,15 @@ impl SettingsSection {
     /// `settingsTitle` — the same strings in both places).
     pub fn label(self) -> &'static str {
         match self {
-            SettingsSection::Cloud => "Cloud",
+            SettingsSection::Cloud => "Overview",
+            SettingsSection::CloudRepositories => "Repositories",
+            SettingsSection::CloudEnvironments => "Environments",
+            SettingsSection::CloudMachine => "Machine",
+            SettingsSection::CloudAgents => "Agent accounts",
+            SettingsSection::Usage => "Usage",
+            SettingsSection::Billing => "Billing",
             SettingsSection::Devices => "Remote access",
-            SettingsSection::Harnesses => "Agents & accounts",
+            SettingsSection::Harnesses => "Providers & accounts",
             SettingsSection::Defaults => "Default models",
             SettingsSection::Plugins => "Plugins & MCP",
             SettingsSection::Agents => "Accounts",
@@ -2178,6 +2251,9 @@ pub struct Shell {
     pull_request_cache:
         std::rc::Rc<std::cell::RefCell<crate::pull_request_detail::PullRequestCache>>,
     cloud_billing_page: Option<Entity<settings::cloud_billing::CloudBillingPage>>,
+    cloud_page_sub: Option<Subscription>,
+    /// Settings → Usage shows Cloud compute instead of model usage.
+    usage_settings_compute: bool,
     devices_page: Option<Entity<DevicesPage>>,
     archived_page: Option<Entity<ArchivedPage>>,
     archive_project: Option<String>,
@@ -2806,6 +2882,8 @@ impl Shell {
             pending_pull_request: None,
             pull_request_cache: Default::default(),
             cloud_billing_page: None,
+            cloud_page_sub: None,
+            usage_settings_compute: false,
             devices_page: None,
             archived_page: None,
             archive_project: None,
@@ -2813,7 +2891,7 @@ impl Shell {
             usage_tasks: Default::default(),
             usage_project: None,
             usage_project_scope: false,
-            usage_pending: false,
+            usage_pending: route == Route::Settings(SettingsSection::Usage),
             project_archives: std::collections::HashMap::new(),
             project_archive_events: std::collections::HashMap::new(),
             appearance_page: None,
@@ -5206,12 +5284,12 @@ impl Shell {
             if !conversation.read(cx).ready(cx) {
                 return;
             }
-            let terminal = self
-                .right_surface_rows(cx)
-                .into_iter()
-                .find_map(|(surface, _, _, _)| {
-                    matches!(surface, RightSurface::Terminal(_)).then_some(surface)
-                });
+            let terminal =
+                self.right_surface_rows(cx)
+                    .into_iter()
+                    .find_map(|(surface, _, _, _)| {
+                        matches!(surface, RightSurface::Terminal(_)).then_some(surface)
+                    });
             if let Some(terminal) = terminal {
                 if self.right_pane_open(cx) && self.resolved_right_active(cx) == terminal {
                     self.toggle_right_pane(cx);
@@ -5460,12 +5538,21 @@ impl Shell {
                 page.update(cx, |page, cx| page.on_hidden(cx));
             }
         }
-        if matches!(self.route, Route::Usage) && !matches!(route, Route::Usage) {
+        // The model-usage dashboard shows on the Usage route and on
+        // Settings → Usage → Models; it loads on entry and stops on exit.
+        let shows_usage = |route: Route, compute: bool| {
+            matches!(route, Route::Usage)
+                || (route == Route::Settings(SettingsSection::Usage) && !compute)
+        };
+        let compute = self.usage_settings_compute;
+        if shows_usage(self.route, compute) && !shows_usage(route, compute) {
             if let Some(dashboard) = self.usage_dashboard.clone() {
                 dashboard.update(cx, |dashboard, cx| dashboard.hide(cx));
             }
         }
-        if matches!(route, Route::Usage) && !matches!(self.route, Route::Usage) {
+        if shows_usage(route, compute) && !shows_usage(self.route, compute)
+            || matches!(route, Route::Usage) && !matches!(self.route, Route::Usage)
+        {
             self.usage_pending = true;
         }
         self.route = route;
@@ -6138,19 +6225,18 @@ impl Shell {
                     .into_any_element()
             }
 
-            SettingsSection::Cloud => {
-                if self.cloud_billing_page.is_none() {
-                    let state = self.state.clone();
-                    self.cloud_billing_page = Some(cx.new(|cx| {
-                        settings::cloud_billing::CloudBillingPage::new(state, window, cx)
-                    }));
-                }
-                self.cloud_billing_page
-                    .as_ref()
-                    .unwrap()
-                    .clone()
-                    .into_any_element()
+            SettingsSection::Cloud
+            | SettingsSection::CloudRepositories
+            | SettingsSection::CloudEnvironments
+            | SettingsSection::CloudMachine
+            | SettingsSection::CloudAgents
+            | SettingsSection::Billing => {
+                let view = section.cloud_view().unwrap_or_default();
+                let page = self.ensure_cloud_page(window, cx);
+                page.update(cx, |page, cx| page.set_view(view, cx));
+                page.into_any_element()
             }
+            SettingsSection::Usage => self.usage_settings(window, cx),
             SettingsSection::Devices => {
                 if self.devices_page.is_none() {
                     self.devices_page = Some(self.create_devices_page(cx));
@@ -8029,8 +8115,7 @@ impl Shell {
     pub(super) fn titlebar_plus_alpha(&self, cx: &App) -> f32 {
         let sidebar_reveal =
             (self.sidebar_now() / self.sidebar_content_width().max(1.0)).clamp(0.0, 1.0);
-        titlebar_new_session_alpha(&self.route, self.has_conversation(cx))
-            * (1.0 - sidebar_reveal)
+        titlebar_new_session_alpha(&self.route, self.has_conversation(cx)) * (1.0 - sidebar_reveal)
     }
 
     /// Native Windows caption controls integrated into Zuse's unified
@@ -8583,6 +8668,12 @@ impl Shell {
         let compact = window.viewport_size().width < px(800.);
         let section_icon = |item: SettingsSection| match item {
             SettingsSection::Cloud => icons::CLOUD,
+            SettingsSection::CloudRepositories => icons::GIT_BRANCH,
+            SettingsSection::CloudEnvironments => icons::TERMINAL,
+            SettingsSection::CloudMachine => icons::HARD_DRIVE,
+            SettingsSection::CloudAgents => icons::KEY_MINIMALISTIC,
+            SettingsSection::Usage => icons::DASHBOARD_SPEED,
+            SettingsSection::Billing => icons::TAG,
             SettingsSection::Devices => icons::SETTINGS_REMOTE,
             SettingsSection::Harnesses => icons::SETTINGS_PROVIDERS,
             SettingsSection::Defaults => icons::SETTINGS_DEFAULTS,
@@ -8621,7 +8712,26 @@ impl Shell {
                             SettingsSection::ALL
                                 .into_iter()
                                 .filter(|item| item.visible_in_nav())
-                                .map(|item| {
+                                .flat_map(|item| {
+                                    let heading = item.heading().map(|heading| {
+                                        if compact {
+                                            div()
+                                                .mx(px(8.))
+                                                .my(px(8.))
+                                                .h(px(1.))
+                                                .bg(theme.border)
+                                                .into_any_element()
+                                        } else {
+                                            div()
+                                                .px(px(8.))
+                                                .pt(px(14.))
+                                                .pb(px(4.))
+                                                .text_size(crate::typography::text_xs())
+                                                .text_color(theme.text_muted)
+                                                .child(heading)
+                                                .into_any_element()
+                                        }
+                                    });
                                     let index = SettingsSection::ALL
                                         .iter()
                                         .position(|s| *s == item)
@@ -8644,7 +8754,7 @@ impl Shell {
                                         ),
                                         theme.text_strong,
                                     );
-                                    settings::widgets::section_tab(
+                                    let tab = settings::widgets::section_tab(
                                         theme,
                                         selected,
                                         selection_t,
@@ -8699,7 +8809,8 @@ impl Shell {
                                     )
                                     .when(!compact, |view| {
                                         view.child(SharedString::from(item.label()))
-                                    })
+                                    });
+                                    heading.into_iter().chain([tab.into_any_element()])
                                 }),
                         ),
                 ),
@@ -12244,7 +12355,11 @@ impl Shell {
     ) -> AnyElement {
         // Active cloud tabs share the normal header's tab row. Draft tabs
         // retain their canvas strip until a conversation is admitted.
-        let strip = self.cloud_conversation.is_none().then(|| self.render_cloud_tabs(cx)).flatten();
+        let strip = self
+            .cloud_conversation
+            .is_none()
+            .then(|| self.render_cloud_tabs(cx))
+            .flatten();
         let content = self.render_main_content(window, main_content_width, transcript_width, cx);
         div()
             .flex_1()
@@ -21371,6 +21486,14 @@ mod settings_modal_regressions {
             ("settings/files", SettingsSection::Files),
             ("settings/appshots", SettingsSection::Appshots),
             ("settings/archived", SettingsSection::Archived),
+            ("settings/cloud", SettingsSection::Cloud),
+            (
+                "settings/cloud-repositories",
+                SettingsSection::CloudRepositories,
+            ),
+            ("settings/cloud-machine", SettingsSection::CloudMachine),
+            ("settings/usage", SettingsSection::Usage),
+            ("settings/billing", SettingsSection::Billing),
         ] {
             assert_eq!(
                 settings_open_route(route, remembered),
@@ -21378,7 +21501,7 @@ mod settings_modal_regressions {
                 "{route}"
             );
         }
-        assert_eq!(settings_open_route("settings/billing", remembered), None);
+        assert_eq!(settings_open_route("settings/invoices", remembered), None);
         assert_eq!(settings_open_route("new", remembered), None);
     }
 
@@ -21501,7 +21624,7 @@ mod settings_modal_regressions {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             settings::UiSettings::path(dir.path()),
-            r#"{"sidebarWidth": 300, "settingsSection": "billing"}"#,
+            r#"{"sidebarWidth": 300, "settingsSection": "invoices"}"#,
         )
         .unwrap();
         let saved = settings::UiSettings::load(dir.path());

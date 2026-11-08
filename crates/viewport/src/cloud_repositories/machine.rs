@@ -14,23 +14,30 @@ pub(super) struct MachineView {
 impl MachineView {
     pub fn new(window: &mut Window, cx: &mut Context<RepositoryPanel>) -> Self {
         let setup = cx.new(|cx| {
-            TextInput::multiline(
-                "For example: curl -fsSL https://bun.sh/install | bash && npm i -g pnpm",
+            TextInput::script(
+                "curl -fsSL https://bun.sh/install | bash\nnpm i -g pnpm\nsudo apt-get install -y ripgrep",
                 window,
                 cx,
             )
         });
         let instructions = cx.new(|cx| {
-            TextInput::multiline(
-                "How you like agents to work, in every repository",
+            TextInput::script(
+                "How you like agents to work, in every repository. For example: keep commits small and run the tests you touched.",
                 window,
                 cx,
             )
+            .proportional()
         });
         for input in [&setup, &instructions] {
             cx.observe(input, |_, _, cx| cx.notify()).detach();
         }
-        Self { version: None, setup, instructions, error: None, notice: None }
+        Self {
+            version: None,
+            setup,
+            instructions,
+            error: None,
+            notice: None,
+        }
     }
     pub fn reset(&mut self, cx: &mut Context<RepositoryPanel>) {
         self.version = None;
@@ -40,19 +47,42 @@ impl MachineView {
             input.update(cx, |input, cx| input.set_value(String::new(), cx));
         }
     }
+    pub(super) fn image_state(&self) -> Option<&str> {
+        self.version.as_ref().map(|v| v.image_state.as_str())
+    }
     /// A customized machine the guide can mark as done.
     pub(super) fn customized(&self) -> bool {
         self.version.as_ref().is_some_and(|v| !v.recipe.is_empty())
     }
 }
 
-fn image_copy(state: &str) -> (&'static str, &'static str, bool) {
+pub(super) fn image_copy(state: &str) -> (&'static str, &'static str, bool) {
     match state {
-        "none" => ("Shared base", "Computers start from Zuse's standard machine.", false),
-        "queued" => ("Waiting to build", "Your machine image will be built from these settings. Until then, computers use the standard machine.", true),
-        "building" => ("Building", "Computers keep using your previous image until this build is verified.", true),
-        "ready" => ("Ready", "New computers start from your machine image.", false),
-        "failed" => ("Build failed", "Computers keep using your last working image. Fix the setup script and save again.", true),
+        "none" => (
+            "Shared base",
+            "Computers start from Zuse's standard machine.",
+            false,
+        ),
+        "queued" => (
+            "Waiting to build",
+            "Your machine image will be built from these settings. Until then, computers use the standard machine.",
+            true,
+        ),
+        "building" => (
+            "Building",
+            "Computers keep using your previous image until this build is verified.",
+            true,
+        ),
+        "ready" => (
+            "Ready",
+            "New computers start from your machine image.",
+            false,
+        ),
+        "failed" => (
+            "Build failed",
+            "Computers keep using your last working image. Fix the setup script and save again.",
+            true,
+        ),
         _ => ("Unknown", "", true),
     }
 }
@@ -64,11 +94,17 @@ impl RepositoryPanel {
     pub(super) fn receive_machine(&mut self, data: Value, cx: &mut Context<Self>) {
         match serde_json::from_value::<MachineVersion>(data) {
             Ok(version) => {
-                let saved = self.machine.version.as_ref().is_some_and(|v| v.revision < version.revision);
-                self.machine.setup.update(cx, |input, cx| input.set_value(version.recipe.setup_script.clone(), cx));
-                self.machine
-                    .instructions
-                    .update(cx, |input, cx| input.set_value(version.recipe.instructions.clone(), cx));
+                let saved = self
+                    .machine
+                    .version
+                    .as_ref()
+                    .is_some_and(|v| v.revision < version.revision);
+                self.machine.setup.update(cx, |input, cx| {
+                    input.set_value(version.recipe.setup_script.clone(), cx)
+                });
+                self.machine.instructions.update(cx, |input, cx| {
+                    input.set_value(version.recipe.instructions.clone(), cx)
+                });
                 if saved {
                     self.machine.notice = Some(if version.recipe.is_empty() {
                         "Saved. Computers use the standard machine.".into()
@@ -80,7 +116,8 @@ impl RepositoryPanel {
                 self.machine.error = None;
             }
             Err(_) => {
-                self.machine.error = Some("Machine settings could not be verified. Reload before saving.".into())
+                self.machine.error =
+                    Some("Machine settings could not be verified. Reload before saving.".into())
             }
         }
         cx.notify();
@@ -97,7 +134,9 @@ impl RepositoryPanel {
         recipe.instructions = self.machine.instructions.read(cx).value(cx);
         if let Err(code) = recipe.validate() {
             self.machine.error = Some(match code {
-                "machine_recipe_text_too_large" => "Keep the setup script and instructions under 64 KiB each.".into(),
+                "machine_recipe_text_too_large" => {
+                    "Keep the setup script and instructions under 64 KiB each.".into()
+                }
                 _ => "Check the machine settings and try again.".into(),
             });
             cx.notify();
@@ -113,84 +152,156 @@ impl RepositoryPanel {
         );
         cx.notify();
     }
+    fn machine_dirty(&self, cx: &App) -> bool {
+        self.machine.version.as_ref().is_some_and(|v| {
+            self.machine.setup.read(cx).value(cx).trim() != v.recipe.setup_script.trim()
+                || self.machine.instructions.read(cx).value(cx).trim()
+                    != v.recipe.instructions.trim()
+        })
+    }
+    fn discard_machine(&mut self, cx: &mut Context<Self>) {
+        let Some(version) = self.machine.version.clone() else {
+            return;
+        };
+        self.machine.setup.update(cx, |input, cx| {
+            input.set_value(version.recipe.setup_script.clone(), cx)
+        });
+        self.machine.instructions.update(cx, |input, cx| {
+            input.set_value(version.recipe.instructions.clone(), cx)
+        });
+        self.machine.error = None;
+        self.machine.notice = None;
+        cx.notify();
+    }
     pub(super) fn render_machine(&self, cx: &mut Context<Self>) -> Div {
+        use super::form;
         let busy = self.pending.values().any(|p| p.kind.starts_with("machine"));
-        let mut body = column().gap(px(10.)).p(px(12.));
-        match &self.machine.version {
-            None => {
-                body = body.child(s::description_text(if busy {
+        let mut root = column().gap(px(16.));
+        let Some(version) = &self.machine.version else {
+            root = root.child(form::section(
+                "Machine image",
+                if busy {
                     "Loading your machine…"
                 } else {
-                    "Your machine settings are unavailable. Refresh to try again."
-                }));
+                    "Your machine couldn't be loaded. Refresh to try again."
+                },
+                None,
+                div(),
+            ));
+            if let Some(error) = &self.machine.error {
+                root = root.child(form::message(error, true));
             }
-            Some(version) => {
-                let (label, detail, warning) = image_copy(&version.image_state);
-                body = body
+            return root;
+        };
+        let (label, detail, warning) = image_copy(&version.image_state);
+        let built = chrono::DateTime::from_timestamp_millis(version.created_at)
+            .map(|d| d.with_timezone(&chrono::Local).format("%b %-d").to_string())
+            .unwrap_or_default();
+        let status = row()
+            .items_center()
+            .gap(px(12.))
+            .px(px(12.))
+            .py(px(12.))
+            .child(
+                div()
+                    .flex_none()
+                    .size(px(32.))
+                    .rounded(px(8.))
+                    .bg(s::frame_bg())
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(icon("cloud").size(px(16.)).text_color(palette::rgb(TEXT))),
+            )
+            .child(
+                column()
+                    .flex_1()
+                    .min_w_0()
+                    .gap(px(2.))
                     .child(
                         row()
                             .items_center()
                             .gap(px(8.))
-                            .child(s::title_text("Machine image"))
-                            .child(cs::badge(label, warning, !warning && version.image_state == "none")),
+                            .child(s::title_text("Your machine image"))
+                            .child(cs::badge(
+                                label,
+                                warning,
+                                !warning && version.image_state == "none",
+                            )),
                     )
-                    .child(s::description_text(detail))
-                    .when_some(version.image_error.clone(), |body, error| {
-                        body.child(
-                            div()
-                                .text_size(px(12.))
-                                .text_color(s::destructive_text())
-                                .child(SharedString::from(error)),
-                        )
-                    })
-                    .child(s::title_text("Setup script"))
-                    .child(s::description_text(
-                        "Runs once when your image is built, with sudo. Install tools and packages every repository should have: apt packages, bun, pnpm, uv, global CLIs.",
-                    ))
-                    .child(self.machine.setup.clone())
-                    .child(s::title_text("Instructions"))
-                    .child(s::description_text(
-                        "Added for every agent, in every repository, alongside each repository's own AGENTS.md.",
-                    ))
-                    .child(self.machine.instructions.clone());
-                if !version.recipe.skills.is_empty() || !version.recipe.files.is_empty() {
-                    body = body.child(s::description_text(format!(
-                        "Also included: {} skill{} and {} file{}.",
-                        version.recipe.skills.len(),
-                        if version.recipe.skills.len() == 1 { "" } else { "s" },
-                        version.recipe.files.len(),
-                        if version.recipe.files.len() == 1 { "" } else { "s" },
-                    )));
-                }
-                body = body
-                    .child(
-                        row().gap(px(8.)).child(
-                            cs::button("save-cloud-machine", "Save machine", true, busy || !self.can_manage(), busy)
-                                .on_click(cx.listener(|this, _, _, cx| this.save_machine(cx))),
-                        ),
-                    )
-                    .child(s::description_text(format!(
-                        "Machine version {} · No secrets: use project secrets for tokens.",
-                        version.revision
-                    )));
-            }
-        }
-        if let Some(notice) = &self.machine.notice {
-            body = body.child(s::description_text(notice.clone()));
-        }
-        if let Some(error) = &self.machine.error {
-            body = body.child(
+                    .child(s::description_text(detail)),
+            )
+            .child(
                 div()
-                    .text_size(px(12.))
-                    .text_color(s::destructive_text())
-                    .child(SharedString::from(error.clone())),
+                    .flex_none()
+                    .text_size(px(11.))
+                    .text_color(palette::rgb(MUTED))
+                    .child(format!("Version {} · {built}", version.revision)),
+            );
+        let mut image = column().child(status);
+        if let Some(error) = version.image_error.clone() {
+            image = image.child(
+                div()
+                    .px(px(12.))
+                    .pb(px(12.))
+                    .child(form::message(&error, true)),
             );
         }
-        cs::group(
-            "Your machine",
-            Some("One image for all your repositories. Tasks still check out only the repository they work on."),
-            None,
-            body,
-        )
+        root = root
+            .child(s::frame().child(s::card().child(image)))
+            .child(form::section(
+                "Setup script",
+                "Runs once with sudo when your image is built. Install what every repository needs: apt packages, runtimes, global CLIs.",
+                None,
+                div().p(px(12.)).child(form::script_box(self.machine.setup.clone())),
+            ))
+            .child(form::section(
+                "Instructions",
+                "Given to every agent in every repository, alongside the repository's own AGENTS.md.",
+                None,
+                div().p(px(12.)).child(form::script_box(self.machine.instructions.clone())),
+            ));
+        let recipe = &version.recipe;
+        if !recipe.skills.is_empty() || !recipe.files.is_empty() {
+            let mut rows = column();
+            let items = recipe
+                .skills
+                .iter()
+                .map(|k| ("Skill", k.name.clone()))
+                .chain(recipe.files.iter().map(|f| ("File", f.path.clone())));
+            for (i, (kind, name)) in items.enumerate() {
+                rows = rows.child(
+                    row()
+                        .items_center()
+                        .gap(px(10.))
+                        .px(px(12.))
+                        .py(px(9.))
+                        .when(i > 0, |v| v.border_t_1().border_color(palette::rgb(BORDER)))
+                        .child(cs::badge(kind, false, true))
+                        .child(form::mono(name)),
+                );
+            }
+            root = root.child(form::section(
+                "Also on your machine",
+                "Imported skills and files, copied into every computer.",
+                None,
+                rows,
+            ));
+        }
+        if let Some(notice) = &self.machine.notice {
+            root = root.child(form::message(notice, false));
+        }
+        if let Some(error) = &self.machine.error {
+            root = root.child(form::message(error, true));
+        }
+        root.child(form::save_bar(
+            "cloud-machine",
+            "Saving rebuilds your image. Running computers keep the one they started with.".into(),
+            self.machine_dirty(cx) && self.can_manage(),
+            busy,
+            |this, cx| this.discard_machine(cx),
+            |this, cx| this.save_machine(cx),
+            cx,
+        ))
     }
 }

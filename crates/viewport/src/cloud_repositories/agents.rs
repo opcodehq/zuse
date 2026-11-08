@@ -26,6 +26,24 @@ impl AgentView {
             .iter()
             .any(|c| c.state == zuse_protocol::cloud_connections::ConnectionState::Connected)
     }
+    /// Connected agents for the Overview, e.g. "Codex · you@example.com".
+    pub(super) fn connected_summary(&self) -> Vec<String> {
+        self.connections
+            .iter()
+            .filter(|c| c.state == ConnectionState::Connected)
+            .map(|c| {
+                let name = match c.agent {
+                    AgentId::Claude => "Claude",
+                    AgentId::Codex => "Codex",
+                    AgentId::Grok => "Grok",
+                };
+                match c.account_label.as_deref().filter(|l| !l.is_empty()) {
+                    Some(label) => format!("{name} · {label}"),
+                    None => name.to_owned(),
+                }
+            })
+            .collect()
+    }
     pub fn new(window: &mut Window, cx: &mut Context<RepositoryPanel>) -> Self {
         let secret = cx.new(|cx| TextInput::password("Paste your credential", window, cx));
         cx.observe(&secret, |_, _, cx| cx.notify()).detach();

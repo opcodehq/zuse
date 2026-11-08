@@ -72,7 +72,10 @@ assets!(
     "star",
     "danger-triangle",
     "trash-bin-minimalistic",
-    "pen"
+    "pen",
+    "eye",
+    "eye-closed",
+    "upload"
 );
 
 pub(super) fn icon(name: &str) -> Svg {

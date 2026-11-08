@@ -24,9 +24,82 @@ fn bound(value: &Value, owner: &Owner) -> bool {
     value["accountId"].as_str() == Some(owner.0.as_str())
         && value["organizationId"].as_str() == owner.1.as_deref()
 }
+/// Which Cloud settings page this entity renders. One entity backs every
+/// Cloud page so account state and in-flight requests survive navigation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CloudView {
+    #[default]
+    Overview,
+    Repositories,
+    Environments,
+    Machine,
+    Agents,
+    /// Usage → Cloud compute (the Usage page supplies the title).
+    Compute,
+    Billing,
+}
+impl CloudView {
+    fn panel_page(self) -> Option<zuse_viewport::cloud_repositories::CloudPage> {
+        use zuse_viewport::cloud_repositories::CloudPage;
+        Some(match self {
+            CloudView::Overview => CloudPage::Overview,
+            CloudView::Repositories => CloudPage::Repositories,
+            CloudView::Environments => CloudPage::Environments,
+            CloudView::Machine => CloudPage::Machine,
+            CloudView::Agents => CloudPage::Agents,
+            CloudView::Compute | CloudView::Billing => return None,
+        })
+    }
+    fn from_page(page: zuse_viewport::cloud_repositories::CloudPage) -> Self {
+        use zuse_viewport::cloud_repositories::CloudPage;
+        match page {
+            CloudPage::All | CloudPage::Overview => CloudView::Overview,
+            CloudPage::Repositories => CloudView::Repositories,
+            CloudPage::Environments => CloudView::Environments,
+            CloudPage::Machine => CloudView::Machine,
+            CloudPage::Agents => CloudView::Agents,
+        }
+    }
+    fn heading(self) -> (&'static str, &'static str) {
+        match self {
+            CloudView::Overview => (
+                "Cloud computer",
+                "Agents run on fresh cloud computers that keep working after you close Zuse.",
+            ),
+            CloudView::Repositories => (
+                "Repositories",
+                "Connect GitHub and choose which repositories cloud computers can check out.",
+            ),
+            CloudView::Environments => (
+                "Environments",
+                "Setup commands, services and secrets for each repository, applied when a task's computer starts.",
+            ),
+            CloudView::Machine => (
+                "Machine",
+                "One machine image for all your repositories: the tools, packages and instructions every task starts with.",
+            ),
+            CloudView::Agents => (
+                "Agent accounts",
+                "The coding-agent subscriptions cloud tasks sign in with. Agents on this computer are under Providers & accounts.",
+            ),
+            CloudView::Compute => ("Usage", ""),
+            CloudView::Billing => (
+                "Billing",
+                "Your Cloud plan, what's left this cycle, credits and payment.",
+            ),
+        }
+    }
+}
+/// Asks Settings to show another page (overview rows, billing links).
+#[derive(Clone, Copy, Debug)]
+pub enum Navigate {
+    Cloud(CloudView),
+}
+/// The most usage pages fetched for one period (100 entries each).
+const USAGE_PAGES: usize = 10;
 pub struct CloudBillingPage {
-    tab: zuse_viewport::cloud_settings::Tab,
-    tab_focus: [FocusHandle; 2],
+    view: CloudView,
+    usage_pages: usize,
     repository_panel: Entity<zuse_viewport::cloud_repositories::RepositoryPanel>,
     repository_tasks: std::collections::HashMap<u64, Task<()>>,
     state: Entity<AppState>,
@@ -54,13 +127,38 @@ pub struct CloudBillingPage {
     workspace_task: Option<Task<()>>,
     cap_request: Option<(i64, String)>,
 }
+impl EventEmitter<Navigate> for CloudBillingPage {}
 impl CloudBillingPage {
+    pub fn set_view(&mut self, view: CloudView, cx: &mut Context<Self>) {
+        if self.view == view {
+            return;
+        }
+        self.view = view;
+        if let Some(page) = view.panel_page() {
+            self.repository_panel
+                .update(cx, |panel, cx| panel.set_page(page, cx));
+        }
+        if matches!(view, CloudView::Compute | CloudView::Billing) && self.owner.is_some() {
+            self.load(false, cx);
+        }
+        cx.notify();
+    }
     pub fn new(state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         zuse_viewport::input::bind_keys(cx);
         let repository_panel =
             cx.new(|cx| zuse_viewport::cloud_repositories::RepositoryPanel::new(window, cx));
         cx.observe(&repository_panel, |_, _, cx| cx.notify())
             .detach();
+        repository_panel.update(cx, |panel, cx| {
+            panel.set_page(zuse_viewport::cloud_repositories::CloudPage::Overview, cx)
+        });
+        cx.subscribe(
+            &repository_panel,
+            |_, _, event: &zuse_viewport::cloud_repositories::OpenPage, cx| {
+                cx.emit(Navigate::Cloud(CloudView::from_page(event.0)));
+            },
+        )
+        .detach();
         cx.subscribe(
             &repository_panel,
             |this, panel, event: &zuse_viewport::cloud_repositories::Request, cx| {
@@ -111,8 +209,8 @@ impl CloudBillingPage {
         cx.observe(&state, |_: &mut Self, _, cx| cx.notify())
             .detach();
         Self {
-            tab: Default::default(),
-            tab_focus: std::array::from_fn(|_| cx.focus_handle()),
+            view: CloudView::Overview,
+            usage_pages: 0,
             repository_panel,
             repository_tasks: Default::default(),
             state,
@@ -206,6 +304,7 @@ impl CloudBillingPage {
         }
         self.loaded = true;
         self.error = None;
+        self.usage_pages = if more { self.usage_pages + 1 } else { 1 };
         let cursor = if more { self.cursor.clone() } else { None };
         let expected = owner.clone();
         let job = gpui_tokio::Tokio::spawn(cx, async move {
@@ -216,7 +315,7 @@ impl CloudBillingPage {
                 ),
                 engine.client().call_scoped(
                     methods::CLOUD_BILLING_USAGE,
-                    request_params(&expected, json!({"limit":10,"cursor":cursor}))
+                    request_params(&expected, json!({"limit":100,"cursor":cursor}))
                 )
             )
         });
@@ -250,6 +349,10 @@ impl CloudBillingPage {
                                 }
                                 this.cursor = page.next_cursor;
                                 this.summary = Some(summary);
+                                // The usage map needs the whole period, not a page.
+                                if this.cursor.is_some() && this.usage_pages < USAGE_PAGES {
+                                    this.load(true, cx);
+                                }
                             }
                             Err(_) => {
                                 this.error = Some(
@@ -604,7 +707,6 @@ impl Render for CloudBillingPage {
         let active = active_owner(self.state.read(cx));
         if self.owner != active {
             self.owner = active;
-            self.tab = Default::default();
             self.loaded = false;
             self.task = None;
             self.portal_task = None;
@@ -633,13 +735,20 @@ impl Render for CloudBillingPage {
         let theme = Theme::of(cx).for_settings_surface();
         zuse_viewport::palette::set_light(theme.appearance.is_light());
         let busy = self.task.is_some();
-        let mut body = widgets::settings_page_column(window).child(widgets::section_title_with_action(
-            &theme,
-            "Cloud",
-            None,
-            "Run agents on fresh cloud computers that keep working after you close this app.",
-            None,
-        ));
+        let (title, description) = self.view.heading();
+        let mut body = widgets::settings_page_column(window);
+        if self.view == CloudView::Compute {
+            // Embedded under the Usage page's own title and tabs.
+            body = body.pt(px(0.));
+        } else {
+            body = body.child(widgets::section_title_with_action(
+                &theme,
+                title,
+                None,
+                description,
+                None,
+            ));
+        }
         if self.owner.is_none() {
             if self.state.read(cx).cloud_account.is_some() {
                 let pending = self.account_task.is_some();
@@ -724,63 +833,83 @@ impl Render for CloudBillingPage {
                 view::Action::BuyCredits => this.load_credits(true, cx),
                 view::Action::MoreUsage => this.load(true, cx),
                 view::Action::ToggleUsageHistory => this.history_open = !this.history_open,
+                view::Action::OpenBilling => cx.emit(Navigate::Cloud(CloudView::Billing)),
+                view::Action::OpenUsage => cx.emit(Navigate::Cloud(CloudView::Compute)),
+                view::Action::OpenAgents => cx.emit(Navigate::Cloud(CloudView::Agents)),
             }
             cx.notify();
         };
-        let mut content = div()
-            .flex()
-            .flex_col()
-            .gap(px(16.))
-            .mt(px(20.))
-            .child(view::hosting(
-                &data,
-                if data.personal {
-                    "Personal workspace"
-                } else {
-                    "Organization workspace"
-                },
-                cx,
-                action,
-            ));
-        content = content.child(zuse_viewport::cloud_settings::tabs(
-            self.tab,
-            &self.tab_focus,
-            cx,
-            |this: &mut Self, tab, _, cx| {
-                this.tab = tab;
-                if tab == zuse_viewport::cloud_settings::Tab::Usage {
-                    this.load(false, cx);
-                }
-                cx.notify();
-            },
-        ));
-        let storage = self.repository_panel.update(cx, |panel, cx| {
-            panel.set_usage(
-                self.tab == zuse_viewport::cloud_settings::Tab::Usage,
-                self.summary.as_ref().map(|s| s.storage_cost_micros),
-                cx,
-            )
-        });
-        if self.tab == zuse_viewport::cloud_settings::Tab::Setup {
-            content = content.child(self.repository_panel.clone());
-        } else {
-            if storage {
-                content = content.child(self.repository_panel.clone());
+        let content = match self.view {
+            CloudView::Compute => {
+                let machines = self.machines(cx);
+                view::compute(&data, &machines, cx, action)
             }
-            content = content.child(view::usage(
+            CloudView::Billing => view::billing(
                 &data,
                 self.cap.clone().into_any_element(),
                 &self.credit_focus,
                 cx,
                 action,
-            ));
-        }
-        body = body.child(content);
+            ),
+            _ => {
+                self.repository_panel
+                    .update(cx, |panel, cx| panel.set_usage(false, None, cx));
+                div().child(self.repository_panel.clone())
+            }
+        };
+        body = body.child(content.mt(px(if self.view == CloudView::Compute {
+            4.
+        } else {
+            20.
+        })));
         div()
             .id("cloud-billing-settings")
             .size_full()
             .overflow_y_scroll()
             .child(body)
             .into_any_element()
+    }
+}
+impl CloudBillingPage {
+    /// Names each cloud computer by the chat it ran, for the usage map.
+    fn machines(
+        &self,
+        cx: &App,
+    ) -> std::collections::BTreeMap<String, zuse_viewport::cloud_billing_view::Machine> {
+        let state = self.state.read(cx);
+        self.workspaces
+            .iter()
+            .filter_map(|w| {
+                let id = w["workspaceId"].as_str()?.to_owned();
+                let branch = w["branch"].as_str().unwrap_or("").to_owned();
+                let chat = w["chatId"].as_str().and_then(|chat| {
+                    state
+                        .chats
+                        .iter()
+                        .find(|c| c.id == chat || c.id.ends_with(chat))
+                });
+                let title = chat
+                    .and_then(|c| c.title.clone())
+                    .filter(|t| !t.trim().is_empty())
+                    .unwrap_or_else(|| {
+                        if branch.is_empty() {
+                            "Cloud computer".into()
+                        } else {
+                            branch.clone()
+                        }
+                    });
+                let detail = match w["state"].as_str() {
+                    Some("deleted") => format!("{branch} · deleted"),
+                    _ => branch,
+                };
+                Some((
+                    id,
+                    zuse_viewport::cloud_billing_view::Machine {
+                        title,
+                        detail: detail.trim_start_matches(" · ").to_owned(),
+                    },
+                ))
+            })
+            .collect()
     }
 }

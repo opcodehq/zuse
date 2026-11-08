@@ -18,10 +18,12 @@ mod agent_login_binding;
 mod agent_recovery;
 mod agents;
 mod environment;
+mod form;
 mod github;
 mod guide;
-mod machine;
 mod images;
+mod machine;
+mod overview;
 mod presentation;
 mod secrets;
 gpui::actions!(
@@ -29,6 +31,21 @@ gpui::actions!(
     [CloseRepositoryPicker, CloseImageHistory]
 );
 pub type Owner = (String, Option<String>);
+/// Which part of Cloud setup the panel renders. `All` stacks every group, as
+/// the browser's single Cloud page does; the desktop gives each its own page.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CloudPage {
+    #[default]
+    All,
+    Overview,
+    Repositories,
+    Environments,
+    Machine,
+    Agents,
+}
+/// Asks the host to show another Cloud page (Overview rows link to them).
+#[derive(Clone, Copy, Debug)]
+pub struct OpenPage(pub CloudPage);
 #[derive(Clone)]
 pub enum Request {
     Call {
@@ -71,14 +88,18 @@ pub struct RepositoryPanel {
     picker_trigger: FocusHandle,
     picker_refresh: FocusHandle,
     picker_add: FocusHandle,
+    picker_manage: FocusHandle,
+    picker_install: FocusHandle,
     choice_focus: BTreeMap<String, FocusHandle>,
     search: Entity<TextInput>,
     selected: BTreeSet<String>,
     queue: Vec<GithubRepository>,
     keys: BTreeMap<String, String>,
     guide: guide::GuideState,
+    page: CloudPage,
 }
 impl EventEmitter<Request> for RepositoryPanel {}
+impl EventEmitter<OpenPage> for RepositoryPanel {}
 impl RepositoryPanel {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         images::bind_keys(cx);
@@ -119,12 +140,22 @@ impl RepositoryPanel {
             picker_trigger: cx.focus_handle(),
             picker_refresh: cx.focus_handle(),
             picker_add: cx.focus_handle(),
+            picker_manage: cx.focus_handle(),
+            picker_install: cx.focus_handle(),
             choice_focus: BTreeMap::new(),
             search,
             selected: BTreeSet::new(),
             queue: vec![],
             keys: BTreeMap::new(),
             guide: Default::default(),
+            page: CloudPage::All,
+        }
+    }
+    pub fn set_page(&mut self, page: CloudPage, cx: &mut Context<Self>) {
+        if self.page != page {
+            self.page = page;
+            self.picker = false;
+            cx.notify();
         }
     }
     pub fn bind_owner(&mut self, owner: Option<Owner>, cx: &mut Context<Self>) {

@@ -412,6 +412,7 @@ impl WorkspaceView {
                 view::Action::ToggleUsageHistory => {
                     this.billing.history_open = !this.billing.history_open
                 }
+                view::Action::OpenBilling | view::Action::OpenUsage | view::Action::OpenAgents => {}
             }
             cx.notify();
         };

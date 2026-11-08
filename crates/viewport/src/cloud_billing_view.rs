@@ -9,6 +9,8 @@ use gpui::{prelude::*, *};
 use serde_json::Value;
 use zuse_i18n::messages as msg;
 use zuse_model::cloud_billing::{cents, usd};
+mod pages;
+pub use pages::{Machine, billing, compute};
 use zuse_protocol::cloud_billing::{
     BillingStatus, BillingSummary, BillingUsageItem, PrepaidBalance,
 };
@@ -24,6 +26,10 @@ pub enum Action {
     BuyCredits,
     MoreUsage,
     ToggleUsageHistory,
+    /// Desktop pages link to each other; the browser ignores these.
+    OpenBilling,
+    OpenUsage,
+    OpenAgents,
 }
 #[derive(Clone, Copy, Default)]
 pub struct Pending {
@@ -338,6 +344,67 @@ pub fn usage<T: 'static>(
         };
         root = root.child(body);
     }
+    let credits = credits_body(data, focus, cx, act);
+    let portal_busy = data.pending.subscription;
+    let disabled = portal_busy;
+    let billing=div().flex().flex_col().child(credits).child(setting_row(false,"Manage subscription","Manage or cancel your Zuse subscription, payment details, and invoices in the billing portal.",Some(button("manage-cloud-subscription","Manage subscription",false,disabled,portal_busy).on_click(cx.listener(move|this,_,window,cx|if !disabled{act(this,Action::ManageSubscription,window,cx)})).into_any_element())));
+    root = root.child(group("Billing", None, None, billing));
+    if data.subscribed == Some(true) && data.personal {
+        let mut activity = div().flex().flex_col();
+        if data.workspaces.is_empty() {
+            activity = activity.child(setting_row(
+                true,
+                "No cloud workspaces yet",
+                "Start a cloud chat and its workspace will appear here.",
+                None,
+            ));
+        } else {
+            for (i, workspace) in data.workspaces.iter().enumerate() {
+                let state = workspace["state"].as_str().unwrap_or("unknown");
+                activity = activity.child(setting_row(
+                    i == 0,
+                    SharedString::from(
+                        workspace["branch"]
+                            .as_str()
+                            .unwrap_or("Workspace")
+                            .to_owned(),
+                    ),
+                    SharedString::from(workspace["statusCode"].as_str().unwrap_or("").to_owned()),
+                    Some(
+                        badge(
+                            SharedString::from(state.to_owned()),
+                            !matches!(state, "ready" | "deleted"),
+                            state == "deleted",
+                        )
+                        .into_any_element(),
+                    ),
+                ));
+            }
+        }
+        root = root.child(group(
+            "Workspace activity",
+            Some("Current and recent cloud workspaces for this account."),
+            Some(
+                badge(
+                    SharedString::from(data.workspaces.len().to_string()),
+                    false,
+                    true,
+                )
+                .into_any_element(),
+            ),
+            activity,
+        ));
+    }
+    root
+}
+
+/// Zuse credits: balance, amount picker and purchase. Shared by both layouts.
+fn credits_body<T: 'static>(
+    data: &Data<'_>,
+    focus: &[FocusHandle; 4],
+    cx: &mut Context<T>,
+    act: impl Fn(&mut T, Action, &mut Window, &mut Context<T>) + Copy + 'static,
+) -> Div {
     let busy = data.pending.credits;
     let enabled = data.credits.is_some_and(|b| b.available) && !busy;
     let mut credits = div().flex().flex_col().gap(px(12.)).p(px(12.));
@@ -525,55 +592,5 @@ pub fn usage<T: 'static>(
     if let Some(error) = data.credit_error {
         credits = credits.child(note(error, true));
     }
-    let portal_busy = data.pending.subscription;
-    let disabled = portal_busy;
-    let billing=div().flex().flex_col().child(credits).child(setting_row(false,"Manage subscription","Manage or cancel your Zuse subscription, payment details, and invoices in the billing portal.",Some(button("manage-cloud-subscription","Manage subscription",false,disabled,portal_busy).on_click(cx.listener(move|this,_,window,cx|if !disabled{act(this,Action::ManageSubscription,window,cx)})).into_any_element())));
-    root = root.child(group("Billing", None, None, billing));
-    if data.subscribed == Some(true) && data.personal {
-        let mut activity = div().flex().flex_col();
-        if data.workspaces.is_empty() {
-            activity = activity.child(setting_row(
-                true,
-                "No cloud workspaces yet",
-                "Start a cloud chat and its workspace will appear here.",
-                None,
-            ));
-        } else {
-            for (i, workspace) in data.workspaces.iter().enumerate() {
-                let state = workspace["state"].as_str().unwrap_or("unknown");
-                activity = activity.child(setting_row(
-                    i == 0,
-                    SharedString::from(
-                        workspace["branch"]
-                            .as_str()
-                            .unwrap_or("Workspace")
-                            .to_owned(),
-                    ),
-                    SharedString::from(workspace["statusCode"].as_str().unwrap_or("").to_owned()),
-                    Some(
-                        badge(
-                            SharedString::from(state.to_owned()),
-                            !matches!(state, "ready" | "deleted"),
-                            state == "deleted",
-                        )
-                        .into_any_element(),
-                    ),
-                ));
-            }
-        }
-        root = root.child(group(
-            "Workspace activity",
-            Some("Current and recent cloud workspaces for this account."),
-            Some(
-                badge(
-                    SharedString::from(data.workspaces.len().to_string()),
-                    false,
-                    true,
-                )
-                .into_any_element(),
-            ),
-            activity,
-        ));
-    }
-    root
+    credits
 }

@@ -306,7 +306,7 @@ impl RepositoryPanel {
             GuideStep::Repositories => self.repositories(window, cx),
             GuideStep::Agent => self.render_agents(window, cx),
             GuideStep::Machine => self.render_machine(cx),
-            GuideStep::Environment => self.render_environment(cx),
+            GuideStep::Environment => self.render_environment(window, cx),
         };
         let checklist = self.guide_checklist(current, cx);
         let footer = self.guide_footer(current, cx);
