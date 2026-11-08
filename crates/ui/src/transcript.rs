@@ -3724,6 +3724,8 @@ pub struct Transcript {
     /// transcript's bottom (measured last frame): the last row pads past it
     /// so pinned content rests above the glass chrome it scrolls under.
     bottom_clearance: f32,
+    /// Primary transcript's shell-sized bottom fade; overlays stay outside it.
+    chrome_fade_bottom: Option<f32>,
     /// The rail's outline list (see `crate::rail`).
     outline_menu: crate::rail::OutlineMenu,
     /// `(row id, entry id)` under the pointer — reveals the entry's timestamp
@@ -4099,6 +4101,7 @@ impl Transcript {
             selection_scroll_task: None,
             rail_enabled,
             bottom_clearance: 0.0,
+            chrome_fade_bottom: None,
             outline_menu: crate::rail::OutlineMenu::new(cx),
             hovered_entry: None,
             copied_code: None,
@@ -4169,6 +4172,14 @@ impl Transcript {
 
     pub(crate) fn rail_enabled(&self) -> bool {
         self.rail_enabled
+    }
+
+    /// Match the primary scrolling layer's fade to the shell's measured chrome.
+    pub(crate) fn set_chrome_fade_bottom(&mut self, band: f32, cx: &mut Context<Self>) {
+        if self.chrome_fade_bottom != Some(band) {
+            self.chrome_fade_bottom = Some(band);
+            cx.notify();
+        }
     }
 
     /// Shell-driven: the measured height of the bottom chrome stack the
@@ -11622,10 +11633,7 @@ impl Render for Transcript {
             });
         }
         let rail = self.render_rail(cx);
-        // The scroll-to-bottom pill is rendered by the SHELL (conversation
-        // region overlay): it must float just above the composer and paint
-        // OVER the bottom fade gradient, which is a later sibling of this
-        // outlet — an overlay here would be tinted by the fade.
+        // The shell positions the scroll-to-bottom pill above the composer.
         self.update_runway_minimum(cx);
         let list_el = crate::overscroll::overscroll(
             "transcript-overscroll",
@@ -11635,11 +11643,9 @@ impl Render for Transcript {
                 .with_sizing_behavior(gpui::ListSizingBehavior::Auto),
         );
         let content: AnyElement = if self.doc_override.is_some() {
-            // The primary transcript's fade lives on the SHELL's outlet
-            // wrapper (it spans the titlebar/composer chrome); an override
-            // instance owns its own — top edge only (nothing overlays the
-            // pane's bottom), gated on real overflow so a short top-anchored
-            // transcript shows no fade. Gated here rather than at paint via
+            // An override instance fades its list's top edge only (nothing
+            // overlays the pane's bottom), gated on real overflow so a short
+            // top-anchored transcript shows no fade. Gated here rather than at paint via
             // a ScrollHandle (the list isn't one); scrolls re-render this
             // entity, so the flag can't go stale.
             let scrolled_under_top = {
@@ -11655,6 +11661,17 @@ impl Render for Transcript {
             .into_any_element()
         } else {
             list_el.into_any_element()
+        };
+        let content = div().size_full().child(content).child(rail);
+        let content = if let Some(bottom_band) = self.chrome_fade_bottom {
+            // Fade scrolling content, leaving find and other overlays in the
+            // normal paint tree so clipping, native input and stacking survive.
+            crate::edge_fade::edge_faded(Theme::TRANSCRIPT_FADE_BAND, true, true, content)
+                .inset_top(Theme::TITLEBAR_HEIGHT)
+                .band_bottom(bottom_band)
+                .into_any_element()
+        } else {
+            content.into_any_element()
         };
         let root = div()
             .relative()
@@ -11675,8 +11692,7 @@ impl Render for Transcript {
             .child(crate::markdown::render::selection_frame_reset_for(
                 cx.entity_id().as_u64(),
             ))
-            .child(content)
-            .child(rail);
+            .child(content);
         let root = root.children(self.render_find_bar(cx));
         let root = root.children(self.render_image_menu(cx));
         // Full-size viewer for a clicked user-bubble thumbnail
