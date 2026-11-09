@@ -4,8 +4,12 @@ use serde_json::{Value, json};
 use std::{io::Write, path::Path};
 use zuse_protocol::cloud::CloudRuntimeBootstrap;
 const FILE: &str = "rust-preparation-ingress.json";
+/// An optional bootstrap field; absent reads as null (indexing a map panics).
+fn extra(boot: &CloudRuntimeBootstrap, key: &str) -> Value {
+    boot.extra.get(key).cloned().unwrap_or(Value::Null)
+}
 fn binding(boot: &CloudRuntimeBootstrap, enrollment: &str) -> Value {
-    json!({"version":1,"workspaceId":boot.workspace_id,"accountId":boot.zuse_account_id,"generation":boot.runtime_generation,"enrollmentId":enrollment,"operationId":boot.extra["rustAllocationOperationId"],"storage":boot.runtime_storage,"checkout":boot.extra["rustRepositoryCheckout"]})
+    json!({"version":1,"workspaceId":boot.workspace_id,"accountId":boot.zuse_account_id,"generation":boot.runtime_generation,"enrollmentId":enrollment,"operationId":extra(boot,"rustAllocationOperationId"),"storage":boot.runtime_storage,"checkout":extra(boot,"rustRepositoryCheckout")})
 }
 pub fn pending(data: &Path, boot: &CloudRuntimeBootstrap, enrollment: &str) -> Result<bool> {
     let path = data.join(FILE);

@@ -553,6 +553,10 @@ async fn run() -> Result<()> {
         adopt(&core, &bootstrap, &checkout, args.test_harness, &command_key, &authority, true).await?;
         let ingress = if bootstrap.extra.get("preparationIngressVersion") == Some(&serde_json::json!(1)) {
             serde_json::json!({"diagnosticsReady":true,"agentReady":false,"credentialPreparationVersion":1})
+        } else if !bootstrap.extra.contains_key("rustAllocationOperationId") {
+            // A server without preparation ingress issues no allocation
+            // operation; it has nothing to report preparation against.
+            serde_json::json!({})
         } else { authority.preparation_ingress(&bootstrap).await? };
         let credential_reports = zuse_cloud_runtime::preparation::credential_reports_supported(&ingress);
         let selected_broker = if !args.test_harness && (

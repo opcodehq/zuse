@@ -501,7 +501,7 @@ impl Authority {
             &bootstrap.workspace_id,
             &["runtime", "preparation", "ingress"],
             &bootstrap.runtime_credential,
-            &json!({"operationId":bootstrap.extra["rustAllocationOperationId"]}),
+            &json!({"operationId":bootstrap.extra.get("rustAllocationOperationId").cloned().unwrap_or_default()}),
         )
         .await
     }

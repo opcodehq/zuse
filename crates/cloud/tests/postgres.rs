@@ -173,6 +173,13 @@ async fn fixture() -> (PgPool, PgPool, String) {
         .execute(&pool)
         .await
         .unwrap();
+    // Provider grants and credential delivery journal their receipts.
+    sqlx::raw_sql(include_str!(
+        "../migrations/0024_credential_delivery_journal.sql"
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
     (admin, pool, schema)
 }
 
@@ -1888,6 +1895,7 @@ mod runtime_engine {
             generation: 2,
             gateway_epoch: 5,
             expires_at: now + 900000,
+            storage_binding: None,
         };
         let runtime_cancel = CancellationToken::new();
         let guest = tokio::spawn({
