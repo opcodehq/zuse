@@ -6568,6 +6568,9 @@ pub struct Composer {
     /// Advertised invocations for the current device/harness/workspace.
     /// Invalidated on context changes; filtering stays local while typing.
     slash_cache: HashMap<String, Vec<InvocationCandidate>>,
+    /// The last catalog loaded in full, keyed without the workspace. Another
+    /// chat's rows stand in for this one's until its own catalog arrives.
+    slash_recent: Option<(String, Vec<InvocationCandidate>)>,
     /// Slash-popup row scroll — the stack overflows into a wheel/keyboard-
     /// scrollable list once it outgrows the card.
     slash_scroll: gpui::ScrollHandle,
@@ -7155,6 +7158,7 @@ impl Composer {
             slash_task: None,
             slash: SlashState::default(),
             slash_cache: HashMap::new(),
+            slash_recent: None,
             slash_scroll: gpui::ScrollHandle::new(),
             mention_scroll: gpui::ScrollHandle::new(),
             popup_bar: crate::popover::MenuScrollbarState::default(),
@@ -8836,6 +8840,19 @@ impl Composer {
             }
             return;
         };
+        let recent_key = format!(
+            "{skill}:{include_skills}:{commands_allowed}:{preferences:?}:{harness:?}:{}",
+            self.completion_connection_context(cx),
+        );
+        if !self.slash_cache.contains_key(&context)
+            && let Some((_, rows)) = self
+                .slash_recent
+                .as_ref()
+                .filter(|(key, _)| *key == recent_key)
+        {
+            let rows = self.finish_slash_catalog(rows.clone(), skill, commands_allowed, cx);
+            self.slash_cache.insert(context.clone(), rows);
+        }
         self.slash.request = self.slash.request.wrapping_add(1);
         let request = self.slash.request;
         self.slash.loading = true;
@@ -8880,6 +8897,7 @@ impl Composer {
                     return;
                 }
                 composer.slash.loading = false;
+                let selected = composer.active_slash_invocation();
                 let decoded = result.map(|(candidates, supported, warning)| {
                     composer.slash.supported = supported;
                     composer.slash.error = warning;
@@ -8887,14 +8905,11 @@ impl Composer {
                 });
                 match decoded {
                     Ok(candidates) => {
-                        let candidates = if !skill && commands_allowed {
-                            with_workspace_commands(
-                                candidates,
-                                composer.state.read(cx).selected_chat.is_some(),
-                            )
-                        } else {
-                            candidates
-                        };
+                        if composer.slash.error.is_none() {
+                            composer.slash_recent = Some((recent_key, candidates.clone()));
+                        }
+                        let candidates =
+                            composer.finish_slash_catalog(candidates, skill, commands_allowed, cx);
                         composer.slash_cache.insert(context, candidates);
                     }
                     Err(err) => {
@@ -8911,10 +8926,80 @@ impl Composer {
                         }
                     }
                 }
-                composer.refilter_slash(cx);
+                composer.slash_catalog_loaded(selected, cx);
             })
             .ok();
         }));
+        cx.notify();
+    }
+
+    fn finish_slash_catalog(
+        &self,
+        rows: Vec<InvocationCandidate>,
+        skill: bool,
+        commands_allowed: bool,
+        cx: &App,
+    ) -> Vec<InvocationCandidate> {
+        let mut rows = if !skill && commands_allowed {
+            with_workspace_commands(rows, self.state.read(cx).selected_chat.is_some())
+        } else {
+            rows
+        };
+        skill_completion::catalog_order(&mut rows);
+        rows
+    }
+
+    fn slash_commands(&self) -> &[InvocationCandidate] {
+        self.slash_cache
+            .get(&self.slash.context)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+    }
+
+    fn active_slash_invocation(&self) -> Option<zuse_protocol::invocation::Invocation> {
+        let row = *self.slash.filtered.get(self.slash.active?)?;
+        Some(self.slash_commands().get(row)?.invocation.clone())
+    }
+
+    fn slash_first_skill_row(&self) -> Option<usize> {
+        let query = self.slash.token.as_ref()?.query.as_str();
+        skill_completion::first_skill_row(query, &self.slash.filtered, self.slash_commands())
+    }
+
+    /// Keep a row in view, past any section headings stacked above it.
+    fn reveal_slash_row(&self, active: usize) {
+        let headings = self
+            .slash_first_skill_row()
+            .map_or(0, |skills| 1 + usize::from(active >= skills));
+        self.slash_scroll
+            .scroll_to_item(if active == 0 { 0 } else { active + headings });
+    }
+
+    /// Each open refreshes the catalog behind rows already on screen, so the
+    /// reply must not take the cursor away from the row the user is on.
+    fn slash_catalog_loaded(
+        &mut self,
+        selected: Option<zuse_protocol::invocation::Invocation>,
+        cx: &mut Context<Self>,
+    ) {
+        let query = self.slash.token.as_ref().map(|t| t.query.clone());
+        let filtered =
+            skill_completion::filter(query.as_deref().unwrap_or_default(), self.slash_commands());
+        let kept = selected.and_then(|selected| {
+            filtered.iter().position(|&ix| {
+                self.slash_commands()
+                    .get(ix)
+                    .is_some_and(|row| row.invocation == selected)
+            })
+        });
+        let Some(active) = kept else {
+            self.refilter_slash(cx);
+            return;
+        };
+        self.slash.filtered = filtered;
+        self.slash.active = Some(active);
+        self.reveal_slash_row(active);
+        self.sync_mention_controls(cx);
         cx.notify();
     }
 
@@ -8926,12 +9011,7 @@ impl Composer {
             .as_ref()
             .map(|t| t.query.clone())
             .unwrap_or_default();
-        let commands = self
-            .slash_cache
-            .get(&self.slash.context)
-            .map(Vec::as_slice)
-            .unwrap_or_default();
-        self.slash.filtered = skill_completion::filter(&query, commands);
+        self.slash.filtered = skill_completion::filter(&query, self.slash_commands());
         self.slash.active = (!self.slash.filtered.is_empty()).then_some(0);
         // A fresh query/reopen restarts the row stack at the top.
         crate::popover::reset_menu_scroll(&self.slash_scroll, &mut self.popup_bar);
@@ -8944,7 +9024,7 @@ impl Composer {
             crate::popover::menu_step(self.slash.active, self.slash.filtered.len(), delta);
         if let Some(active) = self.slash.active {
             // Keep the keyboard cursor visible in the scrolled row stack.
-            self.slash_scroll.scroll_to_item(active);
+            self.reveal_slash_row(active);
         }
         self.sync_mention_controls(cx);
         cx.notify();
@@ -9091,11 +9171,24 @@ impl Composer {
                     }),
             );
         } else {
-            let mut rows: Vec<gpui::AnyElement> = Vec::with_capacity(self.slash.filtered.len());
+            let mut rows: Vec<gpui::AnyElement> = Vec::with_capacity(self.slash.filtered.len() + 2);
+            let first_skill = self.slash_first_skill_row();
             for (row_ix, &cmd_ix) in self.slash.filtered.iter().enumerate() {
                 let Some(command) = commands.get(cmd_ix) else {
                     continue;
                 };
+                let heading = match first_skill {
+                    Some(_) if row_ix == 0 => Some(("Commands", 2.0)),
+                    Some(skills) if row_ix == skills => Some(("Skills", 6.0)),
+                    _ => None,
+                };
+                if let Some((label, top)) = heading {
+                    rows.push(
+                        crate::popover::menu_heading(theme, label)
+                            .pt(px(top))
+                            .into_any_element(),
+                    );
+                }
                 let selected = self.slash.active == Some(row_ix);
                 rows.push(
                     skill_completion::row(theme, command, selected, row_ix)
