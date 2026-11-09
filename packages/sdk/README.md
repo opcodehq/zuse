@@ -45,5 +45,19 @@ An existing global npm SDK installation updates automatically; project-local
 dependencies and lockfiles remain managed by the project's package manager.
 Use `ControlUpdateStatus` and `RetryControlUpdate` to inspect or retry updates.
 
-Build with `npm ci && npm test`. Regenerate contracts from the repository root:
+Use Node.js 22 or newer. Build with `npm ci && npm test`.
+
+To exercise the SDK, CLI and MCP against a temporary engine profile, build the
+binaries from the repository root and run the integration suite:
+
+```sh
+cargo build --locked -p zuse-cli -p zuse-control
+npm --prefix packages/sdk run test:engine
+```
+
+This suite uses no paid models and removes its temporary profile afterward. It
+checks authentication, subscriptions, revision conflicts, versioned file history,
+decision retention, fresh conversations, restart and idempotent command retries.
+
+Regenerate contracts from the repository root:
 `cargo run -p zuse-protocol --example control_types`.

@@ -75,6 +75,31 @@ fn envelope(token: &str, method: &str, params: Value) -> Value {
     json!({"token":token,"method":method,"params":params})
 }
 
+fn validate_endpoint(endpoint: &str) -> Result<()> {
+    let parsed = url::Url::parse(endpoint).context("invalid control endpoint")?;
+    ensure!(
+        parsed.username().is_empty()
+            && parsed.password().is_none()
+            && parsed.query().is_none()
+            && parsed.fragment().is_none(),
+        "endpoint must not contain credentials, queries or fragments"
+    );
+    ensure!(
+        parsed.scheme() == "wss"
+            || (parsed.scheme() == "ws"
+                && matches!(
+                    parsed.host_str(),
+                    Some("localhost" | "127.0.0.1" | "[::1]" | "::1")
+                )),
+        "remote control requires TLS"
+    );
+    Ok(())
+}
+
+fn is_stream(method: &str) -> bool {
+    method.starts_with("Watch") || matches!(method, "SubscribeTerminal" | "UpdateStatus")
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
@@ -93,29 +118,7 @@ async fn main() -> Result<()> {
         "unsupported control API version"
     );
     let endpoint = args.endpoint.unwrap_or(discovery.endpoint);
-    let parsed = url::Url::parse(&endpoint).context("invalid control endpoint")?;
-    ensure!(
-        parsed.username().is_empty()
-            && parsed.password().is_none()
-            && parsed.query().is_none()
-            && parsed.fragment().is_none(),
-        "endpoint must not contain credentials, queries or fragments"
-    );
-    ensure!(
-        parsed.scheme() == "wss"
-            || (parsed.scheme() == "ws"
-                && matches!(
-                    parsed.host_str(),
-                    Some("localhost" | "127.0.0.1" | "[::1]" | "::1")
-                )),
-        "remote control requires TLS"
-    );
-    ensure!(
-        endpoint.starts_with("wss://")
-            || endpoint.starts_with("ws://127.0.0.1:")
-            || endpoint.starts_with("ws://localhost:"),
-        "remote control requires wss://"
-    );
+    validate_endpoint(&endpoint)?;
     let client = zuse_rpc::connect_ws(&endpoint).await?;
     let info = client
         .call_scoped(CALL, envelope(&discovery.token, "ControlInfo", json!({})))
@@ -147,6 +150,10 @@ async fn main() -> Result<()> {
             json: input,
         } => {
             ensure!(METHODS.contains(&method.as_str()), "unsupported operation");
+            ensure!(
+                is_stream(&method),
+                "operation does not provide a subscription"
+            );
             let mut stream = client
                 .subscribe_checked(
                     CALL,
@@ -224,7 +231,7 @@ async fn serve_mcp(client: zuse_rpc::RpcClient, token: String) -> Result<()> {
             let response = match method.as_str() {
                 "initialize" => json!({"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"zuse-control","version":env!("CARGO_PKG_VERSION")}}}),
                 "ping" => json!({"result":{}}),
-                "tools/list" => json!({"result":{"tools":METHODS.iter().filter(|m| !m.starts_with("Watch") && **m != "SubscribeTerminal").map(|method| json!({"name":method,"description":format!("Zuse application operation {method}"),"inputSchema":if *method=="ZotCommand" {zuse_protocol::zots::command_schema()} else {json!({"type":"object","additionalProperties":true})}})).collect::<Vec<_>>()}}),
+                "tools/list" => json!({"result":{"tools":METHODS.iter().filter(|m| !is_stream(m)).map(|method| json!({"name":method,"description":format!("Zuse application operation {method}"),"inputSchema":if *method=="ZotCommand" {zuse_protocol::zots::command_schema()} else {json!({"type":"object","additionalProperties":true})}})).collect::<Vec<_>>()}}),
                 "tools/call" => {
                     let method = params.get("name").and_then(Value::as_str).unwrap_or_default();
                     let result = client.call_scoped(CALL, envelope(&token, method, params.get("arguments").cloned().unwrap_or(json!({})))).await;
@@ -246,4 +253,41 @@ async fn serve_mcp(client: zuse_rpc::RpcClient, token: String) -> Result<()> {
     drop(out);
     writer.await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn control_endpoints_accept_loopback_and_require_tls_remotely() {
+        for endpoint in [
+            "ws://localhost:27654",
+            "ws://127.0.0.1:27654",
+            "ws://[::1]:27654",
+            "ws://localhost/api/control",
+            "wss://cloud.example/api/control",
+        ] {
+            assert!(validate_endpoint(endpoint).is_ok(), "{endpoint}");
+        }
+        for endpoint in [
+            "ws://cloud.example/api/control",
+            "https://cloud.example",
+            "wss://user:secret@cloud.example",
+            "wss://cloud.example?token=secret",
+            "wss://cloud.example#secret",
+            "ws://127.0.0.1.evil.example:27654",
+        ] {
+            assert!(validate_endpoint(endpoint).is_err(), "{endpoint}");
+        }
+    }
+
+    #[test]
+    fn subscription_catalog_includes_update_status() {
+        assert!(is_stream("WatchZots"));
+        assert!(is_stream("SubscribeTerminal"));
+        assert!(is_stream("UpdateStatus"));
+        assert!(!is_stream("ControlUpdateStatus"));
+        assert!(!is_stream("ZotCommand"));
+    }
 }

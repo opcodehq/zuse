@@ -4,7 +4,6 @@ use crate::localization::message as tr;
 use zuse_i18n::messages as msg;
 
 mod access;
-mod popover;
 pub mod account_settings;
 pub mod acp_catalog;
 pub mod acp_command;
@@ -59,6 +58,7 @@ mod plugin_management;
 pub mod plugin_removal;
 pub mod plugin_setup;
 mod plugin_views;
+mod popover;
 mod previews;
 mod project_actions;
 pub mod project_archive;

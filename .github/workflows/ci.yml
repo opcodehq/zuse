@@ -48,7 +48,7 @@ jobs:
           node-version: 22
       - uses: Swatinem/rust-cache@v2
       - run: cargo run --locked -p zuse-protocol --example control_types -- --check
-      - run: cargo check --locked -p zuse-control
+      - run: cargo test --locked -p zuse-control
       - run: npm ci && npm test
         working-directory: packages/sdk
   engine:

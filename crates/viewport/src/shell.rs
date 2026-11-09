@@ -1256,7 +1256,8 @@ impl Render for WorkspaceView {
             panel.set_target(target, cx);
         });
 
-        let panel_width = if self.selected_zot().is_some() && !self.settings && !self.project_picker {
+        let panel_width = if self.selected_zot().is_some() && !self.settings && !self.project_picker
+        {
             320.
         } else if !self.right_open || self.settings || self.project_picker {
             0.
@@ -1513,9 +1514,7 @@ impl Render for WorkspaceView {
                 |d| d.child(self.workspace_panel(panel_width, cx)),
             )
             .when(
-                self.selected_zot().is_some()
-                    && !self.settings
-                    && !self.project_picker,
+                self.selected_zot().is_some() && !self.settings && !self.project_picker,
                 |d| d.child(self.zot_panel(cx)),
             )
             .when(self.preview_open.is_some() && !self.settings, |d| {

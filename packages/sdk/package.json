@@ -1,6 +1,6 @@
 {
   "name": "@zuse/sdk",
-  "version": "0.25.1",
+  "version": "0.26.0",
   "description": "Typed client and command-line control for local and cloud Zuse engines",
   "type": "module",
   "license": "AGPL-3.0-only",
