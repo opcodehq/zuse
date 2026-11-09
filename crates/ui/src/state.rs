@@ -158,6 +158,15 @@ trait EngineBackend: Send + Sync {
     async fn media_client(&self) -> Result<RpcClient, RpcError> {
         Err(RpcError::Failed("voice media unavailable".into()))
     }
+    fn prepare_update_restart(&self) -> Result<(), String> {
+        Ok(())
+    }
+    fn cancel_update_restart(&self) {}
+    /// Agent turns an app restart would interrupt. A remote engine outlives
+    /// this app, so none of its turns are.
+    fn interrupted_by_restart(&self) -> usize {
+        0
+    }
     /// Graceful teardown (drains runs / flushes docs for the in-process engine).
     async fn shutdown(&self);
 }
@@ -187,6 +196,36 @@ impl EngineBackend for InProcessEngine {
     }
     fn signs_in_on_this_machine(&self) -> bool {
         true
+    }
+    fn prepare_update_restart(&self) -> Result<(), String> {
+        let runtime = self
+            .runtime
+            .try_lock()
+            .map_err(|_| "The engine is busy. Try restarting again in a moment.".to_owned())?;
+        if let Some(runtime) = runtime.as_ref() {
+            let sessions = &runtime.core().sessions;
+            if let Err(error) = sessions.checkpoint_for_update() {
+                sessions.cancel_update_restart();
+                return Err(error.to_string());
+            }
+        }
+        Ok(())
+    }
+    fn interrupted_by_restart(&self) -> usize {
+        match self.runtime.try_lock() {
+            Ok(runtime) => runtime
+                .as_ref()
+                .map_or(0, |runtime| runtime.core().sessions.active_turn_count()),
+            // Busy for a moment: count as active so a restart re-checks.
+            Err(_) => 1,
+        }
+    }
+    fn cancel_update_restart(&self) {
+        if let Ok(runtime) = self.runtime.try_lock()
+            && let Some(runtime) = runtime.as_ref()
+        {
+            runtime.core().sessions.cancel_update_restart();
+        }
     }
     async fn shutdown(&self) {
         self.boot_task.abort();
@@ -640,6 +679,18 @@ impl EngineHandle {
 
     fn deferred_state(&self) -> Option<tokio::sync::watch::Receiver<DeferredEngineState>> {
         self.deferred_state.clone()
+    }
+
+    pub fn prepare_update_restart(&self) -> Result<(), String> {
+        self.inner.prepare_update_restart()
+    }
+
+    pub fn cancel_update_restart(&self) {
+        self.inner.cancel_update_restart();
+    }
+
+    pub fn interrupted_by_restart(&self) -> usize {
+        self.inner.interrupted_by_restart()
     }
 
     pub async fn shutdown(&self) {
@@ -4759,6 +4810,7 @@ mod tests {
         Session {
             last_completed_turn: None,
             running_subagents: 0,
+            awaiting_input: None,
             background_tasks: Vec::new(),
             chat_id: chat_id.into(),
             device_id: "dev".into(),
@@ -5039,6 +5091,7 @@ mod tests {
         let mut row = Session {
             last_completed_turn: None,
             running_subagents: 0,
+            awaiting_input: None,
             background_tasks: Vec::new(),
             chat_id: "chat".into(),
             device_id: "host".into(),
@@ -5072,6 +5125,7 @@ mod tests {
         state.sessions = vec![Session {
             last_completed_turn: None,
             running_subagents: 0,
+            awaiting_input: None,
             background_tasks: Vec::new(),
             chat_id: "chat".into(),
             device_id: "host".into(),

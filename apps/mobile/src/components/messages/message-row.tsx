@@ -1,0 +1,1185 @@
+import { useAtomValue } from "@effect/atom-react";
+import { completedNativeChildStep } from "@zuse/client-runtime/native-subagent-fork";
+import { Button } from "~/components/ui/button";
+import "@zuse/i18n/english/chat";
+import type { FileChange } from "@zuse/client-runtime/timeline";
+import {
+	toolImageDataUrl,
+	toolImageResult,
+} from "@zuse/client-runtime/tool-image-result";
+import type {
+	AttachmentRef,
+	Message,
+	MessageContent,
+	SessionExecutionStep,
+	SessionId,
+	UserQuestion,
+} from "@zuse/contracts";
+import { RichMessage, useMessages } from "@zuse/i18n/react";
+import { proposedPlanMarkdownFromContent } from "@zuse/utils/proposed-plan";
+import * as Clipboard from "expo-clipboard";
+import { Image } from "expo-image";
+import { router } from "expo-router";
+import {
+	AlertCircle,
+	Bot,
+	Brain,
+	Camera,
+	CheckSquare,
+	ChevronDown,
+	ChevronRight,
+	Copy,
+	FileCode2,
+	FilePenLine,
+	Folder,
+	Globe,
+	Hourglass,
+	Search,
+	Terminal,
+	Wrench,
+} from "lucide-react-native";
+import React, { useState } from "react";
+import { type ColorValue, Pressable, Text, View } from "react-native";
+import { InlineFileDiff } from "~/components/diff/inline-file-diff";
+import { InlineErrorNotice } from "~/components/inline-error-notice";
+import { FileIcon } from "~/components/ui/file-icon";
+import { ShimmerText } from "~/components/ui/shimmer-text";
+import { cn } from "~/lib/cn";
+import { captureMobileError } from "~/lib/crash-reporting";
+import {
+	summarizeValue,
+	type ToolResultRecord,
+} from "~/lib/message-presentation";
+import { modelLabelFor } from "~/lib/model-options";
+import {
+	buildToolPresentation,
+	type MobileToolIcon,
+} from "~/lib/tool-presentation";
+import { workspaceDisplayPath } from "~/lib/workspace-path";
+import type { WsProtocolOptions } from "~/rpc/ws-protocol";
+import { connectionModelCatalogAtom } from "~/store/model-catalog";
+import { colors } from "~/theme";
+import { AttachmentMedia } from "./attachment-media";
+import { ForkFromMessageMenu } from "./fork-from-message-menu";
+import { Markdown } from "./markdown";
+import type { QuestionAnswer } from "./pending-user-input-card";
+
+/** Extra context the stream provides so question rows can render statefully. */
+export type MessageRowContext = {
+	connectionKey: string;
+	connection?: WsProtocolOptions;
+	sessionId: SessionId;
+	workspaceRoot?: string;
+	answeredQuestionIds: ReadonlySet<string>;
+	questionsByItemId: ReadonlyMap<string, readonly UserQuestion[]>;
+	toolResultsByItemId: ReadonlyMap<string, ToolResultRecord>;
+	/** Whether the session is actively running (drives the shimmer on the last row). */
+	sessionRunning?: boolean;
+	executionSteps?: readonly SessionExecutionStep[];
+	lastAssistantMessageId?: Message["id"];
+	onAnswerQuestion: (
+		itemId: string,
+		answers: readonly QuestionAnswer[],
+	) => void | Promise<void>;
+	onForkNativeChild?: (messageId: Message["id"], stepId: string) => void;
+	onForkFromMessage?: (
+		messageId: Message["id"],
+		destination: "tab" | "chat",
+		isolated: boolean,
+	) => void;
+};
+
+export const MessageRow = ({
+	message,
+	ctx,
+	isLast = false,
+}: {
+	message: Message;
+	ctx: MessageRowContext;
+	isLast?: boolean;
+}) => (
+	<MessageRowBoundary
+		context={`message-row:${message.id}:${message.content._tag}`}
+	>
+		<MessageRowContent message={message} ctx={ctx} isLast={isLast} />
+	</MessageRowBoundary>
+);
+
+class MessageRowBoundary extends React.Component<
+	{ readonly children: React.ReactNode; readonly context: string },
+	{ readonly failed: boolean }
+> {
+	state = { failed: false };
+
+	static getDerivedStateFromError(): { readonly failed: boolean } {
+		return { failed: true };
+	}
+
+	componentDidCatch(error: unknown, info: React.ErrorInfo): void {
+		void captureMobileError(error, {
+			context: this.props.context,
+			componentStack: info.componentStack ?? undefined,
+		});
+	}
+
+	render() {
+		if (this.state.failed) {
+			return <ErrorRow message="This message could not be rendered." />;
+		}
+		return this.props.children;
+	}
+}
+
+const MessageRowContent = ({
+	message,
+	ctx,
+	isLast,
+}: {
+	message: Message;
+	ctx: MessageRowContext;
+	isLast: boolean;
+}) => {
+	const content = message.content;
+	const shimmerActive = ctx.sessionRunning === true && isLast;
+	switch (content._tag) {
+		case "user":
+			return <UserBubble text={content.text} goal={content.goal} />;
+		case "user_rich":
+			return (
+				<UserBubble
+					text={content.text}
+					chips={richChips(content)}
+					attachments={content.attachments}
+					context={ctx}
+					goal={content.goal}
+				/>
+			);
+		case "assistant":
+			return (
+				<AssistantMarkdown
+					text={content.text}
+					planText={proposedPlanMarkdownFromContent(content)}
+					messageId={message.id}
+					createdAt={message.createdAt}
+					context={ctx}
+				/>
+			);
+		case "ui_spec":
+			return <UiSpecSource spec={content.spec} />;
+		case "thinking":
+			return <ThinkingRow content={content} shimmer={shimmerActive} />;
+		case "tool_use": {
+			if (content.tool === "ExitPlanMode") {
+				const plan = proposedPlanMarkdownFromContent(content);
+				return plan === null ? (
+					<ErrorRow message="The proposed plan body is unavailable." />
+				) : (
+					<PlanPreview
+						text={plan}
+						messageId={message.id}
+						itemId={content.itemId}
+						context={ctx}
+						status={planResultStatus(
+							ctx.toolResultsByItemId.get(content.itemId),
+						)}
+					/>
+				);
+			}
+			return (
+				<View>
+					<ToolUseRow
+						content={content}
+						result={ctx.toolResultsByItemId.get(content.itemId)}
+						shimmer={shimmerActive}
+						connectionKey={ctx.connectionKey}
+						sessionId={ctx.sessionId}
+						workspaceRoot={ctx.workspaceRoot}
+					/>
+					{content.subagent !== undefined ? (
+						<NativeChildFork
+							messageId={message.id}
+							itemId={content.itemId}
+							nativeChildId={content.subagent.childSessionId}
+							context={ctx}
+						/>
+					) : null}
+				</View>
+			);
+		}
+		case "tool_result":
+			return ctx.toolResultsByItemId.has(content.itemId) ? null : (
+				<ToolResultRow content={content} />
+			);
+		case "error":
+			return <ErrorRow message={content.message} />;
+		case "usage_limit":
+			return <UsageLimitRow content={content} />;
+		case "model_switch":
+			return (
+				<ModelSwitchRow content={content} connectionKey={ctx.connectionKey} />
+			);
+		case "interrupted":
+			return <InlineSystemRow label="Interrupted by user" />;
+		case "context_compaction":
+			return <ContextCompactionRow content={content} />;
+		case "subagent_summary":
+			return <SubagentSummaryRow content={content} />;
+		case "usage":
+		case "context_usage":
+			return null;
+		case "user_question":
+			return ctx.answeredQuestionIds.has(content.itemId) ? (
+				<AnsweredQuestion questions={content.questions} />
+			) : null;
+		case "user_question_answer":
+			return (
+				<AnswerBubble
+					content={content}
+					questions={ctx.questionsByItemId.get(content.itemId)}
+				/>
+			);
+		default:
+			return <FallbackRow content={content} />;
+	}
+};
+
+const UserBubble = ({
+	text,
+	goal,
+	chips = [],
+	attachments = [],
+	context,
+}: {
+	text: string;
+	goal?: boolean;
+	chips?: string[];
+	attachments?: readonly AttachmentRef[];
+	context?: MessageRowContext;
+}) => (
+	<View className="items-end px-2 py-2">
+		<View
+			style={{ borderCurve: "continuous" }}
+			className="max-w-[88%] rounded-2xl bg-primary px-3.5 py-2.5"
+		>
+			{goal === true ? (
+				<Text className="mb-1 font-sans-medium text-xs text-primary-foreground/75">
+					Goal
+				</Text>
+			) : null}
+			<Text className="font-sans text-[15px] leading-5 text-primary-foreground">
+				{text}
+			</Text>
+			{attachments.length > 0 && context !== undefined ? (
+				<View className="mt-2 gap-2">
+					{attachments.map((attachment) => (
+						<AttachmentMedia
+							key={attachment.id}
+							attachment={attachment}
+							connectionKey={context.connectionKey}
+							connection={context.connection}
+							sessionId={context.sessionId}
+						/>
+					))}
+				</View>
+			) : null}
+			{chips.length > 0 ? (
+				<View className="mt-2 flex-row flex-wrap gap-1">
+					{chips.map((chip) => (
+						<Text
+							key={chip}
+							className="rounded-full bg-background/15 px-2 py-0.5 font-sans text-[11px] text-primary-foreground"
+						>
+							{chip}
+						</Text>
+					))}
+				</View>
+			) : null}
+		</View>
+	</View>
+);
+
+const AssistantMarkdown = ({
+	text,
+	planText,
+	messageId,
+	createdAt,
+	context,
+}: {
+	text: string;
+	planText: string | null;
+	messageId: Message["id"];
+	createdAt: Date;
+	context: MessageRowContext;
+}) =>
+	planText !== null ? (
+		<PlanPreview text={planText} messageId={messageId} context={context} />
+	) : (
+		<View className="px-2 py-2">
+			<Markdown>{text}</Markdown>
+			{context.lastAssistantMessageId === messageId ? (
+				<View className="mt-1 flex-row items-center">
+					{context.onForkFromMessage === undefined ? null : (
+						<ForkFromMessageMenu
+							onForkInChat={() =>
+								context.onForkFromMessage?.(messageId, "tab", false)
+							}
+							onForkInCurrentWorktree={() =>
+								context.onForkFromMessage?.(messageId, "chat", false)
+							}
+							onForkInNewWorktree={() =>
+								context.onForkFromMessage?.(messageId, "chat", true)
+							}
+						/>
+					)}
+					<Pressable
+						accessibilityRole="button"
+						accessibilityLabel="Copy response"
+						hitSlop={8}
+						className="h-9 w-9 items-center justify-center active:opacity-60"
+						onPress={() => void Clipboard.setStringAsync(text)}
+					>
+						<Copy size={16} color={colors.secondaryFg} />
+					</Pressable>
+					<Text
+						className="px-1 font-sans text-[11px] text-muted-foreground"
+						style={{ fontVariant: ["tabular-nums"] }}
+					>
+						{formatMessageTime(createdAt)}
+					</Text>
+				</View>
+			) : null}
+		</View>
+	);
+
+const PlanPreview = ({
+	text,
+	messageId,
+	itemId,
+	context,
+	status,
+}: {
+	text: string;
+	messageId: string;
+	itemId?: string;
+	context: MessageRowContext;
+	status?: string | null;
+}) => {
+	const title = planTitle(text);
+	const preview = planPreview(text);
+	return (
+		<View className="px-2 py-2">
+			<Pressable
+				accessibilityRole="button"
+				onPress={() => {
+					router.push({
+						pathname: "/plan-viewer",
+						params: {
+							conn: context.connectionKey,
+							sessionId: context.sessionId,
+							messageId,
+							...(itemId === undefined ? {} : { itemId }),
+						},
+					});
+				}}
+				className="rounded-3xl border border-border bg-card px-4 py-4 active:opacity-80"
+				style={{ borderCurve: "continuous" }}
+			>
+				<View className="mb-3 flex-row items-center gap-2">
+					<Text className="font-sans-medium text-[13px] text-muted-foreground">
+						{status ? `Plan · ${status}` : "Plan"}
+					</Text>
+					<Text className="ml-auto font-sans text-[12px] text-muted-foreground">
+						Open
+					</Text>
+				</View>
+				<Text
+					className="font-sans-bold text-[22px] leading-7 text-foreground"
+					numberOfLines={2}
+				>
+					{title}
+				</Text>
+				<Text
+					className="mt-3 font-sans text-[15px] leading-6 text-muted-foreground"
+					numberOfLines={5}
+				>
+					{preview}
+				</Text>
+			</Pressable>
+		</View>
+	);
+};
+
+const ThinkingRow = ({
+	content,
+	shimmer,
+}: {
+	content: Extract<MessageContent, { _tag: "thinking" }>;
+	shimmer: boolean;
+}) => (
+	<PlainEventRow
+		icon="thinking"
+		label={content.redacted ? "Redacted thinking" : "Thinking"}
+		shimmer={shimmer && !content.redacted}
+	>
+		<Text className="font-sans text-[13px] leading-5 text-muted-foreground">
+			{content.redacted ? "Thought content was redacted." : content.text}
+		</Text>
+	</PlainEventRow>
+);
+
+const ToolUseRow = ({
+	content,
+	result,
+	shimmer,
+	connectionKey,
+	sessionId,
+	workspaceRoot,
+}: {
+	content: Extract<MessageContent, { _tag: "tool_use" }>;
+	result?: ToolResultRecord;
+	shimmer: boolean;
+	connectionKey: string;
+	sessionId: SessionId;
+	workspaceRoot?: string;
+}) => {
+	const view = buildToolPresentation(content, result);
+	const running = view.resultLabel === "Running";
+	const openDetails = () =>
+		router.push({
+			pathname: "/c/[conn]/session/[sessionId]/tool/[itemId]",
+			params: {
+				conn: connectionKey,
+				sessionId,
+				itemId: content.itemId,
+			},
+		});
+
+	if (view.isError) {
+		return (
+			<ExpandableEventRow
+				icon={view.icon}
+				title={view.label}
+				detail={view.detail ?? undefined}
+				badge={view.resultLabel}
+				danger
+			>
+				<Text className="font-mono text-xs leading-5 text-muted-foreground">
+					{view.body}
+				</Text>
+				{view.resultBody !== null ? (
+					<View className="mt-3 border-t border-border pt-3">
+						<Text className="mb-1 font-sans-medium text-[11px] uppercase text-danger">
+							Error
+						</Text>
+						<Text
+							selectable
+							className="font-mono text-xs leading-5 text-muted-foreground"
+							numberOfLines={8}
+						>
+							{view.resultBody}
+						</Text>
+					</View>
+				) : null}
+				<DetailButton onPress={openDetails} />
+			</ExpandableEventRow>
+		);
+	}
+
+	if (view.fileChangeTotals !== null) {
+		return (
+			<View className="px-2">
+				{view.fileChanges.map((change) => (
+					<EditedFileRow
+						key={change.path}
+						change={change}
+						workspaceRoot={workspaceRoot}
+						shimmer={shimmer && running}
+					/>
+				))}
+			</View>
+		);
+	}
+
+	return (
+		<PlainEventRow
+			icon={view.icon}
+			label={view.inlineLabel}
+			shimmer={shimmer && running}
+		>
+			<Text className="font-mono text-xs leading-5 text-muted-foreground">
+				{view.body}
+			</Text>
+			{view.resultBody !== null ? (
+				<Text
+					selectable
+					className="mt-2 font-mono text-xs leading-5 text-muted-foreground"
+					numberOfLines={8}
+				>
+					{view.resultBody}
+				</Text>
+			) : null}
+			{view.kind === "read" ||
+			(view.kind === "shell" &&
+				(view.body.length > 600 || (view.resultBody?.length ?? 0) > 1_200)) ? (
+				<DetailButton onPress={openDetails} />
+			) : null}
+		</PlainEventRow>
+	);
+};
+
+function EditedFileRow({
+	change,
+	workspaceRoot,
+	shimmer,
+}: {
+	change: FileChange;
+	workspaceRoot?: string;
+	shimmer: boolean;
+}) {
+	const [expanded, setExpanded] = useState(false);
+	const path = workspaceDisplayPath(change.path, workspaceRoot);
+	return (
+		<View>
+			<Pressable
+				accessibilityRole="button"
+				accessibilityLabel={`${expanded ? "Collapse" : "Expand"} changes for ${path}`}
+				accessibilityState={{ expanded }}
+				onPress={() => setExpanded((value) => !value)}
+				hitSlop={8}
+				className="flex-row items-center gap-2 py-1.5 active:opacity-60"
+			>
+				<FileIcon path={change.path} size={16} />
+				{shimmer ? (
+					<ShimmerText className="min-w-0 flex-1 font-mono text-[13px] text-foreground">
+						{path}
+					</ShimmerText>
+				) : (
+					<Text
+						className="min-w-0 flex-1 font-mono text-[13px] text-foreground"
+						numberOfLines={1}
+						ellipsizeMode="middle"
+					>
+						{path}
+					</Text>
+				)}
+				<Text
+					className="font-mono text-[12px]"
+					style={{ color: colors.accent, fontVariant: ["tabular-nums"] }}
+				>
+					+{change.added}
+				</Text>
+				<Text
+					className="font-mono text-[12px]"
+					style={{
+						color: colors.diffRemoved,
+						fontVariant: ["tabular-nums"],
+					}}
+				>
+					−{change.removed}
+				</Text>
+				{expanded ? (
+					<ChevronDown size={12} color={colors.secondaryFg} />
+				) : (
+					<ChevronRight size={12} color={colors.secondaryFg} />
+				)}
+			</Pressable>
+			{expanded ? (
+				<View className="ml-6 overflow-hidden rounded-xl border border-border bg-background">
+					<InlineFileDiff lines={change.lines} lineLimit={80} />
+				</View>
+			) : null}
+		</View>
+	);
+}
+
+const DetailButton = ({ onPress }: { onPress: () => void }) => (
+	<Pressable
+		accessibilityRole="button"
+		accessibilityLabel="Open tool details"
+		onPress={onPress}
+		hitSlop={10}
+		className="mt-1 min-h-11 self-start justify-center active:opacity-60"
+	>
+		<Text className="font-sans-medium text-[11px] text-muted-foreground">
+			View detail
+		</Text>
+	</Pressable>
+);
+
+const ToolResultRow = ({
+	content,
+}: {
+	content: Extract<MessageContent, { _tag: "tool_result" }>;
+}) => {
+	const image = toolImageResult(content.output);
+	if (image !== null) {
+		const uri = toolImageDataUrl(image);
+		return (
+			<View className="px-2 py-2">
+				<Pressable
+					accessibilityRole="imagebutton"
+					accessibilityLabel="Open tool image"
+					onPress={() =>
+						router.push({
+							pathname: "/media-viewer",
+							params: { uri, name: "Tool image" },
+						})
+					}
+					className="self-start overflow-hidden rounded-xl border border-border bg-card active:opacity-80"
+				>
+					<Image
+						source={{ uri }}
+						style={{ width: 240, height: 180 }}
+						contentFit="contain"
+						accessibilityLabel="Image produced by tool"
+					/>
+				</Pressable>
+			</View>
+		);
+	}
+	return content.isError ? (
+		<ExpandableEventRow
+			icon="wrench"
+			title="Tool error"
+			detail={summarizeValue(content.output, 96)}
+			danger
+		>
+			<Text
+				selectable
+				className="font-mono text-xs leading-5 text-muted-foreground"
+			>
+				{summarizeValue(content.output)}
+			</Text>
+		</ExpandableEventRow>
+	) : (
+		<PlainEventRow icon="wrench" label="Tool result">
+			<Text
+				selectable
+				className="font-mono text-xs leading-5 text-muted-foreground"
+			>
+				{summarizeValue(content.output)}
+			</Text>
+		</PlainEventRow>
+	);
+};
+
+const ErrorRow = ({ message }: { message: string }) => (
+	<View className="px-2 py-1">
+		<InlineErrorNotice message={message} compact />
+	</View>
+);
+
+const UsageLimitRow = ({
+	content,
+}: {
+	content: Extract<MessageContent, { _tag: "usage_limit" }>;
+}) => {
+	const reset = formatResetTime(content.resetsAt);
+	const detail =
+		reset !== null
+			? `${content.label} · resets ${reset}`
+			: content.label.length > 0
+				? content.label
+				: "This provider has reached its current usage window.";
+
+	return (
+		<View className="px-2 py-1.5">
+			<View
+				style={{ borderCurve: "continuous" }}
+				className="rounded-2xl border border-primary/25 bg-primary/10 px-3 py-2.5"
+			>
+				<View className="flex-row items-center gap-2">
+					<AlertCircle size={15} color={colors.accent} />
+					<Text className="font-sans-medium text-sm text-foreground">
+						Limit reached
+					</Text>
+					{typeof content.usedPercent === "number" ? (
+						<Text className="ml-auto rounded-full bg-primary/15 px-2 py-0.5 font-sans-medium text-[11px] text-accent">
+							{Math.round(content.usedPercent)}%
+						</Text>
+					) : null}
+				</View>
+				<Text
+					className="mt-1 font-sans text-[13px] leading-5 text-muted-foreground"
+					numberOfLines={2}
+				>
+					{detail}
+				</Text>
+			</View>
+		</View>
+	);
+};
+
+const ModelSwitchRow = ({
+	content,
+	connectionKey,
+}: {
+	content: Extract<MessageContent, { _tag: "model_switch" }>;
+	connectionKey: string;
+}) => {
+	const { message } = useMessages(["chat"]);
+	const catalog = useAtomValue(connectionModelCatalogAtom(connectionKey));
+	return (
+		<View className="items-center px-4 py-2">
+			<Text className="text-center font-sans text-[11px] leading-5 text-muted-foreground">
+				<RichMessage
+					id="chat:message_row_model_switched"
+					values={{
+						from: modelLabelFor(
+							catalog,
+							content.fromProviderId,
+							content.fromModel,
+						),
+						to: modelLabelFor(catalog, content.toProviderId, content.toModel),
+					}}
+					components={{ from: <Text />, to: <Text /> }}
+				/>
+				{" · "}
+				{message(
+					content.context === "handoff"
+						? "chat:message_row_context_handed_off"
+						: "chat:message_row_context_preserved",
+				)}
+			</Text>
+		</View>
+	);
+};
+
+const InlineSystemRow = ({ label }: { label: string }) => (
+	<View className="items-center px-2 py-1">
+		<Text className="rounded-full bg-muted px-2.5 py-1 font-sans text-[11px] text-muted-foreground">
+			{label}
+		</Text>
+	</View>
+);
+
+const ContextCompactionRow = ({
+	content,
+}: {
+	content: Extract<MessageContent, { _tag: "context_compaction" }>;
+}) => {
+	const { message } = useMessages(["chat"]);
+	const before = formatTokens(content.beforeTokens);
+	const after = formatTokens(content.afterTokens);
+	const detail =
+		before !== null && after !== null
+			? `${before} → ${after}`
+			: content.status === "in_progress"
+				? message("chat:message_row_compacting")
+				: content.status === "failed"
+					? message("chat:message_row_compaction_failed")
+					: message("chat:message_row_chat_compacted");
+
+	return (
+		<ExpandableEventRow
+			icon="hourglass"
+			title={
+				content.status === "in_progress"
+					? message("chat:message_row_compacting")
+					: content.status === "failed"
+						? message("chat:message_row_compaction_failed")
+						: message("chat:message_row_chat_compacted")
+			}
+			detail={detail}
+			badge={formatDuration(content.durationMs)}
+		>
+			<Text className="font-sans text-sm leading-5 text-muted-foreground">
+				{before !== null && after !== null
+					? `${before} → ${after}`
+					: content.status === "failed"
+						? message("chat:message_row_compaction_failed")
+						: content.status === "in_progress"
+							? message("chat:message_row_compacting")
+							: message("chat:message_row_chat_compacted")}
+			</Text>
+		</ExpandableEventRow>
+	);
+};
+
+const SubagentSummaryRow = ({
+	content,
+}: {
+	content: Extract<MessageContent, { _tag: "subagent_summary" }>;
+}) => (
+	<ExpandableEventRow
+		icon="agent"
+		title={content.isError ? `${content.agentName} failed` : content.agentName}
+		detail={`${content.turns} ${content.turns === 1 ? "turn" : "turns"} · ${formatDuration(content.durationMs)}`}
+		danger={content.isError}
+	>
+		<Text
+			selectable
+			className="font-sans text-sm leading-5 text-muted-foreground"
+		>
+			{content.summary}
+		</Text>
+	</ExpandableEventRow>
+);
+
+const AnsweredQuestion = ({
+	questions,
+}: {
+	questions: readonly UserQuestion[];
+}) => (
+	<View className="px-2 py-2">
+		<View className="rounded-2xl border border-border bg-card px-3 py-3 opacity-70">
+			<Text className="font-sans-medium text-xs text-muted-foreground">
+				Question · answered
+			</Text>
+			{questions.map((question, questionIndex) => (
+				<Text
+					key={`${question.question}:${question.options.join("|")}`}
+					className={cn(
+						"font-sans-medium text-sm text-foreground",
+						questionIndex > 0 ? "mt-2" : "mt-1",
+					)}
+				>
+					{question.question}
+				</Text>
+			))}
+		</View>
+	</View>
+);
+
+const AnswerBubble = ({
+	content,
+	questions,
+}: {
+	content: Extract<MessageContent, { _tag: "user_question_answer" }>;
+	questions?: readonly UserQuestion[];
+}) => {
+	const labels = content.answers.flatMap((answer) => {
+		const options = questions?.[answer.questionIndex]?.options ?? [];
+		const picked = answer.selected
+			.map((index) => options[index])
+			.filter((label): label is string => label !== undefined);
+		const other = answer.other?.trim();
+		return other !== undefined && other.length > 0
+			? [...picked, other]
+			: picked;
+	});
+	const summary = content.resolution
+		? `Question ${content.resolution === "timed-out" ? "timed out" : "cancelled"}`
+		: labels.length > 0
+			? labels.join(", ")
+			: "Answered";
+	return (
+		<View className="items-end px-3 py-1.5">
+			<View
+				style={{ borderCurve: "continuous" }}
+				className="max-w-[88%] rounded-2xl bg-primary px-3.5 py-2.5"
+			>
+				<Text className="mb-1 font-sans-medium text-xs text-primary-foreground/75">
+					Answer
+				</Text>
+				<Text className="font-sans text-[15px] leading-5 text-primary-foreground">
+					{summary}
+				</Text>
+			</View>
+		</View>
+	);
+};
+
+function UiSpecSource({ spec }: { spec: string }) {
+	const { message } = useMessages(["chat"]);
+	return (
+		<View className="px-2 py-2">
+			<Text className="mb-1 font-sans-medium text-xs text-muted-foreground">
+				{message("chat:message_row_ui_spec_generated")}
+			</Text>
+			<Text
+				selectable
+				className="font-mono text-xs leading-5 text-muted-foreground"
+			>
+				{spec}
+			</Text>
+		</View>
+	);
+}
+
+const FallbackRow = ({ content }: { content: MessageContent }) => (
+	<View className="px-2 py-2">
+		<View className="rounded-2xl border border-border bg-muted px-3 py-2">
+			<Text className="font-sans-medium text-xs text-muted-foreground">
+				{content._tag}
+			</Text>
+			<Text
+				className="mt-1 font-mono text-xs leading-5 text-muted-foreground"
+				numberOfLines={4}
+			>
+				{safeSummary(content)}
+			</Text>
+		</View>
+	</View>
+);
+
+const richChips = (content: Extract<MessageContent, { _tag: "user_rich" }>) => [
+	...content.fileRefs.map((file) => file.relPath),
+	...content.skillRefs.map((skill) => skill.name),
+];
+
+function PlainEventRow({
+	icon,
+	label,
+	shimmer = false,
+	children,
+}: {
+	icon: "thinking" | "hourglass" | MobileToolIcon;
+	label: string;
+	shimmer?: boolean;
+	children: React.ReactNode;
+}) {
+	const [expanded, setExpanded] = useState(false);
+	const Chevron = expanded ? ChevronDown : ChevronRight;
+	return (
+		<Pressable
+			accessibilityRole="button"
+			accessibilityState={{ expanded }}
+			onPress={() => setExpanded((value) => !value)}
+			className="px-2 py-1.5 active:opacity-60"
+		>
+			<View className="flex-row items-center gap-2">
+				{renderToolRowIcon(icon, colors.secondaryFg)}
+				{shimmer ? (
+					<ShimmerText className="min-w-0 flex-1 font-sans text-[13px] text-muted-foreground">
+						{label}
+					</ShimmerText>
+				) : (
+					<Text
+						className="min-w-0 flex-1 font-sans text-[13px] text-muted-foreground"
+						numberOfLines={1}
+						ellipsizeMode="middle"
+					>
+						{label}
+					</Text>
+				)}
+				<Chevron size={12} color={colors.secondaryFg} />
+			</View>
+			{expanded ? <View className="mt-2 pl-6">{children}</View> : null}
+		</Pressable>
+	);
+}
+
+function ExpandableEventRow({
+	title,
+	detail,
+	badge,
+	danger,
+	icon,
+	shimmer = false,
+	children,
+}: {
+	title: string;
+	detail?: string;
+	badge?: string;
+	danger?: boolean;
+	icon: "thinking" | "hourglass" | MobileToolIcon;
+	shimmer?: boolean;
+	children: React.ReactNode;
+}) {
+	const [expanded, setExpanded] = useState(false);
+	const Chevron = expanded ? ChevronDown : ChevronRight;
+	return (
+		<View className="px-2 py-1">
+			<Pressable
+				accessibilityRole="button"
+				accessibilityState={{ expanded }}
+				onPress={() => setExpanded((value) => !value)}
+				className={cn(
+					"rounded-xl px-3 py-2 active:bg-muted",
+					!danger && "bg-card",
+				)}
+				style={{ borderCurve: "continuous" }}
+			>
+				<View className="flex-row items-center gap-2">
+					<Chevron size={15} color={colors.secondaryFg} />
+					{renderToolRowIcon(icon, danger ? colors.danger : colors.accent)}
+					{shimmer && !danger ? (
+						<ShimmerText className="min-w-0 flex-1 font-sans-medium text-[13px] text-foreground">
+							{title}
+						</ShimmerText>
+					) : (
+						<Text
+							className={cn(
+								"min-w-0 flex-1 font-sans-medium text-[13px]",
+								danger ? "text-danger" : "text-foreground",
+							)}
+							numberOfLines={1}
+						>
+							{title}
+						</Text>
+					)}
+					{badge ? (
+						<Text
+							className={cn(
+								"rounded-full px-2 py-0.5 font-sans-medium text-[11px]",
+								danger
+									? "bg-danger/15 text-danger"
+									: "bg-muted text-muted-foreground",
+							)}
+						>
+							{badge}
+						</Text>
+					) : null}
+				</View>
+				{detail ? (
+					<Text
+						className="mt-1 pl-11 font-sans text-[12px] leading-4 text-muted-foreground"
+						numberOfLines={expanded ? 3 : 1}
+					>
+						{detail}
+					</Text>
+				) : null}
+				{expanded ? <View className="mt-3 pl-6">{children}</View> : null}
+			</Pressable>
+		</View>
+	);
+}
+
+const renderToolRowIcon = (
+	icon: "thinking" | "hourglass" | MobileToolIcon,
+	color: ColorValue,
+) => {
+	switch (icon) {
+		case "thinking":
+			return <Brain size={14} color={color} />;
+		case "hourglass":
+			return <Hourglass size={14} color={color} />;
+		case "terminal":
+			return <Terminal size={14} color={color} />;
+		case "file":
+			return <FileCode2 size={14} color={color} />;
+		case "edit":
+			return <FilePenLine size={14} color={color} />;
+		case "search":
+			return <Search size={14} color={color} />;
+		case "folder":
+			return <Folder size={14} color={color} />;
+		case "agent":
+			return <Bot size={14} color={color} />;
+		case "web":
+			return <Globe size={14} color={color} />;
+		case "camera":
+			return <Camera size={14} color={color} />;
+		case "todo":
+			return <CheckSquare size={14} color={color} />;
+		case "wrench":
+			return <Wrench size={14} color={color} />;
+	}
+};
+
+function formatResetTime(value: string | null): string | null {
+	if (value === null) {
+		return null;
+	}
+	const date = new Date(value);
+	if (Number.isNaN(date.getTime())) {
+		return value;
+	}
+	try {
+		return new Intl.DateTimeFormat(undefined, {
+			hour: "numeric",
+			minute: "2-digit",
+			timeZoneName: "short",
+		}).format(date);
+	} catch {
+		return date.toLocaleTimeString();
+	}
+}
+
+const formatMessageTime = (date: Date): string =>
+	date.toLocaleTimeString([], {
+		hour: "numeric",
+		minute: "2-digit",
+	});
+
+function formatTokens(value: number | null): string | null {
+	if (value === null) {
+		return null;
+	}
+	if (value >= 1000) {
+		return `${Math.round(value / 100) / 10}k tokens`;
+	}
+	return `${value} tokens`;
+}
+
+function formatDuration(durationMs: number): string {
+	if (!Number.isFinite(durationMs) || durationMs <= 0) {
+		return "now";
+	}
+	if (durationMs < 1000) {
+		return `${Math.round(durationMs)}ms`;
+	}
+	return `${Math.round(durationMs / 1000)}s`;
+}
+
+function safeSummary(value: unknown): string {
+	try {
+		return summarizeValue(value);
+	} catch {
+		return "Unsupported message payload";
+	}
+}
+
+const planTitle = (text: string): string => {
+	const heading = text
+		.split(/\r\n|\r|\n/)
+		.map((line) => line.trim())
+		.find((line) => /^#{1,3}\s+\S/.test(line));
+	if (heading !== undefined) return heading.replace(/^#{1,3}\s+/, "");
+	return "Implementation Plan";
+};
+
+const planPreview = (text: string): string =>
+	text
+		.replace(/^#{1,6}\s+/gm, "")
+		.replace(/^\s*[-*]\s+/gm, "• ")
+		.split(/\r\n|\r|\n/)
+		.map((line) => line.trim())
+		.filter((line) => line.length > 0)
+		.slice(1, 8)
+		.join("\n");
+
+const planResultStatus = (
+	result: ToolResultRecord | undefined,
+): string | null => {
+	if (result === undefined) return null;
+	const text = safeSummary(result.output).toLowerCase();
+	if (text.includes("approved")) return "Approved";
+	if (text.includes("feedback") || text.includes("cancel"))
+		return "Feedback sent";
+	if (text.includes("hand")) return "Handed off";
+	if (text.includes("abandon")) return "Abandoned";
+	return "Resolved";
+};
+
+function NativeChildFork({
+	messageId,
+	itemId,
+	nativeChildId,
+	context,
+}: {
+	messageId: Message["id"];
+	itemId: string;
+	nativeChildId?: string;
+	context: MessageRowContext;
+}) {
+	const { message } = useMessages(["chat"]);
+	const step =
+		nativeChildId === undefined
+			? null
+			: completedNativeChildStep(context.executionSteps ?? [], {
+					itemId,
+					nativeChildId,
+				});
+	if (step === null || context.onForkNativeChild === undefined) return null;
+	return (
+		<Button
+			className="h-7 self-start"
+			variant="ghost"
+			onPress={() => context.onForkNativeChild?.(messageId, step.id)}
+		>
+			{message("chat:fork_menu_fork_in_new_tab")}
+		</Button>
+	);
+}

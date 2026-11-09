@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.26.0-preview.3 - 2026-11-09
+
+### Added
+
+- Inline UI blocks for agent-generated cards, charts, tables, steps and forms, with replies sent back into the conversation.
+- Fold completed turns into expandable summaries, and show file mentions, attachments and handoff context as message chips.
+- Native iOS and Android app sources with Rust remote-access integration. Mobile store downloads are not included in this desktop release.
+- Create folders directly from the New project picker, and open Review in a side tab.
+
+### Changed
+
+- Refresh the workspace with dithered buttons, icons and working indicators, clearer pull request and chat status glyphs, translucent panes and a floating session card.
+- Share Git status and pull request subscriptions across views, keep sidebar change counts live, and simplify the Git panel and inline review threads.
+- Move updates into a quiet footer control with release notes, allow restart to wait for agents, preserve verified staged updates, and offer retry after installation failures.
+- Start new worktrees from the latest remote commits with progress feedback.
+- Archive threads by stopping their agents, subagents and background commands; keep the worktree when shutdown cannot complete safely.
+
+### Fixed
+
+- Prevent Linux file-watcher exhaustion by sharing workspace watches and bounding watcher allocation.
+- Keep Git status fresh during long builds and preserve unrelated pull request action errors when subscriptions recover.
+- Avoid a link-detector panic on non-ASCII text, and keep chat search above the transcript fade.
+- Preserve drafts and retry failed UI-block replies, release inactive form views, and retain context-chip padding.
+- Resume interrupted turns after an update restart without scheduling continuation after an ordinary quit or a user stop.
+
 ## 0.26.0-preview.2 - 2026-11-05
 
 ### Added

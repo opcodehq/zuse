@@ -296,11 +296,9 @@ impl Shell {
                     })
                     .child(SharedString::from(format!("#{}", model.number)))
                     .child(if self.summary_pr.busy {
-                        crate::loaders::ring_spinner(
+                        crate::loaders::dither_ring(
                             "session-info-pull-request-busy",
                             12.0,
-                            1.5,
-                            theme.text_muted.opacity(0.25),
                             theme.text_muted,
                         )
                     } else {

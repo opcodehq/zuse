@@ -1,0 +1,61 @@
+import { describe, expect, test, vi } from "vitest";
+
+import { isLegacyPairingUrl, pairWithDesktop } from "../../../src/lib/pairing";
+
+describe("mobile pairing operation", () => {
+	test("adds scanned connections as paired", async () => {
+		const add = vi.fn(async (input) => ({ key: "env-1", ...input }));
+
+		const result = await pairWithDesktop(
+			"zuse:///connect/pair?pairingUrl=ws%3A%2F%2F192.168.1.2%3A8787#token=zp_code",
+			add,
+		);
+
+		expect(add).toHaveBeenCalledWith({
+			host: "192.168.1.2",
+			port: 8787,
+			token: "zp_code",
+			wsBaseUrl: "ws://192.168.1.2:8787/rpc",
+			httpBaseUrl: "http://192.168.1.2:8787",
+			source: "paired",
+		});
+		expect(result).toMatchObject({ key: "env-1" });
+	});
+
+	test("pairs from the same browser URL used by the web client", async () => {
+		const add = vi.fn(async (input) => ({ key: "env-1", ...input }));
+
+		await pairWithDesktop("http://192.168.1.2:8787/#pair=ABCD1234", add);
+
+		expect(add).toHaveBeenCalledWith({
+			host: "192.168.1.2",
+			port: 8787,
+			token: "ABCD1234",
+			wsBaseUrl: "ws://192.168.1.2:8787/rpc",
+			httpBaseUrl: "http://192.168.1.2:8787",
+			source: "paired",
+		});
+	});
+
+	test("rejects a pairing link without a token", async () => {
+		await expect(
+			pairWithDesktop(
+				"zuse:///connect/pair?pairingUrl=ws%3A%2F%2F192.168.1.2%3A8787",
+				vi.fn(),
+			),
+		).rejects.toThrow("does not include a pairing token");
+	});
+
+	test("routes legacy external pairing links through the shared flow", () => {
+		expect(
+			isLegacyPairingUrl(
+				"zuse://?pairingUrl=ws%3A%2F%2F192.168.1.2%3A8787#token=zp_code",
+			),
+		).toBe(true);
+		expect(
+			isLegacyPairingUrl(
+				"zuse:///connect/pair?pairingUrl=ws%3A%2F%2F192.168.1.2%3A8787#token=zp_code",
+			),
+		).toBe(false);
+	});
+});

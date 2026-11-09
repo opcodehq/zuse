@@ -2740,8 +2740,8 @@ fn home_folder_row(
         )
         .when(is_repo, |el| {
             el.child(
-                icon(icons::GIT_BRANCH)
-                    .size(px(14.0))
+                icon(icons::GIT_STATE_BRANCH)
+                    .size(px(12.0))
                     .flex_none()
                     .text_color(theme.text_muted),
             )
@@ -2830,6 +2830,33 @@ pub(crate) fn status_dot_color(status: ChatIndicator, theme: &Theme) -> gpui::Hs
             theme.success.opacity(0.9) // emerald-400
         }
         ChatIndicator::Idle => crate::theme::ink(0.14),
+    }
+}
+
+/// The mark for a chat that needs attention, each reason with its own shape;
+/// routine states (working, done, idle) have none.
+pub(crate) fn status_glyph(
+    status: ChatIndicator,
+    queued: bool,
+    undelivered: bool,
+    awaiting: Option<zuse_protocol::AwaitingInputKind>,
+    theme: &Theme,
+) -> Option<(&'static str, gpui::Hsla)> {
+    use zuse_protocol::AwaitingInputKind as Kind;
+    if undelivered {
+        return Some((icons::STATUS_FAILED, theme.danger.opacity(0.8)));
+    }
+    if queued {
+        return Some((icons::STATUS_QUEUED, theme.text_muted));
+    }
+    match status {
+        ChatIndicator::Errored => Some((icons::STATUS_FAILED, theme.danger.opacity(0.8))),
+        ChatIndicator::AwaitingInput => Some(match awaiting {
+            Some(Kind::Plan) => (icons::STATUS_PLAN, theme.success),
+            Some(Kind::Permission) => (icons::STATUS_PERMISSION, theme.warning),
+            Some(Kind::Question) | None => (icons::STATUS_QUESTION, theme.warning),
+        }),
+        _ => None,
     }
 }
 
@@ -7787,12 +7814,7 @@ impl Shell {
                         .child(popover::dialog_field(input.into_any_element())),
                 )
                 .child(
-                    div()
-                        .mt(px(16.0))
-                        .flex()
-                        .flex_row()
-                        .justify_end()
-                        .gap(px(8.0))
+                    popover::dialog_footer(&theme)
                         .child(
                             popover::btn_ghost(
                                 &theme,
@@ -7845,12 +7867,7 @@ impl Shell {
                 .child(popover::dialog_title(&theme, "Remove project?"))
                 .child(div().mt(px(6.0)).child(popover::dialog_body(&theme, copy)))
                 .child(
-                    div()
-                        .mt(px(16.0))
-                        .flex()
-                        .flex_row()
-                        .justify_end()
-                        .gap(px(8.0))
+                    popover::dialog_footer(&theme)
                         .child(
                             popover::btn_ghost(
                                 &theme,

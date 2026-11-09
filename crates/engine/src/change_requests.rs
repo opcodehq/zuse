@@ -595,6 +595,8 @@ mod tests {
             state: ChangeRequestState::Open,
             base_ref: "main".into(),
             head_ref: "feature/status".into(),
+            is_draft: false,
+            review_decision: Default::default(),
         }
     }
 

@@ -63,6 +63,10 @@ pub const BETA_MESSAGE: &str = "Cloud computers are in beta and not available he
 /// off; otherwise they are on for every cloud except production (staging,
 /// local development), so production builds never offer them.
 pub fn beta_enabled() -> bool {
+    // Unit tests exercise cloud code against the default (production) origin.
+    if cfg!(test) && std::env::var_os("ZUSE_CLOUD_BETA").is_none() {
+        return true;
+    }
     beta_enabled_for(
         std::env::var("ZUSE_CLOUD_BETA").ok().as_deref(),
         &crate::api_origins::from_env().cloud,

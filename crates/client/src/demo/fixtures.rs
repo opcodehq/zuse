@@ -449,6 +449,7 @@ pub(crate) fn seed(
             doc.upsert_session(&Session {
                 last_completed_turn: None,
                 running_subagents: 0,
+                awaiting_input: None,
                 background_tasks: Vec::new(),
                 chat_id: demo.id.into(),
                 device_id: demo.device.into(),
@@ -472,6 +473,8 @@ pub(crate) fn seed(
                     state,
                     base_ref: "main".into(),
                     head_ref: source.branch.clone(),
+                    is_draft: false,
+                    review_decision: Default::default(),
                 }),
                 updated_at: Utc::now(),
             });

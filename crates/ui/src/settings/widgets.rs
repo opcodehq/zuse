@@ -946,13 +946,6 @@ impl RenderOnce for SwitchVisual {
         if (position - target).abs() > 0.001 {
             window.request_animation_frame();
         }
-        let track = if self.on {
-            self.theme.accent
-        } else if self.theme.appearance.is_dark() {
-            self.theme.surface_raised
-        } else {
-            self.theme.surface_raised
-        };
         let thumb = if self.theme.appearance.is_dark() {
             self.theme.text
         } else {
@@ -964,12 +957,15 @@ impl RenderOnce for SwitchVisual {
             .w(px(SWITCH_WIDTH))
             .h(px(SWITCH_HEIGHT))
             .rounded_full()
-            .bg(track)
+            .when(!self.on, |track| track.bg(self.theme.surface_raised))
             .border_1()
             .border_color(if self.on {
                 self.theme.accent.opacity(0.6)
             } else {
                 self.theme.border
+            })
+            .when(self.on, |track| {
+                track.child(zuse_viewport::dither::fill_color(self.theme.accent, 10.0))
             })
             .child(
                 div()
@@ -1637,21 +1633,16 @@ pub fn action_button(theme: &Theme, tone: ActionTone) -> gpui::Div {
                 .text_color(theme.text)
                 .hover(move |s| s.bg(lifted))
         }
-        // Commits share the app's primary dithered action, so a page's one
-        // decisive button reads the same everywhere.
-        ActionTone::Solid => button
-            .relative()
-            .overflow_hidden()
-            .bg(gpui::rgb(0x13150f))
-            .font_weight(gpui::FontWeight::MEDIUM)
-            .text_color(gpui::white())
-            .child(zuse_viewport::styling::dither_background(true, true))
-            .hover(|s| s.opacity(0.95)),
-        // The dialogs' destructive fill (`popover::btn_danger`).
-        ActionTone::Danger => button
-            .bg(theme.danger_strong)
-            .text_color(gpui::white())
-            .hover(|s| s.opacity(0.9)),
+        ActionTone::Solid => {
+            crate::popover::dither_key(button, theme, crate::popover::DitherKey::Primary, 7.0)
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .hover(|s| s.opacity(0.9))
+        }
+        // The dialogs' destructive face (`popover::btn_danger`).
+        ActionTone::Danger => {
+            crate::popover::dither_key(button, theme, crate::popover::DitherKey::Danger, 7.0)
+                .hover(|s| s.opacity(0.9))
+        }
     }
 }
 

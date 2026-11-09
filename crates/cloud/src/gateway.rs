@@ -20,6 +20,10 @@ const FENCED: (u16, &str) = (4101, "workspace generation changed");
 const EXPIRED: (u16, &str) = (4102, "workspace authorization expired");
 const PRESSURE: (u16, &str) = (4104, "workspace gateway backpressure");
 
+#[cfg(test)]
+#[path = "gateway/native_acceptance.rs"]
+mod native_acceptance;
+
 #[derive(Clone)]
 pub struct Grant {
     pub workspace: String,

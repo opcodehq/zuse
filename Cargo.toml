@@ -4,6 +4,7 @@ exclude = ["vendor/zkit"]
 members = [
     "crates/i18n",
     "crates/simulator",
+    "crates/mobile-bridge",
     "apps/cloud",
     "apps/cloud-runtime",
     "crates/cloud-runtime",
@@ -112,6 +113,7 @@ gpui_platform = { git = "https://github.com/opcodehq/zkit", rev = "14d9b82fb65d8
 ] }
 gpui_tokio = { git = "https://github.com/opcodehq/zkit", rev = "14d9b82fb65d86f63b6332cb3d616f1ab0ada103" }
 gpui-base = { git = "https://github.com/opcodehq/zkit", rev = "14d9b82fb65d86f63b6332cb3d616f1ab0ada103" }
+zkit-dither = { git = "https://github.com/opcodehq/zkit", rev = "14d9b82fb65d86f63b6332cb3d616f1ab0ada103" }
 
 # diffs
 similar = "2"
@@ -156,7 +158,7 @@ clap = { version = "4", features = ["derive"] }
 chrono = { version = "0.4", features = ["serde"] }
 sha2 = "0.10"
 zip = { version = "7.2", default-features = false, features = ["deflate-flate2-zlib-rs"] }
-notify = "7"
+notify = "8.2"
 portable-pty = "0.8"
 alacritty_terminal = "0.26"
 pulldown-cmark = "0.12"

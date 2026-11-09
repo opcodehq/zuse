@@ -2186,6 +2186,7 @@ mod tests {
             started_at: None,
             updated_at: at,
             running_subagents: 0,
+            awaiting_input: None,
             background_tasks: Vec::new(),
         }
     }

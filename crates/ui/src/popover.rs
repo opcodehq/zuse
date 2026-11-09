@@ -1284,6 +1284,38 @@ pub fn dialog_card(theme: &Theme) -> gpui::Div {
         .text_color(theme.text)
 }
 
+/// [`dialog_card`]'s padding, which [`dialog_footer`] bleeds past.
+const DIALOG_INSET: f32 = 20.0;
+
+/// The tint that sets a dialog's action band apart from its body.
+pub fn dialog_footer_fill(theme: &Theme) -> gpui::Hsla {
+    gpui::black().opacity(if theme.appearance.is_dark() {
+        0.24
+    } else {
+        0.04
+    })
+}
+
+/// A dialog's action row: a tinted band running to the card's edges. Must be
+/// the last child of a [`dialog_card`] that keeps its default padding.
+pub fn dialog_footer(theme: &Theme) -> gpui::Div {
+    div()
+        .mt(px(DIALOG_INSET))
+        .mx(px(-DIALOG_INSET))
+        .mb(px(-DIALOG_INSET))
+        .px(px(DIALOG_INSET))
+        .py(px(12.0))
+        .rounded_b(px(15.0))
+        .border_t_1()
+        .border_color(hairline(0.08))
+        .bg(dialog_footer_fill(theme))
+        .flex()
+        .flex_row()
+        .items_center()
+        .justify_end()
+        .gap(px(8.0))
+}
+
 /// Dialog title: `text-[15px] font-semibold tracking-tight`.
 pub fn dialog_title(theme: &Theme, title: &str) -> gpui::Div {
     div()
@@ -1345,55 +1377,81 @@ pub fn btn_ghost(theme: &Theme, label: &str, fade_key: impl Into<SharedString>) 
 pub(crate) const DITHER_KEY_RGB: [u8; 3] = [151, 183, 76];
 pub(crate) const DITHER_KEY_RADIUS: f32 = 7.0;
 
-/// Primary button: the send key's dithered olive plate with a white label,
-/// 28px tall so it sits level with the composer keys.
+/// Primary button: the send key's dithered olive plate with a white label.
 pub fn btn_primary(theme: &Theme, label: &str) -> gpui::Div {
-    div()
-        .relative()
-        .h(px(28.0))
-        .px(px(10.0))
-        .flex()
-        .flex_none()
-        .items_center()
-        .justify_center()
-        .rounded(px(DITHER_KEY_RADIUS))
-        // The texture is tuned for a dark plate; a light card gets a deep
-        // olive base so the white label keeps its contrast.
-        .when(theme.appearance == crate::theme::Appearance::Light, |el| {
-            el.bg(gpui::hsla(80.0 / 360.0, 0.28, 0.2, 1.0))
-        })
-        .border_1()
-        .border_color(theme.accent.opacity(0.4))
-        .text_size(px(12.0))
-        .font_weight(gpui::FontWeight::MEDIUM)
-        .text_color(gpui::white())
-        .cursor_pointer()
-        .hover(|s| s.opacity(0.88))
-        .child(zuse_viewport::dither::fill(
-            DITHER_KEY_RGB,
-            DITHER_KEY_RADIUS,
-        ))
-        // Above the absolutely positioned dither fill.
-        .child(
-            div()
-                .relative()
-                .child(SharedString::from(label.to_string())),
-        )
+    dither_button(theme, DitherKey::Primary, label)
 }
 
-/// Destructive button (`btnDestructive`): the muted red fill.
+/// Destructive button (`btnDestructive`): the send key's texture in red.
 pub fn btn_danger(theme: &Theme, label: &str) -> gpui::Div {
-    div()
-        .px(px(12.0))
-        .py(px(6.0))
-        .rounded(px(8.0))
-        .bg(theme.danger_strong)
-        .text_size(crate::typography::text_sm())
-        .font_weight(gpui::FontWeight::MEDIUM)
+    dither_button(theme, DitherKey::Danger, label)
+}
+
+fn dither_button(theme: &Theme, key: DitherKey, label: &str) -> gpui::Div {
+    dither_key(
+        div()
+            .px(px(12.0))
+            .py(px(5.0))
+            .rounded(px(8.0))
+            .text_size(crate::typography::text_sm())
+            .font_weight(gpui::FontWeight::MEDIUM)
+            .cursor_pointer()
+            .hover(|s| s.opacity(0.9)),
+        theme,
+        key,
+        8.0,
+    )
+    // Above the absolutely positioned dither fill.
+    .child(
+        div()
+            .relative()
+            .child(SharedString::from(label.to_string())),
+    )
+}
+
+#[derive(Clone, Copy)]
+pub enum DitherKey {
+    Primary,
+    Danger,
+}
+
+/// Give a button the send key's ordered-dither face. Call before adding the
+/// label so it paints over the texture; `radius` must match the button's.
+pub fn dither_key<E: Styled + ParentElement>(
+    el: E,
+    theme: &Theme,
+    key: DitherKey,
+    radius: f32,
+) -> E {
+    // The texture is tuned for a dark plate; light cards get a deep base so
+    // the white label keeps its contrast.
+    let light = theme.appearance == crate::theme::Appearance::Light;
+    let (plate, ink, edge): (gpui::Hsla, [u8; 3], gpui::Hsla) = match key {
+        DitherKey::Primary => (
+            if light {
+                gpui::hsla(80.0 / 360.0, 0.28, 0.2, 1.0)
+            } else {
+                gpui::rgb(0x13150f).into()
+            },
+            DITHER_KEY_RGB,
+            theme.accent.opacity(0.4),
+        ),
+        DitherKey::Danger => (
+            if light {
+                gpui::hsla(0.0, 0.38, 0.24, 1.0)
+            } else {
+                gpui::rgb(0x1c0f0e).into()
+            },
+            [208, 85, 78],
+            theme.danger.opacity(0.4),
+        ),
+    };
+    el.relative()
+        .bg(plate)
+        .border_1()
+        .border_color(edge)
         .text_color(gpui::white())
-        .cursor_pointer()
-        .hover(|s| s.opacity(0.9))
-        .child(SharedString::from(label.to_string()))
+        .child(zuse_viewport::dither::fill(ink, radius))
 }
 
 /// Pulsing skeleton rows shown while a list loads (zuse:

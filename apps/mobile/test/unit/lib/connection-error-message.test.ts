@@ -1,0 +1,37 @@
+import { describe, expect, test } from "vitest";
+
+import { connectionErrorMessage } from "../../../src/lib/connection-error-message";
+
+describe("connection error message", () => {
+	test("does not expose raw local socket close errors", () => {
+		expect(
+			connectionErrorMessage(
+				new Error("SocketCloseError: 1001: Stream end encountered"),
+			),
+		).toBe("The connection to this computer ended. Reconnecting may fix it.");
+	});
+
+	test("turns native socket timeouts into recovery guidance", () => {
+		expect(
+			connectionErrorMessage(
+				new Error('SocketOpenError: timeout waiting for "open"'),
+			),
+		).toBe("Could not reach this computer. Check that it is online and retry.");
+	});
+
+	test("does not expose api machine codes", () => {
+		expect(connectionErrorMessage("api_connect_500:internal_error")).toBe(
+			"API is temporarily unavailable. Try again in a moment.",
+		);
+	});
+
+	test("does not expose native fetch implementation details", () => {
+		expect(
+			connectionErrorMessage(
+				new Error(
+					"fetch failed: UnexpectedException: Could not connect to the server. (at ExpoModulesCore/Promise.swift:56)",
+				),
+			),
+		).toBe("Your computer is unreachable. Messages will stay queued.");
+	});
+});

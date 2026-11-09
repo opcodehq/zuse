@@ -16,8 +16,11 @@ pub mod project_caches;
 pub mod config;
 pub mod connections;
 pub mod crypto;
+pub mod device_proof;
+pub mod devices;
 pub mod error;
 pub mod events;
+pub mod host_link;
 pub mod jobs;
 pub mod managed_bases;
 pub mod model_catalog;
@@ -26,6 +29,7 @@ pub mod routes;
 pub mod runtime;
 pub mod store;
 pub mod tickets;
+pub mod tunnels;
 
 pub const REFERENCE_COMMIT: &str = "2016cf4f0cc240e6797916dd5cab1d8bebab89ae";
 

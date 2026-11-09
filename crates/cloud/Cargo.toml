@@ -53,6 +53,8 @@ zeroize = "1"
 
 [dev-dependencies]
 tracing-subscriber.workspace = true
+p256 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
+zuse-rpc.workspace = true
 tokio-util = { workspace = true, features = ["rt"] }
 zuse-doc.workspace = true
 rusqlite.workspace = true

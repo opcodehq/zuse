@@ -908,6 +908,7 @@ async fn main() -> Result<()> {
                     .await?,
                 );
             }
+            store.devices = zuse_cloud::devices::Authority::from_env().await?;
             store =
                 store.with_project_templates(zuse_cloud::projects::template_versions_from_env()?);
             if let Ok(origin) = env::var("ZUSE_CLOUD_LEGACY_GITHUB_URL") {

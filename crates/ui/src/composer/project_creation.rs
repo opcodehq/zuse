@@ -57,11 +57,9 @@ impl Composer {
         };
         let mut pill = TrayPill::new("composer-project-creation", title).tone(tone);
         pill = if running {
-            pill.icon_element(crate::loaders::ring_spinner(
+            pill.icon_element(crate::loaders::dither_ring(
                 "composer-project-spinner",
                 12.0,
-                1.5,
-                theme.hairline(0.12),
                 theme.accent,
             ))
         } else if tone == TrayTone::Danger {

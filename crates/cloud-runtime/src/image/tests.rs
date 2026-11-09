@@ -194,10 +194,7 @@ async fn private_git_image_manifest_is_journaled_and_tokens_are_removed_before_r
             .unwrap()
             .contains("failed")
     );
-    assert!(
-        prepare(&plan).is_ok(),
-        "Previous prepared cache must remain usable after a failed rebuild"
-    );
+    prepare(&plan).expect("Previous prepared cache must remain usable after a failed rebuild");
     let mut conflicting = plan.clone();
     conflicting.build_id = "different-build".into();
     let result = prepare(&conflicting);

@@ -135,6 +135,161 @@ impl Harness for RecordingHarness {
     }
 }
 
+struct UpdatingHarness;
+
+#[async_trait]
+impl Harness for UpdatingHarness {
+    fn id(&self) -> HarnessId {
+        HarnessId::Mock
+    }
+    fn display_name(&self) -> &str {
+        "Updating"
+    }
+    fn supports_steering(&self) -> bool {
+        false
+    }
+    fn steering_mode(&self) -> SteeringMode {
+        SteeringMode::TurnBoundary
+    }
+    fn reasoning_levels(&self) -> &[ReasoningLevel] {
+        &[ReasoningLevel::Medium]
+    }
+    async fn models(&self) -> Result<Vec<Model>, HarnessError> {
+        Ok(vec![])
+    }
+    async fn run(
+        &self,
+        request: RunRequest,
+        controls: RunControls,
+    ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
+        let started = AgentEvent::SessionStarted {
+            harness: HarnessId::Mock,
+            model: "mock-1".into(),
+            tools: vec![],
+            cwd: request.cwd,
+            session_id: "update-session".into(),
+            assistant_message_id: "update-reply".into(),
+        };
+        Ok(futures::stream::once(async { Ok(started) })
+            .chain(futures::stream::once(async move {
+                controls.interrupt.cancelled().await;
+                Ok(AgentEvent::Done {
+                    status: DoneStatus::Interrupted,
+                    result: None,
+                    error: None,
+                    session_id: Some("update-session".into()),
+                })
+            }))
+            .boxed())
+    }
+}
+
+#[tokio::test]
+async fn update_restart_resumes_unfinished_turn_without_duplicate_user_message() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("data");
+    let registry = HarnessRegistry::new();
+    registry.register(Arc::new(UpdatingHarness));
+    let core = EngineCore::assemble(&dir, Arc::new(registry), HarnessId::Mock, None).unwrap();
+    pre_title(&core);
+    queue_run(&core, "finish this task", "/tmp", "update-user");
+    wait_for(
+        || stored_harness_session(&core).is_some(),
+        "agent session to start",
+    )
+    .await;
+    core.sessions.checkpoint_for_update().unwrap();
+    core.shutdown().await;
+    drop(core);
+
+    let requests: RequestLog = Default::default();
+    let core = assemble(
+        &dir,
+        RecordingHarness {
+            requests: requests.clone(),
+            session_id: "updated-session".into(),
+            fail_starts: Default::default(),
+        },
+    );
+    wait_for(
+        || complete_assistant_count(&core) == 1,
+        "unfinished task to resume after update",
+    )
+    .await;
+    {
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].prompt.contains("finish this task"));
+        assert!(
+            requests[0].prompt.contains("interrupted your last turn"),
+            "a resumed turn must not read as a brand new request"
+        );
+        assert!(
+            requests[0].auto_approve,
+            "preserve the original run configuration"
+        );
+        assert_eq!(requests[0].cwd, "/tmp");
+        assert_eq!(requests[0].resume.as_deref(), Some("update-session"));
+    }
+    let users: Vec<_> = entries_now(&core)
+        .into_iter()
+        .filter(|entry| entry.role == MessageRole::User)
+        .collect();
+    assert_eq!(users.len(), 1);
+    assert!(
+        matches!(&users[0].parts[0], MessagePart::Text { text, .. } if text == "finish this task"),
+        "the transcript keeps what the user wrote"
+    );
+    core.shutdown().await;
+    drop(core);
+
+    // A later launch must not repeat the already resumed, completed turn.
+    let core = assemble(
+        &dir,
+        RecordingHarness {
+            requests: requests.clone(),
+            session_id: "later-session".into(),
+            fail_starts: Default::default(),
+        },
+    );
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(requests.lock().unwrap().len(), 1);
+    core.shutdown().await;
+}
+
+#[tokio::test]
+async fn cancelled_update_restart_does_not_resume_a_stopped_turn() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("data");
+    let registry = HarnessRegistry::new();
+    registry.register(Arc::new(UpdatingHarness));
+    let core = EngineCore::assemble(&dir, Arc::new(registry), HarnessId::Mock, None).unwrap();
+    pre_title(&core);
+    queue_run(&core, "finish this task", "/tmp", "update-user");
+    wait_for(
+        || stored_harness_session(&core).is_some(),
+        "agent session to start",
+    )
+    .await;
+    core.sessions.checkpoint_for_update().unwrap();
+    core.sessions.cancel_update_restart();
+    core.shutdown().await;
+    drop(core);
+    let requests: RequestLog = Default::default();
+    let core = assemble(
+        &dir,
+        RecordingHarness {
+            requests: requests.clone(),
+            session_id: "later-session".into(),
+            fail_starts: Default::default(),
+        },
+    );
+    // recover_stale schedules work before returning; give a scheduled replay a chance to run.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(requests.lock().unwrap().is_empty());
+    core.shutdown().await;
+}
+
 fn assemble(dir: &std::path::Path, harness: RecordingHarness) -> EngineCore {
     let registry = HarnessRegistry::new();
     registry.register(Arc::new(harness));
@@ -684,7 +839,7 @@ async fn fresh_crash_auto_resumes_and_notes_the_interruption() {
     let recorded = requests.lock().unwrap().clone();
     let revived = recorded
         .iter()
-        .find(|r| r.prompt == "long task")
+        .find(|r| r.prompt.contains("long task"))
         .expect("auto-resumed dispatch reached the harness");
     assert_eq!(
         revived.resume.as_deref(),
@@ -761,7 +916,7 @@ async fn a_crash_before_the_reply_reached_disk_still_auto_resumes() {
     let recorded = requests.lock().unwrap().clone();
     let revived = recorded
         .iter()
-        .find(|r| r.prompt == "long task")
+        .find(|r| r.prompt.contains("long task"))
         .expect("auto-resumed dispatch reached the harness");
     assert_eq!(revived.resume.as_deref(), Some("hs-crash"));
     core.shutdown().await;
@@ -858,7 +1013,7 @@ async fn a_crash_recovers_the_conversation_through_a_symlinked_folder() {
                 .lock()
                 .unwrap()
                 .iter()
-                .any(|r| r.prompt == "long task")
+                .any(|r| r.prompt.contains("long task"))
         },
         "the crashed turn to be picked back up",
     )
@@ -867,7 +1022,7 @@ async fn a_crash_recovers_the_conversation_through_a_symlinked_folder() {
         .lock()
         .unwrap()
         .iter()
-        .find(|r| r.prompt == "long task")
+        .find(|r| r.prompt.contains("long task"))
         .cloned()
         .unwrap();
     assert_eq!(revived.cwd, link, "the chat's own folder");

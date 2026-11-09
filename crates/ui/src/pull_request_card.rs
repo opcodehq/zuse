@@ -913,13 +913,7 @@ fn chip(text: SharedString, color: Hsla, theme: &Theme) -> AnyElement {
 }
 
 fn spinner(id: &'static str, theme: &Theme) -> AnyElement {
-    crate::loaders::ring_spinner(
-        id,
-        12.0,
-        1.5,
-        theme.text_muted.opacity(0.25),
-        theme.text_muted,
-    )
+    crate::loaders::dither_ring(id, 12.0, theme.text_muted)
 }
 
 fn button(

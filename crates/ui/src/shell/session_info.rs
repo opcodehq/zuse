@@ -824,11 +824,9 @@ impl Shell {
         for task in &running {
             let stopping = self.background_stops.contains(&task.id);
             let control: AnyElement = if stopping {
-                crate::loaders::ring_spinner(
+                crate::loaders::dither_ring(
                     SharedString::from(format!("session-info-background-stopping-{}", task.id)),
                     12.0,
-                    1.5,
-                    theme.text_muted.opacity(0.25),
                     theme.text_muted,
                 )
             } else if task.stoppable {

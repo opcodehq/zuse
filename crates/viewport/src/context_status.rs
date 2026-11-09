@@ -7,39 +7,44 @@ use zuse_protocol::ContextUsage;
 
 /// Paint a bounded progress ring without allocating an image or an animation loop.
 pub fn progress_ring(fraction: Option<f32>, color: Hsla, track: Hsla, diameter: f32) -> AnyElement {
+    let fraction = fraction.unwrap_or(0.).clamp(0., 1.);
     canvas(
         |_, _, _| (),
         move |bounds, _, window, _| {
-            let center = bounds.center();
-            let mut arc = |fraction: f32, color| {
-                if fraction <= 0. {
-                    return;
+            let side = diameter.round() as usize;
+            for y in 0..side {
+                for x in 0..side {
+                    let cell = match ring_cell(x, y, side, fraction) {
+                        Some(true) => color,
+                        Some(false) if crate::dither::threshold(x, y) < 0.5 => track,
+                        _ => continue,
+                    };
+                    window.paint_quad(gpui::fill(
+                        gpui::Bounds::new(
+                            bounds.origin + point(px(x as f32), px(y as f32)),
+                            gpui::size(px(1.), px(1.)),
+                        ),
+                        cell,
+                    ));
                 }
-                let steps = (64. * fraction).ceil().max(2.) as usize;
-                let mut path = PathBuilder::stroke(px(diameter * 0.1125));
-                for i in 0..=steps {
-                    let angle = -std::f32::consts::FRAC_PI_2
-                        + std::f32::consts::TAU * fraction * i as f32 / steps as f32;
-                    let p = point(
-                        center.x + px(diameter * 0.375 * angle.cos()),
-                        center.y + px(diameter * 0.375 * angle.sin()),
-                    );
-                    if i == 0 {
-                        path.move_to(p);
-                    } else {
-                        path.line_to(p);
-                    }
-                }
-                if let Ok(path) = path.build() {
-                    window.paint_path(path, color);
-                }
-            };
-            arc(1., track);
-            arc(fraction.unwrap_or(0.).clamp(0., 1.), color);
+            }
         },
     )
     .size(px(diameter))
     .into_any_element()
+}
+
+/// Whether pixel `(x, y)` of a `side`-wide ring is on the band, and if so
+/// whether the reading (clockwise from twelve o'clock) has reached it. Pure.
+fn ring_cell(x: usize, y: usize, side: usize, fraction: f32) -> Option<bool> {
+    let radius = side as f32 / 2.;
+    let (dx, dy) = (x as f32 + 0.5 - radius, y as f32 + 0.5 - radius);
+    let distance = dx.hypot(dy);
+    if distance > radius || distance < radius * 0.56 {
+        return None;
+    }
+    let turn = dx.atan2(-dy).rem_euclid(std::f32::consts::TAU) / std::f32::consts::TAU;
+    Some(turn <= fraction)
 }
 
 fn tokens(value: u64) -> String {
@@ -242,5 +247,21 @@ impl WorkspaceView {
             }))
             .into_any_element(),
         )
+    }
+}
+
+#[cfg(test)]
+mod ring_tests {
+    use super::ring_cell;
+
+    #[test]
+    fn ring_fills_clockwise_and_leaves_the_center_open() {
+        assert_eq!(ring_cell(7, 7, 14, 1.0), None);
+        // Right of center is a quarter turn around.
+        assert_eq!(ring_cell(12, 7, 14, 0.2), Some(false));
+        assert_eq!(ring_cell(12, 7, 14, 0.3), Some(true));
+        // Left of center is three quarters around.
+        assert_eq!(ring_cell(1, 7, 14, 0.5), Some(false));
+        assert_eq!(ring_cell(1, 7, 14, 0.8), Some(true));
     }
 }

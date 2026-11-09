@@ -98,6 +98,60 @@ pub struct FileMeta {
     pub sha256: Option<String>,
 }
 
+/// One heading of a release's changelog ("Added", "Fixed", ...).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReleaseNotesSection {
+    pub title: String,
+    pub items: Vec<String>,
+}
+
+/// The GitHub release page of one version.
+pub fn release_page(version: &str) -> String {
+    format!("https://github.com/opcodehq/zuse/releases/tag/v{version}")
+}
+
+/// The changelog of `version`, from its public GitHub release. The R2 feed
+/// carries only versions and checksums.
+pub async fn fetch_release_notes(version: &str) -> anyhow::Result<Vec<ReleaseNotesSection>> {
+    #[derive(Deserialize)]
+    struct Release {
+        #[serde(default)]
+        body: String,
+    }
+    let url = format!("https://api.github.com/repos/opcodehq/zuse/releases/tags/v{version}");
+    let response = fetch_release_metadata(&http_client()?, &url).await?;
+    anyhow::ensure!(
+        response.status.is_success(),
+        "fetching release notes: HTTP {}",
+        response.status
+    );
+    let release: Release =
+        serde_json::from_slice(&response.body).context("parsing the GitHub release")?;
+    Ok(parse_release_notes(&release.body))
+}
+
+/// The `### Heading` / `- item` changelog of a release body, without the
+/// installer block `scripts/distribution-notes.py` puts ahead of it.
+pub fn parse_release_notes(body: &str) -> Vec<ReleaseNotesSection> {
+    const INSTALLERS_END: &str = "<!-- zuse-installers:end -->";
+    let changelog = body
+        .split_once(INSTALLERS_END)
+        .map_or(body, |(_, changelog)| changelog);
+    let mut sections: Vec<ReleaseNotesSection> = Vec::new();
+    for line in changelog.lines().map(str::trim) {
+        if let Some(title) = line.strip_prefix("### ") {
+            sections.push(ReleaseNotesSection {
+                title: title.trim().to_owned(),
+                items: Vec::new(),
+            });
+        } else if let (Some(item), Some(section)) = (line.strip_prefix("- "), sections.last_mut()) {
+            section.items.push(item.replace("**", "").replace('`', ""));
+        }
+    }
+    sections.retain(|section| !section.items.is_empty());
+    sections
+}
+
 /// Artifact-name platform pair matching the packaging scripts. Unsupported
 /// updater targets retain their real OS name rather than impersonating Linux.
 pub fn platform_key() -> (&'static str, &'static str) {
@@ -832,7 +886,6 @@ pub async fn stage_mac_app(
     if staged_binary.exists() && verify_staged_binary(&staged_binary, version).await.is_ok() {
         return Ok(staged);
     }
-    prune_stale_stages(&updates, version);
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
     let file = mac_app_artifact(version);
@@ -869,8 +922,10 @@ pub async fn stage_mac_app(
 
 /// Staged bundles of other versions are dead weight (each is a whole app):
 /// drop them whenever a new version stages.
-fn prune_stale_stages(updates: &Path, keep: &str) {
-    let Ok(entries) = std::fs::read_dir(updates) else {
+/// Drop older staged updates. Separate from staging so the update a user can
+/// restart into survives until its replacement is verified and showing.
+pub fn prune_stale_stages(data_dir: &Path, keep: &str) {
+    let Ok(entries) = std::fs::read_dir(data_dir.join("updates")) else {
         return;
     };
     for entry in entries.flatten() {
@@ -1408,6 +1463,48 @@ fn now_ms() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod staged_update_tests {
+    #[test]
+    fn pruning_keeps_only_the_named_release() {
+        let dir = tempfile::tempdir().unwrap();
+        for version in ["0.24.0", "0.25.0"] {
+            std::fs::create_dir_all(dir.path().join("updates").join(version)).unwrap();
+        }
+        super::prune_stale_stages(dir.path(), "0.25.0");
+        assert!(!dir.path().join("updates/0.24.0").exists());
+        assert!(dir.path().join("updates/0.25.0").exists());
+    }
+}
+
+#[cfg(test)]
+mod release_notes_tests {
+    use super::*;
+
+    #[test]
+    fn release_body_yields_the_changelog_without_installer_steps() {
+        let body = "<!-- zuse-installers:start -->\n## Downloads\n\n### Install from a Linux terminal\n\n- not a change\n<!-- zuse-installers:end -->\n\n### Added\n\n- A **bold** `code` item.\n\n### Empty\n\n### Fixed\n\n- Another.\n";
+        assert_eq!(
+            parse_release_notes(body),
+            [
+                ReleaseNotesSection {
+                    title: "Added".into(),
+                    items: vec!["A bold code item.".into()],
+                },
+                ReleaseNotesSection {
+                    title: "Fixed".into(),
+                    items: vec!["Another.".into()],
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn release_body_without_a_changelog_has_no_notes() {
+        assert!(parse_release_notes("Just a sentence.\n- orphan\n").is_empty());
+    }
 }
 
 #[cfg(test)]

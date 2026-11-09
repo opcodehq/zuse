@@ -11,8 +11,8 @@ archives for x64 and ARM64. The release's `SHA256SUMS` covers every asset.
   set -e
   installer=$(mktemp)
   trap 'rm -f "$installer"' EXIT
-  curl -fsSL https://github.com/opcodehq/zuse/releases/download/v0.26.0-preview.2/install.sh -o "$installer"
-  sh "$installer" --version 0.26.0-preview.2
+  curl -fsSL https://github.com/opcodehq/zuse/releases/download/v0.26.0-preview.3/install.sh -o "$installer"
+  sh "$installer" --version 0.26.0-preview.3
 )
 ```
 
@@ -49,7 +49,7 @@ This builds the release browser and native executables from the checkout, then
 creates `dist/build/zuse-VERSION-PLATFORM-ARCH.tar.gz` (a `.zip` on Windows). Keep the terminal open
 until the command completes. The output directory must not already contain an
 archive with that name. `--profile dev` selects a development native build.
-For a preview of the workspace version, use `--version 0.26.0-preview.2`.
+For a preview of the workspace version, use `--version 0.26.0-preview.3`.
 The archive and manifest retain that suffix; macOS bundle versions remain numeric.
 
 To assemble executables already built on the target, use:
@@ -163,7 +163,7 @@ published browser assets. Signing runs on separate fresh macOS runners.
 To add formats to an existing release without rebuilding its existing binaries:
 
 ```sh
-gh workflow run release.yml -f tag=v0.26.0-preview.2 -f formats_only=true
+gh workflow run release.yml -f tag=v0.26.0-preview.3 -f formats_only=true
 ```
 
 This adds the downloads and updates checksums and installation notes on the
