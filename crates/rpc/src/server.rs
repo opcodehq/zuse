@@ -49,7 +49,12 @@ pub async fn serve_connection_bounded(
     inbound: mpsc::Receiver<String>,
     byte_limit: usize,
 ) {
-    serve_connection_inner(service, crate::output::Output::bounded(out, byte_limit), inbound).await;
+    serve_connection_inner(
+        service,
+        crate::output::Output::bounded(out, byte_limit),
+        inbound,
+    )
+    .await;
 }
 
 async fn serve_connection_inner(
@@ -190,7 +195,9 @@ async fn handle_request(
                 return;
             }
         };
-        if permit.send(json).await.is_err() { return; }
+        if permit.send(json).await.is_err() {
+            return;
+        }
         // An opening preview retains its slot through full hydration. Idle
         // established watches must not monopolize history-opening admission.
         if !pending {
