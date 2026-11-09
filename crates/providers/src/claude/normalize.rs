@@ -278,6 +278,8 @@ pub(crate) struct Normalizer {
     /// Rotates at each assistant-frame close and at each steer; SessionStarted
     /// carries the first value so folds can attribute deltas from the start.
     assistant_message_id: String,
+    /// The tool row of a compaction the CLI has announced but not finished.
+    compaction: Option<String>,
     /// Last session id seen (init or result) — used for synthetic Dones.
     pub session_id: Option<String>,
 }
@@ -295,8 +297,87 @@ impl Normalizer {
             workflow_runs: std::collections::HashMap::new(),
             file_diffs: std::collections::HashMap::new(),
             assistant_message_id: new_message_id(),
+            compaction: None,
             session_id: None,
         }
+    }
+
+    /// `/compact` and auto-compaction report only through `system` frames and
+    /// end with an empty `result` (live-verified 2.1.314), so without a row
+    /// a successful compaction reads as a turn that did nothing.
+    fn compaction_started(&mut self) -> (String, AgentEvent) {
+        let id = format!("compaction:{}", uuid::Uuid::new_v4());
+        self.compaction = Some(id.clone());
+        let call = AgentEvent::ToolCall {
+            id: id.clone(),
+            call: ToolCall::Unknown {
+                name: "Compact context".into(),
+                input: None,
+            },
+        };
+        (id, call)
+    }
+
+    fn compaction_status(&mut self, frame: &SystemFrame) -> Vec<AgentEvent> {
+        if frame.status.as_deref() == Some("compacting") {
+            if self.compaction.is_some() {
+                return Vec::new();
+            }
+            return vec![self.compaction_started().1];
+        }
+        // Success is left to the boundary frame, which carries the token counts.
+        if frame.compact_result.as_deref() != Some("failed") {
+            return Vec::new();
+        }
+        let error = frame.compact_error.as_deref();
+        self.compaction_failed(error.unwrap_or("Context compaction failed."))
+            .into_iter()
+            .collect()
+    }
+
+    fn compaction_failed(&mut self, reason: &str) -> Option<AgentEvent> {
+        Some(AgentEvent::ToolResult {
+            id: self.compaction.take()?,
+            is_error: true,
+            output: Some(reason.to_owned()),
+            diff: None,
+        })
+    }
+
+    fn compaction_finished(&mut self, frame: &SystemFrame) -> Vec<AgentEvent> {
+        let mut out = Vec::new();
+        let id = match self.compaction.take() {
+            Some(id) => id,
+            None => {
+                let (id, call) = self.compaction_started();
+                self.compaction = None;
+                out.push(call);
+                id
+            }
+        };
+        let (before, after) = (
+            frame.compact_metadata.pre_tokens,
+            frame.compact_metadata.post_tokens,
+        );
+        out.push(AgentEvent::ToolResult {
+            id,
+            is_error: false,
+            output: Some(match (before, after) {
+                (Some(before), Some(after)) => {
+                    format!("Context reduced from {before} to {after} tokens.")
+                }
+                _ => "Context compacted.".to_owned(),
+            }),
+            diff: None,
+        });
+        // The compaction's `result` has no usage to move the context meter.
+        if after.is_some() {
+            out.push(AgentEvent::ContextUsage {
+                tokens: after,
+                window: None,
+            });
+        }
+        out
     }
 
     /// Restore only spawn identity from Claude's native history. The CLI
@@ -569,6 +650,12 @@ impl Normalizer {
                     self.agent_tool_spawns
                         .insert(tool.to_owned(), spawn.clone());
                     return Vec::new();
+                }
+                if f.subtype == "status" {
+                    return self.compaction_status(&f);
+                }
+                if f.subtype == "compact_boundary" {
+                    return self.compaction_finished(&f);
                 }
                 if f.subtype != "init" || self.saw_init {
                     return Vec::new();
@@ -961,7 +1048,10 @@ impl Normalizer {
                         session_id: f.session_id,
                     }
                 };
-                let mut out = Vec::new();
+                let mut out: Vec<AgentEvent> = self
+                    .compaction_failed("Context compaction did not finish.")
+                    .into_iter()
+                    .collect();
                 if let Some(window) = window {
                     out.push(AgentEvent::ContextUsage {
                         tokens: None,
@@ -985,6 +1075,106 @@ impl Normalizer {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn system(normalizer: &mut Normalizer, line: &str) -> Vec<AgentEvent> {
+        normalizer.normalize(super::super::wire::parse_frame(line).unwrap(), false)
+    }
+
+    #[test]
+    fn compaction_shows_a_row_and_moves_the_context_meter() {
+        let mut normalizer = Normalizer::new();
+        let started = system(
+            &mut normalizer,
+            r#"{"type":"system","subtype":"status","status":"compacting"}"#,
+        );
+        let [AgentEvent::ToolCall { id, call }] = started.as_slice() else {
+            panic!("{started:?}");
+        };
+        assert!(matches!(call, ToolCall::Unknown { name, .. } if name == "Compact context"));
+        assert!(
+            system(
+                &mut normalizer,
+                r#"{"type":"system","subtype":"status","status":null,"compact_result":"success"}"#,
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            system(
+                &mut normalizer,
+                r#"{"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"manual","pre_tokens":23759,"post_tokens":4391}}"#,
+            ),
+            vec![
+                AgentEvent::ToolResult {
+                    id: id.clone(),
+                    is_error: false,
+                    output: Some("Context reduced from 23759 to 4391 tokens.".into()),
+                    diff: None,
+                },
+                AgentEvent::ContextUsage {
+                    tokens: Some(4391),
+                    window: None,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn failed_compaction_reports_the_cli_reason() {
+        let mut normalizer = Normalizer::new();
+        let started = system(
+            &mut normalizer,
+            r#"{"type":"system","subtype":"status","status":"compacting"}"#,
+        );
+        let [AgentEvent::ToolCall { id, .. }] = started.as_slice() else {
+            panic!("{started:?}");
+        };
+        assert_eq!(
+            system(
+                &mut normalizer,
+                r#"{"type":"system","subtype":"status","status":null,"compact_result":"failed","compact_error":"Not enough messages to compact."}"#,
+            ),
+            vec![AgentEvent::ToolResult {
+                id: id.clone(),
+                is_error: true,
+                output: Some("Not enough messages to compact.".into()),
+                diff: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn a_turn_ending_mid_compaction_settles_the_row() {
+        let mut normalizer = Normalizer::new();
+        system(
+            &mut normalizer,
+            r#"{"type":"system","subtype":"status","status":"compacting"}"#,
+        );
+        let ended = system(
+            &mut normalizer,
+            r#"{"type":"result","subtype":"success","result":""}"#,
+        );
+        assert!(matches!(
+            ended.first(),
+            Some(AgentEvent::ToolResult { is_error: true, .. })
+        ));
+        assert!(matches!(ended.last(), Some(AgentEvent::Done { .. })));
+    }
+
+    #[test]
+    fn boundary_without_a_status_frame_still_shows_a_finished_row() {
+        let mut normalizer = Normalizer::new();
+        let events = system(
+            &mut normalizer,
+            r#"{"type":"system","subtype":"compact_boundary"}"#,
+        );
+        assert!(matches!(
+            events.as_slice(),
+            [
+                AgentEvent::ToolCall { .. },
+                AgentEvent::ToolResult { is_error: false, .. }
+            ]
+        ));
+    }
 
     #[test]
     fn decodes_typed_tools() {

@@ -2,21 +2,41 @@
 use super::*;
 
 pub(super) const ROW_HEIGHT: f32 = 32.;
+const NAME_COLUMN: f32 = 0.34;
+const HINT_COLUMN: f32 = 0.3;
 
 pub(super) fn description(candidate: &InvocationCandidate) -> String {
-    let mut text = candidate
+    candidate
         .description
         .split_whitespace()
         .collect::<Vec<_>>()
-        .join(" ");
-    if let Some(hint) = &candidate.input_hint {
-        let hint = hint.split_whitespace().collect::<Vec<_>>().join(" ");
-        if !text.is_empty() {
-            text.push_str(" · ");
-        }
-        text.push_str(&format!("<{hint}>"));
+        .join(" ")
+}
+
+fn input_hint(candidate: &InvocationCandidate) -> Option<String> {
+    let hint = candidate.input_hint.as_ref()?;
+    Some(hint.split_whitespace().collect::<Vec<_>>().join(" "))
+}
+
+/// The open catalogue reads alphabetically, commands ahead of skills, since
+/// providers list a user's many skills ahead of their built-in commands.
+pub(super) fn catalog_order(candidates: &mut [InvocationCandidate]) {
+    candidates
+        .sort_by_cached_key(|row| (row.invocation.prefix() == '$', row.name.to_lowercase()));
+}
+
+/// The row that opens the Skills section. Only the whole catalogue is grouped:
+/// ranked results read best as one list.
+pub(super) fn first_skill_row(
+    query: &str,
+    filtered: &[usize],
+    candidates: &[InvocationCandidate],
+) -> Option<usize> {
+    if !query.is_empty() {
+        return None;
     }
-    text
+    let is_skill = |&ix: &usize| candidates.get(ix).is_some_and(|c| c.invocation.prefix() == '$');
+    filtered.iter().position(is_skill).filter(|&row| row > 0)
 }
 
 /// Prefer names, then descriptions; compact subsequences support abbreviated queries.
@@ -65,7 +85,8 @@ pub(super) fn filter(query: &str, candidates: &[InvocationCandidate]) -> Vec<usi
                 .map(|score| (score, index))
         })
         .collect();
-    ranked.sort_by_key(|&(score, index)| (score, index));
+    // Equal matches favor the shorter name: it is the closer one to the query.
+    ranked.sort_by_key(|&(score, index)| (score, candidates[index].name.len(), index));
     ranked
         .into_iter()
         .take(50)
@@ -98,28 +119,37 @@ pub(super) fn row(
         .overflow_hidden()
         .gap(px(12.))
         .rounded(px(8.))
-        .when(skill, |row| {
-            row.child(
-                crate::icons::icon(crate::icons::SKILL)
-                    .size(px(14.))
-                    .flex_none()
-                    .text_color(theme.accent.opacity(0.75)),
-            )
-        })
+        // A shared name column lines the descriptions up down the list.
         .child(
             div()
                 .min_w_0()
-                .max_w(gpui::relative(0.55))
+                .w(gpui::relative(NAME_COLUMN))
                 .flex_none()
-                .h(px(20.))
-                .font_family(theme.font_mono.clone())
-                .font_weight(gpui::FontWeight::NORMAL)
-                .text_size(px(14.))
-                .line_height(px(20.))
-                .truncate()
-                .line_clamp(1)
-                .text_color(theme.text)
-                .child(name),
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .when(skill, |column| {
+                    column.child(
+                        crate::icons::icon(crate::icons::SKILL)
+                            .size(px(14.))
+                            .flex_none()
+                            .text_color(theme.accent.opacity(0.75)),
+                    )
+                })
+                .child(
+                    div()
+                        .min_w_0()
+                        .flex_1()
+                        .h(px(20.))
+                        .font_family(theme.font_mono.clone())
+                        .font_weight(gpui::FontWeight::NORMAL)
+                        .text_size(px(13.))
+                        .line_height(px(20.))
+                        .truncate()
+                        .line_clamp(1)
+                        .text_color(theme.text)
+                        .child(name),
+                ),
         )
         .child(
             div()
@@ -133,6 +163,24 @@ pub(super) fn row(
                 .text_color(theme.text_muted)
                 .child(description(candidate)),
         )
+        // Arguments matter once a row is chosen; on every row they would
+        // crowd out the descriptions.
+        .when_some(input_hint(candidate).filter(|_| selected), |row, hint| {
+            row.child(
+                div()
+                    .min_w_0()
+                    .max_w(gpui::relative(HINT_COLUMN))
+                    .flex_none()
+                    .h(px(16.))
+                    .font_family(theme.font_mono.clone())
+                    .text_size(px(11.))
+                    .line_height(px(16.))
+                    .truncate()
+                    .line_clamp(1)
+                    .text_color(theme.text_muted)
+                    .child(hint),
+            )
+        })
 }
 
 #[cfg(test)]
@@ -189,6 +237,39 @@ mod tests {
         assert_eq!(filter("skill", &many).len(), 50);
         assert_eq!(filter("", &many).len(), 80);
     }
+    fn command(name: &str) -> InvocationCandidate {
+        InvocationCandidate {
+            invocation: zuse_protocol::invocation::Invocation::Command { name: name.into() },
+            ..candidate(name, "")
+        }
+    }
+    #[test]
+    fn the_open_catalog_groups_commands_ahead_of_skills() {
+        let mut rows = vec![
+            candidate("deploy", ""),
+            command("review"),
+            candidate("Audit", ""),
+            command("compact"),
+        ];
+        catalog_order(&mut rows);
+        let names: Vec<_> = rows.iter().map(|row| row.name.as_str()).collect();
+        assert_eq!(names, ["compact", "review", "Audit", "deploy"]);
+        let all: Vec<_> = (0..rows.len()).collect();
+        assert_eq!(first_skill_row("", &all, &rows), Some(2));
+        assert_eq!(first_skill_row("co", &all, &rows), None);
+        assert_eq!(first_skill_row("", &[2, 3], &rows), None, "one kind, no headings");
+    }
+    #[test]
+    fn equal_matches_prefer_the_shorter_name() {
+        let rows = vec![command("compact-notes"), command("compact")];
+        assert_eq!(filter("comp", &rows), vec![1, 0]);
+    }
+    #[test]
+    fn argument_hints_are_not_searched_as_descriptions() {
+        let mut row = command("compact");
+        row.input_hint = Some("<optional custom instructions>".into());
+        assert!(filter("custom", &[row]).is_empty());
+    }
     struct Suggestion {
         width: f32,
     }
@@ -214,6 +295,39 @@ mod tests {
             assert_eq!(f32::from(bounds.size.height), ROW_HEIGHT);
             assert_eq!(f32::from(bounds.size.width), width);
         }
+    }
+    #[gpui::test]
+    fn a_background_refresh_keeps_the_row_under_the_cursor(cx: &mut TestAppContext) {
+        let (_dir, window) = super::super::tests::composer_focus_window(cx);
+        window
+            .update(cx, |composer, _, cx| {
+                composer.slash = SlashState {
+                    token: invocation_token("$", 1, '$'),
+                    context: "skill-test".into(),
+                    skill: true,
+                    ..Default::default()
+                };
+                let (first, second) = (candidate("alpha", ""), candidate("beta", ""));
+                composer
+                    .slash_cache
+                    .insert("skill-test".into(), vec![first, second.clone()]);
+                composer.refilter_slash(cx);
+                composer.move_slash(1, cx);
+                let selected = composer.active_slash_invocation();
+                composer.slash_cache.insert(
+                    "skill-test".into(),
+                    vec![candidate("added", ""), candidate("alpha", ""), second],
+                );
+                composer.slash_catalog_loaded(selected, cx);
+                assert_eq!(composer.slash.active, Some(2), "still on beta");
+                let selected = composer.active_slash_invocation();
+                composer
+                    .slash_cache
+                    .insert("skill-test".into(), vec![candidate("alpha", "")]);
+                composer.slash_catalog_loaded(selected, cx);
+                assert_eq!(composer.slash.active, Some(0), "beta left the catalog");
+            })
+            .unwrap();
     }
     #[gpui::test]
     fn popup_renders_selected_and_unselected_skills_without_colliding_hover_handlers(
