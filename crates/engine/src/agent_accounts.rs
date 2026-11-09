@@ -2763,7 +2763,10 @@ impl AgentAccounts {
                         .next()
                         .map(str::to_owned)
                 })?;
-                if !matches!(issuer.trim_end_matches('/'), "https://auth.x.ai" | "https://accounts.x.ai/sign-in") {
+                if !matches!(
+                    issuer.trim_end_matches('/'),
+                    "https://auth.x.ai" | "https://accounts.x.ai/sign-in"
+                ) {
                     return None;
                 }
                 str_field(credentials, "key")
