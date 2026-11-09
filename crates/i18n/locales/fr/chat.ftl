@@ -1936,3 +1936,6 @@ chat-chat_composer_press_esc_again_to_clear = Appuyez à nouveau sur <part0>Éch
 chat-worktree_fetching = Récupération de la dernière version de { $branch }…
 chat-worktree_creating = Création du worktree depuis { $branch }…
 chat-worktree_offline = Dépôt distant injoignable · utilisation de { $branch } en local
+
+# Native and browser history pagination; translations remain draft.
+chat-cloud_history_load_earlier = Charger les messages précédents

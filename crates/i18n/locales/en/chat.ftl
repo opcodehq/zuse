@@ -2914,3 +2914,6 @@ chat-chat_composer_press_esc_again_to_clear = Press <part0>Esc</part0> again to 
 chat-worktree_fetching = Fetching latest { $branch }…
 chat-worktree_creating = Creating worktree from { $branch }…
 chat-worktree_offline = Couldn't reach the remote · using local { $branch }
+
+# Native and browser history pagination; translations remain draft.
+chat-cloud_history_load_earlier = Load earlier messages

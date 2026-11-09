@@ -411,12 +411,25 @@ impl ClaudeHarness {
             ))
         };
         let result = tokio::time::timeout(Duration::from_secs(10), discovery).await;
-        shutdown_child(&mut child, self.kill_grace).await;
+        // The reply is all a picker waits for; the CLI takes about a second
+        // longer to exit, so it is reaped off the caller's path.
+        let kill_grace = self.kill_grace;
+        tokio::spawn(async move { shutdown_child(&mut child, kill_grace).await });
         match result {
             Ok(inner) => inner,
             Err(_) => Err(HarnessError::Protocol("Claude initialize timed out".into())),
         }
     }
+}
+
+/// The CLI suffixes a command's description with where it was installed from;
+/// that is noise in a picker. Other trailing parentheses are real description.
+fn without_source_tag(description: &str) -> &str {
+    let text = description.trim_end();
+    [" (user)", " (project)", " (claude.ai sync)"]
+        .iter()
+        .find_map(|tag| text.strip_suffix(tag))
+        .unwrap_or(text)
 }
 
 /// `commands` out of an `initialize` control_response payload
@@ -436,11 +449,12 @@ fn parse_initialize_commands(response: &Value) -> Vec<SlashCommand> {
             }
             Some(SlashCommand {
                 name: name.to_owned(),
-                description: c
-                    .get("description")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_owned(),
+                description: without_source_tag(
+                    c.get("description")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                )
+                .to_owned(),
                 input_hint: c
                     .get("argumentHint")
                     .and_then(Value::as_str)

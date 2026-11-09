@@ -649,6 +649,10 @@ impl WorkspaceView {
                         .text_color(rgb(MUTED)).text_size(px(12.))
                         .on_click(cx.listener(|this, _, _, cx| { this.project = None; this.set_creation_destination(false, cx); cx.notify(); })))))
             })
+            .when(self.transcript_state.has_more, |view| view.child(
+                row().w_full().justify_center().child(control("load-earlier-messages", if self.transcript_state.loading_earlier { tr(cx, msg::chat::cloud_history_loading) } else { tr(cx, msg::chat::cloud_history_load_earlier) })
+                    .on_click(cx.listener(|this, _, _, cx| this.load_earlier_messages(cx))))
+            ))
             .children(self.messages.iter().enumerate().map(|(i, entry)| {
                 let message = serde_json::to_value(entry).unwrap_or(Value::Null);
                 let user = message["role"] == "user";

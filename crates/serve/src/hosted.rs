@@ -304,7 +304,8 @@ async fn socket(
                         }
                     }
                 },
-                8,
+                crate::browser_io::Compression::None,
+                false,
             )
             .await;
         })

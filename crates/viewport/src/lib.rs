@@ -159,6 +159,7 @@ pub struct WorkspaceView {
     next_id: u64,
     pending: HashMap<u64, String>,
     chats: Vec<Value>,
+    chat_rows: Vec<Value>,
     providers: Vec<Value>,
     selected: Option<Value>,
     messages: Vec<SessionMessageEntry>,
@@ -694,6 +695,7 @@ impl WorkspaceView {
             next_id: 1,
             pending: HashMap::new(),
             chats: vec![],
+            chat_rows: vec![],
             providers: vec![],
             selected: None,
             messages: vec![],
@@ -1456,7 +1458,22 @@ impl WorkspaceView {
                 }
                 methods::WATCH_CHATS => {
                     self.workspace_synced = true;
-                    self.chats = self.receive_cloud_conversations(value);
+                    // Deltas apply to the unfiltered list; cloud guests then hide
+                    // their metadata thread from the selectable chats.
+                    let rows = if self.cloud.guest {
+                        &mut self.chat_rows
+                    } else {
+                        &mut self.chats
+                    };
+                    if zuse_protocol::list_delta::apply(rows, value, "id").is_err() {
+                        self.cancel(id);
+                        self.call(methods::WATCH_CHATS, json!({"delta":true}));
+                        return;
+                    }
+                    if self.cloud.guest {
+                        self.chats = self
+                            .receive_cloud_conversations(&Value::Array(self.chat_rows.clone()));
+                    }
                     if let Some(chat) = self
                         .cloud
                         .initial_session
@@ -1514,8 +1531,14 @@ impl WorkspaceView {
                     }
                 }
                 methods::WATCH_SESSIONS => {
-                    self.receive_session_notifications(value);
-                    self.sessions = value.as_array().cloned().unwrap_or_default()
+                    if zuse_protocol::list_delta::apply(&mut self.sessions, value, "chatId")
+                        .is_err()
+                    {
+                        self.cancel(id);
+                        self.call(methods::WATCH_SESSIONS, json!({"delta":true}));
+                        return;
+                    }
+                    self.receive_session_notifications(&Value::Array(self.sessions.clone()));
                 }
                 methods::LIST_REPOS => self.repos = value.as_array().cloned().unwrap_or_default(),
                 methods::WATCH_DEVICES => {

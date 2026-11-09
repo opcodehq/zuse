@@ -21,7 +21,7 @@ pub const MAX_UNACKED_BYTES: usize = 8 * 1024 * 1024;
 pub const ACK_INTERVAL_MS: u64 = 1_000;
 const ACK_EVERY_MESSAGES: u64 = 16;
 const ACK_EVERY_BYTES: usize = 256 * 1024;
-const COMPRESS_MIN_BYTES: usize = 1024;
+const COMPRESS_MIN_BYTES: usize = 256;
 
 const PREFIX: &[u8] = b"\0zuse-paired-session-v1:";
 const KIND_ACK: u8 = 0;
@@ -268,6 +268,11 @@ mod tests {
         let encoded = encode_message(&text, true);
         assert!(encoded.len() < text.len() / 4);
         assert_eq!(decode_message(encoded).unwrap(), text);
+        let medium = br#"{"chatId":"chat","status":"running","text":"repeated text"}"#.repeat(7);
+        assert!(medium.len() < 1024 && medium.len() >= 256);
+        let encoded_medium = encode_message(&medium, true);
+        assert!(encoded_medium.len() < medium.len());
+        assert_eq!(decode_message(encoded_medium).unwrap(), medium);
         assert_eq!(encode_message(b"{}", true), b"{}");
         assert_eq!(encode_message(&text, false), text);
         assert_eq!(decode_message(text.clone()).unwrap(), text);

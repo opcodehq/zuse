@@ -56,7 +56,9 @@ mod desktop_import;
 mod dictation;
 mod external_chats;
 mod git_workspace;
+mod list_watch;
 mod simulators;
+mod transcript_window;
 mod visuals;
 mod voice_chat;
 mod voice_remote;
@@ -2014,10 +2016,11 @@ fn chat_config_stream(
 /// The transcript watch as delta frames (`zuse_doc::transcript_delta`): a
 /// full `reset` first, then only changed entries per commit — the whole-Vec
 /// serialization here was the per-tick cost that scaled with transcript size.
-fn doc_message_updates(
+fn doc_message_envelopes(
     rx: watch::Receiver<crate::doc_host::TranscriptSnapshot>,
     doc: std::sync::Arc<zuse_doc::SessionDoc>,
-) -> BoxStream<'static, zuse_doc::TranscriptUpdate> {
+    window: Option<transcript_window::Window>,
+) -> BoxStream<'static, transcript_window::Envelope> {
     use zuse_doc::transcript_delta::{TranscriptFrame, diff_transcript};
     futures::stream::unfold(
         (
@@ -2026,8 +2029,18 @@ fn doc_message_updates(
             doc,
             None,
             zuse_doc::TranscriptBaseline::default(),
+            window,
+            None,
         ),
-        |(mut rx, mut prev, doc, mut previous_usage, mut opening_baseline)| async move {
+        |(
+            mut rx,
+            mut prev,
+            doc,
+            mut previous_usage,
+            mut opening_baseline,
+            mut window,
+            mut previous_history,
+        )| async move {
             loop {
                 if prev.is_some() {
                     rx.changed().await.ok()?;
@@ -2035,10 +2048,25 @@ fn doc_message_updates(
                 // Watchers retain the immutable published snapshot. Each
                 // connection used to deep-copy the entire transcript here.
                 let current = rx.borrow_and_update().clone();
+                let (current, history) = match &mut window {
+                    Some(window) => {
+                        let (current, history) = window.project(current);
+                        (current, Some(history))
+                    }
+                    None => (current, None),
+                };
+                let resumed = if prev.is_none() {
+                    window
+                        .as_mut()
+                        .and_then(|window| window.resume_frame(&current.entries))
+                } else {
+                    None
+                };
+                let history_resumed = resumed.is_some();
                 let frame = match prev.as_ref() {
-                    None => TranscriptFrame::Reset {
+                    None => resumed.unwrap_or_else(|| TranscriptFrame::Reset {
                         reset: current.entries.clone(),
-                    },
+                    }),
                     Some(prev) => diff_transcript(&prev.entries, &current.entries),
                 };
                 let replay_baseline = match prev.as_ref() {
@@ -2057,13 +2085,39 @@ fn doc_message_updates(
                         // subscription's opening cutoff without capturing live
                         // appends or sharing another viewer's later cutoff.
                         // Ordinary live updates never rebuild this metadata.
-                        let mut baseline = (*current.replay_baseline).clone();
+                        let mut baseline = if window.is_some() {
+                            zuse_doc::TranscriptBaseline {
+                                entries: current
+                                    .entries
+                                    .iter()
+                                    .filter_map(|entry| {
+                                        current
+                                            .replay_baseline
+                                            .entries
+                                            .get(&entry.id)
+                                            .map(|parts| (entry.id.clone(), parts.clone()))
+                                    })
+                                    .collect(),
+                            }
+                        } else {
+                            (*current.replay_baseline).clone()
+                        };
                         for (entry, parts) in &opening_baseline.entries {
                             let merged = baseline.entries.entry(entry.clone()).or_default();
                             for (part, &len) in parts {
                                 let cutoff = merged.entry(part.clone()).or_default();
                                 *cutoff = (*cutoff).max(len);
                             }
+                        }
+                        if window.is_some() {
+                            let visible = current
+                                .entries
+                                .iter()
+                                .map(|entry| entry.id.as_str())
+                                .collect::<std::collections::HashSet<_>>();
+                            baseline
+                                .entries
+                                .retain(|id, _| visible.contains(id.as_str()));
                         }
                         Some(baseline)
                     }
@@ -2073,20 +2127,54 @@ fn doc_message_updates(
                 // No-op commits (a second watcher attaching, command-only
                 // changes) produce empty deltas — skip the frame entirely.
                 let usage = doc.context_usage();
-                if frame.is_empty_delta() && usage == previous_usage && replay_baseline.is_none() {
+                if frame.is_empty_delta()
+                    && usage == previous_usage
+                    && replay_baseline.is_none()
+                    && history == previous_history
+                {
                     continue;
                 }
                 previous_usage = usage;
+                let outgoing_history = if history == previous_history {
+                    None
+                } else {
+                    history.clone()
+                };
+                previous_history = history;
                 let value = zuse_doc::TranscriptUpdate {
                     frame,
                     context_usage: usage,
                     replay_baseline,
                 };
-                return Some((value, (rx, prev, doc, previous_usage, opening_baseline)));
+                return Some((
+                    transcript_window::Envelope {
+                        update: value,
+                        history: outgoing_history,
+                        history_resumed,
+                    },
+                    (
+                        rx,
+                        prev,
+                        doc,
+                        previous_usage,
+                        opening_baseline,
+                        window,
+                        previous_history,
+                    ),
+                ));
             }
         },
     )
     .boxed()
+}
+
+fn doc_message_updates(
+    rx: watch::Receiver<crate::doc_host::TranscriptSnapshot>,
+    doc: std::sync::Arc<zuse_doc::SessionDoc>,
+) -> BoxStream<'static, zuse_doc::TranscriptUpdate> {
+    doc_message_envelopes(rx, doc, None)
+        .map(|envelope| envelope.update)
+        .boxed()
 }
 
 fn doc_messages_typed_stream(
@@ -3913,12 +4001,49 @@ impl EngineRpc {
                     .get("openingTail")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
+                let window = params
+                    .get("tailLimit")
+                    .and_then(|v| v.as_u64())
+                    .map(|rows| {
+                        transcript_window::Window::new(
+                            rows.min(usize::MAX as u64) as usize,
+                            params
+                                .get("tailBytes")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(64 * 1024)
+                                .min(usize::MAX as u64) as usize,
+                        )
+                        .with_anchor(
+                            params
+                                .get("tailAnchor")
+                                .and_then(|value| value.as_str())
+                                .map(str::to_owned),
+                        )
+                        .with_resume(
+                            params
+                                .get("resume")
+                                .and_then(|value| serde_json::from_value(value.clone()).ok()),
+                        )
+                    });
                 let p: ChatParams = parse_params(params)?;
                 // An open transcript keeps its chat's checkout diff live (and
                 // discardable) even when the chat is archived; the guard lives
                 // exactly as long as the stream.
                 let interest = self.diff_sync.retain_chat(&p.chat_id);
-                let stream = if opening_tail {
+                let stream = if let Some(window) = window {
+                    let host = self.doc_host.clone();
+                    let chat_id = p.chat_id;
+                    let (rx, doc) = tokio::task::spawn_blocking(move || {
+                        let handle = host.open(&chat_id)?;
+                        Ok::<_, crate::EngineError>((handle.watch_messages(), handle.doc_arc()))
+                    })
+                    .await
+                    .map_err(|e| RpcError::Failed(e.to_string()))?
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                    doc_message_envelopes(rx, doc, Some(window))
+                        .map(zuse_rpc::RpcStreamItem::new)
+                        .boxed()
+                } else if opening_tail {
                     opening_doc_messages_typed_stream(self.doc_host.clone(), p.chat_id).await?
                 } else {
                     let handle = self
@@ -4225,7 +4350,12 @@ impl EngineRpc {
                 )))
             }
             methods::WATCH_CHATS => {
-                Ok(RpcReply::Stream(watch_stream(self.workspace.watch_chats())))
+                let rx = self.workspace.watch_chats();
+                if params["delta"] == true {
+                    Ok(RpcReply::TypedStream(list_watch::stream(rx, |row| &row.id)))
+                } else {
+                    Ok(RpcReply::Stream(watch_stream(rx)))
+                }
             }
             methods::WATCH_SIDEBAR_PREFERENCES => Ok(RpcReply::Stream(watch_stream(
                 self.workspace.watch_sidebar_preferences(),
@@ -4241,7 +4371,13 @@ impl EngineRpc {
                 let merged = self
                     .workspace
                     .merged_sessions_watch(self.sessions.watch_sessions());
-                Ok(RpcReply::Stream(watch_stream(merged)))
+                if params["delta"] == true {
+                    Ok(RpcReply::TypedStream(list_watch::stream(merged, |row| {
+                        &row.chat_id
+                    })))
+                } else {
+                    Ok(RpcReply::Stream(watch_stream(merged)))
+                }
             }
             methods::LOCAL_DEVICE => {
                 RpcReply::value(&serde_json::json!({ "deviceId": self.doc_host.device_id() }))

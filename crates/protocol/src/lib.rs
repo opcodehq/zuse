@@ -38,6 +38,7 @@ pub mod preview;
 pub mod project_creation;
 pub mod projectless;
 pub mod recovery;
+pub mod rpc_probe;
 pub mod session_commands;
 pub mod sidebar_pins;
 pub mod view;
@@ -97,4 +98,5 @@ pub mod cloud_assets;
 pub mod usage;
 
 pub mod keybindings;
+pub mod list_delta;
 pub mod simulators;

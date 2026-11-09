@@ -7,7 +7,7 @@ use std::{
     cell::{Cell, RefCell},
     rc::Rc,
 };
-use wasm_bindgen::{JsCast, closure::Closure};
+use wasm_bindgen::{JsCast, closure::Closure, prelude::wasm_bindgen};
 use web_sys::{MessageEvent, WebSocket};
 use zuse_remote::{
     Invitation, MAX_MESSAGE_BYTES, MAX_RECORD_BYTES, PairedTarget, Route, RouteTable,
@@ -16,6 +16,20 @@ use zuse_remote::{
     routes::Decision,
     session::{self, AttachReply, AttachRequest, Control, Resume},
 };
+
+#[wasm_bindgen(module = "/src/rpc_compression.js")]
+extern "C" {
+    #[wasm_bindgen(js_name = supportsRpcCompression)]
+    fn supports_rpc_compression() -> bool;
+    #[wasm_bindgen(js_name = createRpcDecoder)]
+    fn create_rpc_decoder() -> wasm_bindgen::JsValue;
+    #[wasm_bindgen(catch, js_name = decodeRpcFrame)]
+    async fn decode_rpc_frame(
+        bytes: js_sys::Uint8Array,
+        max_bytes: u32,
+        decoder: wasm_bindgen::JsValue,
+    ) -> Result<wasm_bindgen::JsValue, wasm_bindgen::JsValue>;
+}
 
 // WebSocket.send rejects views backed by shared WASM memory. Own a normal JS
 // buffer for the browser call; do not pass a borrowed Rust slice directly.
@@ -39,6 +53,11 @@ pub(super) struct Socket {
     account: Option<Account>,
     session: Option<Session>,
     clock: web_time::Instant,
+    plain_probe: zuse_protocol::rpc_probe::Probe,
+    // Connection.send can cancel receive. Keep an in-progress decode owned
+    // by the socket so no already-dequeued frame disappears on that branch.
+    decoder: wasm_bindgen::JsValue,
+    pending_text: Option<futures::future::LocalBoxFuture<'static, Result<String, String>>>,
     _open: Closure<dyn FnMut()>,
     _close: Closure<dyn FnMut()>,
     _error: Closure<dyn FnMut()>,
@@ -80,6 +99,29 @@ impl Socket {
         invitation: Option<&Invitation>,
         protocol: Option<&str>,
     ) -> Result<Self, String> {
+        // Opt-in query negotiation lets older engines continue replying with
+        // plain text. Secure and account channels retain their own framing.
+        let compressed_url = (protocol.is_none()
+            && invitation.is_none()
+            && supports_rpc_compression()
+            && !url.contains("rpcCompression="))
+        .then(|| {
+            format!(
+                "{url}{}rpcCompression=deflate-stream-v1",
+                if url.contains('?') { '&' } else { '?' }
+            )
+        });
+        let url = compressed_url.as_deref().unwrap_or(url);
+        let progress_url = (protocol.is_none()
+            && invitation.is_none()
+            && !url.contains("rpcProgress="))
+        .then(|| {
+            format!(
+                "{url}{}rpcProgress=true",
+                if url.contains('?') { '&' } else { '?' }
+            )
+        });
+        let url = progress_url.as_deref().unwrap_or(url);
         let socket = match protocol {
             Some(protocol) => WebSocket::new_with_str(url, protocol),
             None => WebSocket::new(url),
@@ -120,14 +162,20 @@ impl Socket {
         let state = closed.clone();
         let message_socket = socket.clone();
         let mut sender = sender;
+        let binary_limit = if invitation.is_none() && protocol.is_none() {
+            // A valid incompressible stream has a small framing overhead.
+            // Decoding still enforces the original uncompressed byte cap.
+            MAX_MESSAGE_BYTES + 64 * 1024
+        } else {
+            MAX_RECORD_BYTES
+        };
         let message = Closure::<dyn FnMut(MessageEvent)>::new(move |event: MessageEvent| {
             let data = event.data();
             let frame = if let Some(text) = data.as_string() {
                 (text.len() <= MAX_MESSAGE_BYTES).then_some(Incoming::Text(text))
             } else if data.is_instance_of::<js_sys::ArrayBuffer>() {
                 let bytes = js_sys::Uint8Array::new(&data);
-                (bytes.length() as usize <= MAX_RECORD_BYTES)
-                    .then(|| Incoming::Binary(bytes.to_vec()))
+                (bytes.length() as usize <= binary_limit).then(|| Incoming::Binary(bytes.to_vec()))
             } else {
                 None
             };
@@ -150,6 +198,9 @@ impl Socket {
             account: None,
             session: None,
             clock: web_time::Instant::now(),
+            plain_probe: Default::default(),
+            decoder: create_rpc_decoder(),
+            pending_text: None,
             _open: open,
             _close: close,
             _error: error,
@@ -219,6 +270,25 @@ impl Socket {
         Ok(owner)
     }
     fn poll_heartbeat(&mut self) -> Result<Option<u64>, String> {
+        if self.heartbeat.is_none() && self.account.is_none() {
+            return match self
+                .plain_probe
+                .poll(self.clock.elapsed().as_millis() as u64)
+            {
+                zuse_protocol::rpc_probe::Action::Send => {
+                    self.plain_probe.outgoing_buffer(
+                        self.clock.elapsed().as_millis() as u64,
+                        self.socket.buffered_amount() as u64,
+                    );
+                    self.send(zuse_protocol::rpc_probe::REQUEST)?;
+                    self.poll_heartbeat()
+                }
+                zuse_protocol::rpc_probe::Action::Wait(ms) => Ok(Some(ms)),
+                zuse_protocol::rpc_probe::Action::Expired => {
+                    Err("Engine stopped responding".into())
+                }
+            };
+        }
         loop {
             let Some(heartbeat) = &mut self.heartbeat else {
                 return Ok(None);
@@ -301,14 +371,17 @@ impl Socket {
         }
         loop {
             self.send_due_ack()?;
-            let wait = self.poll_heartbeat()?.map(|ms| {
+            let frame = if let Some(pending) = self.pending_text.as_mut() {
+                let decoded = pending.await;
+                self.pending_text = None;
+                Incoming::Text(decoded?)
+            } else if let Some(ms) = self.poll_heartbeat()?.map(|ms| {
                 if self.session.is_some() {
                     ms.min(session::ACK_INTERVAL_MS)
                 } else {
                     ms
                 }
-            });
-            let frame = if let Some(ms) = wait {
+            }) {
                 futures::select_biased! {
                     frame = self.raw().fuse() => frame?,
                     _ = super::connection::delay(ms as u32).fuse() => continue,
@@ -317,7 +390,51 @@ impl Socket {
                 self.raw().await?
             };
             match (&mut self.channel, frame) {
-                (None, Incoming::Text(text)) => return Ok(text),
+                (None, Incoming::Binary(bytes)) => {
+                    self.plain_probe
+                        .received_frame(self.clock.elapsed().as_millis() as u64);
+                    let owned = js_sys::Uint8Array::new_with_length(bytes.len() as u32);
+                    owned.copy_from(&bytes);
+                    let decoder = self.decoder.clone();
+                    self.pending_text = Some(
+                        async move {
+                            decode_rpc_frame(owned, MAX_MESSAGE_BYTES as u32, decoder)
+                                .await
+                                .map_err(|_| "Invalid compressed engine frame".to_string())?
+                                .as_string()
+                                .ok_or_else(|| "Invalid compressed engine text".to_string())
+                        }
+                        .boxed_local(),
+                    );
+                }
+                (None, Incoming::Text(text)) => {
+                    let now = self.clock.elapsed().as_millis() as u64;
+                    self.plain_probe.received_frame(now);
+                    let mut transfer_notice = false;
+                    if self.plain_probe.awaiting_reply() || text.starts_with(r#"{"id":0,"#) {
+                        for line in text.lines() {
+                            if let Ok(frame) = serde_json::from_str::<serde_json::Value>(line)
+                                && frame["id"] == 0
+                            {
+                                if let Some(bytes) = frame["transportBytes"].as_u64() {
+                                    self.plain_probe.incoming_transfer(now, bytes);
+                                    transfer_notice = true;
+                                } else if frame["ok"]["deviceId"]
+                                    .as_str()
+                                    .is_some_and(|id| !id.is_empty())
+                                {
+                                    self.plain_probe.acknowledge(now);
+                                }
+                            }
+                        }
+                    }
+                    // A notice is a separate transport frame. Normal RPC
+                    // batches still reach the dispatcher, including id=0 ACKs.
+                    if transfer_notice && text.lines().count() == 1 {
+                        continue;
+                    }
+                    return Ok(text);
+                }
                 (Some(channel), Incoming::Binary(bytes)) => {
                     if let Some(message) = channel
                         .open(&bytes)
@@ -888,6 +1005,11 @@ impl Socket {
 }
 impl Drop for Socket {
     fn drop(&mut self) {
+        if let Ok(close) = js_sys::Reflect::get(&self.decoder, &"close".into()) {
+            if let Some(close) = close.dyn_ref::<js_sys::Function>() {
+                let _ = close.call0(&self.decoder);
+            }
+        }
         self.socket.set_onopen(None);
         self.socket.set_onclose(None);
         self.socket.set_onerror(None);
