@@ -1574,12 +1574,19 @@ mod database {
             fixture.scoped_release.notify_one();
         };
         let (grant, _) = tokio::join!(grant, unlink);
-        // Parallel scoping can observe unlink either during the App inspection
-        // or at the final epoch fence. Both must reject delivery of the token.
-        assert!(matches!(
-            grant.err().expect("unlinked grant must fail").code,
-            "github_installation_changed" | "github_observation_superseded"
-        ));
+        // Parallel scoping can observe unlink before the App inspection (the
+        // installation is gone), during it, or at the final epoch fence. Every
+        // one must reject delivery of the token.
+        let code = grant.err().expect("unlinked grant must fail").code;
+        assert!(
+            matches!(
+                code,
+                "github_repository_access_denied"
+                    | "github_installation_changed"
+                    | "github_observation_superseded"
+            ),
+            "unexpected unlinked grant failure: {code}"
+        );
         fixture.gate_scoped.store(false, Ordering::SeqCst);
         assert_eq!(
             authority.remove_installation(&personal, 9).await.unwrap()["changed"],
