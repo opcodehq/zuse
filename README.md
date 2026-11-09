@@ -71,9 +71,14 @@ For native app bundles and user-level Linux installation, see
 Install the stable Rust toolchain with rustfmt and Clippy. Linux native builds require the platform development libraries listed in `internal-docs/development.md`.
 
 ```sh
-cargo check -p zuse-engine
-cargo run -p zuse
+python3 scripts/cargo_dev.py check -p zuse-engine
+python3 scripts/cargo_dev.py run -p zuse
 ```
+
+The Cargo launcher shares build output across Git worktrees and avoids rebuilding
+unchanged icon assets. Native and browser dev launchers use it automatically.
+See [build speed and disk usage](internal-docs/development.md#build-speed-and-disk-usage)
+for cache locations and debugging options.
 
 For the browser target, install nightly Rust with `rust-src` and the `wasm32-unknown-unknown` target, plus Trunk 0.21.14. Then build and serve the same local engine:
 

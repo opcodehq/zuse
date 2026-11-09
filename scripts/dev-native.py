@@ -9,6 +9,8 @@ import socket
 import subprocess
 import time
 
+from cargo_dev import build_environment
+
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -49,7 +51,7 @@ def main():
     args = parser.parse_args()
     if not 0 < args.ipc_port < 65536:
         parser.error("--ipc-port must be between 1 and 65535")
-    env = dict(os.environ, ZUSE_DATA_DIR=str(Path(args.data_dir).resolve()), ZUSE_IPC_PORT=str(args.ipc_port))
+    env = dict(build_environment(), ZUSE_DATA_DIR=str(Path(args.data_dir).resolve()), ZUSE_IPC_PORT=str(args.ipc_port))
     # Use a separate local development profile unless the caller opts into sync.
     env.setdefault("ZUSE_WORKOS_CLIENT_ID", "")
     engine = ui = None

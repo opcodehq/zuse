@@ -50,4 +50,4 @@ for option in ipc-port assets data-dir; do
 done
 
 bash scripts/build-web.sh
-exec cargo +stable run --locked -p zuse-cli --bin zuse-server -- "${server_defaults[@]}" "$@"
+exec python3 scripts/cargo_dev.py +stable run --locked -p zuse-cli --bin zuse-server -- "${server_defaults[@]}" "$@"
