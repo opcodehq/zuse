@@ -151,6 +151,28 @@ impl HarnessRegistry {
         self.discover_models_with_lease(id, lease).await
     }
 
+    /// Explicit refresh also reaches the underlying CLI catalog cache.
+    pub(crate) async fn discover_models_force(
+        &self,
+        id: HarnessId,
+        force: bool,
+    ) -> Result<Vec<zuse_protocol::Model>, HarnessError> {
+        if !force {
+            return self.discover_models(id).await;
+        }
+        let lease = self.execution_lease(id).await;
+        let harness = self.resolve(id)?;
+        tokio::spawn(async move {
+            let _lease = lease;
+            harness
+                .model_catalog(true)
+                .await
+                .map(|catalog| catalog.models)
+        })
+        .await
+        .map_err(|error| HarnessError::Protocol(format!("model discovery task failed: {error}")))?
+    }
+
     /// A caller such as titling already holds a lease. Reacquiring after an
     /// update queues would deadlock it against its own existing reader.
     pub(crate) async fn discover_models_with_lease(

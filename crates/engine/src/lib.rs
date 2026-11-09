@@ -43,6 +43,7 @@ pub mod relay_access;
 pub use zuse_harness::processes::supervisor as command_host;
 mod acp_catalog;
 mod harness_api;
+mod harness_local;
 pub mod harness_models;
 mod model_catalogs;
 pub mod model_connections;
@@ -399,6 +400,7 @@ impl EngineCore {
             model_connections::ModelConnections::new(data_dir.to_path_buf(), account.clone());
         let harness_models =
             harness_models::HarnessModels::new(model_connections.clone(), data_dir.join("harness"))
+                .map(|models| models.with_local(agent_accounts.clone(), Arc::downgrade(&registry)))
                 .map_err(|error| EngineError::Other(error.to_string()))?;
         #[cfg(unix)]
         registry.register(Arc::new(
