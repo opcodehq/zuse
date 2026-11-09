@@ -86,6 +86,11 @@ async fn v2_large_tool_put_keeps_control_and_new_admission_independent_and_recon
     ));
     let admin = PgPool::connect(&url).await.unwrap();
     let schema = "zuse_staging".to_owned();
+    let _staging = crate::STAGING_SCHEMA_LOCK.lock().await;
+    sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+        .execute(&admin)
+        .await
+        .unwrap();
     sqlx::query(&format!("CREATE SCHEMA {schema}"))
         .execute(&admin)
         .await

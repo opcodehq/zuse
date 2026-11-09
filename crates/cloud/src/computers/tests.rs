@@ -144,6 +144,8 @@ async fn environments_are_scoped_revisioned_and_available_without_compute_entitl
         include_str!("../../tests/fixtures/legacy-catalog.sql"),
         include_str!("../../tests/fixtures/projects.sql"),
         include_str!("../../migrations/0009_computers.sql"),
+        // Connection refresh journals its rotations.
+        include_str!("../../migrations/0024_credential_delivery_journal.sql"),
     ] {
         sqlx::raw_sql(sql).execute(&pool).await.unwrap();
     }

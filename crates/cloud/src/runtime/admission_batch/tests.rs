@@ -11,6 +11,11 @@ async fn v2_initial_write_is_atomic_under_the_actual_restricted_role() {
     ));
     let admin = PgPool::connect(&url).await.unwrap();
     let schema = "zuse_staging".to_owned();
+    let _staging = crate::STAGING_SCHEMA_LOCK.lock().await;
+    sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+        .execute(&admin)
+        .await
+        .unwrap();
     sqlx::query(&format!("CREATE SCHEMA {schema}"))
         .execute(&admin)
         .await

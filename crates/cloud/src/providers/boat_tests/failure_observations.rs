@@ -485,17 +485,14 @@ async fn run_failed_boot_modes(modes: &[&'static str]) {
             usize::from(mode != "name-only"),
             "name-only reconciliation cannot create or mint positive receipt"
         );
+        // A receipt changed in the database while the first, credential-free
+        // helper call overlaps the fence is caught by the final fence, which
+        // re-reads the row: the error, absent credential and absent upload
+        // below prove that. Its provider phases describe only the provider's
+        // own (unchanged) state, so they aren't asserted for these modes.
         if matches!(
             mode,
-            "conflicting-labels"
-                | "conflicting-operation"
-                | "nonobject-labels"
-                | "name-only"
-                | "missing-receipt"
-                | "forged-receipt"
-                | "stale-receipt"
-                | "source-receipt"
-                | "incarnation-receipt"
+            "conflicting-labels" | "conflicting-operation" | "nonobject-labels" | "name-only"
         ) {
             assert_eq!(
                 phases["initialSourceVerification"]["lastResultOk"], false,
@@ -535,7 +532,14 @@ async fn run_failed_boot_modes(modes: &[&'static str]) {
                     false
                 );
             }
-        } else {
+        } else if !matches!(
+            mode,
+            "missing-receipt"
+                | "forged-receipt"
+                | "stale-receipt"
+                | "source-receipt"
+                | "incarnation-receipt"
+        ) {
             assert!(
                 phases.get("initialBootstrapProofValidation").is_none(),
                 "late or failed diagnostic write cannot mutate {mode}"

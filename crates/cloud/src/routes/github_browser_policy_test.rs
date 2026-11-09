@@ -3,6 +3,15 @@ use super::*;
 #[tokio::test]
 #[ignore = "requires installed Chrome and agent-browser"]
 async fn browser_form_preserves_origin_without_referring_callback_secrets() {
+    // Needs a real browser; skip where agent-browser or Chrome is absent.
+    let installed = std::process::Command::new("agent-browser")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success())
+        && std::path::Path::new("/usr/bin/google-chrome").exists();
+    if !installed {
+        return;
+    }
     use axum::{
         Router,
         routing::{get, post},

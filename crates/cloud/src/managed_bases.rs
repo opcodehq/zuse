@@ -731,6 +731,19 @@ mod tests {
             let mut candidate = release();
             candidate.provider = id;
             candidate.capabilities.id = id;
+            // E2B releases must pin their provider build.
+            if id == ProviderId::E2b {
+                candidate.provider_artifact_binding =
+                    Some(crate::providers::artifact::ArtifactBinding {
+                        version: 1,
+                        mode: "private-single-build".into(),
+                        artifact_id: candidate.artifact_id.clone(),
+                        artifact_version: "build-one".into(),
+                        artifact_name: "zuse-e2b-stage-one".into(),
+                        runtime_sha256: "a".repeat(64),
+                        manifest_sha256: "b".repeat(64),
+                    });
+            }
             sqlx::query(
                 "INSERT INTO cloud_managed_bases VALUES($1,'catalog-release','pending',$2,1)",
             )

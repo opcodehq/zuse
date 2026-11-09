@@ -1,6 +1,10 @@
 //! Hosted control plane. Runtime history stays with the execution engine.
 #[cfg(test)]
 mod aaa_sql_census;
+/// Tests that need the literal `zuse_staging` schema (the code checks for
+/// it) take turns: one holds this while it recreates and uses the schema.
+#[cfg(test)]
+pub(crate) static STAGING_SCHEMA_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 pub mod access;
 #[cfg(test)]
 mod zzz_sql_census {

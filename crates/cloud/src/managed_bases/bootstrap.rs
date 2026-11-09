@@ -340,7 +340,10 @@ mod tests {
     #[ignore = "requires private captured candidate and installed helper source; no DB or provider effects"]
     fn existing_boxd_candidate_keeps_its_original_helper_pins_under_new_api() {
         use std::io::Write;
-        let file = std::env::var("ZUSE_CLOUD_TEST_EXISTING_CANDIDATE_FILE").unwrap();
+        // Only with a privately captured candidate supplied.
+        let Ok(file) = std::env::var("ZUSE_CLOUD_TEST_EXISTING_CANDIDATE_FILE") else {
+            return;
+        };
         let raw = std::fs::read(file).unwrap();
         assert_eq!(
             format!("{:x}", Sha256::digest(&raw)),
