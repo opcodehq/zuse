@@ -225,6 +225,7 @@ struct Transport {
     broker: OnceLock<Weak<AccountBroker>>,
     notices: broadcast::Sender<AccountNotice>,
     stop: CancellationToken,
+    local: OnceLock<crate::harness_local::LocalModels>,
 }
 #[derive(Clone)]
 pub struct HarnessModels {
@@ -276,10 +277,22 @@ impl HarnessModels {
             broker: OnceLock::new(),
             notices: broadcast::channel(128).0,
             stop: CancellationToken::new(),
+            local: OnceLock::new(),
         });
         let broker = Arc::new(AccountBroker::new(transport.clone()));
         let _ = transport.broker.set(Arc::downgrade(&broker));
         Ok(Self { transport, broker })
+    }
+    pub fn with_local(
+        self,
+        accounts: crate::agent_accounts::AgentAccounts,
+        registry: Weak<crate::registry::HarnessRegistry>,
+    ) -> Self {
+        let _ = self
+            .transport
+            .local
+            .set(crate::harness_local::LocalModels::new(accounts, registry));
+        self
     }
     pub fn subscribe(&self) -> broadcast::Receiver<AccountNotice> {
         self.transport.notices.subscribe()
@@ -296,10 +309,17 @@ impl HarnessModels {
             lock(&self.transport.caches).clear();
         }
         let collect = async {
+            let local = match self.transport.local.get() {
+                Some(local) => local.models(force).await,
+                None => vec![],
+            };
             let rows = self.transport.sync().await?;
             let candidates = rows.iter().filter(|c| c.authorized).collect::<Vec<_>>();
             if candidates.is_empty() {
-                return Ok(self.transport.api.models());
+                let mut models = self.transport.api.models();
+                models.extend(local);
+                models.sort_by(|a, b| a.id.cmp(&b.id));
+                return Ok(models);
             }
             let inventories = join_all(
                 candidates
@@ -317,10 +337,10 @@ impl HarnessModels {
                     }
                 }
             }
-            if !succeeded && self.transport.api.models().is_empty() {
+            if !succeeded && local.is_empty() && self.transport.api.models().is_empty() {
                 return Err(failure("model_inventory_unavailable", None));
             }
-            for model in self.transport.api.models() {
+            for model in local.into_iter().chain(self.transport.api.models()) {
                 result.insert(model.id.clone(), model);
             }
             Ok(result.into_values().collect())
@@ -473,6 +493,15 @@ impl Transport {
 #[async_trait]
 impl BrokerHost for Transport {
     async fn connections(&self, input: &ModelInput) -> Result<Vec<BrokerConnection>, Error> {
+        if input.model.starts_with("local/") {
+            let local = self.local.get().ok_or(Error::AccountsUnavailable)?;
+            let (_, credential) = local.credential(&input.model).await?;
+            return Ok(vec![BrokerConnection {
+                id: credential.connection_id,
+                authorized: true,
+                preferred: true,
+            }]);
+        }
         if input.model.starts_with("api/") {
             let id = self.api.connection(&input.model)?;
             return Ok(vec![BrokerConnection {
@@ -508,6 +537,29 @@ impl BrokerHost for Transport {
         connection_id: &str,
         mut input: ModelInput,
     ) -> Result<ModelOutput, Error> {
+        if input.model.starts_with("local/") {
+            let local = self.local.get().ok_or(Error::AccountsUnavailable)?;
+            let (model, credential) = local.credential(&input.model).await?;
+            if credential.connection_id != connection_id {
+                return Err(Error::paused(
+                    "Local login changed. Retry with the selected account.",
+                ));
+            }
+            input.model = model;
+            return self
+                .wire
+                .request(
+                    input,
+                    AccountCredential {
+                        connection_id: credential.connection_id,
+                        provider: "local".into(),
+                        access_token: credential.access_token,
+                        authorization_generation: credential.authorization_generation,
+                        route: Some(credential.route),
+                    },
+                )
+                .await;
+        }
         if input.model.starts_with("api/") {
             let (model, credential) = self.api.credential(&input.model)?;
             if credential.connection_id != connection_id {
@@ -637,7 +689,7 @@ mod tests {
             assert!(!input.model.contains('/'));
             assert!(matches!(
                 credential.provider.as_str(),
-                "chatgpt" | "supergrok"
+                "chatgpt" | "supergrok" | "local"
             ));
             lock(&self.calls).push((credential.connection_id.clone(), input.model));
             if self.slow.load(Ordering::Acquire) {
@@ -1012,5 +1064,195 @@ mod tests {
             Err(Error::AccountsUnavailable)
         ));
         assert!(lock(&fixture.wire.calls).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod local_tests {
+    use super::*;
+    use zuse_protocol::{AgentEvent, HarnessId, Model, ReasoningLevel, RunRequest, SteeringMode};
+    use zuse_providers::{Harness, HarnessError, RunControls};
+    struct Catalog {
+        id: HarnessId,
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+        // Mirror the real registry -> native harness -> model transport ownership.
+        _models: HarnessModels,
+    }
+    #[async_trait]
+    impl Harness for Catalog {
+        fn id(&self) -> HarnessId {
+            self.id
+        }
+        fn display_name(&self) -> &str {
+            "Fixture"
+        }
+        fn supports_steering(&self) -> bool {
+            false
+        }
+        fn steering_mode(&self) -> SteeringMode {
+            SteeringMode::TurnBoundary
+        }
+        fn reasoning_levels(&self) -> &[ReasoningLevel] {
+            &[]
+        }
+        async fn models(&self) -> Result<Vec<Model>, HarnessError> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(vec![Model {
+                id: "test-model".into(),
+                label: "Test".into(),
+                description: None,
+                reasoning_levels: vec![],
+                options: vec![],
+            }])
+        }
+        async fn run(
+            &self,
+            _: RunRequest,
+            _: RunControls,
+        ) -> Result<
+            futures::stream::BoxStream<'static, Result<AgentEvent, HarnessError>>,
+            HarnessError,
+        > {
+            unreachable!()
+        }
+    }
+    #[derive(Default)]
+    struct EmptyAccounts;
+    #[async_trait]
+    impl Accounts for EmptyAccounts {
+        async fn list(&self) -> Result<Vec<Connection>, Error> {
+            Ok(vec![])
+        }
+        async fn credential(&self, _: &str) -> Result<Credential, Error> {
+            unreachable!()
+        }
+    }
+    struct LocalWire;
+    #[async_trait]
+    impl Wire for LocalWire {
+        async fn request(
+            &self,
+            input: ModelInput,
+            credential: AccountCredential,
+        ) -> Result<ModelOutput, Error> {
+            assert_eq!(input.model, "test-model");
+            assert_eq!(credential.access_token, "local-token");
+            let route = credential.route.unwrap();
+            assert!(route.subscription);
+            assert_eq!(
+                route.authentication,
+                zuse_harness::transport::Authentication::CodexOauth
+            );
+            Ok(ModelOutput {
+                messages: vec![],
+                calls: vec![],
+                text: "local reply".into(),
+                usage: Default::default(),
+            })
+        }
+        async fn close(&self) {}
+    }
+    struct Budget;
+    #[async_trait]
+    impl zuse_harness::RequestBudget for Budget {
+        async fn reserve(&self) -> Result<(), Error> {
+            Ok(())
+        }
+    }
+    #[tokio::test(start_paused = true)]
+    async fn local_catalog_and_dispatch_work_without_registered_model_accounts() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = crate::agent_accounts::AgentAccountsConfig::isolated(dir.path());
+        std::fs::create_dir_all(&config.codex_home).unwrap();
+        std::fs::write(
+            config.codex_home.join("auth.json"),
+            br#"{"tokens":{"access_token":"local-token"}}"#,
+        )
+        .unwrap();
+        let accounts = crate::agent_accounts::AgentAccounts::new(config.clone());
+        let registry = Arc::new(crate::registry::HarnessRegistry::new());
+        let api_path = dir.path().join("providers.json");
+        std::fs::write(&api_path, serde_json::json!({"connections":[{
+            "id":"fixture", "protocol":"responses", "endpoint":"https://example.invalid/v1/responses",
+            "credentialEnv":"PATH", "capabilities":{"images":true,"tools":true,"reasoning":true,"promptCache":true},
+            "models":[{"id":"api-first","label":"API first","contextWindowTokens":32000}]
+        }]}).to_string()).unwrap();
+        let models = HarnessModels::configured_api(
+            crate::harness_api::ApiModels::load(&api_path).unwrap(),
+            Arc::new(EmptyAccounts),
+            Arc::new(LocalWire),
+            ["unused".into(), "unused".into()],
+        )
+        .unwrap()
+        .with_local(accounts, Arc::downgrade(&registry));
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        registry.register(Arc::new(Catalog {
+            id: HarnessId::Codex,
+            calls: calls.clone(),
+            _models: models.clone(),
+        }));
+        let inventory = models
+            .models(true, &CancellationToken::new())
+            .await
+            .unwrap();
+        assert_eq!(
+            inventory.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+            vec!["api/fixture/api-first", "local/codex/test-model"]
+        );
+        let count = || calls.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(count(), 1);
+        let cancel = CancellationToken::new();
+        models.models(false, &cancel).await.unwrap();
+        assert_eq!(count(), 1, "warm inventories must not probe a CLI again");
+        models.models(true, &cancel).await.unwrap();
+        assert_eq!(count(), 2, "explicit refresh bypasses the cache");
+        tokio::time::advance(Duration::from_secs(61)).await;
+        let (a, b) = tokio::join!(models.models(false, &cancel), models.models(false, &cancel));
+        assert_eq!(a.unwrap().len(), 2);
+        assert_eq!(b.unwrap().len(), 2);
+        assert_eq!(count(), 3, "expired concurrent callers share one probe");
+        let output = models
+            .request(ModelInput {
+                root_id: "root".into(),
+                agent_id: "root".into(),
+                model: "local/codex/test-model".into(),
+                reasoning: None,
+                messages: Arc::new(vec![]),
+                tools: Arc::new(zuse_harness::Tools::new()),
+                purpose: Default::default(),
+                retry_index: 0,
+                cancel: CancellationToken::new(),
+                text: Arc::new(|_| {}),
+                budget: Arc::new(Budget),
+                report: Arc::new(|_| {}),
+            })
+            .await
+            .unwrap();
+        assert_eq!(output.text, "local reply");
+        std::fs::write(
+            config.codex_home.join("auth.json"),
+            br#"{"tokens":{"access_token":"new-local-token"}}"#,
+        )
+        .unwrap();
+        models.models(false, &cancel).await.unwrap();
+        assert_eq!(
+            count(),
+            4,
+            "a changed login invalidates the inventory immediately"
+        );
+        std::fs::remove_file(config.codex_home.join("auth.json")).unwrap();
+        assert_eq!(models.models(false, &cancel).await.unwrap().len(), 1);
+        assert_eq!(
+            count(),
+            4,
+            "signed-out models must disappear without a probe"
+        );
+        let weak = Arc::downgrade(&registry);
+        drop(registry);
+        assert!(
+            weak.upgrade().is_none(),
+            "local models must not retain their owning registry"
+        );
+        assert_eq!(models.models(false, &cancel).await.unwrap().len(), 1);
     }
 }
