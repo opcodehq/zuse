@@ -1171,7 +1171,10 @@ mod tests {
             events.as_slice(),
             [
                 AgentEvent::ToolCall { .. },
-                AgentEvent::ToolResult { is_error: false, .. }
+                AgentEvent::ToolResult {
+                    is_error: false,
+                    ..
+                }
             ]
         ));
     }

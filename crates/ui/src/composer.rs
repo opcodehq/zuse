@@ -8896,12 +8896,8 @@ impl Composer {
                         if composer.slash.error.is_none() {
                             composer.slash_recent = Some((recent_key, candidates.clone()));
                         }
-                        let candidates = composer.finish_slash_catalog(
-                            candidates,
-                            skill,
-                            commands_allowed,
-                            cx,
-                        );
+                        let candidates =
+                            composer.finish_slash_catalog(candidates, skill, commands_allowed, cx);
                         composer.slash_cache.insert(context, candidates);
                     }
                     Err(err) => {
@@ -9163,8 +9159,7 @@ impl Composer {
                     }),
             );
         } else {
-            let mut rows: Vec<gpui::AnyElement> =
-                Vec::with_capacity(self.slash.filtered.len() + 2);
+            let mut rows: Vec<gpui::AnyElement> = Vec::with_capacity(self.slash.filtered.len() + 2);
             let first_skill = self.slash_first_skill_row();
             for (row_ix, &cmd_ix) in self.slash.filtered.iter().enumerate() {
                 let Some(command) = commands.get(cmd_ix) else {

@@ -21,8 +21,7 @@ fn input_hint(candidate: &InvocationCandidate) -> Option<String> {
 /// The open catalogue reads alphabetically, commands ahead of skills, since
 /// providers list a user's many skills ahead of their built-in commands.
 pub(super) fn catalog_order(candidates: &mut [InvocationCandidate]) {
-    candidates
-        .sort_by_cached_key(|row| (row.invocation.prefix() == '$', row.name.to_lowercase()));
+    candidates.sort_by_cached_key(|row| (row.invocation.prefix() == '$', row.name.to_lowercase()));
 }
 
 /// The row that opens the Skills section. Only the whole catalogue is grouped:
@@ -35,7 +34,11 @@ pub(super) fn first_skill_row(
     if !query.is_empty() {
         return None;
     }
-    let is_skill = |&ix: &usize| candidates.get(ix).is_some_and(|c| c.invocation.prefix() == '$');
+    let is_skill = |&ix: &usize| {
+        candidates
+            .get(ix)
+            .is_some_and(|c| c.invocation.prefix() == '$')
+    };
     filtered.iter().position(is_skill).filter(|&row| row > 0)
 }
 
@@ -257,7 +260,11 @@ mod tests {
         let all: Vec<_> = (0..rows.len()).collect();
         assert_eq!(first_skill_row("", &all, &rows), Some(2));
         assert_eq!(first_skill_row("co", &all, &rows), None);
-        assert_eq!(first_skill_row("", &[2, 3], &rows), None, "one kind, no headings");
+        assert_eq!(
+            first_skill_row("", &[2, 3], &rows),
+            None,
+            "one kind, no headings"
+        );
     }
     #[test]
     fn equal_matches_prefer_the_shorter_name() {
