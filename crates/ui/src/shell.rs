@@ -2378,9 +2378,6 @@ pub struct Shell {
     /// they last painted with their content held at its layout width (same
     /// order).
     fit_exits: [Option<(WidthTween, f32)>; 3],
-    /// The window width the surface host's share was last split for. Seeded
-    /// by the first frame, so a saved divider survives a relaunch.
-    split_viewport: Option<f32>,
     /// The last window fit and the inputs it was computed from, one slot
     /// per `closing` flag of `fit`: layout helpers ask for both many times
     /// per frame while a close runs. Not a per-frame value, since handlers
@@ -2891,7 +2888,6 @@ impl Shell {
             files_content_tween: None,
             painted_columns: None,
             fit_exits: [None; 3],
-            split_viewport: None,
             fit_memo: Default::default(),
             right_images_suspended: false,
             sidebar_edge_bounce: None,
@@ -13721,8 +13717,9 @@ impl Shell {
         if plus_open {
             let closing = self.right_plus.closing_since();
             let menu = self.render_right_plus_menu(&theme, cx).into_any_element();
-            // Right-aligned to the trigger, opening over the pane.
-            plus = plus.relative().child(popover::anchored_menu_below_end(
+            // Align the menu's left edge with the trigger so it opens into
+            // the surface pane instead of covering the conversation.
+            plus = plus.relative().child(popover::anchored_menu_below(
                 "right-plus-menu",
                 menu,
                 closing,
@@ -17087,6 +17084,58 @@ mod exit_regressions {
                 assert!(shell.state.read(cx).selected_chat.is_none());
                 assert_eq!(shell.state.read(cx).selected_space.as_deref(), Some("b"));
                 assert_eq!(shell.composer.read(cx).appshots[""].len(), 1);
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn right_panel_opens_at_default_and_remembers_a_resized_width(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        cx.update(|cx| {
+            settings::init(settings::UiSettings::default(), dir.path(), cx);
+            crate::history::init(
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                cx,
+            );
+            gpui_base::init(cx);
+            cx.set_global(Theme::default());
+            crate::app_menus::init(cx);
+        });
+        let window = cx.add_window(|_, cx| {
+            let state = cx.new(|_| AppState::new());
+            Shell::new(
+                state,
+                EngineBootConfig {
+                    target: None,
+                    data_dir: dir.path().into(),
+                    ipc_port: 0,
+                    edge_url: "http://127.0.0.1:1".into(),
+                    edge_token: None,
+                    org_id: None,
+                    workos_client_id: None,
+                    default_harness: zuse_protocol::HarnessId::Mock,
+                },
+                cx,
+            )
+        });
+        window
+            .update(cx, |shell, _, cx| {
+                shell.active_chat = "preview".into();
+                shell.viewport_width = 1400.0;
+                shell.set_surfaces_open(true, cx);
+                assert_eq!(shell.right_settled_target(cx), 520.0);
+
+                // A drag updates this preference; closing and reopening the
+                // panel must not replace it with the default or an even split.
+                shell.settings.right_pane_width = 400.0;
+                shell.set_surfaces_open(false, cx);
+                shell.set_surfaces_open(true, cx);
+                assert_eq!(shell.right_settled_target(cx), 400.0);
+                shell.observe_viewport_width(1500.0, cx);
+                assert_eq!(shell.right_settled_target(cx), 400.0);
             })
             .unwrap();
     }
