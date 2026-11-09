@@ -13825,6 +13825,7 @@ name = "zuse"
 version = "0.26.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "clap",
  "embed-resource",
  "libc",
@@ -13834,6 +13835,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
  "windows-sys 0.61.2",
  "zuse-engine",
  "zuse-mcp",

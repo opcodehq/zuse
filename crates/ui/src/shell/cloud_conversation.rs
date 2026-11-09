@@ -5,6 +5,7 @@ use crate::state::CloudTarget;
 use serde_json::{Value, json};
 mod activity;
 mod computer;
+mod ssh;
 pub(super) use computer::Tone;
 mod history;
 

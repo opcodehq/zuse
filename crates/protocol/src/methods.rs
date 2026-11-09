@@ -278,6 +278,14 @@ pub const CLOUD_WORKSPACES: &str = "CloudWorkspaces";
 pub const CLOUD_HISTORY: &str = "CloudHistory";
 /// CPU, memory and disk of the machine the engine runs on.
 pub const MACHINE_RESOURCES: &str = "MachineResources";
+/// Authorize an SSH key on this machine and start its loopback sshd.
+pub const SSH_PREPARE: &str = "SshPrepare";
+/// Stream a connection to the loopback sshd: `{tunnel}`, then `{data}` items.
+pub const SSH_TUNNEL: &str = "SshTunnel";
+/// Send `{tunnel, data}` (base64) into an open SSH tunnel.
+pub const SSH_TUNNEL_WRITE: &str = "SshTunnelWrite";
+/// Close an SSH tunnel.
+pub const SSH_TUNNEL_CLOSE: &str = "SshTunnelClose";
 /// Explicit lifecycle mutation. Never automatically retry on reconnect.
 pub const CLOUD_CLEANUP_MIRROR: &str = "CloudCleanupMirror";
 pub const CLOUD_DELETE: &str = "CloudDelete";

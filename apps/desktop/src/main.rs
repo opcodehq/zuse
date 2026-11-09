@@ -7,6 +7,7 @@
 mod auth_cli;
 mod daemon;
 mod paths;
+mod ssh_proxy;
 mod update_cli;
 
 use clap::{Parser, Subcommand};
@@ -60,6 +61,16 @@ enum Command {
     Daemon {
         #[command(subcommand)]
         command: DaemonCommand,
+    },
+    /// SSH ProxyCommand for `ssh zuse-<workspace>`: tunnels to that cloud
+    /// computer through the running Zuse engine.
+    #[command(hide = true)]
+    SshProxy {
+        /// The host alias ssh connects to (`zuse-<workspace id>`).
+        host: String,
+        /// The engine's IPC port (defaults to this environment's).
+        #[arg(long)]
+        ipc_port: Option<u16>,
     },
     /// Check for a newer release and apply it (download → verify → swap →
     /// service restart). `--check` only reports (exits 1 when one is available).
@@ -196,7 +207,7 @@ fn main() -> anyhow::Result<()> {
         use tracing_subscriber::util::SubscriberInitExt;
         // `zuse mcp` owns stdout for the protocol: a single log line on it
         // would corrupt the JSON-RPC stream, so its diagnostics go to stderr.
-        if matches!(&cli.command, Some(Command::Mcp)) {
+        if matches!(&cli.command, Some(Command::Mcp | Command::SshProxy { .. })) {
             tracing_subscriber::registry()
                 .with(filter)
                 .with(
@@ -259,6 +270,11 @@ fn main() -> anyhow::Result<()> {
         Some(Command::Status) => {
             let runtime = tokio::runtime::Runtime::new()?;
             runtime.block_on(auth_cli::status(engine_config_from_env()))
+        }
+        Some(Command::SshProxy { host, ipc_port }) => {
+            let runtime = tokio::runtime::Runtime::new()?;
+            let port = ipc_port.unwrap_or_else(|| engine_config_from_env().ipc_port);
+            runtime.block_on(ssh_proxy::run(port, &host))
         }
         Some(Command::Sync) => {
             let runtime = tokio::runtime::Runtime::new()?;

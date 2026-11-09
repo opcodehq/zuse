@@ -87,9 +87,12 @@ impl AppState {
             vec![]
         }
     }
+    /// The sidebar refreshes silently; tests still observe its phases.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn cloud_sidebar_loading(&self) -> bool {
         self.cloud_sidebar.loading
     }
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn cloud_sidebar_stale(&self) -> bool {
         !self.cloud_sidebar.projects_fresh || !self.cloud_sidebar.workspaces_fresh
     }

@@ -32,6 +32,7 @@ use zuse_sync::DocsStore;
 
 pub mod account;
 pub mod machine_resources;
+pub mod ssh_access;
 pub mod agent_accounts;
 mod api_origins;
 pub mod local_mcp;

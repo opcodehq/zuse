@@ -3115,6 +3115,33 @@ impl EngineRpc {
                 RpcReply::value(&response)
             }
             methods::ENGINE_INFO => RpcReply::value(&self.engine_info),
+            methods::SSH_PREPARE => {
+                let key = params["publicKey"].as_str().unwrap_or_default();
+                let prepared = crate::ssh_access::prepare(key, None)
+                    .await
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(&prepared)
+            }
+            methods::SSH_TUNNEL => {
+                let stream = crate::ssh_access::open_tunnel()
+                    .await
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                Ok(RpcReply::Stream(stream))
+            }
+            methods::SSH_TUNNEL_WRITE => {
+                crate::ssh_access::write_tunnel(
+                    params["tunnel"].as_str().unwrap_or_default(),
+                    params["data"].as_str().unwrap_or_default(),
+                )
+                .await
+                .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(&serde_json::json!({"ok": true}))
+            }
+            methods::SSH_TUNNEL_CLOSE => {
+                crate::ssh_access::close_tunnel(params["tunnel"].as_str().unwrap_or_default())
+                    .await;
+                RpcReply::value(&serde_json::json!({"ok": true}))
+            }
             methods::MACHINE_RESOURCES => {
                 let root = std::env::current_dir().unwrap_or_else(|_| "/".into());
                 RpcReply::value(&crate::machine_resources::snapshot(&root).await)

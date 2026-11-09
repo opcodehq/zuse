@@ -98,6 +98,14 @@ enum Page {
     More,
     /// Apps to open the synced folder in.
     OpenIn,
+    /// Ways to open the computer over SSH.
+    Ssh,
+}
+/// What to do once SSH access is ready.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SshAction {
+    Terminal,
+    Copy,
 }
 #[derive(Clone)]
 struct Pending {
@@ -125,6 +133,10 @@ pub(super) struct State {
     sync_error: Option<String>,
     /// Which page of the menu shows.
     page: Page,
+    /// SSH access: the host once prepared, the preparation, its failure.
+    ssh: Option<super::ssh::Prepared>,
+    ssh_task: Option<Task<()>>,
+    ssh_error: Option<String>,
     /// The apps this computer can open a folder in (the shell detects them).
     open_targets: Vec<crate::shell::open_in::OpenTarget>,
     /// The machine's last CPU, memory and disk snapshot, and the poll that
@@ -732,6 +744,144 @@ impl CloudConversation {
             self.toggle_computer(cx);
         }
     }
+    /// Prepare SSH access (this device's key, the computer's sshd, the host
+    /// entry), then run `action`.
+    fn open_ssh(&mut self, action: SshAction, cx: &mut Context<Self>) {
+        if self.computer.ssh_task.is_some() {
+            return;
+        }
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            self.connect_execution(cx);
+            self.computer.ssh_error =
+                Some("Connecting to the computer. Try again in a moment.".into());
+            cx.notify();
+            return;
+        };
+        let workspace = self.target.workspace.clone();
+        let port = self.boot.ipc_port;
+        self.computer.ssh_error = None;
+        self.computer.ssh_task = Some(cx.spawn(async move |this, cx| {
+            let result: Result<super::ssh::Prepared, String> = async {
+                let key = cx
+                    .background_executor()
+                    .spawn(async { super::ssh::ensure_key() })
+                    .await?;
+                let prepared = gpui_tokio::Tokio::spawn(cx, async move {
+                    engine
+                        .client()
+                        .call(methods::SSH_PREPARE, json!({"publicKey": key}))
+                        .await
+                })
+                .await
+                .map_err(|_| "SSH setup was interrupted.".to_string())?
+                .map_err(|e| e.to_string())?;
+                let user = prepared["user"].as_str().unwrap_or("zuse").to_owned();
+                let path = prepared["path"]
+                    .as_str()
+                    .unwrap_or("/home/zuse/workspace")
+                    .to_owned();
+                let host_workspace = workspace.clone();
+                cx.background_executor()
+                    .spawn(async move { super::ssh::install_host(&host_workspace, &user, port) })
+                    .await?;
+                Ok(super::ssh::Prepared {
+                    host: super::ssh::host_alias(&workspace),
+                    path,
+                })
+            }
+            .await;
+            let _ = this.update(cx, |this, cx| {
+                this.computer.ssh_task = None;
+                match result {
+                    Ok(prepared) => {
+                        this.computer.ssh = Some(prepared.clone());
+                        match action {
+                            SshAction::Copy => {
+                                cx.write_to_clipboard(ClipboardItem::new_string(format!(
+                                    "ssh {}",
+                                    prepared.host
+                                )));
+                                this.close_computer(cx);
+                            }
+                            SshAction::Terminal => {
+                                let command = super::ssh::terminal_command(&prepared);
+                                cx.background_executor()
+                                    .spawn(async move { super::ssh::open_terminal(&command) })
+                                    .detach();
+                                this.close_computer(cx);
+                            }
+                        }
+                    }
+                    Err(error) => this.computer.ssh_error = Some(error),
+                }
+                cx.notify();
+            });
+        }));
+        cx.notify();
+    }
+    /// SSH: open a terminal on the computer, or copy the command for any
+    /// terminal or editor (the host is in ~/.ssh/config once prepared).
+    fn render_ssh_page(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = Theme::of(cx).for_popup();
+        let busy = self.computer.ssh_task.is_some();
+        let host = super::ssh::host_alias(&self.target.workspace);
+        let mut page = div()
+            .id("native-computer-ssh")
+            .flex()
+            .flex_col()
+            .text_size(crate::typography::text_xs())
+            .child(
+                popover::menu_row(&theme, false, "computer-ssh-back")
+                    .id("computer-ssh-back")
+                    .child(icon(icons::ALT_ARROW_LEFT).size(px(14.)).text_color(theme.text_muted))
+                    .child(div().flex_1().text_color(theme.text_muted).child("Computer"))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.computer.page = Page::Summary;
+                        cx.notify();
+                    })),
+            )
+            .child(popover::menu_separator())
+            .child(
+                popover::menu_row(&theme, false, "computer-ssh-terminal")
+                    .id("computer-ssh-terminal")
+                    .opacity(if busy { 0.5 } else { 1. })
+                    .child(icon(icons::TERMINAL).size(px(14.)).text_color(theme.text_muted))
+                    .child("Open in Terminal")
+                    .on_click(cx.listener(|this, _, _, cx| this.open_ssh(SshAction::Terminal, cx))),
+            )
+            .child(
+                popover::menu_row(&theme, false, "computer-ssh-copy")
+                    .id("computer-ssh-copy")
+                    .opacity(if busy { 0.5 } else { 1. })
+                    .child(icon(icons::COPY).size(px(14.)).text_color(theme.text_muted))
+                    .child("Copy SSH command")
+                    .on_click(cx.listener(|this, _, _, cx| this.open_ssh(SshAction::Copy, cx))),
+            )
+            .child(popover::menu_separator())
+            .child(
+                div()
+                    .px(px(8.))
+                    .py(px(6.))
+                    .text_color(theme.text_muted)
+                    .child(if busy {
+                        "Setting up SSH access…".to_owned()
+                    } else if self.computer.ssh.is_some() {
+                        format!("Ready. Editors with Remote SSH can connect to {host}.")
+                    } else {
+                        format!("Adds the host {host} to your SSH config, for terminals and editors with Remote SSH.")
+                    }),
+            );
+        if let Some(error) = self.computer.ssh_error.clone() {
+            page = page.child(
+                div()
+                    .px(px(8.))
+                    .py(px(4.))
+                    .text_color(theme.danger)
+                    .child(error),
+            );
+        }
+        page.into_any_element()
+    }
     /// The synced folder's apps: each opens it there, then copy its path.
     fn render_open_in_page(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::of(cx).for_popup();
@@ -968,6 +1118,23 @@ impl CloudConversation {
             );
         }
 
+        // SSH, while the computer runs.
+        let running = matches!(summary.tone, Tone::Running);
+        menu = menu.child(popover::menu_separator()).child(
+            popover::menu_row(&theme, false, "computer-ssh")
+                .id("computer-ssh")
+                .opacity(if running { 1. } else { 0.45 })
+                .child(icon(icons::TERMINAL).size(px(14.)).text_color(theme.text_muted))
+                .child(div().flex_1().child("Open via SSH"))
+                .child(icon(icons::ALT_ARROW_RIGHT).size(px(12.)).text_color(theme.text_muted))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if running {
+                        this.computer.page = Page::Ssh;
+                        cx.notify();
+                    }
+                })),
+        );
+
         // Local sync.
         let sync = &self.computer.sync;
         let loaded = sync["enabled"].is_boolean();
@@ -1195,6 +1362,9 @@ impl CloudConversation {
         );
         if self.computer.page == Page::OpenIn {
             return self.render_open_in_page(cx);
+        }
+        if self.computer.page == Page::Ssh {
+            return self.render_ssh_page(cx);
         }
         if self.computer.page == Page::More {
             // The "More" page replaces the summary page: a way back, then
