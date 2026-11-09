@@ -615,3 +615,52 @@ async fn orphaned_entry_skips_captures_and_catches_up_on_return() {
     .await;
     core.shutdown().await;
 }
+
+/// A checkout too large to watch still refreshes raw file edits promptly.
+/// Its git-dir watch stays live, so checking only for *some* live watch would
+/// incorrectly disable polling and leave the diff stale for two minutes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unwatched_worktree_polls_edits_without_git_events() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let repo = tmp.path().join("repo");
+    init_dirty_repo(&repo).await;
+    // These ignored directories exhaust diff-sync's bounded watch budget.
+    std::fs::write(repo.join(".gitignore"), "deps/\n").unwrap();
+    std::fs::create_dir(repo.join("deps")).unwrap();
+    for i in 0..8_050 {
+        std::fs::create_dir(repo.join(format!("deps/d{i}"))).unwrap();
+    }
+    let core = assemble(&tmp.path().join("data"));
+    core.workspace
+        .create_space(
+            "space",
+            &core.device_id,
+            &repo.to_string_lossy(),
+            None,
+            true,
+        )
+        .unwrap();
+    core.workspace
+        .create_chat("chat", Some("space"), None, None, None)
+        .unwrap();
+    wait_chat_state(&core, "chat", true).await;
+    core.diff_sync.reconcile_now().await;
+    wait_for_diff(&core.diff_sync).await;
+    // Let the initial capture + watch attachment finish before changing a file.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    std::fs::write(repo.join("a.txt"), "polled edit\n").unwrap();
+    tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            if current_diffs(&core.diff_sync)
+                .iter()
+                .any(|diff| diff.patch.contains("+polled edit"))
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("unwatched edits refresh before the 120-second repair tick");
+    core.diff_sync.shutdown().await;
+}
