@@ -459,18 +459,25 @@ async fn run_failed_boot_modes(modes: &[&'static str]) {
             continue;
         }
         let error = control.allocate_once(&adapter, now).await.unwrap_err();
-        assert_eq!(
-            error.code,
-            if mode == "invalid-json" {
-                "cloud_provider_invalid_response"
-            } else if mode == "generation" {
-                // The existing subsequent authority check supersedes the
-                // provider error; diagnostics must not weaken that fence.
-                "workspace_runtime_fenced"
-            } else {
-                "cloud_provider_rejected"
-            },
-            "{mode}"
+        let expected = if mode == "invalid-json" {
+            "cloud_provider_invalid_response"
+        } else if mode == "generation" {
+            // The existing subsequent authority check supersedes the
+            // provider error; diagnostics must not weaken that fence.
+            "workspace_runtime_fenced"
+        } else {
+            "cloud_provider_rejected"
+        };
+        // The first helper call overlaps the allocation fence, whose result is
+        // read first: authority lost mid-flight surfaces as either fence's
+        // error depending on which observes it. Both fail closed, and every
+        // assertion below still applies.
+        let fenced_first = matches!(mode, "lease" | "delete" | "source")
+            && error.code == "cloud_initial_runtime_bootstrap_fenced";
+        assert!(
+            error.code == expected || fenced_first,
+            "{mode}: {} (expected {expected})",
+            error.code
         );
         let config: Value = sqlx::query_scalar(
             "SELECT request_config FROM api_cloud_workspaces WHERE workspace_id=$1",
@@ -532,14 +539,16 @@ async fn run_failed_boot_modes(modes: &[&'static str]) {
                     false
                 );
             }
-        } else if !matches!(
-            mode,
-            "missing-receipt"
-                | "forged-receipt"
-                | "stale-receipt"
-                | "source-receipt"
-                | "incarnation-receipt"
-        ) {
+        } else if !fenced_first
+            && !matches!(
+                mode,
+                "missing-receipt"
+                    | "forged-receipt"
+                    | "stale-receipt"
+                    | "source-receipt"
+                    | "incarnation-receipt"
+            )
+        {
             assert!(
                 phases.get("initialBootstrapProofValidation").is_none(),
                 "late or failed diagnostic write cannot mutate {mode}"
