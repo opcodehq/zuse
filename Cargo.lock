@@ -13785,6 +13785,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "zkit-dither"
+version = "0.1.0"
+source = "git+https://github.com/opcodehq/zkit?rev=14d9b82fb65d86f63b6332cb3d616f1ab0ada103#14d9b82fb65d86f63b6332cb3d616f1ab0ada103"
+[[package]]
 name = "zlib-rs"
 version = "0.6.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -14601,6 +14605,7 @@ dependencies = [
  "windows-sys 0.61.2",
  "wry",
  "x11rb 0.14.0",
+ "zkit-dither",
  "zuse-doc",
  "zuse-engine",
  "zuse-i18n",

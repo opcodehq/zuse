@@ -127,6 +127,21 @@ fn pulse_delta_every(spec: &MotionSpec, view: EntityId, stride: u64, cx: &mut Ap
     pulse_phase(spec, cx)
 }
 
+/// Seconds on the shared 15Hz pulse clock, for loaders with their own timing.
+/// `None` under reduced motion, where they hold a still frame.
+pub fn pulse_seconds(view: EntityId, cx: &mut App) -> Option<f32> {
+    if cx.reduce_motion() {
+        return None;
+    }
+    pulse_lease_every(view, 2, cx);
+    Some(
+        cx.default_global::<PulseClock>()
+            .epoch
+            .elapsed()
+            .as_secs_f32(),
+    )
+}
+
 fn pulse_phase(spec: &MotionSpec, cx: &mut App) -> f32 {
     let clock = cx.default_global::<PulseClock>();
     (clock.epoch.elapsed().as_secs_f32() / spec.total().as_secs_f32()).fract()
