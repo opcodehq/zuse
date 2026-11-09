@@ -20,6 +20,8 @@ tracing.workspace = true
 uuid.workspace = true
 
 # NWPathMonitor bridge (net_path.rs) — the update handler is an ObjC block.
+if-addrs = "0.15"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6"
 

@@ -13,9 +13,18 @@ pub enum Action {
     Expired,
 }
 pub struct Heartbeat {
-    pending: Option<([u8; NONCE_BYTES], u64)>,
+    pending: Option<Pending>,
     next_at: u64,
     confirmed: bool,
+    interval_ms: u64,
+    timeout_ms: u64,
+    expedited_timeout_ms: Option<u64>,
+    last_rtt_ms: Option<u32>,
+}
+struct Pending {
+    nonce: [u8; NONCE_BYTES],
+    sent_at: u64,
+    deadline: u64,
 }
 fn frame(kind: u8, nonce: &[u8; NONCE_BYTES]) -> Vec<u8> {
     let mut payload = Vec::with_capacity(PREFIX.len() + 1 + NONCE_BYTES);
@@ -52,15 +61,38 @@ impl Heartbeat {
             pending: None,
             next_at: 0,
             confirmed: false,
+            interval_ms: INTERVAL_MS,
+            timeout_ms: TIMEOUT_MS,
+            expedited_timeout_ms: None,
+            last_rtt_ms: None,
         }
+    }
+    /// How often to check and how long to wait, for this route's latency.
+    pub fn set_limits(&mut self, interval_ms: u64, timeout_ms: u64) {
+        self.interval_ms = interval_ms;
+        self.timeout_ms = timeout_ms;
+    }
+    /// Check now with a short deadline, because the path may just have changed.
+    pub fn expedite(&mut self, now: u64, timeout_ms: u64) {
+        match &mut self.pending {
+            Some(pending) => pending.deadline = pending.deadline.min(now + timeout_ms),
+            None => {
+                self.next_at = now;
+                self.expedited_timeout_ms = Some(timeout_ms);
+            }
+        }
+    }
+    /// Time from the latest challenge to its encrypted reply.
+    pub fn last_rtt_ms(&self) -> Option<u32> {
+        self.last_rtt_ms
     }
     /// Caller supplies elapsed monotonic milliseconds, preserved across cancelled waits.
     pub fn poll(&mut self, now: u64) -> Result<Action, Error> {
-        if let Some((_, deadline)) = self.pending {
-            return Ok(if now >= deadline {
+        if let Some(pending) = &self.pending {
+            return Ok(if now >= pending.deadline {
                 Action::Expired
             } else {
-                Action::Wait(deadline - now)
+                Action::Wait(pending.deadline - now)
             });
         }
         if now < self.next_at {
@@ -68,14 +100,16 @@ impl Heartbeat {
         }
         let mut nonce = [0; NONCE_BYTES];
         getrandom::fill(&mut nonce).map_err(|_| Error::Random)?;
-        self.pending = Some((
+        let timeout = match self.expedited_timeout_ms.take() {
+            Some(timeout) => timeout,
+            None if self.confirmed => self.timeout_ms,
+            None => INITIAL_TIMEOUT_MS,
+        };
+        self.pending = Some(Pending {
             nonce,
-            now.saturating_add(if self.confirmed {
-                TIMEOUT_MS
-            } else {
-                INITIAL_TIMEOUT_MS
-            }),
-        ));
+            sent_at: now,
+            deadline: now.saturating_add(timeout),
+        });
         Ok(Action::Send(frame(0, &nonce)))
     }
     /// Only a matching, timely encrypted reply advances responsiveness.
@@ -84,15 +118,15 @@ impl Heartbeat {
         let Some(nonce) = control(payload, 1)? else {
             return Ok(false);
         };
-        let Some((expected, deadline)) = self.pending else {
+        let Some(pending) = self
+            .pending
+            .take_if(|p| p.nonce == nonce && now < p.deadline)
+        else {
             return Err(Error::Heartbeat);
         };
-        if nonce != expected || now >= deadline {
-            return Err(Error::Heartbeat);
-        }
-        self.pending = None;
+        self.last_rtt_ms = Some(now.saturating_sub(pending.sent_at).min(u32::MAX as u64) as u32);
         self.confirmed = true;
-        self.next_at = now.saturating_add(INTERVAL_MS);
+        self.next_at = now.saturating_add(self.interval_ms);
         Ok(true)
     }
 }

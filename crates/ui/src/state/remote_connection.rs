@@ -28,7 +28,11 @@ pub(super) trait Source: Send + Sync {
     }
     async fn connect(self: Arc<Self>) -> Result<(zuse_rpc::reconnect::Channel, String), RpcError>;
     async fn connected(&self, _origin: &str) {}
+    fn link_status(&self) -> Option<LinkWatch> {
+        None
+    }
 }
+pub(super) type LinkWatch = tokio::sync::watch::Receiver<Option<zuse_rpc::paired_link::LinkStatus>>;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Status {
     Ready,
@@ -64,6 +68,9 @@ impl EngineBackend for RemoteEngine {
     }
     fn remote_status(&self) -> Option<tokio::sync::watch::Receiver<Status>> {
         Some(self.status.clone())
+    }
+    fn link_status(&self) -> Option<LinkWatch> {
+        self.source.link_status()
     }
     fn connection_revision(&self) -> u64 {
         self.control.generation()
@@ -111,6 +118,7 @@ async fn verify_identity(
 ) -> Result<(zuse_rpc::reconnect::Channel, EngineInfo, String), RpcError> {
     let legacy = source.legacy_identity();
     let (mut channel, origin) = source.connect().await?;
+    let delivered = channel.engine_info.take();
     let verify = async {
         async fn query(
             channel: &mut zuse_rpc::reconnect::Channel,
@@ -138,6 +146,10 @@ async fn verify_identity(
             frame
                 .ok
                 .ok_or_else(|| RpcError::Transport("Computer identity unavailable".into()))
+        }
+        if let Some(info) = delivered {
+            return serde_json::from_value(info)
+                .map_err(|_| RpcError::Transport("Invalid computer identity".into()));
         }
         match query(&mut channel, methods::ENGINE_INFO).await {
             Ok(value) => serde_json::from_value(value)
@@ -270,6 +282,7 @@ pub(super) async fn bootstrap(
 
 struct Pairing {
     target: zuse_remote::PairedTarget,
+    host: zuse_rpc::paired_link::PairedHost,
     closed: CancellationToken,
 }
 #[async_trait]
@@ -287,14 +300,31 @@ impl Source for Pairing {
         true
     }
     async fn connect(self: Arc<Self>) -> Result<(zuse_rpc::reconnect::Channel, String), RpcError> {
-        let channel = zuse_rpc::connect_paired_channel(&self.target, self.closed.clone()).await?;
-        Ok((channel, self.target.origin().into()))
+        let channel = self.host.connect(self.closed.clone()).await?;
+        let origin = self
+            .host
+            .status()
+            .borrow()
+            .as_ref()
+            .map_or_else(|| self.target.origin().into(), |s| s.route.origin.clone());
+        Ok((channel, origin))
+    }
+    fn link_status(&self) -> Option<LinkWatch> {
+        Some(self.host.status())
     }
 }
-pub(super) async fn paired(target: zuse_remote::PairedTarget) -> anyhow::Result<EngineHandle> {
+pub(super) async fn paired(
+    target: zuse_remote::PairedTarget,
+    data_dir: &std::path::Path,
+) -> anyhow::Result<EngineHandle> {
+    // Learned addresses persist so the next launch can start on the fastest
+    // route. They contain no pairing secret.
+    let routes = data_dir.join("paired-routes");
+    let host = zuse_rpc::paired_link::PairedHost::new(&target, Some(&routes));
     bootstrap(
         Arc::new(Pairing {
             target,
+            host,
             closed: CancellationToken::new(),
         }),
         None,

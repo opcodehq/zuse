@@ -24,6 +24,7 @@ class RpcClient(
     private val accountGrant: (suspend () -> AccountGrant)? = null,
     private val accountEnvironmentId: String? = null,
     private val cloudExpiresAt: Long? = null,
+    private val onRoute: ((PairedRouteStatus) -> Unit)? = null,
     val canonical: Boolean =
         accountGrant != null ||
             pairingLink != null ||
@@ -65,7 +66,7 @@ class RpcClient(
         }
         if (pairingLink != null) {
             try {
-                paired = PairedSocket(pairingLink, http, ::receive, ::fail)
+                paired = PairedSocket(pairingLink, http, ::receive, ::fail, onRoute)
                 paired!!.connect()
                 call("EngineInfo")
                 return

@@ -5,9 +5,9 @@
 //! backoff redials; while the OS says there is no path, backoff waiters park
 //! on the event buses instead of burning dial attempts (see `wake.rs`).
 //!
-//! Other platforms: no-op — `path_is_offline()` stays false and the empirical
-//! signals (suspend detector, sibling-dial successes, focus probe) carry the
-//! recovery story unchanged, exactly as before this module existed.
+//! Every platform also watches its interface addresses, which is what reveals
+//! a move to another network. Platforms without `NWPathMonitor` take their
+//! online/offline signal from the same watch.
 
 /// Start the process-wide path monitor. Idempotent; call from engine startup.
 pub fn spawn_path_monitor() {
@@ -15,7 +15,53 @@ pub fn spawn_path_monitor() {
     STARTED.call_once(|| {
         #[cfg(target_os = "macos")]
         imp::start();
+        watch_addresses();
     });
+}
+
+const ADDRESS_POLL: std::time::Duration = std::time::Duration::from_secs(3);
+
+fn local_addresses() -> Vec<std::net::IpAddr> {
+    let mut addresses: Vec<_> = if_addrs::get_if_addrs()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|interface| !interface.is_loopback())
+        .map(|interface| interface.ip())
+        .collect();
+    addresses.sort();
+    addresses
+}
+
+/// An opaque fingerprint of the current network, for remembering which route
+/// won here. It is a hash so saved settings never contain local addresses.
+pub fn network_id() -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    local_addresses().hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+fn watch_addresses() {
+    let spawned = std::thread::Builder::new()
+        .name("zuse-net-watch".into())
+        .spawn(|| {
+            let mut previous = local_addresses();
+            loop {
+                std::thread::sleep(ADDRESS_POLL);
+                let current = local_addresses();
+                if current == previous {
+                    continue;
+                }
+                #[cfg(not(target_os = "macos"))]
+                crate::wake::set_path_online(!current.is_empty());
+                previous = current;
+                crate::wake::notify_online();
+                crate::wake::notify_network_changed();
+            }
+        });
+    if let Err(error) = spawned {
+        tracing::warn!(%error, "net_path: address watcher unavailable");
+    }
 }
 
 #[cfg(target_os = "macos")]

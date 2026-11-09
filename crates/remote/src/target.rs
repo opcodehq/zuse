@@ -37,6 +37,14 @@ impl PairedTarget {
             invitation,
         })
     }
+    /// One address of an already-paired host. Plain HTTP is allowed on private
+    /// addresses because only Noise records ever cross this socket.
+    pub fn for_route(origin: &str, invitation: Invitation) -> Result<Self, Error> {
+        Ok(Self {
+            origin: crate::normalized_route_origin(origin)?,
+            invitation,
+        })
+    }
     pub fn parse_link(link: &str) -> Result<Self, Error> {
         if link.len() > 2048 {
             return Err(Error::Endpoint);
@@ -45,6 +53,11 @@ impl PairedTarget {
         let fragment = url.fragment().ok_or(Error::Invitation)?;
         let invitation = Invitation::parse_fragment(&format!("#{fragment}"))?;
         url.set_fragment(None);
+        // A native client can pair over LAN or a tailnet. A browser still has
+        // to load its application from a trusted HTTPS origin.
+        #[cfg(not(target_arch = "wasm32"))]
+        return Self::for_route(url.as_str(), invitation);
+        #[cfg(target_arch = "wasm32")]
         Self::new(url.as_str(), invitation)
     }
     pub fn origin(&self) -> &str {

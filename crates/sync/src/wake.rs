@@ -29,6 +29,7 @@ const JUMP_THRESHOLD: Duration = Duration::from_secs(5);
 
 static CHANNEL: OnceLock<broadcast::Sender<()>> = OnceLock::new();
 static ONLINE: OnceLock<broadcast::Sender<()>> = OnceLock::new();
+static NETWORK: OnceLock<broadcast::Sender<()>> = OnceLock::new();
 /// OS-reported network path status. `false` (the default, and the permanent
 /// value on platforms without a path monitor) means "assume a path exists" —
 /// backoff loops behave exactly as before. Only an explicit
@@ -89,6 +90,19 @@ pub fn subscribe_online() -> broadcast::Receiver<()> {
 /// Broadcast that a dial just succeeded (see [`subscribe_online`]).
 pub fn notify_online() {
     let _ = online_channel().send(());
+}
+
+/// Subscribe to "this device's network may be different now". Separate from
+/// [`subscribe_online`] because dial successes fire that one, and a route
+/// probe that wakes itself would never stop.
+pub fn subscribe_network_changed() -> broadcast::Receiver<()> {
+    NETWORK.get_or_init(|| broadcast::channel(4).0).subscribe()
+}
+
+/// Announce a network change, or an app returning to the foreground, where
+/// sockets may have died silently and a better route may be reachable.
+pub fn notify_network_changed() {
+    let _ = NETWORK.get_or_init(|| broadcast::channel(4).0).send(());
 }
 
 /// Report the OS network-path status (macOS `NWPathMonitor`; other platforms

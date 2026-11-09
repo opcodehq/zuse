@@ -80,6 +80,7 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
         private set
 
     var status by mutableStateOf("Not connected")
+    var linkRoute by mutableStateOf<PairedRouteStatus?>(null)
         private set
 
     var connected by mutableStateOf(false)
@@ -248,16 +249,11 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
                                 .json(),
                     ),
                 ),
-                Message(
-                    "tool",
-                    session.id,
-                    "assistant",
-                    obj(
-                        "_tag" to "tool_use".json(),
-                        "tool" to "Read · composer.tsx".json(),
-                        "input" to obj("path" to "composer.tsx".json()),
-                    ),
-                ),
+                previewTool("t1", session.id, "readFile", "path", "src/composer.tsx"),
+                previewTool("t2", session.id, "search", "pattern", "useComposerHeight"),
+                previewTool("t3", session.id, "editFile", "path", "src/composer.tsx"),
+                previewTool("t4", session.id, "exec", "command", "pnpm test composer", output = "12 passed"),
+                previewTool("t5", session.id, "exec", "command", "pnpm lint", error = true, output = "error  Unexpected any"),
                 Message(
                     "result",
                     session.id,
@@ -512,6 +508,7 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
                         connected = false
                         synced = false
                         status = if (backoff.attempt == 0) "Connecting…" else "Reconnecting…"
+                        linkRoute = null
                         client =
                             when (val target = source) {
                                 is Source.Device ->
@@ -520,6 +517,9 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
                                             token = target.device.token,
                                             http = pinnedHttp(target.device.certificatePin),
                                             pairingLink = target.device.pairingLink,
+                                            onRoute = { route ->
+                                                viewModelScope.launch { linkRoute = route }
+                                            },
                                         )
                                         .also {
                                             it.connect()
@@ -650,6 +650,46 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
             synced = false
             status = "Paused"
         } else if (source != null) startConnection()
+    }
+
+    private fun previewTool(
+        id: String,
+        session: String,
+        kind: String,
+        field: String,
+        value: String,
+        resolved: Boolean = true,
+        error: Boolean = false,
+        output: String? = null,
+    ) =
+        Message(
+            id,
+            session,
+            "assistant",
+            obj(
+                "_tag" to "tool_use".json(),
+                "tool" to kind.json(),
+                "input" to obj("kind" to kind.json(), field to value.json()),
+                "resolved" to resolved.json(),
+                "isError" to error.json(),
+                "output" to output?.json(),
+            ),
+        )
+
+    /** Where a message from the composer will run. */
+    val composerContext: String?
+        get() =
+            projects
+                .firstOrNull { it.id == selectedSession?.projectId }
+                ?.name
+                ?.takeIf { it.isNotBlank() }
+
+    /** The route in use, for the computer this workspace is connected to. */
+    fun linkSummary(device: SavedDevice): String? {
+        val route = linkRoute ?: return null
+        val label = route.label ?: return null
+        if (!connected || (source as? Source.Device)?.device?.id != device.id) return null
+        return route.rttMs?.let { "$label · $it ms" } ?: label
     }
 
     fun networkRecovered() {

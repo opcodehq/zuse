@@ -5,11 +5,15 @@
 mod channel;
 pub mod heartbeat;
 mod invitation;
+pub mod link;
+pub mod routes;
+pub mod session;
 mod target;
 pub use channel::{
     ClientHandshake, MAX_MESSAGE_BYTES, MAX_RECORD_BYTES, SecureChannel, accept, initiate,
 };
 pub use invitation::{Invitation, PairId, PairSecret};
+pub use routes::{Route, RouteKind, RouteTable, normalized_route_origin};
 pub use target::{PairedTarget, normalized_origin};
 
 #[derive(Debug, thiserror::Error)]
