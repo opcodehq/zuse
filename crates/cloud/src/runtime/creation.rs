@@ -462,8 +462,10 @@ impl RuntimeControl {
         };
         let git_brokered =
             github_user_id.is_some() && build["settings"]["rustGithubCredentialsVersion"] == 1;
-        // Every computer uses the connected GitHub identity for Git and PRs.
-        if !git_brokered {
+        // Where GitHub is configured, every computer uses the connected GitHub
+        // identity for Git and PRs. A deployment without it has no identity to
+        // require; its computers keep unbrokered Git.
+        if github_enabled && !git_brokered {
             return Err(ApiError::conflict("github_runtime_credentials_required"));
         }
 
