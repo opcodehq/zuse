@@ -112,6 +112,7 @@ impl WorkspaceView {
         cx.stop_propagation();
         cx.notify();
     }
+    /// Stage an access change and save the selection as the global new-chat default.
     pub(super) fn choose_access(&mut self, level: SandboxLevel, cx: &mut Context<Self>) {
         self.access_picker = false;
         if self.model_change_pending_for_selection() {
@@ -173,6 +174,7 @@ impl WorkspaceView {
         self.remember_access(level);
         cx.notify();
     }
+    /// Persist the last access selection through the host preferences channel.
     fn remember_access(&mut self, level: SandboxLevel) {
         let mode = zuse_protocol::presentation::PermissionMode::from_sandbox(level);
         self.preferences.default_permission_mode = mode;

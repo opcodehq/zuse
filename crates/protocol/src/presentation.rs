@@ -62,6 +62,7 @@ pub enum PermissionMode {
 }
 impl PermissionMode {
     pub const ALL: [Self; 3] = [Self::ApprovalRequired, Self::Auto, Self::FullAccess];
+    /// Convert a composer access selection into its persisted new-chat default.
     pub fn from_sandbox(level: crate::SandboxLevel) -> Self {
         match level {
             crate::SandboxLevel::WorkspaceWrite => Self::ApprovalRequired,

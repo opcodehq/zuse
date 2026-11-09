@@ -32,6 +32,7 @@ fn effective(level: SandboxLevel, harness: Option<&HarnessId>) -> SandboxLevel {
     }
 }
 impl Composer {
+    /// Apply an access choice to the draft or selected chat and remember it globally.
     fn choose_permission(
         &mut self,
         level: SandboxLevel,
@@ -82,6 +83,7 @@ impl Composer {
         }
         cx.notify();
     }
+    /// Save the new-chat default immediately and refresh permission controls.
     fn remember_permission(&self, level: SandboxLevel, cx: &mut Context<Self>) {
         let mode = zuse_protocol::presentation::PermissionMode::from_sandbox(level);
         crate::settings::update(crate::settings::SavePolicy::Immediate, cx, |settings| {
