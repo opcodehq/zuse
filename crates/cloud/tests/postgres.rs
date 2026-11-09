@@ -3047,6 +3047,11 @@ for line in sys.stdin:
             !seen.exists(),
             "A late grant must not start the stopped turn"
         );
+        // Preparation hands the gateway from its diagnostic connection to the
+        // serving one; clients reconnect once, as the desktop does.
+        client.closed.cancel();
+        drop(client);
+        let client = api.client().await;
         client.client.call(zuse_rpc::methods::RELAY_COMMAND,json!({"chatId":"session-bob","entry":{"id":"explicit-run-after-grant","issuedBy":"cloud-ui","issuedAt":chrono::Utc::now().timestamp_millis(),"status":"pending","payload":{"kind":"run","messageId":"explicit-provider-message","request":{"prompt":"Run with the account credential","harness":"claude-code","model":"fixture","cwd":checkout,"sandbox":"workspace-write","autoApprove":false}}}})).await.unwrap();
         client.closed.cancel();
         drop(client);

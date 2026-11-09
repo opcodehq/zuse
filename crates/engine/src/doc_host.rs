@@ -782,6 +782,11 @@ impl ChatDocHandle {
         &self.doc
     }
 
+    /// Whether the user has pressed Stop on this conversation since it opened.
+    pub fn stop_requested(&self) -> bool {
+        lock(&self.stopped_by).is_some()
+    }
+
     pub fn writer(&self) -> DocWriter {
         self.writers.fetch_add(1, Ordering::AcqRel);
         DocWriter {

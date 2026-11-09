@@ -1442,6 +1442,15 @@ async fn adopt(
         );
         return Ok(());
     }
+    // A Stop sent while the computer was still preparing has no running turn
+    // to cancel; it cancels the first message before it can ever start.
+    if core
+        .doc_host
+        .open_local(&bootstrap.initial_session_id)?
+        .stop_requested()
+    {
+        return Ok(());
+    }
     let fingerprint = command_key.fingerprint(&serde_json::to_vec(intent)?);
     if core.doc_host.mailbox_command_admitted(
         &bootstrap.initial_session_id,
