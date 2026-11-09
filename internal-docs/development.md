@@ -138,8 +138,9 @@ shared-memory features enabled. Build with `bash scripts/build-web.sh --release`
 The Node.js post-build hook writes deterministic Brotli and gzip sidecars and a
 `network-budget.json` report. Release builds fail if compressed assets exceed
 9 MiB in total (override explicitly with `ZUSE_WEB_MAX_BROTLI_BYTES`). This cap
-is based on the current build with offline CJK fonts and localization: CI measured
-8,354,245 Brotli bytes. The earlier 5 MiB target and startup timings came from a
+is based on the November 9, 2026 build with offline CJK fonts and localization,
+when CI measured 8,354,245 Brotli bytes. Use the generated `network-budget.json`
+for the current size. The earlier 5 MiB target and startup timings came from a
 pre-localization build. The report's
 400 kbps estimate is transfer time only, excluding compilation and latency.
 

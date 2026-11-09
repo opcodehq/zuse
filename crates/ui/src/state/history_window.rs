@@ -403,6 +403,28 @@ mod tests {
             "durable history stays complete"
         );
         drop(watch);
+        // Live appends can grow a retained window beyond the requested tail.
+        // The host must preserve that entire anchored window on reattach.
+        let cached = retained.clone();
+        assert!(cached.len() > 32);
+        let (params, _, _) = WatchSeed::capture(&history, &retained, None).prepare(doc_id);
+        let mut watch = engine
+            .client()
+            .subscribe_checked(methods::WATCH_DOC_MESSAGES, params)
+            .await
+            .unwrap();
+        let frame = tokio::time::timeout(Duration::from_secs(5), watch.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(frame["historyResumed"], true);
+        let update: zuse_doc::TranscriptUpdate = serde_json::from_value(frame).unwrap();
+        zuse_doc::apply_transcript_frame(&mut retained, update.frame).unwrap();
+        assert_eq!(
+            retained, cached,
+            "reattach must not shrink a live-grown cached window to tailLimit"
+        );
+        drop(watch);
         engine.shutdown().await;
         stop.cancel();
         server_task.await.unwrap().unwrap();
