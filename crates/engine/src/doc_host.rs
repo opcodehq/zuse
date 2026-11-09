@@ -3527,6 +3527,16 @@ impl DocHost {
         payload: SessionCommandPayload,
         transfers: Vec<crate::uploads::AttachmentTransfer>,
     ) -> Result<String, EngineError> {
+        self.queue_identified_command(chat_id, payload, transfers, new_id())
+    }
+
+    pub fn queue_identified_command(
+        &self,
+        chat_id: &str,
+        payload: SessionCommandPayload,
+        transfers: Vec<crate::uploads::AttachmentTransfer>,
+        id: String,
+    ) -> Result<String, EngineError> {
         let is_message = matches!(
             &payload,
             SessionCommandPayload::Run { .. } | SessionCommandPayload::Steer { .. }
@@ -3535,7 +3545,16 @@ impl DocHost {
             self.require_unarchived(chat_id)?;
         }
         let handle = self.open(chat_id)?;
-        let id = new_id();
+        if let Some(entry) = handle
+            .doc
+            .read_commands()?
+            .into_iter()
+            .find(|entry| entry.id == id)
+        {
+            self.nudge_remote_host(chat_id);
+            self.spawn_command_delivery(chat_id, entry, transfers);
+            return Ok(id);
+        }
         let now = now_ms();
         let based_on = handle.doc.last_entry_id().map(|id| CommandBasedOn {
             turn_id: Some(id),

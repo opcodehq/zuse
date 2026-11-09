@@ -109,6 +109,8 @@ mod thread_search;
 mod usage_dashboard;
 mod workspace_layout;
 mod workspace_storage;
+mod zot_forms;
+mod zots;
 use side_chats::SideChatTab;
 mod cloud_info;
 mod tabs;
@@ -673,6 +675,8 @@ pub enum Route {
     Plugins,
     Archives,
     Usage,
+    /// The New Zot page; [`zots::ZotUi`] holds the form.
+    Zot,
     Settings(SettingsSection),
 }
 
@@ -870,6 +874,7 @@ pub enum NavEntry {
     Settings(SettingsSection),
     Plugins,
     Archives(String),
+    NewZot,
     Usage {
         project: Option<String>,
         project_scope: bool,
@@ -2041,6 +2046,7 @@ fn dismiss_update_prompt(cx: &mut App) {
 pub struct Shell {
     update_restart: Option<update_restart::RestartPlan>,
     update_restart_task: Option<Task<()>>,
+    zot_ui: zots::ZotUi,
     state: Entity<AppState>,
     desktop_import: Entity<crate::desktop_import::Onboarding>,
     sidebar_pane: Entity<SidebarPane>,
@@ -2378,9 +2384,6 @@ pub struct Shell {
     /// they last painted with their content held at its layout width (same
     /// order).
     fit_exits: [Option<(WidthTween, f32)>; 3],
-    /// The window width the surface host's share was last split for. Seeded
-    /// by the first frame, so a saved divider survives a relaunch.
-    split_viewport: Option<f32>,
     /// The last window fit and the inputs it was computed from, one slot
     /// per `closing` flag of `fit`: layout helpers ask for both many times
     /// per frame while a close runs. Not a per-frame value, since handlers
@@ -2621,6 +2624,7 @@ impl Shell {
         let route = match open_route.as_deref() {
             Some("pull-requests") => Route::PullRequests,
             Some("plugins") => Route::Plugins,
+            Some("zots/new") => Route::Zot,
             Some(route) if route == "settings" || route.starts_with("settings/") => {
                 match settings_open_route(route, settings.settings_section) {
                     Some(section) => {
@@ -2665,6 +2669,7 @@ impl Shell {
             Route::PullRequests => NavEntry::PullRequests,
             Route::Plugins => NavEntry::Plugins,
             Route::Archives => NavEntry::Archives(String::new()),
+            Route::Zot => NavEntry::NewZot,
             Route::Usage => NavEntry::Usage {
                 project: None,
                 project_scope: false,
@@ -2685,6 +2690,7 @@ impl Shell {
         Self {
             state: state.clone(),
             desktop_import,
+            zot_ui: zots::ZotUi::default(),
             sidebar_pane,
             sidebar_controls,
             workspace_sidebar_focus: cx.focus_handle().tab_stop(true),
@@ -2891,7 +2897,6 @@ impl Shell {
             files_content_tween: None,
             painted_columns: None,
             fit_exits: [None; 3],
-            split_viewport: None,
             fit_memo: Default::default(),
             right_images_suspended: false,
             sidebar_edge_bounce: None,
@@ -3526,6 +3531,11 @@ impl Shell {
     /// it opens the surface host beside it, and it never hides the explorer —
     /// only the explorer's own toggle undocks that portion.
     fn toggle_right_pane(&mut self, cx: &mut Context<Self>) {
+        if matches!(self.route, Route::Chat) && self.selected_zot(cx).is_some() {
+            self.zot_ui.panel_hidden = !self.zot_ui.panel_hidden;
+            cx.notify();
+            return;
+        }
         if self.right_pane_open(cx) && self.promote_hidden_panel(AuxiliaryPanel::Right, cx) {
             return;
         }
@@ -5897,6 +5907,7 @@ impl Shell {
                 self.pending_pull_request = Some((url, device));
             }
             NavEntry::Plugins => self.set_route(Route::Plugins, cx),
+            NavEntry::NewZot => self.show_new_zot(cx),
             NavEntry::Usage {
                 project,
                 project_scope,
@@ -7608,7 +7619,10 @@ impl Shell {
     /// the pull request pane's tabs.
     fn render_title_bar(&mut self, cx: &mut Context<Self>) -> AnyElement {
         // The Plugins page has no tabs: a bare strip that still drags.
-        if matches!(self.route, Route::Plugins | Route::Archives | Route::Usage) {
+        if matches!(
+            self.route,
+            Route::Plugins | Route::Archives | Route::Usage | Route::Zot
+        ) {
             return self
                 .titlebar_drag_region("plugins-titlebar", div().size_full(), cx)
                 .into_any_element();
@@ -8574,8 +8588,11 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         // The Plugins page owns the main area, so no chat reads as current.
-        let selected =
-            selected && !matches!(self.route, Route::Plugins | Route::Archives | Route::Usage);
+        let selected = selected
+            && !matches!(
+                self.route,
+                Route::Plugins | Route::Archives | Route::Usage | Route::Zot
+            );
         // Activity, not position: status is a small colored
         // word + glyph in the row's top-right corner — Working animates the
         // composer-strip spinner, Done wears a check; Idle rows show the
@@ -10209,6 +10226,7 @@ impl Shell {
             // (No titlebar strip: the unified window titlebar spans the whole
             // window above this column.)
             .child(self.render_sidebar_nav(theme, cx))
+            .child(self.render_zot_sidebar(theme, cx))
             .child(self.render_sidebar_modes(theme, cx))
             .child(filter_row)
             .child(sidebar_lists)
@@ -10452,6 +10470,25 @@ impl Shell {
     fn render_update_pill(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
         use crate::app_update::{Flow, StripAction};
         let update = crate::app_update::AppUpdate::global(cx)?;
+        if let Some(problem) = update.read(cx).control_problem() {
+            return Some(
+                div()
+                    .id("control-update-retry")
+                    .mx(px(8.0))
+                    .p(px(8.0))
+                    .text_size(crate::typography::ui_rems(12.0))
+                    .text_color(theme.danger)
+                    .cursor_pointer()
+                    .tooltip(crate::settings::widgets::text_tooltip(problem))
+                    .child("Control tools update failed · Retry")
+                    .on_click(cx.listener(|_, _, _, cx| {
+                        if let Some(update) = crate::app_update::AppUpdate::global(cx) {
+                            update.update(cx, |update, cx| update.retry_control(cx));
+                        }
+                    }))
+                    .into_any_element(),
+            );
+        }
         let (status, action) = update.read(cx).strip()?;
         let flow = update.read(cx).flow().clone();
         let notes = update
@@ -11619,6 +11656,10 @@ impl Shell {
         {
             return true;
         }
+        if self.zot_ui.dialog.take().is_some() {
+            cx.notify();
+            return true;
+        }
         if self.harness_update_expanded {
             self.set_harness_updates_expanded(false, cx);
             return true;
@@ -11677,6 +11718,10 @@ impl Shell {
         }
         if self.conversation_history.is_open() {
             self.close_conversation_history(cx);
+            return true;
+        }
+        if matches!(self.route, Route::Zot) || self.zot_editor_open(cx) {
+            self.leave_zot_page(cx);
             return true;
         }
         self.active_changes(cx)
@@ -11849,6 +11894,7 @@ impl Shell {
         let mut overlays: Vec<AnyElement> = Vec::new();
         overlays.push(self.desktop_import.clone().into_any_element());
         overlays.extend(self.render_shortcuts_panel(viewport, cx));
+        overlays.extend(self.render_zot_dialog(viewport, window, cx));
 
         if let Some(menu_state) = self.chat_menu.get().cloned() {
             let chat_id = menu_state.chat_id;
@@ -12214,6 +12260,10 @@ impl Shell {
         let theme = &theme_owned;
         let (border, text, faint) = (theme.border, theme.text, theme.text_faint);
 
+        if matches!(self.route, Route::Zot) {
+            return self.render_zot_page(window, cx);
+        }
+
         if matches!(self.route, Route::PullRequests) {
             if self.pull_requests_page.is_none() {
                 self.pull_requests_page =
@@ -12315,12 +12365,14 @@ impl Shell {
         let session_reveal = self.session_info_reveal(has_selection);
         // Panel open/close glides the composer width; a window resize or a
         // seam drag is direct manipulation, so the width tracks the pointer.
+        // The Zot panel leaves a narrow column; keep the composer off its edges.
+        let zot_coordinator = self.state.read(cx).selected_chat_is_zot_coordinator();
         let direct_width =
             self.reduced_motion || self.viewport_resized || self.pane_resize_dragging.is_some();
         let composer_width = self.composer_dock.borrow_mut().layout_width(
             composer_target_width(
                 main_content_width
-                    - if has_selection || cloud_starting {
+                    - if (has_selection && !zot_coordinator) || cloud_starting {
                         0.
                     } else {
                         2. * if self.viewport_width <= 800. {
@@ -12738,7 +12790,13 @@ impl Shell {
                                     .id("persistent-composer")
                                     .relative()
                                     .w(px(composer_width))
-                                    .pb(px(if cloud_starting { 16. } else { 0. }))
+                                    .pb(px(if cloud_starting {
+                                        16.
+                                    } else if zot_coordinator {
+                                        12.
+                                    } else {
+                                        0.
+                                    }))
                                     .opacity(composer_opacity)
                                     .mx_auto()
                                     .child(self.composer.clone())
@@ -13721,8 +13779,9 @@ impl Shell {
         if plus_open {
             let closing = self.right_plus.closing_since();
             let menu = self.render_right_plus_menu(&theme, cx).into_any_element();
-            // Right-aligned to the trigger, opening over the pane.
-            plus = plus.relative().child(popover::anchored_menu_below_end(
+            // Align the menu's left edge with the trigger so it opens into
+            // the surface pane instead of covering the conversation.
+            plus = plus.relative().child(popover::anchored_menu_below(
                 "right-plus-menu",
                 menu,
                 closing,
@@ -15123,6 +15182,17 @@ impl Render for Shell {
                 } else {
                     0.0
                 };
+                // The Zot panel replaces the right pane but takes the same room.
+                let on_zot = on_chat && self.selected_zot(cx).is_some();
+                let right_target_width = if on_zot {
+                    if self.zot_ui.panel_hidden {
+                        0.0
+                    } else {
+                        zots::ZOT_PANEL_WIDTH
+                    }
+                } else {
+                    right_target_width
+                };
                 let main_target_width = self.main_target_width(right_target_width, cx);
                 // Navigation can change either edge: Files and responsive
                 // sidebar fitting matter just as much as the right surface.
@@ -15192,7 +15262,7 @@ impl Render for Shell {
                 // never renders it (zuse __root.tsx `!isSettings && activeChat`
                 // around the diff column) — the per-session open flags stay
                 // intact for the return trip.
-                let right_open = on_chat && self.right_pane_shown(cx);
+                let right_open = on_chat && !on_zot && self.right_pane_shown(cx);
                 // Takeover mode derives its width from the viewport, so a
                 // manual drag handle would fight the expanded target.
                 let right_handle = (right_open
@@ -15216,7 +15286,11 @@ impl Render for Shell {
                         .then(|| self.pull_request_pane_handle(cx))
                         .flatten()
                 });
-                let right: AnyElement = if on_chat {
+                let right: AnyElement = if on_zot && self.zot_ui.panel_hidden {
+                    Empty.into_any_element()
+                } else if on_zot {
+                    self.render_zot_inspector(window, cx)
+                } else if on_chat {
                     self.render_right_pane(window, cx)
                 } else if on_pull_requests {
                     self.render_pull_request_pane(window, cx)
@@ -17087,6 +17161,58 @@ mod exit_regressions {
                 assert!(shell.state.read(cx).selected_chat.is_none());
                 assert_eq!(shell.state.read(cx).selected_space.as_deref(), Some("b"));
                 assert_eq!(shell.composer.read(cx).appshots[""].len(), 1);
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn right_panel_opens_at_default_and_remembers_a_resized_width(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        cx.update(|cx| {
+            settings::init(settings::UiSettings::default(), dir.path(), cx);
+            crate::history::init(
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                cx,
+            );
+            gpui_base::init(cx);
+            cx.set_global(Theme::default());
+            crate::app_menus::init(cx);
+        });
+        let window = cx.add_window(|_, cx| {
+            let state = cx.new(|_| AppState::new());
+            Shell::new(
+                state,
+                EngineBootConfig {
+                    target: None,
+                    data_dir: dir.path().into(),
+                    ipc_port: 0,
+                    edge_url: "http://127.0.0.1:1".into(),
+                    edge_token: None,
+                    org_id: None,
+                    workos_client_id: None,
+                    default_harness: zuse_protocol::HarnessId::Mock,
+                },
+                cx,
+            )
+        });
+        window
+            .update(cx, |shell, _, cx| {
+                shell.active_chat = "preview".into();
+                shell.viewport_width = 1400.0;
+                shell.set_surfaces_open(true, cx);
+                assert_eq!(shell.right_settled_target(cx), 520.0);
+
+                // A drag updates this preference; closing and reopening the
+                // panel must not replace it with the default or an even split.
+                shell.settings.right_pane_width = 400.0;
+                shell.set_surfaces_open(false, cx);
+                shell.set_surfaces_open(true, cx);
+                assert_eq!(shell.right_settled_target(cx), 400.0);
+                shell.observe_viewport_width(1500.0, cx);
+                assert_eq!(shell.right_settled_target(cx), 400.0);
             })
             .unwrap();
     }

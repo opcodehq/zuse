@@ -105,6 +105,8 @@ pub enum TurnOutcome {
 }
 
 pub struct Zuse {
+    control_token: Option<String>,
+    coordinator: bool,
     url: String,
     origin: Origin,
     rpc: Mutex<Option<Arc<RpcClient>>>,
@@ -115,6 +117,8 @@ impl Zuse {
     /// mcp` starts (and answers `initialize`) even before the engine is up.
     pub fn new(url: String, origin: Origin) -> Self {
         Self {
+            control_token: std::env::var("ZUSE_CONTROL_TOKEN").ok(),
+            coordinator: std::env::var("ZUSE_ZOT_ID").is_ok_and(|id| !id.is_empty()),
             url,
             origin,
             rpc: Mutex::new(None),
@@ -124,6 +128,8 @@ impl Zuse {
     /// Wrap an already-connected client (tests, in-process embedding).
     pub fn with_client(client: RpcClient, origin: Origin) -> Self {
         Self {
+            control_token: None,
+            coordinator: false,
             url: String::new(),
             origin,
             rpc: Mutex::new(Some(Arc::new(client))),
@@ -132,6 +138,27 @@ impl Zuse {
 
     pub fn origin(&self) -> &Origin {
         &self.origin
+    }
+
+    pub fn with_control_context(mut self, token: Option<String>, coordinator: bool) -> Self {
+        self.control_token = token;
+        self.coordinator = coordinator;
+        self
+    }
+    pub fn is_coordinator(&self) -> bool {
+        self.coordinator
+    }
+
+    pub async fn control(&self, method: &str, params: Value) -> anyhow::Result<Value> {
+        let token = self
+            .control_token
+            .as_ref()
+            .context("Zot tools require an engine-issued session credential")?;
+        self.call_once(
+            zuse_protocol::control::CALL,
+            json!({"token":token,"method":method,"params":params}),
+        )
+        .await
     }
 
     async fn client(&self) -> anyhow::Result<Arc<RpcClient>> {

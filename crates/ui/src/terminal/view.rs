@@ -667,7 +667,14 @@ fn shape_row(
         if cell.wide_spacer {
             continue;
         }
-        let ch = if cell.hidden { ' ' } else { cell.ch };
+        // Alacritty stores a tab marker in the first grid cell it crosses.
+        // The remaining cells already represent the expanded tab stop; do not
+        // let the text shaper expand that marker a second time.
+        let ch = if cell.hidden || cell.ch == '\t' {
+            ' '
+        } else {
+            cell.ch
+        };
         // Anything that can leave the mono font gets its own pinned segment.
         let pinned = !ch.is_ascii() || cell.wide;
         if pinned {
@@ -746,6 +753,40 @@ fn shape_row(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct TestRoot;
+
+    impl gpui::Render for TestRoot {
+        fn render(
+            &mut self,
+            _window: &mut Window,
+            _cx: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            gpui::div()
+        }
+    }
+
+    #[gpui::test]
+    fn tabbed_listing_shapes_as_aligned_terminal_cells(cx: &mut gpui::TestAppContext) {
+        let window = cx.add_window(|_, _| TestRoot);
+        window
+            .update(cx, |_, window, _| {
+                let mut emulator = super::super::emulator::Emulator::new(32, 2);
+                emulator.feed(b"a\t\tX\r\nabcdefg\t\tY");
+                let theme = Theme::default();
+                let mono = font("Geist Mono");
+                let first = shape_row(&emulator.line(0), &theme, &mono, px(13.0), window);
+                let second = shape_row(&emulator.line(1), &theme, &mono, px(13.0), window);
+                // Both tabs end at cell 16. The rendered text must contain just
+                // one space per empty grid cell, never a second shaped tab advance.
+                assert_eq!(first[0].1.text.as_ref().chars().nth(16), Some('X'));
+                assert_eq!(second[0].1.text.as_ref().chars().nth(16), Some('Y'));
+                assert!(!first[0].1.text.contains('\t'));
+                assert!(!second[0].1.text.contains('\t'));
+                assert_eq!(first[0].1.x_for_index(16), second[0].1.x_for_index(16));
+            })
+            .unwrap();
+    }
 
     fn mods() -> Modifiers {
         Modifiers::default()

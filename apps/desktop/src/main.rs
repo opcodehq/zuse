@@ -248,7 +248,10 @@ fn main() -> anyhow::Result<()> {
 
     match cli.command {
         Some(Command::Headless) => {
-            let runtime = tokio::runtime::Runtime::new()?;
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .thread_stack_size(zuse_engine::RUNTIME_STACK_SIZE)
+                .enable_all()
+                .build()?;
             runtime.block_on(async {
                 let engine = zuse_engine::Engine::new(engine_config_from_env());
                 engine.run().await

@@ -12,3 +12,5 @@ uuid.workspace = true
 chrono.workspace = true
 pulldown-cmark.workspace = true
 url = "2.5"
+ts-rs = { version = "11", features = ["serde-json-impl"] }
+schemars = "1"

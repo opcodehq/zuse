@@ -139,6 +139,9 @@ pub enum StripAction {
 }
 
 pub struct AppUpdate {
+    control_status: Option<zuse_update::control::ControlUpdateStatus>,
+    _control_watch: Task<()>,
+    control_retry: Option<Task<()>>,
     install: InstallKind,
     blocker: Option<UpdateBlocker>,
     /// Background download + install on quit (`ZUSE_AUTO_UPDATE` unset or on).
@@ -227,7 +230,29 @@ impl AppUpdate {
             }
             None => {}
         }
+        let control_watch = cx.spawn(async move |this, cx| {
+            loop {
+                let status = zuse_update::control::status().ok();
+                if this
+                    .update(cx, |this, cx| {
+                        if this.control_status != status {
+                            this.control_status = status;
+                            cx.notify();
+                        }
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(15))
+                    .await;
+            }
+        });
         Self {
+            control_status: None,
+            _control_watch: control_watch,
+            control_retry: None,
             install,
             blocker,
             automatic: zuse_update::desktop_auto_update_enabled(),
@@ -250,6 +275,36 @@ impl AppUpdate {
 
     pub fn install(&self) -> &InstallKind {
         &self.install
+    }
+
+    pub fn control_problem(&self) -> Option<String> {
+        self.control_status
+            .as_ref()
+            .filter(|s| s.state == "failed")
+            .map(|s| {
+                s.error
+                    .clone()
+                    .unwrap_or_else(|| "Control tools could not update".into())
+            })
+    }
+    pub fn retry_control(&mut self, cx: &mut Context<Self>) {
+        if let Some(status) = self.control_status.as_mut() {
+            status.state = "updating".into();
+        }
+        let task = Tokio::spawn(cx, async {
+            zuse_update::control::synchronize_bundled().await
+        });
+        self.control_retry=Some(cx.spawn(async move|this,cx|{
+            let result=task.await;
+            let _=this.update(cx,|this,cx|{
+                this.control_status=Some(match result {
+                    Ok(Ok(status))=>status,
+                    _=>zuse_update::control::ControlUpdateStatus{version:env!("CARGO_PKG_VERSION").into(),state:"failed".into(),error:Some("Control tools could not update. Retry after checking the installation.".into())},
+                });
+                cx.notify();
+            });
+        }));
+        cx.notify();
     }
 
     pub fn blocker(&self) -> Option<&UpdateBlocker> {

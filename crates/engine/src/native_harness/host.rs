@@ -394,6 +394,10 @@ pub(super) fn tools(
                 chat_id: Some(chat_id),
                 device_id: Some(device_id.into()),
             },
+        )
+        .with_control_context(
+            mcp.env.get("ZUSE_CONTROL_TOKEN").cloned(),
+            mcp.env.contains_key("ZUSE_ZOT_ID"),
         ),
     )))))
 }

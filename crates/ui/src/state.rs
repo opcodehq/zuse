@@ -905,6 +905,8 @@ struct PendingChatArchive {
 /// are plain `&mut self` functions so tests construct the struct directly; gpui
 /// glue ([`Self::bootstrap`], [`Self::select_chat`]) layers subscriptions on top.
 pub struct AppState {
+    pub zots: Vec<zuse_protocol::zots::Zot>,
+    zot_watches: HashMap<String, Task<()>>,
     pub connection: ConnectionStatus,
     /// Fixed data boundary of the attached engine. Authentication may change
     /// in place, but changing this scope requires assembling a new runtime.
@@ -1114,6 +1116,8 @@ impl Default for AppState {
 impl AppState {
     pub fn new() -> Self {
         Self {
+            zots: Vec::new(),
+            zot_watches: HashMap::new(),
             connection: ConnectionStatus::Connecting,
             workspace_scope: None,
             auth: None,
@@ -1622,6 +1626,94 @@ impl AppState {
         }
         self.heal_space_selection();
         changed || self.selected_space != previous_selection
+    }
+
+    /// Whether the selected chat is a Zot's coordinator, current or earlier.
+    /// These run in the Zot's own folder, with no repository or checkout.
+    pub fn selected_chat_is_zot_coordinator(&self) -> bool {
+        self.selected_chat.as_ref().is_some_and(|chat| {
+            self.zots.iter().any(|z| {
+                &z.coordinator_chat_id == chat || z.previous_coordinator_chats.contains(chat)
+            })
+        })
+    }
+
+    pub fn apply_zots(&mut self, zots: Vec<zuse_protocol::zots::Zot>) -> bool {
+        if self.zots == zots {
+            return false;
+        }
+        self.zots = zots;
+        true
+    }
+
+    fn reconcile_zot_watches(&mut self, cx: &mut Context<Self>) {
+        let Some(handle) = self.engine.clone() else {
+            return;
+        };
+        if !handle
+            .engine_info()
+            .supports(zuse_protocol::zots::CAPABILITY)
+        {
+            return;
+        }
+        let local = handle.engine_info().device_id.clone();
+        let mut devices: Vec<String> = self.devices.iter().map(|d| d.id.clone()).collect();
+        if !devices.contains(&local) {
+            devices.push(local);
+        }
+        self.zot_watches.retain(|id, _| devices.contains(id));
+        for device in devices {
+            if self.zot_watches.contains_key(&device) {
+                continue;
+            }
+            let engine = handle.clone();
+            let target = device.clone();
+            let task = cx.spawn(async move |this, cx| {
+                loop {
+                    let mut stream = match engine
+                        .client()
+                        .subscribe_scoped(
+                            zuse_protocol::control::WATCH_ZOTS,
+                            serde_json::json!({"targetDeviceId":target}),
+                        )
+                        .await
+                    {
+                        Ok(stream) => stream,
+                        Err(_) => {
+                            cx.background_executor()
+                                .timer(std::time::Duration::from_secs(3))
+                                .await;
+                            continue;
+                        }
+                    };
+                    while let Some(value) = stream.recv().await {
+                        let Ok(zots) =
+                            serde_json::from_value::<Vec<zuse_protocol::zots::Zot>>(value)
+                        else {
+                            continue;
+                        };
+                        if this
+                            .update(cx, |state, cx| {
+                                state.zots.retain(|z| z.config.home_device_id != target);
+                                state.zots.extend(zots);
+                                state.zots.sort_by(|a, b| a.config.name.cmp(&b.config.name));
+                                cx.notify();
+                            })
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                    if this.update(cx, |_, _| {}).is_err() {
+                        return;
+                    }
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_secs(3))
+                        .await;
+                }
+            });
+            self.zot_watches.insert(device, task);
+        }
     }
 
     fn heal_space_selection(&mut self) {
@@ -2468,6 +2560,7 @@ impl AppState {
         let mut chats: Vec<&Chat> = self
             .visible_chats()
             .filter(|c| c.space_id.as_deref() == Some(space_id))
+            .filter(|c| !zuse_protocol::presentation::zot_panel::zot_owns_chat(&self.zots, &c.id))
             .collect();
         sort_tabs(&mut chats);
         chats
@@ -2561,6 +2654,10 @@ impl AppState {
         }
         rows.into_iter()
             .filter(|(_, chat)| chat.thread_id.is_none() && in_filter(chat))
+            // Zots list their own threads; projects don't repeat them.
+            .filter(|(_, chat)| {
+                !zuse_protocol::presentation::zot_panel::zot_owns_chat(&self.zots, &chat.id)
+            })
             .map(|(status, chat)| {
                 (
                     thread_status
@@ -2871,6 +2968,8 @@ impl AppState {
     /// stopped. The next bootstrap must never render rows from the previous
     /// account while the local profile is opening.
     pub fn prepare_runtime_replacement(&mut self, cx: &mut Context<Self>) {
+        self.zots.clear();
+        self.zot_watches.clear();
         self.engine = None;
         self.chat_configuration = Default::default();
         self.watch_tasks.clear();
@@ -3217,6 +3316,7 @@ impl AppState {
             ));
         }
         self.watch_tasks = watch_tasks;
+        self.reconcile_zot_watches(cx);
         self.reconcile_change_request_watches(cx);
         // EngineInfo is part of the attachment boundary: views must know which
         // data profile they reached before they are allowed to render Ready.
@@ -3921,6 +4021,7 @@ fn spawn_watch<T: DeserializeOwned + 'static>(
                     let linked = state.apply_pending_deep_link(cx);
                     if changed && matches!(method, methods::WATCH_SPACES | methods::WATCH_DEVICES) {
                         state.reconcile_change_request_watches(cx);
+                        state.reconcile_zot_watches(cx);
                     }
                     if changed || linked {
                         cx.notify();

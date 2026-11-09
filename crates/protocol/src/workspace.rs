@@ -23,6 +23,7 @@ pub mod capabilities {
     pub const PROJECTLESS_SCRATCH_V1: &str = "projectless-scratch-v1";
 
     pub const CURRENT: &[&str] = &[
+        crate::zots::CAPABILITY,
         COMPOSER_REFERENCES_V1,
         MESSAGE_QUEUE_V1,
         MESSAGE_QUEUE_ACTIONS_V1,
@@ -109,6 +110,7 @@ mod tests {
                 "workspaceScope": "local",
                 "cursorSdkVersion": "1.0.31",
                 "capabilities": [
+                    "zots.v1",
                     "composer-references-v1",
                     "message-queue-v1",
                     "message-queue-actions-v1",
@@ -116,6 +118,7 @@ mod tests {
                     "message-queue-clean-attachment-text-v1",
                     "message-queue-edit-lease-v1",
                     "harness-updates-v1",
+                    "pr-watch-v1",
                     "checkout-archives-v1",
                     "custom-acp-agents-v1",
                     "projectless-scratch-v1",
