@@ -1,0 +1,23 @@
+name: Prebuild release binaries
+
+# Tagging a commit built here skips compilation and only signs, packages and
+# publishes. Only the newest commit on main needs to finish.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: prebuild
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  binaries:
+    uses: ./.github/workflows/native-binaries.yml
+    with:
+      ref: ${{ github.sha }}
+      retention_days: 14
+    secrets: inherit

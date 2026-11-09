@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import time
 import zipfile
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -24,6 +25,20 @@ def release_version(tag):
     if not VERSION.fullmatch(value):
         raise ValueError('Expected a version such as v0.26.0-preview.1')
     return value
+
+
+def retrying(run=None, attempts=6, delay=30, sleep=time.sleep):
+    """Repeat calls to Apple's timestamp, notary and ticket services, whose connections drop."""
+    def call(command, **options):
+        for attempt in range(1, attempts + 1):
+            try:
+                return (run or subprocess.run)(command, **options)
+            except subprocess.CalledProcessError as error:
+                if attempt == attempts:
+                    raise
+                print(f'{" ".join(command[:3])} exited {error.returncode}; retry {attempt} of {attempts - 1}', flush=True)
+                sleep(delay * attempt)
+    return call
 
 
 def check_archive(archive, checksums):
@@ -114,15 +129,16 @@ def notarize(path):
     command = ['codesign', '--force', '--timestamp', '--sign', identity]
     if os.environ.get('ZUSE_MACOS_KEYCHAIN'):
         command += ['--keychain', os.environ['ZUSE_MACOS_KEYCHAIN']]
-    subprocess.run(command + [str(path)], check=True)
+    apple = retrying()
+    apple(command + [str(path)], check=True)
     auth = ['--apple-id', credentials[0], '--password', credentials[1], '--team-id', credentials[2]]
-    result = subprocess.run(['xcrun', 'notarytool', 'submit', str(path), *auth, '--wait', '--output-format', 'json'], check=True, capture_output=True, text=True)
+    result = apple(['xcrun', 'notarytool', 'submit', str(path), *auth, '--wait', '--output-format', 'json'], check=True, capture_output=True, text=True)
     submission = json.loads(result.stdout)
     if submission.get('status') != 'Accepted':
         subprocess.run(['xcrun', 'notarytool', 'log', submission.get('id', ''), *auth], check=False)
         raise ValueError(f'Notarization failed: {submission.get("status")}')
-    subprocess.run(['xcrun', 'stapler', 'staple', str(path)], check=True)
-    subprocess.run(['xcrun', 'stapler', 'validate', str(path)], check=True)
+    apple(['xcrun', 'stapler', 'staple', str(path)], check=True)
+    apple(['xcrun', 'stapler', 'validate', str(path)], check=True)
 
 
 def macos(package, manifest, output, sign_app=False):
@@ -135,7 +151,7 @@ def macos(package, manifest, output, sign_app=False):
             raise ValueError('Signing is required for the new macOS architecture')
         refresh_manifest(package, manifest)
     subprocess.run(['codesign', '--verify', '--deep', '--strict', str(app)], check=True)
-    subprocess.run(['xcrun', 'stapler', 'validate', str(app)], check=True)
+    retrying()(['xcrun', 'stapler', 'validate', str(app)], check=True)
     if sign_app:
         archive = output / f'{package.name}.tar.gz'
         with tarfile.open(archive, 'w:gz') as bundle:
@@ -158,8 +174,8 @@ def macos(package, manifest, output, sign_app=False):
             if os.readlink(mount / 'Applications') != '/Applications':
                 raise ValueError('DMG is missing the Applications shortcut')
             subprocess.run(['codesign', '--verify', '--deep', '--strict', str(mounted_app)], check=True)
-            subprocess.run(['xcrun', 'stapler', 'validate', str(mounted_app)], check=True)
-            subprocess.run(['spctl', '--assess', '--type', 'execute', '--verbose=2', str(mounted_app)], check=True)
+            retrying()(['xcrun', 'stapler', 'validate', str(mounted_app)], check=True)
+            retrying()(['spctl', '--assess', '--type', 'execute', '--verbose=2', str(mounted_app)], check=True)
         finally:
             subprocess.run(['hdiutil', 'detach', str(mount)], check=True)
 

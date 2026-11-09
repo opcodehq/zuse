@@ -160,7 +160,8 @@ Linux ARM64 archives build from the immutable release tag with the matching
 published browser assets. Signing runs on separate fresh macOS runners.
 `scripts/distribution.py` converts verified archives to native installers.
 
-To add formats to an existing release without rebuilding its existing binaries:
+To add formats to an older release without rebuilding its existing binaries,
+compiling only architectures it never shipped:
 
 ```sh
 gh workflow run release.yml -f tag=v0.26.0-preview.3 -f formats_only=true
