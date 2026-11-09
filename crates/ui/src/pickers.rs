@@ -27,12 +27,12 @@ pub(crate) use creation_sources::CreationIssueTitle;
 use crate::roll_text::{roll_text, rolling};
 use std::collections::{HashMap, HashSet};
 
-/// Labels of every model a catalog has shown in this app, by id. A picker
-/// whose own catalog hasn't arrived yet (a cloud chat just opened) names
-/// its model as the catalog will, instead of showing the raw id first.
-/// Pickers live on the UI thread, so one table per thread is one per app
-/// (and keeps tests, which each run on their own thread, independent).
 thread_local! {
+    /// Labels of every model a catalog has shown in this app, by id. A picker
+    /// whose own catalog hasn't arrived yet (a cloud chat just opened) names
+    /// its model as the catalog will, instead of showing the raw id first.
+    /// Pickers live on the UI thread, so one table per thread is one per app
+    /// (and keeps tests, which each run on their own thread, independent).
     static KNOWN_MODEL_LABELS: std::cell::RefCell<HashMap<String, String>> =
         Default::default();
 }

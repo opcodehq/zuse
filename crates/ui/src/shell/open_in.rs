@@ -433,6 +433,10 @@ impl Shell {
     /// The selected chat's workspace path, and whether it is on this
     /// computer (only then can a local app open it).
     pub(super) fn open_in_path(&self, cx: &App) -> Option<(String, bool)> {
+        // A cloud chat opens where its repository syncs on this computer.
+        if let Some(conversation) = &self.cloud_conversation {
+            return conversation.read(cx).synced_folder().map(|path| (path, true));
+        }
         let state = self.state.read(cx);
         let chat = state.selected_chat_row()?;
         let path = chat_copy_path(chat)?.to_owned();

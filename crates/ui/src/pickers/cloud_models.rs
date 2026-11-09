@@ -186,11 +186,14 @@ impl Pickers {
                 || matches!(self.cloud.harnesses, Loadable::Idle | Loadable::Loading)) {
             return None;
         }
-        Some(match &self.cloud.harnesses {
-            Loadable::Error(error) => (error.clone(), true),
-            Loadable::Ready(_) => ("Choose a Cloud model before starting.".into(), true),
-            _ => ("Loading Cloud models…".into(), false),
-        })
+        // Loading is quiet: the model picker shows its own placeholder, and a
+        // tray row that appears on every chat switch only to vanish a moment
+        // later reads as something going wrong.
+        match &self.cloud.harnesses {
+            Loadable::Error(error) => Some((error.clone(), true)),
+            Loadable::Ready(_) => Some(("Choose a Cloud model before starting.".into(), true)),
+            _ => None,
+        }
     }
 
     pub(crate) fn refresh_cloud_models(&mut self, cx: &mut Context<Self>) {

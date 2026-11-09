@@ -12445,11 +12445,21 @@ impl Shell {
         }
 
         if let Some(conversation) = self.cloud_conversation.clone() {
+            // The environment summary toggle works for cloud chats too.
+            let reveal = self.session_info_reveal(true);
+            let card = self.render_cloud_session_info(
+                &conversation,
+                reveal,
+                self.viewport_height - Theme::TITLEBAR_HEIGHT - 160.0,
+                cx,
+            );
             return div()
+                .relative()
                 .flex_1()
                 .min_w_0()
                 .h_full()
                 .child(conversation)
+                .children(card)
                 .into_any_element();
         }
         let _ = (text, border);

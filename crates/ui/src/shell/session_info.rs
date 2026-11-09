@@ -500,6 +500,136 @@ impl Shell {
         )
     }
 
+    /// The environment summary for a cloud conversation: the computer and
+    /// its state, the repository and branch it works on, and the actions a
+    /// computer has (sleep or wake, its details, the synced folder).
+    pub(super) fn render_cloud_session_info(
+        &mut self,
+        conversation: &Entity<super::cloud_conversation::CloudConversation>,
+        reveal: f32,
+        max_height: f32,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        if reveal <= 0.001 {
+            return None;
+        }
+        let theme = Theme::of(cx).for_popup();
+        let (summary, synced) = {
+            let view = conversation.read(cx);
+            (view.computer_summary(), view.synced_folder())
+        };
+        let computer = summary
+            .provider
+            .clone()
+            .map(|provider| format!("{provider} computer"))
+            .unwrap_or_else(|| "Cloud computer".into());
+        let computer_row = info_row(
+            &theme,
+            row_glyph(icons::DITHER_CLOUD, &theme),
+            computer.into(),
+        )
+        .id("cloud-session-info-computer")
+        .child(
+            row_meta(&theme)
+                .child(div().size(px(6.0)).rounded_full().bg(summary.tone.color(&theme)))
+                .child(summary.label),
+        );
+        let repository_row = summary.repository.clone().map(|repository| {
+            info_row(&theme, row_glyph(icons::FOLDER, &theme), repository.into())
+                .id("cloud-session-info-repository")
+        });
+        let branch_row = summary.branch.clone().map(|branch| {
+            info_row(&theme, row_glyph(icons::GIT_BRANCH, &theme), branch.into())
+                .id("cloud-session-info-branch")
+        });
+        let sleep = {
+            let conversation = conversation.clone();
+            action_row(&theme, "cloud-session-info-sleep")
+                .debug_selector(|| "cloud-session-info-sleep".into())
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.close_session_info_overlay(cx);
+                    conversation.update(cx, |view, cx| view.toggle_sleep(cx));
+                }))
+                .child(popover::picker_icon_slot(row_glyph(
+                    if summary.sleeping {
+                        icons::ACTION_PLAY
+                    } else {
+                        icons::MOON
+                    },
+                    &theme,
+                )))
+                .child(div().flex_1().child(if summary.sleeping {
+                    "Wake computer"
+                } else {
+                    "Put computer to sleep"
+                }))
+        };
+        let details = {
+            let conversation = conversation.clone();
+            action_row(&theme, "cloud-session-info-details")
+                .debug_selector(|| "cloud-session-info-details".into())
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.close_session_info_overlay(cx);
+                    conversation.update(cx, |view, cx| view.open_computer(cx));
+                }))
+                .child(popover::picker_icon_slot(row_glyph(icons::SETTINGS, &theme)))
+                .child(div().flex_1().child("Computer details and sync"))
+        };
+        let folder = synced.map(|path| {
+            let reveal_path = path.clone();
+            action_row(&theme, "cloud-session-info-folder")
+                .tooltip(crate::settings::widgets::text_tooltip(path))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.close_session_info_overlay(cx);
+                    cx.reveal_path(std::path::Path::new(&reveal_path));
+                }))
+                .child(popover::picker_icon_slot(row_glyph(icons::FOLDER_OPEN, &theme)))
+                .child(div().flex_1().child("Open synced folder"))
+        });
+        let body = div()
+            .id("cloud-session-info-body")
+            .max_h(px(max_height.max(120.0)))
+            .overflow_y_scroll()
+            .p(px(SUMMARY_CARD_PADDING))
+            .flex()
+            .flex_col()
+            .child(computer_row)
+            .children(repository_row)
+            .children(branch_row)
+            .child(fade_rule(&theme))
+            .child(sleep)
+            .children(folder)
+            .child(details);
+        let card = div()
+            .w(px(SESSION_CARD_WIDTH))
+            .rounded(px(SUMMARY_CARD_RADIUS))
+            .overflow_hidden()
+            .border_1()
+            .border_color(theme.border)
+            .bg(popover::surface_bg(&theme))
+            .when(!theme.is_frost(), |card| card.shadow_lg())
+            .child(body);
+        let ease = crate::motion::RESIZE.progress(reveal.clamp(0.0, 1.0));
+        let dy = -6.0 * (1.0 - ease);
+        Some(
+            div()
+                .id("session-info")
+                .debug_selector(|| "session-info".into())
+                .absolute()
+                .top(px(Theme::TITLEBAR_HEIGHT + SESSION_CARD_DROP + dy))
+                .right(px(SESSION_CARD_INSET))
+                .opacity(ease)
+                .occlude()
+                .on_mouse_down_out(cx.listener(|this, _, _, cx| this.close_session_info_overlay(cx)))
+                .child(crate::frost::frosted(
+                    SUMMARY_CARD_RADIUS,
+                    crate::frost::MENU_BLUR,
+                    card,
+                ))
+                .into_any_element(),
+        )
+    }
+
     /// A collapsible section's header: an ordinary icon row whose chevron
     /// folds the rows beneath it. Returns the row and whether it is open.
     /// `session_info_folded` records the sections toggled away from
