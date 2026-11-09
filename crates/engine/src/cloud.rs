@@ -52,6 +52,47 @@ pub(crate) fn rpc_error(error: anyhow::Error) -> zuse_rpc::RpcError {
 
 pub const DEFAULT_API_URL: &str = crate::account::API_URL;
 
+/// Production cloud origins. Cloud computers stay off against these unless
+/// explicitly enabled.
+const PRODUCTION_ORIGINS: &[&str] = &["https://api.zuse.sh", "https://api-rust.zuse.sh"];
+
+/// What a request for a cloud computer gets while the beta is off.
+pub const BETA_MESSAGE: &str = "Cloud computers are in beta and not available here yet.";
+
+/// Cloud computers are a beta. `ZUSE_CLOUD_BETA=1` turns them on and `=0`
+/// off; otherwise they are on for every cloud except production (staging,
+/// local development), so production builds never offer them.
+pub fn beta_enabled() -> bool {
+    beta_enabled_for(
+        std::env::var("ZUSE_CLOUD_BETA").ok().as_deref(),
+        &crate::api_origins::from_env().cloud,
+    )
+}
+
+fn beta_enabled_for(flag: Option<&str>, cloud_origin: &str) -> bool {
+    match flag.map(|v| v.trim().to_ascii_lowercase()).as_deref() {
+        Some("1" | "true" | "on" | "yes") => return true,
+        Some("0" | "false" | "off" | "no") => return false,
+        _ => {}
+    }
+    let origin = cloud_origin.trim().trim_end_matches('/');
+    !PRODUCTION_ORIGINS.contains(&origin)
+}
+
+/// Methods the beta switch covers: cloud computers, their projects, sync and
+/// history. The Zuse account and billing stay available everywhere.
+pub fn beta_gated(method: &str) -> bool {
+    method.starts_with("Cloud")
+        && !matches!(
+            method,
+            zuse_protocol::methods::CLOUD_ACCOUNT_STATUS
+                | zuse_protocol::methods::CLOUD_ACCOUNT_SIGN_IN
+                | zuse_protocol::methods::CLOUD_ACCOUNT_SIGN_OUT
+        )
+        && !method.starts_with("CloudBilling")
+        && !method.starts_with("CloudPrepaid")
+}
+
 const CREATE_LIMIT_REJECTED: &str =
     "This staging account has reached its computer limit. Your new message has not been queued.";
 const CREATE_REPOSITORY_REJECTED: &str = "This repository is not available through your connected GitHub App. Choose a connected repository. Your new message has not been queued.";
@@ -1538,6 +1579,31 @@ pub async fn handle(auth: &Auth, method: &str, params: Value) -> Result<Value> {
         api.syncs.ensure_reconciliation(auth.clone());
     }
     api.handle(auth, method, params).await
+}
+
+#[cfg(test)]
+mod beta_tests {
+    use super::*;
+    #[test]
+    fn cloud_computers_are_off_in_production_unless_enabled() {
+        assert!(!beta_enabled_for(None, "https://api.zuse.sh"));
+        assert!(!beta_enabled_for(None, "https://api.zuse.sh/"));
+        assert!(!beta_enabled_for(None, "https://api-rust.zuse.sh"));
+        assert!(beta_enabled_for(None, "https://api-rust-stag.zuse.sh"));
+        assert!(beta_enabled_for(None, "http://127.0.0.1:27655"));
+        assert!(beta_enabled_for(Some("1"), "https://api.zuse.sh"));
+        assert!(!beta_enabled_for(Some("0"), "https://api-rust-stag.zuse.sh"));
+    }
+    #[test]
+    fn the_account_and_billing_stay_outside_the_beta() {
+        use zuse_protocol::methods;
+        for method in [methods::CLOUD_CREATE, methods::CLOUD_WORKSPACES, methods::CLOUD_CONTEXT, methods::CLOUD_RPC, methods::CLOUD_SYNC_STATUS, methods::CLOUD_HISTORY] {
+            assert!(beta_gated(method), "{method}");
+        }
+        for method in [methods::CLOUD_ACCOUNT_STATUS, methods::CLOUD_ACCOUNT_SIGN_IN, methods::CLOUD_BILLING_SUMMARY, methods::CLOUD_PREPAID_BALANCE, methods::ENGINE_INFO] {
+            assert!(!beta_gated(method), "{method}");
+        }
+    }
 }
 
 #[cfg(test)]

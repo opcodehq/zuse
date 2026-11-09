@@ -392,6 +392,9 @@ impl Pickers {
         }
     }
     pub(super) fn ensure_cloud(&mut self, cx: &mut Context<Self>) {
+        if !crate::cloud_beta() {
+            return;
+        }
         let state = self.state.read(cx);
         let owner = self
             .cloud

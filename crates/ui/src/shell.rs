@@ -567,7 +567,7 @@ impl SettingsSection {
     fn heading(self) -> Option<&'static str> {
         match self {
             SettingsSection::Harnesses => Some("Local agents"),
-            SettingsSection::Cloud => Some("Cloud computer"),
+            SettingsSection::Cloud => Some("Cloud computer · Beta"),
             SettingsSection::Usage => Some("Plan & usage"),
             SettingsSection::Appearance => Some("App"),
             _ => None,
@@ -612,7 +612,22 @@ impl SettingsSection {
     }
 
     fn visible_in_nav(self) -> bool {
-        self != Self::Agents && (self != Self::Appshots || crate::appshots::is_desktop())
+        self != Self::Agents
+            && (self != Self::Appshots || crate::appshots::is_desktop())
+            && (!self.cloud_computer() || crate::cloud_beta())
+    }
+
+    /// The Cloud computer group, shown only while cloud computers are in beta
+    /// here.
+    fn cloud_computer(self) -> bool {
+        matches!(
+            self,
+            Self::Cloud
+                | Self::CloudRepositories
+                | Self::CloudEnvironments
+                | Self::CloudMachine
+                | Self::CloudAgents
+        )
     }
 
     /// Where a generic "open Settings" lands for a remembered section: legacy
@@ -12672,13 +12687,13 @@ impl Shell {
                                         .id("onboarding-add-space")
                                         .on_click(cx.listener(|this, _, _, cx| this.open_add_space(cx))),
                                 )
-                                .child(
+                                .when(crate::cloud_beta(), |row| row.child(
                                     popover::btn_ghost(&theme_owned, "Set up Cloud", "onboarding-cloud")
                                         .id("onboarding-cloud")
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.open_settings(SettingsSection::Cloud, cx)
                                         })),
-                                ),
+                                )),
                         )
                         .child(
                             div()

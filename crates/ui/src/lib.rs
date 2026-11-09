@@ -162,6 +162,16 @@ pub fn fixture_http_client(
 /// Run the headed app: tokio bridge up, engine bootstrap kicked off (probe →
 /// connect-or-embed), 1320×880 window (min 900×600) with [`shell::Shell`] as the
 /// root view, boot splash overlaid until the engine reports ready.
+/// Whether cloud computers are offered here: a beta, off in production
+/// (see `zuse_engine::cloud::beta_enabled`). Tests exercise the cloud UI.
+pub(crate) fn cloud_beta() -> bool {
+    if cfg!(test) {
+        return true;
+    }
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(zuse_engine::cloud::beta_enabled)
+}
+
 pub fn run_app(config: UiConfig) {
     // Retain ownership for the whole application lifetime. The bridge's
     // default runtime has only two workers, insufficient for a desktop engine.

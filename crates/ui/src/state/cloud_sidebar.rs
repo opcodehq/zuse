@@ -257,6 +257,10 @@ async fn request(
     (part, provisional, result)
 }
 pub(super) fn spawn(cx: &mut Context<AppState>, handle: EngineHandle) -> Task<()> {
+    // Cloud computers are a beta; without it there is nothing to list.
+    if !crate::cloud_beta() {
+        return Task::ready(());
+    }
     // A replacement controller must not inherit another API's visible catalog.
     cx.spawn(async move |this,cx| {
         if this.update(cx,|state,_|state.clear_cloud_sidebar()).is_err(){return;}

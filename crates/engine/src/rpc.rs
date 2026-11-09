@@ -2159,6 +2159,9 @@ impl AuthRpc {
 #[async_trait]
 impl RpcService for AuthRpc {
     async fn handle(&self, method: &str, params: serde_json::Value) -> Result<RpcReply, RpcError> {
+        if crate::cloud::beta_gated(method) && !crate::cloud::beta_enabled() {
+            return Err(RpcError::Failed(crate::cloud::BETA_MESSAGE.into()));
+        }
         if method == methods::CLOUD_EVENTS {
             return crate::cloud::events::handle(&self.cloud, params).await;
         }
