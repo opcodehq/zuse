@@ -2948,6 +2948,21 @@ pub(crate) struct PreparedTranscript {
 }
 
 impl TranscriptPreparation {
+    pub(crate) fn from_retained(
+        entries: Vec<SessionMessageEntry>,
+        prepared: Option<Arc<PreparedTranscript>>,
+    ) -> Self {
+        Self {
+            entries,
+            cache: prepared
+                .as_ref()
+                .map(|p| p.rows.clone())
+                .unwrap_or_default(),
+            baseline: prepared.map(|p| (*p.navigation_baseline).clone()),
+            ..Self::default()
+        }
+    }
+
     pub(crate) fn prepare(
         &mut self,
         update: &zuse_doc::TranscriptUpdate,
@@ -11691,6 +11706,41 @@ impl Render for Transcript {
                 cx.entity_id().as_u64(),
             ))
             .child(content);
+        let history = self
+            .state
+            .read(cx)
+            .native_history_status(self.doc_override.as_deref());
+        let root = root.children(history.map(|loading| {
+            let state = self.state.clone();
+            let doc = self.doc_override.clone();
+            let theme = Theme::of(cx).clone();
+            div()
+                .absolute()
+                .top(if self.doc_override.is_some() {
+                    px(8.)
+                } else {
+                    px(Theme::TITLEBAR_HEIGHT + 8.)
+                })
+                .left(px(16.))
+                .id("load-earlier-messages")
+                .px_3()
+                .py_1()
+                .rounded_md()
+                .bg(theme.element_hover)
+                .text_sm()
+                .text_color(theme.text_muted)
+                .cursor_pointer()
+                .child(if loading {
+                    tr(cx, msg::chat::cloud_history_loading)
+                } else {
+                    "Load earlier messages".into()
+                })
+                .on_click(move |_, _, cx| {
+                    state.update(cx, |state, cx| {
+                        state.load_earlier_native(doc.as_deref(), cx)
+                    })
+                })
+        }));
         let root = root.children(self.render_find_bar(cx));
         let root = root.children(self.render_image_menu(cx));
         // Full-size viewer for a clicked user-bubble thumbnail

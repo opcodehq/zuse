@@ -1962,26 +1962,25 @@ impl Pickers {
         }));
     }
 
-    /// Kick a model load for the effective harness AND every offered one, in
-    /// parallel — by the time the user opens the picker (or switches rail
-    /// tabs) the lists are already there, instead of a per-selection
-    /// "Loading models…" round-trip. Each `ensure_models` call is guarded by
-    /// its slot state, so re-running this every catalog load/render is free.
+    /// Resolve the active agent first. Other agents are discovered when the
+    /// picker is opened, so startup doesn't compete with chat history on 3G.
     fn prefetch_models(&mut self, force: bool, cx: &mut Context<Self>) {
         if self.cloud_models_active(cx) {
             self.ensure_cloud(cx);
             return;
         }
-        let mut targets: Vec<HarnessId> = match self.harnesses.ready() {
-            Some(list) => self.offered(list).iter().map(|d| d.id).collect(),
-            None => Vec::new(),
+        let mut targets: Vec<HarnessId> = if self.open_kind() == Some(PickerKind::HarnessModel) {
+            self.harnesses
+                .ready()
+                .map(|list| self.offered(list).iter().map(|d| d.id).collect())
+                .unwrap_or_default()
+        } else {
+            Vec::new()
         };
-        // The committed chat's harness may be outside the offered set (e.g.
-        // disabled after the chat was created) — its models still matter.
         if let Some(effective) = self.effective_harness(cx)
             && !targets.contains(&effective)
         {
-            targets.push(effective);
+            targets.insert(0, effective);
         }
         for harness in targets {
             self.ensure_models(harness, force, cx);
@@ -6226,9 +6225,8 @@ impl Render for Pickers {
             });
         }
 
-        // Eager-load the harness catalog + every offered harness's models so
-        // the chip reads "Fable 5" (a concrete pick) before any popover
-        // opens, and rail switches inside the picker are instant.
+        // Resolve the selected model before opening a picker. Unselected
+        // agents wait until the picker is actually needed.
         self.ensure_harnesses(false, cx);
         self.prefetch_models(false, cx);
         // A popover opened data-side (ZUSE_OPEN_PICKER) never went through
@@ -8493,6 +8491,44 @@ mod tests {
             supports_steering: false,
         }
     }
+    #[gpui::test]
+    fn native_model_discovery_defers_other_agents_until_picker_open(cx: &mut gpui::TestAppContext) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = runtime.enter();
+        let (out, _requests) = tokio::sync::mpsc::channel::<String>(16);
+        let (_replies, inbound) = tokio::sync::mpsc::channel::<String>(16);
+        let state = cx.new(|_| AppState::new());
+        state.update(cx, |state, _| {
+            state.set_test_engine(EngineHandle::from_test_client(zuse_rpc::RpcClient::new(
+                out, inbound,
+            )))
+        });
+        let pickers = cx.new(|cx| Pickers::new(state, cx));
+        pickers.update(cx, |pickers, cx| {
+            pickers.harnesses = Loadable::Ready(vec![
+                descriptor(HarnessId::Codex, "Codex"),
+                descriptor(HarnessId::ClaudeCode, "Claude"),
+            ]);
+            pickers.config.harness = Some(HarnessId::Codex);
+            pickers.models.clear();
+            pickers.prefetch_models(false, cx);
+            assert!(matches!(
+                pickers.models.get(&HarnessId::Codex),
+                Some(Loadable::Loading)
+            ));
+            assert!(!pickers.models.contains_key(&HarnessId::ClaudeCode));
+            pickers.open.open(PickerKind::HarnessModel);
+            pickers.prefetch_models(false, cx);
+            assert!(matches!(
+                pickers.models.get(&HarnessId::ClaudeCode),
+                Some(Loadable::Loading)
+            ));
+        });
+    }
+
     #[gpui::test]
     fn model_name_never_reads_select_model_while_anything_can_still_name_it(
         cx: &mut gpui::TestAppContext,

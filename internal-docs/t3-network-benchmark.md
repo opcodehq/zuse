@@ -4,6 +4,10 @@ Open the [interactive HTML report](zuse-vs-t3-3g.html) for comparison bars, indi
 
 T3 Code loads faster on a first visit; Zuse reloads faster with a fully warmed cache. In the matched chat fixture, Zuse receives history and first text sooner and resumes sooner after reconnect. T3 loads older history and stops faster. Zuse now transfers fewer bytes during text streaming and tool traces. These are local artifact and fixture measurements, not remote model inference speeds.
 
+The measurements below use the browser UI. Desktop remote chats and live agent panes now opt into the same 32-row / 64 KiB opening history, anchored older pages, verified cached-history resume and keyed chat/session deltas. Native model discovery loads the active agent first and defers other agents until the picker opens. Native paired connections use the existing negotiated LZ4 codec, encryption and ACK/replay budget; this change also compresses profitable frames from 256 bytes instead of 1 KiB. Account routes benefit from smaller history and list payloads, but do not gain that paired codec. Full durable history and provider context remain intact.
+
+These changes address desktop network traffic. Downloading the browser WASM shell is a separate metric and does not describe launching an installed desktop application. **Native desktop timing versus T3 is not measured in the charts below.** The native regression fixture exercises a real encrypted paired connection with 1,500 retained messages, paging, verified resume and live updates; it is a correctness check without 3G throttling.
+
 Both apps used Chrome for Testing 151.0.7922.34, a 1280 × 1000 viewport, 400 ms emulated latency, 400 kbps download and 200 kbps upload. Values below are medians of three samples per app per metric. Workspaces were empty, authentication was established before measurement, and T3 onboarding was completed.
 
 | Metric | Zuse | T3 Code 0.1.7 |

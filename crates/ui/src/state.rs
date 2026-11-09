@@ -51,6 +51,7 @@ struct CachedTranscript {
     entries: Vec<SessionMessageEntry>,
     context_usage: Option<zuse_protocol::ContextUsage>,
     bytes: usize,
+    history: NativeHistory,
 }
 
 // A cancelled GPUI watch may own a whale's mirror between updates. Its
@@ -60,12 +61,6 @@ struct WatchPreparation {
     executor: gpui::BackgroundExecutor,
 }
 impl WatchPreparation {
-    fn new(executor: gpui::BackgroundExecutor) -> Self {
-        Self {
-            worker: Some(Default::default()),
-            executor,
-        }
-    }
     fn prepare(
         &mut self,
         update: &zuse_doc::TranscriptUpdate,
@@ -87,6 +82,9 @@ impl Drop for WatchPreparation {
 // ---------------------------------------------------------------------------
 // Engine handle
 // ---------------------------------------------------------------------------
+
+mod history_window;
+use history_window::{HistoryFrame, NativeHistory, WatchSeed};
 
 mod account_connection;
 mod cloud_connection;
@@ -990,6 +988,7 @@ pub struct AppState {
     /// empty transcript is otherwise indistinguishable from the pre-replay
     /// gap after selection, where optimistic echoes may already be visible.
     pub transcript_replayed: bool,
+    transcript_history: NativeHistory,
     transcript_baselines: HashMap<String, Arc<zuse_doc::TranscriptBaseline>>,
     transcript_cache: std::collections::VecDeque<CachedTranscript>,
     pub(crate) prepared_transcripts: HashMap<String, Arc<crate::transcript::PreparedTranscript>>,
@@ -1045,6 +1044,7 @@ pub struct AppState {
     /// subagent tabs read these). Independent of `selected_chat`: a tab's
     /// feed must survive chat switches — the tab itself is what scopes it.
     sub_transcripts: HashMap<String, Vec<SessionMessageEntry>>,
+    sub_history: HashMap<String, NativeHistory>,
     /// One watch task per live subagent doc (single-flight per key).
     /// Dropping a task cancels the engine-side watch and unpins the doc from
     /// the engine LRU — closing a tab MUST go through
@@ -1147,6 +1147,7 @@ impl AppState {
             queue: Vec::new(),
             context_usage: None,
             transcript_replayed: false,
+            transcript_history: NativeHistory::default(),
             transcript_baselines: HashMap::new(),
             transcript_cache: Default::default(),
             prepared_transcripts: HashMap::new(),
@@ -1173,6 +1174,7 @@ impl AppState {
             queue_task: None,
             change_requests_visible: true,
             sub_transcripts: HashMap::new(),
+            sub_history: HashMap::new(),
             sub_watch_tasks: HashMap::new(),
             auto_selected: false,
             chats_synced: false,
@@ -1575,6 +1577,7 @@ impl AppState {
             self.context_usage = None;
             self.transcript_revision = self.transcript_revision.wrapping_add(1);
             self.transcript_replayed = false;
+            self.transcript_history = NativeHistory::default();
             self.transcript_task = None;
             self.queue.clear();
             self.queue_task = None;
@@ -2068,7 +2071,9 @@ impl AppState {
             return;
         };
         self.sub_transcripts.entry(doc_id.clone()).or_default();
-        let task = spawn_subagent_watch(cx, handle, doc_id.clone());
+        let history = self.sub_history.entry(doc_id.clone()).or_default();
+        history.generation = uuid::Uuid::new_v4();
+        let task = spawn_subagent_watch(cx, handle, doc_id.clone(), history.generation);
         self.sub_watch_tasks.insert(doc_id, task);
     }
 
@@ -2078,6 +2083,7 @@ impl AppState {
         self.transcript_revision = self.transcript_revision.wrapping_add(1);
         self.sub_watch_tasks.remove(doc_id);
         self.sub_transcripts.remove(doc_id);
+        self.sub_history.remove(doc_id);
         self.prepared_transcripts.remove(doc_id);
         self.transcript_baselines.remove(doc_id);
     }
@@ -2088,6 +2094,7 @@ impl AppState {
         self.prepared_transcripts.remove(&doc_id);
         self.transcript_revision = self.transcript_revision.wrapping_add(1);
         self.sub_watch_tasks.remove(&doc_id);
+        self.sub_history.remove(&doc_id);
         self.transcript_baselines.insert(
             doc_id.clone(),
             Arc::new(zuse_doc::TranscriptBaseline::capture(&entries)),
@@ -2103,6 +2110,7 @@ impl AppState {
     ) {
         self.transcript_revision = self.transcript_revision.wrapping_add(1);
         self.sub_watch_tasks.remove(&doc_id);
+        self.sub_history.remove(&doc_id);
         self.transcript_baselines
             .insert(doc_id.clone(), prepared.navigation_baseline.clone());
         self.prepared_transcripts.insert(doc_id.clone(), prepared);
@@ -2901,6 +2909,10 @@ impl AppState {
         self.context_usage = None;
         self.transcript_revision = self.transcript_revision.wrapping_add(1);
         self.transcript_replayed = false;
+        self.transcript_history = NativeHistory::default();
+        self.sub_watch_tasks.clear();
+        self.sub_transcripts.clear();
+        self.sub_history.clear();
         self.echoes.clear();
         self.pending_sends.clear();
         self.upload_progress = None;
@@ -3005,7 +3017,13 @@ impl AppState {
         let Some(handle) = self.engine.clone() else {
             return;
         };
-        self.transcript_task = Some(spawn_transcript_watch(cx, handle.clone(), chat_id.clone()));
+        self.transcript_history.generation = uuid::Uuid::new_v4();
+        self.transcript_task = Some(spawn_transcript_watch(
+            cx,
+            handle.clone(),
+            chat_id.clone(),
+            self.transcript_history.generation,
+        ));
         if handle
             .engine_info()
             .supports(zuse_protocol::capabilities::MESSAGE_QUEUE_V1)
@@ -3206,8 +3224,13 @@ impl AppState {
         self.reconcile_configuration_watch(cx);
         // Re-subscribe the transcript if a chat was already selected (reconnect path).
         if let Some(chat_id) = self.selected_chat.clone() {
-            self.transcript_task =
-                Some(spawn_transcript_watch(cx, handle.clone(), chat_id.clone()));
+            self.transcript_history.generation = uuid::Uuid::new_v4();
+            self.transcript_task = Some(spawn_transcript_watch(
+                cx,
+                handle.clone(),
+                chat_id.clone(),
+                self.transcript_history.generation,
+            ));
             if handle
                 .engine_info()
                 .supports(zuse_protocol::capabilities::MESSAGE_QUEUE_V1)
@@ -3401,6 +3424,7 @@ impl AppState {
                     chat_id: previous.clone(),
                     entries,
                     context_usage: self.context_usage,
+                    history: self.transcript_history.clone(),
                     bytes,
                 });
                 while self.transcript_cache.len() > TRANSCRIPT_CACHE_CAP
@@ -3426,6 +3450,7 @@ impl AppState {
         self.context_usage = None;
         self.transcript_revision = self.transcript_revision.wrapping_add(1);
         self.transcript_replayed = false;
+        self.transcript_history = NativeHistory::default();
         if let Some(cached) = cached {
             self.transcript_baselines.insert(
                 cached.chat_id.clone(),
@@ -3440,6 +3465,8 @@ impl AppState {
             if let Some(prepared) = cached.prepared {
                 self.prepared_transcripts.insert(cached.chat_id, prepared);
             }
+            self.transcript_history = cached.history;
+            self.transcript_history.loading = false;
             self.transcript = cached.entries;
             self.context_usage = cached.context_usage;
             self.transcript_replayed = true;
@@ -3637,7 +3664,7 @@ fn spawn_chats_watch(cx: &mut Context<AppState>, handle: EngineHandle) -> Task<(
         loop {
             let mut rx = match handle
                 .client()
-                .subscribe_scoped(methods::WATCH_CHATS, serde_json::json!({}))
+                .subscribe_scoped(methods::WATCH_CHATS, serde_json::json!({"delta":true}))
                 .await
             {
                 Ok(rx) => rx,
@@ -3650,14 +3677,20 @@ fn spawn_chats_watch(cx: &mut Context<AppState>, handle: EngineHandle) -> Task<(
                     continue;
                 }
             };
+            let mut retained = Vec::new();
             while let Some(value) = rx.recv().await {
-                let parsed: Vec<Chat> = match serde_json::from_value(value) {
-                    Ok(parsed) => parsed,
-                    Err(err) => {
-                        tracing::warn!(error = %err, "dropping malformed chats frame");
-                        continue;
-                    }
-                };
+                if let Err(error) = zuse_protocol::list_delta::apply(&mut retained, &value, "id") {
+                    tracing::warn!(error, "chat list delta desync; resubscribing");
+                    break;
+                }
+                let parsed: Vec<Chat> =
+                    match serde_json::from_value(serde_json::Value::Array(retained.clone())) {
+                        Ok(parsed) => parsed,
+                        Err(err) => {
+                            tracing::warn!(error = %err, "dropping malformed chats frame");
+                            continue;
+                        }
+                    };
                 let alive = this.update(cx, |state, cx| {
                     // Identical re-published lists skip the re-sort fan-out:
                     // watch reconciliation and a whole-shell re-render.
@@ -3840,9 +3873,17 @@ fn spawn_watch<T: DeserializeOwned + 'static>(
         // devices never arrived again — "the session never completes").
         const RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
         loop {
+            let delta = method == methods::WATCH_SESSIONS;
             let mut rx = match handle
                 .client()
-                .subscribe_scoped(method, serde_json::json!({}))
+                .subscribe_scoped(
+                    method,
+                    if delta {
+                        serde_json::json!({"delta":true})
+                    } else {
+                        serde_json::json!({})
+                    },
+                )
                 .await
             {
                 Ok(rx) => rx,
@@ -3855,7 +3896,19 @@ fn spawn_watch<T: DeserializeOwned + 'static>(
                     continue;
                 }
             };
+            let mut retained = Vec::new();
             while let Some(value) = rx.recv().await {
+                let value = if delta {
+                    if let Err(error) =
+                        zuse_protocol::list_delta::apply(&mut retained, &value, "chatId")
+                    {
+                        tracing::warn!(error, "session list delta desync; resubscribing");
+                        break;
+                    }
+                    serde_json::Value::Array(retained.clone())
+                } else {
+                    value
+                };
                 let parsed: T = match serde_json::from_value(value) {
                     Ok(parsed) => parsed,
                     Err(err) => {
@@ -3924,6 +3977,7 @@ fn spawn_transcript_watch(
     cx: &mut Context<AppState>,
     handle: EngineHandle,
     chat_id: String,
+    generation: uuid::Uuid,
 ) -> Task<()> {
     // The scoped subscription cancels even a silent server stream on drop;
     // otherwise a deselected chat would retain its protected sync slot.
@@ -3938,7 +3992,29 @@ fn spawn_transcript_watch(
         // deselected or deleted, so retrying can't outlive relevance.
         const RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
         'resubscribe: loop {
-            let params = serde_json::json!({ "chatId": chat_id, "openingTail": true });
+            let Ok(Some(seed)) = this.update(cx, |state, _| {
+                (state.selected_chat.as_deref() == Some(chat_id.as_str())
+                    && state.transcript_history.generation == generation)
+                    .then(|| {
+                        WatchSeed::capture(
+                            &state.transcript_history,
+                            &state.transcript,
+                            state.prepared_transcripts.get(&chat_id).cloned(),
+                        )
+                    })
+            }) else {
+                return;
+            };
+            let request_chat = chat_id.clone();
+            let (params, worker, resume_requested) = cx
+                .background_executor()
+                .spawn(async move { seed.prepare(&request_chat) })
+                .await;
+            let mut preparation = WatchPreparation {
+                worker: Some(worker),
+                executor: cx.background_executor().clone(),
+            };
+            let mut opening = true;
             let mut rx = match handle
                 .client()
                 .subscribe_checked(methods::WATCH_DOC_MESSAGES, params)
@@ -3954,17 +4030,19 @@ fn spawn_transcript_watch(
                     continue 'resubscribe;
                 }
             };
-            let mut preparation = WatchPreparation::new(cx.background_executor().clone());
             while let Some(value) = rx.recv().await {
+                let history = HistoryFrame::parse(&value, resume_requested);
                 let history_pending = value
                     .get("historyPending")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
+                let validation = history.clone();
                 let decoded = cx
                     .background_executor()
                     .spawn(async move {
                         let update: zuse_doc::TranscriptUpdate =
                             serde_json::from_value(value).map_err(|e| e.to_string())?;
+                        validation.validate_opening(opening, &update.frame)?;
                         let prepared = preparation.prepare(&update).map_err(|e| e.to_string())?;
                         Ok::<_, String>((update, prepared, preparation))
                     })
@@ -3982,10 +4060,14 @@ fn spawn_transcript_watch(
                     }
                 };
                 preparation = next_preparation;
+                let was_opening = opening;
+                opening = false;
                 let mut desync = false;
                 let alive = this.update(cx, |state, cx| {
                     // Guard against a stale pump racing a newer selection.
-                    if state.selected_chat.as_deref() == Some(chat_id.as_str()) {
+                    if state.selected_chat.as_deref() == Some(chat_id.as_str())
+                        && state.transcript_history.generation == generation
+                    {
                         if history_pending && state.transcript_replayed {
                             return;
                         }
@@ -3995,7 +4077,15 @@ fn spawn_transcript_watch(
                             tracing::warn!(%chat_id, error = %err, "resubscribing transcript");
                             desync = true;
                         } else {
+                            let history_changed =
+                                state.transcript_history.receive(&history, was_opening);
+                            if history.resumed {
+                                state.transcript_replayed = true;
+                            }
                             state.prepared_transcripts.insert(chat_id.clone(), prepared);
+                            if history_changed || history.resumed {
+                                cx.notify();
+                            }
                         }
                     }
                 });
@@ -4084,11 +4174,36 @@ fn spawn_subagent_watch(
     cx: &mut Context<AppState>,
     handle: EngineHandle,
     doc_id: String,
+    generation: uuid::Uuid,
 ) -> Task<()> {
     cx.spawn(async move |this, cx| {
         const RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
         'resubscribe: loop {
-            let params = serde_json::json!({ "chatId": doc_id });
+            let Ok(Some(seed)) = this.update(cx, |state, _| {
+                state
+                    .sub_history
+                    .get(&doc_id)
+                    .filter(|history| history.generation == generation)
+                    .map(|history| {
+                        WatchSeed::capture(
+                            history,
+                            state.sub_transcript(&doc_id),
+                            state.prepared_transcripts.get(&doc_id).cloned(),
+                        )
+                    })
+            }) else {
+                return;
+            };
+            let request_doc = doc_id.clone();
+            let (params, worker, resume_requested) = cx
+                .background_executor()
+                .spawn(async move { seed.prepare(&request_doc) })
+                .await;
+            let mut preparation = WatchPreparation {
+                worker: Some(worker),
+                executor: cx.background_executor().clone(),
+            };
+            let mut opening = true;
             let mut rx = match handle
                 .client()
                 .subscribe_checked(methods::WATCH_DOC_MESSAGES, params)
@@ -4104,13 +4219,15 @@ fn spawn_subagent_watch(
                     continue 'resubscribe;
                 }
             };
-            let mut preparation = WatchPreparation::new(cx.background_executor().clone());
             while let Some(value) = rx.recv().await {
+                let history = HistoryFrame::parse(&value, resume_requested);
+                let validation = history.clone();
                 let decoded = cx
                     .background_executor()
                     .spawn(async move {
                         let update: zuse_doc::TranscriptUpdate =
                             serde_json::from_value(value).map_err(|e| e.to_string())?;
+                        validation.validate_opening(opening, &update.frame)?;
                         let prepared = preparation.prepare(&update).map_err(|e| e.to_string())?;
                         Ok::<_, String>((update, prepared, preparation))
                     })
@@ -4124,9 +4241,18 @@ fn spawn_subagent_watch(
                     }
                 };
                 preparation = next_preparation;
+                let was_opening = opening;
+                opening = false;
                 let mut desync = false;
                 let alive = this.update(cx, |state, cx| {
-                    // A stale pump racing a snapshot/unwatch finds no key.
+                    // Same-doc pagination and frozen snapshots invalidate old pumps too.
+                    if !state
+                        .sub_history
+                        .get(&doc_id)
+                        .is_some_and(|h| h.generation == generation)
+                    {
+                        return;
+                    }
                     if let Some(rows) = state.sub_transcripts.get_mut(&doc_id) {
                         let frame = update.frame;
                         let text_only = is_text_append(&frame);
@@ -4136,6 +4262,11 @@ fn spawn_subagent_watch(
                             desync = true;
                         }
                         if !desync {
+                            state
+                                .sub_history
+                                .get_mut(&doc_id)
+                                .unwrap()
+                                .receive(&history, was_opening);
                             state.prepared_transcripts.insert(doc_id.clone(), prepared);
                         }
                         if !desync && let Some(baseline) = update.replay_baseline {
