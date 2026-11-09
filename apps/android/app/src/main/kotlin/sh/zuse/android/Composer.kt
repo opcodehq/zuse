@@ -53,7 +53,16 @@ fun Composer(workspace: WorkspaceViewModel) {
         rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
             uri?.let { workspace.attach(it) }
         }
-    val stopping = workspace.activeTurnId != null
+    val running = workspace.activeTurnId != null
+    // Mid-turn a written message is a follow-up, and the host queues it.
+    val hasDraft = workspace.draft.isNotBlank() || workspace.attachments.isNotEmpty()
+    val stopping = running && !hasDraft
+    val placeholder =
+        when {
+            workspace.source != null && !workspace.connected -> "Reconnecting to your computer…"
+            running -> "Send a follow-up…"
+            else -> "Ask Zuse"
+        }
     val sendEnabled =
         if (stopping) workspace.connected
         else
@@ -72,8 +81,19 @@ fun Composer(workspace: WorkspaceViewModel) {
             workspace::updateDraft,
             expanded,
             workspace.inputsReady,
+            placeholder = placeholder,
             onFocus = { focused = it },
             topContent = {
+                val context = workspace.composerContext
+                if (expanded && context != null)
+                    Text(
+                        context,
+                        Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 if (workspace.attachments.isNotEmpty())
                     Row(
                         Modifier.padding(12.dp).horizontalScroll(rememberScrollState()),
@@ -142,17 +162,21 @@ fun ComposerFrame(
     expanded: Boolean,
     enabled: Boolean = true,
     inputDescription: String = "Ask Zuse",
+    placeholder: String = "Ask Zuse",
     onFocus: (Boolean) -> Unit = {},
     topContent: @Composable () -> Unit = {},
     leadingAction: @Composable RowScope.() -> Unit,
     trailingAction: @Composable RowScope.() -> Unit,
 ) {
+    // A pill at rest; it opens into a card, and the field keeps its node throughout.
+    val radius by animateDpAsState(if (expanded) 18.dp else 22.dp, tween(180), label = "radius")
+    val shape = RoundedCornerShape(radius)
     Surface(
-        shape = RoundedCornerShape(12.dp),
+        shape = shape,
         color = MaterialTheme.colorScheme.surfaceContainer,
         modifier =
             Modifier.fillMaxWidth()
-                .border(.5.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(12.dp))
+                .border(.5.dp, MaterialTheme.colorScheme.outlineVariant, shape)
                 .animateContentSize(tween(180))
                 .semantics {
                     contentDescription = "Message composer"
@@ -197,7 +221,7 @@ fun ComposerFrame(
                         ) {
                             if (value.isEmpty())
                                 Text(
-                                    "Ask Zuse",
+                                    placeholder,
                                     style = style,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )

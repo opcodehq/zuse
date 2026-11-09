@@ -6,6 +6,7 @@ class ZuseApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         ru.noties.jlatexmath.JLatexMathAndroid.init(this)
+        sh.zuse.core.PairedNetwork.routesDirectory = filesDir.resolve("paired-routes").path
     }
 
     val uiParser by lazy { NativeUiParser(this) }

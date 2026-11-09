@@ -3,10 +3,7 @@ use crate::{RpcClient, RpcError};
 use futures::{SinkExt, StreamExt};
 use std::time::Duration;
 use tokio::sync::mpsc;
-use tokio_tungstenite::{
-    connect_async_with_config,
-    tungstenite::{Message, protocol::WebSocketConfig},
-};
+use tokio_tungstenite::tungstenite::{Message, protocol::WebSocketConfig};
 use zuse_remote::{
     MAX_RECORD_BYTES, PairedTarget, SecureChannel,
     heartbeat::{Action, Heartbeat},
@@ -35,9 +32,10 @@ async fn paired_channel(
             max_frame_size: Some(MAX_RECORD_BYTES),
             ..Default::default()
         };
-        let (mut socket, _) = connect_async_with_config(target.socket_url(), Some(config), false)
+        let mut socket = zuse_sync::dial::connect_ws_with_config(target.socket_url(), Some(config))
             .await
-            .map_err(|_| RpcError::Transport("Could not reach paired engine".into()))?;
+            .map_err(|_| RpcError::Transport("Could not reach paired engine".into()))?
+            .socket;
         let invitation = target.invitation();
         let (handshake, first) = zuse_remote::initiate(&invitation.id, &invitation.secret)
             .map_err(|_| RpcError::Transport("Could not start paired authentication".into()))?;
@@ -162,10 +160,11 @@ async fn paired_channel(
         outgoing: out_tx,
         incoming: in_rx,
         closed,
+        engine_info: None,
     })
 }
 
-async fn send<W: futures::Sink<Message> + Unpin>(
+pub(crate) async fn send<W: futures::Sink<Message> + Unpin>(
     writer: &mut W,
     message: Message,
 ) -> Result<(), ()> {
@@ -174,7 +173,7 @@ async fn send<W: futures::Sink<Message> + Unpin>(
         .map_err(|_| ())?
         .map_err(|_| ())
 }
-async fn send_records<W: futures::Sink<Message> + Unpin>(
+pub(crate) async fn send_records<W: futures::Sink<Message> + Unpin>(
     writer: &mut W,
     channel: &mut SecureChannel,
     payload: &[u8],

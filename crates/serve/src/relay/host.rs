@@ -7,10 +7,7 @@ use tokio::{
     sync::{Notify, Semaphore},
     task::JoinSet,
 };
-use tokio_tungstenite::{
-    connect_async_with_config,
-    tungstenite::{self, client::IntoClientRequest, protocol::WebSocketConfig},
-};
+use tokio_tungstenite::tungstenite::{self, client::IntoClientRequest, protocol::WebSocketConfig};
 use zuse_remote::{MAX_RECORD_BYTES, PairId, authority::Credentials};
 /// Socket counts describe broker transport, not encrypted application health.
 #[derive(Clone, Default)]
@@ -200,13 +197,14 @@ async fn worker(
                 max_frame_size: Some(MAX_RECORD_BYTES),
                 ..Default::default()
             };
-            let (mut socket, _) = tokio::time::timeout(
+            let mut socket = tokio::time::timeout(
                 Duration::from_secs(10),
-                connect_async_with_config(request, Some(config), false),
+                zuse_sync::dial::connect_ws_with_config(request, Some(config)),
             )
             .await
             .map_err(|_| ())?
-            .map_err(|_| ())?;
+            .map_err(|_| ())?
+            .socket;
             let _socket_count = metrics.track(false);
             let mut ping = tokio::time::interval(Duration::from_secs(15));
             let mut seen = tokio::time::Instant::now();

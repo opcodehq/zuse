@@ -9,6 +9,7 @@ use axum::{
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
     routing::get,
+    serve::ListenerExt,
 };
 use futures::StreamExt;
 use std::{
@@ -134,7 +135,7 @@ impl RelayBroker {
                     .await?
             }
             None => {
-                axum::serve(listener, router)
+                axum::serve(listener.tap_io(crate::no_delay), router)
                     .with_graceful_shutdown(signal)
                     .await?
             }

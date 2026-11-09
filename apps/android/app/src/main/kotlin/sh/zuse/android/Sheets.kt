@@ -344,7 +344,7 @@ fun SettingsSheet(
                                                 SettingsRow(
                                                     Icons.Outlined.Laptop,
                                                     device.label,
-                                                    device.address,
+                                                    workspace.linkSummary(device) ?: device.address,
                                                     chevron = false,
                                                 ) {
                                                     workspace.connect(Source.Device(device))

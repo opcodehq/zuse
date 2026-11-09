@@ -40,10 +40,10 @@ pub(super) async fn upgrade(
             })
         })
 }
-struct Authorized {
-    inner: Arc<dyn RpcService>,
-    credentials: Arc<Credentials>,
-    device: String,
+pub(super) struct Authorized {
+    pub(super) inner: Arc<dyn RpcService>,
+    pub(super) credentials: Arc<Credentials>,
+    pub(super) device: String,
 }
 #[async_trait::async_trait]
 impl RpcService for Authorized {
@@ -159,6 +159,42 @@ pub(crate) async fn session<S, E>(
     let Ok((mut channel, first, control)) = authenticated else {
         return;
     };
+    let heartbeat_peer = control.is_some();
+    if let Some(control) = control
+        && encrypted(&mut channel, &mut writer, &control)
+            .await
+            .is_err()
+    {
+        return;
+    }
+    let first = match first {
+        Some(first) => first,
+        None => {
+            let opened = tokio::select! { biased;
+                _ = server.shutdown.cancelled() => Err(()),
+                _ = credentials.revoked() => Err(()),
+                first = first_application(&mut channel, &mut reader, &mut writer, &credentials) => first,
+            };
+            let Ok(first) = opened else {
+                channel.close();
+                return;
+            };
+            first
+        }
+    };
+    if let Some(request) = crate::paired_session::attach_request(&first) {
+        crate::paired_session::run(
+            server,
+            device,
+            credentials,
+            channel,
+            reader,
+            writer,
+            request,
+        )
+        .await;
+        return;
+    }
     let (out_tx, mut out_rx) = mpsc::channel::<String>(16);
     let (in_tx, in_rx) = mpsc::channel::<String>(16);
     let service = Arc::new(Authorized {
@@ -171,14 +207,9 @@ pub(crate) async fn session<S, E>(
     ));
     {
         let exchange = async {
-            let mut heartbeat_peer = control.is_some();
+            let mut heartbeat_peer = heartbeat_peer;
             let mut last_encrypted = tokio::time::Instant::now();
-            if let Some(control) = control {
-                encrypted(&mut channel, &mut writer, &control).await?;
-            }
-            if let Some(first) = first {
-                in_tx.send(first).await.map_err(|_| ())?;
-            }
+            in_tx.send(first).await.map_err(|_| ())?;
             loop {
                 tokio::select! {
                     _ = tokio::time::sleep_until(last_encrypted + Duration::from_secs(90)), if heartbeat_peer => return Err(()),
@@ -218,14 +249,45 @@ pub(crate) async fn session<S, E>(
     let _ = dispatch.await;
 }
 
-async fn send<W: Sink<Message> + Unpin>(writer: &mut W, message: Message) -> Result<(), ()> {
+/// Answer heartbeats until the first application message shows which protocol
+/// this client speaks. Probes close here without ever opening a session.
+async fn first_application<R, W, E>(
+    channel: &mut SecureChannel,
+    reader: &mut R,
+    writer: &mut W,
+    credentials: &Credentials,
+) -> Result<String, ()>
+where
+    R: Stream<Item = Result<Message, E>> + Unpin,
+    W: Sink<Message> + Unpin,
+{
+    loop {
+        let bytes = tokio::time::timeout(Duration::from_secs(90), message(channel, reader, writer))
+            .await
+            .map_err(|_| ())??;
+        match zuse_remote::heartbeat::response(&bytes).map_err(|_| ())? {
+            Some(reply) => {
+                if !credentials.is_live() {
+                    return Err(());
+                }
+                encrypted(channel, writer, &reply).await?;
+            }
+            None => return String::from_utf8(bytes).map_err(|_| ()),
+        }
+    }
+}
+
+pub(super) async fn send<W: Sink<Message> + Unpin>(
+    writer: &mut W,
+    message: Message,
+) -> Result<(), ()> {
     tokio::time::timeout(Duration::from_secs(30), writer.send(message))
         .await
         .map_err(|_| ())?
         .map_err(|_| ())
 }
 
-async fn encrypted<W: Sink<Message> + Unpin>(
+pub(super) async fn encrypted<W: Sink<Message> + Unpin>(
     channel: &mut SecureChannel,
     writer: &mut W,
     payload: &[u8],

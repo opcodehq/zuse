@@ -119,6 +119,8 @@ struct Shared {
     device: String,
     pairings: zuse_remote::authority::Authority,
     slots: Arc<tokio::sync::Semaphore>,
+    sessions: Arc<zuse_serve::PairedSessions>,
+    advertised: tokio::sync::watch::Sender<Vec<zuse_remote::Route>>,
     closed: CancellationToken,
     state: Mutex<State>,
 }
@@ -146,9 +148,22 @@ impl Owner {
             device,
             pairings,
             slots,
+            sessions: Arc::default(),
+            advertised: tokio::sync::watch::Sender::new(vec![]),
             closed: CancellationToken::new(),
             state: Mutex::new(state),
         })))
+    }
+    /// Share one session table and route list with the other listeners.
+    pub fn with_paired_state(
+        mut self,
+        sessions: Arc<zuse_serve::PairedSessions>,
+        advertised: tokio::sync::watch::Sender<Vec<zuse_remote::Route>>,
+    ) -> Self {
+        let shared = Arc::get_mut(&mut self.0.0).expect("configure before sharing relay access");
+        shared.sessions = sessions;
+        shared.advertised = advertised;
+        self
     }
     pub fn control(&self) -> RelayAccess {
         self.0.clone()
@@ -201,6 +216,8 @@ impl RelayAccess {
         )?
         .with_pairings(self.0.pairings.clone(), self.0.device.clone())
         .with_pairing_slots(self.0.slots.clone())
+        .with_paired_sessions(self.0.sessions.clone())
+        .with_advertised_routes(self.0.advertised.subscribe())
         .with_shutdown_token(stop.clone());
         if persist {
             write_saved(&self.0.profile, &saved)?;

@@ -356,3 +356,24 @@ impl RenderOnce for Modal {
         .priority(3)
     }
 }
+
+/// One line naming the routes a host offers, from its direct access status.
+pub fn route_summary(status: &serde_json::Value) -> String {
+    let routes = status["routes"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let has = |kind: &str| routes.iter().any(|route| route["kind"] == kind);
+    let mut parts = vec![];
+    if has("lan") {
+        parts.push("Local network");
+    }
+    if has("tailnet") {
+        parts.push("Tailscale");
+    }
+    if parts.is_empty() {
+        "On · waiting for a network".to_owned()
+    } else {
+        format!("On · {}", parts.join(" and "))
+    }
+}

@@ -8,10 +8,10 @@ mkdir -p "$portable_dir/Sources/ZuseCore" "$portable_dir/Tests/ZuseCoreTests"
 for source in "$portable_dir"/Sources/ZuseCore/*.swift "$portable_dir"/Tests/ZuseCoreTests/*.swift; do
   [[ ! -L "$source" ]] || rm "$source"
 done
-for source in CloudGateway AccountTransport PairedTransport NativePairing CanonicalTranscript CanonicalWorkspace JSONValue ModelCatalog Transcript Diff MarkdownBlocks PairingLink ConnectionProfile ChatCreation SettingsSchema WorkspaceCatalog SessionArchive InteractionResponse WorkspaceLocation CloudLifecycle CloudClient RemoteAccess PairingHTTPDelegate RPCReply RPCClient Attachments AccountAuthorization SessionActivity ServeCommand ComputerAccess ServeConfiguration; do
+for source in CloudGateway AccountTransport PairedTransport NativePairing CanonicalTranscript CanonicalWorkspace JSONValue ModelCatalog Transcript Diff MarkdownBlocks PairingLink ConnectionProfile ChatCreation SettingsSchema WorkspaceCatalog SessionArchive InteractionResponse WorkspaceLocation CloudLifecycle CloudClient RemoteAccess PairingHTTPDelegate RPCReply RPCClient Attachments AccountAuthorization SessionActivity ServeCommand ComputerAccess ServeConfiguration ToolPresentation TranscriptPresentation; do
   ln -sf "$root/Sources/ZuseCore/$source.swift" "$portable_dir/Sources/ZuseCore/$source.swift"
 done
-for source in CloudGatewayTests AccountTransportTests TranscriptTests MarkdownBlocksTests ConnectionProfileTests ChatCreationTests SettingsSchemaTests RPCReplyTests RPCTransportTests WorkspaceCatalogTests ArchiveTests ConnectionTests CloudClientTests WorkspaceLocationTests AccountAuthorizationTests SessionActivityTests ServeCommandTests ComputerAccessTests ServeConfigurationTests; do
+for source in CloudGatewayTests AccountTransportTests TranscriptTests MarkdownBlocksTests ConnectionProfileTests ChatCreationTests SettingsSchemaTests RPCReplyTests RPCTransportTests WorkspaceCatalogTests ArchiveTests ConnectionTests CloudClientTests WorkspaceLocationTests AccountAuthorizationTests SessionActivityTests ServeCommandTests ComputerAccessTests ServeConfigurationTests ToolPresentationTests; do
   ln -sf "$root/Tests/ZuseCoreTests/$source.swift" "$portable_dir/Tests/ZuseCoreTests/$source.swift"
 done
 cat > "$portable_dir/Package.swift" <<'MANIFEST'
