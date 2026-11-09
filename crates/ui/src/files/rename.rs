@@ -350,10 +350,8 @@ impl FilesSurface {
             .child(popover::dialog_title(&theme, "Delete permanently?"))
             .child(popover::dialog_body(&theme, copy))
             .child(
-                div()
-                    .flex()
-                    .justify_end()
-                    .gap(px(8.))
+                popover::dialog_footer(&theme)
+                    .mt(px(8.))
                     .child(
                         popover::btn_ghost(
                             &theme,

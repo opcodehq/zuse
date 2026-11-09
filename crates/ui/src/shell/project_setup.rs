@@ -684,12 +684,6 @@ impl Shell {
             window.focus(&input.focus_handle(cx), cx);
         }
         let mode = setup.mode;
-        let step = match mode {
-            Mode::Choose => "choose",
-            Mode::Create => "create",
-            Mode::Clone if setup.clone_confirm => "clone-confirm",
-            Mode::Clone => "clone",
-        };
         let focus = setup.focus.clone();
         let card = command_palette::cmd::card("project-setup", &focus, viewport, &theme)
             .on_mouse_down_out(cx.listener(|this, _, _, cx| this.close_add_space(cx)))
@@ -701,23 +695,9 @@ impl Shell {
         } else {
             self.render_project_form(viewport, cx)
         };
-        // The panel's content slides in from the side the step was reached
-        // from; the header and footer stay put.
-        let travel = if mode == Mode::Choose { -8.0 } else { 8.0 };
-        let panel_body = if crate::motion::reduced_motion(cx) {
-            panel.into_any_element()
-        } else {
-            panel
-                .with_animation(
-                    SharedString::from(format!("project-step-{step}")),
-                    crate::motion::DIALOG_IN.animation(),
-                    move |el, t| el.relative().opacity(t).left(px(travel * (1.0 - t))),
-                )
-                .into_any_element()
-        };
         let card = card
             .child(header)
-            .child(command_palette::cmd::panel(&theme).child(panel_body))
+            .child(command_palette::cmd::panel(&theme).child(panel))
             .child(footer);
         Some(command_palette::palette_overlay(viewport, card))
     }

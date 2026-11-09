@@ -533,7 +533,7 @@ impl ArchivedPage {
                 "This permanently removes all conversations, Cloud files and recovery backups for this chat. This cannot be undone."
             )))
             .child(
-                div().mt(px(16.)).flex().justify_end().gap(px(8.))
+                popover::dialog_footer(&theme)
                     .child(popover::btn_ghost(&theme, &tr(cx, msg::settings::organizations_cancel), "cloud-delete-cancel")
                         .id("cloud-delete-cancel").role(gpui::Role::Button).tab_index(0).track_focus(&focus[1])
                         .on_click(cx.listener(|page, _, window, cx| page.cancel_cloud_delete(window,cx))))
@@ -824,12 +824,7 @@ impl ArchivedPage {
                     .child(popover::dialog_body(&theme, delete_all_body(count))),
             )
             .child(
-                div()
-                    .mt(px(16.0))
-                    .flex()
-                    .flex_row()
-                    .justify_end()
-                    .gap(px(8.0))
+                popover::dialog_footer(&theme)
                     .child(
                         popover::btn_ghost(
                             &theme,

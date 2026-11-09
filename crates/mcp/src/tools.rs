@@ -2088,6 +2088,7 @@ mod tests {
             updated_at: chrono::Utc::now() - chrono::Duration::minutes(10),
             last_completed_turn: None,
             running_subagents: 0,
+            awaiting_input: None,
             background_tasks: Vec::new(),
         };
         // No mid-turn capability is required for a live mailbox delivery.

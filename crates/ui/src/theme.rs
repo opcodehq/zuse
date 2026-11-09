@@ -1205,17 +1205,32 @@ impl Theme {
         }
     }
 
-    /// The composer card's small overlay shadow. It sits under a 90% fill,
-    /// so the part painted beneath the card stays imperceptible.
-    pub fn composer_glass_shadows(&self) -> Vec<gpui::BoxShadow> {
+    /// Fill of a raised, embossed control. Reserved for the few selected
+    /// states that use it (the active tab and segment); most controls are flat.
+    pub fn emboss_fill(&self) -> Hsla {
+        match self.appearance {
+            Appearance::Dark => hsla(0.0, 0.0, 0.13, 1.0),
+            Appearance::Light => hsla(0.0, 0.0, 1.0, 1.0),
+        }
+    }
+
+    /// The embossed control's lit top edge.
+    pub fn emboss_rim(&self) -> Hsla {
+        match self.appearance {
+            Appearance::Dark => hsla(0.0, 0.0, 1.0, 0.16),
+            Appearance::Light => hsla(0.0, 0.0, 1.0, 1.0),
+        }
+    }
+
+    /// The embossed control's small contact shadow.
+    pub fn emboss_shadow(&self) -> Vec<gpui::BoxShadow> {
         let alpha = match self.appearance {
-            Appearance::Dark => 0.72,
-            Appearance::Light => 0.12,
+            Appearance::Dark => 0.45,
+            Appearance::Light => 0.14,
         };
         vec![
-            gpui::BoxShadow::new(gpui::px(0.0), gpui::px(4.0), hsla(0.0, 0.0, 0.0, alpha))
-                .blur_radius(gpui::px(12.0))
-                .spread_radius(gpui::px(-4.0)),
+            gpui::BoxShadow::new(gpui::px(0.0), gpui::px(1.0), hsla(0.0, 0.0, 0.0, alpha))
+                .blur_radius(gpui::px(2.0)),
         ]
     }
 

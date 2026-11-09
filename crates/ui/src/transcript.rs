@@ -110,7 +110,7 @@ const ACTIVITY_TRUNK_X: f32 = 12.5;
 const ACTIVITY_BEND_RADIUS: f32 = 6.0;
 const ACTIVITY_BRANCH_END_X: f32 = 28.0;
 const ACTIVITY_ICON_LEFT: f32 = 32.0;
-const ACTIVITY_ICON_SIZE: f32 = 16.0;
+const ACTIVITY_ICON_SIZE: f32 = 14.0;
 const TOOL_TEXT_SIZE: f32 = 12.0;
 const TOOL_LABEL_SIZE: f32 = TOOL_TEXT_SIZE;
 const TOOL_LABEL_LINE_HEIGHT: f32 = 18.0;
@@ -10002,12 +10002,12 @@ fn input_chip(header: SharedString, resolved: bool, theme: &Theme) -> AnyElement
 /// robot for subagents and a wrench for anything unrecognized.
 fn tool_icon_path(call: &ToolCall) -> &'static str {
     match call {
-        ToolCall::Exec { .. } => crate::icons::TERMINAL,
-        ToolCall::ReadFile { .. } => crate::icons::DOCUMENT,
+        ToolCall::Exec { .. } => crate::icons::DITHER_TERMINAL,
+        ToolCall::ReadFile { .. } => crate::icons::DITHER_NOTE,
         ToolCall::WriteFile { .. } | ToolCall::EditFile { .. } | ToolCall::ApplyPatch { .. } => {
-            crate::icons::TOOL_EDIT
+            crate::icons::DITHER_PEN
         }
-        ToolCall::Search { .. } | ToolCall::Glob { .. } => crate::icons::MAGNIFER,
+        ToolCall::Search { .. } | ToolCall::Glob { .. } => crate::icons::DITHER_SEARCH,
         ToolCall::WebFetch { .. } | ToolCall::WebSearch { .. } => crate::icons::TOOL_WEB,
         ToolCall::Todo { .. } => crate::icons::TOOL_TODO,
         call if is_agent_call(call) => crate::icons::TOOL_AGENT,
@@ -15036,6 +15036,7 @@ mod tests {
                         state.sessions.push(zuse_protocol::Session {
                             last_completed_turn: None,
                             running_subagents: 0,
+                            awaiting_input: None,
                             background_tasks: Vec::new(),
                             chat_id: "chat".into(),
                             device_id: "test".into(),

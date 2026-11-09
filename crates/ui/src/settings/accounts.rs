@@ -1581,12 +1581,7 @@ impl AccountsPage {
                 .child(error_line(message.clone()))
                 .into_any_element(),
         };
-        let buttons = div()
-            .mt(px(16.0))
-            .flex()
-            .flex_row()
-            .justify_end()
-            .gap(px(8.0));
+        let buttons = popover::dialog_footer(&theme);
         let buttons = match &login.step {
             LoginStep::Browser { .. } => buttons.child(
                 action("login-cancel", widgets::ActionTone::Quiet, "Cancel")

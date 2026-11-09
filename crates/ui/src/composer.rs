@@ -11845,8 +11845,8 @@ impl Composer {
                     .tooltip(crate::settings::widgets::text_tooltip("Set up voice input"))
                     .on_click(|_, window, cx| window.dispatch_action(Box::new(SetupDictation), cx))
                     .child(
-                        crate::icons::icon(crate::icons::MICROPHONE)
-                            .size(px(15.))
+                        crate::icons::icon(crate::icons::DITHER_MIC)
+                            .size(px(14.0))
                             .text_color(theme.text_muted),
                     )
                     .into_any_element(),
@@ -11953,8 +11953,8 @@ impl Composer {
                 let scale = 1.0 - 0.75 * t;
                 el.child(
                     centered().child(
-                        crate::icons::icon(crate::icons::MICROPHONE)
-                            .size(px(18.0))
+                        crate::icons::icon(crate::icons::DITHER_MIC)
+                            .size(px(14.0))
                             .text_color(theme.text_muted.opacity(1.0 - t))
                             .with_transformation(gpui::Transformation::scale(gpui::size(
                                 scale, scale,
@@ -12282,8 +12282,8 @@ impl Composer {
                 .id("composer-stop")
                 .size(px(SEND_BUTTON_SIZE))
                 .flex_none()
+                .relative()
                 .rounded(px(7.0))
-                .bg(theme.text)
                 .flex()
                 .items_center()
                 .justify_center()
@@ -12291,7 +12291,8 @@ impl Composer {
                 .hover(|s| s.opacity(0.85))
                 .on_click(cx.listener(|this, _, _, cx| this.interrupt_selected(cx)))
                 .tooltip(crate::settings::widgets::text_tooltip("Stop"))
-                .child(div().size(px(11.0)).rounded(px(3.0)).bg(theme.bg))
+                .child(zuse_viewport::dither::fill_color(theme.text_muted, 7.0))
+                .child(div().size(px(10.0)).rounded(px(1.0)).bg(gpui::white()))
                 .into_any_element(),
             SendButtonMode::Send | SendButtonMode::Queue => {
                 // Share the submission guard with Enter, including pending
@@ -12363,7 +12364,7 @@ pub(crate) fn send_circle(
             ))
         })
         .child(
-            crate::icons::icon(crate::icons::SEND)
+            crate::icons::icon(crate::icons::DITHER_SEND)
                 .size(px(14.0))
                 .text_color(if blocked {
                     theme.text_muted
@@ -12374,7 +12375,7 @@ pub(crate) fn send_circle(
 }
 
 /// The send key's dither ink: `rgb(151 183 76)`.
-const SEND_DITHER_RGB: [u8; 3] = [151, 183, 76];
+const SEND_DITHER_RGB: [u8; 3] = zuse_viewport::dither::KEY_RGB;
 const SEND_BUTTON_RADIUS: f32 = 7.0;
 /// The Send / Stop key: a 28px square, matching the attach button.
 const SEND_BUTTON_SIZE: f32 = 28.0;
@@ -12877,8 +12878,8 @@ impl Render for Composer {
                         .items_center()
                         .justify_center()
                         .child(
-                            crate::icons::icon(crate::icons::PLUS)
-                                .size(px(16.0))
+                            crate::icons::icon(crate::icons::DITHER_PLUS)
+                                .size(px(14.0))
                                 .text_color(theme.text_muted.opacity(1.0 - voice_t))
                                 .with_transformation(gpui::Transformation::scale(gpui::size(
                                     scale, scale,
@@ -12935,8 +12936,7 @@ impl Render for Composer {
             .rounded(px(surface_radius))
             .border_1()
             .border_color(pill_border)
-            .bg(theme.composer_glass_bg())
-            .shadow(theme.composer_glass_shadows());
+            .bg(theme.composer_glass_bg());
         // The pill's bottom edge is stationary on screen (the composer sits at
         // the bottom of the shell column; growth moves the TOP edge), so the
         // toolbar pins to the bottom and only the editor grows.
@@ -13034,8 +13034,8 @@ impl Render for Composer {
                 cx.emit(ComposerEvent::WorkspaceCommand(WorkspaceCommand::Plugins));
             }))
             .child(
-                crate::icons::icon(crate::icons::SETTINGS_PLUGINS)
-                    .size(px(15.0))
+                crate::icons::icon(crate::icons::DITHER_PLUG)
+                    .size(px(14.0))
                     .text_color(motion::hover_blend(
                         &plugins_hover_key,
                         theme.text_muted,
@@ -13215,7 +13215,22 @@ impl Render for Composer {
             .children(self.render_slash_popup(&theme, cx))
             .children(self.render_emoji_popup(&theme, cx))
             .children(self.render_composer_list(&theme, cx))
-            .children(self.render_flash(&theme, cx));
+            .children(self.render_flash(&theme, cx))
+            // While the agent works, a pixel bug walks the card's top edge
+            // eating a row of pellets.
+            .when(mode == SendButtonMode::Stop, |el| {
+                el.child(
+                    div()
+                        .absolute()
+                        .top(px(-crate::arcade::PELLET_TRAIL_HEIGHT - 4.0))
+                        .left(px(surface_radius))
+                        .right(px(surface_radius))
+                        .child(crate::arcade::pellet_trail(
+                            format!("composer-trail-{}", cx.entity_id()),
+                            theme.text_muted,
+                        )),
+                )
+            });
         // The context tray: a tonal tab tucked behind the card's top edge,
         // one step narrower than the card (`w-14/15`), carrying the
         // destination and checkout chips. It reaches down under the card so
@@ -14857,6 +14872,7 @@ mod tests {
                 started_at: Some(updated),
                 updated_at: updated,
                 running_subagents: 0,
+                awaiting_input: None,
                 background_tasks: Vec::new(),
             }];
             state.selected_chat = Some("c".into());

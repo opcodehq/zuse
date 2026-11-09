@@ -3848,7 +3848,7 @@ impl Pickers {
                 if self.state.read(cx).cloud_project.is_some() {
                     crate::icons::DITHER_CLOUD
                 } else {
-                    crate::icons::MONITOR
+                    crate::icons::DITHER_MONITOR
                 },
                 device_label,
                 &theme,
@@ -3858,7 +3858,7 @@ impl Pickers {
         let project_chip = self.tray_chip(
             PickerKind::Space,
             "picker-project",
-            crate::icons::FOLDER,
+            crate::icons::DITHER_FOLDER,
             project_label,
             &theme,
             cx,

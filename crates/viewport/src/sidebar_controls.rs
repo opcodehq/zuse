@@ -433,7 +433,7 @@ impl SidebarControls {
                                         .line_height(px(16.)),
                                 ),
                         )
-                        .child(stick_meter(left as f32, used >= 0.8))
+                        .child(dither_meter(left as f32, used >= 0.8))
                         .child(ui::meta(reset).text_size(px(11.)).line_height(px(14.85))),
                 );
             }
@@ -801,24 +801,16 @@ pub fn footer_button(id: impl Into<ElementId>, label: impl Into<SharedString>) -
         .hover(|v| v.bg(s::frame_bg().opacity(0.6)))
         .focus_visible(|v| v.border_1().border_color(palette::rgb(0x89ca21)))
 }
-fn stick_meter(left: f32, warning: bool) -> Div {
-    let lit = (left / 100. * 38.).ceil() as usize;
+fn dither_meter(left: f32, warning: bool) -> Div {
     div()
+        .relative()
         .w_full()
-        .h(px(16.))
-        .flex()
-        .gap(px(2.))
-        .children((0..38).map(|i| {
-            div().flex_1().h_full().rounded(px(2.)).bg(if i < lit {
-                palette::rgb(if warning { 0xfcd34d } else { 0x89ca21 }).opacity(if warning {
-                    0.65
-                } else {
-                    0.7
-                })
-            } else {
-                palette::rgb(crate::shell::MUTED).opacity(0.16)
-            })
-        }))
+        .h(px(8.))
+        .child(crate::dither::meter(
+            left / 100.,
+            palette::rgb(if warning { 0xfcd34d } else { 0x89ca21 }).into(),
+            gpui::Hsla::from(palette::rgb(crate::shell::MUTED)).opacity(0.3),
+        ))
 }
 struct ControlTip(SharedString);
 impl Render for ControlTip {

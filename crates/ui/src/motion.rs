@@ -453,7 +453,7 @@ pub const COLLAPSE: MotionSpec = MotionSpec::new(180, EASE_OUT);
 /// morphs on a fast-starting, soft-landing curve while the canvas/transcript
 /// crossfade is staged around it. Slightly longer than a utility transition,
 /// but still short enough to acknowledge a send immediately.
-pub const NEW_THREAD_TRANSITION: MotionSpec = MotionSpec::new(420, EASE_RESORT);
+pub const NEW_THREAD_TRANSITION: MotionSpec = MotionSpec::new(240, EASE_RESORT);
 /// Diff-pane chevron rotate: 200ms (§1.11; approximated as a crossfade — gpui
 /// divs have no rotation transform at the pinned rev, same caveat as scale).
 pub const CHEVRON: MotionSpec = MotionSpec::new(200, EASE);
@@ -571,14 +571,14 @@ pub fn resize_bounce_offset(edge: ResizeEdge, raw: f32) -> f32 {
 // Element helpers (paint-layer entrances/exits)
 // ---------------------------------------------------------------------------
 
-/// Standard entrance: opacity 0→1 + translateY 4→0 over [`FADE_IN`].
-pub fn fade_in<E>(id: impl Into<ElementId>, element: E) -> AnimationElement<E>
+/// Standard entrance. Content appears in place on its first frame: page,
+/// card and pill fades read as lag, so entrances are instant. This stays the
+/// one seam for entrance motion; the id is kept for callers' stable keys.
+pub fn fade_in<E>(_id: impl Into<ElementId>, element: E) -> E
 where
     E: Styled + IntoElement + 'static,
 {
-    element.with_animation(id, FADE_IN.animation(), |el, t| {
-        el.relative().opacity(t).top(px(4.0 * (1.0 - t)))
-    })
+    element
 }
 
 /// New-thread composition entrance: opacity 0→1 while settling 10px down into
@@ -660,14 +660,13 @@ where
     })
 }
 
-/// Dialog entrance over [`DIALOG_IN`] (scale approximated with fade + 2px rise).
-pub fn dialog_in<E>(id: impl Into<ElementId>, element: E) -> AnimationElement<E>
+/// Dialog entrance. Like [`fade_in`], dialogs open instantly; a fade on
+/// every modal made simple actions feel slow.
+pub fn dialog_in<E>(_id: impl Into<ElementId>, element: E) -> E
 where
     E: Styled + IntoElement + 'static,
 {
-    element.with_animation(id, DIALOG_IN.animation(), |el, t| {
-        el.relative().opacity(t).top(px(2.0 * (1.0 - t)))
-    })
+    element
 }
 
 /// Boot-splash exit: hold 150ms, then fade out + lift 6px over 500ms.

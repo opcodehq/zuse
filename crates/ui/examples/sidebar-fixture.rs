@@ -74,7 +74,7 @@ fn main() -> anyhow::Result<()> {
                 let source = chat.source_context.as_ref().unwrap();
                 s.fixture_sidebar_change_request(zuse_protocol::CheckoutChangeRequestStatus {
                     checkout_id: source.checkout_id.clone(), device_id: chat.device_id.clone(), cwd: source.repo_root.clone(), branch: source.branch.clone(), updated_at: chrono::Utc::now(),
-                    change_request: Some(zuse_protocol::ChangeRequestSummary { provider: "github".into(), number: 412 + ix as u64, title: chat.title.clone().unwrap(), url: "https://github.com/opcodehq/zuse/pull/412".into(), state: zuse_protocol::ChangeRequestState::Open, base_ref: "main".into(), head_ref: source.branch.clone() }),
+                    change_request: Some(zuse_protocol::ChangeRequestSummary { provider: "github".into(), number: 412 + ix as u64, title: chat.title.clone().unwrap(), url: "https://github.com/opcodehq/zuse/pull/412".into(), state: zuse_protocol::ChangeRequestState::Open, base_ref: "main".into(), head_ref: source.branch.clone(), is_draft: false, review_decision: Default::default(), }),
                 });
             }
             if by_project {

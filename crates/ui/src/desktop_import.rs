@@ -633,11 +633,7 @@ impl Render for Onboarding {
             if let Some(error) = &self.error {
                 card = card.child(div().mt_3().text_color(theme.text).child(error.clone()));
             }
-            let mut buttons = div()
-                .mt_5()
-                .flex()
-                .gap_2()
-                .justify_end()
+            let mut buttons = popover::dialog_footer(&theme)
                 .child(
                     popover::btn_ghost(
                         &theme,

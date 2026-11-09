@@ -1917,6 +1917,13 @@ impl Inner {
         self.set_status_with_completion(chat_id, status, fresh_start, None);
     }
 
+    /// Record why `chat_id` is about to wait, for the status publish that follows.
+    fn note_awaiting_input(&self, chat_id: &str, kind: zuse_protocol::AwaitingInputKind) {
+        if let Some(entry) = lock(&self.statuses).get_mut(chat_id) {
+            entry.awaiting_input = Some(kind);
+        }
+    }
+
     /// Publish how many subagents of `chat_id` are streaming. A change is
     /// mirrored like any status transition (it doubles as a heartbeat); an
     /// unchanged count is a no-op, and a chat without a status row has
@@ -1998,8 +2005,12 @@ impl Inner {
                     started_at: None,
                     updated_at: now,
                     running_subagents: 0,
+                    awaiting_input: None,
                     background_tasks: Vec::new(),
                 });
+            if status != SessionStatus::AwaitingInput {
+                entry.awaiting_input = None;
+            }
             // `started_at` is the elapsed-timer base and must only ever mean
             // "this turn". Entering Working from a settled state always
             // restamps (a steer into a parked session is a NEW turn — reusing
@@ -3994,9 +4005,11 @@ async fn drive_run(
                 inner.remember_owned_harness_session(&chat_id, session_id, &run_cwd, harness_id);
                 note_fork_history_session(&doc, carried_history, session_id);
             }
-            AgentEvent::InputRequested { .. } => {
+            AgentEvent::InputRequested { questions, .. } => {
                 // Known-id guaranteed: the unknown-id twin was dropped above,
                 // before the parked gate.
+                inner
+                    .note_awaiting_input(&chat_id, zuse_protocol::AwaitingInputKind::of(questions));
                 inner.set_status(&chat_id, SessionStatus::AwaitingInput, false);
             }
             AgentEvent::InputResolved { .. } => {

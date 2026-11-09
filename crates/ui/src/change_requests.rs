@@ -124,16 +124,37 @@ pub(crate) enum ChangeRequestBadgeSurface {
     Composer,
 }
 
-/// A session's branch glyph tone: its pull request's state when it has one
-/// (open, merged, closed), else the quiet muted tone.
-pub(crate) fn branch_state_color(
+/// A session's sidebar glyph and tone. Each pull request stage has its own
+/// shape as well as its own color, so state doesn't rest on hue alone.
+pub(crate) fn branch_state_glyph(
     summary: Option<&ChangeRequestSummary>,
     theme: &Theme,
-) -> gpui::Hsla {
-    match summary.map(|summary| summary.state) {
-        Some(ChangeRequestState::Open) => ChangeRequestBadgeTone::Open.color(theme),
-        Some(ChangeRequestState::Merged) => ChangeRequestBadgeTone::Merged.color(theme),
-        Some(ChangeRequestState::Closed) | None => theme.text_muted,
+) -> (&'static str, gpui::Hsla) {
+    use zuse_protocol::ChangeRequestReviewDecision as Review;
+    let Some(summary) = summary else {
+        return (crate::icons::GIT_STATE_BRANCH, theme.text_muted);
+    };
+    match summary.state {
+        ChangeRequestState::Merged => (
+            crate::icons::GIT_STATE_MERGED,
+            ChangeRequestBadgeTone::Merged.color(theme),
+        ),
+        ChangeRequestState::Closed => (
+            crate::icons::GIT_STATE_CLOSED,
+            ChangeRequestBadgeTone::Closed.color(theme),
+        ),
+        ChangeRequestState::Open if summary.is_draft => {
+            (crate::icons::GIT_STATE_DRAFT, theme.text_muted)
+        }
+        ChangeRequestState::Open => match summary.review_decision {
+            Review::ReviewRequired | Review::ChangesRequested => {
+                (crate::icons::GIT_STATE_REVIEW, theme.warning)
+            }
+            Review::Approved | Review::Unknown => (
+                crate::icons::GIT_STATE_OPEN,
+                ChangeRequestBadgeTone::Open.color(theme),
+            ),
+        },
     }
 }
 
@@ -582,6 +603,8 @@ mod tests {
                 state: ChangeRequestState::Open,
                 base_ref: "main".into(),
                 head_ref: "feature/pr".into(),
+                is_draft: false,
+                review_decision: Default::default(),
             }),
             updated_at: Utc.timestamp_opt(1, 0).unwrap(),
         }
