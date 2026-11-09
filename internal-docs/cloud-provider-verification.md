@@ -1,5 +1,32 @@
 # Cloud verification against Boxd and Boat
 
+## November 9, 2026: adapter lifecycle on all four providers
+
+`crates/cloud/examples/provider_lifecycle_probe.rs` drives our Rust provider
+adapters directly against the staging accounts. For each provider it creates a
+computer from the newest staging managed base, waits for the installed runtime,
+writes a disk marker, sleeps and resumes, rechecks the runtime and marker, then
+deletes and confirms absence. `--runtime PATH` also uploads and runs a current
+runtime build, and environment checks record what app features need.
+
+| Provider | Create | Runtime ready | Sleep settled | Resume to runtime | Disk kept |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Boat | 0.4–0.9 s | 4.6–16.7 s | 2.0–5.6 s | 0.8 s | Yes |
+| E2B | 1.1–1.2 s | 0.8–2.7 s | 0.1 s | 0.6–0.7 s | Yes |
+| Daytona | 0.8–2.2 s | 0.1–0.2 s | 1.6–2.1 s | 0.9–1.0 s | Yes |
+
+- The bases are from October 31 (runtime 0.25.1). Runtime 0.26.0
+  (`7ae4b2179f3e`, from this branch) also runs on all three and reports its
+  capabilities. Republish each base before an end-to-end app test.
+- `sshd` and passwordless `sudo` exist on Boxd, Boat and E2B. Daytona's
+  container base has no `sshd`: the installer now adds the binary (no
+  listening service, no shared host keys), and the guest explains the gap
+  until the base is republished.
+- Daytona computers are containers, so `/proc` reports the host (48 CPUs,
+  ~395 GB). The Performance panel now reads cgroup limits when set; on
+  Daytona it reports 1 CPU and 2 GiB. VMs are unchanged.
+- Sixteen probe computers were created and all were confirmed deleted.
+
 Verified October 29, 2026 against the configured live provider accounts. Provider
 infrastructure works, but **the deployed cloud application is not ready end to
 end**. These checks do not establish working chat, credential delivery, Git setup,
