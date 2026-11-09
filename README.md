@@ -61,7 +61,22 @@ provider execution, the full archive lifecycle and cutover remain in progress.
 - `crates/protocol`, `crates/rpc`, `crates/client`: shared types, transports and client logic.
 - Focused crates own documents, synchronization, themes, Markdown, audio and previews.
 
-Rust dependencies and versions are managed in the root Cargo workspace. JavaScript is limited to provider SDK bridges and generated browser bindings.
+Rust dependencies and versions are managed in the root Cargo workspace. JavaScript is used for provider SDK bridges, generated browser bindings, and the native browser’s element-selection helper.
+
+## Native browser panel
+
+The desktop browser panel can open local previews and HTTP(S) websites. Enter a
+website address or a search term in its address bar; search terms open
+DuckDuckGo. Recent pages appear on the browser home page. Use the toolbar to
+navigate, reload, or open the current page in your default browser.
+
+On macOS, the browser toolbar also supports selecting a page element for chat
+context and opening WebKit’s developer inspector. The options menu can copy the
+URL, capture a screenshot, choose the page appearance, and clear browser cookies
+or cached data. Screenshots are saved to `~/Downloads/Zuse Screenshots`.
+Appearance **System** follows Zuse’s current theme; individual websites must
+support the chosen appearance. The developer inspector is WebKit’s, not Chrome
+DevTools. Some browser controls are currently macOS-only.
 
 ## Development
 
