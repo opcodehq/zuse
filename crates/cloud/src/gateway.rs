@@ -80,6 +80,33 @@ fn now() -> i64 {
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
+// Keep the database lease contract narrow so cancellation at an uncertain
+// commit can be exercised without weakening gateway authentication.
+#[async_trait::async_trait]
+trait LeaseControl: Send + Sync + 'static {
+    async fn gateway_lease(
+        &self,
+        workspace: &str,
+        token: &str,
+        fence: (i64, i64),
+    ) -> Result<(), ApiError>;
+    async fn release_gateway(&self, workspace: &str, token: &str);
+}
+#[async_trait::async_trait]
+impl LeaseControl for RuntimeControl {
+    async fn gateway_lease(
+        &self,
+        workspace: &str,
+        token: &str,
+        fence: (i64, i64),
+    ) -> Result<(), ApiError> {
+        RuntimeControl::gateway_lease(self, workspace, token, fence).await
+    }
+    async fn release_gateway(&self, workspace: &str, token: &str) {
+        RuntimeControl::release_gateway(self, workspace, token).await
+    }
+}
+
 impl Hub {
     pub fn permit(&self) -> Result<OwnedSemaphorePermit, ApiError> {
         self.sockets
@@ -92,6 +119,13 @@ impl Hub {
         control: Arc<RuntimeControl>,
         grant: &Grant,
     ) -> Result<Arc<SessionRoom>, ApiError> {
+        self.room_with_control(control, grant).await
+    }
+    async fn room_with_control<C: LeaseControl>(
+        &self,
+        control: Arc<C>,
+        grant: &Grant,
+    ) -> Result<Arc<SessionRoom>, ApiError> {
         let entry = {
             let mut rooms = lock(&self.rooms);
             rooms.retain(|_, entry| {
@@ -100,65 +134,73 @@ impl Hub {
             });
             rooms.entry(grant.workspace.clone()).or_default().clone()
         };
-        let mut slot = entry.lock().await;
+        let mut slot = entry.lock_owned().await;
         if let Some(room) = slot.upgrade() {
             if room.fence != (grant.generation, grant.epoch) || lock(&room.state).closed {
                 return Err(ApiError::conflict("workspace_gateway_reconnecting"));
             }
             return Ok(Arc::new(SessionRoom(room)));
         }
-        let token = uuid::Uuid::new_v4().to_string();
-        let lease_requested_at = Instant::now();
-        control
-            .gateway_lease(&grant.workspace, &token, (grant.generation, grant.epoch))
-            .await?;
-        let room = Arc::new(Room {
-            workspace: grant.workspace.clone(),
-            token,
-            fence: (grant.generation, grant.epoch),
-            lease_valid_until: Mutex::new(lease_requested_at + Duration::from_secs(9)),
-            bytes: self.bytes.clone(),
-            state: Mutex::new(State {
-                peers: HashMap::new(),
-                runtime: None,
-                closed: false,
-            }),
-        });
-        *slot = Arc::downgrade(&room);
-        let supervisor = room.clone();
+        let workspace = grant.workspace.clone();
+        let fence = (grant.generation, grant.epoch);
+        let bytes = self.bytes.clone();
+        // A disconnected upgrade must not cancel a possibly committed lease.
+        // The owned task finishes registration and starts its release owner;
+        // an unused room is then reclaimed by the existing supervisor.
         tokio::spawn(async move {
-            let mut tick = tokio::time::interval(Duration::from_secs(2));
-            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            tick.tick().await;
-            loop {
+            let token = uuid::Uuid::new_v4().to_string();
+            let lease_requested_at = Instant::now();
+            control.gateway_lease(&workspace, &token, fence).await?;
+            let room = Arc::new(Room {
+                workspace,
+                token,
+                fence,
+                lease_valid_until: Mutex::new(lease_requested_at + Duration::from_secs(9)),
+                bytes,
+                state: Mutex::new(State {
+                    peers: HashMap::new(),
+                    runtime: None,
+                    closed: false,
+                }),
+            });
+            *slot = Arc::downgrade(&room);
+            let supervisor = room.clone();
+            tokio::spawn(async move {
+                let mut tick = tokio::time::interval(Duration::from_secs(2));
+                tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
                 tick.tick().await;
-                let room = &supervisor;
-                {
-                    let mut state = lock(&room.state);
-                    if state.peers.is_empty() {
-                        state.closed = true;
+                loop {
+                    tick.tick().await;
+                    let room = &supervisor;
+                    {
+                        let mut state = lock(&room.state);
+                        if state.peers.is_empty() {
+                            state.closed = true;
+                            break;
+                        }
+                    }
+                    room.expire();
+                    let requested_at = Instant::now();
+                    let lease = tokio::time::timeout(
+                        Duration::from_secs(3),
+                        control.gateway_lease(&room.workspace, &room.token, room.fence),
+                    )
+                    .await;
+                    if !matches!(lease, Ok(Ok(()))) {
+                        room.close_all(FENCED);
                         break;
                     }
+                    *lock(&room.lease_valid_until) = requested_at + Duration::from_secs(9);
                 }
-                room.expire();
-                let requested_at = Instant::now();
-                let lease = tokio::time::timeout(
-                    Duration::from_secs(3),
-                    control.gateway_lease(&room.workspace, &room.token, room.fence),
-                )
-                .await;
-                if !matches!(lease, Ok(Ok(()))) {
-                    room.close_all(FENCED);
-                    break;
-                }
-                *lock(&room.lease_valid_until) = requested_at + Duration::from_secs(9);
-            }
-            supervisor.close_all(FENCED);
-            control
-                .release_gateway(&supervisor.workspace, &supervisor.token)
-                .await;
-        });
-        Ok(Arc::new(SessionRoom(room)))
+                supervisor.close_all(FENCED);
+                control
+                    .release_gateway(&supervisor.workspace, &supervisor.token)
+                    .await;
+            });
+            Ok(Arc::new(SessionRoom(room)))
+        })
+        .await
+        .map_err(|_| ApiError::unavailable("workspace_gateway_setup_failed"))?
     }
 }
 // Public wrapper prevents access to routing state outside the socket owner.
@@ -467,4 +509,87 @@ fn decode_legacy(payload: Payload) -> Option<Frame> {
         connection_id: connection.into(),
         payload,
     })
+}
+
+#[cfg(test)]
+mod lease_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    #[derive(Default)]
+    struct Lease {
+        owner: Mutex<Option<String>>,
+        claims: AtomicUsize,
+        committed: tokio::sync::Notify,
+        reply: tokio::sync::Notify,
+        released: tokio::sync::Notify,
+    }
+    #[async_trait::async_trait]
+    impl LeaseControl for Lease {
+        async fn gateway_lease(&self, _: &str, token: &str, _: (i64, i64)) -> Result<(), ApiError> {
+            {
+                let mut owner = lock(&self.owner);
+                if let Some(held) = owner.as_deref() {
+                    return if held == token {
+                        Ok(())
+                    } else {
+                        Err(ApiError::unavailable("workspace_gateway_owned_elsewhere"))
+                    };
+                }
+                *owner = Some(token.to_owned());
+                self.claims.fetch_add(1, Ordering::SeqCst);
+            }
+            // Database committed; its response has not reached the caller.
+            self.committed.notify_one();
+            self.reply.notified().await;
+            Ok(())
+        }
+        async fn release_gateway(&self, _: &str, token: &str) {
+            let mut owner = lock(&self.owner);
+            assert_eq!(owner.as_deref(), Some(token));
+            *owner = None;
+            self.released.notify_one();
+        }
+    }
+    #[tokio::test]
+    async fn canceled_upgrade_finishes_uncertain_lease_and_reuses_then_releases_it() {
+        let hub = Arc::new(Hub::default());
+        let lease = Arc::new(Lease::default());
+        let grant = Grant {
+            workspace: "test-workspace".into(),
+            generation: 1,
+            epoch: 1,
+            runtime: false,
+            protocol: zuse_protocol::cloud_gateway::RUST_PROTOCOL.into(),
+            actor: "test-user".into(),
+            permission: "edit".into(),
+            expires_at: now() + 60_000,
+        };
+        let pending = tokio::spawn({
+            let hub = hub.clone();
+            let lease = lease.clone();
+            let grant = grant.clone();
+            async move { hub.room_with_control(lease, &grant).await }
+        });
+        lease.committed.notified().await;
+        pending.abort();
+        assert!(matches!(pending.await,Err(error) if error.is_cancelled()));
+        lease.reply.notify_one();
+        let room = tokio::time::timeout(
+            Duration::from_secs(3),
+            hub.room_with_control(lease.clone(), &grant),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            lease.claims.load(Ordering::SeqCst),
+            1,
+            "a canceled upgrade must not orphan a lease and force a competing owner"
+        );
+        drop(room);
+        tokio::time::timeout(Duration::from_secs(3), lease.released.notified())
+            .await
+            .expect("unused room must release its lease");
+        assert!(lock(&lease.owner).is_none());
+    }
 }

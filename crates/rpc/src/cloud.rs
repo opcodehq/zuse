@@ -73,6 +73,15 @@ fn request(
     );
     Ok(request)
 }
+fn handshake_error(error: &tokio_tungstenite::tungstenite::Error) -> RpcError {
+    if let tokio_tungstenite::tungstenite::Error::Http(response) = error {
+        let status = response.status();
+        if status.is_server_error() || status.as_u16() == 429 || status.as_u16() == 409 {
+            return RpcError::Transport("Cloud gateway is temporarily unavailable".into());
+        }
+    }
+    rejected()
+}
 async fn dial(
     grant: &Grant,
     workspace: &str,
@@ -92,7 +101,7 @@ async fn dial(
     )
     .await
     .map_err(|_| RpcError::Transport("Cloud gateway connection timed out".into()))?
-    .map_err(|_| rejected())?;
+    .map_err(|error| handshake_error(&error))?;
     if response
         .headers()
         .get("sec-websocket-protocol")
@@ -270,4 +279,38 @@ pub async fn serve_guest(
     peers.clear();
     let _ = tokio::time::timeout(Duration::from_secs(1), socket.close(None)).await;
     Ok(())
+}
+
+#[cfg(test)]
+mod handshake_tests {
+    use super::*;
+    #[test]
+    fn temporary_gateway_statuses_do_not_claim_credentials_were_rejected() {
+        for status in [409, 429, 500, 503, 504] {
+            let error = tokio_tungstenite::tungstenite::Error::Http(
+                tokio_tungstenite::tungstenite::http::Response::builder()
+                    .status(status)
+                    .body(None)
+                    .unwrap(),
+            );
+            assert!(
+                handshake_error(&error)
+                    .to_string()
+                    .contains("temporarily unavailable")
+            );
+        }
+        for status in [401, 403] {
+            let error = tokio_tungstenite::tungstenite::Error::Http(
+                tokio_tungstenite::tungstenite::http::Response::builder()
+                    .status(status)
+                    .body(None)
+                    .unwrap(),
+            );
+            assert!(
+                handshake_error(&error)
+                    .to_string()
+                    .contains("authorization failed")
+            );
+        }
+    }
 }

@@ -1423,7 +1423,11 @@ impl WorkspaceView {
                 }
                 methods::WATCH_CHATS => {
                     self.workspace_synced = true;
-                    self.chats = value.as_array().cloned().unwrap_or_default();
+                    if zuse_protocol::list_delta::apply(&mut self.chats, value, "id").is_err() {
+                        self.cancel(id);
+                        self.call(methods::WATCH_CHATS, json!({"delta":true}));
+                        return;
+                    }
                     if let Some(chat) = self
                         .cloud
                         .initial_session
@@ -1481,8 +1485,14 @@ impl WorkspaceView {
                     }
                 }
                 methods::WATCH_SESSIONS => {
-                    self.receive_session_notifications(value);
-                    self.sessions = value.as_array().cloned().unwrap_or_default()
+                    if zuse_protocol::list_delta::apply(&mut self.sessions, value, "chatId")
+                        .is_err()
+                    {
+                        self.cancel(id);
+                        self.call(methods::WATCH_SESSIONS, json!({"delta":true}));
+                        return;
+                    }
+                    self.receive_session_notifications(&Value::Array(self.sessions.clone()));
                 }
                 methods::LIST_REPOS => self.repos = value.as_array().cloned().unwrap_or_default(),
                 methods::WATCH_DEVICES => {

@@ -1869,3 +1869,6 @@ chat-chat_composer_press_esc_again_to_clear = もう一度 <part0>Esc</part0> �
 chat-worktree_fetching = 最新の { $branch } を取得しています…
 chat-worktree_creating = { $branch } からワークツリーを作成しています…
 chat-worktree_offline = リモートに接続できません · ローカルの { $branch } を使用します
+
+# Native and browser history pagination; translations remain draft.
+chat-cloud_history_load_earlier = 以前のメッセージを読み込む

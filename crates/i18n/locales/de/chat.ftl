@@ -1913,3 +1913,6 @@ chat-chat_composer_press_esc_again_to_clear = Zum Leeren erneut <part0>Esc</part
 chat-worktree_fetching = Neueste Änderungen von { $branch } werden abgerufen…
 chat-worktree_creating = Worktree wird aus { $branch } erstellt…
 chat-worktree_offline = Remote nicht erreichbar · lokales { $branch } wird verwendet
+
+# Native and browser history pagination; translations remain draft.
+chat-cloud_history_load_earlier = Frühere Nachrichten laden

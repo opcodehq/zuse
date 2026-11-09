@@ -3556,8 +3556,8 @@ impl DocHost {
             return Ok(id);
         }
         let now = now_ms();
-        let based_on = handle.doc.read_entries()?.last().map(|m| CommandBasedOn {
-            turn_id: Some(m.id.clone()),
+        let based_on = handle.doc.last_entry_id().map(|id| CommandBasedOn {
+            turn_id: Some(id),
             frontier: None,
         });
         let entry = SessionCommandEntry {

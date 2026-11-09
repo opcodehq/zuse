@@ -34,7 +34,7 @@ struct Live {
     pair: String,
     created: Instant,
     in_tx: mpsc::Sender<String>,
-    out_rx: tokio::sync::Mutex<mpsc::Receiver<String>>,
+    out_rx: tokio::sync::Mutex<mpsc::Receiver<zuse_rpc::OutputFrame>>,
     resume: Mutex<Resume>,
     /// Held by the socket currently serving this session.
     exchange: tokio::sync::Mutex<()>,
@@ -104,15 +104,18 @@ fn open(
     device: String,
     credentials: &Arc<Credentials>,
 ) -> Option<Arc<Live>> {
-    let (out_tx, out_rx) = mpsc::channel::<String>(16);
+    let (out_tx, out_rx) = mpsc::channel::<zuse_rpc::OutputFrame>(crate::SOCKET_OUTPUT_CAPACITY);
     let (in_tx, in_rx) = mpsc::channel::<String>(16);
     let service = Arc::new(Authorized {
         inner: server.service.clone(),
         credentials: credentials.clone(),
         device,
     });
-    let dispatch = AbortOnDropHandle::new(tokio::spawn(zuse_rpc::serve_connection(
-        service, out_tx, in_rx,
+    let dispatch = AbortOnDropHandle::new(tokio::spawn(zuse_rpc::serve_connection_bounded(
+        service,
+        out_tx,
+        in_rx,
+        crate::SOCKET_OUTPUT_BYTES,
     )));
     let live = Arc::new(Live {
         id: session::generate_session_id().ok()?,

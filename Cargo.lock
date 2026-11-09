@@ -514,6 +514,7 @@ dependencies = [
  "compression-core",
  "futures-io",
  "pin-project-lite",
+ "tokio",
 ]
 
 [[package]]
@@ -11035,6 +11036,7 @@ version = "0.6.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4cfcf7e2740e6fc6d4d688b4ef00650406bb94adf4731e43c096c3a19fe40840"
 dependencies = [
+ "async-compression",
  "bitflags 2.13.1",
  "bytes",
  "futures-core",
@@ -14149,6 +14151,7 @@ version = "0.26.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
+ "flate2",
  "futures",
  "libc",
  "reqwest",
@@ -14254,6 +14257,7 @@ version = "0.26.0"
 dependencies = [
  "serde",
  "serde_json",
+ "sha2",
  "similar",
  "thiserror 2.0.20",
  "zuse-protocol",
@@ -14444,6 +14448,7 @@ dependencies = [
  "async-trait",
  "axum",
  "base64 0.22.1",
+ "flate2",
  "futures",
  "rcgen",
  "reqwest",
