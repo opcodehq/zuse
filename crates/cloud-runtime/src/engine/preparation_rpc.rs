@@ -30,7 +30,11 @@ impl RpcService for PreparationRpc {
         mut params: Value,
     ) -> std::result::Result<RpcReply, RpcError> {
         if !self.sessions.agent_preparation_ready() {
-            if super::rpc_guard::blocked(method, &params) {
+            // Stop must reach a turn even while credentials are still being
+            // prepared; the engine itself gates every start, dispatch and steer.
+            let interrupt = method == methods::RELAY_COMMAND
+                && params["entry"]["payload"]["kind"] == "interrupt";
+            if !interrupt && super::rpc_guard::blocked(method, &params) {
                 return Err(RpcError::Failed("runtime_preparation_pending".into()));
             }
             if method == methods::OPEN_TERMINAL {
@@ -96,7 +100,22 @@ mod tests {
                 .await
                 .is_err()
         );
+        assert!(
+            rpc.handle(
+                methods::RELAY_COMMAND,
+                serde_json::json!({"entry":{"payload":{"kind":"run"}}})
+            )
+            .await
+            .is_err()
+        );
         assert!(calls.lock().unwrap().is_empty());
+        rpc.handle(
+            methods::RELAY_COMMAND,
+            serde_json::json!({"entry":{"payload":{"kind":"interrupt"}}}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(calls.lock().unwrap().remove(0).0, methods::RELAY_COMMAND);
         rpc.handle(
             methods::OPEN_TERMINAL,
             serde_json::json!({"chatId":"task","cwd":"/will/be/atomically/replaced"}),

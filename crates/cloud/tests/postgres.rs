@@ -2729,13 +2729,18 @@ mod runtime_engine {
             "cloud_provider_outcome_unknown"
         );
         allocation_due(&api).await;
-        assert!(
+        // One claim adopts the uncertain machine and launches it; the fixture
+        // loses that launch response too.
+        assert_eq!(
             api.control
                 .allocate_once(&provider, chrono::Utc::now().timestamp_millis())
                 .await
-                .unwrap()
+                .unwrap_err()
+                .code,
+            "cloud_provider_outcome_unknown"
         );
         assert_eq!(provider.creates.load(Ordering::SeqCst), 1);
+        assert_eq!(provider.launches.load(Ordering::SeqCst), 1);
         // An assigned source disappearing must not cause another create.
         let retained = provider.machine.lock().unwrap().take().unwrap();
         allocation_due(&api).await;
@@ -2814,7 +2819,8 @@ mod runtime_engine {
         );
         assert!(record["sealed_boot_token"].is_null());
         assert_eq!(provider.creates.load(Ordering::SeqCst), 1);
-        assert_eq!(provider.launches.load(Ordering::SeqCst), 1);
+        // The uncertain launch is redelivered unchanged to the same machine.
+        assert_eq!(provider.launches.load(Ordering::SeqCst), 2);
         let receipt: Value = sqlx::query_scalar(
             "SELECT request_config FROM api_cloud_workspaces WHERE workspace_id='ws-bob'",
         )
@@ -4095,7 +4101,9 @@ for line in sys.stdin:
         let mut recovered = guest_command(&api, &directory, &checkout, None, &log)
             .spawn()
             .unwrap();
-        wait_command_state(&api, "mailbox-receipt-gap", "applied").await;
+        // Queue admission is not proof of a terminal outcome. Cold recovery
+        // quarantines the lost receipt instead of claiming it applied.
+        wait_command_state(&api, "mailbox-receipt-gap", "outcome-unknown").await;
         let connection = api.client().await;
         let mut messages = connection
             .client

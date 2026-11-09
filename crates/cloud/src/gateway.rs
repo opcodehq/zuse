@@ -523,16 +523,21 @@ impl SessionRoom {
                         control.record_gateway_activity(&grant, now()),
                     )
                     .await;
-                    if !matches!(recorded, Ok(Ok(true))) {
-                        // The request was never forwarded. Close rather than
-                        // silently discard it; mutation retry policy stays at
-                        // the existing client layer, never blind server replay.
-                        if let Some(peer) = lock(&self.0.state).peers.get(id) {
-                            let _ = peer.close.send(Some(UNAVAILABLE));
+                    match recorded {
+                        Ok(Ok(true)) => *last = Some(Instant::now()),
+                        // Viewers, other protocols and machines that are not
+                        // ready carry no idle deadline. Forward unchanged.
+                        Ok(Ok(false)) => {}
+                        _ => {
+                            // The request was never forwarded. Close rather than
+                            // silently discard it; mutation retry policy stays at
+                            // the existing client layer, never blind server replay.
+                            if let Some(peer) = lock(&self.0.state).peers.get(id) {
+                                let _ = peer.close.send(Some(UNAVAILABLE));
+                            }
+                            return;
                         }
-                        return;
                     }
-                    *last = Some(Instant::now());
                 }
             }
         }
