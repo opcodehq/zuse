@@ -1,5 +1,5 @@
 //! FsWatchHub — one `notify` watcher shared by every subsystem that live-watches
-//! folders (diff-sync checkouts, space folders).
+//! folders (diff-sync checkouts, file trees, space folders).
 //!
 //! Every `notify::RecommendedWatcher` owns a dedicated OS thread (the FSEvents
 //! run loop on macOS, the inotify loop on Linux). One watcher per checkout and
@@ -70,6 +70,30 @@ const STREAM_RESTARTS_ON_CHANGE: bool = cfg!(target_os = "macos");
 /// and unwatching either root would strip the other. Those backends get one
 /// watcher per installed root instead, exactly as before the hub.
 const SHARED_WATCHER: bool = cfg!(any(target_os = "macos", windows));
+
+/// Maximum directories traversed before a checkout uses polling instead.
+pub const MAX_WATCH_DIRS: usize = 8_000;
+
+/// Match the native watcher's no-symlink policy. Bounded even for huge trees.
+pub(crate) fn exceeds_watch_budget(root: &Path, max_dirs: usize) -> bool {
+    let mut queue = std::collections::VecDeque::from([root.to_path_buf()]);
+    let mut seen = 0usize;
+    while let Some(directory) = queue.pop_front() {
+        let Ok(entries) = std::fs::read_dir(directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                seen += 1;
+                if seen > max_dirs {
+                    return true;
+                }
+                queue.push_back(entry.path());
+            }
+        }
+    }
+    false
+}
 
 type Handler = Arc<dyn Fn(&notify::Event) + Send + Sync>;
 
@@ -448,7 +472,7 @@ impl FsWatchHub {
     }
 
     #[cfg(test)]
-    fn installed(&self) -> HashMap<PathBuf, bool> {
+    pub(crate) fn installed(&self) -> HashMap<PathBuf, bool> {
         lock(&self.os).installed.clone()
     }
 }
@@ -468,10 +492,18 @@ fn install(
     }
     let new_watcher = || {
         let routes = routes.clone();
-        notify::recommended_watcher(move |event: notify::Result<notify::Event>| match event {
-            Ok(event) => dispatch(&routes, &event),
-            Err(err) => tracing::debug!(error = %err, "fs-watch: watcher error"),
-        })
+        notify::RecommendedWatcher::new(
+            move |event: notify::Result<notify::Event>| match event {
+                Ok(event) => dispatch(&routes, &event),
+                Err(err) => {
+                    tracing::debug!(error = %err, "fs-watch: watcher error");
+                    dispatch(&routes, &rescan_event());
+                }
+            },
+            // Match the budget walk: linked dependencies belong to another
+            // tree and must not silently multiply this checkout's OS watches.
+            notify::Config::default().with_follow_symlinks(false),
+        )
     };
     let mode = if recursive {
         notify::RecursiveMode::Recursive
@@ -635,6 +667,46 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let root = std::fs::canonicalize(tmp.path()).unwrap();
         (tmp, root)
+    }
+
+    /// Both existing and newly created directory links must remain outside
+    /// the recursive watch, matching the bounded preflight traversal.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn recursive_watch_does_not_follow_linked_dependencies() {
+        let (_tmp, root) = tree();
+        let (_external_tmp, external) = tree();
+        std::fs::create_dir_all(external.join("nested")).unwrap();
+        std::fs::write(external.join("nested/a.txt"), "before").unwrap();
+        std::os::unix::fs::symlink(&external, root.join("node_modules")).unwrap();
+        assert!(
+            !exceeds_watch_budget(&root, 0),
+            "links cost no directory watches"
+        );
+        let hub = FsWatchHub::new();
+        let (handler, mut rx) = recorder();
+        let watch = hub.watch(&root, notify::RecursiveMode::Recursive, handler);
+        hub.apply();
+        settle(&hub).await;
+        assert!(watch.is_live());
+        drain(&mut rx);
+        std::fs::write(external.join("nested/a.txt"), "after").unwrap();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(
+            !drain(&mut rx).contains(&Seen::Event),
+            "linked tree is not watched"
+        );
+        std::os::unix::fs::symlink(&external, root.join("new-link")).unwrap();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        drain(&mut rx);
+        std::fs::write(external.join("nested/a.txt"), "later").unwrap();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(
+            !drain(&mut rx).contains(&Seen::Event),
+            "new links are not followed"
+        );
+        std::fs::write(root.join("source.txt"), "source edit").unwrap();
+        expect(&mut rx, Seen::Event).await;
     }
 
     #[test]

@@ -26,6 +26,7 @@ use zuse_protocol::{
 };
 use zuse_rpc::RpcError;
 
+use crate::fs_watch::{FsWatch, FsWatchHub};
 use crate::workspace_search::{IndexState, NameKinds, normalize_name_query};
 use crate::{Repos, WorkspaceHost, WorkspaceSearch};
 
@@ -48,7 +49,7 @@ pub const MAX_PREVIEW_FILE_BYTES: u64 = 8 * 1024 * 1024;
 pub const WATCH_DEBOUNCE: Duration = Duration::from_millis(100);
 pub const WATCH_MAX_BURST: Duration = Duration::from_secs(1);
 pub const WATCH_REPAIR_INTERVAL: Duration = Duration::from_secs(120);
-pub const MAX_WATCH_DIRS: usize = 8_000;
+pub const MAX_WATCH_DIRS: usize = crate::fs_watch::MAX_WATCH_DIRS;
 const WATCH_EVENT_BUFFER: usize = 256;
 const WATCH_BROADCAST_BUFFER: usize = 64;
 
@@ -81,7 +82,7 @@ struct CheckoutWatch {
     subscribers: AtomicUsize,
     changes_tx: broadcast::Sender<WorkspaceFileChanges>,
     cancel: CancellationToken,
-    watcher: Mutex<Option<notify::RecommendedWatcher>>,
+    watcher: Mutex<Option<FsWatch>>,
     task: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
@@ -722,36 +723,29 @@ impl CheckoutWatch {
         } else {
             let callback_overflow = overflow.clone();
             let callback_notify = overflow_notify.clone();
-            notify::recommended_watcher(move |event: Result<notify::Event, notify::Error>| {
-                if event
-                    .as_ref()
-                    .is_ok_and(|event| matches!(event.kind, notify::EventKind::Access(_)))
-                {
-                    return;
-                }
-                let event = TimedWatchEvent {
-                    received_at: Instant::now(),
-                    event,
-                };
-                match event_tx.try_send(event) {
-                    Ok(()) => {}
-                    Err(mpsc::error::TrySendError::Full(_)) => {
-                        callback_overflow.store(true, Ordering::Release);
-                        callback_notify.notify_one();
+            Some(FsWatchHub::global().watch(
+                &root,
+                notify::RecursiveMode::Recursive,
+                move |event| {
+                    if matches!(event.kind, notify::EventKind::Access(_)) {
+                        return;
                     }
-                    Err(mpsc::error::TrySendError::Closed(_)) => {}
-                }
-            })
-            .ok()
-            .and_then(|mut watcher| {
-                use notify::Watcher as _;
-                watcher
-                    .watch(&root, notify::RecursiveMode::Recursive)
-                    .ok()
-                    .map(|()| watcher)
-            })
+                    let event = TimedWatchEvent {
+                        received_at: Instant::now(),
+                        event: Ok(event.clone()),
+                    };
+                    match event_tx.try_send(event) {
+                        Ok(()) => {}
+                        Err(mpsc::error::TrySendError::Full(_)) => {
+                            callback_overflow.store(true, Ordering::Release);
+                            callback_notify.notify_one();
+                        }
+                        Err(mpsc::error::TrySendError::Closed(_)) => {}
+                    }
+                },
+            ))
         };
-        let repair_only = over_budget || watcher.is_none();
+        let repair_only = over_budget;
         let watch = Arc::new(Self {
             checkout_id,
             root,
@@ -889,6 +883,9 @@ async fn watch_task(
     let mut repair = tokio::time::interval(WATCH_REPAIR_INTERVAL);
     repair.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     repair.tick().await;
+    let mut fallback = tokio::time::interval(Duration::from_secs(5));
+    fallback.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    fallback.tick().await;
     loop {
         enum Wake {
             Event(TimedWatchEvent),
@@ -899,6 +896,12 @@ async fn watch_task(
             _ = cancel.cancelled() => return,
             _ = overflow_notify.notified() => Wake::Overflow,
             _ = repair.tick() => Wake::Repair,
+            _ = fallback.tick() => {
+                let Some(watch) = watch.upgrade() else { return };
+                let live = lock(&watch.watcher).as_ref().is_some_and(FsWatch::is_live);
+                if live { continue; }
+                Wake::Repair
+            },
             event = event_rx.recv(), if !repair_only => match event {
                 Some(event) => Wake::Event(event),
                 None => return,
@@ -976,6 +979,7 @@ fn normalize_watch_events(
                 continue;
             }
         };
+        resync_required |= event.need_rescan();
         if matches!(
             event.kind,
             EventKind::Modify(ModifyKind::Name(RenameMode::Both))
@@ -1085,23 +1089,7 @@ fn is_internal_temp_wire_path(path: &str) -> bool {
 }
 
 fn exceeds_watch_budget(root: &Path) -> bool {
-    let mut queue = std::collections::VecDeque::from([root.to_path_buf()]);
-    let mut seen = 0usize;
-    while let Some(directory) = queue.pop_front() {
-        let Ok(entries) = std::fs::read_dir(directory) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            if entry.file_type().is_ok_and(|file_type| file_type.is_dir()) {
-                seen += 1;
-                if seen > MAX_WATCH_DIRS {
-                    return true;
-                }
-                queue.push_back(entry.path());
-            }
-        }
-    }
-    false
+    crate::fs_watch::exceeds_watch_budget(root, MAX_WATCH_DIRS)
 }
 
 struct CancelOnDrop(Option<Arc<AtomicBool>>);
@@ -3497,6 +3485,79 @@ mod tests {
         assert!(watch.cancel.is_cancelled());
     }
 
+    async fn await_native_attachment(subscription: &mut WorkspaceFileSubscription) {
+        // The baseline is delivered before asynchronous hub attachment. Wait
+        // for the attach rescan before testing individual native events.
+        let batch = tokio::time::timeout(Duration::from_secs(3), subscription.recv())
+            .await
+            .expect("native watch attached")
+            .expect("watch open");
+        assert!(batch.resync_required);
+        assert!(
+            lock(&subscription.watch.watcher)
+                .as_ref()
+                .unwrap()
+                .is_live()
+        );
+    }
+
+    #[test]
+    fn native_rescan_flags_reach_file_subscribers() {
+        let event =
+            notify::Event::new(notify::EventKind::Other).set_flag(notify::event::Flag::Rescan);
+        let (resync, changes) = normalize_watch_events(Path::new("/root"), vec![Ok(event)]);
+        assert!(resync);
+        assert!(changes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn file_tree_reuses_the_diff_watch_and_releases_only_its_subscription() {
+        let root = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(root.path()).unwrap();
+        let hub = FsWatchHub::global();
+        let diff = hub.watch(&root, notify::RecursiveMode::Recursive, |_| {});
+        hub.apply();
+        let watch = CheckoutWatch::start(
+            "checkout".into(),
+            root.clone(),
+            false,
+            CancellationToken::new(),
+        );
+        let mut subscription = watch.subscribe(Weak::new());
+        subscription.recv().await.unwrap();
+        await_native_attachment(&mut subscription).await;
+        assert_eq!(hub.installed().get(&root), Some(&true));
+        drop(subscription);
+        hub.apply();
+        assert!(
+            diff.is_live(),
+            "file-tree teardown must keep the diff watch"
+        );
+        assert_eq!(hub.installed().get(&root), Some(&true));
+        drop(diff);
+        hub.apply();
+        assert!(!hub.installed().contains_key(&root));
+    }
+
+    #[tokio::test]
+    async fn failed_native_watch_refreshes_file_subscribers() {
+        let tmp = tempfile::tempdir().unwrap();
+        let watch = CheckoutWatch::start(
+            "checkout".into(),
+            tmp.path().join("missing"),
+            false,
+            CancellationToken::new(),
+        );
+        let mut subscription = watch.subscribe(Weak::new());
+        subscription.recv().await.unwrap();
+        let batch = tokio::time::timeout(Duration::from_secs(7), subscription.recv())
+            .await
+            .expect("failed native watch polls")
+            .expect("watch open");
+        assert!(batch.resync_required);
+        assert!(!lock(&watch.watcher).as_ref().unwrap().is_live());
+    }
+
     #[tokio::test]
     async fn watch_streams_native_file_changes_and_stops_on_cancel() {
         let root = tempfile::tempdir().unwrap();
@@ -3509,6 +3570,7 @@ mod tests {
         );
         let mut subscription = watch.subscribe(Weak::<WorkspaceFilesInner>::new());
         subscription.recv().await.unwrap();
+        await_native_attachment(&mut subscription).await;
         std::fs::write(canonical.join("created.txt"), b"hello").unwrap();
         let batch = tokio::time::timeout(Duration::from_secs(3), subscription.recv())
             .await
@@ -3538,6 +3600,7 @@ mod tests {
         );
         let mut subscription = watch.subscribe(Weak::<WorkspaceFilesInner>::new());
         subscription.recv().await.unwrap();
+        await_native_attachment(&mut subscription).await;
 
         std::fs::remove_file(&path).unwrap();
         std::fs::write(&path, b"after").unwrap();
@@ -3579,6 +3642,7 @@ mod tests {
         );
         let mut subscription = watch.subscribe(Weak::<WorkspaceFilesInner>::new());
         subscription.recv().await.unwrap();
+        await_native_attachment(&mut subscription).await;
 
         std::fs::write(&replacement, b"after").unwrap();
         std::fs::rename(&replacement, &path).unwrap();
@@ -3617,6 +3681,7 @@ mod tests {
         );
         let mut subscription = watch.subscribe(Weak::<WorkspaceFilesInner>::new());
         subscription.recv().await.unwrap();
+        await_native_attachment(&mut subscription).await;
 
         let producer = tokio::spawn(async move {
             for value in 1..=50 {
