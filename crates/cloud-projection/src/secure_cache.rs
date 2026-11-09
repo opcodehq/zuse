@@ -1,5 +1,10 @@
-//! Optional platform credential storage for read-only cached transcript keys.
-//! An unavailable/locked store is a cache miss; keys are never written to files.
+//! Storage for the keys of cached cloud transcripts (and small cached
+//! metadata). The macOS data-protection Keychain is used when the app is
+//! entitled to it. Builds without that entitlement (every unsigned or
+//! unprovisioned build: SecItem calls fail with errSecMissingEntitlement) and
+//! other platforms keep them in a private per-user directory instead, the
+//! same protection local chats have on disk. Without this the encrypted page
+//! cache could never be opened again, and every cloud chat loaded blank.
 #[cfg(any(target_os = "macos", test))]
 mod mac {
     use std::{
@@ -89,6 +94,32 @@ mod mac {
             fields
         }
     }
+    /// Whether this process may use the data-protection Keychain at all.
+    pub fn available() -> bool {
+        static AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *AVAILABLE.get_or_init(|| {
+            let Some(service) = string("sh.zuse.keychain-probe") else {
+                return false;
+            };
+            let mut fields = base(service.0, None);
+            unsafe {
+                fields.extend([
+                    (kSecReturnData, kCFBooleanTrue),
+                    (kSecMatchLimit, kSecMatchLimitOne),
+                ]);
+            }
+            let Some(query) = dictionary(&fields) else {
+                return false;
+            };
+            let mut result = ptr::null();
+            let status = unsafe { SecItemCopyMatching(query.0, &mut result) };
+            if !result.is_null() {
+                drop(Owned(result));
+            }
+            // errSecMissingEntitlement: the process is not provisioned for it.
+            status != -34018
+        })
+    }
     pub fn read(service: &str, account: &str) -> Option<Vec<u8>> {
         let service = string(service)?;
         let account = string(account)?;
@@ -169,16 +200,130 @@ mod mac {
         }
     }
 }
+/// The per-user fallback store: one directory per service, one file per
+/// account, both named by digest. Owner-only permissions on Unix.
+mod file {
+    use std::path::PathBuf;
+    fn root() -> Option<PathBuf> {
+        if let Some(dir) = std::env::var_os("ZUSE_SECURE_CACHE_DIR") {
+            return Some(dir.into());
+        }
+        #[cfg(test)]
+        {
+            Some(std::env::temp_dir().join(format!("zuse-secure-cache-{}", std::process::id())))
+        }
+        #[cfg(not(test))]
+        {
+            let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
+            Some(PathBuf::from(home).join(".zuse/cache/keys"))
+        }
+    }
+    fn service_dir(service: &str) -> Option<PathBuf> {
+        Some(root()?.join(crate::digest(service.as_bytes())))
+    }
+    fn path(service: &str, account: &str) -> Option<PathBuf> {
+        Some(service_dir(service)?.join(crate::digest(account.as_bytes())))
+    }
+    fn private_dir(dir: &std::path::Path) -> std::io::Result<()> {
+        std::fs::create_dir_all(dir)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            for dir in [dir, dir.parent().unwrap_or(dir)] {
+                std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+            }
+        }
+        Ok(())
+    }
+    pub fn read(service: &str, account: &str) -> Option<Vec<u8>> {
+        let bytes = std::fs::read(path(service, account)?).ok()?;
+        (bytes.len() <= 65536).then_some(bytes)
+    }
+    pub fn write(service: &str, account: &str, bytes: &[u8]) {
+        if bytes.len() > 65536 {
+            return;
+        }
+        let (Some(dir), Some(path)) = (service_dir(service), path(service, account)) else {
+            return;
+        };
+        if private_dir(&dir).is_err() {
+            return;
+        }
+        // Write a private temporary file, then rename it into place.
+        let temporary = dir.join(format!(".{}.tmp", uuid_like()));
+        let written = {
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            options.open(&temporary).and_then(|mut file| {
+                use std::io::Write;
+                file.write_all(bytes)?;
+                file.sync_all()
+            })
+        };
+        if written.and_then(|()| std::fs::rename(&temporary, &path)).is_err() {
+            let _ = std::fs::remove_file(&temporary);
+        }
+    }
+    pub fn clear(service: &str, account: Option<&str>) {
+        match account {
+            Some(account) => {
+                if let Some(path) = path(service, account) {
+                    let _ = std::fs::remove_file(path);
+                }
+            }
+            None => {
+                if let Some(dir) = service_dir(service) {
+                    let _ = std::fs::remove_dir_all(dir);
+                }
+            }
+        }
+    }
+    fn uuid_like() -> String {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        format!(
+            "{}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|v| v.as_nanos())
+                .unwrap_or(0),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        )
+    }
+}
+
 #[cfg(target_os = "macos")]
-pub use mac::{clear, read, write};
-#[cfg(not(target_os = "macos"))]
-pub fn read(_: &str, _: &str) -> Option<Vec<u8>> {
-    None
+pub fn read(service: &str, account: &str) -> Option<Vec<u8>> {
+    if mac::available() {
+        mac::read(service, account)
+    } else {
+        file::read(service, account)
+    }
+}
+#[cfg(target_os = "macos")]
+pub fn write(service: &str, account: &str, bytes: &[u8]) {
+    if mac::available() {
+        mac::write(service, account, bytes)
+    } else {
+        file::write(service, account, bytes)
+    }
+}
+#[cfg(target_os = "macos")]
+pub fn clear(service: &str, account: Option<&str>) {
+    if mac::available() {
+        mac::clear(service, account)
+    } else {
+        file::clear(service, account)
+    }
 }
 #[cfg(not(target_os = "macos"))]
-pub fn write(_: &str, _: &str, _: &[u8]) {}
-#[cfg(not(target_os = "macos"))]
-pub fn clear(_: &str, _: Option<&str>) {}
+pub use file::{clear, read, write};
 
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
@@ -230,3 +375,30 @@ mod tests {
 #[cfg(all(test, not(target_os = "macos")))]
 #[path = "secure_cache_tests.rs"]
 mod ffi_tests;
+
+#[cfg(test)]
+mod file_store_tests {
+    use super::file;
+    #[test]
+    fn keys_roundtrip_per_account_and_clear_by_account_or_service() {
+        let service = format!("sh.zuse.file-store-test.{}", std::process::id());
+        assert!(file::read(&service, "a").is_none());
+        file::write(&service, "a", b"first");
+        file::write(&service, "b", b"other");
+        assert_eq!(file::read(&service, "a").as_deref(), Some(b"first".as_slice()));
+        file::write(&service, "a", b"rotated");
+        assert_eq!(file::read(&service, "a").as_deref(), Some(b"rotated".as_slice()));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let root = std::env::temp_dir().join(format!("zuse-secure-cache-{}", std::process::id()));
+            let mode = std::fs::metadata(&root).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o700, "the key store is private to its user");
+        }
+        file::clear(&service, Some("a"));
+        assert!(file::read(&service, "a").is_none());
+        assert_eq!(file::read(&service, "b").as_deref(), Some(b"other".as_slice()));
+        file::clear(&service, None);
+        assert!(file::read(&service, "b").is_none());
+    }
+}

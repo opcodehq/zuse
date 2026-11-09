@@ -177,9 +177,11 @@ impl State {
 impl CloudConversation {
     /// Platform-protected saved pages can paint while a distinct fresh read is
     /// pending. They carry no authority for controls, choices or attachment.
+    /// Runs as soon as the conversation opens, without waiting for the account
+    /// check: the engine only decrypts a page saved for the signed-in account,
+    /// and a revocation clears whatever painted.
     pub(super) fn read_provisional_history(&mut self, cx: &mut Context<Self>) {
-        if !self.authorized
-            || self.access_revoked
+        if self.access_revoked
             || self.history.fresh_received
             || self.history.provisional_read.is_some()
             || self.state.read(cx).engine().is_some()
@@ -203,8 +205,7 @@ impl CloudConversation {
                 }
                 this.history.provisional_read = None;
                 this.history.provisional_request = None;
-                if !this.authorized
-                    || this.access_revoked
+                if this.access_revoked
                     || this.history.fresh_received
                     || this.state.read(cx).engine().is_some()
                     || !this.state.read(cx).transcript.is_empty()

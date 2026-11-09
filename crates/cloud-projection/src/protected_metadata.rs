@@ -1,5 +1,5 @@
-//! Optional small native metadata snapshots in the same non-interactive platform
-//! store as provisional history keys. Never falls back to plaintext files.
+//! Optional small native metadata snapshots in the same store as provisional
+//! history keys (see `secure_cache`).
 use serde_json::{Value, json};
 use std::time::{SystemTime, UNIX_EPOCH};
 const SERVICE: &str = "sh.zuse.cloud-sidebar.catalog.v1";

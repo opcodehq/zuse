@@ -198,6 +198,8 @@ impl CloudConversation {
         };
         this.computer.metadata = initial_metadata;
         this.watch_account(cx);
+        // Paint the saved copy now; the fresh read follows the account check.
+        this.read_provisional_history(cx);
         this
     }
     #[cfg(test)]

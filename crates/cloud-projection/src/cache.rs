@@ -1,5 +1,7 @@
-//! Native ciphertext-only page cache. Keys and decrypted transcripts never reach disk.
-//! A page can only be read after a fresh authorized head supplied its decryption key.
+//! Native ciphertext-only page cache. Decrypted transcripts never reach disk;
+//! page keys live in `secure_cache` (the Keychain, or a private per-user store
+//! where the Keychain is unavailable). A cached page only paints provisionally
+//! until a fresh authorized read replaces it.
 use crate::{Head, PAGE_LIMIT, digest};
 use anyhow::{Result, ensure};
 use rusqlite::{Connection, OptionalExtension, params};
