@@ -3053,12 +3053,12 @@ impl EngineRpc {
                     .account
                     .as_ref()
                     .ok_or_else(|| RpcError::Failed("Account service is unavailable.".into()))?;
-                // Only a client on this machine can follow a loopback redirect;
-                // remote browsers confirm a device code instead.
+                // Browser sign-in only: the loopback callback lives on this
+                // machine, so a client elsewhere must sign in from here.
                 let progress = if params["browser"] == true {
                     account.sign_in_in_browser().await
                 } else {
-                    account.sign_in().await
+                    Err(crate::account::AccountError::BrowserRequired)
                 }
                 .map_err(|e| RpcError::Failed(e.to_string()))?;
                 RpcReply::value(&progress)

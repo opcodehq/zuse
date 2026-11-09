@@ -275,7 +275,9 @@ impl RpcService for Controller {
                     if last.is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(15)) { return Err(RpcError::Failed("A sign-in was just started. Use its verification link before starting another.".into())); }
                     *last = Some(std::time::Instant::now());
                 }
-                RpcReply::value(&self.account.sign_in().await.map_err(|e| RpcError::Failed(e.to_string()))?)?
+                // Device-code sign-in is gone; hosted browsers need their own
+                // redirect flow before they can sign in here.
+                return Err(RpcError::Failed(crate::account::AccountError::BrowserRequired.to_string()));
             }
             methods::CLOUD_ACCOUNT_SIGN_OUT => { self.account.sign_out().map_err(|e| RpcError::Failed(e.to_string()))?; self.closed.cancel(); RpcReply::value(&json!({"ok":true}))? }
             methods::SELECT_ORG => return self.select_organization(&params).await,

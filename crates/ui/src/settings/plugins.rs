@@ -797,12 +797,7 @@ impl PluginsCard {
                             .child(catalog_ui::title_block(
                                 theme,
                                 "Finish signing in",
-                                if login.user_code.is_empty() {
-                                    // Browser sign-in: nothing to confirm.
-                                    tr(cx, msg::providers::accounts_waiting)
-                                } else {
-                                    format!("Confirm the code {} in your browser.", login.user_code)
-                                },
+                                tr(cx, msg::providers::accounts_waiting),
                                 crate::typography::TEXT_SM,
                                 crate::typography::TEXT_XS,
                             ))

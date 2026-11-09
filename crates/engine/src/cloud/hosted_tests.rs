@@ -214,66 +214,31 @@ mod hosted_controller_tests {
         assert_eq!(controller.requests.available_permits(), 32);
     }
     #[tokio::test]
-    async fn anonymous_general_device_sign_in_uses_public_client_without_local_auth() {
-        async fn device(request: Request) -> axum::response::Response {
-            let path = request.uri().path().to_owned();
-            assert_eq!(request.method(), axum::http::Method::POST);
-            assert!(!request.headers().contains_key("authorization"));
-            let bytes = axum::body::to_bytes(request.into_body(), 4096)
-                .await
-                .unwrap();
-            let form = String::from_utf8(bytes.to_vec()).unwrap();
-            assert!(form.contains("client_id=public-staging-client"));
-            if path == "/user_management/authorize/device" {
-                return axum::Json(json!({"device_code":"private-fixture-device-grant","user_code":"TEST-CODE","verification_uri_complete":"https://identity.example/device?user_code=TEST-CODE","expires_in":600,"interval":1})).into_response();
-            }
-            assert_eq!(path, "/user_management/authenticate");
-            (
-                axum::http::StatusCode::BAD_REQUEST,
-                axum::Json(json!({"error":"authorization_pending"})),
-            )
-                .into_response()
-        }
+    async fn hosted_sign_in_never_starts_device_authorization() {
+        let requests = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = requests.clone();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let origin = format!("http://{}", listener.local_addr().unwrap());
         let task = tokio::spawn(async move {
-            axum::serve(listener, Router::new().fallback(device))
-                .await
-                .unwrap();
+            axum::serve(
+                listener,
+                Router::new().fallback(move || {
+                    seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    async { axum::http::StatusCode::NOT_FOUND }
+                }),
+            )
+            .await
+            .unwrap();
         });
         let controller = controller(&origin, "actor-a");
         controller.account.sign_out().unwrap();
-        assert!(controller.current().0.is_none());
-        assert!(
-            controller
-                .handle(methods::CLOUD_CONTEXT, json!({}))
-                .await
-                .is_err()
-        );
-        let RpcReply::Value(progress) = controller
+        let error = controller
             .handle(methods::CLOUD_ACCOUNT_SIGN_IN, json!({}))
             .await
-            .unwrap()
-        else {
-            panic!("expected public login progress")
-        };
-        assert_eq!(progress["userCode"], "TEST-CODE");
-        assert_eq!(
-            progress["url"],
-            "https://identity.example/device?user_code=TEST-CODE"
-        );
-        assert!(progress.get("device_code").is_none());
-        assert!(progress.get("access_token").is_none());
-        let RpcReply::Stream(mut status) = controller
-            .handle(methods::CLOUD_ACCOUNT_STATUS, json!({}))
-            .await
-            .unwrap()
-        else {
-            panic!("expected account status")
-        };
-        let status = status.next().await.unwrap();
-        assert!(status["user"].is_null());
-        assert_eq!(status["login"]["userCode"], "TEST-CODE");
+            .err()
+            .expect("hosted sign-in has no device fallback");
+        assert!(error.to_string().contains("Sign in from Zuse"));
+        assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 0);
         controller.account.retire();
         controller.closed.cancel();
         task.abort();

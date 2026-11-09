@@ -1,9 +1,9 @@
 //! Zuse cloud identity for hosted plugins and provider connections.
 //!
-//! Native clients on this machine sign in through the browser: AuthKit redirects
-//! back to a loopback callback and the engine redeems the code with PKCE. Remote
-//! browser clients, and machines where the callback cannot bind, use device
-//! authorization instead. Credentials stay in the engine; views receive only
+//! Sign-in is browser-only: AuthKit redirects back to a loopback callback on
+//! the engine's machine and the engine redeems the code with PKCE. There is no
+//! device-code fallback, so a misconfigured redirect fails loudly instead of
+//! silently switching flows. Credentials stay in the engine; views receive only
 //! profile and sign-in progress metadata.
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use futures::StreamExt;
@@ -45,6 +45,12 @@ pub enum AccountError {
     Storage,
     #[error("Account service URLs must be HTTPS origins.")]
     InvalidEndpoint,
+    #[error("Zuse couldn't open its local sign-in callback. Check that 127.0.0.1 is reachable, then retry.")]
+    CallbackUnavailable,
+    #[error("Sign-in is misconfigured: the identity provider rejected Zuse's http://127.0.0.1 callback. Allow it as a redirect URI for this client.")]
+    RedirectRejected,
+    #[error("Sign in from Zuse on the computer that runs this engine.")]
+    BrowserRequired,
 }
 
 /// Deliberately has no Debug implementation.
@@ -57,10 +63,6 @@ pub struct Credential {
 #[serde(rename_all = "camelCase")]
 pub struct LoginProgress {
     pub url: String,
-    /// The code to confirm on the device authorization page; empty for a
-    /// browser sign-in, which returns to this machine on its own.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub user_code: String,
     pub expires_at: i64,
 }
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -105,14 +107,6 @@ struct Inner {
 #[derive(Clone)]
 pub struct Account(Arc<Inner>);
 
-#[derive(Deserialize)]
-struct DeviceGrant {
-    device_code: String,
-    user_code: String,
-    verification_uri_complete: String,
-    expires_in: u64,
-    interval: u64,
-}
 #[derive(Deserialize)]
 struct TokenResponse {
     access_token: String,
@@ -400,16 +394,14 @@ impl Account {
 
     /// Sign in through this machine's browser: AuthKit redirects to a loopback
     /// callback and the code is redeemed with PKCE, so there is no code to
-    /// confirm. Falls back to [`Self::sign_in`] (device authorization) when the
-    /// callback cannot bind or the identity provider rejects its redirect.
-    /// Only for clients on the engine's own machine.
+    /// confirm. Only for clients on the engine's own machine.
     pub async fn sign_in_in_browser(&self) -> Result<LoginProgress, AccountError> {
         let listener = match tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await
         {
             Ok(listener) => listener,
             Err(error) => {
-                tracing::info!(%error, "account: loopback sign-in unavailable; using device authorization");
-                return self.sign_in().await;
+                tracing::warn!(%error, "account: loopback sign-in callback unavailable");
+                return Err(AccountError::CallbackUnavailable);
             }
         };
         let port = listener
@@ -448,12 +440,13 @@ impl Account {
             rejected = crate::auth::loopback_redirect_rejected(url.as_str()) => rejected,
         };
         if rejected {
-            tracing::info!("account: loopback redirect rejected; using device authorization");
-            return self.sign_in_attempt(generation, cancel).await;
+            tracing::warn!("account: identity provider rejected the loopback redirect");
+            // Surface it on the account status too, so the app shows the cause.
+            self.complete_login(generation, async { Err(AccountError::RedirectRejected) });
+            return Err(AccountError::RedirectRejected);
         }
         let progress = LoginProgress {
             url: url.into(),
-            user_code: String::new(),
             expires_at: now() + BROWSER_SIGN_IN_SECS,
         };
         self.show_login(generation, &progress)?;
@@ -552,96 +545,6 @@ impl Account {
         let tokens: TokenResponse =
             serde_json::from_value(body).map_err(|_| AccountError::InvalidResponse)?;
         self.install(tokens, generation, None)
-    }
-
-    /// Sign in with device authorization: the user confirms a code on the
-    /// identity provider's page, from any device.
-    pub async fn sign_in(&self) -> Result<LoginProgress, AccountError> {
-        let (generation, cancel) = self.begin_login()?;
-        self.sign_in_attempt(generation, cancel).await
-    }
-
-    async fn sign_in_attempt(
-        &self,
-        generation: u64,
-        cancel: CancellationToken,
-    ) -> Result<LoginProgress, AccountError> {
-        let response = tokio::select! {
-            biased;
-            _=cancel.cancelled()=>return Err(AccountError::Cancelled),
-            response=self.0.http.post(format!("{}/user_management/authorize/device",self.0.identity_url))
-                .form(&[("client_id",self.0.client_id.as_str())]).send()=>response.map_err(|_|AccountError::Unavailable)?,
-        };
-        if !response.status().is_success() {
-            return Err(AccountError::Unavailable);
-        }
-        let grant: DeviceGrant = serde_json::from_value(read_json(response).await?)
-            .map_err(|_| AccountError::InvalidResponse)?;
-        if grant.device_code.is_empty()
-            || grant.user_code.is_empty()
-            || grant.interval == 0
-            || grant.expires_in == 0
-            || grant.expires_in > 3600
-            || !grant.verification_uri_complete.starts_with("https://")
-        {
-            return Err(AccountError::InvalidResponse);
-        }
-        let verification = reqwest::Url::parse(&grant.verification_uri_complete)
-            .map_err(|_| AccountError::InvalidResponse)?;
-        if verification.scheme() != "https"
-            || verification.host_str().is_none()
-            || !verification.username().is_empty()
-            || verification.password().is_some()
-        {
-            return Err(AccountError::InvalidResponse);
-        }
-        let progress = LoginProgress {
-            url: grant.verification_uri_complete.clone(),
-            user_code: grant.user_code.clone(),
-            expires_at: now() + grant.expires_in as i64,
-        };
-        self.show_login(generation, &progress)?;
-        let account = self.clone();
-        self.complete_login(generation, async move {
-            account.poll_login(grant, generation, cancel).await
-        });
-        Ok(progress)
-    }
-
-    async fn poll_login(
-        &self,
-        grant: DeviceGrant,
-        generation: u64,
-        cancel: CancellationToken,
-    ) -> Result<(), AccountError> {
-        let deadline = now() + grant.expires_in as i64;
-        let mut interval = grant.interval.clamp(1, 60);
-        while now() < deadline {
-            tokio::select! {_ = cancel.cancelled()=>return Err(AccountError::Cancelled),_ = tokio::time::sleep(Duration::from_secs(interval))=>{}}
-            if now() >= deadline {
-                return Err(AccountError::Expired);
-            }
-            let response = tokio::select! {
-                _=cancel.cancelled()=>return Err(AccountError::Cancelled),
-                response=self.0.http.post(format!("{}/user_management/authenticate",self.0.identity_url))
-                    .form(&[("client_id",self.0.client_id.as_str()),("grant_type","urn:ietf:params:oauth:grant-type:device_code"),("device_code",grant.device_code.as_str())]).send()=>response.map_err(|_|AccountError::Unavailable)?,
-            };
-            let success = response.status().is_success();
-            let body = read_json(response).await?;
-            if success {
-                let tokens: TokenResponse =
-                    serde_json::from_value(body).map_err(|_| AccountError::InvalidResponse)?;
-                return self.install(tokens, generation, None);
-            }
-            match body["error"].as_str() {
-                Some("authorization_pending") => {}
-                Some("slow_down") => interval = (interval + 5).min(60),
-                Some("access_denied") => return Err(AccountError::Denied),
-                Some("expired_token") => return Err(AccountError::Expired),
-                _ => return Err(AccountError::Unavailable),
-            }
-        }
-        Err(AccountError::Expired)
     }
 
     fn install(
