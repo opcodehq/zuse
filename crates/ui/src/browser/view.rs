@@ -1156,11 +1156,14 @@ impl Render for BrowserSurface {
             let action = |id: &'static str, text: &'static str, primary: bool| {
                 let base = div()
                     .id(id)
-                    .h(px(28.0))
+                    .h(px(30.0))
                     .px(px(12.0))
                     .rounded(px(8.0))
                     .flex()
+                    .flex_none()
                     .items_center()
+                    .justify_center()
+                    .whitespace_nowrap()
                     .text_size(px(12.0))
                     .font_weight(gpui::FontWeight::MEDIUM)
                     .cursor_pointer()
@@ -1176,11 +1179,14 @@ impl Render for BrowserSurface {
                         .hover(|el| el.bg(crate::theme::wash(0.1)))
                 }
             };
+            // Sized by its actions: the row of buttons sets the card's width, the
+            // header spans it, and padding is even on every side.
             let notice = crate::popover::popover_card(&theme.for_popup())
-                .w(px(340.0))
-                .px(px(14.0))
-                .py(px(12.0))
-                .gap(px(12.0))
+                .min_w(px(300.0))
+                .p(px(14.0))
+                .gap(px(14.0))
+                .flex()
+                .flex_col()
                 .child(
                     div()
                         .flex()
@@ -1189,7 +1195,6 @@ impl Render for BrowserSurface {
                         .child(
                             crate::icons::icon(crate::icons::CHECK_CIRCLE)
                                 .size(px(18.0))
-                                .flex_none()
                                 .text_color(theme.success),
                         )
                         .child(
@@ -1209,9 +1214,12 @@ impl Render for BrowserSurface {
                                 .justify_center()
                                 .rounded_full()
                                 .cursor_pointer()
-                                .text_color(theme.text_muted)
-                                .hover(|el| el.bg(crate::theme::wash(0.1)).text_color(theme.text))
-                                .child(crate::icons::icon(crate::icons::CLOSE).size(px(12.0)))
+                                .hover(|el| el.bg(crate::theme::wash(0.1)))
+                                .child(
+                                    crate::icons::icon(crate::icons::CLOSE)
+                                        .size(px(12.0))
+                                        .text_color(theme.text_muted),
+                                )
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.screenshot = None;
                                     cx.notify();
@@ -1221,8 +1229,7 @@ impl Render for BrowserSurface {
                 .child(
                     div()
                         .flex()
-                        .flex_wrap()
-                        .justify_end()
+                        .items_center()
                         .gap(px(8.0))
                         .child(
                             action("browser-screenshot-copy-path", "Copy path", false).on_click(
