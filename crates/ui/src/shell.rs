@@ -16113,8 +16113,9 @@ mod tests {
 
     #[test]
     fn sidebar_drag_stays_exact_in_range_and_reduced_motion_never_nudges() {
-        let middle = sidebar_drag_sample(312.0, None, false);
-        assert_eq!(middle.width, 312.0);
+        let inside = (SIDEBAR_MIN + SIDEBAR_MAX) / 2.0;
+        let middle = sidebar_drag_sample(inside, None, false);
+        assert_eq!(middle.width, inside);
         assert_eq!(middle.edge, None);
         assert!(!middle.starts_bounce);
 

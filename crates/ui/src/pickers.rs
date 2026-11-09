@@ -7688,7 +7688,8 @@ mod tests {
         });
         let pickers = cx.new(|cx| Pickers::new(state.clone(), cx));
         pickers.update(cx, |pickers, cx| {
-            // One row per repository, named for its oldest checkout.
+            // One row per repository, named for its oldest checkout, listed
+            // alphabetically.
             let rows: Vec<(String, String)> = pickers
                 .project_rows(cx)
                 .into_iter()
@@ -7697,8 +7698,8 @@ mod tests {
             assert_eq!(
                 rows,
                 [
-                    ("zuse".into(), "repo:github.com/o/zuse".into()),
-                    ("notes".into(), "notes".into())
+                    ("notes".into(), "notes".into()),
+                    ("zuse".into(), "repo:github.com/o/zuse".into())
                 ]
             );
             // Picking it keeps the canvas on this device's checkout.
@@ -7707,7 +7708,8 @@ mod tests {
                 pickers.state.read(cx).selected_space.as_deref(),
                 Some("laptop")
             );
-            assert_eq!(pickers.selected_project_index(cx), 0);
+            // "zuse" is the second row once rows are alphabetical.
+            assert_eq!(pickers.selected_project_index(cx), 1);
             // The device picker offers only the project's checkouts; a device
             // holding two is told apart by path.
             let devices: Vec<(String, Option<String>)> = pickers
@@ -8271,17 +8273,25 @@ mod tests {
                 pickers.update(cx, |pickers, cx| {
                     let mut model = bare_model("test", "Test model");
                     model.reasoning_levels = vec![ReasoningLevel::Low, ReasoningLevel::High];
-                    model.options.push(ModelOption {
-                        id: "contextWindow".into(),
-                        label: "Context window".into(),
-                        choices: ["200k", "1m"]
-                            .map(|id| ModelOptionChoice {
-                                id: id.into(),
-                                label: id.into(),
-                            })
-                            .into(),
-                        default_choice: "200k".into(),
-                    });
+                    // Effort has its own control, so the tray lists only
+                    // options; three choices keep each a nested menu rather
+                    // than a switch.
+                    for (id, label, choices) in [
+                        ("contextWindow", "Context window", ["200k", "500k", "1m"]),
+                        ("tier", "Tier", ["low", "standard", "high"]),
+                    ] {
+                        model.options.push(ModelOption {
+                            id: id.into(),
+                            label: label.into(),
+                            choices: choices
+                                .map(|choice| ModelOptionChoice {
+                                    id: choice.into(),
+                                    label: choice.into(),
+                                })
+                                .into(),
+                            default_choice: choices[0].into(),
+                        });
+                    }
                     pickers.config.harness = Some(HarnessId::ClaudeCode);
                     pickers.harnesses =
                         Loadable::Ready(vec![descriptor(HarnessId::ClaudeCode, "Claude Code")]);
@@ -8303,10 +8313,6 @@ mod tests {
             cx.update_window(handle.into(), |_, window, cx| window.draw(cx).clear())
                 .unwrap();
             let parent = measured.get();
-            let trigger = gpui::point(
-                parent.center().x,
-                parent.bottom() - px(popover::CARD_INSET + 30.0 + popover::MENU_GAP + 15.0),
-            );
             let click = |window: &mut Window, cx: &mut App, position| {
                 window.dispatch_event(
                     gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent {
@@ -8345,23 +8351,67 @@ mod tests {
                 window.draw(cx).clear();
                 window.draw(cx).clear();
             };
+            // The tray's first trigger: probe down the card for the first row
+            // that opens a menu, then rest inside it. Effort and the tray sit
+            // at the bottom, so this stays correct as their heights change.
+            let mut probe = f32::from(parent.top());
+            let first_row = loop {
+                assert!(probe < f32::from(parent.bottom()), "no tray trigger found");
+                let at = gpui::point(parent.center().x, px(probe));
+                cx.update_window(handle.into(), |_, window, cx| hover(window, cx, at))
+                    .unwrap();
+                if pickers.read_with(cx, |pickers, _| pickers.setting_menu.is_some()) {
+                    break probe;
+                }
+                probe += 2.0;
+            };
+            let trigger = gpui::point(parent.center().x, px(first_row + 8.0));
+            // The provider rail sits inside the card's left edge, so the tray
+            // row (and the child anchored to it) starts past the card edge.
+            // Probe in from the open side for the row's actual edge.
+            let mut edge = if on_left {
+                f32::from(parent.left()) + 2.0
+            } else {
+                f32::from(parent.right()) - 2.0
+            };
+            loop {
+                assert!(
+                    edge > f32::from(parent.left()) && edge < f32::from(parent.right()),
+                    "no tray row edge found"
+                );
+                let at = gpui::point(px(edge), trigger.y);
+                cx.update_window(handle.into(), |_, window, cx| {
+                    hover(window, cx, gpui::point(px(8.0), px(8.0)));
+                    hover(window, cx, at)
+                })
+                .unwrap();
+                if pickers.read_with(cx, |pickers, _| pickers.setting_menu.is_some()) {
+                    break;
+                }
+                edge += if on_left { 2.0 } else { -2.0 };
+            }
+            let row_edge = px(edge);
             cx.update_window(handle.into(), |_, window, cx| {
+                hover(window, cx, gpui::point(px(8.0), px(8.0)));
                 hover(window, cx, trigger);
                 window.draw(cx).clear();
                 window.draw(cx).clear();
             })
             .unwrap();
             let submenu = pickers.read_with(cx, |pickers, _| {
-                assert_eq!(pickers.setting_menu, Some(ModelSetting::Reasoning));
+                assert_eq!(
+                    pickers.setting_menu,
+                    Some(ModelSetting::Option("contextWindow".into()))
+                );
                 assert_eq!(pickers.setting_on_left, on_left);
                 pickers
                     .setting_bounds
                     .expect("submenu measured after opening")
             });
             if on_left {
-                assert!(submenu.right() < parent.left());
+                assert!(submenu.right() < row_edge);
             } else {
-                assert!(submenu.left() > parent.right());
+                assert!(submenu.left() > row_edge);
             }
             // Clicking the hovered trigger dismisses its child and keeps it closed.
             cx.update_window(handle.into(), |_, window, cx| {
@@ -8388,15 +8438,18 @@ mod tests {
             // It must not steal the menu while the pointer is inside the cone.
             let diagonal = gpui::point(
                 if on_left {
-                    parent.left() + px(8.0)
+                    row_edge + px(8.0)
                 } else {
-                    parent.right() - px(8.0)
+                    row_edge - px(8.0)
                 },
                 trigger.y + px(32.0),
             );
             cx.update_window(handle.into(), |_, window, cx| {
                 hover(window, cx, diagonal);
-                assert_eq!(pickers.read(cx).setting_menu, Some(ModelSetting::Reasoning));
+                assert_eq!(
+                    pickers.read(cx).setting_menu,
+                    Some(ModelSetting::Option("contextWindow".into()))
+                );
                 assert!(pickers.read(cx).setting_hover.pending().is_some());
             })
             .unwrap();
@@ -8417,7 +8470,7 @@ mod tests {
             cx.update_window(handle.into(), |_, window, cx| {
                 assert_eq!(
                     pickers.read(cx).setting_menu,
-                    Some(ModelSetting::Reasoning),
+                    Some(ModelSetting::Option("contextWindow".into())),
                     "forward progress renews grace"
                 );
                 hover(window, cx, submenu.center());
@@ -8427,7 +8480,10 @@ mod tests {
             cx.executor().advance_clock(Duration::from_millis(400));
             cx.run_until_parked();
             pickers.read_with(cx, |pickers, _| {
-                assert_eq!(pickers.setting_menu, Some(ModelSetting::Reasoning));
+                assert_eq!(
+                    pickers.setting_menu,
+                    Some(ModelSetting::Option("contextWindow".into()))
+                );
                 assert!(pickers.setting_hover.pending().is_none());
             });
             // Resting on the sibling expresses intent to switch after grace.
@@ -8442,7 +8498,7 @@ mod tests {
             pickers.read_with(cx, |pickers, _| {
                 assert_eq!(
                     pickers.setting_menu,
-                    Some(ModelSetting::Option("contextWindow".into()))
+                    Some(ModelSetting::Option("tier".into()))
                 );
             });
             // Moving away from the cone switches immediately. A click during
@@ -8453,7 +8509,7 @@ mod tests {
                 hover(window, cx, trigger + gpui::point(px(0.0), px(32.0)));
                 assert_eq!(
                     pickers.read(cx).setting_menu,
-                    Some(ModelSetting::Option("contextWindow".into()))
+                    Some(ModelSetting::Option("tier".into()))
                 );
                 hover(window, cx, trigger);
                 hover(window, cx, diagonal);
@@ -8472,9 +8528,9 @@ mod tests {
             cx.update_window(handle.into(), |_, window, cx| hover(window, cx, trigger))
                 .unwrap();
             let gap_x = if on_left {
-                (submenu.right() + parent.left()) / 2.0
+                (submenu.right() + row_edge) / 2.0
             } else {
-                (parent.right() + submenu.left()) / 2.0
+                (row_edge + submenu.left()) / 2.0
             };
             // Leaving the safe corridor closes the child and clears its
             // trigger selection, while preserving the parent picker.
@@ -8489,7 +8545,10 @@ mod tests {
                     assert_eq!(pickers.read(cx).active, 0);
                     assert!(pickers.read(cx).is_open());
                     hover(window, cx, trigger);
-                    assert_eq!(pickers.read(cx).setting_menu, Some(ModelSetting::Reasoning));
+                    assert_eq!(
+                        pickers.read(cx).setting_menu,
+                        Some(ModelSetting::Option("contextWindow".into()))
+                    );
                 })
                 .unwrap();
             }
@@ -8514,13 +8573,19 @@ mod tests {
                 cx.run_until_parked();
                 pickers.read_with(cx, |pickers, _| {
                     assert!(pickers.is_open());
-                    assert_eq!(pickers.setting_menu, Some(ModelSetting::Reasoning));
+                    assert_eq!(
+                        pickers.setting_menu,
+                        Some(ModelSetting::Option("contextWindow".into()))
+                    );
                 });
             }
             cx.update_window(handle.into(), |_, window, cx| click(window, cx, target))
                 .unwrap();
             pickers.read_with(cx, |pickers, cx| {
-                assert_eq!(pickers.effective_reasoning(cx), Some(ReasoningLevel::Low));
+                assert_eq!(
+                    pickers.explicit_options(cx).get("contextWindow"),
+                    Some(&serde_json::json!("500k"))
+                );
                 assert!(pickers.setting_menu.is_none());
                 assert!(pickers.is_open());
             });
@@ -8536,17 +8601,19 @@ mod tests {
             pickers.read_with(cx, |pickers, _| {
                 assert_eq!(
                     pickers.setting_menu,
-                    Some(ModelSetting::Option("contextWindow".into()))
+                    Some(ModelSetting::Option("tier".into()))
                 );
                 assert!(pickers.is_open());
             });
             // Clicking the parent's search closes only the child and focuses
             // the input on that same click, rather than swallowing the press.
             cx.update_window(handle.into(), |_, window, cx| {
+                // The search field sits 10px inside the card's top edge and is
+                // 32px tall.
                 click(
                     window,
                     cx,
-                    gpui::point(parent.center().x, parent.top() + px(60.0)),
+                    gpui::point(parent.center().x, parent.top() + px(26.0)),
                 );
                 pickers.read_with(cx, |pickers, cx| {
                     assert!(pickers.setting_menu.is_none());
@@ -9098,29 +9165,35 @@ mod tests {
                 picker.pick_compact_provider(HarnessId::ClaudeCode, cx);
                 assert_eq!(picker.resolved(cx).model.as_deref(), Some("opus"));
                 assert_eq!(picker.effective_reasoning(cx), Some(ReasoningLevel::High));
-                // The list's tabs are its provider groups, in list order;
-                // starring adds a Starred tab ahead of them, holding the
-                // starred models from every provider.
+                // The list's tabs are its provider groups, the current provider
+                // (Claude) first; a starred model keeps its place in its
+                // provider's run but forms its own group.
                 picker.show_compact_models(cx);
                 assert_eq!(
                     picker.compact_groups(cx),
                     vec![
-                        (Some(HarnessId::Codex), 0),
-                        (Some(HarnessId::ClaudeCode), 2)
+                        (Some(HarnessId::ClaudeCode), 0),
+                        (Some(HarnessId::Codex), 1)
                     ]
                 );
                 picker.toggle_model_favorite(HarnessId::Codex, "gpt-a", cx);
                 assert_eq!(
                     picker.compact_groups(cx),
                     vec![
-                        (None, 0),
-                        (Some(HarnessId::Codex), 1),
-                        (Some(HarnessId::ClaudeCode), 2),
+                        (Some(HarnessId::ClaudeCode), 0),
+                        (None, 1),
+                        (Some(HarnessId::Codex), 2),
                     ]
                 );
                 let rows = picker.model_rows(cx);
                 assert_eq!(
                     (rows[0].harness, rows[0].model.id.as_str()),
+                    (HarnessId::ClaudeCode, "opus")
+                );
+                // The starred model stays in its provider's run, flagged by
+                // its own group.
+                assert_eq!(
+                    (rows[1].harness, rows[1].model.id.as_str()),
                     (HarnessId::Codex, "gpt-a")
                 );
             })
@@ -9674,7 +9747,7 @@ mod tests {
         // Case-insensitive; the length indexes into the NAME's bytes.
         assert_eq!(completion_prefix_len("Documents", "doc"), Some(3));
         assert_eq!(&"Documents"[3..], "uments");
-        assert_eq!(completion_prefix_len("zuse", "zuse"), Some(5));
+        assert_eq!(completion_prefix_len("zuse", "zuse"), Some(4));
         assert_eq!(completion_prefix_len("zuse", ""), Some(0));
         assert_eq!(completion_prefix_len("zuse", "dev"), None);
         // Longer than the name → not a prefix.

@@ -3892,7 +3892,17 @@ mod tests {
         keymap.align_desktop_defaults();
         assert_eq!(keymap.new_session, "mod-s");
         assert_eq!(keymap.save_file, "mod-shift-s");
-        assert_eq!(keymap.get(ShortcutId::Desktop(Command::ComposerStash)), "");
+        // Off macOS the stash default (Ctrl+S) collides with the kept New session
+        // binding and is cleared; on macOS it is a different key and survives.
+        let stash = if cfg!(target_os = "macos") {
+            "ctrl-s"
+        } else {
+            ""
+        };
+        assert_eq!(
+            keymap.get(ShortcutId::Desktop(Command::ComposerStash)),
+            stash
+        );
         assert!(conflicted_shortcuts(&keymap).is_empty());
         let mut restored: KeymapConfig =
             serde_json::from_value(serde_json::to_value(&keymap).unwrap()).unwrap();
