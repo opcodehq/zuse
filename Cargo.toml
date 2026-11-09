@@ -39,6 +39,7 @@ members = [
     "apps/desktop",
     "apps/cli",
     "apps/relay",
+    "apps/control",
     "apps/web",
     "crates/viewport",
     "crates/model",

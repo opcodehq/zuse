@@ -18,15 +18,6 @@ pub(super) fn panel_content_tween(current: f32, from: f32, to: f32) -> (f32, f32
     }
 }
 
-/// The surface host's half of `available`, the width the tools leave for
-/// the conversation and the host. When halves would break a minimum, the
-/// host keeps its own and the conversation keeps as much of its own as fits.
-pub(super) fn content_split(available: f32) -> f32 {
-    (available / 2.0)
-        .max(RIGHT_PANE_MIN)
-        .min((available - CHAT_PANEL_MIN).max(RIGHT_PANE_MIN))
-}
-
 /// What the Files and surface host columns paint, read before an action
 /// changes anything so the panels that stay open can ease from there.
 #[derive(Debug, Clone, Copy)]
@@ -353,31 +344,8 @@ impl Shell {
         }
     }
 
-    /// Split the space the sidebar and Files leave equally between the
-    /// conversation and the surface host. The sidebar and Files are tools:
-    /// they keep their own widths, like a navigator and an inspector, and the
-    /// content columns absorb every change. The share persists with the next
-    /// settings save, like a drag. Returns whether the surface host took one.
-    fn split_panel_widths(&mut self, cx: &App) -> bool {
-        if !matches!(self.route, Route::Chat) || self.active_chat.is_empty() {
-            return false;
-        }
-        // Split for where the columns will rest, not for a slot a closing
-        // column still holds this frame.
-        let (fit, sidebar) = self.settled_fit();
-        // Takeover spends the conversation's width on the surface host.
-        let right_open = fit.right && self.right_pane_open(cx) && !self.right_pane_expanded;
-        if !right_open {
-            return false;
-        }
-        let files = self.files_width_for(fit, sidebar, cx);
-        self.settings.right_pane_width =
-            content_split((self.viewport_width - sidebar - files).max(0.0));
-        true
-    }
-
-    /// Opening or closing a panel re-splits the width (a dragged divider
-    /// holds until then). A surface host that stays open eases from `before`
+    /// Opening or closing a panel retains the preferred surface width.
+    /// A surface host that stays open eases from `before`
     /// to its new share; `skip` is the panel the caller is opening or
     /// closing, which runs its own tween.
     pub(super) fn resplit_panels(
@@ -386,7 +354,7 @@ impl Shell {
         skip: Option<AuxiliaryPanel>,
         cx: &App,
     ) {
-        let right_open = self.split_panel_widths(cx);
+        let right_open = self.right_pane_open(cx) && !self.right_pane_expanded;
         let takeover_running = self.tween_active(self.main_takeover_tween);
         // Files keeps its own width, but a window too narrow for it beside the
         // conversation and the surface host squeezes it; ease that change too.
@@ -432,7 +400,7 @@ impl Shell {
 
     /// Double-clicking a seam restores the default layout, easing from what
     /// is on screen: the sidebar's or Files' seam brings that tool back to
-    /// its default width, and the content columns split equally again.
+    /// its default width, and the surface host returns to its default width.
     pub(super) fn reset_panel_widths(&mut self, seam: PaneResizeKind, cx: &mut Context<Self>) {
         let before = self.painted_panels(cx);
         match seam {
@@ -444,13 +412,14 @@ impl Shell {
             }
             PaneResizeKind::Right | PaneResizeKind::Terminal | PaneResizeKind::PullRequests => {}
         }
+        self.settings.right_pane_width = crate::settings::RIGHT_PANE_DEFAULT;
         self.right_edge_bounce = None;
         self.resplit_panels(before, None, cx);
     }
 
     /// A panel the window fit hides is open but off screen. Asking for it
-    /// again ranks it most recent; when that brings it back, the columns
-    /// re-split and the next frame returns it from what it paints (see
+    /// again ranks it most recent; when that brings it back, the next frame
+    /// returns it from what it paints (see
     /// [`Self::track_horizontal_fit`]). True when it came back.
     pub(super) fn promote_hidden_panel(
         &mut self,
@@ -624,28 +593,13 @@ impl Shell {
     }
 
     /// Record this frame's window width. A change is direct manipulation:
-    /// it drops width tweens and keeps the open columns equal, applied
-    /// directly so nothing lags the window edge.
-    pub(super) fn observe_viewport_width(&mut self, viewport: f32, cx: &App) {
+    /// it drops width tweens so nothing lags the window edge. Preferred
+    /// widths remain intact and are constrained by the available space.
+    pub(super) fn observe_viewport_width(&mut self, viewport: f32, _cx: &App) {
         self.viewport_resized = (self.viewport_width - viewport).abs() > 1.0;
         if self.viewport_resized {
             self.clear_panel_transitions();
         }
         self.viewport_width = viewport;
-        // Re-split directly whenever the window changed since the last
-        // split, sub-pixel steps included. Only a shown surface host outside
-        // takeover takes a share, so a chat switch, a visit to Settings or a
-        // relaunch keeps a dragged divider; panel toggles re-split on their
-        // own (see `Self::resplit_panels`).
-        let last = *self.split_viewport.get_or_insert(viewport);
-        let (fit, _) = self.settled_fit();
-        if matches!(self.route, Route::Chat)
-            && fit.right
-            && !self.right_pane_expanded
-            && (viewport - last).abs() > 0.01
-        {
-            self.split_panel_widths(cx);
-            self.split_viewport = Some(viewport);
-        }
     }
 }

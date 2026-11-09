@@ -19,6 +19,8 @@ pub(super) struct ThreadDialog {
     page: DialogPage,
     error: Option<String>,
     buttons: [FocusHandle; 4],
+    /// Where the actions menu opens: the pointer at the moment it was requested.
+    anchor: Point<Pixels>,
 }
 #[derive(Clone)]
 pub(super) enum ThreadChange {
@@ -64,6 +66,7 @@ impl WorkspaceView {
             page: DialogPage::Actions,
             error: None,
             buttons: std::array::from_fn(|_| cx.focus_handle()),
+            anchor: window.mouse_position(),
         });
         self.model_picker = false;
         self.access_picker = false;
@@ -306,21 +309,22 @@ impl WorkspaceView {
     ) {
         if event.keystroke.key == "escape" {
             self.close_thread_dialog(window, cx);
-        } else if event.keystroke.key == "tab" {
+        } else if matches!(event.keystroke.key.as_str(), "tab" | "up" | "down") {
             if let Some(dialog) = &self.thread_dialog {
+                let back = event.keystroke.modifiers.shift || event.keystroke.key == "up";
                 let mut targets = if dialog.page == DialogPage::Rename {
                     vec![self.thread_title.focus_handle(cx)]
                 } else {
                     vec![]
                 };
                 let buttons = if dialog.page == DialogPage::Actions {
-                    4
+                    3
                 } else {
                     2
                 };
                 targets.extend(dialog.buttons[..buttons].iter().cloned());
                 let at = targets.iter().position(|handle| handle.is_focused(window));
-                let next = match (at, event.keystroke.modifiers.shift) {
+                let next = match (at, back) {
                     (Some(at), true) => (at + targets.len() - 1) % targets.len(),
                     (Some(at), false) => (at + 1) % targets.len(),
                     (None, true) => targets.len() - 1,
@@ -375,6 +379,7 @@ impl WorkspaceView {
             .into_any_element()
     }
     pub(super) fn thread_dialog_view(&self, cx: &mut Context<Self>) -> AnyElement {
+        use crate::popover::{self, Kind};
         let dialog = self.thread_dialog.as_ref().unwrap();
         let chat = self.chats.iter().find(|row| {
             row["id"] == dialog.chat["id"] && row["deviceId"] == dialog.chat["deviceId"]
@@ -391,98 +396,161 @@ impl WorkspaceView {
             .unwrap_or("New thread")
             .to_owned();
         let busy = self.thread_action.is_some();
-        let heading = match dialog.page {
-            DialogPage::Actions => "Thread actions",
-            DialogPage::Rename => "Rename thread",
-            DialogPage::Delete => "Delete thread?",
-        };
-        let button = |index, name: &'static str| {
-            s::button(("thread-dialog-button", index), name)
-                .track_focus(&dialog.buttons[index])
-                .tab_index(0)
-                .opacity(if available { 1. } else { 0.45 })
-        };
         let chat_value = dialog.chat.clone();
-        let contents = match dialog.page {
-            DialogPage::Actions => column().gap_2()
-                .child(button(0, "Rename").justify_start().child(icon("pen"))
-                    .on_click(cx.listener(move |this, _, window, cx| { if !available { return; } let Some(dialog) = &mut this.thread_dialog else { return; }; dialog.page = DialogPage::Rename; window.focus(&this.thread_title.focus_handle(cx), cx); cx.notify(); })))
-                .child(button(1, if archived { "Restore thread" } else { "Archive thread" }).justify_start().child(icon("archive-minimalistic"))
-                    .on_click(cx.listener(move |this, _, _, cx| { if available { this.change_thread(chat_value.clone(), ThreadChange::Archive(!archived), cx); } })))
-                .child(button(2, "Delete thread…").justify_start().text_color(rgb(0xec9292)).child(icon("trash-bin-minimalistic"))
-                    .on_click(cx.listener(move |this, _, window, cx| { if !available { return; } let Some(dialog) = &mut this.thread_dialog else { return; }; dialog.page = DialogPage::Delete; window.focus(&dialog.buttons[0], cx); cx.notify(); })))
-                .child(button(3, "Close").opacity(if busy { 0.45 } else { 1. })
-                    .on_click(cx.listener(|this, _, window, cx| this.close_thread_dialog(window, cx)))).into_any_element(),
-            DialogPage::Rename => column().gap_3()
-                .child(s::field().h(px(36.)).child(self.thread_title.clone()))
-                .child(row().justify_end().gap_2()
-                    .child(button(0, "Cancel").opacity(if busy { 0.45 } else { 1. }).on_click(cx.listener(|this, _, window, cx| this.close_thread_dialog(window, cx))))
-                    .child(button(1, if busy { "Saving…" } else { "Save name" }).on_click(cx.listener(move |this, _, _, cx| { if available { this.commit_thread_rename(cx); } })))).into_any_element(),
-            DialogPage::Delete => column().gap_3()
-                .child(s::description_text(tr(cx, msg::native::remove_this_thread_from_the_workspace_this_cannot_be_undone_here_project_files_are_kept)))
-                .child(row().justify_end().gap_2()
-                    .child(button(0, "Cancel").opacity(if busy { 0.45 } else { 1. }).on_click(cx.listener(|this, _, window, cx| this.close_thread_dialog(window, cx))))
-                    .child(button(1, if busy { "Deleting…" } else { "Delete thread" }).text_color(rgb(0xec9292))
-                        .on_click(cx.listener(move |this, _, _, cx| { if available { this.change_thread(chat_value.clone(), ThreadChange::Delete, cx); } })))).into_any_element(),
+        let notice = if !self.connected {
+            Some(tr(cx, msg::native::reconnect_to_manage_this_thread).to_string())
+        } else if chat.is_none() {
+            Some(tr(cx, msg::native::this_thread_is_no_longer_in_the_workspace).to_string())
+        } else {
+            dialog.error.clone()
         };
-        div()
-            .absolute()
-            .inset_0()
-            .occlude()
-            .flex()
-            .items_center()
-            .justify_center()
-            .p_4()
-            .bg(black().opacity(0.55))
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
-            .child(
-                column()
-                    .id("thread-dialog")
-                    .role(Role::Dialog)
-                    .aria_label(heading)
+        if dialog.page == DialogPage::Actions {
+            let item = |index: usize, glyph, name, destructive| {
+                popover::item(("thread-dialog-button", index), glyph, name, destructive)
+                    .track_focus(&dialog.buttons[index])
+                    .when(!available, |d| d.opacity(0.45))
+            };
+            let menu =
+                popover::menu("thread-dialog", 200.)
+                    .aria_label("Thread actions")
                     .track_focus(&self.thread_dialog_focus)
                     .on_key_down(cx.listener(Self::thread_dialog_key))
-                    .w(px(400.))
-                    .max_w_full()
-                    .rounded(px(12.))
-                    .border_1()
-                    .border_color(rgb(BORDER))
-                    .bg(rgb(BG))
-                    .p_4()
-                    .gap_3()
-                    .shadow_lg()
-                    .child(
-                        div()
-                            .text_size(px(16.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(rgb(TEXT))
-                            .child(heading),
+                    .on_mouse_down_out(
+                        cx.listener(|this, _, window, cx| this.close_thread_dialog(window, cx)),
                     )
+                    .child(item(0, "pen", "Rename", false).on_click(cx.listener(
+                        move |this, _, window, cx| {
+                            if !available {
+                                return;
+                            }
+                            let Some(dialog) = &mut this.thread_dialog else {
+                                return;
+                            };
+                            dialog.page = DialogPage::Rename;
+                            window.focus(&this.thread_title.focus_handle(cx), cx);
+                            cx.notify();
+                        },
+                    )))
                     .child(
-                        div()
-                            .text_size(px(12.))
-                            .text_color(rgb(MUTED))
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .child(title),
+                        item(
+                            1,
+                            "archive-minimalistic",
+                            if archived { "Restore" } else { "Archive" },
+                            false,
+                        )
+                        .on_click(cx.listener({
+                            let chat = chat_value.clone();
+                            move |this, _, window, cx| {
+                                if available {
+                                    this.change_thread(
+                                        chat.clone(),
+                                        ThreadChange::Archive(!archived),
+                                        cx,
+                                    );
+                                    this.close_thread_dialog(window, cx);
+                                }
+                            }
+                        })),
                     )
-                    .child(contents)
-                    .when(!self.connected, |view| {
-                        view.child(s::description_text(tr(
-                            cx,
-                            msg::native::reconnect_to_manage_this_thread,
-                        )))
-                    })
-                    .when(self.connected && chat.is_none(), |view| {
-                        view.child(s::description_text(tr(
-                            cx,
-                            msg::native::this_thread_is_no_longer_in_the_workspace,
-                        )))
-                    })
-                    .when_some(dialog.error.clone(), |view, error| {
-                        view.child(s::description_text(error).text_color(rgb(0xec9292)))
+                    .child(popover::separator())
+                    .child(item(2, "trash-bin-minimalistic", "Delete…", true).on_click(
+                        cx.listener(move |this, _, window, cx| {
+                            if !available {
+                                return;
+                            }
+                            let Some(dialog) = &mut this.thread_dialog else {
+                                return;
+                            };
+                            dialog.page = DialogPage::Delete;
+                            window.focus(&dialog.buttons[0], cx);
+                            cx.notify();
+                        }),
+                    ))
+                    .when_some(notice, |d, notice| {
+                        d.child(
+                            div()
+                                .px(px(8.))
+                                .py(px(6.))
+                                .text_size(px(11.))
+                                .text_color(rgb(MUTED))
+                                .child(notice),
+                        )
+                    });
+            return popover::anchored_at(dialog.anchor, menu);
+        }
+        let button = |index: usize, name: &'static str, kind| {
+            popover::button(("thread-dialog-button", index), name, kind)
+                .track_focus(&dialog.buttons[index])
+                .when(!available || busy, |d| d.opacity(0.45))
+        };
+        let (heading, body, confirm): (&str, AnyElement, Stateful<Div>) = match dialog.page {
+            DialogPage::Rename => (
+                "Rename thread",
+                s::field().h(px(34.)).px(px(10.)).child(self.thread_title.clone()).into_any_element(),
+                button(1, if busy { "Saving…" } else { "Save" }, Kind::Primary).on_click(
+                    cx.listener(move |this, _, _, cx| {
+                        if available {
+                            this.commit_thread_rename(cx);
+                        }
                     }),
+                ),
+            ),
+            _ => (
+                "Delete thread?",
+                s::description_text(tr(
+                    cx,
+                    msg::native::remove_this_thread_from_the_workspace_this_cannot_be_undone_here_project_files_are_kept,
+                ))
+                .into_any_element(),
+                button(1, if busy { "Deleting…" } else { "Delete" }, Kind::Destructive).on_click(
+                    cx.listener(move |this, _, _, cx| {
+                        if available {
+                            this.change_thread(chat_value.clone(), ThreadChange::Delete, cx);
+                        }
+                    }),
+                ),
+            ),
+        };
+        let (backdrop, card) = popover::dialog("thread-dialog", heading, 380.);
+        backdrop
+            .child(
+                card.track_focus(&self.thread_dialog_focus)
+                    .on_key_down(cx.listener(Self::thread_dialog_key))
+                    .p(px(18.))
+                    .gap(px(14.))
+                    .child(
+                        column()
+                            .gap(px(3.))
+                            .child(
+                                div()
+                                    .text_size(px(15.))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(rgb(TEXT))
+                                    .child(heading),
+                            )
+                            .when(dialog.page == DialogPage::Delete, |d| {
+                                d.child(
+                                    div()
+                                        .text_size(px(12.))
+                                        .text_color(rgb(MUTED))
+                                        .truncate()
+                                        .child(title),
+                                )
+                            }),
+                    )
+                    .child(body)
+                    .when_some(notice, |d, notice| {
+                        d.child(s::description_text(notice).text_color(rgb(popover::DESTRUCTIVE)))
+                    })
+                    .child(
+                        row()
+                            .justify_end()
+                            .gap_2()
+                            .child(button(0, "Cancel", Kind::Secondary).on_click(cx.listener(
+                                |this, _, window, cx| this.close_thread_dialog(window, cx),
+                            )))
+                            .child(confirm),
+                    ),
             )
             .into_any_element()
     }

@@ -75,7 +75,17 @@ assets!(
     "pen",
     "eye",
     "eye-closed",
-    "upload"
+    "upload",
+    "widget",
+    "chat-round-line",
+    "folder-open",
+    "history",
+    "document",
+    "document-add",
+    "settings",
+    "info-circle",
+    "more-horizontal",
+    "restart"
 );
 
 pub(super) fn icon(name: &str) -> Svg {

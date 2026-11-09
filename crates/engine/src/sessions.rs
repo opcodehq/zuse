@@ -304,6 +304,7 @@ struct Inner {
     turn_listener: OnceLock<TurnListener>,
     provider_context: OnceLock<ProviderContext>,
     execution_observer: OnceLock<crate::execution_progress::Observer>,
+    zots: OnceLock<crate::zots::Zots>,
 }
 
 struct FilesystemAdmission {
@@ -467,12 +468,17 @@ impl SessionsEngine {
                 turn_listener: OnceLock::new(),
                 provider_context: OnceLock::new(),
                 execution_observer: OnceLock::new(),
+                zots: OnceLock::new(),
             }),
         }
     }
 
     pub(crate) fn voice_manager(&self) -> crate::voice::VoiceManager {
         self.inner.voice.clone()
+    }
+
+    pub fn set_zots(&self, zots: crate::zots::Zots) {
+        let _ = self.inner.zots.set(zots);
     }
 
     /// Record the loopback IPC port this engine serves. Runs started after
@@ -487,6 +493,11 @@ impl SessionsEngine {
         let _ = self.inner.secret_filter.set(filter);
     }
     pub fn set_ipc_port(&self, port: u16) {
+        if let Some(zots) = self.inner.zots.get() {
+            if let Err(error) = zots.publish_discovery(port) {
+                tracing::warn!(%error, "control discovery publication failed");
+            }
+        }
         self.inner
             .ipc_port
             .store(port, std::sync::atomic::Ordering::Relaxed);
@@ -962,7 +973,7 @@ impl SessionsEngine {
     async fn dispatch_admitted(
         &self,
         chat_id: &str,
-        harness_id: HarnessId,
+        mut harness_id: HarnessId,
         mut request: RunRequest,
         mut message_id: Option<String>,
         startup_retry: bool,
@@ -972,6 +983,19 @@ impl SessionsEngine {
         self.require_unarchived(chat_id)?;
         let _activity = self.claim_filesystem_admission(chat_id);
         drop(admission);
+        if let Some(zots) = self.inner.zots.get() {
+            zots.prepare_request(chat_id, &mut request)
+                .map_err(|e| EngineError::Other(e.to_string()))?;
+            if zots
+                .coordinator(chat_id)
+                .map_err(|e| EngineError::Other(e.to_string()))?
+                .is_some()
+            {
+                if let Some(selected) = request.harness {
+                    harness_id = selected;
+                }
+            }
+        }
         // Project-less chats store a home-relative cwd (the creating device
         // can't know the host's home); expand it here, on the host, where the
         // run spawns, creating a new chat's scratch folder.
@@ -2066,6 +2090,7 @@ impl SessionsEngine {
                 request.prompt = prompt_text;
                 request.resume = None; // dispatch re-injects the remembered session
                 let harness_id = host.harness_for_request(&chat_id, &request);
+                sessions.inner.await_ipc_port().await;
                 lock(&sessions.inner.continuing_turns).insert(chat_id.clone());
                 match host
                     .dispatch_with_source_context(
@@ -2532,12 +2557,24 @@ impl Inner {
         // incoming RPC supplied a field with the same wire shape.
         request.mcp = self.zuse_mcp(chat_id);
     }
+    /// Boot recovers runs before the IPC server binds, and a run launched
+    /// without a port has no Zuse tools for its whole life. Engines that never
+    /// serve a port only lose this short wait.
+    async fn await_ipc_port(&self) {
+        for _ in 0..IPC_PORT_WAIT_POLLS {
+            if self.ipc_port.load(std::sync::atomic::Ordering::Relaxed) != 0 {
+                return;
+            }
+            tokio::time::sleep(IPC_PORT_POLL).await;
+        }
+    }
+
     fn zuse_mcp(&self, chat_id: &str) -> Option<zuse_protocol::McpServer> {
         let port = self.ipc_port.load(std::sync::atomic::Ordering::Relaxed);
         if port == 0 {
             return None;
         }
-        let command = std::env::current_exe().ok()?.to_str()?.to_owned();
+        let command = mcp_command(std::env::current_exe().ok()?.to_str()?);
         Some(zuse_protocol::McpServer {
             name: "zuse".into(),
             command,
@@ -2548,6 +2585,17 @@ impl Inner {
                 ("ZUSE_DEVICE_ID".to_owned(), self.device_id.clone()),
             ]
             .into_iter()
+            .chain(
+                self.zots
+                    .get()
+                    .map(|zots| ("ZUSE_CONTROL_TOKEN".to_owned(), zots.grant(chat_id))),
+            )
+            .chain(
+                self.zots
+                    .get()
+                    .and_then(|zots| zots.coordinator(chat_id).ok().flatten())
+                    .map(|zot| ("ZUSE_ZOT_ID".into(), zot.id)),
+            )
             .collect(),
         })
     }
@@ -4886,6 +4934,15 @@ fn continuation_prompt(request: &str) -> String {
     )
 }
 
+const IPC_PORT_POLL: std::time::Duration = std::time::Duration::from_millis(50);
+const IPC_PORT_WAIT_POLLS: usize = 40;
+
+/// Linux reports a binary replaced while running as `<path> (deleted)`; agents
+/// must launch the rebuilt or updated file at that path instead.
+fn mcp_command(executable: &str) -> String {
+    executable.trim_end_matches(" (deleted)").to_owned()
+}
+
 #[cfg(test)]
 mod update_checkpoint_tests {
     use super::*;
@@ -5006,6 +5063,29 @@ mod tests {
         assert!(publisher.await.unwrap().is_ok());
         assert_eq!(lock(&ledger).front().unwrap().epoch, turn.steering_epoch());
         assert!(!turn.steer_cancelled("new"));
+    }
+
+    #[tokio::test]
+    async fn recovered_runs_wait_until_the_engine_has_a_port() {
+        let dir = tempfile::tempdir().unwrap();
+        let sessions = SessionsEngine::new(
+            "host-device".into(),
+            Arc::new(RunJournal::open(dir.path()).unwrap()),
+            Arc::new(HarnessRegistry::new()),
+        );
+        let binder = sessions.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            binder.set_ipc_port(27654);
+        });
+        sessions.inner.await_ipc_port().await;
+        assert!(sessions.inner.zuse_mcp("chat").is_some());
+    }
+
+    #[test]
+    fn replaced_executables_still_launch_the_mcp_server() {
+        assert_eq!(mcp_command("/opt/zuse (deleted)"), "/opt/zuse");
+        assert_eq!(mcp_command("/opt/zuse"), "/opt/zuse");
     }
 
     #[test]

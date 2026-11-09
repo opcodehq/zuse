@@ -74,7 +74,12 @@ distinguishes verified hosting from the remaining real-agent launch work.
 - `crates/protocol`, `crates/rpc`, `crates/client`: shared types, transports and client logic.
 - Focused crates own documents, synchronization, themes, Markdown, audio and previews.
 
-Rust dependencies and versions are managed in the root Cargo workspace. JavaScript is limited to provider SDK bridges and generated browser bindings.
+Rust dependencies and versions are managed in the root Cargo workspace. JavaScript is limited to provider SDK bridges, the public npm client and generated browser bindings.
+
+Persistent coordinators and the application control surface are documented in
+[Zots and application control](internal-docs/zots.md). The standalone
+`zuse-control` client and [`@zuse/sdk`](packages/sdk/README.md) share the engine's
+versioned operations across local and paired cloud environments.
 
 ## Development
 

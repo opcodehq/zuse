@@ -7,7 +7,7 @@ use crate::localization::message as tr;
 use crate::{icons, popover};
 use zuse_i18n::messages as msg;
 
-const PLAN_ICON: &str = "icons/access-read-only.svg";
+const PLAN_ICON: &str = icons::LIST;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum AddMenuItem {
@@ -227,7 +227,6 @@ impl Composer {
     pub(super) fn render_plan_chip(
         &self,
         theme: &Theme,
-        icon_only: bool,
         cx: &mut Context<Self>,
     ) -> Option<gpui::Stateful<gpui::Div>> {
         if !self.plan_mode(cx) {
@@ -243,7 +242,8 @@ impl Composer {
                 .aria_label(exit.clone())
                 .tab_index(0)
                 .h(px(28.))
-                .px(px(if icon_only { 7. } else { 9. }))
+                .pl(px(9.))
+                .pr(px(7.))
                 .flex()
                 .flex_none()
                 .items_center()
@@ -268,14 +268,12 @@ impl Composer {
                         this.toggle_plan_mode(cx);
                     }
                 }))
+                .child(tr(cx, msg::native::composer_plan_chip))
                 .child(
-                    icons::icon(PLAN_ICON)
-                        .size(px(14.))
-                        .text_color(theme.accent),
-                )
-                .when(!icon_only, |chip| {
-                    chip.child(tr(cx, msg::native::composer_plan_chip))
-                }),
+                    icons::icon(icons::CLOSE)
+                        .size(px(11.))
+                        .text_color(theme.accent.opacity(0.7)),
+                ),
         )
     }
 }

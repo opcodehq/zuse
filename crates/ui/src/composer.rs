@@ -2191,6 +2191,7 @@ pub struct ComposerInput {
     text_size: f32,
     configured_line_height: f32,
     single_line: bool,
+    enter_inserts_newline: bool,
     scroll_left: f32,
     // -- measured state (written during layout/paint) --
     last_lines: Vec<WrappedLine>,
@@ -2311,6 +2312,7 @@ impl ComposerInput {
             text_size: INPUT_TEXT_SIZE,
             configured_line_height: INPUT_LINE_HEIGHT,
             single_line: false,
+            enter_inserts_newline: false,
             scroll_left: 0.0,
             last_lines: Vec::new(),
             line_starts: vec![0],
@@ -2374,6 +2376,12 @@ impl ComposerInput {
 
     pub fn with_single_line(mut self) -> Self {
         self.single_line = true;
+        self
+    }
+
+    /// Long-form text in a form: Enter starts a new line instead of submitting.
+    pub(crate) fn with_enter_newline(mut self) -> Self {
+        self.enter_inserts_newline = true;
         self
     }
 
@@ -3971,7 +3979,11 @@ impl ComposerInput {
         }
     }
 
-    fn submit(&mut self, _: &Submit, _: &mut Window, cx: &mut Context<Self>) {
+    fn submit(&mut self, _: &Submit, window: &mut Window, cx: &mut Context<Self>) {
+        if self.enter_inserts_newline {
+            self.newline(&Newline, window, cx);
+            return;
+        }
         match enter_outcome(self.mention_has_selection, EnterOutcome::Submit) {
             EnterOutcome::AcceptCompletion => cx.emit(ComposerInputEvent::MentionAccept),
             EnterOutcome::Submit => cx.emit(ComposerInputEvent::Submitted),
@@ -13526,7 +13538,7 @@ impl Render for Composer {
             .render_permission_control(&theme, narrow, cx)
             .opacity(beneath_voice);
         let plan_chip = self
-            .render_plan_chip(&theme, narrow, cx)
+            .render_plan_chip(&theme, cx)
             .map(|chip| chip.opacity(beneath_voice));
         // Plugins: a quiet `size-7` icon key beside the access chip that opens
         // the plugins page.

@@ -253,6 +253,9 @@ impl WorkspaceView {
             "Local engine connected"
         }
         .into();
+        self.zots.watches.clear();
+        self.watch_zot_home(device.to_owned());
+        self.call(methods::ENGINE_INFO, json!({}));
         for method in [
             methods::AUTH_STATUS,
             methods::CLOUD_ACCOUNT_STATUS,

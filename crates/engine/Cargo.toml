@@ -61,6 +61,7 @@ ignore.workspace = true
 fff-search.workspace = true
 
 same-file = "1"
+subtle.workspace = true
 tempfile.workspace = true
 if-addrs = "0.15"
 

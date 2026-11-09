@@ -63,6 +63,7 @@ mod plugin_management;
 pub mod plugin_removal;
 pub mod plugin_setup;
 mod plugin_views;
+mod popover;
 mod previews;
 mod project_actions;
 pub mod project_archive;
@@ -102,6 +103,7 @@ mod workspace_layout;
 mod workspace_review;
 pub mod workspace_style;
 mod worktree_settings;
+mod zots;
 
 use futures::{
     StreamExt,
@@ -150,6 +152,7 @@ pub struct WorkspaceView {
     pull_requests: pull_requests::PullRequests,
     git_requests: HashMap<u64, u64>,
     _git_events: Subscription,
+    zots: zots::ZotView,
     workspace_focus: FocusHandle,
     input: Entity<input::TextInput>,
     requests: UnboundedSender<Value>,
@@ -671,6 +674,7 @@ impl WorkspaceView {
         let view = Self {
             environment: Default::default(),
             browser,
+            zots: zots::ZotView::default(),
             workspace_focus,
             input,
             cloud_archive: Default::default(),
@@ -1135,6 +1139,9 @@ impl WorkspaceView {
         };
         let method = self.pending.get(&id).cloned().unwrap_or_default();
         if method.is_empty() {
+            return;
+        }
+        if self.receive_zot(id, &method, &frame, cx) {
             return;
         }
         if self.receive_browser_previews(id, &frame, cx) {
@@ -1710,6 +1717,7 @@ impl WorkspaceView {
         self.prefetch_model_catalogs();
         self.begin_transcript(cx);
         self.refresh_model_config_watch();
+        self.refresh_zot();
         self.restore_draft(cx);
         if let Some(chat) = &self.selected {
             if let Some(harness) = chat["config"]["harness"].as_str() {

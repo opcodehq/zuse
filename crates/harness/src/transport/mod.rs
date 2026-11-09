@@ -24,6 +24,10 @@ pub enum Authentication {
     Bearer,
     /// Messages subscription OAuth includes provider-required caller attribution.
     AnthropicOauth,
+    /// Existing local Codex ChatGPT login, using the Codex subscription endpoint.
+    CodexOauth,
+    /// Local Grok CLI login, using the CLI chat proxy.
+    GrokOauth,
 }
 impl Authentication {
     fn is_protocol_default(&self) -> bool {
@@ -99,6 +103,16 @@ impl Route {
             })
         {
             return Err(failed("invalid_provider_capabilities"));
+        }
+        if self.authentication == Authentication::GrokOauth
+            && (self.protocol != Protocol::ChatCompletions || !self.subscription)
+        {
+            return Err(failed("unsupported_oauth_route"));
+        }
+        if self.authentication == Authentication::CodexOauth
+            && (self.protocol != Protocol::Responses || !self.subscription)
+        {
+            return Err(failed("unsupported_oauth_route"));
         }
         if self.authentication == Authentication::AnthropicOauth
             && (self.protocol != Protocol::Messages || !self.subscription)
@@ -312,6 +326,31 @@ impl NativeTransport {
             }
             _ => request.bearer_auth(&credential.access_token),
         };
+        if credential.route.authentication == Authentication::GrokOauth {
+            request = request
+                .header("X-XAI-Token-Auth", "xai-grok-cli")
+                .header("x-grok-model-override", &input.model);
+        }
+        if credential.route.authentication == Authentication::CodexOauth {
+            use base64::Engine as _;
+            let claims = credential
+                .access_token
+                .split('.')
+                .nth(1)
+                .and_then(|s| {
+                    base64::engine::general_purpose::URL_SAFE_NO_PAD
+                        .decode(s)
+                        .ok()
+                })
+                .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
+            if let Some(account) = claims
+                .as_ref()
+                .and_then(|c| c["https://api.openai.com/auth"]["chatgpt_account_id"].as_str())
+            {
+                request = request.header("chatgpt-account-id", account);
+            }
+            request = request.header("originator", "zuse");
+        }
         audit
             .timing
             .lock()
@@ -407,7 +446,7 @@ mod tests;
 
 /// Provider qualification is routing metadata, never part of the wire model ID.
 pub fn model_name(model: &str) -> &str {
-    if model.starts_with("api/") {
+    if model.starts_with("api/") || model.starts_with("local/") {
         model.splitn(3, '/').nth(2).unwrap_or(model)
     } else {
         model

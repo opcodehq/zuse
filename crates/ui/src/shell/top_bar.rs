@@ -55,7 +55,9 @@ impl Shell {
 
     /// Whether the conversation tab row shows: on a selected conversation.
     pub(super) fn conversation_tab_row_visible(&self, cx: &App) -> bool {
-        matches!(self.route, Route::Chat) && self.has_conversation(cx)
+        matches!(self.route, Route::Chat)
+            && self.has_conversation(cx)
+            && !self.state.read(cx).selected_chat_is_zot_coordinator()
     }
 
     /// The conversation tabs on their own row below the top bar: main-area

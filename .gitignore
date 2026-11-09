@@ -1,6 +1,8 @@
 /target/
 /.context/
 node_modules/
+/packages/sdk/dist/
+*.tgz
 /dist/build/
 /dist/web/
 __pycache__/

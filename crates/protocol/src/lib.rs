@@ -17,6 +17,7 @@ pub mod cloud_computers;
 pub mod cloud_connections;
 pub mod cloud_gateway;
 pub mod cloud_task_commands;
+pub mod control;
 pub mod creation_source;
 pub mod custom_acp;
 pub mod device_paths;
@@ -44,6 +45,7 @@ pub mod visual_session;
 pub mod voice;
 pub mod workflow;
 pub mod workspace;
+pub mod zots;
 
 pub use agent::*;
 pub use chat_config::ChatConfigPatch;

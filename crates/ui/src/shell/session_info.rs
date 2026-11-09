@@ -259,7 +259,7 @@ impl Shell {
         max_height: f32,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        if reveal <= 0.001 {
+        if reveal <= 0.001 || self.state.read(cx).selected_chat_is_zot_coordinator() {
             return None;
         }
         let theme = Theme::of(cx).for_popup();

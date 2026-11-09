@@ -185,6 +185,7 @@ fn main() -> Result<()> {
         return Ok(());
     }
     tokio::runtime::Builder::new_multi_thread()
+        .thread_stack_size(zuse_engine::RUNTIME_STACK_SIZE)
         .enable_all()
         .build()?
         .block_on(run())
