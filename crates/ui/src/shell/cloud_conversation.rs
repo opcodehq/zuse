@@ -12,6 +12,8 @@ pub(super) enum CloudConversationEvent {
     Terminal,
     Files,
     OpenFile(String),
+    /// Open a folder on this computer (the synced copy) in an app.
+    OpenPathIn(super::open_in::OpenTarget, String),
 }
 pub(super) struct CloudConversation {
     pub(super) target: CloudTarget,
@@ -940,6 +942,9 @@ impl Shell {
                 CloudConversationEvent::OpenFile(path) => {
                     this.pending_chip_file = Some(path.clone());
                     cx.notify();
+                }
+                CloudConversationEvent::OpenPathIn(target, path) => {
+                    this.open_path_in(target.clone(), path.clone(), cx);
                 }
             }));
     }

@@ -215,7 +215,13 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         if let Some(conversation) = self.cloud_conversation.clone() {
-            return Some(conversation.update(cx, |view, cx| view.render_header_control(cx)));
+            // The menu can open the synced folder in this computer's apps.
+            self.ensure_open_targets(cx);
+            let targets = self.open_in.targets.clone();
+            return Some(conversation.update(cx, |view, cx| {
+                view.set_open_targets(targets);
+                view.render_header_control(cx)
+            }));
         }
         let target = self.cloud_info_target(cx)?;
         if self.cloud_info.target.as_ref() != Some(&target) {

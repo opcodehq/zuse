@@ -89,6 +89,16 @@ pub(in crate::shell) struct ComputerSummary {
     pub created: Option<String>,
     pub size: Option<String>,
 }
+/// The computer menu's pages.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Page {
+    #[default]
+    Summary,
+    /// Every action on the computer.
+    More,
+    /// Apps to open the synced folder in.
+    OpenIn,
+}
 #[derive(Clone)]
 struct Pending {
     action: Action,
@@ -113,8 +123,10 @@ pub(super) struct State {
     sync_change: Option<Task<()>>,
     sync_folder: Option<Task<()>>,
     sync_error: Option<String>,
-    /// The menu's second page: every action on the computer.
-    more: bool,
+    /// Which page of the menu shows.
+    page: Page,
+    /// The apps this computer can open a folder in (the shell detects them).
+    open_targets: Vec<crate::shell::open_in::OpenTarget>,
     /// The machine's last CPU, memory and disk snapshot, and the poll that
     /// keeps it current while the summary shows it.
     pub(super) resources: Value,
@@ -309,7 +321,7 @@ fn request(mut scope: Value, action: Action, key: &str, row: &Value, check: bool
 impl CloudConversation {
     pub(super) fn close_computer(&mut self, cx: &mut Context<Self>) {
         self.computer.open = false;
-        self.computer.more = false;
+        self.computer.page = Page::Summary;
         self.computer.confirm = None;
         if self.computer.menu.begin_close() {
             popover::reap_popup(cx, |this: &mut Self| &mut this.computer.menu);
@@ -691,6 +703,13 @@ impl CloudConversation {
             }
         }));
     }
+    /// The apps the synced folder can open in, as the shell detected them.
+    pub(in crate::shell) fn set_open_targets(
+        &mut self,
+        targets: Vec<crate::shell::open_in::OpenTarget>,
+    ) {
+        self.computer.open_targets = targets;
+    }
     /// The last machine snapshot, when one arrived.
     pub(in crate::shell) fn resources(&self) -> &Value {
         &self.computer.resources
@@ -712,6 +731,74 @@ impl CloudConversation {
         if !self.computer.open {
             self.toggle_computer(cx);
         }
+    }
+    /// The synced folder's apps: each opens it there, then copy its path.
+    fn render_open_in_page(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = Theme::of(cx).for_popup();
+        let path = self.synced_folder();
+        let mut page = div()
+            .id("native-computer-open-in")
+            .flex()
+            .flex_col()
+            .text_size(crate::typography::text_xs())
+            .child(
+                popover::menu_row(&theme, false, "computer-open-in-back")
+                    .id("computer-open-in-back")
+                    .child(icon(icons::ALT_ARROW_LEFT).size(px(14.)).text_color(theme.text_muted))
+                    .child(div().flex_1().text_color(theme.text_muted).child("Computer"))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.computer.page = Page::Summary;
+                        cx.notify();
+                    })),
+            )
+            .child(popover::menu_separator());
+        let Some(path) = path else {
+            return page
+                .child(
+                    div()
+                        .px(px(8.))
+                        .py(px(6.))
+                        .text_color(theme.text_muted)
+                        .child("Turn on sync to open this computer's files here."),
+                )
+                .into_any_element();
+        };
+        for target in self.computer.open_targets.clone() {
+            let glyph: AnyElement = match &target.icon {
+                Some(png) => gpui::img(png.clone()).size(px(16.)).into_any_element(),
+                None => icon(crate::shell::open_in::fallback_glyph(target.id))
+                    .size(px(14.))
+                    .text_color(theme.text_muted)
+                    .into_any_element(),
+            };
+            let open_path = path.clone();
+            page = page.child(
+                popover::menu_row(&theme, false, format!("cloud-open-in-{}", target.id))
+                    .id(SharedString::from(format!("cloud-open-in-{}", target.id)))
+                    .child(div().size(px(16.)).flex().items_center().justify_center().child(glyph))
+                    .child(target.label)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        cx.emit(CloudConversationEvent::OpenPathIn(
+                            target.clone(),
+                            open_path.clone(),
+                        ));
+                        this.close_computer(cx);
+                    })),
+            );
+        }
+        let copy = path.clone();
+        page.child(popover::menu_separator())
+            .child(
+                popover::menu_row(&theme, false, "cloud-open-in-copy")
+                    .id("cloud-open-in-copy")
+                    .child(icon(icons::COPY).size(px(14.)).text_color(theme.text_muted))
+                    .child("Copy path")
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()));
+                        this.close_computer(cx);
+                    })),
+            )
+            .into_any_element()
     }
     pub(super) fn render_computer(&mut self, cx: &mut Context<Self>) -> AnyElement {
         self.watch_sync(cx);
@@ -982,6 +1069,19 @@ impl CloudConversation {
                         ),
                 );
             }
+            if self.synced_folder().is_some() {
+                menu = menu.child(
+                    popover::menu_row(&theme, false, "cloud-sync-open-in")
+                        .id("cloud-sync-open-in")
+                        .child(icon(icons::FOLDER_OPEN).size(px(14.)).text_color(theme.text_muted))
+                        .child(div().flex_1().child("Open synced folder in…"))
+                        .child(icon(icons::ALT_ARROW_RIGHT).size(px(12.)).text_color(theme.text_muted))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.computer.page = Page::OpenIn;
+                            cx.notify();
+                        })),
+                );
+            }
             menu = menu.child(
                 popover::menu_row(&theme, false, "cloud-sync-folder")
                     .id("cloud-sync-folder")
@@ -1093,7 +1193,10 @@ impl CloudConversation {
                 .on_click(cx.listener(|this, _, _, cx| this.refresh_computer(cx)))
                 .into_any_element(),
         );
-        if self.computer.more {
+        if self.computer.page == Page::OpenIn {
+            return self.render_open_in_page(cx);
+        }
+        if self.computer.page == Page::More {
             // The "More" page replaces the summary page: a way back, then
             // the actions, then whatever they report.
             menu = div()
@@ -1111,7 +1214,7 @@ impl CloudConversation {
                         )
                         .child(div().flex_1().text_color(theme.text_muted).child("Computer"))
                         .on_click(cx.listener(|this, _, _, cx| {
-                            this.computer.more = false;
+                            this.computer.page = Page::Summary;
                             this.computer.confirm = None;
                             cx.notify();
                         })),
@@ -1136,7 +1239,7 @@ impl CloudConversation {
                             .text_color(theme.text_muted),
                     )
                     .on_click(cx.listener(|this, _, _, cx| {
-                        this.computer.more = true;
+                        this.computer.page = Page::More;
                         cx.notify();
                     })),
             );
