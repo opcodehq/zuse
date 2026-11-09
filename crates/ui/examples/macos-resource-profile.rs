@@ -151,6 +151,7 @@ fn main() -> anyhow::Result<()> {
                         state.apply_sessions(vec![zuse_protocol::Session {
                             last_completed_turn: None,
                             running_subagents: 0,
+                            awaiting_input: None,
                             background_tasks: Vec::new(),
                             chat_id: "profile".into(),
                             device_id: "local".into(),

@@ -23,9 +23,9 @@ impl Pickers {
                 PickerKind::Checkout,
                 "picker-checkout",
                 if self.config.checkout == CheckoutKind::NewWorktree {
-                    crate::icons::GIT_BRANCH
+                    crate::icons::DITHER_BRANCH
                 } else {
-                    crate::icons::FOLDER
+                    crate::icons::DITHER_FOLDER
                 },
                 self.checkout_label().into(),
                 &theme,

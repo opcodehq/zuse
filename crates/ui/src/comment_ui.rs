@@ -306,7 +306,9 @@ fn comment_action(
         .text_size(px(11.0))
         .font_weight(gpui::FontWeight::MEDIUM)
         .cursor_pointer()
-        .when(primary, |el| el.bg(theme.solid).text_color(theme.on_solid))
+        .when(primary, |el| {
+            crate::popover::dither_key(el, theme, crate::popover::DitherKey::Primary, 6.0)
+        })
         .when(!primary, |el| {
             el.text_color(motion::hover_blend(id, theme.text_muted, theme.text))
                 .bg(motion::hover_blend(

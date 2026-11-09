@@ -415,7 +415,7 @@ impl AccountUsage {
                         format!("{:.0}% left", (1.0 - used) * 100.0),
                         theme.text,
                     ))
-                    .child(crate::context_usage::stick_meter(
+                    .child(crate::context_usage::dither_meter(
                         used as f64,
                         usage_level(used) != UsageLevel::Normal,
                         theme,

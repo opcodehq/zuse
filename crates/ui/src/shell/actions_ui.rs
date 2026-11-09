@@ -531,11 +531,7 @@ impl Shell {
                     format!("“{name}” will be permanently deleted."),
                 )))
                 .child(
-                    div()
-                        .mt(px(16.0))
-                        .flex()
-                        .justify_end()
-                        .gap(px(8.0))
+                    popover::dialog_footer(&theme)
                         .child(
                             popover::btn_ghost(
                                 &theme,
@@ -673,10 +669,7 @@ impl Shell {
                 )
             })
             .child(
-                div()
-                    .mt(px(18.0))
-                    .flex()
-                    .items_center()
+                popover::dialog_footer(&theme)
                     .justify_between()
                     .child(div().when(editing, |el| {
                         el.child(

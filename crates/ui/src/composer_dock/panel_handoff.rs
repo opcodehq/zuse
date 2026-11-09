@@ -1,7 +1,7 @@
 //! A fade-through when navigation changes the conversation's horizontal frame.
 use std::time::Instant;
 
-pub(super) const DURATION: f32 = 0.320;
+pub(super) const DURATION: f32 = 0.180;
 /// Between the fade-out ending at 0.18 and the fade-in starting at 0.26.
 pub(super) const GEOMETRY_SWITCH: f32 = 0.22;
 

@@ -228,6 +228,10 @@ enum ChatMenuPage {
 }
 
 /// Hover-intent keys for the chat menu's rows; only Copy owns a submenu.
+/// Height of the new-thread arcade band under the titlebar.
+const NEW_THREAD_ARCADE_HEIGHT: f32 = 200.0;
+/// Shorter windows have no empty space above the heading for the band.
+const NEW_THREAD_ARCADE_MIN_WINDOW: f32 = 640.0;
 const CHAT_MENU_ROW_RENAME: u8 = 0;
 const CHAT_MENU_ROW_PIN: u8 = 1;
 const CHAT_MENU_ROW_ARCHIVE: u8 = 2;
@@ -8333,7 +8337,6 @@ impl Shell {
             .size_full()
             .flex()
             .flex_col()
-            .bg(theme.bg)
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                 match event.keystroke.key.as_str() {
                     "escape" => {
@@ -8362,27 +8365,20 @@ impl Shell {
                     .flex()
                     .items_center()
                     .px(px(12.))
-                    .border_b_1()
-                    .border_color(theme.border)
                     .child(div().w(px(64.)).flex_none())
                     .child(back)
                     .child(div().flex_1()),
             )
+            // Same frame as a chat: the navigation sits on the window glass
+            // and the section is a rounded card inset from the window edges.
             .child(
                 div()
                     .flex_1()
                     .min_h_0()
                     .flex()
-                    .child(
-                        div()
-                            .w(px(sidebar_width))
-                            .h_full()
-                            .flex_none()
-                            .border_r_1()
-                            .border_color(theme.border)
-                            .bg(theme.surface)
-                            .child(nav),
-                    )
+                    .pr(px(zuse_viewport::workspace_style::GUTTER))
+                    .pb(px(zuse_viewport::workspace_style::GUTTER))
+                    .child(div().w(px(sidebar_width)).h_full().flex_none().child(nav))
                     .child(
                         div()
                             .flex_1()
@@ -8390,6 +8386,11 @@ impl Shell {
                             .h_full()
                             .flex()
                             .flex_col()
+                            .overflow_hidden()
+                            .rounded(px(zuse_viewport::workspace_style::RADIUS))
+                            .bg(theme.bg)
+                            .border_1()
+                            .border_color(crate::theme::hairline(0.05))
                             .opacity(self.voice_stage_underlay_opacity(cx))
                             .child(outlet),
                     ),
@@ -8415,20 +8416,20 @@ impl Shell {
     ) -> AnyElement {
         let compact = window.viewport_size().width < px(800.);
         let section_icon = |item: SettingsSection| match item {
-            SettingsSection::Cloud => icons::CLOUD,
-            SettingsSection::Devices => icons::SETTINGS_REMOTE,
-            SettingsSection::Harnesses => icons::SETTINGS_PROVIDERS,
-            SettingsSection::Defaults => icons::SETTINGS_DEFAULTS,
-            SettingsSection::Plugins => icons::SETTINGS_PLUGINS,
-            SettingsSection::Agents => icons::KEY_MINIMALISTIC,
-            SettingsSection::Appearance => icons::TUNING,
-            SettingsSection::Files => icons::FOLDER,
-            SettingsSection::Notifications => icons::BELL,
-            SettingsSection::Voice => icons::MICROPHONE,
-            SettingsSection::Shortcuts => icons::KEYBOARD,
-            SettingsSection::General => icons::SETTINGS_GENERAL,
-            SettingsSection::Appshots => icons::MONITOR,
-            SettingsSection::Archived => icons::ARCHIVE_MINIMALISTIC,
+            SettingsSection::Cloud => icons::DITHER_CLOUD_FILLED,
+            SettingsSection::Devices => icons::DITHER_MONITOR,
+            SettingsSection::Harnesses => icons::DITHER_TERMINAL,
+            SettingsSection::Defaults => icons::DITHER_SLIDERS,
+            SettingsSection::Plugins => icons::DITHER_PLUG,
+            SettingsSection::Agents => icons::DITHER_KEY,
+            SettingsSection::Appearance => icons::DITHER_PEN,
+            SettingsSection::Files => icons::DITHER_FOLDER,
+            SettingsSection::Notifications => icons::DITHER_BELL,
+            SettingsSection::Voice => icons::DITHER_MIC,
+            SettingsSection::Shortcuts => icons::DITHER_KEYBOARD,
+            SettingsSection::General => icons::DITHER_GEAR,
+            SettingsSection::Appshots => icons::DITHER_DOCUMENT,
+            SettingsSection::Archived => icons::DITHER_ARCHIVE,
         };
         settings::widgets::scroll_faded(
             "settings-nav-scroll",
@@ -8527,7 +8528,7 @@ impl Shell {
                                     }))
                                     .child(
                                         icon(section_icon(item))
-                                            .size(px(16.0))
+                                            .size(px(14.0))
                                             .text_color(tab_text),
                                     )
                                     .when(!compact, |view| {
@@ -8641,12 +8642,15 @@ impl Shell {
         // FAILED (explicit, with the transcript's retry affordance); a send
         // whose delivery path is degraded is QUEUED, not Working — the
         // pending pill tells the truth instead of faking a spinner.
-        let (queued, undelivered) = {
+        let (queued, undelivered, awaiting) = {
             let now = Utc::now();
             let state = self.state.read(cx);
             (
                 state.send_queued(&id, now),
                 state.send_undelivered(&id, now),
+                state
+                    .session_for(&id)
+                    .and_then(|session| session.awaiting_input),
             )
         };
         let status_color = if undelivered {
@@ -8670,6 +8674,16 @@ impl Shell {
             }
         };
         let shows_metadata = branch.is_some() || change_request.is_some();
+        let attention_mark = |size: f32| -> AnyElement {
+            match spaces::status_glyph(status, queued, undelivered, awaiting, theme) {
+                Some((glyph, tone)) => icon(glyph)
+                    .size(px(size))
+                    .flex_none()
+                    .text_color(tone)
+                    .into_any_element(),
+                None => div().size(px(size)).flex_none().into_any_element(),
+            }
+        };
         let queued = queued && !undelivered;
         let working = status == zuse_protocol::ChatIndicator::Working && !queued && !undelivered;
         let compact_status = sidebar.then(|| {
@@ -8688,11 +8702,7 @@ impl Shell {
                     .text_color(status_color)
                     .into_any_element()
             } else {
-                div()
-                    .size(px(6.0))
-                    .rounded_full()
-                    .bg(status_color)
-                    .into_any_element()
+                attention_mark(13.0)
             };
             div()
                 .id(SharedString::from(format!("{row_id}-status")))
@@ -8777,7 +8787,7 @@ impl Shell {
                 Some(label) => {
                     // Glyph slot: Working wears the preset's animated pixel
                     // glyph beside its label, Done wears the check, and the
-                    // remaining statuses use a compact dot.
+                    // remaining statuses use their attention mark.
                     let glyph: AnyElement = if status == zuse_protocol::ChatIndicator::Completed {
                         icon(icons::CHECK)
                             .size(px(11.0))
@@ -8794,12 +8804,7 @@ impl Shell {
                         )
                         .into_any_element()
                     } else {
-                        div()
-                            .size(px(6.0))
-                            .flex_none()
-                            .rounded_full()
-                            .bg(status_color)
-                            .into_any_element()
+                        attention_mark(13.0)
                     };
                     div()
                         .flex()
@@ -8892,10 +8897,10 @@ impl Shell {
                 .into_any_element()
         };
         let mut corner = Some(corner);
-        let (hover, text) = (theme.glass_hover(), theme.text);
+        let hover = theme.glass_hover();
         let selected_wash = crate::theme::glass_selected_bg();
-        // Metadata reads in the subtle text role; titles in default text,
-        // strong once selected.
+        // Metadata reads in the subtle text role, as do read titles;
+        // titles turn strong once selected or unread.
         let subline = theme.text_muted;
         let select_id = id.clone();
         let menu_id = id.clone();
@@ -8916,12 +8921,14 @@ impl Shell {
         // below its near-opaque selected fill, and blending toward it visibly
         // dimmed the active row under the pointer (user report).
         let hover_bg = if selected { selected_wash } else { hover };
-        let rest_text = if selected {
+        // Brightness is the read state: titles rest gray and an unseen finish
+        // stands out in full white, with no status mark beside it.
+        let finished_unseen =
+            status == zuse_protocol::ChatIndicator::Completed && !queued && !undelivered;
+        let rest_text = if selected || (finished_unseen && !archived) {
             theme.text_strong
-        } else if archived {
-            theme.text_muted
         } else {
-            text
+            theme.text_muted
         };
         let row = div()
             .id(SharedString::from(row_id.clone()))
@@ -9067,8 +9074,6 @@ impl Shell {
             // queued) on the avatar and set an unseen finish in bold, as the
             // reference thread list does.
             let avatar_badge = !nested && working && project_icon.is_some();
-            let finished_unseen =
-                status == zuse_protocol::ChatIndicator::Completed && !queued && !undelivered;
             let unread = two_line && finished_unseen;
             let attention_badge = two_line
                 && !working
@@ -9177,12 +9182,15 @@ impl Shell {
             // the pull request's state.
             // A working card wears its spinner as a badge on the avatar (the
             // title stays clean); other activity leads the title.
+            let status_mark = status_label
+                .filter(|_| !finished_unseen)
+                .and(compact_status);
             let (status_glyph, title_glyph) = if nested {
-                (status_label.and(compact_status), None)
+                (status_mark, None)
             } else if avatar_badge || attention_badge || unread {
                 (None, None)
             } else {
-                (None, status_label.and(compact_status))
+                (None, status_mark)
             };
             let lead: Option<AnyElement> = if nested {
                 Some(
@@ -9195,16 +9203,20 @@ impl Shell {
                         .justify_center()
                         .child(match status_glyph {
                             Some(glyph) => glyph,
-                            None => icon(icons::GIT_BRANCH)
-                                .size(px(14.0))
-                                .text_color(
-                                    crate::change_requests::branch_state_color(
-                                        change_request.as_ref(),
-                                        theme,
-                                    )
-                                    .opacity(if archived_muted { 0.4 } else { 0.85 }),
-                                )
-                                .into_any_element(),
+                            None => {
+                                let (glyph, tone) = crate::change_requests::branch_state_glyph(
+                                    change_request.as_ref(),
+                                    theme,
+                                );
+                                icon(glyph)
+                                    .size(px(12.0))
+                                    .text_color(tone.opacity(if archived_muted {
+                                        0.4
+                                    } else {
+                                        0.85
+                                    }))
+                                    .into_any_element()
+                            }
                         })
                         .into_any_element(),
                 )
@@ -9234,7 +9246,7 @@ impl Shell {
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .child(div().size(px(7.0)).rounded_full().bg(attention_color)),
+                                .child(attention_mark(10.0)),
                         )
                         .into_any_element();
                 }
@@ -9605,7 +9617,7 @@ impl Shell {
                             .gap(px(4.0))
                             .when_some(branch, |el, branch| {
                                 el.child(
-                                    icon(icons::GIT_BRANCH)
+                                    icon(icons::GIT_STATE_BRANCH)
                                         .size(px(11.0))
                                         .flex_none()
                                         .text_color(subline),
@@ -10282,7 +10294,7 @@ impl Shell {
                 .focus_visible(|el| el.border_1().border_color(theme.border_strong))
                 .child(
                     icon(glyph)
-                        .size(px(16.0))
+                        .size(px(14.0))
                         .flex_none()
                         .text_color(if active {
                             theme.text
@@ -10306,7 +10318,7 @@ impl Shell {
             .child(
                 row(
                     "sidebar-new-chat-row",
-                    icons::PEN_NEW_SQUARE,
+                    icons::DITHER_CHAT,
                     "New chat",
                     false,
                 )
@@ -10326,7 +10338,7 @@ impl Shell {
             .child(
                 row(
                     "sidebar-new-project-row",
-                    icons::FOLDER_WITH_FILES,
+                    icons::DITHER_FOLDER,
                     "New project",
                     false,
                 )
@@ -10337,7 +10349,7 @@ impl Shell {
                 view.child(
                     row(
                         "sidebar-plugins-row",
-                        icons::SETTINGS_PLUGINS,
+                        icons::DITHER_PLUG,
                         "Plugins",
                         plugins_open,
                     )
@@ -10798,12 +10810,7 @@ impl Shell {
                 },
             }
         };
-        let mut row = div()
-            .mt(px(16.0))
-            .flex()
-            .flex_row()
-            .justify_end()
-            .gap(px(8.0));
+        let mut row = popover::dialog_footer(&theme);
         for button in buttons {
             row = row.child(match button {
                 UpdatePromptButton::Close(label) => {
@@ -11241,8 +11248,8 @@ impl Shell {
             .focus_visible(|s| s.border_2().border_color(theme.accent))
             .on_click(cx.listener(|this, _, _, cx| this.toggle_settings(cx)))
             .child(
-                icon(icons::SETTINGS)
-                    .size(px(15.0))
+                icon(icons::DITHER_GEAR)
+                    .size(px(14.0))
                     .text_color(if settings_open {
                         theme.text
                     } else {
@@ -11301,12 +11308,7 @@ impl Shell {
                     )),
                 )
                 .child(
-                    div()
-                        .mt(px(16.0))
-                        .flex()
-                        .flex_row()
-                        .justify_end()
-                        .gap(px(8.0))
+                    popover::dialog_footer(&theme)
                         .child(
                             popover::btn_ghost(&theme, &tr(cx, msg::common::cancel), "sync-enable-cancel")
                                 .id("sync-enable-cancel")
@@ -11350,12 +11352,7 @@ impl Shell {
                     .into(),
                     (None, None) => "Zuse can switch to your synced workspace now.".into(),
                 };
-                let mut actions = div()
-                    .mt(px(16.0))
-                    .flex()
-                    .flex_row()
-                    .justify_end()
-                    .gap(px(8.0))
+                let mut actions = popover::dialog_footer(&theme)
                     .child(
                         popover::btn_ghost(&theme, &tr(cx, msg::native::later), "sync-switch-later")
                             .id("sync-switch-later")
@@ -11473,11 +11470,7 @@ impl Shell {
                     .child(popover::dialog_title(&theme, "You're all set"))
                     .child(div().mt(px(6.0)).child(popover::dialog_body(&theme, body)))
                     .child(
-                        div()
-                            .mt(px(16.0))
-                            .flex()
-                            .flex_row()
-                            .justify_end()
+                        popover::dialog_footer(&theme)
                             .child(
                                 popover::btn_primary(&theme, "Continue")
                                     .id("sync-switch-done")
@@ -11506,12 +11499,7 @@ impl Shell {
                     )
                 })
                 .child(
-                    div()
-                        .mt(px(16.0))
-                        .flex()
-                        .flex_row()
-                        .justify_end()
-                        .gap(px(8.0))
+                    popover::dialog_footer(&theme)
                         .child(
                             popover::btn_ghost(&theme, &tr(cx, msg::native::later), "import-failed-dismiss")
                                 .id("import-failed-dismiss")
@@ -11554,12 +11542,7 @@ impl Shell {
                     )
                 })
                 .child(
-                    div()
-                        .mt(px(16.0))
-                        .flex()
-                        .flex_row()
-                        .justify_end()
-                        .gap(px(8.0))
+                    popover::dialog_footer(&theme)
                         .child(
                             popover::btn_ghost(&theme, &tr(cx, msg::native::later), "sync-restart-later")
                                 .id("sync-restart-later")
@@ -11588,12 +11571,7 @@ impl Shell {
                     )),
                 )
                 .child(
-                    div()
-                        .mt(px(16.0))
-                        .flex()
-                        .flex_row()
-                        .justify_end()
-                        .gap(px(8.0))
+                    popover::dialog_footer(&theme)
                         .child(
                             popover::btn_ghost(&theme, &tr(cx, msg::common::cancel), "signout-cancel")
                                 .id("signout-cancel")
@@ -12052,12 +12030,7 @@ impl Shell {
                     format!("\u{201C}{title}\u{201D} will be permanently deleted. This can\u{2019}t be undone."),
                 )))
                 .child(
-                    div()
-                        .mt(px(16.0))
-                        .flex()
-                        .flex_row()
-                        .justify_end()
-                        .gap(px(8.0))
+                    popover::dialog_footer(&theme)
                         .child(
                             popover::btn_ghost(&theme, &tr(cx, msg::common::cancel), "delete-chat-cancel")
                                 .id("delete-chat-cancel")
@@ -12091,12 +12064,7 @@ impl Shell {
                             "Discard all uncommitted changes in this working tree? This can’t be undone.",
                         )))
                         .child(
-                            div()
-                                .mt(px(16.0))
-                                .flex()
-                                .flex_row()
-                                .justify_end()
-                                .gap(px(8.0))
+                            popover::dialog_footer(&theme)
                                 .child(
                                     popover::btn_ghost(
                                         &theme,
@@ -12123,7 +12091,7 @@ impl Shell {
                     .child(popover::dialog_title(&theme, "Couldn’t discard changes"))
                     .child(div().mt(px(6.0)).child(popover::dialog_body(&theme, error)))
                     .child(
-                        div().mt(px(16.0)).flex().justify_end().child(
+                        popover::dialog_footer(&theme).child(
                             popover::btn_primary(&theme, "Close")
                                 .id("discard-working-tree-error-close")
                                 .on_click(cx.listener(|this, _, _, cx| {
@@ -12406,6 +12374,7 @@ impl Shell {
                 let width = (self.viewport_width - self.sidebar_now()).max(0.0);
                 let bounds = self.composer.read(cx).surface_bounds();
                 let opacity = new_thread_background_opacity(theme.is_frost());
+                let has_artwork = artwork_frame.current.is_some();
                 div()
                     .absolute()
                     .inset_0()
@@ -12427,6 +12396,27 @@ impl Shell {
                         dock_frame.dissolve(),
                         artwork_frame.mix * opacity,
                     ))
+                    // Without artwork, invaders march across a dim band
+                    // under the titlebar; it leaves with the canvas on send.
+                    .when(
+                        !has_artwork && self.viewport_height >= NEW_THREAD_ARCADE_MIN_WINDOW,
+                        |layer| {
+                            layer.child(
+                                div()
+                                    .absolute()
+                                    .top(px(Theme::TITLEBAR_HEIGHT))
+                                    .left_0()
+                                    .right_0()
+                                    .h(px(NEW_THREAD_ARCADE_HEIGHT))
+                                    .opacity(1.0 - dock_frame.dissolve())
+                                    .child(crate::arcade::invaders_header(
+                                        format!("new-thread-invaders-{}", cx.entity_id()),
+                                        NEW_THREAD_ARCADE_HEIGHT,
+                                        theme.text,
+                                    )),
+                            )
+                        },
+                    )
                     .into_any_element()
             });
 
@@ -13876,10 +13866,9 @@ impl Shell {
                         .items_center()
                         .justify_center()
                         .rounded(px(6.0))
-                        .bg(theme.text)
+                        .map(|el| popover::dither_key(el, &theme, popover::DitherKey::Primary, 6.0))
                         .text_size(crate::typography::text_md())
                         .font_weight(gpui::FontWeight::MEDIUM)
-                        .text_color(theme.on_solid)
                         .cursor_pointer()
                         .hover(|s| s.opacity(0.9))
                         .on_click(cx.listener(|this, _, _, cx| this.start_sign_in(cx)))
@@ -14079,10 +14068,11 @@ impl Shell {
                             .flex()
                             .items_center()
                             .rounded(px(6.0))
-                            .bg(theme.text)
+                            .map(|el| {
+                                popover::dither_key(el, &theme, popover::DitherKey::Primary, 6.0)
+                            })
                             .text_size(crate::typography::text_md())
                             .font_weight(gpui::FontWeight::MEDIUM)
-                            .text_color(theme.on_solid)
                             .when(submitting, |el| el.opacity(0.5))
                             .cursor_pointer()
                             .hover(|s| s.opacity(0.9))
@@ -15114,9 +15104,6 @@ impl Render for Shell {
                     // A call started from Settings opens its stage here too.
                     let voice_stage = self.render_voice_stage(window, cx);
                     let overlays = self.render_overlays(window.viewport_size(), window, cx);
-                    let border_color = Theme::of(cx).border;
-                    let sidebar_tone =
-                        Self::sidebar_tone(self.settings.sidebar_width, border_color, window);
                     let drag = self.titlebar_drag_region(
                         "settings-titlebar",
                         div()
@@ -15134,9 +15121,7 @@ impl Render for Shell {
                         .children(voice_stage)
                         .child(drag)
                         .children(overlays);
-                    break 'ready root
-                        .child(sidebar_tone)
-                        .child(motion::fade_in("phase-app", page));
+                    break 'ready root.child(motion::fade_in("phase-app", page));
                 }
                 // The Pull requests route shares this layout with its own
                 // side pane: opened pull requests as tabs beside the board.
@@ -15840,6 +15825,7 @@ mod tests {
             started_at: Some(updated_at),
             updated_at,
             running_subagents: 0,
+            awaiting_input: None,
             background_tasks: Vec::new(),
         }
     }
@@ -19789,6 +19775,8 @@ impl Shell {
                         state: zuse_protocol::ChangeRequestState::Open,
                         base_ref: "main".into(),
                         head_ref: "fieldnotes/workspace".into(),
+                        is_draft: false,
+                        review_decision: Default::default(),
                     }),
                 });
             }
@@ -20059,6 +20047,7 @@ impl Shell {
                     state.apply_sessions(vec![zuse_protocol::Session {
                         last_completed_turn: None,
                         running_subagents: 1,
+                        awaiting_input: None,
                         background_tasks: Vec::new(),
                         chat_id: "browser-fixture".into(),
                         device_id: "local".into(),
@@ -20095,6 +20084,7 @@ impl Shell {
                     state.apply_sessions(vec![zuse_protocol::Session {
                         last_completed_turn: None,
                         running_subagents: 0,
+                        awaiting_input: None,
                         background_tasks: vec![
                             task(
                                 "bg-1",

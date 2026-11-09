@@ -4746,6 +4746,7 @@ mod tests {
         Session {
             last_completed_turn: None,
             running_subagents: 0,
+            awaiting_input: None,
             background_tasks: Vec::new(),
             chat_id: chat_id.into(),
             device_id: "dev".into(),
@@ -5026,6 +5027,7 @@ mod tests {
         let mut row = Session {
             last_completed_turn: None,
             running_subagents: 0,
+            awaiting_input: None,
             background_tasks: Vec::new(),
             chat_id: "chat".into(),
             device_id: "host".into(),
@@ -5059,6 +5061,7 @@ mod tests {
         state.sessions = vec![Session {
             last_completed_turn: None,
             running_subagents: 0,
+            awaiting_input: None,
             background_tasks: Vec::new(),
             chat_id: "chat".into(),
             device_id: "host".into(),

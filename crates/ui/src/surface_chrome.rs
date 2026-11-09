@@ -82,8 +82,23 @@ pub(crate) fn tab_frame(
             theme.text_muted
         })
         .focus_visible(|style| style.border_2().border_color(theme.accent))
-        // Reference workspace-panel-tab: active `bg-muted`.
-        .when(selected, |el| el.bg(theme.muted_fill()))
+        // The active tab is one of the few raised, embossed surfaces.
+        .when(selected, |el| {
+            el.relative()
+                .bg(theme.emboss_fill())
+                .shadow(theme.emboss_shadow())
+                .child(emboss_rim(CONTROL_RADIUS, theme))
+        })
+}
+
+/// A lit top edge over a raised control, matching its corner radius.
+pub(crate) fn emboss_rim(radius: f32, theme: &Theme) -> Div {
+    div()
+        .absolute()
+        .inset_0()
+        .rounded(px(radius))
+        .border_t_1()
+        .border_color(theme.emboss_rim())
 }
 
 pub(crate) fn tab(

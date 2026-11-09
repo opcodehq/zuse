@@ -37,7 +37,7 @@ const SSH_CONFIG_TIMEOUT: Duration = Duration::from_secs(3);
 const GITHUB_REPOSITORY_QUERY: &str = "query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { nameWithOwner } }";
 const GITHUB_OUTPUT_LIMIT: usize = 1024 * 1024;
 const GITHUB_RESULT_LIMIT: &str = "20";
-const GITHUB_JSON_FIELDS: &str = "number,title,url,state,baseRefName,headRefName,updatedAt,isCrossRepository,headRepositoryOwner";
+const GITHUB_JSON_FIELDS: &str = "number,title,url,state,baseRefName,headRefName,updatedAt,isCrossRepository,headRepositoryOwner,isDraft,reviewDecision";
 const GITHUB_SEARCH_QUERY: &str = "query($search: String!, $owner: String!, $name: String!, $after: String) { repository(owner: $owner, name: $name) { nameWithOwner } search(query: $search, type: ISSUE, first: 50, after: $after) { issueCount pageInfo { hasNextPage endCursor } nodes { ... on PullRequest { author { login } headRefOid viewerDidAuthor viewerLatestReviewRequest { id } reviewRequests(first: 100) { nodes { id } pageInfo { hasNextPage } } statusCheckRollup { commit { oid } state contexts { totalCount checkRunCountsByState { state count } statusContextCountsByState { state count } } } number title url state isDraft mergeable reviewDecision createdAt updatedAt additions deletions repository { nameWithOwner } } } } }";
 
 const GITHUB_PR_METADATA_QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) { viewer { login } repository(owner: $owner, name: $name) { pullRequest(number: $number) { headRefOid viewerDidAuthor viewerLatestReviewRequest { id } reviewRequests(first: 100) { nodes { id } pageInfo { hasNextPage } } statusCheckRollup { commit { oid } state contexts(first: 100) { nodes { ... on CheckRun { name status conclusion detailsUrl databaseId startedAt completedAt } ... on StatusContext { context state targetUrl } } totalCount checkRunCountsByState { state count } statusContextCountsByState { state count } } } } } }";
@@ -1812,6 +1812,12 @@ struct GhPullRequest {
     updated_at: DateTime<Utc>,
     is_cross_repository: bool,
     head_repository_owner: GhRepositoryOwner,
+    #[serde(default)]
+    is_draft: bool,
+    /// Kept as text: `gh pr list` reports an empty string for no decision,
+    /// which must not fail the whole lookup.
+    #[serde(default)]
+    review_decision: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2211,6 +2217,13 @@ fn to_summary(
         state: pull_request.state.into(),
         base_ref: pull_request.base_ref_name,
         head_ref: pull_request.head_ref_name,
+        is_draft: pull_request.is_draft,
+        review_decision: match pull_request.review_decision.as_deref() {
+            Some("APPROVED") => ChangeRequestReviewDecision::Approved,
+            Some("CHANGES_REQUESTED") => ChangeRequestReviewDecision::ChangesRequested,
+            Some("REVIEW_REQUIRED") => ChangeRequestReviewDecision::ReviewRequired,
+            _ => ChangeRequestReviewDecision::Unknown,
+        },
     })
 }
 

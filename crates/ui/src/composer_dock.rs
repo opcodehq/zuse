@@ -503,7 +503,7 @@ impl DockState {
 }
 
 fn duration(docked: bool) -> f32 {
-    (if docked { 0.420 } else { 0.470 }) * crate::motion::speed_scale()
+    (if docked { 0.240 } else { 0.260 }) * crate::motion::speed_scale()
 }
 
 pub(crate) type SharedDock = Rc<RefCell<DockState>>;

@@ -277,6 +277,7 @@ mod gate_tests {
             started_at: None,
             updated_at,
             running_subagents: running,
+            awaiting_input: None,
             background_tasks: Vec::new(),
         }
     }

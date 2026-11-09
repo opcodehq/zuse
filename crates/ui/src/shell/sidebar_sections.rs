@@ -526,11 +526,7 @@ impl Shell {
                         .child(popover::dialog_field(input.into_any_element())),
                 )
                 .child(
-                    div()
-                        .mt(px(16.0))
-                        .flex()
-                        .justify_end()
-                        .gap(px(8.0))
+                    popover::dialog_footer(&theme)
                         .child(
                             popover::btn_ghost(
                                 &theme,
