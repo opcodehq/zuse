@@ -269,11 +269,12 @@ pub fn run_app(config: UiConfig) {
         let quit_state = state.clone();
         cx.on_app_quit(move |cx| {
             settings::flush(cx);
+            let engine = quit_state.read(cx).engine().cloned();
+            // Quit means stop: agents come back only from a restart the user
+            // asked for, however long until Zuse is next opened.
             app_update::install_on_quit(cx);
-            let shutdown =
-                quit_state.read(cx).engine().cloned().map(|handle| {
-                    gpui_tokio::Tokio::spawn(cx, async move { handle.shutdown().await })
-                });
+            let shutdown = engine
+                .map(|handle| gpui_tokio::Tokio::spawn(cx, async move { handle.shutdown().await }));
             async move {
                 if let Some(task) = shutdown {
                     let _ = task.await;
