@@ -66,6 +66,10 @@ retains stale-edit protection when another writer changes the file's beginning.
 
 ## External MCP tools
 
+[Opcode computer-use setup](computer-use.md) provides an explicit opt-in local
+CU configuration, desktop permission guidance and a discovery-only compatibility
+check. CU is installed separately and is not bundled with Zuse.
+
 The application loads `<profile>/harness/extensions.json` once on backend startup.
 Configuration belongs to the trusted profile, never to repository instructions.
 No server is started until its capability is used. Example:

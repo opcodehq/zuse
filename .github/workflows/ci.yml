@@ -269,5 +269,6 @@ jobs:
           cache-on-failure: true
       - run: sudo apt-get update && sudo apt-get install -y ripgrep
       - run: cargo test --locked -p zuse-harness -p zuse-harness-extensions --all-targets
+      - run: python3 -m unittest discover -s scripts -p test_computer_use_config.py -v
       - run: cargo build --locked --release -p zuse-harness --example harness-evaluate
       - run: python3 scripts/test-harness-evaluation.py --binary target/release/examples/harness-evaluate --output .context/native-transport-fixtures
