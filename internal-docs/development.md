@@ -7,6 +7,48 @@ The next send uses the saved provider/model choice and the engine's context
 handoff, retaining the same chat history. Each conversation tab shows its own
 provider icon. Pending first sends keep their original configuration snapshot.
 
+## Build speed and disk usage
+
+Use the Cargo launcher for local work:
+
+```sh
+python3 scripts/cargo_dev.py check -p zuse-engine
+python3 scripts/cargo_dev.py run -p zuse
+python3 scripts/cargo_dev.py test -p zuse-protocol --lib
+python3 scripts/cargo_dev.py --print-target-dir
+```
+
+Native and browser development launchers select the same cache automatically.
+Each repository gets one directory under `${XDG_CACHE_HOME:-~/.cache}/zuse/cargo`,
+identified by its common Git directory; linked worktrees reuse it. Browser output
+uses its `browser` subdirectory to isolate nightly/build-std artifacts. Set
+`CARGO_TARGET_DIR` to an absolute path to override the location. CI continues to
+use checkout-local `target` directories for Actions caching.
+
+Cargo locks the shared output during builds, so simultaneous worktree builds
+wait for one another. Switching branches may still rebuild changed crates;
+sharing avoids maintaining a full dependency tree for every worktree. Bare
+`cargo` uses the usual checkout-local target and does not get this sharing.
+
+Development builds keep source line information for workspace crates and omit
+dependency debug symbols, while retaining optimized dependencies for GPUI.
+Incremental compilation stays enabled locally for quick edits. For full
+workspace variable/type debugging, set `CARGO_PROFILE_DEV_DEBUG=2`; dependency
+debugging additionally requires overriding `[profile.dev.package."*"].debug`.
+CI omits debug information and incremental output entirely.
+
+The launcher also supplies a hash of the icon license configuration. This lets
+Cargo reuse unchanged icons and their UI dependents without writing the license
+key into Cargo fingerprints. Key changes are picked up on the next invocation;
+restart a running native watcher after changing its environment. Bare Cargo
+retains automatic license detection but must rerun the icon selector every time.
+
+Existing checkout-local `target` directories are not moved or deleted. After
+stopping builds that use an old directory, `cargo clean --target-dir /path/to/old/target`
+reclaims it; the next build using that directory must compile again. To clear
+the shared cache, use `python3 scripts/cargo_dev.py clean`. Avoid cleaning as
+part of ordinary development, since that removes the output that speeds up builds.
+
 ## Native development reload
 
 Run `python3 scripts/dev-native.py` on macOS or Linux. It builds the app, starts

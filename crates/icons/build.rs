@@ -6,13 +6,16 @@ fn main() {
     println!("cargo:rerun-if-changed=../../scripts/prepare-icons.mjs");
     let root = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
     let out = PathBuf::from(env::var_os("OUT_DIR").unwrap());
-    // Check key presence each invocation without recording the secret value in
-    // Cargo's RerunIfEnvChanged fingerprint. The missing sentinel forces this
-    // small selector to rerun; prepared SVGs are reused by the generator.
-    println!(
-        "cargo:rerun-if-changed={}",
-        out.join("style-selection-sentinel").display()
-    );
+    // Launchers and CI supply a digest so Cargo detects license changes without
+    // storing the secret. Bare Cargo retains automatic style detection, at the
+    // cost of rerunning this script and recompiling its dependents each time.
+    println!("cargo:rerun-if-env-changed=HUGEICONS_BUILD_KEY");
+    if env::var_os("HUGEICONS_BUILD_KEY").is_none() {
+        println!(
+            "cargo:rerun-if-changed={}",
+            out.join("style-selection-sentinel").display()
+        );
+    }
     let solid = env::var("HUGEICONS_LICENSE_KEY").is_ok_and(|key| !key.trim().is_empty());
     let assets = if solid {
         let assets = out.join("solid");

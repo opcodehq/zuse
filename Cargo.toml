@@ -188,6 +188,7 @@ debug = "line-tables-only"
 
 [profile.dev.package."*"]
 opt-level = 2
+debug = 0
 
 # Scenes rasterize in software every frame the camera moves.
 [profile.dev.package.zuse-visual]
