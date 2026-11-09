@@ -30,6 +30,14 @@ impl PanelChoice {
         }
     }
 
+    fn label_for_conversation(self, cloud: bool) -> &'static str {
+        if self == Self::Terminal && cloud {
+            "Cloud terminal"
+        } else {
+            self.label()
+        }
+    }
+
     fn icon(self) -> &'static str {
         match self {
             Self::Files => icons::FOLDER,
@@ -163,11 +171,12 @@ impl Shell {
             .map(|choice| {
                 let fade = format!("surface-card-{}", choice.id());
                 let shortcut = self.panel_choice_shortcut(choice);
+                let label = choice.label_for_conversation(self.cloud_conversation.is_some());
                 div()
                     .id(SharedString::from(fade.clone()))
                     .debug_selector(move || fade.clone())
                     .role(gpui::Role::Button)
-                    .aria_label(choice.label())
+                    .aria_label(label)
                     .w_full()
                     .h(px(36.0))
                     .px(px(10.0))
@@ -191,7 +200,7 @@ impl Shell {
                             .truncate()
                             .text_size(crate::typography::text_sm())
                             .text_color(theme.text)
-                            .child(SharedString::from(choice.label())),
+                            .child(SharedString::from(label)),
                     )
                     .children(shortcut.map(|shortcut| {
                         div()
@@ -236,11 +245,12 @@ impl Shell {
             .map(|choice| {
                 let fade = format!("right-plus-{}", choice.id());
                 let shortcut = self.panel_choice_shortcut(choice);
+                let label = choice.label_for_conversation(self.cloud_conversation.is_some());
                 popover::menu_row(&theme, false, fade.clone())
                     .id(SharedString::from(format!("{fade}-row")))
                     .debug_selector(move || format!("{fade}-row"))
                     .role(gpui::Role::MenuItem)
-                    .aria_label(choice.label())
+                    .aria_label(label)
                     .gap(px(10.0))
                     .text_size(crate::typography::text_md())
                     .child(
@@ -254,7 +264,7 @@ impl Shell {
                             .flex_1()
                             .min_w_0()
                             .truncate()
-                            .child(SharedString::from(choice.label())),
+                            .child(SharedString::from(label)),
                     )
                     .children(shortcut.map(|shortcut| popover::kbd_hint(&theme, &shortcut)))
                     .on_click(cx.listener(move |this, _, window, cx| {

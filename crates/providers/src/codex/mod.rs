@@ -40,9 +40,13 @@
 //!   `turn/interrupt`, escalating to SIGTERM → SIGKILL if the child is
 //!   unresponsive; the stream always ends with `Done { status: Interrupted }`.
 
+pub mod auth;
 pub(crate) mod catalog;
+pub mod memory;
 mod normalize;
+mod raw_tools;
 pub mod realtime;
+mod startup;
 mod subagents;
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -154,6 +158,11 @@ async fn refresh_dictation_account_using(
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .kill_on_drop(true);
+    let mut startup_guard = if harness.managed_startup {
+        Some(startup::acquire(&cmd, None).await?)
+    } else {
+        None
+    };
     let mut child = cmd.spawn()?;
     let (Some(stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
         return Err(HarnessError::Protocol(
@@ -169,6 +178,7 @@ async fn refresh_dictation_account_using(
             )
             .await?;
         client.notify("initialized", None);
+        drop(startup_guard.take());
         let account = client
             .request("account/read", json!({"refreshToken":true}))
             .await?;
@@ -201,6 +211,10 @@ async fn refresh_dictation_account_using(
 /// The Codex harness. Construct with [`CodexHarness::new`]; tests point it at a
 /// fake app server with [`CodexHarness::with_executable`].
 pub struct CodexHarness {
+    memory_sessions: Option<Arc<memory::ManagedMemorySessions>>,
+    managed_startup: bool,
+    internal_tool_observations: bool,
+    credentials: Option<Arc<dyn auth::CredentialResolver>>,
     models_cache: crate::catalog::Catalog,
     executable: Option<PathBuf>,
     /// Grace between `turn/interrupt` and SIGTERM.
@@ -212,6 +226,10 @@ pub struct CodexHarness {
 impl Default for CodexHarness {
     fn default() -> Self {
         Self {
+            memory_sessions: None,
+            managed_startup: false,
+            internal_tool_observations: false,
+            credentials: None,
             models_cache: crate::catalog::Catalog::default(),
             executable: None,
             interrupt_grace: Duration::from_secs(2),
@@ -223,6 +241,48 @@ impl Default for CodexHarness {
 impl CodexHarness {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Internal staging-pilot observation surface; never controlled by a run request.
+    /// Raw Responses events are not a supported customer integration contract.
+    #[doc(hidden)]
+    pub fn with_internal_tool_observations(mut self, enabled: bool) -> Self {
+        self.internal_tool_observations = enabled;
+        self
+    }
+
+    /// Serialize managed native profile initialization across run, title and
+    /// discovery processes. The native0.166 cold profile race occurs before
+    /// auth; the OS lock is released immediately after initialize.
+    #[doc(hidden)]
+    pub fn with_managed_startup(mut self) -> Self {
+        self.managed_startup = true;
+        self
+    }
+
+    #[doc(hidden)]
+    pub fn with_managed_memory_sessions(
+        mut self,
+        sessions: Option<Arc<memory::ManagedMemorySessions>>,
+    ) -> Self {
+        self.memory_sessions = sessions;
+        self
+    }
+
+    /// Brokered access credentials, independent of device/browser onboarding.
+    pub fn with_credentials(mut self, resolver: Arc<dyn auth::CredentialResolver>) -> Self {
+        self.credentials = Some(resolver);
+        self
+    }
+
+    fn isolate_credentials(&self, cmd: &mut Command) {
+        if self.credentials.is_some() {
+            cmd.env_remove("OPENAI_API_KEY")
+                .env_remove("CODEX_API_KEY")
+                .env_remove("CODEX_ACCESS_TOKEN")
+                .arg("--config")
+                .arg("cli_auth_credentials_store=\"ephemeral\"");
+        }
     }
 
     /// Use a fixed CLI binary instead of PATH/known-location resolution.
@@ -268,6 +328,10 @@ impl CodexHarness {
         let exe = self.resolve_executable()?;
         let mut cmd = Command::new(&exe);
         cmd.arg("app-server");
+        if let Some(credentials) = &self.credentials {
+            credentials.environment().await?.apply(&mut cmd);
+        }
+        self.isolate_credentials(&mut cmd);
         if let Some(cwd) = cwd {
             cmd.current_dir(cwd);
         }
@@ -276,6 +340,11 @@ impl CodexHarness {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .kill_on_drop(true);
+        let mut startup_guard = if self.managed_startup {
+            Some(startup::acquire(&cmd, None).await?)
+        } else {
+            None
+        };
         let mut child = cmd.spawn().map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 HarnessError::NotInstalled(crate::executable::binary_hint(&exe))
@@ -305,6 +374,10 @@ impl CodexHarness {
                 )
                 .await?;
             client.notify("initialized", None);
+            drop(startup_guard.take());
+            if let Some(credentials) = &self.credentials {
+                auth::login(&client, credentials.as_ref()).await?;
+            }
             let params = cwd
                 .map(|cwd| json!({ "cwds": [cwd], "forceReload": true }))
                 .unwrap_or_else(|| json!({}));
@@ -327,11 +400,20 @@ impl CodexHarness {
         let exe = self.resolve_executable()?;
         let mut cmd = Command::new(&exe);
         cmd.arg("app-server");
+        if let Some(credentials) = &self.credentials {
+            credentials.environment().await?.apply(&mut cmd);
+        }
+        self.isolate_credentials(&mut cmd);
         crate::compose_child_path(&mut cmd, &exe);
         cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .kill_on_drop(true);
+        let mut startup_guard = if self.managed_startup {
+            Some(startup::acquire(&cmd, None).await?)
+        } else {
+            None
+        };
         let mut child = cmd.spawn().map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 HarnessError::NotInstalled(crate::executable::binary_hint(&exe))
@@ -359,6 +441,10 @@ impl CodexHarness {
                 )
                 .await?;
             client.notify("initialized", None);
+            drop(startup_guard.take());
+            if let Some(credentials) = &self.credentials {
+                auth::login(&client, credentials.as_ref()).await?;
+            }
 
             let mut models = Vec::new();
             let mut model_ids = HashSet::new();
@@ -837,6 +923,10 @@ impl CodexHarness {
         }
         let mut cmd = Command::new(&exe);
         cmd.arg("app-server");
+        if let Some(credentials) = &self.credentials {
+            credentials.environment().await?.apply(&mut cmd);
+        }
+        self.isolate_credentials(&mut cmd);
         crate::compose_child_path(&mut cmd, &exe);
         if !request.cwd.is_empty() {
             cmd.current_dir(&request.cwd);
@@ -845,6 +935,11 @@ impl CodexHarness {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        let startup_guard = if self.managed_startup {
+            Some(startup::acquire(&cmd, Some(&controls.interrupt)).await?)
+        } else {
+            None
+        };
         let mut child = cmd.spawn().map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 HarnessError::NotInstalled(crate::executable::binary_hint(&exe))
@@ -863,12 +958,17 @@ impl CodexHarness {
             .ok_or_else(|| HarnessError::Protocol("codex child has no stdout".into()))?;
         let stderr_tail = crate::StderrTail::default();
         if let Some(stderr) = child.stderr.take() {
+            let brokered = self.credentials.is_some();
             let tail = stderr_tail.clone();
             tokio::spawn(async move {
                 let mut lines = tokio::io::BufReader::new(stderr).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    tracing::debug!(target: "zuse_providers::codex", "stderr: {line}");
-                    tail.push(&line);
+                    // A provider can echo login input on failure. Brokered stderr is
+                    // consumed but never copied to logs or persisted crash diagnostics.
+                    if !brokered {
+                        tracing::debug!(target: "zuse_providers::codex", "stderr: {line}");
+                        tail.push(&line);
+                    }
                 }
             });
         }
@@ -876,6 +976,10 @@ impl CodexHarness {
         let (client, incoming) = RpcClient::new(stdin, stdout);
         let (event_tx, event_rx) = mpsc::channel::<Result<AgentEvent, HarnessError>>(256);
         tokio::spawn(run_session(Session {
+            memory_sessions: self.memory_sessions.clone(),
+            startup_guard,
+            internal_tool_observations: self.internal_tool_observations,
+            credentials: self.credentials.clone(),
             title_only,
             idle,
             executable: exe,
@@ -902,6 +1006,10 @@ impl CodexHarness {
 // ---------------------------------------------------------------------------
 
 struct Session {
+    memory_sessions: Option<Arc<memory::ManagedMemorySessions>>,
+    startup_guard: Option<startup::Guard>,
+    internal_tool_observations: bool,
+    credentials: Option<Arc<dyn auth::CredentialResolver>>,
     executable: PathBuf,
     title_only: bool,
     idle: bool,
@@ -915,6 +1023,75 @@ struct Session {
     kill_grace: Duration,
     /// Rolling stderr tail for the crash message on an unexpected exit.
     stderr_tail: crate::StderrTail,
+}
+
+/// Retained native history is private resume state, not a second public
+/// transcript. Drop duplicate historical notifications before normalization,
+/// even when their old credential values are no longer known to this process.
+#[derive(Default)]
+struct RestoreFence {
+    turns: HashSet<String>,
+    raw_turns: HashSet<String>,
+    items: HashSet<String>,
+}
+impl RestoreFence {
+    fn from_thread(thread: &Value) -> Result<Self, HarnessError> {
+        let mut fence = Self::default();
+        for turn in thread["turns"].as_array().into_iter().flatten() {
+            if let Some(id) = turn["id"].as_str() {
+                fence.raw_turns.insert(id.to_owned());
+            }
+            if fence.raw_turns.len() > 65536 {
+                return Err(HarnessError::Protocol(
+                    "retained-history-replay-fence-capacity-exceeded".into(),
+                ));
+            }
+            // A retained in-progress turn may still report legitimate lifecycle
+            // settlement. Fence its already-known items, not future new items.
+            if !matches!(
+                turn["status"].as_str(),
+                Some("inProgress" | "in_progress" | "running")
+            ) {
+                if let Some(id) = turn["id"].as_str() {
+                    fence.turns.insert(id.to_owned());
+                }
+            }
+            if fence.turns.len() > 65536 {
+                return Err(HarnessError::Protocol(
+                    "retained-history-replay-fence-capacity-exceeded".into(),
+                ));
+            }
+            for item in turn["items"].as_array().into_iter().flatten() {
+                if let Some(id) = item["id"].as_str() {
+                    fence.items.insert(id.to_owned());
+                }
+                if fence.items.len() > 65536 || fence.turns.len() > 65536 {
+                    return Err(HarnessError::Protocol(
+                        "retained-history-replay-fence-capacity-exceeded".into(),
+                    ));
+                }
+            }
+        }
+        Ok(fence)
+    }
+    fn contains_raw(&self, params: &Value) -> bool {
+        params["turnId"]
+            .as_str()
+            .is_some_and(|id| self.raw_turns.contains(id))
+            || self.contains(params)
+    }
+    fn contains(&self, params: &Value) -> bool {
+        let turn = params["turnId"]
+            .as_str()
+            .or_else(|| params["turn_id"].as_str())
+            .or_else(|| params["turn"]["id"].as_str());
+        let item = params["itemId"]
+            .as_str()
+            .or_else(|| params["item_id"].as_str())
+            .or_else(|| params["item"]["id"].as_str());
+        turn.is_some_and(|id| self.turns.contains(id))
+            || item.is_some_and(|id| self.items.contains(id))
+    }
 }
 
 /// Turn-routing state (port of codex.ts's activeTurnId/completedTurnIds): the
@@ -1083,6 +1260,7 @@ async fn start_turn(client: &RpcClient, params: Value) -> Result<String, Harness
         .unwrap_or_default();
     let thread_id = params["threadId"].as_str().unwrap_or_default();
     let native = command_request(text, thread_id)?;
+    let native_thread = thread_id.to_owned();
     if native.is_some()
         && params["input"]
             .as_array()
@@ -1093,14 +1271,30 @@ async fn start_turn(client: &RpcClient, params: Value) -> Result<String, Harness
         ));
     }
     let (method, params) = native.unwrap_or(("turn/start", params));
-    let started = client.request(method, params).await?;
+    let clock = std::time::Instant::now();
+    let started = client.request(method, params).await;
+    tracing::info!(phase="codex-turn-acceptance", native_thread=%native_thread,
+        duration_ms=clock.elapsed().as_millis() as u64, succeeded=started.is_ok(),
+        "Cloud startup phase");
+    let started = started?;
     Ok(started["turn"]["id"].as_str().unwrap_or("").to_owned())
+}
+
+fn configure_internal_observations(params: &mut serde_json::Map<String, Value>, enabled: bool) {
+    params.remove("experimentalRawEvents");
+    if enabled {
+        params.insert("experimentalRawEvents".into(), true.into());
+    }
 }
 
 /// The per-run event loop: one task multiplexing app-server messages, the
 /// steering mailbox, the interrupt token, and consumer liveness.
 async fn run_session(session: Session) {
     let Session {
+        memory_sessions,
+        mut startup_guard,
+        internal_tool_observations,
+        credentials,
         executable,
         title_only,
         idle,
@@ -1156,6 +1350,7 @@ async fn run_session(session: Session) {
                 }),
             );
         }
+        configure_internal_observations(&mut p, internal_tool_observations && !title_only);
         p.insert("cwd".into(), Value::String(request.cwd.clone()));
         if let Some(mcp) = request.mcp.as_ref().filter(|_| !title_only) {
             // Zuse's own MCP server as dotted config overrides on top of the
@@ -1201,6 +1396,10 @@ async fn run_session(session: Session) {
             )
             .await?;
         client.notify("initialized", None);
+        drop(startup_guard.take());
+        if let Some(credentials) = &credentials {
+            auth::login(&client, credentials.as_ref()).await?;
+        }
 
         if realtime.is_some() {
             // Codex's first account/read announces the initial auth snapshot
@@ -1232,6 +1431,9 @@ async fn run_session(session: Session) {
         let thread = if let Some(resume) = &request.resume {
             let mut p = start_params.clone();
             p.insert("threadId".into(), Value::String(resume.clone()));
+            // Native0.166 ThreadResumeParams has no raw-event opt-in. Never
+            // pretend an ignored field enables it or read retained JSONL.
+            p.remove("experimentalRawEvents");
             match client.request("thread/resume", Value::Object(p)).await {
                 Ok(thread) => thread,
                 // A missing/foreign rollout falls back to a fresh thread.
@@ -1254,15 +1456,16 @@ async fn run_session(session: Session) {
                 .await?
         };
         let thread_id = thread["thread"]["id"].as_str().unwrap_or("").to_owned();
+        let restore_fence = RestoreFence::from_thread(&thread["thread"])?;
         let mut children = subagents::Subagents::new(thread_id.clone());
         children.restore(&thread["thread"]);
         let voice_context = realtime::ThreadContext {
             cwd: thread["cwd"].as_str().unwrap_or(&request.cwd).to_owned(),
             model_provider: thread["modelProvider"].as_str().map(str::to_owned),
         };
-        Ok::<_, HarnessError>((thread_id, children, voice_context))
+        Ok::<_, HarnessError>((thread_id, children, voice_context, restore_fence))
     };
-    let (thread_id, mut children, voice_context) = tokio::select! {
+    let (thread_id, mut children, voice_context, restore_fence) = tokio::select! {
         res = setup => match res {
             Ok(thread_id) => thread_id,
             Err(e) => {
@@ -1291,6 +1494,12 @@ async fn run_session(session: Session) {
             return;
         }
     };
+
+    let memory_registration = memory_sessions.and_then(|sessions| {
+        child
+            .id()
+            .map(|pid| sessions.register(pid, client.clone(), thread_id.clone(), turn.clone()))
+    });
 
     // Model, effort and service tier ride every `turn/start` (each sticks
     // for later turns): a steer's in-place `config` takes effect from the
@@ -1421,10 +1630,25 @@ async fn run_session(session: Session) {
     #[cfg_attr(not(unix), allow(unused_mut))]
     let mut torn_down: Vec<i32> = Vec::new();
 
+    let mut raw_tools = raw_tools::RawTools::default();
+    let mut auth_tasks = tokio::task::JoinSet::new();
     'main: loop {
+        if let Some(registration) = &memory_registration {
+            registration.idle.store(
+                done_current
+                    && router.active.is_none()
+                    && queued_steers.is_empty()
+                    && accepted_steers.is_empty()
+                    && !turn.background_live()
+                    && !children.has_children(),
+                std::sync::atomic::Ordering::Release,
+            );
+        }
         tokio::select! {
             inc = incoming.recv() => match inc {
                 Some(Incoming::Notification { method, params }) => {
+                if method=="rawResponseItem/completed" && (!internal_tool_observations || restore_fence.contains_raw(&params)) {continue;}
+                if restore_fence.contains(&params) { continue; }
                 // Foreign-thread traffic FIRST: a child thread's turn/thread
                 // bookkeeping must never reach the parent turn router below
                 // (a child's turn/completed would settle the PARENT turn).
@@ -1450,6 +1674,11 @@ async fn run_session(session: Session) {
                     }
                 }
                 match method.as_str() {
+                    "rawResponseItem/completed"=>{
+                        for event in raw_tools.map(&params,router.active.as_deref()) {
+                            if !send(&event_tx,event).await {break 'main;}
+                        }
+                    }
                     "turn/started" => {
                         let id = turn_id(&params);
                         // Native voice handoffs start a turn without going through turn/start.
@@ -1696,6 +1925,7 @@ async fn run_session(session: Session) {
                             if !steer_as_new_turn(
                                 &client,
                                 turn_params(&live, &text),
+                                credentials.as_deref(),
                                 &mut router,
                                 &event_tx,
                                 &mut assistant_message_id,
@@ -1825,6 +2055,26 @@ async fn run_session(session: Session) {
                 }
 
                 Some(Incoming::Request { id, method, params }) => {
+                    if method == "account/chatgptAuthTokens/refresh"
+                        && let Some(credentials) = &credentials
+                    {
+                        // Never stall streaming, Stop or steering on an authority round trip.
+                        // One renewal per process at a time; tasks abort when the session exits.
+                        while auth_tasks.try_join_next().is_some() {}
+                        if !auth_tasks.is_empty() {
+                            client.respond_error(&id, -32000, "codex-auth-reconnecting");
+                            continue 'main;
+                        }
+                        let credentials = credentials.clone();
+                        let client = client.clone();
+                        auth_tasks.spawn(async move {
+                            match auth::refresh(credentials.as_ref(), &params).await {
+                                Ok(value) => client.respond(&id, value),
+                                Err(_) => client.respond_error(&id, -32000, "codex-auth-reconnecting"),
+                            }
+                        });
+                        continue 'main;
+                    }
                     handle_server_request(
                         &client,
                         id,
@@ -1890,7 +2140,7 @@ async fn run_session(session: Session) {
                                 } else {
                                     current_native = command_request(&text, &thread_id).ok().flatten().is_some();
                                     if !steer_as_new_turn(
-                                        &client, turn_params(&live, &text), &mut router, &event_tx,
+                                        &client, turn_params(&live, &text), credentials.as_deref(), &mut router, &event_tx,
                                         &mut assistant_message_id, &mut done_current,
                                     ).await { break 'main; }
                                 }
@@ -1899,7 +2149,7 @@ async fn run_session(session: Session) {
                     } else {
                         current_native = command_request(&text, &thread_id).ok().flatten().is_some();
                         if !steer_as_new_turn(
-                            &client, turn_params(&live, &text), &mut router, &event_tx,
+                            &client, turn_params(&live, &text), credentials.as_deref(), &mut router, &event_tx,
                             &mut assistant_message_id, &mut done_current,
                         ).await { break 'main; }
                     }
@@ -2082,11 +2332,21 @@ fn send_turn_interrupt(client: &RpcClient, thread_id: &str, turn: String) {
 async fn steer_as_new_turn(
     client: &RpcClient,
     params: Value,
+    credentials: Option<&dyn auth::CredentialResolver>,
     router: &mut TurnRouter,
     event_tx: &mpsc::Sender<Result<AgentEvent, HarnessError>>,
     assistant_message_id: &mut String,
     done_current: &mut bool,
 ) -> bool {
+    // A retained app-server keeps its in-memory auth across machine sleep.
+    // Refresh the explicitly selected connection before starting the next
+    // turn, using its supported login RPC rather than changing process env.
+    if let Some(credentials) = credentials {
+        if let Err(error) = auth::login_before_turn(client, credentials).await {
+            let _ = event_tx.send(Err(error)).await;
+            return false;
+        }
+    }
     match start_turn(client, params).await {
         Ok(id) => {
             router.adopt_started(id);
@@ -2861,5 +3121,132 @@ mod skill_discovery_tests {
         assert_eq!(skills.len(), 2);
         assert_ne!(skills[0].path, skills[1].path);
         assert!(!skills[1].enabled);
+    }
+}
+
+#[cfg(test)]
+mod cold_resume_tests {
+    use super::*;
+    #[test]
+    fn internal_observation_is_private_default_off_and_retained_raw_history_is_fenced() {
+        assert!(!CodexHarness::default().internal_tool_observations);
+        let mut p = serde_json::Map::new();
+        p.insert("experimentalRawEvents".into(), json!(true));
+        configure_internal_observations(&mut p, false);
+        assert!(!p.contains_key("experimentalRawEvents"));
+        configure_internal_observations(&mut p, true);
+        assert_eq!(p["experimentalRawEvents"], true);
+        let f = RestoreFence::from_thread(
+            &json!({"turns":[{"id":"running","status":"inProgress","items":[]}]}),
+        )
+        .unwrap();
+        let frame = json!({"turnId":"running","item":{"type":"custom_tool_call","call_id":"prior","input":"retired-secret"}});
+        assert!(f.contains_raw(&frame));
+        assert!(!f.contains(&json!({"turnId":"running","itemId":"new-public-command"})));
+        assert!(!f.contains_raw(&json!({"turnId":"fresh"})));
+    }
+
+    #[test]
+    fn cold_resume_discards_old_native_content_without_knowing_rotated_credential() {
+        let old = "retired-credential-not-in-current-registry";
+        let history = json!({"turns":[{"id":"old-turn","items":[{"id":"old-item","type":"agentMessage","text":old}]}]});
+        let fence = RestoreFence::from_thread(&history).unwrap();
+        let frames = [
+            json!({"turnId":"old-turn","itemId":"old-item","delta":old}),
+            json!({"item":{"id":"old-item","text":old}}),
+            json!({"turn":{"id":"old-turn"}}),
+        ];
+        let admitted = frames
+            .into_iter()
+            .filter(|frame| !fence.contains(frame))
+            .collect::<Vec<_>>();
+        assert!(admitted.is_empty());
+        assert!(
+            !fence.contains(&json!({"turnId":"new-turn","itemId":"new-item","delta":"new output"}))
+        );
+        let active = RestoreFence::from_thread(&json!({"turns":[{"id":"active-turn","status":"inProgress","items":[{"id":"prior-item"}]}]})).unwrap();
+        assert!(active.contains(&json!({"turnId":"active-turn","itemId":"prior-item"})));
+        assert!(!active.contains(&json!({"turnId":"active-turn","itemId":"new-item"})));
+        assert_eq!(
+            history["turns"][0]["items"][0]["text"], old,
+            "private resume content untouched"
+        );
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod managed_startup_tests {
+    use super::*;
+    struct Isolated(std::path::PathBuf);
+    #[async_trait]
+    impl auth::CredentialResolver for Isolated {
+        async fn environment(&self) -> Result<crate::credentials::ChildEnvironment, HarnessError> {
+            Ok(crate::credentials::ChildEnvironment::new(
+                "CODEX_HOME",
+                zeroize::Zeroizing::new(self.0.to_string_lossy().into_owned()),
+            ))
+        }
+        async fn resolve(
+            &self,
+            _: bool,
+            _: Option<&str>,
+        ) -> Result<auth::Credential, HarnessError> {
+            Err(HarnessError::Protocol("fixture-no-auth".into()))
+        }
+    }
+    #[tokio::test]
+    async fn failed_initialize_retains_profile_lock_until_child_is_reaped() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let profile = tmp.path().join("profile");
+        let peer = tmp.path().join("peer");
+        std::fs::write(&peer,"#!/usr/bin/python3\nimport os,signal,time\ndef stop(*_):\n time.sleep(0.3)\n os._exit(0)\nsignal.signal(signal.SIGTERM,stop)\nos.close(1)\nwhile True:time.sleep(1)\n").unwrap();
+        std::fs::set_permissions(&peer, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let harness = CodexHarness::new()
+            .with_executable(&peer)
+            .with_managed_startup()
+            .with_credentials(Arc::new(Isolated(profile.clone())));
+        let request:RunRequest=serde_json::from_value(json!({"prompt":"","cwd":tmp.path(),"sandbox":"workspace-write","model":null,"reasoning":null,"resume":null})).unwrap();
+        let (_keep, steering) = mpsc::channel(1);
+        let controls = RunControls {
+            realtime: None,
+            execution_lease: None,
+            steering,
+            interrupt: tokio_util::sync::CancellationToken::new(),
+            request_input: Box::new(|_| {
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                let _ = tx.send(vec![]);
+                rx
+            }),
+            turn: Default::default(),
+        };
+        let mut stream = harness.start_idle(request, controls).await.unwrap();
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(3), stream.next())
+                .await
+                .unwrap(),
+            Some(Ok(AgentEvent::Done {
+                status: DoneStatus::Errored,
+                ..
+            }))
+        ));
+        let mut cmd = Command::new("/bin/true");
+        cmd.env("CODEX_HOME", &profile);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(75), startup::acquire(&cmd, None))
+                .await
+                .is_err(),
+            "a still-alive failed child must retain its startup lock during cleanup"
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_secs(3), stream.next())
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let _guard = tokio::time::timeout(Duration::from_secs(1), startup::acquire(&cmd, None))
+            .await
+            .unwrap()
+            .unwrap();
     }
 }

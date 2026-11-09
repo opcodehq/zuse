@@ -76,8 +76,15 @@ const MIGRATIONS: &[&str] = &[
     "ALTER TABLE chat_sync_jobs ADD COLUMN cursor TEXT NOT NULL DEFAULT '';",
     "CREATE TABLE tool_blobs (blob_ref TEXT PRIMARY KEY, doc_id TEXT NOT NULL, bytes BLOB NOT NULL) STRICT;
      CREATE INDEX tool_blobs_doc ON tool_blobs(doc_id);",
+    // Local authority proof is separate from a peer-editable command document.
+    "CREATE TABLE cloud_command_authorizations (
+        doc_id TEXT NOT NULL, command_id TEXT NOT NULL, digest TEXT NOT NULL,
+        PRIMARY KEY(doc_id,command_id)
+     ) STRICT;",
 ];
 
+#[path = "cloud_authority.rs"]
+mod cloud_authority;
 #[path = "tool_blobs.rs"]
 mod tool_blobs;
 pub use tool_blobs::ToolBlobPage;
@@ -491,6 +498,10 @@ impl DocsStore {
         let tx = conn.transaction()?;
         tx.execute("DELETE FROM snapshots WHERE doc_id = ?1", params![doc_id])?;
         tx.execute("DELETE FROM tool_blobs WHERE doc_id = ?1", params![doc_id])?;
+        tx.execute(
+            "DELETE FROM cloud_command_authorizations WHERE doc_id = ?1",
+            params![doc_id],
+        )?;
         tx.execute("DELETE FROM chat_outbox WHERE doc_id = ?1", params![doc_id])?;
         tx.execute(
             "DELETE FROM chat_sync_jobs WHERE doc_id = ?1",

@@ -16,6 +16,11 @@ mod attachment_tests;
 pub mod branding;
 mod browser;
 mod cloud;
+pub use cloud::preparation::{
+    Progress as CloudPreparationProgress, Step as CloudPreparationStep,
+    StepState as CloudPreparationStepState, progress as cloud_preparation_progress,
+    response_started as cloud_response_started,
+};
 pub mod cloud_archive_cards;
 mod cloud_billing;
 pub mod cloud_billing_view;
@@ -154,6 +159,7 @@ pub struct WorkspaceView {
     next_id: u64,
     pending: HashMap<u64, String>,
     chats: Vec<Value>,
+    chat_rows: Vec<Value>,
     providers: Vec<Value>,
     selected: Option<Value>,
     messages: Vec<SessionMessageEntry>,
@@ -180,6 +186,7 @@ pub struct WorkspaceView {
     secret_editing: Option<String>,
     expanded_parts: std::collections::HashSet<String>,
     device_id: Option<String>,
+    cloud_controller: bool,
     status: String,
     connected: bool,
     connection_epoch: u64,
@@ -258,6 +265,9 @@ pub struct WorkspaceView {
     creation_source_requests: HashMap<u64, u64>,
     creation_source_checkout: Option<(String, String, String)>,
     queue: Vec<Value>,
+    queue_paused: bool,
+    queue_pause_request: Option<(u64, String)>,
+    unknown_review_request: Option<(u64, String, String)>,
     queue_watch: Option<u64>,
     queue_edit: Option<queue_edit::QueueEdit>,
     queue_actions: HashMap<u64, queue::PendingQueueAction>,
@@ -685,6 +695,7 @@ impl WorkspaceView {
             next_id: 1,
             pending: HashMap::new(),
             chats: vec![],
+            chat_rows: vec![],
             providers: vec![],
             selected: None,
             messages: vec![],
@@ -711,6 +722,7 @@ impl WorkspaceView {
             secret_editing: None,
             expanded_parts: Default::default(),
             device_id: None,
+            cloud_controller: false,
             status: "Connecting to your engine…".into(),
             connected: false,
             connection_epoch: 0,
@@ -790,6 +802,9 @@ impl WorkspaceView {
             import_requests: Default::default(),
             creation_source_checkout: None,
             queue: vec![],
+            queue_paused: false,
+            queue_pause_request: None,
+            unknown_review_request: None,
             queue_watch: None,
             queue_edit: None,
             queue_actions: HashMap::new(),
@@ -975,7 +990,7 @@ impl WorkspaceView {
         self.pending.insert(id, method.into());
         if self
             .requests
-            .unbounded_send(json!({"id":id,"method":method,"params":params,"epoch":if self.connected||method==methods::LOCAL_DEVICE {self.connection_epoch}else{0}}))
+            .unbounded_send(json!({"id":id,"method":method,"params":params,"cloudCommandId":if self.cloud.guest{Some(uuid::Uuid::new_v4().to_string())}else{None},"epoch":if self.connected||method==methods::LOCAL_DEVICE {self.connection_epoch}else{0}}))
             .is_err()
         {
             self.error = Some("The engine connection is closed. Reconnect before sending.".into());
@@ -1095,7 +1110,10 @@ impl WorkspaceView {
         if frame.get("attachment").is_some() || frame.get("uploading").is_some() {
             if frame["generation"].as_u64() != Some(self.composer_generation)
                 || frame["epoch"].as_u64() != Some(self.connection_epoch)
-                || (!self.connected && frame["uploadRejected"] != true)
+                || (!self.connected
+                    && !self.cloud_server_commands()
+                    && !self.cloud_models_active()
+                    && frame["uploadRejected"] != true)
             {
                 return;
             }
@@ -1223,6 +1241,12 @@ impl WorkspaceView {
         if self.receive_queue_edit(id, &frame, cx) {
             return;
         }
+        if self.receive_unknown_review(id, &frame, cx) {
+            return;
+        }
+        if self.receive_queue_pause(id, &frame, cx) {
+            return;
+        }
         if self.receive_queue_action(id, &frame, cx) {
             return;
         }
@@ -1341,7 +1365,16 @@ impl WorkspaceView {
                         if !self.chats.iter().any(|row| row["id"] == chat["id"]) {
                             self.chats.push(chat.clone());
                         }
-                        self.select(chat.clone(), cx);
+                        if self.cloud.cached && self.cloud_server_commands() {
+                            self.selected = Some(chat.clone());
+                            self.messages.clear();
+                            self.queue.clear();
+                            self.transcript_state.ready = true;
+                            self.model = chat["config"]["model"].as_str().map(str::to_owned);
+                            self.refresh_queue_snapshot(chat);
+                        } else {
+                            self.select(chat.clone(), cx);
+                        }
                     }
                 }
 
@@ -1355,8 +1388,10 @@ impl WorkspaceView {
                     }
                 }
                 methods::CLOUD_ACCOUNT_STATUS => {
-                    let changed = self.cloud_account["user"]["id"] != value["user"]["id"];
+                    let changed = self.cloud_account["user"]["id"] != value["user"]["id"]
+                        || self.cloud_account["orgId"] != value["orgId"];
                     self.cloud_account = value.clone();
+                    self.update_cloud_account_catalog(changed, cx);
                     self.update_sidebar_controls(cx);
                     if changed || value["login"].is_object() {
                         self.account_action_error = None;
@@ -1423,10 +1458,21 @@ impl WorkspaceView {
                 }
                 methods::WATCH_CHATS => {
                     self.workspace_synced = true;
-                    if zuse_protocol::list_delta::apply(&mut self.chats, value, "id").is_err() {
+                    // Deltas apply to the unfiltered list; cloud guests then hide
+                    // their metadata thread from the selectable chats.
+                    let rows = if self.cloud.guest {
+                        &mut self.chat_rows
+                    } else {
+                        &mut self.chats
+                    };
+                    if zuse_protocol::list_delta::apply(rows, value, "id").is_err() {
                         self.cancel(id);
                         self.call(methods::WATCH_CHATS, json!({"delta":true}));
                         return;
+                    }
+                    if self.cloud.guest {
+                        self.chats =
+                            self.receive_cloud_conversations(&Value::Array(self.chat_rows.clone()));
                     }
                     if let Some(chat) = self
                         .cloud
@@ -1516,6 +1562,8 @@ impl WorkspaceView {
                 methods::WATCH_QUEUE if self.queue_watch == Some(id) => {
                     if let Some(items) = value["items"].as_array() {
                         self.queue = items.clone();
+                        queue_render::retain_queue_error(&mut self.queue, &value["queueError"]);
+                        self.queue_paused = value["paused"].as_bool().unwrap_or(false);
                         self.reconcile_queue_edit(cx);
                         if let Some(chat) =
                             self.selected.as_ref().and_then(|chat| chat["id"].as_str())
@@ -1617,7 +1665,16 @@ impl WorkspaceView {
                     self.send_draft.remove(&id);
                 }
                 methods::QUEUE_COMMAND => {
-                    self.send_draft.remove(&id);
+                    if let Some(draft) = self.send_draft.remove(&id)
+                        && self.cloud.guest
+                        && value["durablyAdmitted"] == true
+                        && let (Some(session), Some(message), Some(command)) =
+                            (draft.chat_id, draft.message_id, value["commandId"].as_str())
+                    {
+                        self.cloud.response_wait = Some(
+                            json!({"sessionId":session,"messageId":message,"commandId":command,"executionState":"queued"}),
+                        );
+                    }
                 }
                 _ => {}
             }
@@ -1656,6 +1713,7 @@ impl WorkspaceView {
             zuse_protocol::presentation::chat_request(&chat, json!({})),
         );
         self.queue_watch = Some(queue_watch);
+        self.queue_paused = false;
         self.messages.clear();
         self.reset_context_status();
         self.transcript_scroll.scroll_to_bottom();
@@ -1720,10 +1778,14 @@ impl WorkspaceView {
     }
 
     fn new_chat(&mut self, cx: &mut Context<Self>) -> bool {
+        self.new_chat_for(self.cloud.mode, cx)
+    }
+
+    fn new_chat_for(&mut self, cloud: bool, cx: &mut Context<Self>) -> bool {
         self.creation_checkout.dismiss();
         self.close_usage(cx);
         self.close_project_archives();
-        if !self.require_connection(cx) {
+        if !cloud && !self.require_connection(cx) {
             return false;
         }
         if self.file_navigation_blocked(cx)
@@ -1735,6 +1797,7 @@ impl WorkspaceView {
         }
         self.close_plugins_browse();
         self.stash_draft(cx);
+        self.cloud.mode = cloud;
         self.creation_source_picker
             .update(cx, |picker, cx| picker.set_target(None, cx));
         self.creation_source_checkout = None;
@@ -1771,6 +1834,10 @@ impl WorkspaceView {
             return;
         }
         if self.project_archive.project.is_some() || self.usage_open {
+            return;
+        }
+        if self.cloud.cached && self.cloud_server_commands() {
+            self.submit_saved_cloud_command(cx);
             return;
         }
         if self.cloud.cached {
@@ -1897,6 +1964,29 @@ impl WorkspaceView {
             cx.notify();
             return;
         }
+        if self.is_working()
+            && self.cloud.guest
+            && self.cloud.guest_status["commandDeliveryMode"] == "server-admitted-v2"
+            && self.cloud.guest_status["queueRunSelectionVersion"]
+                != zuse_protocol::cloud_task_commands::QUEUE_RUN_SELECTION_VERSION
+        {
+            self.error=Some("This server cannot save the selected agent with queued messages yet. Your draft is preserved; wait for the current turn to finish, then Send.".into());
+            cx.notify();
+            return;
+        }
+        let queue_selection = if self.is_working()
+            && self.cloud.guest
+            && self.cloud.guest_status["commandDeliveryMode"] == "server-admitted-v2"
+        {
+            let Some(selection) = self.selected_cloud_run_selection() else {
+                self.error=Some("Choose an available agent and model, and wait for its settings to finish saving. Your draft is preserved.".into());
+                cx.notify();
+                return;
+            };
+            Some(selection)
+        } else {
+            None
+        };
         self.stage_creation_issue(cx);
         let mut draft = Draft {
             text: text.clone(),
@@ -1915,7 +2005,15 @@ impl WorkspaceView {
         if self.is_working() {
             self.persist_outgoing_draft(draft.clone(), cx);
             let chat = self.selected.as_ref().unwrap();
-            let id = self.call(methods::QUEUE_MESSAGE, zuse_protocol::presentation::chat_request(chat, json!({"text":text, "holdForTurnEnd":true, "attachments":self.attachment_paths()})));
+            let mut body =
+                json!({"text":text,"holdForTurnEnd":true,"attachments":self.attachment_paths()});
+            if let Some(selection) = queue_selection {
+                body["runSelection"] = json!(selection);
+            }
+            let id = self.call(
+                methods::QUEUE_MESSAGE,
+                zuse_protocol::presentation::chat_request(chat, body),
+            );
             self.send_draft.insert(id, draft);
             self.input
                 .update(cx, |input, cx| input.set_value(String::new(), cx));
@@ -1935,7 +2033,7 @@ impl WorkspaceView {
             draft.chat_id = Some(uuid::Uuid::new_v4().to_string());
         }
         self.persist_outgoing_draft(draft.clone(), cx);
-        let command = json!({"kind":"run","messageId":message_id,"request":{"prompt":prompt,"harness":provider["id"],"model":self.model,"reasoning":self.reasoning,"modelOptions":self.model_options,"cwd":self.cwd(),"sandbox":self.sandbox,"plan":self.selected.as_ref().is_some_and(|chat| chat["config"]["plan"] == true),"autoApprove":self.sandbox==zuse_protocol::SandboxLevel::DangerFullAccess,"resume":null,"attachments":self.attachment_paths(),"worktree":self.creation_worktree()}});
+        let command = json!({"kind":"run","messageId":message_id,"request":{"prompt":prompt,"harness":provider["id"],"model":self.model,"reasoning":self.reasoning,"modelOptions":self.model_options,"cwd":self.cloud_command_cwd(),"sandbox":self.sandbox,"plan":self.selected.as_ref().is_some_and(|chat| chat["config"]["plan"] == true),"autoApprove":self.sandbox==zuse_protocol::SandboxLevel::DangerFullAccess,"resume":null,"attachments":self.attachment_paths(),"worktree":self.creation_worktree()}});
         let send = if let Some(chat) = &self.selected {
             self.call(
                 methods::QUEUE_COMMAND,

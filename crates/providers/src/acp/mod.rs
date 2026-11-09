@@ -1261,6 +1261,7 @@ enum Launch {
 /// fake agent with [`AcpHarness::with_executable`].
 pub struct AcpHarness {
     spec: AcpAgentSpec,
+    credentials: Option<std::sync::Arc<dyn crate::credentials::CredentialResolver>>,
     custom: Option<zuse_protocol::custom_acp::CustomAcpAgent>,
     executable: Option<PathBuf>,
     /// Override of the agent's on-disk sessions root (grok's
@@ -1289,6 +1290,7 @@ impl AcpHarness {
     fn with_spec(spec: AcpAgentSpec) -> Self {
         Self {
             spec,
+            credentials: None,
             custom: None,
             executable: None,
             sessions_root: None,
@@ -1304,6 +1306,15 @@ impl AcpHarness {
             workspace_commands: crate::skills::CommandDiscovery::default(),
             devin_models: Default::default(),
         }
+    }
+
+    /// Supply host-owned execution credentials outside serialized requests/history.
+    pub fn with_credentials(
+        mut self,
+        credentials: std::sync::Arc<dyn crate::credentials::CredentialResolver>,
+    ) -> Self {
+        self.credentials = Some(credentials);
+        self
     }
 
     /// Run an explicitly configured native ACP server through the shared engine.
@@ -1372,7 +1383,7 @@ impl AcpHarness {
     /// sign-in stored.
     pub async fn sign_out(&self) -> Result<(), HarnessError> {
         let home = std::env::var("HOME").ok();
-        let (_scratch, mut child, _stderr, sign_in_prompted) =
+        let (_scratch, mut child, _stderr, sign_in_prompted, _external_auth, _live_credentials) =
             self.spawn_agent(home.as_deref(), false, &[], None).await?;
         let (client, mut incoming) = match (child.stdin.take(), child.stdout.take()) {
             (Some(stdin), Some(stdout)) => {
@@ -1772,6 +1783,8 @@ impl AcpHarness {
             Child,
             crate::StderrTail,
             CancellationToken,
+            bool,
+            Option<crate::credentials::LiveCredentials>,
         ),
         HarnessError,
     > {
@@ -1802,6 +1815,19 @@ impl AcpHarness {
         if let Some(dir) = &scratch {
             dir.apply(&mut cmd);
         }
+        let mut live_credentials = None;
+        let external_auth = if let Some(credentials) = &self.credentials {
+            let environment = credentials.environment().await?;
+            let external = environment.external_grok_auth();
+            environment.apply(&mut cmd);
+            live_credentials = Some(crate::credentials::LiveCredentials::new(
+                credentials.clone(),
+                &environment,
+            ));
+            external
+        } else {
+            false
+        };
         cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -1832,7 +1858,14 @@ impl AcpHarness {
                 tail.close();
             });
         }
-        Ok((scratch, child, stderr_tail, sign_in_prompted))
+        Ok((
+            scratch,
+            child,
+            stderr_tail,
+            sign_in_prompted,
+            external_auth,
+            live_credentials,
+        ))
     }
 
     /// Short-lived discovery run for [`Harness::commands`]: initialize, scan
@@ -1844,9 +1877,9 @@ impl AcpHarness {
         &self,
         cwd: Option<&std::path::Path>,
     ) -> Result<Vec<SlashCommand>, HarnessError> {
-        let (_scratch, mut child, _stderr, sign_in_prompted) = self
-            .spawn_agent(cwd.and_then(|p| p.to_str()), false, &[], None)
-            .await?;
+        let (_scratch, mut child, _stderr, sign_in_prompted, external_auth, _live_credentials) =
+            self.spawn_agent(cwd.and_then(|p| p.to_str()), false, &[], None)
+                .await?;
         let (client, mut incoming) = match (child.stdin.take(), child.stdout.take()) {
             (Some(stdin), Some(stdout)) => {
                 client_with_sign_in_prompt(stdin, stdout, self.spec.id, &sign_in_prompted)
@@ -1860,6 +1893,7 @@ impl AcpHarness {
             let init = client
                 .request("initialize", initialize_params(self.spec.id))
                 .await?;
+            authenticate_external(&client, &init, external_auth).await?;
             let mut commands = scan_available_commands(&init);
             {
                 let cwd = cwd
@@ -1916,7 +1950,7 @@ impl AcpHarness {
     /// wire is the source of truth — the spec's static catalog only enriches
     /// matching entries and names the pick when the agent advertises nothing.
     async fn discover_models(&self) -> Result<Vec<Model>, HarnessError> {
-        let (_scratch, mut child, stderr_tail, sign_in_prompted) =
+        let (_scratch, mut child, stderr_tail, sign_in_prompted, external_auth, _live_credentials) =
             self.spawn_agent(None, false, &[], None).await?;
         let (client, _incoming) = match (child.stdin.take(), child.stdout.take()) {
             (Some(stdin), Some(stdout)) => {
@@ -1928,9 +1962,10 @@ impl AcpHarness {
             }
         };
         let discovery = async {
-            client
+            let init = client
                 .request("initialize", initialize_params(self.spec.id))
                 .await?;
+            authenticate_external(&client, &init, external_auth).await?;
             let cwd = crate::executable::home_or_current_dir();
             let session = client
                 .request("session/new", json!({ "cwd": cwd, "mcpServers": [] }))
@@ -2489,9 +2524,9 @@ impl Harness for AcpHarness {
                 launch_args.extend(["--effort".into(), effort.into()]);
             }
         }
-        let (scratch, mut child, stderr_tail, sign_in_prompted) = self
-            .spawn_agent(Some(&request.cwd), true, &launch_args, request.mcp.as_ref())
-            .await?;
+        let (scratch, mut child, stderr_tail, sign_in_prompted, external_auth, live_credentials) =
+            self.spawn_agent(Some(&request.cwd), true, &launch_args, request.mcp.as_ref())
+                .await?;
         let stdin = child
             .stdin
             .take()
@@ -2536,6 +2571,7 @@ impl Harness for AcpHarness {
             _ => None,
         };
         tokio::spawn(run_session(Session {
+            live_credentials,
             child,
             scratch,
             client,
@@ -2556,6 +2592,7 @@ impl Harness for AcpHarness {
             stall_hint: self.spec.stall_hint,
             effort_in_model_id: self.spec.effort_in_model_id,
             auth_method: self.spec.auth_method,
+            external_auth,
             sessions_root: self.sessions_root.clone(),
             interrupt_grace: self.interrupt_grace,
             kill_grace: self.kill_grace,
@@ -2581,6 +2618,7 @@ impl Harness for AcpHarness {
 // ---------------------------------------------------------------------------
 
 struct Session {
+    live_credentials: Option<crate::credentials::LiveCredentials>,
     child: Child,
     scratch: Option<ScratchDir>,
     client: RpcClient,
@@ -2603,6 +2641,7 @@ struct Session {
     stall_hint: &'static str,
     effort_in_model_id: bool,
     auth_method: Option<&'static str>,
+    external_auth: bool,
     /// Sessions-root override for the subagent transcript tail (tests).
     sessions_root: Option<PathBuf>,
     prompt_transform: fn(Option<ReasoningLevel>, &str) -> String,
@@ -4032,8 +4071,37 @@ async fn select_session_config(
     Ok(options_snapshot)
 }
 
+async fn authenticate_external(
+    client: &RpcClient,
+    initialized: &Value,
+    external: bool,
+) -> Result<(), HarnessError> {
+    if !external {
+        return Ok(());
+    }
+    if !initialized["authMethods"]
+        .as_array()
+        .is_some_and(|methods| methods.iter().any(|method| method["id"] == "grok.com"))
+    {
+        return Err(HarnessError::Protocol(
+            "grok-auth-adapter-incompatible".into(),
+        ));
+    }
+    // The configured external command resolves this selected connection without
+    // opening a browser or passing token material through ACP request params.
+    client
+        .request(
+            "authenticate",
+            json!({"methodId":"grok.com","_meta":{"headless":true}}),
+        )
+        .await
+        .map_err(|_| HarnessError::Protocol("grok-auth-reconnecting".into()))?;
+    Ok(())
+}
+
 async fn run_session(session: Session) {
     let Session {
+        live_credentials,
         // Locals drop in reverse binding order: reap the child before cleanup.
         scratch: _scratch,
         mut child,
@@ -4053,6 +4121,7 @@ async fn run_session(session: Session) {
         stall_hint,
         effort_in_model_id,
         auth_method,
+        external_auth,
         sessions_root,
         prompt_transform,
         effort_values,
@@ -4082,6 +4151,7 @@ async fn run_session(session: Session) {
         let init = client
             .request("initialize", initialize_params(harness))
             .await?;
+        authenticate_external(&client, &init, external_auth).await?;
         let steer_ext = steering_supported(&init);
         let init_commands = scan_available_commands(&init);
 
@@ -5088,6 +5158,16 @@ async fn run_session(session: Session) {
             }, if (released.is_some() || (steering_open && deferred.is_empty())) && !interrupted => match steer {
                 Some(msg) => {
                     if crate::cancelled_steer(&msg, &turn_control) { continue 'main; }
+                    if quiet!() && let Some(credentials) = &live_credentials {
+                        let validation = tokio::select! { biased;
+                            _ = interrupt.cancelled() => break 'main,
+                            result = credentials.validate() => result,
+                        };
+                        if let Err(error) = validation {
+                            let _ = event_tx.send(Err(error)).await;
+                            break 'main;
+                        }
+                    }
                     if msg.config.is_some() && !quiet!() {
                         deferred.push_back(msg);
                         continue 'main;
@@ -5397,6 +5477,84 @@ async fn run_session(session: Session) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn brokered_grok_credentials_reach_the_real_child_and_authenticate_before_session_creation()
+     {
+        use crate::credentials::{ChildEnvironment, CredentialResolver};
+        use std::os::unix::fs::PermissionsExt;
+        struct Resolver;
+        #[async_trait]
+        impl CredentialResolver for Resolver {
+            async fn environment(&self) -> Result<ChildEnvironment, HarnessError> {
+                Ok(ChildEnvironment::new(
+                    "GROK_AUTH_PROVIDER_COMMAND",
+                    zeroize::Zeroizing::new("exec /test/helper".into()),
+                )
+                .and(
+                    "ZUSE_GROK_AUTH_SOCKET",
+                    zeroize::Zeroizing::new("/private/test/socket".into()),
+                )
+                .and("BROWSER", zeroize::Zeroizing::new("/bin/false".into())))
+            }
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let script = directory.path().join("grok");
+        std::fs::write(
+            &script,
+            r#"#!/usr/bin/env python3
+import os,sys,json
+assert os.environ.get('GROK_AUTH_PROVIDER_COMMAND')=='exec /test/helper'
+assert os.environ.get('ZUSE_GROK_AUTH_SOCKET')=='/private/test/socket'
+assert not os.environ.get('XAI_API_KEY')
+assert os.environ.get('BROWSER')=='/bin/false'
+authenticated=False
+for line in sys.stdin:
+    request=json.loads(line)
+    if request['method']=='initialize': result={'authMethods':[{'id':'grok.com'}]}
+    elif request['method']=='authenticate':
+        assert request['params']=={'methodId':'grok.com','_meta':{'headless':True}}
+        authenticated=True
+        result={}
+    elif request['method']=='session/new':
+        assert authenticated
+        result={'sessionId':'fixture-session'}
+    else: raise RuntimeError('unexpected request')
+    print(json.dumps({'jsonrpc':'2.0','id':request['id'],'result':result}),flush=True)
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let harness = AcpHarness::grok()
+            .with_executable(script)
+            .with_credentials(std::sync::Arc::new(Resolver));
+        let (_scratch, mut child, _stderr, prompted, external, _live_credentials) =
+            harness.spawn_agent(None, false, &[], None).await.unwrap();
+        assert!(external);
+        let (client, _incoming) = client_with_sign_in_prompt(
+            child.stdin.take().unwrap(),
+            child.stdout.take().unwrap(),
+            HarnessId::Grok,
+            &prompted,
+        );
+        let init = client
+            .request("initialize", initialize_params(HarnessId::Grok))
+            .await
+            .unwrap();
+        authenticate_external(&client, &init, external)
+            .await
+            .unwrap();
+        let session = client
+            .request(
+                "session/new",
+                json!({"cwd":directory.path(),"mcpServers":[]}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(session["sessionId"], "fixture-session");
+        child.shutdown(Duration::from_millis(20)).await;
+    }
 
     #[test]
     fn saved_approval_keys_bind_tool_kind_and_complete_inputs() {
@@ -6754,4 +6912,38 @@ mod mcp_injection_tests {
             })]
         );
     }
+}
+
+#[cfg(all(test, unix))]
+#[tokio::test]
+async fn cold_resume_drops_replayed_native_history_before_and_queued_at_load_response() {
+    let mut child = Command::new(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fake-robust-acp.py"),
+    )
+    .stdin(Stdio::piped())
+    .stdout(Stdio::piped())
+    .kill_on_drop(true)
+    .spawn()
+    .unwrap();
+    let (client, mut incoming) =
+        RpcClient::new(child.stdin.take().unwrap(), child.stdout.take().unwrap());
+    let result = tokio::time::timeout(
+        Duration::from_secs(5),
+        request_draining(
+            &client,
+            &mut incoming,
+            "session/load",
+            json!({"sessionId":"parent"}),
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(result["sessionId"], "parent");
+    assert!(
+        incoming.try_recv().is_err(),
+        "old native text cannot enter next public turn"
+    );
+    assert!(!result.to_string().contains("retired-credential"));
+    child.kill().await.unwrap();
 }

@@ -36,6 +36,7 @@ impl WorkspaceView {
     }
     fn import_target(&self) -> Option<Target> {
         if self.selected.is_some()
+            || self.cloud_controller
             || self.cloud.guest
             || self.cloud_model_change_pending()
             || !self.connected

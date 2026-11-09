@@ -500,6 +500,257 @@ impl Shell {
         )
     }
 
+    /// The environment summary for a cloud conversation: the computer and
+    /// its state, the repository and branch it works on, and the actions a
+    /// computer has (sleep or wake, its details, the synced folder).
+    pub(super) fn render_cloud_session_info(
+        &mut self,
+        conversation: &Entity<super::cloud_conversation::CloudConversation>,
+        reveal: f32,
+        max_height: f32,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        if reveal <= 0.001 {
+            return None;
+        }
+        let theme = Theme::of(cx).for_popup();
+        let (summary, synced, resources) = {
+            let view = conversation.read(cx);
+            (
+                view.computer_summary(),
+                view.synced_folder(),
+                view.resources().clone(),
+            )
+        };
+        let running = matches!(summary.tone, super::cloud_conversation::Tone::Running);
+        if running {
+            conversation.update(cx, |view, cx| view.want_resources(cx));
+        }
+        let computer = summary
+            .provider
+            .clone()
+            .map(|provider| format!("{provider} computer"))
+            .unwrap_or_else(|| "Cloud computer".into());
+        let computer_row = info_row(
+            &theme,
+            row_glyph(icons::DITHER_CLOUD, &theme),
+            computer.into(),
+        )
+        .id("cloud-session-info-computer")
+        .child(
+            row_meta(&theme)
+                .child(
+                    div()
+                        .size(px(6.0))
+                        .rounded_full()
+                        .bg(summary.tone.color(&theme)),
+                )
+                .child(summary.label),
+        );
+        let repository_row = summary.repository.clone().map(|repository| {
+            info_row(&theme, row_glyph(icons::FOLDER, &theme), repository.into())
+                .id("cloud-session-info-repository")
+        });
+        let branch_row = summary.branch.clone().map(|branch| {
+            info_row(&theme, row_glyph(icons::GIT_BRANCH, &theme), branch.into())
+                .id("cloud-session-info-branch")
+        });
+        // Its size, and when it sleeps on its own.
+        let size_row = info_row(
+            &theme,
+            row_glyph(icons::CLOCK_CIRCLE, &theme),
+            if summary.sleeping {
+                "Wakes when you send a message".into()
+            } else {
+                "Sleeps after 10 min idle".into()
+            },
+        )
+        .id("cloud-session-info-idle")
+        .when_some(summary.size.clone(), |row, size| {
+            row.child(row_meta(&theme).child(size))
+        });
+        // Performance: one row with CPU at a glance, unfolding to the bars.
+        let cpu = resources["cpuPercent"].as_f64();
+        let (performance_header, performance_open) = self.session_info_section(
+            "cloud-performance",
+            false,
+            row_glyph(icons::MONITOR, &theme),
+            "Performance",
+            Some(SharedString::from(match (running, cpu) {
+                (false, _) => "Not running".to_owned(),
+                (true, Some(cpu)) => format!("{cpu:.0}% CPU"),
+                (true, None) => "Measuring…".to_owned(),
+            })),
+            &theme,
+            cx,
+        );
+        let mut performance = vec![performance_header];
+        if performance_open && running {
+            let bytes = |value: &serde_json::Value| value.as_u64().map(|v| v as f64 / 1e9);
+            let meter = |label: &'static str, fraction: Option<f64>, detail: String| {
+                let fraction = fraction.unwrap_or(0.0).clamp(0.0, 1.0) as f32;
+                let tone = if fraction > 0.9 {
+                    theme.danger
+                } else if fraction > 0.7 {
+                    theme.warning
+                } else {
+                    theme.success
+                };
+                sub_row(&theme)
+                    .flex_col()
+                    .items_start()
+                    .gap(px(4.0))
+                    .py(px(4.0))
+                    .child(
+                        div()
+                            .w_full()
+                            .flex()
+                            .justify_between()
+                            .child(label)
+                            .child(div().text_color(theme.text_muted).child(detail)),
+                    )
+                    .child(
+                        div()
+                            .w_full()
+                            .h(px(4.0))
+                            .rounded_full()
+                            .bg(theme.text.opacity(0.08))
+                            .child(
+                                div()
+                                    .h_full()
+                                    .w(gpui::relative(fraction))
+                                    .rounded_full()
+                                    .bg(tone),
+                            ),
+                    )
+                    .into_any_element()
+            };
+            let cores = resources["cores"].as_u64();
+            performance.push(meter(
+                "CPU",
+                cpu.map(|cpu| cpu / 100.0),
+                match (cpu, cores) {
+                    (Some(cpu), Some(cores)) => format!("{cpu:.0}% of {cores} cores"),
+                    (Some(cpu), None) => format!("{cpu:.0}%"),
+                    _ => "—".into(),
+                },
+            ));
+            for (label, used, total) in [
+                ("Memory", "memoryUsedBytes", "memoryTotalBytes"),
+                ("Disk", "diskUsedBytes", "diskTotalBytes"),
+            ] {
+                let (used, total) = (bytes(&resources[used]), bytes(&resources[total]));
+                performance.push(meter(
+                    label,
+                    used.zip(total)
+                        .filter(|(_, t)| *t > 0.0)
+                        .map(|(u, t)| u / t),
+                    match (used, total) {
+                        (Some(used), Some(total)) => format!("{used:.1} of {total:.1} GB"),
+                        _ => "—".into(),
+                    },
+                ));
+            }
+        }
+        let sleep = {
+            let conversation = conversation.clone();
+            action_row(&theme, "cloud-session-info-sleep")
+                .debug_selector(|| "cloud-session-info-sleep".into())
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.close_session_info_overlay(cx);
+                    conversation.update(cx, |view, cx| view.toggle_sleep(cx));
+                }))
+                .child(popover::picker_icon_slot(row_glyph(
+                    if summary.sleeping {
+                        icons::ACTION_PLAY
+                    } else {
+                        icons::MOON
+                    },
+                    &theme,
+                )))
+                .child(div().flex_1().child(if summary.sleeping {
+                    "Wake computer"
+                } else {
+                    "Put computer to sleep"
+                }))
+        };
+        let details = {
+            let conversation = conversation.clone();
+            action_row(&theme, "cloud-session-info-details")
+                .debug_selector(|| "cloud-session-info-details".into())
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.close_session_info_overlay(cx);
+                    conversation.update(cx, |view, cx| view.open_computer(cx));
+                }))
+                .child(popover::picker_icon_slot(row_glyph(
+                    icons::SETTINGS,
+                    &theme,
+                )))
+                .child(div().flex_1().child("Computer details and sync"))
+        };
+        let folder = synced.map(|path| {
+            let reveal_path = path.clone();
+            action_row(&theme, "cloud-session-info-folder")
+                .tooltip(crate::settings::widgets::text_tooltip(path))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.close_session_info_overlay(cx);
+                    cx.reveal_path(std::path::Path::new(&reveal_path));
+                }))
+                .child(popover::picker_icon_slot(row_glyph(
+                    icons::FOLDER_OPEN,
+                    &theme,
+                )))
+                .child(div().flex_1().child("Open synced folder"))
+        });
+        let body = div()
+            .id("cloud-session-info-body")
+            .max_h(px(max_height.max(120.0)))
+            .overflow_y_scroll()
+            .p(px(SUMMARY_CARD_PADDING))
+            .flex()
+            .flex_col()
+            .child(computer_row)
+            .children(repository_row)
+            .children(branch_row)
+            .child(size_row)
+            .child(fade_rule(&theme))
+            .children(performance)
+            .child(fade_rule(&theme))
+            .child(sleep)
+            .children(folder)
+            .child(details);
+        let card = div()
+            .w(px(SESSION_CARD_WIDTH))
+            .rounded(px(SUMMARY_CARD_RADIUS))
+            .overflow_hidden()
+            .border_1()
+            .border_color(theme.border)
+            .bg(popover::surface_bg(&theme))
+            .when(!theme.is_frost(), |card| card.shadow_lg())
+            .child(body);
+        let ease = crate::motion::RESIZE.progress(reveal.clamp(0.0, 1.0));
+        let dy = -6.0 * (1.0 - ease);
+        Some(
+            div()
+                .id("session-info")
+                .debug_selector(|| "session-info".into())
+                .absolute()
+                .top(px(Theme::TITLEBAR_HEIGHT + SESSION_CARD_DROP + dy))
+                .right(px(SESSION_CARD_INSET))
+                .opacity(ease)
+                .occlude()
+                .on_mouse_down_out(
+                    cx.listener(|this, _, _, cx| this.close_session_info_overlay(cx)),
+                )
+                .child(crate::frost::frosted(
+                    SUMMARY_CARD_RADIUS,
+                    crate::frost::MENU_BLUR,
+                    card,
+                ))
+                .into_any_element(),
+        )
+    }
+
     /// A collapsible section's header: an ordinary icon row whose chevron
     /// folds the rows beneath it. Returns the row and whether it is open.
     /// `session_info_folded` records the sections toggled away from

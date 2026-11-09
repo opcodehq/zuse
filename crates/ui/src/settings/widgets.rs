@@ -795,6 +795,27 @@ pub fn row_title(theme: &Theme, title: impl Into<SharedString>) -> gpui::Div {
         .child(title.into())
 }
 
+/// A settings row's left side: title over one muted description, using the
+/// design system's row type sizes. Every page's rows share this one helper.
+pub fn row_copy(theme: &Theme, title: &str, description: &str) -> gpui::Div {
+    div()
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .flex_col()
+        .gap(px(2.))
+        .child(row_title(theme, title.to_owned()))
+        .when(!description.is_empty(), |copy| {
+            copy.child(
+                div()
+                    .text_size(crate::typography::ui_rems(ROW_DESCRIPTION_SIZE))
+                    .line_height(crate::typography::ui_rems(16.))
+                    .text_color(theme.text_muted)
+                    .child(description.to_owned()),
+            )
+        })
+}
+
 /// The quiet meta line under a row title: `text-[12px]
 /// text-muted-foreground/65` fragments joined by dots.
 pub fn meta_line(theme: &Theme, fragments: Vec<AnyElement>) -> gpui::Div {

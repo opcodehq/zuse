@@ -80,7 +80,12 @@ pub(crate) async fn list_with_lease(
     harness: Arc<dyn Harness>,
     force: bool,
     lease: Option<Arc<tokio::sync::OwnedRwLockReadGuard<()>>>,
+    pinned_models: Option<Vec<Model>>,
 ) -> Result<Vec<Model>, HarnessError> {
+    // This check precedes both the foreground probe and its background refresh.
+    if let Some(models) = pinned_models {
+        return Ok(models);
+    }
     let root = root.to_path_buf();
     tokio::spawn(async move {
         let _lease = lease.clone();
@@ -96,7 +101,7 @@ async fn list(
     harness: Arc<dyn Harness>,
     force: bool,
 ) -> Result<Vec<Model>, HarnessError> {
-    list_with_lease(root, harness, force, None).await
+    list_with_lease(root, harness, force, None, None).await
 }
 
 async fn list_inner(
@@ -305,6 +310,46 @@ mod tests {
         }
     }
     #[tokio::test]
+    async fn pinned_managed_catalogs_never_start_foreground_or_background_discovery() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = crate::HarnessRegistry::new();
+        let mut probes = Vec::new();
+        for id in [
+            zuse_protocol::HarnessId::Codex,
+            zuse_protocol::HarnessId::ClaudeCode,
+            zuse_protocol::HarnessId::Grok,
+        ] {
+            let mut probe = Probe::new();
+            Arc::get_mut(&mut probe).unwrap().harness = id;
+            probe.fail.store(true, SeqCst);
+            registry.register(probe.clone());
+            registry.pin_models(id, models());
+            let lease = Arc::new(registry.execution_lease(id).await);
+            let rows = list_with_lease(
+                dir.path(),
+                probe.clone(),
+                true,
+                Some(lease),
+                registry.pinned_models(id),
+            )
+            .await
+            .unwrap();
+            assert_eq!(rows[0].id, models()[0].id);
+            assert!(
+                !probe.forced.load(SeqCst),
+                "managed model listing must not request credentials"
+            );
+            probes.push(probe);
+        }
+        tokio::task::yield_now().await;
+        assert!(
+            probes.iter().all(|probe| !probe.forced.load(SeqCst)),
+            "no background refresh was spawned"
+        );
+        assert!(!dir.path().join("model-catalogs").exists());
+    }
+
+    #[tokio::test]
     async fn background_refresh_holds_lease_after_cached_reply() {
         let dir = tempfile::tempdir().unwrap();
         let probe = Probe::new();
@@ -312,7 +357,7 @@ mod tests {
         probe.delay.store(true, SeqCst);
         let gate = Arc::new(tokio::sync::RwLock::new(()));
         let lease = Arc::new(gate.clone().read_owned().await);
-        list_with_lease(dir.path(), probe, true, Some(lease))
+        list_with_lease(dir.path(), probe, true, Some(lease), None)
             .await
             .unwrap();
         assert!(
@@ -334,7 +379,7 @@ mod tests {
         let lease = Arc::new(gate.clone().read_owned().await);
         let task = tokio::spawn({
             let probe = probe.clone();
-            async move { list_with_lease(&root, probe, true, Some(lease)).await }
+            async move { list_with_lease(&root, probe, true, Some(lease), None).await }
         });
         tokio::time::timeout(Duration::from_secs(2), async {
             while !probe.forced.load(SeqCst) {

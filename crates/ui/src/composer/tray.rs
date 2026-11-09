@@ -42,6 +42,14 @@ pub(crate) const ICON_ACTION: f32 = 24.0;
 const TEXT_ACTION_HEIGHT: f32 = 28.0;
 /// Compact staged-image tiles in the attachment row.
 const THUMB: f32 = 40.0;
+
+fn is_configuration_notice(
+    message: &str,
+    key: Option<&str>,
+    notice: Option<&(String, String)>,
+) -> bool {
+    notice.is_some_and(|(chat, text)| key == Some(chat.as_str()) && message == text)
+}
 const THUMB_RADIUS: f32 = 7.0;
 /// `ContextPill` hover intent: open after a short dwell, close after a grace
 /// that carries the pointer across the gap to the preview card.
@@ -559,64 +567,31 @@ impl Composer {
     ) -> Option<AnyElement> {
         let theme = Theme::of(cx).clone();
         let mut rows = Vec::new();
-        if let Some(request) = self
-            .cloud
-            .request
-            .as_ref()
-            .filter(|_| self.state.read(cx).selected_chat.is_none())
-        {
-            rows.push(TrayRow::Element(
-                zuse_viewport::cloud_queue::queue(
-                    zuse_viewport::cloud_queue::Prompt::from_request(request),
-                    self.cloud.message.clone().unwrap_or_else(|| {
-                        if self.cloud.task.is_some() {
-                            "Preparing cloud workspace…".into()
-                        } else {
-                            "Cloud startup needs attention. Your message is still queued.".into()
-                        }
-                    }),
-                    self.cloud.task.is_some(),
-                    !crate::motion::reduced_motion(cx),
-                    theme.text,
-                    theme.text_muted,
-                    theme.border.opacity(0.4),
-                )
-                .into_any_element(),
-            ));
-            if self.cloud.task.is_none() && self.visible_failure().is_none() {
-                rows.push(TrayRow::Element(
-                    div()
-                        .w_full()
-                        .flex()
-                        .justify_end()
-                        .px(px(12.))
-                        .py(px(4.))
-                        .child(
-                            tray_text_action("retry-cloud-launch", "Retry", None, &theme).on_click(
-                                cx.listener(|this, _, _, cx| {
-                                    let text = this.input.read(cx).text().to_owned();
-                                    this.send_cloud(text, cx);
-                                }),
-                            ),
-                        )
-                        .into_any_element(),
-                ));
-            }
-        } else if let Some((message, retry)) = self.pickers.read(cx).cloud_model_notice(cx) {
-            let row =
-                TrayPill::new("native-cloud-models", message).glyph(crate::icons::DITHER_CLOUD);
+        // The prompt itself is already in the transcript; the tray only says
+        // what the cloud computer is doing.
+        if let Some(row) = self.cloud_status_row(&theme, cx) {
+            let retry = self.cloud_launch_pending(cx)
+                && self.cloud.task.is_none()
+                && self.visible_failure().is_none();
             rows.push(TrayRow::Pill(if retry {
                 row.action(
-                    tray_text_action("retry-cloud-models", "Retry", None, &theme).on_click(
+                    tray_text_action("retry-cloud-launch", "Retry", None, &theme).on_click(
                         cx.listener(|this, _, _, cx| {
-                            this.pickers
-                                .update(cx, |picker, cx| picker.refresh_cloud_models(cx));
+                            let text = this.input.read(cx).text().to_owned();
+                            this.send_cloud(text, cx);
                         }),
                     ),
                 )
             } else {
                 row
             }));
+            if self.cloud_launch_pending(cx) {
+                // Nothing else in the tray while the launch owns it.
+            } else if let Some(notice) = self.cloud_model_notice_row(&theme, cx) {
+                rows.push(TrayRow::Pill(notice));
+            }
+        } else if let Some(notice) = self.cloud_model_notice_row(&theme, cx) {
+            rows.push(TrayRow::Pill(notice));
         }
         rows.extend(self.live_cloud_row(&theme, cx).map(TrayRow::Pill));
         rows.extend(self.connection_row(cx).map(TrayRow::Pill));
@@ -662,14 +637,28 @@ impl Composer {
             );
         }
         let surface = tray_surface(&theme, cx.has_active_drag())
-            .when(self.cloud_launch_pending(cx), |surface| {
-                surface.bg(zuse_viewport::cloud_queue::background())
-            })
             .debug_selector(|| "composer-tray".into())
             .children(rows);
         Some(
             crate::frost::frosted(TRAY_RADIUS, crate::frost::MENU_BLUR, surface).into_any_element(),
         )
+    }
+
+    fn cloud_model_notice_row(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<TrayPill> {
+        let (message, retry) = self.pickers.read(cx).cloud_model_notice(cx)?;
+        let row = TrayPill::new("native-cloud-models", message).glyph(crate::icons::DITHER_CLOUD);
+        Some(if retry {
+            row.action(
+                tray_text_action("retry-cloud-models", "Retry", None, theme).on_click(cx.listener(
+                    |this, _, _, cx| {
+                        this.pickers
+                            .update(cx, |picker, cx| picker.refresh_cloud_models(cx));
+                    },
+                )),
+            )
+        } else {
+            row
+        })
     }
 
     /// "No connection" while offline; a quiet reconnecting row while only the
@@ -1281,13 +1270,29 @@ impl Composer {
         // A failed send in this composer outranks the transcript's error.
         if let Some(message) = self.visible_failure() {
             let offline = message.as_ref() == "Engine not connected";
+            let configuration = is_configuration_notice(
+                message.as_ref(),
+                self.failure_key.as_deref(),
+                self.state.read(cx).configuration_notice().as_ref(),
+            );
             let cloud_launch = self.cloud.request.is_some();
             let sign_in = if cloud_launch {
                 None
             } else {
                 self.sign_in_row(None, harness, label, theme, cx)
             };
-            let actions = if cloud_launch {
+            let actions = if configuration {
+                vec![
+                    tray_text_action("refresh-chat-choices", "Refresh access", None, theme)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.state
+                                .update(cx, |state, cx| state.refresh_selected_configuration(cx));
+                            this.permission_open = false;
+                            cx.notify();
+                        }))
+                        .into_any_element(),
+                ]
+            } else if cloud_launch {
                 vec![
                     tray_text_action("retry-cloud-launch", "Retry", None, theme)
                         .on_click(cx.listener(|this, _, _, cx| {
@@ -1301,6 +1306,8 @@ impl Composer {
             };
             let (title, subtitle) = if offline {
                 ("Engine not connected", None)
+            } else if configuration {
+                ("Chat choices unavailable", Some(message.to_string()))
             } else {
                 ("Couldn't send", Some(message.to_string()))
             };
@@ -2074,6 +2081,36 @@ impl Composer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn configuration_notice_title_never_relabels_an_actual_or_foreign_send_failure() {
+        let notice = ("chat".to_owned(), "Read configuration failed".to_owned());
+        assert!(is_configuration_notice(
+            "Read configuration failed",
+            Some("chat"),
+            Some(&notice)
+        ));
+        assert!(!is_configuration_notice(
+            "Actual send failed",
+            Some("chat"),
+            Some(&notice)
+        ));
+        assert!(!is_configuration_notice(
+            "Read configuration failed",
+            Some("different-chat"),
+            Some(&notice)
+        ));
+        assert!(!is_configuration_notice(
+            "Read configuration failed",
+            None,
+            Some(&notice)
+        ));
+        assert!(!is_configuration_notice(
+            "Actual send failed",
+            Some("chat"),
+            None
+        ));
+    }
 
     fn entry(id: &str, role: MessageRole, parts: Vec<MessagePart>) -> SessionMessageEntry {
         SessionMessageEntry {

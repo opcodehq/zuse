@@ -1,6 +1,13 @@
 //! Retained-machine operations; recovery retirement requires a separate verified barrier.
 use serde::{Deserialize, Serialize};
 
+pub const RECREATION_CAPABILITY: &str = "rust-computer-recreation-v1";
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+pub const MEMORY_CAPABILITY: &str = "rust-memory-sleep-v1";
 pub const CAPABILITY: &str = "rust-workspace-lifecycle-v1";
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -29,6 +36,9 @@ pub struct ActionRequest {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Directive {
+    /// Explicit full core shutdown for verified recreation capture; never RAM parking.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub full_shutdown: bool,
     pub operation_id: String,
     pub action: Action,
     pub phase: String,
@@ -44,8 +54,17 @@ pub enum RuntimeRequest {
         #[serde(rename = "operationId")]
         operation_id: String,
     },
+    Parked {
+        #[serde(rename = "operationId")]
+        operation_id: String,
+    },
     Resumed {
         #[serde(rename = "operationId")]
         operation_id: String,
+    },
+    RecoveryRequired {
+        #[serde(rename = "operationId")]
+        operation_id: String,
+        code: String,
     },
 }

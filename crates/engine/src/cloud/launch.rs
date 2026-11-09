@@ -20,9 +20,10 @@ pub async fn create(
     let account = auth
         .user_id()
         .ok_or_else(|| anyhow::anyhow!("Sign in to access cloud workspaces."))?;
+    let organization = auth.state().org_id().map(str::to_owned);
     ensure!(
         params["expectedAccountId"].as_str() == Some(account.as_str())
-            && auth.state().org_id().is_none(),
+            && params["expectedOrganizationId"].as_str() == organization.as_deref(),
         "The account changed. Select the cloud destination again."
     );
     let token = auth
@@ -30,7 +31,8 @@ pub async fn create(
         .await
         .map_err(|_| anyhow::anyhow!("Sign in to access cloud workspaces."))?;
     ensure!(
-        auth.user_id().as_deref() == Some(account.as_str()) && auth.state().org_id().is_none(),
+        auth.user_id().as_deref() == Some(account.as_str())
+            && auth.state().org_id() == organization.as_deref(),
         "The account changed. Select the cloud destination again."
     );
     let transfers: Vec<crate::uploads::AttachmentTransfer> =
@@ -44,6 +46,10 @@ pub async fn create(
         .unwrap()
         .remove("attachmentTransfers");
     params.as_object_mut().unwrap().remove("expectedAccountId");
+    params
+        .as_object_mut()
+        .unwrap()
+        .remove("expectedOrganizationId");
     let request: zuse_protocol::cloud::CloudWorkspaceCreateRequest =
         serde_json::from_value(params)?;
     ensure!(
@@ -53,8 +59,15 @@ pub async fn create(
     // The admitted task owns its token, file store and request. Dropping the RPC waiter
     // must not interrupt create after the authority has accepted the first message.
     tokio::spawn(async move {
-        api.upload_and_create(&token, &account, uploads, request, transfers)
-            .await
+        api.upload_and_create(
+            &token,
+            &account,
+            organization.as_deref(),
+            uploads,
+            request,
+            transfers,
+        )
+        .await
     })
     .await
     .map_err(|_| {
@@ -66,6 +79,7 @@ impl CloudApi {
         &self,
         token: &str,
         account: &str,
+        organization: Option<&str>,
         uploads: crate::uploads::Uploads,
         mut request: zuse_protocol::cloud::CloudWorkspaceCreateRequest,
         transfers: Vec<crate::uploads::AttachmentTransfer>,
@@ -116,7 +130,7 @@ impl CloudApi {
                 })
                 .await??;
             for (seq, chunk) in bytes.chunks(wire::CHUNK_BYTES).enumerate() {
-                self.request(
+                self.request_scoped(
                     token,
                     &["v1", "cloud", "launch-assets", "chunk"],
                     Some(serde_json::to_value(wire::Chunk {
@@ -125,11 +139,13 @@ impl CloudApi {
                         seq,
                         bytes: URL_SAFE_NO_PAD.encode(chunk),
                     })?),
+                    organization,
+                    &[],
                 )
                 .await?;
             }
             let result = self
-                .request(
+                .request_scoped(
                     token,
                     &["v1", "cloud", "launch-assets", "commit"],
                     Some(serde_json::to_value(wire::Commit {
@@ -140,6 +156,8 @@ impl CloudApi {
                         size_bytes: bytes.len(),
                         sha256: URL_SAFE_NO_PAD.encode(Sha256::digest(&bytes)),
                     })?),
+                    organization,
+                    &[],
                 )
                 .await?;
             request
@@ -147,13 +165,15 @@ impl CloudApi {
                 .push(serde_json::from_value(result["asset"].clone())?);
         }
         let value = self
-            .request(
+            .request_scoped(
                 token,
                 &["v1", "cloud", "workspaces"],
                 Some(serde_json::to_value(request)?),
+                organization,
+                &[],
             )
             .await?;
-        Ok(json!({"accountId":account,"workspace":value}))
+        Ok(json!({"accountId":account,"organizationId":organization,"workspace":value}))
     }
 }
 fn launch_mime(name: &str) -> Option<&'static str> {

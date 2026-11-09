@@ -13836,6 +13836,7 @@ name = "zuse"
 version = "0.26.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "clap",
  "embed-resource",
  "libc",
@@ -13845,6 +13846,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
  "windows-sys 0.61.2",
  "zuse-engine",
  "zuse-mcp",
@@ -13951,6 +13953,8 @@ dependencies = [
  "tokio-util",
  "tower",
  "tower-http",
+ "tracing",
+ "tracing-subscriber",
  "uuid",
  "zeroize",
  "zuse-cloud-projection",
@@ -13960,6 +13964,7 @@ dependencies = [
  "zuse-protocol",
  "zuse-providers",
  "zuse-rpc",
+ "zuse-serve",
 ]
 
 [[package]]
@@ -13971,6 +13976,7 @@ dependencies = [
  "clap",
  "serde_json",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
  "zuse-cloud",
@@ -14007,9 +14013,12 @@ dependencies = [
  "futures",
  "rand 0.8.7",
  "reqwest",
+ "rusqlite",
  "serde",
  "serde_json",
  "sha2",
+ "tempfile",
+ "tokio",
  "zeroize",
  "zuse-model",
  "zuse-protocol",
@@ -14026,6 +14035,7 @@ dependencies = [
  "base64 0.22.1",
  "ed25519-dalek",
  "flate2",
+ "futures",
  "hmac",
  "jsonwebtoken",
  "libc",

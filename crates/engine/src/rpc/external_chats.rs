@@ -25,6 +25,10 @@ impl EngineRpc {
         method: &str,
         mut params: serde_json::Value,
     ) -> Result<RpcReply, RpcError> {
+        // Check before discovery, payload parsing, receipts or reading CLI files.
+        if !self.doc_host.native_provider_import_allowed() {
+            return Err(RpcError::Failed("Native provider history import is unavailable on managed cloud computers; use the retained Zuse conversation".into()));
+        }
         if let Some(params) = params.as_object_mut() {
             params.remove("targetDeviceId");
         }
@@ -124,6 +128,8 @@ impl EngineRpc {
         .await
         .map_err(failed)?
         .map_err(RpcError::Failed)?;
+        this.doc_host
+            .mask_imported_messages(&mut conversation.messages);
         if conversation.messages.is_empty() {
             return Err(RpcError::Failed(
                 "No readable messages were found in that provider chat.".into(),
@@ -246,5 +252,43 @@ impl EngineRpc {
         receipt.result = Some(result.clone());
         write_receipt(&path, &receipt)?;
         RpcReply::value(&result)
+    }
+}
+
+#[cfg(test)]
+mod cloud_policy_tests {
+    use super::*;
+    #[tokio::test]
+    async fn cold_resume_managed_import_policy_rejects_list_and_invalid_import_before_native_discovery()
+     {
+        let root = tempfile::tempdir().unwrap();
+        let core = crate::EngineCore::assemble(
+            root.path(),
+            std::sync::Arc::new(crate::registry::HarnessRegistry::new()),
+            zuse_protocol::HarnessId::Mock,
+            None,
+        )
+        .unwrap();
+        assert!(
+            core.doc_host.native_provider_import_allowed(),
+            "desktop default retains imports"
+        );
+        core.doc_host.disable_native_provider_import();
+        for method in [wire::LIST, wire::IMPORT] {
+            let error = match core
+                .rpc_service()
+                .external_chats(method, serde_json::json!({"not":"an import payload"}))
+                .await
+            {
+                Err(error) => error,
+                Ok(_) => panic!("managed CLI files must stay private"),
+            };
+            assert!(
+                error.to_string().contains("unavailable on managed cloud"),
+                "policy must precede payload parsing"
+            );
+        }
+        assert!(!core.repos.data_dir().join("external-chats").exists());
+        core.doc_host.shutdown_workers().await;
     }
 }

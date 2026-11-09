@@ -7,6 +7,17 @@ operation="${1:?}"
 root="${ZUSE_RECOVERY_STATUS_ROOT:-/var/lib/zuse/recovery}"
 state="$root/$operation"
 mkdir -p "$state"
+export ZUSE_USER_DATA="${ZUSE_USER_DATA:-/home/zuse/.zuse-data}"
+supervisor="${ZUSE_RUNTIME_SUPERVISOR:-/usr/local/lib/zuse/runtime-supervisor.py}"
+if [[ "${2:-}" != --foreground && -f "$supervisor" && ! -L "$supervisor" ]]; then
+  action=recover
+  [[ "${2:-}" != --cancel ]] || action=cancel-recovery
+  exec python3 "$supervisor" --data-dir "$ZUSE_USER_DATA" --operation-id "$operation" "$action"
+fi
+if [[ "${2:-}" != --foreground ]]; then
+  [[ "${ZUSE_RUNTIME_PERSISTENT_EXEC_CERTIFIED:-0}" == 1 ]] || { printf '%s\n' runtime_supervisor_missing >&2; exit 1; }
+  case "${ZUSE_RUNTIME_PROVIDER:-}" in boat|e2b|daytona) ;; *) exit 1;; esac
+fi
 if [[ "${2:-}" == --cancel ]]; then
   : >"$state/cancelled"
   if [[ -f "$state/pid" ]]; then
@@ -28,6 +39,8 @@ if [[ "${2:-}" == --cancel ]]; then
   exit 0
 fi
 if [[ "${2:-}" != --foreground ]]; then
+  [[ "${ZUSE_RUNTIME_PERSISTENT_EXEC_CERTIFIED:-0}" == 1 ]] || { printf '%s\n' runtime_supervisor_missing >&2; exit 1; }
+  case "${ZUSE_RUNTIME_PROVIDER:-}" in boat|e2b|daytona) ;; *) exit 1;; esac
   [[ -f "$state/config.json" && ! -L "$state/config.json" ]]
   nohup setsid "$0" "$operation" --foreground >>"$state/helper.log" 2>&1 </dev/null &
   exit 0
@@ -40,7 +53,8 @@ printf '%s\n' "$$" >"$state/pid"
 trap 'rm -f -- "$state/pid"' EXIT
 export ZUSE_USER_DATA="${ZUSE_USER_DATA:-/home/zuse/.zuse-data}"
 export ZUSE_ARCHIVE_CONFIG="$(cat "$state/config.json")"
-unset BOXD_API_KEY CLOUD_DATA_ENCRYPTION_KEY CLOUD_CREDENTIAL_VAULT_KEY RELAY_MINT_PRIVATE_JWK WORKOS_API_KEY
+unset BOXD_API_KEY BOAT_API_KEY E2B_API_KEY DAYTONA_API_KEY CLOUD_DATA_ENCRYPTION_KEY CLOUD_CREDENTIAL_VAULT_KEY RELAY_MINT_PRIVATE_JWK WORKOS_API_KEY
+unset ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN OPENAI_API_KEY XAI_API_KEY GROK_API_KEY
 binary="${ZUSE_RUNTIME_BINARY:-/usr/local/bin/zuse-cloud-runtime}"
 if "$binary" recover >"$state/result.next"; then
   if grep -qx 'workspace_archive_uploaded' "$state/result.next"; then

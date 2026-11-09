@@ -3569,6 +3569,10 @@ pub struct Transcript {
     /// only then may the working trailer render — a frozen snapshot must
     /// never spin, whatever its entries claim.
     doc_live: bool,
+    /// Work the chat's own session rows can't report yet, such as a cloud
+    /// computer starting or a first message on its way to the agent. While
+    /// set, the working line under the last message shows it.
+    external_activity: Option<SharedString>,
     /// Memory-only viewport state for primary chats visited in this window.
     /// A transcript instance is shared across tabs, so the active ListState is
     /// reset on every attach and cannot retain these positions by itself.
@@ -4059,6 +4063,7 @@ impl Transcript {
             retain_on_deselect: false,
             land_end_pending: doc_override.is_some() && !follow,
             doc_live: doc_override.is_some() && follow,
+            external_activity: None,
             doc_override,
             saved_viewports: SavedViewportCache::default(),
             pending_viewport: None,
@@ -4181,6 +4186,21 @@ impl Transcript {
             active: Some(0),
         });
         cx.notify();
+    }
+
+    /// Show `label` in the working line until cleared. The chat's own live
+    /// turn, when there is one, still takes precedence.
+    pub(crate) fn set_external_activity(
+        &mut self,
+        label: Option<SharedString>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.external_activity != label {
+            self.external_activity = label;
+            // The working line grows the last row; the list caches its height.
+            self.remeasure_last_row();
+            cx.notify();
+        }
     }
 
     pub fn set_rail_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
@@ -8055,6 +8075,11 @@ impl Transcript {
                 }
                 let state = self.state.read(cx);
                 let turn_started = state.session_for(&chat_id).and_then(|s| s.started_at);
+                if state.indicator_for(&chat_id, now) != crate::state::Indicator::Working
+                    && let Some(label) = self.external_activity.clone()
+                {
+                    return Some(self.render_activity_line(label, None, None, false, cx));
+                }
                 if state.indicator_for(&chat_id, now) != crate::state::Indicator::Working {
                     // The turn settled but subagents it spawned still stream:
                     // the agent resumes when they report, so the trailer holds
@@ -8129,51 +8154,70 @@ impl Transcript {
         } else {
             format!("{agent} is working")
         };
+        Some(self.render_activity_line(
+            SharedString::from(word),
+            Some(turn),
+            (!sending && waiting == 0).then(|| format_elapsed(elapsed_secs)),
+            queued,
+            cx,
+        ))
+    }
+
+    /// The working line: the animated glyph, a rolling word and, during a
+    /// turn, its elapsed time. `turn` keys the rolling text so a new turn's
+    /// labels appear fresh.
+    fn render_activity_line(
+        &self,
+        word: SharedString,
+        turn: Option<i64>,
+        timer: Option<String>,
+        warn: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let turn = turn.unwrap_or_default();
         let theme = Theme::of(cx).clone();
-        Some(
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(px(Theme::SPACE_SM))
-                .pt(px(Theme::SPACE_LG))
-                .text_size(crate::typography::text_xs())
-                .child(crate::loaders::dither_ring(
-                    format!("working-mark-{}", cx.entity_id()),
-                    14.0,
-                    theme.text_muted,
-                ))
-                .child(
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(Theme::SPACE_SM))
+            .pt(px(Theme::SPACE_LG))
+            .text_size(crate::typography::text_xs())
+            .child(crate::loaders::dither_ring(
+                format!("working-mark-{}", cx.entity_id()),
+                14.0,
+                theme.text_muted,
+            ))
+            .child(
+                div()
+                    .text_size(crate::typography::text_xs())
+                    .text_color(if warn {
+                        theme.warning
+                    } else {
+                        theme.text_muted
+                    })
+                    .child(crate::roll_text::roll_text(
+                        format!("working-word-{}-{turn}", cx.entity_id()),
+                        word,
+                        cx.reduce_motion(),
+                    )),
+            )
+            .when_some(timer, |el, timer| {
+                // The timer ticks every second; its digits roll in place
+                // (the unit suffix holds).
+                el.child(
                     div()
-                        .text_size(crate::typography::text_xs())
-                        .text_color(if queued {
-                            theme.warning
-                        } else {
-                            theme.text_muted
-                        })
+                        .relative()
+                        .top(px(1.0))
+                        .text_color(theme.text_faint)
                         .child(crate::roll_text::roll_text(
-                            format!("working-word-{}-{turn}", cx.entity_id()),
-                            SharedString::from(word),
+                            format!("working-timer-{}-{turn}", cx.entity_id()),
+                            SharedString::from(timer),
                             cx.reduce_motion(),
                         )),
                 )
-                .when(!sending && waiting == 0, |el| {
-                    // The timer ticks every second; its digits roll in place
-                    // (the unit suffix holds).
-                    el.child(
-                        div()
-                            .relative()
-                            .top(px(1.0))
-                            .text_color(theme.text_faint)
-                            .child(crate::roll_text::roll_text(
-                                format!("working-timer-{}-{turn}", cx.entity_id()),
-                                SharedString::from(format_elapsed(elapsed_secs)),
-                                cx.reduce_motion(),
-                            )),
-                    )
-                })
-                .into_any_element(),
-        )
+            })
+            .into_any_element()
     }
 
     fn render_row(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {

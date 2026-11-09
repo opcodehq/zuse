@@ -5,7 +5,7 @@ COPY . .
 RUN cargo build --locked --release -p zuse-cloud-api
 
 FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates zlib1g libstdc++6 \
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git zlib1g libstdc++6 \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --uid 10001 --create-home zuse \
     && install -d -o 10001 -g 10001 -m 700 /var/lib/zuse/recovery

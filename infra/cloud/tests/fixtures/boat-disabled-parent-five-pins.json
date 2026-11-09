@@ -1,0 +1,68 @@
+{
+  "schema": 1,
+  "mode": "post-hydration-first-start-v1",
+  "pins": {
+    "runtimeSha256": "4b09b3d42ae3e673ef173a1a4390489c605c10b2eb3d6f4cc55c416ac73eb0f6",
+    "supervisorSha256": "996ada43e893c0c74cb3e0045f700d7eb52e12d520913bcb8d5a1ee929b451c9",
+    "serviceSha256": "683d40f00d2cde548c207345384c1b76c01a644aa8043fd73623a64ac1fa14aa",
+    "manifestSha256": "d19b8543c4e8b8df9b058734d87a43b932f4ee4e0578d804340a1c08be2e87e2",
+    "helperSha256": "8ba347e88412371d19212bb88869a0d8efaaaaf20793bb5154405775bb5795cb"
+  },
+  "metadataProvenance": {
+    "hashes": "actual published clean-parent five-pin bootstrap receipt",
+    "rootOwners": "actual successful protected_bytes image verification restricts four executable/helper/unit owners to uid0",
+    "supervisorMode": "actual publication resident diagnostic",
+    "manifestOwnerAndMode": "actual failed derivation metadata observation uid/gid10001 mode0600",
+    "remainingExactModes": "immutable verified installer explicit install/chmod modes, not a fresh stat of the deleted builder",
+    "installerSha256": "9f610ea0242b3d89649637600df4382b7358082d6b1d277c1189193a26e603af"
+  },
+  "files": [
+    {
+      "path": "/usr/local/bin/zuse-cloud-runtime",
+      "pin": "runtimeSha256",
+      "uid": 0,
+      "gid": 0,
+      "mode": 493,
+      "nlink": 1,
+      "sha256": "4b09b3d42ae3e673ef173a1a4390489c605c10b2eb3d6f4cc55c416ac73eb0f6"
+    },
+    {
+      "path": "/usr/local/lib/zuse/runtime-supervisor.py",
+      "pin": "supervisorSha256",
+      "uid": 0,
+      "gid": 0,
+      "mode": 365,
+      "nlink": 1,
+      "sha256": "996ada43e893c0c74cb3e0045f700d7eb52e12d520913bcb8d5a1ee929b451c9"
+    },
+    {
+      "path": "/usr/local/lib/zuse/managed-base-fresh-boot.py",
+      "pin": "helperSha256",
+      "uid": 0,
+      "gid": 0,
+      "mode": 365,
+      "nlink": 1,
+      "sha256": "8ba347e88412371d19212bb88869a0d8efaaaaf20793bb5154405775bb5795cb"
+    },
+    {
+      "path": "/etc/systemd/system/zuse-runtime-supervisor.service",
+      "pin": "serviceSha256",
+      "uid": 0,
+      "gid": 0,
+      "mode": 420,
+      "nlink": 1,
+      "sha256": "683d40f00d2cde548c207345384c1b76c01a644aa8043fd73623a64ac1fa14aa"
+    },
+    {
+      "path": "/opt/zuse/preparation/status/manifest.json",
+      "pin": "manifestSha256",
+      "uid": 10001,
+      "gid": 10001,
+      "mode": 384,
+      "nlink": 1,
+      "sha256": "d19b8543c4e8b8df9b058734d87a43b932f4ee4e0578d804340a1c08be2e87e2"
+    }
+  ],
+  "manifestRaw": "{\"managedBase\":true,\"rustMemorySleepVersion\":1,\"rustToolOutputVersion\":1,\"rustRepositoryFetchVersion\":1,\"rustGithubCredentialsVersion\":1,\"rustGithubCliVersion\":1,\"githubCli\":{\"version\":\"gh version 2.103.3 (2026-10-26)\",\"sha256\":\"b768184570b12536be4ac1528893f6340d1c6a7b40b56ad45bca9cd0e87ad34d\",\"wrapperSha256\":\"b078a758ee8f2a1e91bdc4539f17adb4460bdae9df666bc385933c79f0db9037\",\"loginShellResolvedManaged\":true},\"rustOrganizationExecutionVersion\":1,\"rustRuntimeSupervisorVersion\":1,\"rustRuntimeRepairVersion\":1,\"rustRecreationVersion\":1,\"rustCommandAdmissionVersion\":2,\"commandAdmission\":{\"version\":1,\"runtimeSha256\":\"4b09b3d42ae3e673ef173a1a4390489c605c10b2eb3d6f4cc55c416ac73eb0f6\",\"commandAdmissionVersion\":2,\"runtimeRpcProtocol\":\"zuse-rpc-v1\",\"storageFormat\":\"zuse-rust-engine-v1\",\"sessionCommandVersion\":1,\"executionProgressVersion\":1,\"managedAgentVersion\":1},\"rustEnvironmentRecipeVersion\":1,\"rustLaunchModelConfigVersion\":1,\"rustLaunchAssetsVersion\":1,\"version\":1,\"buildId\":\"zuse-base-f392a4a03c293f2d0a2aeccb44534df5\",\"templateVersion\":\"zuse-base-f392a4a03c293f2d0a2aeccb44534df5\",\"configurationDigest\":\"zuse-base-f392a4a03c293f2d0a2aeccb44534df5\",\"planDigest\":\"afde052d5f0f9ba7360e4a0dcdc21dd306aab582717c0b270a5560afb3571537\",\"runtimeRpcProtocol\":\"zuse-rpc-v1\",\"rustRuntimeStorageFormat\":\"zuse-rust-engine-v1\",\"rustSessionCommandVersion\":1,\"credentialsRemoved\":true,\"repositories\":[]}",
+  "serviceRaw": "[Unit]\nDescription=Zuse resident runtime supervisor\nAfter=network.target\n[Service]\nType=simple\nUser=zuse\nGroup=zuse\nUMask=0077\nEnvironment=HOME=/home/zuse\nExecStart=/usr/bin/python3 /usr/local/lib/zuse/runtime-supervisor.py serve\nRestart=on-failure\nKillMode=mixed\nTimeoutStopSec=10\n[Install]\nWantedBy=multi-user.target\n"
+}
