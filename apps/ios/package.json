@@ -1,0 +1,17 @@
+{
+	"name": "@zuse/native-apple",
+	"version": "0.1.0",
+	"private": true,
+	"scripts": {
+		"check-types": "tsc --noEmit",
+		"check:native": "bash scripts/check.sh",
+		"validate:apple": "bash scripts/validate-apple.sh",
+		"test:swift": "bash scripts/test-rpc.sh",
+		"test:portable": "bash scripts/test-portable.sh"
+	},
+	"devDependencies": {
+		"bun-types": "1.3.10",
+		"effect": "catalog:",
+		"typescript": "catalog:"
+	}
+}

@@ -1530,11 +1530,31 @@ pub async fn capture_diff_against(
     capture_diff_with_status(repos, root, base_override, None).await
 }
 
-/// The capture, reusing a status the caller already read.
+/// Explicit index/worktree scopes used by native mobile review tabs.
+pub async fn capture_scoped_diff(
+    repos: &Repos,
+    root: &Path,
+    base_override: Option<&str>,
+    scope: &str,
+) -> Result<DiffSnapshot, EngineError> {
+    capture_scoped_diff_with_status(repos, root, base_override, scope, None).await
+}
+
+/// The working-tree capture, reusing a status the caller already read.
 async fn capture_diff_with_status(
     repos: &Repos,
     root: &Path,
     base_override: Option<&str>,
+    status: Option<Capture>,
+) -> Result<DiffSnapshot, EngineError> {
+    capture_scoped_diff_with_status(repos, root, base_override, "working", status).await
+}
+
+async fn capture_scoped_diff_with_status(
+    repos: &Repos,
+    root: &Path,
+    base_override: Option<&str>,
+    scope: &str,
     status: Option<Capture>,
 ) -> Result<DiffSnapshot, EngineError> {
     let head = capture_git(root, &["rev-parse", "--verify", "HEAD"], 256)
@@ -1551,32 +1571,38 @@ async fn capture_diff_with_status(
         .await
         .unwrap_or_else(|_| "HEAD".into());
 
-    let names = capture_git(
-        root,
-        &["diff", "--name-status", "-z", "--find-renames", base, "--"],
-        2 * 1024 * 1024,
-    )
-    .await?;
-    let nums = capture_git(
-        root,
-        &["diff", "--numstat", "-z", "--find-renames", base, "--"],
-        2 * 1024 * 1024,
-    )
-    .await?;
-    let tracked = capture_git(
-        root,
-        &[
+    let scope_args: Vec<&str> = match scope {
+        "staged" => vec!["--cached", base],
+        "unstaged" => vec![],
+        _ => vec![base],
+    };
+    let names_args = [
+        vec!["diff", "--name-status", "-z", "--find-renames"],
+        scope_args.clone(),
+        vec!["--"],
+    ]
+    .concat();
+    let nums_args = [
+        vec!["diff", "--numstat", "-z", "--find-renames"],
+        scope_args.clone(),
+        vec!["--"],
+    ]
+    .concat();
+    let patch_args = [
+        vec![
             "diff",
             "--no-ext-diff",
             "--no-color",
             "--find-renames",
             "--unified=3",
-            base,
-            "--",
         ],
-        MAX_PATCH_BYTES,
-    )
-    .await?;
+        scope_args,
+        vec!["--"],
+    ]
+    .concat();
+    let names = capture_git(root, &names_args, 2 * 1024 * 1024).await?;
+    let nums = capture_git(root, &nums_args, 2 * 1024 * 1024).await?;
+    let tracked = capture_git(root, &patch_args, MAX_PATCH_BYTES).await?;
     // Untracked listing via porcelain status; `--no-optional-locks` keeps this
     // read-only (a status-triggered index refresh would re-kick our own watcher).
     let status = match status {
@@ -1625,7 +1651,7 @@ async fn capture_diff_with_status(
         if code.starts_with('R') || code.starts_with('C') {
             i += 1; // skip the origin-path field
         }
-        if code == "??" {
+        if code == "??" && scope != "staged" {
             untracked.push(path.trim_start().to_string());
         }
     }
@@ -2342,5 +2368,56 @@ mod watch_budget_tests {
         // A self-referential symlink cycle must not send the walk into a spin.
         std::os::unix::fs::symlink(root.join("real"), root.join("real/inner/loop")).unwrap();
         assert!(!exceeds_watch_budget(root)); // terminates, under budget
+    }
+}
+
+#[cfg(test)]
+mod mobile_scope_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn staged_and_unstaged_scopes_do_not_mix_changes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let git = |args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .current_dir(root)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        git(&["init", "-q"]);
+        git(&["config", "user.name", "Mobile test"]);
+        git(&["config", "user.email", "mobile@example.test"]);
+        std::fs::write(root.join("tracked.txt"), "base\n").unwrap();
+        git(&["add", "tracked.txt"]);
+        git(&["commit", "-qm", "base"]);
+        std::fs::write(root.join("tracked.txt"), "indexed\n").unwrap();
+        git(&["add", "tracked.txt"]);
+        std::fs::write(root.join("tracked.txt"), "working\n").unwrap();
+        std::fs::write(root.join("untracked.txt"), "new\n").unwrap();
+        let repos = Repos::new(&root.join("data"), "mobile-test");
+        let staged = capture_scoped_diff(&repos, root, None, "staged")
+            .await
+            .unwrap();
+        assert!(staged.patch.contains("+indexed"));
+        assert!(!staged.patch.contains("+working"));
+        assert!(!staged.files.iter().any(|file| file.path == "untracked.txt"));
+        let unstaged = capture_scoped_diff(&repos, root, None, "unstaged")
+            .await
+            .unwrap();
+        assert!(unstaged.patch.contains("-indexed"));
+        assert!(unstaged.patch.contains("+working"));
+        assert!(
+            unstaged
+                .files
+                .iter()
+                .any(|file| file.path == "untracked.txt")
+        );
     }
 }

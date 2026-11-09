@@ -1,0 +1,87 @@
+import { describe, expect, test } from "vitest";
+
+import {
+	nearbyMacDisplayName,
+	normalizeNearbyServices,
+} from "../../modules/local-connectivity/src/normalize-nearby-services";
+
+const service = (
+	overrides: Partial<
+		Parameters<typeof normalizeNearbyServices>[0][number]
+	> = {},
+) => ({
+	id: "route-1",
+	name: "MacBook-Pro-3.local",
+	type: "_zuse._tcp",
+	domain: "local.",
+	interfaceName: "en0",
+	tlsCertificatePin: "certificate-a",
+	...overrides,
+});
+
+describe("nearby service normalization", () => {
+	test("collapses multiple routes for the same certificate identity", () => {
+		const result = normalizeNearbyServices([
+			service({
+				id: "peer-route",
+				name: "MacBook-Pro-3.local (2)",
+				interfaceName: "awdl0",
+			}),
+			service({ id: "lan-route" }),
+		]);
+
+		expect(result).toHaveLength(1);
+		expect(result[0]).toMatchObject({
+			id: "certificate-a",
+			name: "MacBook-Pro-3.local",
+			interfaceName: "en0",
+		});
+	});
+
+	test("keeps different certificate identities separate", () => {
+		const result = normalizeNearbyServices([
+			service(),
+			service({ id: "route-2", tlsCertificatePin: "certificate-b" }),
+		]);
+
+		expect(result).toHaveLength(2);
+	});
+
+	test("keeps the route stable across browser republication generations", () => {
+		const [before] = normalizeNearbyServices([
+			service({ id: "mac|_zuse._tcp|local.|en0|1" }),
+		]);
+		const [after] = normalizeNearbyServices([
+			service({
+				id: "mac|_zuse._tcp|local.|en0|2",
+				name: "MacBook-Pro-3.local (2)",
+			}),
+		]);
+
+		expect(after?.id).toBe(before?.id);
+		expect(after?.routeId).toBe(before?.routeId);
+	});
+
+	test("changes the route identity when the network interface changes", () => {
+		const [wifi] = normalizeNearbyServices([service({ interfaceName: "en0" })]);
+		const [peer] = normalizeNearbyServices([
+			service({ interfaceName: "awdl0" }),
+		]);
+
+		expect(peer?.routeId).not.toBe(wifi?.routeId);
+	});
+
+	test("removes native nulls before they can reach string-only functions", () => {
+		const [result] = normalizeNearbyServices([
+			service({ interfaceName: null }),
+		]);
+
+		expect(result).not.toHaveProperty("interfaceName");
+	});
+
+	test("formats Bonjour host names for people", () => {
+		expect(nearbyMacDisplayName("MacBook-Pro-3.local (2)")).toBe(
+			"MacBook Pro 3",
+		);
+	});
+});

@@ -43,7 +43,9 @@ pub enum AccountError {
     Denied,
     #[error("The saved account could not be updated. Check the profile folder permissions.")]
     Storage,
-    #[error("Account service URLs must be HTTPS origins.")]
+    #[error(
+        "Account service URLs must be HTTPS origins (local HTTP requires ZUSE_ALLOW_LOOPBACK_ACCOUNT_HTTP=1)."
+    )]
     InvalidEndpoint,
 }
 
@@ -156,9 +158,17 @@ fn claims(token: &str) -> Result<Value, AccountError> {
         .map_err(|_| AccountError::InvalidResponse)?;
     serde_json::from_slice(&data).map_err(|_| AccountError::InvalidResponse)
 }
-fn endpoint(value: &str) -> Result<String, AccountError> {
+fn endpoint(value: &str, allow_loopback_http: bool) -> Result<String, AccountError> {
     let url = reqwest::Url::parse(value).map_err(|_| AccountError::InvalidEndpoint)?;
-    if url.scheme() != "https"
+    let local_http = allow_loopback_http
+        && url.scheme() == "http"
+        && url.host_str().is_some_and(|host| {
+            host.trim_start_matches('[')
+                .trim_end_matches(']')
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(|address| address.is_loopback())
+        });
+    if !(url.scheme() == "https" || local_http)
         || url.host_str().is_none()
         || !url.username().is_empty()
         || url.password().is_some()
@@ -178,7 +188,14 @@ impl Account {
             .ok()
             .filter(|s| !s.trim().is_empty())
             .unwrap_or_else(|| PUBLIC_CLIENT_ID.into());
-        Self::configured(root, endpoint(&api_url)?, client_id, IDENTITY_URL.into())
+        let allow_local_http =
+            std::env::var("ZUSE_ALLOW_LOOPBACK_ACCOUNT_HTTP").is_ok_and(|value| value == "1");
+        Self::configured(
+            root,
+            endpoint(&api_url, allow_local_http)?,
+            client_id,
+            IDENTITY_URL.into(),
+        )
     }
 
     /// [`Self::open`] with explicit service endpoints (deployments and tests).
@@ -916,6 +933,25 @@ fn persist(path: &Path, session: &impl Serialize) -> Result<(), AccountError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn local_http_requires_opt_in_and_a_literal_loopback_origin() {
+        assert!(endpoint("https://api.zuse.sh", false).is_ok());
+        assert!(endpoint("http://127.0.0.1:28700", false).is_err());
+        assert!(endpoint("http://127.0.0.1:28700", true).is_ok());
+        assert!(endpoint("http://[::1]:28700", true).is_ok());
+        for invalid in [
+            "http://api.example.test",
+            "http://localhost:28700",
+            "http://192.168.1.2:28700",
+            "http://0.0.0.0:28700",
+            "http://user:secret@127.0.0.1:28700",
+            "http://127.0.0.1:28700/path",
+            "http://127.0.0.1:28700?query=1",
+            "http://127.0.0.1:28700#fragment",
+        ] {
+            assert!(endpoint(invalid, true).is_err(), "Accepted {invalid}");
+        }
+    }
     fn token(subject: &str, expires: i64) -> TokenResponse {
         let payload = URL_SAFE_NO_PAD
             .encode(serde_json::to_vec(&json!({"sub":subject,"exp":expires})).unwrap());

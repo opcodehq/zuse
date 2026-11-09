@@ -4,6 +4,7 @@ exclude = ["vendor/zkit"]
 members = [
     "crates/i18n",
     "crates/simulator",
+    "crates/mobile-bridge",
     "apps/cloud",
     "apps/cloud-runtime",
     "crates/cloud-runtime",

@@ -13921,6 +13921,7 @@ dependencies = [
  "hmac",
  "jsonwebtoken",
  "libc",
+ "p256",
  "percent-encoding",
  "prost",
  "quick-xml",
@@ -14208,6 +14209,16 @@ dependencies = [
  "zuse-rpc",
  "zuse-ui-block",
  "zuse-visual",
+]
+
+[[package]]
+name = "zuse-mobile-bridge"
+version = "0.26.0"
+dependencies = [
+ "base64 0.22.1",
+ "serde",
+ "serde_json",
+ "zuse-remote",
 ]
 
 [[package]]

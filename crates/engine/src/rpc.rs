@@ -4328,6 +4328,10 @@ impl RpcService for EngineRpc {
                             crate::diff_sync::capture_turn_diff(&self.repos, root, &snapshot.tree)
                                 .await
                         }
+                        "staged" | "unstaged" => {
+                            crate::diff_sync::capture_scoped_diff(&self.repos, root, None, &p.mode)
+                                .await
+                        }
                         _ => crate::diff_sync::capture_diff(&self.repos, root).await,
                     }
                     .map_err(|e| RpcError::Failed(e.to_string()))?;

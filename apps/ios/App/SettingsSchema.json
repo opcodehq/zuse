@@ -1,0 +1,1543 @@
+{
+  "type": "object",
+  "properties": {
+    "simulatorSupportEnabled": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "simulatorAgentAccessEnabled": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "simulatorOnboardingCompleted": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "defaultProviderId": {
+      "anyOf": [
+        {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "claude",
+                "codex",
+                "grok",
+                "gemini",
+                "cursor",
+                "opencode",
+                "opencode2",
+                "kiro",
+                "pi",
+                "zuse"
+              ]
+            },
+            {
+              "type": "string",
+              "pattern": "^acp-[\\s\\S]*?$",
+              "allOf": [
+                {
+                  "pattern": "^acp-[a-z0-9][a-z0-9-]{0,95}$"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "defaultModelByProvider": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "claude": {
+              "type": "string"
+            },
+            "codex": {
+              "type": "string"
+            },
+            "grok": {
+              "type": "string"
+            },
+            "gemini": {
+              "type": "string"
+            },
+            "cursor": {
+              "type": "string"
+            },
+            "opencode": {
+              "type": "string"
+            },
+            "opencode2": {
+              "type": "string"
+            },
+            "kiro": {
+              "type": "string"
+            },
+            "pi": {
+              "type": "string"
+            },
+            "zuse": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "claude",
+            "codex",
+            "grok",
+            "gemini",
+            "cursor",
+            "opencode",
+            "opencode2",
+            "kiro",
+            "pi",
+            "zuse"
+          ],
+          "patternProperties": {
+            "^acp-[\\s\\S]*?$": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "defaultRuntimeMode": {
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "auto",
+            "approval-required",
+            "auto-accept-edits",
+            "auto-accept-edits-and-bash",
+            "full-access"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "defaultAutoCreateWorktree": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "defaultAutonomyLevel": {
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "off",
+            "approval-gated",
+            "autonomous"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "onboardingCompleted": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "appearanceMode": {
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "system",
+            "light",
+            "dark"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "providerUpdateNotificationsEnabled": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "completionSoundEnabled": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "completionSoundPreset": {
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "chime",
+            "soft",
+            "pop",
+            "bell",
+            "rise",
+            "bloom"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "providerEnabled": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "claude": {
+              "type": "boolean"
+            },
+            "codex": {
+              "type": "boolean"
+            },
+            "grok": {
+              "type": "boolean"
+            },
+            "gemini": {
+              "type": "boolean"
+            },
+            "cursor": {
+              "type": "boolean"
+            },
+            "opencode": {
+              "type": "boolean"
+            },
+            "opencode2": {
+              "type": "boolean"
+            },
+            "kiro": {
+              "type": "boolean"
+            },
+            "pi": {
+              "type": "boolean"
+            },
+            "zuse": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "claude",
+            "codex",
+            "grok",
+            "gemini",
+            "cursor",
+            "opencode",
+            "opencode2",
+            "kiro",
+            "pi",
+            "zuse"
+          ],
+          "patternProperties": {
+            "^acp-[\\s\\S]*?$": {
+              "type": "boolean"
+            }
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "providerBinaryPaths": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "modelEnabledByProvider": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "claude": {
+              "$ref": "#/$defs/Objects_"
+            },
+            "codex": {
+              "$ref": "#/$defs/Objects_"
+            },
+            "grok": {
+              "$ref": "#/$defs/Objects_"
+            },
+            "gemini": {
+              "$ref": "#/$defs/Objects_"
+            },
+            "cursor": {
+              "$ref": "#/$defs/Objects_"
+            },
+            "opencode": {
+              "$ref": "#/$defs/Objects_"
+            },
+            "opencode2": {
+              "$ref": "#/$defs/Objects_"
+            },
+            "kiro": {
+              "$ref": "#/$defs/Objects_"
+            },
+            "pi": {
+              "$ref": "#/$defs/Objects_"
+            },
+            "zuse": {
+              "$ref": "#/$defs/Objects_"
+            }
+          },
+          "required": [
+            "claude",
+            "codex",
+            "grok",
+            "gemini",
+            "cursor",
+            "opencode",
+            "opencode2",
+            "kiro",
+            "pi",
+            "zuse"
+          ],
+          "patternProperties": {
+            "^acp-[\\s\\S]*?$": {
+              "$ref": "#/$defs/Objects_"
+            }
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "customModelIdsByProvider": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "claude": {
+              "$ref": "#/$defs/Arrays_"
+            },
+            "codex": {
+              "$ref": "#/$defs/Arrays_"
+            },
+            "grok": {
+              "$ref": "#/$defs/Arrays_"
+            },
+            "gemini": {
+              "$ref": "#/$defs/Arrays_"
+            },
+            "cursor": {
+              "$ref": "#/$defs/Arrays_"
+            },
+            "opencode": {
+              "$ref": "#/$defs/Arrays_"
+            },
+            "opencode2": {
+              "$ref": "#/$defs/Arrays_"
+            },
+            "kiro": {
+              "$ref": "#/$defs/Arrays_"
+            },
+            "pi": {
+              "$ref": "#/$defs/Arrays_"
+            },
+            "zuse": {
+              "$ref": "#/$defs/Arrays_"
+            }
+          },
+          "required": [
+            "claude",
+            "codex",
+            "grok",
+            "gemini",
+            "cursor",
+            "opencode",
+            "opencode2",
+            "kiro",
+            "pi",
+            "zuse"
+          ],
+          "patternProperties": {
+            "^acp-[\\s\\S]*?$": {
+              "$ref": "#/$defs/Arrays_"
+            }
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "opencodeProviderVisible": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": {
+            "type": "boolean"
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "opencodeModelVisibleByProvider": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "boolean"
+            }
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "opencodeCustomProviders": {
+      "anyOf": [
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Objects_1"
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "opencode2ProviderVisible": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": {
+            "type": "boolean"
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "opencode2ModelVisibleByProvider": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "boolean"
+            }
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "opencode2CustomProviders": {
+      "anyOf": [
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Objects_1"
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "disabledSkills": {
+      "anyOf": [
+        {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "subagents": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "enableForNewSessions": {
+              "type": "boolean"
+            },
+            "presets": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "object",
+                "properties": {
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "overrides": {
+                    "type": "object",
+                    "properties": {
+                      "description": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "prompt": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "tools": {
+                        "anyOf": [
+                          {
+                            "anyOf": [
+                              {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "disallowedTools": {
+                        "anyOf": [
+                          {
+                            "anyOf": [
+                              {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "model": {
+                        "anyOf": [
+                          {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "maxTurns": {
+                        "anyOf": [
+                          {
+                            "anyOf": [
+                              {
+                                "anyOf": [
+                                  {
+                                    "type": "number"
+                                  },
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "Infinity",
+                                      "-Infinity",
+                                      "NaN"
+                                    ]
+                                  }
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "permissionMode": {
+                        "anyOf": [
+                          {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": [
+                                  "auto",
+                                  "approval-required",
+                                  "auto-accept-edits",
+                                  "auto-accept-edits-and-bash",
+                                  "full-access"
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "enabled",
+                  "overrides"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "enableForNewSessions",
+            "presets"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "branchNamingStyle": {
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "username-slug",
+            "slug",
+            "feat-slug",
+            "custom"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "branchNamingPrefix": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "mergePrefs": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "merge",
+                "squash",
+                "rebase"
+              ]
+            },
+            "deleteBranch": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "method",
+            "deleteBranch"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "notchTrayEnabled": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "notchTrayPinned": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "Objects_": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "boolean"
+      }
+    },
+    "Arrays_": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "Objects_1": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "baseURL": {
+          "type": "string"
+        },
+        "npm": {
+          "type": "string"
+        },
+        "models": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "baseURL",
+        "npm",
+        "models"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "cloudProviderConnection": {
+    "type": "object",
+    "properties": {
+      "providerId": {
+        "type": "string",
+        "enum": [
+          "e2b",
+          "boxd",
+          "box",
+          "daytona"
+        ]
+      },
+      "apiKey": {
+        "type": "string",
+        "allOf": [
+          {
+            "minLength": 1
+          },
+          {
+            "maxLength": 4096
+          }
+        ]
+      },
+      "templateId": {
+        "anyOf": [
+          {
+            "type": "string",
+            "allOf": [
+              {
+                "minLength": 1
+              },
+              {
+                "maxLength": 512
+              }
+            ]
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "organization": {
+        "anyOf": [
+          {
+            "type": "string",
+            "allOf": [
+              {
+                "minLength": 1
+              },
+              {
+                "maxLength": 256
+              }
+            ]
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "providerId",
+      "apiKey"
+    ],
+    "additionalProperties": false,
+    "$defs": {}
+  },
+  "workspaceSettings": {
+    "type": "object",
+    "properties": {
+      "defaultProviderId": {
+        "anyOf": [
+          {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "claude",
+                  "codex",
+                  "grok",
+                  "gemini",
+                  "cursor",
+                  "opencode",
+                  "opencode2",
+                  "kiro",
+                  "pi",
+                  "zuse"
+                ]
+              },
+              {
+                "type": "string",
+                "pattern": "^acp-[\\s\\S]*?$",
+                "allOf": [
+                  {
+                    "pattern": "^acp-[a-z0-9][a-z0-9-]{0,95}$"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "defaultModelByProvider": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "claude": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "codex": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "grok": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "gemini": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "cursor": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "opencode": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "opencode2": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "kiro": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "pi": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "zuse": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "patternProperties": {
+              "^acp-[\\s\\S]*?$": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "defaultRuntimeMode": {
+        "anyOf": [
+          {
+            "type": "string",
+            "enum": [
+              "auto",
+              "approval-required",
+              "auto-accept-edits",
+              "auto-accept-edits-and-bash",
+              "full-access"
+            ]
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "defaultAutoCreateWorktree": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "defaultAutonomyLevel": {
+        "anyOf": [
+          {
+            "type": "string",
+            "enum": [
+              "off",
+              "approval-gated",
+              "autonomous"
+            ]
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "providerEnabled": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "claude": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "codex": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "grok": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "gemini": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "cursor": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "opencode": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "opencode2": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "kiro": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "pi": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "zuse": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "patternProperties": {
+              "^acp-[\\s\\S]*?$": {
+                "type": "boolean"
+              }
+            }
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "modelEnabledByProvider": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "claude": {
+                "$ref": "#/$defs/Union_"
+              },
+              "codex": {
+                "$ref": "#/$defs/Union_"
+              },
+              "grok": {
+                "$ref": "#/$defs/Union_"
+              },
+              "gemini": {
+                "$ref": "#/$defs/Union_"
+              },
+              "cursor": {
+                "$ref": "#/$defs/Union_"
+              },
+              "opencode": {
+                "$ref": "#/$defs/Union_"
+              },
+              "opencode2": {
+                "$ref": "#/$defs/Union_"
+              },
+              "kiro": {
+                "$ref": "#/$defs/Union_"
+              },
+              "pi": {
+                "$ref": "#/$defs/Union_"
+              },
+              "zuse": {
+                "$ref": "#/$defs/Union_"
+              }
+            },
+            "patternProperties": {
+              "^acp-[\\s\\S]*?$": {
+                "$ref": "#/$defs/Objects_"
+              }
+            }
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "customModelIdsByProvider": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "claude": {
+                "$ref": "#/$defs/Union_1"
+              },
+              "codex": {
+                "$ref": "#/$defs/Union_1"
+              },
+              "grok": {
+                "$ref": "#/$defs/Union_1"
+              },
+              "gemini": {
+                "$ref": "#/$defs/Union_1"
+              },
+              "cursor": {
+                "$ref": "#/$defs/Union_1"
+              },
+              "opencode": {
+                "$ref": "#/$defs/Union_1"
+              },
+              "opencode2": {
+                "$ref": "#/$defs/Union_1"
+              },
+              "kiro": {
+                "$ref": "#/$defs/Union_1"
+              },
+              "pi": {
+                "$ref": "#/$defs/Union_1"
+              },
+              "zuse": {
+                "$ref": "#/$defs/Union_1"
+              }
+            },
+            "patternProperties": {
+              "^acp-[\\s\\S]*?$": {
+                "$ref": "#/$defs/Arrays_"
+              }
+            }
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "opencodeProviderVisible": {
+        "anyOf": [
+          {
+            "type": "object",
+            "additionalProperties": {
+              "type": "boolean"
+            }
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "opencodeModelVisibleByProvider": {
+        "anyOf": [
+          {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "boolean"
+              }
+            }
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "opencode2ProviderVisible": {
+        "anyOf": [
+          {
+            "type": "object",
+            "additionalProperties": {
+              "type": "boolean"
+            }
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "opencode2ModelVisibleByProvider": {
+        "anyOf": [
+          {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "boolean"
+              }
+            }
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "branchNamingStyle": {
+        "anyOf": [
+          {
+            "type": "string",
+            "enum": [
+              "username-slug",
+              "slug",
+              "feat-slug",
+              "custom"
+            ]
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "branchNamingPrefix": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "mergePrefs": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "method": {
+                "type": "string",
+                "enum": [
+                  "merge",
+                  "squash",
+                  "rebase"
+                ]
+              },
+              "deleteBranch": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "method",
+              "deleteBranch"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "additionalProperties": false,
+    "$defs": {
+      "Objects_": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "boolean"
+        }
+      },
+      "Union_": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Objects_"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "Arrays_": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "Union_1": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Arrays_"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    }
+  },
+  "cloudAuthConfigure": {
+    "$ref": "#/$defs/CloudAuthConfigureRequestJsonEncoding",
+    "$defs": {
+      "CloudAuthSealedSecretJsonEncoding": {
+        "type": "object",
+        "properties": {
+          "keyId": {
+            "type": "string"
+          },
+          "ciphertext": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "keyId",
+          "ciphertext"
+        ],
+        "additionalProperties": false
+      },
+      "CloudAuthConfigureRequestJsonEncoding": {
+        "type": "object",
+        "properties": {
+          "providerId": {
+            "type": "string",
+            "enum": [
+              "claude",
+              "codex",
+              "cursor",
+              "grok"
+            ]
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "subscription",
+              "api-key",
+              "custom"
+            ]
+          },
+          "sealedSecret": {
+            "$ref": "#/$defs/CloudAuthSealedSecretJsonEncoding"
+          },
+          "baseUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "modelProvider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "providerId",
+          "method",
+          "sealedSecret"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "cloudAuthLogin": {
+    "$ref": "#/$defs/CloudAuthLoginStartRequestJsonEncoding",
+    "$defs": {
+      "CloudAuthLoginStartRequestJsonEncoding": {
+        "type": "object",
+        "properties": {
+          "providerId": {
+            "type": "string",
+            "enum": [
+              "codex",
+              "grok"
+            ]
+          }
+        },
+        "required": [
+          "providerId"
+        ],
+        "additionalProperties": false
+      }
+    }
+  }
+}
