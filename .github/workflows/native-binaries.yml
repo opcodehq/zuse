@@ -11,6 +11,10 @@ on:
       retention_days:
         type: number
         default: 2
+    # These jobs run dependency build code, so they never receive signing secrets.
+    secrets:
+      HUGEICONS_LICENSE_KEY:
+        required: false
 
 jobs:
   # Browser assets are identical on every platform, so build them once.

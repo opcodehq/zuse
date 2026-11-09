@@ -95,7 +95,8 @@ jobs:
     uses: ./.github/workflows/native-binaries.yml
     with:
       ref: ${{ inputs.tag || github.ref_name }}
-    secrets: inherit
+    secrets:
+      HUGEICONS_LICENSE_KEY: ${{ secrets.HUGEICONS_LICENSE_KEY }}
 
   package:
     needs: [verify, binaries]
@@ -287,6 +288,6 @@ jobs:
     uses: ./.github/workflows/distributions.yml
     with:
       tag: ${{ inputs.tag || github.ref_name }}
-      archive_run_id: ${{ inputs.archive_run_id || '' }}
+      archive_run_id: ${{ inputs.formats_only == true && inputs.archive_run_id || '' }}
       staged: ${{ inputs.formats_only != true }}
     secrets: inherit

@@ -36,11 +36,11 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
         run: |
           native='["ubuntu-24.04","macos-latest"]'
-          # A diff GitHub refuses to list keeps macOS on.
+          # A diff GitHub refuses to list, or a deleted file, keeps macOS on.
           if [ -n "$PR" ] && changed=$(gh pr diff "$PR" --name-only); then
             desktop='^(apps/desktop/|crates/(ui|text|viewport|preview|simulator|update)/|dist/macos/|Cargo\.(toml|lock)$|rust-toolchain\.toml$|\.github/workflows/ci\.yml$)'
-            existing=$(printf '%s\n' "$changed" | while IFS= read -r file; do if [ -f "$file" ]; then printf '%s\n' "$file"; fi; done)
-            if ! grep -qE "$desktop" <<<"$changed" && { [ -z "$existing" ] || ! xargs -d '\n' grep -qE 'target_os *= *"macos"' <<<"$existing"; }; then
+            missing=$(printf '%s\n' "$changed" | while IFS= read -r file; do if [ ! -f "$file" ]; then printf '%s\n' "$file"; fi; done)
+            if [ -z "$missing" ] && ! grep -qE "$desktop" <<<"$changed" && ! xargs -d '\n' grep -qE 'target_os *= *"macos"' <<<"$changed"; then
               native='["ubuntu-24.04"]'
             fi
           fi

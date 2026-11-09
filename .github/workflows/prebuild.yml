@@ -20,4 +20,5 @@ jobs:
     with:
       ref: ${{ github.sha }}
       retention_days: 14
-    secrets: inherit
+    secrets:
+      HUGEICONS_LICENSE_KEY: ${{ secrets.HUGEICONS_LICENSE_KEY }}
