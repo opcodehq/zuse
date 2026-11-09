@@ -13,17 +13,101 @@ fn button(
     glyph: &'static str,
     enabled: bool,
     theme: &Theme,
-    _cx: &mut Context<BrowserSurface>,
+    hovered_button: Option<&'static str>,
+    cx: &mut Context<BrowserSurface>,
 ) -> gpui::Stateful<gpui::Div> {
-    // Match Files/History chrome, including focus-preserving mouse-down and
-    // tooltips. Disabled controls have neither a pointer cursor nor a handler.
-    crate::files::toolbar_button(id, label)
+    let show_tooltip = enabled && id != "browser-options" && hovered_button == Some(id);
+    let card = div()
+        .px(px(7.0))
+        .py(px(4.0))
+        .rounded(px(6.0))
+        .border_1()
+        .border_color(theme.border)
+        .bg(crate::popover::surface_bg(theme))
+        .font_family(theme.font_sans.clone())
+        .font_weight(gpui::FontWeight::MEDIUM)
+        .text_size(px(11.0))
+        .text_color(theme.text_strong)
+        .child(label);
+    div()
+        .id(id)
+        .debug_selector(move || id.into())
+        .relative()
+        .size(px(surface_chrome::CONTROL_SIZE))
+        .flex_none()
+        .rounded(px(surface_chrome::CONTROL_RADIUS))
+        .flex()
+        .items_center()
+        .justify_center()
+        .cursor_pointer()
+        .role(gpui::Role::Button)
+        .aria_label(label)
+        .occlude()
+        .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
+        .hover(|style| style.bg(crate::theme::wash(0.14)))
+        .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+            let next = if *hovered && enabled && id != "browser-options" {
+                Some(id)
+            } else if this.hovered_toolbar_button == Some(id) {
+                None
+            } else {
+                this.hovered_toolbar_button
+            };
+            if next != this.hovered_toolbar_button {
+                this.hovered_toolbar_button = next;
+                cx.notify();
+            }
+        }))
         .when(!enabled, |el| el.cursor_default().opacity(0.35))
         .child(
             icons::icon(glyph)
                 .size(px(surface_chrome::ICON_SIZE))
                 .text_color(theme.text_muted),
         )
+        .when(show_tooltip, |el| {
+            el.child(
+                div()
+                    .absolute()
+                    .bottom_0()
+                    .left(px(surface_chrome::CONTROL_SIZE / 2.0))
+                    .size_0()
+                    .child(
+                        gpui::deferred(
+                            gpui::anchored()
+                                .anchor(gpui::Anchor::TopCenter)
+                                .snap_to_window_with_margin(px(8.0))
+                                .child(div().pt(px(5.0)).child(crate::frost::frosted(
+                                    6.0,
+                                    crate::frost::MENU_BLUR,
+                                    card,
+                                ))),
+                        )
+                        .priority(1),
+                    ),
+            )
+        })
+}
+
+fn browser_menu_row(
+    theme: &Theme,
+    id: &'static str,
+    icon: &'static str,
+    label: &'static str,
+) -> gpui::Stateful<gpui::Div> {
+    crate::popover::menu_row(&theme.for_popup(), false, id)
+        .id(id)
+        .debug_selector(move || id.into())
+        .font_family(theme.font_sans.clone())
+        .font_weight(gpui::FontWeight::MEDIUM)
+        .text_size(px(12.0))
+        .gap(px(8.0))
+        .py(px(4.0))
+        .child(
+            icons::icon(icon)
+                .size(px(14.0))
+                .text_color(theme.text_muted),
+        )
+        .child(label)
 }
 
 impl BrowserSurface {
@@ -35,6 +119,11 @@ impl BrowserSurface {
     ) {
         #[cfg(target_os = "linux")]
         if self.linux_menu_key(&event.keystroke.key, cx) {
+            cx.stop_propagation();
+            return;
+        }
+        if event.keystroke.key == "escape" && self.toolbar_menu.is_open() {
+            self.close_toolbar_menu(cx);
             cx.stop_propagation();
             return;
         }
@@ -113,12 +202,27 @@ impl BrowserSurface {
         };
         let mut content = div()
             .w_full()
-            .max_w(px(280.0))
+            .font_family(theme.font_sans.clone())
+            .max_w(px(440.0))
             .flex_shrink_0()
-            .my_auto()
+            .pt(px(24.0))
             .flex()
             .flex_col()
             .gap(px(8.0))
+            .child(
+                div()
+                    .text_size(px(18.0))
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(theme.text_strong)
+                    .child("Browser"),
+            )
+            .child(
+                div()
+                    .mb(px(16.0))
+                    .text_size(crate::typography::text_sm())
+                    .text_color(theme.text_muted)
+                    .child("Search the web or open a local project."),
+            )
             .child(
                 div()
                     .mb(px(4.0))
@@ -258,18 +362,145 @@ impl BrowserSurface {
                     .child(error.clone()),
             );
         }
-        content = content.child(
-            div()
-                .id("preview-enter-address")
-                .mt(px(8.0))
-                .text_size(crate::typography::text_xs())
-                .text_color(theme.text_muted)
-                .cursor_pointer()
-                .role(gpui::Role::Button)
-                .aria_label(tr(cx, msg::native::enter_a_website_address))
-                .on_click(cx.listener(|this, _, window, cx| this.focus_address(window, cx)))
-                .child(tr(cx, msg::native::or_enter_a_website_address)),
-        );
+        let visits = self.context.recent.borrow().visits.clone();
+        let mut heading = div()
+            .mt(px(22.0))
+            .flex()
+            .items_center()
+            .justify_between()
+            .child(
+                div()
+                    .text_size(crate::typography::text_xs())
+                    .text_color(theme.text_muted)
+                    .child("Recently visited"),
+            );
+        if !visits.is_empty() {
+            heading = heading.child(
+                div()
+                    .id("browser-clear-recent")
+                    .cursor_pointer()
+                    .text_size(crate::typography::text_xs())
+                    .text_color(theme.text_muted)
+                    .role(gpui::Role::Button)
+                    .aria_label("Clear recently visited pages")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.context.recent.borrow_mut().clear();
+                        cx.notify();
+                    }))
+                    .size(px(26.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(6.0))
+                    .hover(|style| style.bg(crate::theme::wash(0.10)))
+                    .child(
+                        icons::icon(icons::TRASH_BIN_MINIMALISTIC)
+                            .size(px(15.0))
+                            .text_color(theme.text_muted),
+                    ),
+            );
+        }
+        content = content.child(heading);
+        if visits.is_empty() {
+            content = content.child(
+                div()
+                    .py(px(10.0))
+                    .text_size(crate::typography::text_xs())
+                    .text_color(theme.text_muted)
+                    .child("Pages you visit will appear here."),
+            );
+        } else {
+            for (index, visit) in visits.into_iter().enumerate() {
+                let (title, host) = visit.display();
+                let url = visit.url.clone();
+                let favicon = self.context.recent.borrow().icon(&visit.url);
+                let remove_url = visit.url;
+                content = content.child(
+                    div()
+                        .id(("browser-recent", index))
+                        .w_full()
+                        .min_w_0()
+                        .px(px(12.0))
+                        .py(px(9.0))
+                        .rounded(px(8.0))
+                        .flex()
+                        .items_center()
+                        .gap(px(10.0))
+                        .cursor_pointer()
+                        .hover(|style| style.bg(crate::theme::wash(0.08)))
+                        .role(gpui::Role::Button)
+                        .aria_label(format!("Open {title}"))
+                        .on_click(
+                            cx.listener(move |this, _, window, cx| this.navigate(&url, window, cx)),
+                        )
+                        .child(
+                            div()
+                                .size(px(24.0))
+                                .flex_none()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(match favicon {
+                                    Some(image) => gpui::img(image)
+                                        .size(px(20.0))
+                                        .rounded(px(4.0))
+                                        .into_any_element(),
+                                    None => icons::icon(icons::GLOBE)
+                                        .size(px(16.0))
+                                        .text_color(theme.text_muted)
+                                        .into_any_element(),
+                                }),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .flex()
+                                .flex_col()
+                                .gap(px(2.0))
+                                .child(
+                                    div()
+                                        .truncate()
+                                        .text_size(crate::typography::text_sm())
+                                        .font_weight(gpui::FontWeight::MEDIUM)
+                                        .text_color(theme.text_strong)
+                                        .child(title),
+                                )
+                                .child(
+                                    div()
+                                        .truncate()
+                                        .text_size(crate::typography::text_xs())
+                                        .text_color(theme.text_muted)
+                                        .child(host),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .id(("browser-remove-recent", index))
+                                .size(px(24.0))
+                                .flex_none()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded(px(5.0))
+                                .cursor_pointer()
+                                .hover(|style| style.bg(crate::theme::wash(0.12)))
+                                .role(gpui::Role::Button)
+                                .aria_label("Remove from recently visited")
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    cx.stop_propagation();
+                                    this.context.recent.borrow_mut().remove(&remove_url);
+                                    cx.notify();
+                                }))
+                                .child(
+                                    icons::icon(icons::TRASH_BIN_MINIMALISTIC)
+                                        .size(px(14.0))
+                                        .text_color(theme.text_muted),
+                                ),
+                        ),
+                );
+            }
+        }
         div()
             .id("browser-previews")
             .size_full()
@@ -554,6 +785,7 @@ impl Render for BrowserSurface {
             icons::ARROW_LEFT,
             self.page.can_back,
             &theme,
+            self.hovered_toolbar_button,
             cx,
         )
         .when(self.page.can_back, |el| {
@@ -565,6 +797,7 @@ impl Render for BrowserSurface {
             icons::ARROW_RIGHT,
             self.page.can_forward,
             &theme,
+            self.hovered_toolbar_button,
             cx,
         )
         .when(self.page.can_forward, |el| {
@@ -576,6 +809,7 @@ impl Render for BrowserSurface {
             icons::REFRESH,
             has_page,
             &theme,
+            self.hovered_toolbar_button,
             cx,
         )
         .when(has_page, |el| {
@@ -597,12 +831,18 @@ impl Render for BrowserSurface {
                     let _ = this;
                 }),
             )
-            .child(
-                icons::icon(icons::GLOBE)
+            .child(match self.favicon.clone() {
+                Some(image) => gpui::img(image)
                     .size(px(12.0))
                     .flex_none()
-                    .text_color(theme.text_faint),
-            )
+                    .rounded(px(2.0))
+                    .into_any_element(),
+                None => icons::icon(icons::GLOBE)
+                    .size(px(12.0))
+                    .flex_none()
+                    .text_color(theme.text_faint)
+                    .into_any_element(),
+            })
             .child(
                 div()
                     .flex_1()
@@ -641,15 +881,358 @@ impl Render for BrowserSurface {
             icons::ARROW_UP_RIGHT,
             has_page,
             &theme,
+            self.hovered_toolbar_button,
             cx,
         )
         .when(has_page, |el| {
             el.on_click(cx.listener(|this, _, _, cx| this.open_external(cx)))
         });
+        #[cfg(target_os = "macos")]
+        let select = button(
+            "browser-select-element",
+            "Select element",
+            icons::BROWSER_SELECT,
+            has_page,
+            &theme,
+            self.hovered_toolbar_button,
+            cx,
+        )
+        .when(self.selecting_element, |el| el.bg(crate::theme::wash(0.10)))
+        .when(has_page, |el| {
+            el.on_click(cx.listener(|this, _, _, cx| this.toggle_select_element(cx)))
+        });
+        #[cfg(target_os = "macos")]
+        let devtools = button(
+            "browser-developer-tools",
+            "Developer tools",
+            icons::BROWSER_CODE,
+            has_page,
+            &theme,
+            self.hovered_toolbar_button,
+            cx,
+        )
+        .when(has_page, |el| {
+            el.on_click(cx.listener(|this, _, _, cx| this.toggle_devtools(cx)))
+        });
+        let menu_trigger = button(
+            "browser-options",
+            "Browser options",
+            icons::MORE_HORIZONTAL,
+            true,
+            &theme,
+            self.hovered_toolbar_button,
+            cx,
+        )
+        .aria_expanded(self.toolbar_menu.is_open())
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|this, _, _, _| {
+                this.toolbar_menu.note_trigger_press();
+            }),
+        )
+        .on_click(cx.listener(|this, _, _, cx| {
+            if this.toolbar_menu.take_press_was_open() {
+                this.close_toolbar_menu(cx);
+            } else {
+                this.toolbar_menu.open(());
+                #[cfg(target_os = "macos")]
+                {
+                    this.screenshot = None;
+                }
+                cx.notify();
+            }
+        }));
+        let menu_trigger = if self.toolbar_menu.get().is_some() {
+            let copy =
+                browser_menu_row(&theme, "browser-copy-url", icons::BROWSER_LINK, "Copy URL")
+                    .when(!has_page, |el| el.opacity(0.4).cursor_default())
+                    .when(has_page, |el| {
+                        el.on_click(cx.listener(|this, _, _, cx| {
+                            if let Some(url) = this.page.url.clone() {
+                                cx.write_to_clipboard(gpui::ClipboardItem::new_string(url));
+                                crate::toast::success(cx, "URL copied");
+                            }
+                            this.close_toolbar_menu(cx);
+                        }))
+                    });
+            let menu = crate::popover::popover_card(&theme.for_popup())
+                .w(px(184.0))
+                .on_mouse_down_out(cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
+                    #[cfg(target_os = "macos")]
+                    if this
+                        .appearance_menu_bounds
+                        .is_some_and(|bounds| bounds.contains(&event.position))
+                    {
+                        return;
+                    }
+                    #[cfg(not(target_os = "macos"))]
+                    let _ = event;
+                    this.close_toolbar_menu(cx);
+                }));
+            #[cfg(target_os = "macos")]
+            let menu = menu.child(
+                browser_menu_row(
+                    &theme,
+                    "browser-screenshot",
+                    icons::BROWSER_CAMERA,
+                    "Take screenshot",
+                )
+                .when(has_page, |el| {
+                    el.on_click(cx.listener(|this, _, _, cx| this.save_screenshot(cx)))
+                })
+                .when(!has_page, |el| el.opacity(0.4).cursor_default()),
+            );
+            let menu = menu.child(copy);
+            #[cfg(target_os = "macos")]
+            let menu = {
+                use crate::appearance::AppearanceMode;
+                let current = crate::settings::current(cx).browser_appearance;
+                let mut appearance =
+                    browser_menu_row(&theme, "browser-appearance", icons::MONITOR, "Appearance")
+                        .relative()
+                        .w_full()
+                        .role(gpui::Role::MenuItem)
+                        .child(div().flex_1())
+                        .child(
+                            icons::icon(icons::ALT_ARROW_LEFT)
+                                .size(px(12.0))
+                                .text_color(theme.text_muted),
+                        );
+                if self.appearance_menu_open {
+                    let mut submenu = crate::popover::popover_card(&theme.for_popup()).w(px(144.0));
+                    for (mode, label, icon) in [
+                        (AppearanceMode::System, "System", icons::MONITOR),
+                        (AppearanceMode::Light, "Light", icons::SUN),
+                        (AppearanceMode::Dark, "Dark", icons::MOON),
+                    ] {
+                        let id = match mode {
+                            AppearanceMode::System => "browser-appearance-system",
+                            AppearanceMode::Light => "browser-appearance-light",
+                            AppearanceMode::Dark => "browser-appearance-dark",
+                        };
+                        let row = browser_menu_row(&theme, id, icon, label)
+                            .w_full()
+                            .role(gpui::Role::MenuItem)
+                            .child(div().flex_1())
+                            .when(mode == current, |row| {
+                                row.child(
+                                    icons::icon(icons::CHECK)
+                                        .size(px(13.0))
+                                        .text_color(theme.text_muted),
+                                )
+                            })
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                crate::settings::update(
+                                    crate::settings::SavePolicy::Immediate,
+                                    cx,
+                                    |settings| settings.browser_appearance = mode,
+                                );
+                                this.close_toolbar_menu(cx);
+                                cx.refresh_windows();
+                            }));
+                        submenu = submenu.child(row);
+                    }
+                    let entity = cx.entity().downgrade();
+                    submenu = submenu.child(
+                        gpui::canvas(
+                            move |bounds, _, cx| {
+                                let _ = entity.update(cx, |this, _| {
+                                    this.appearance_menu_bounds = Some(bounds);
+                                });
+                            },
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .inset_0(),
+                    );
+                    appearance = appearance.child(crate::popover::nested_menu(
+                        "browser-appearance-menu",
+                        submenu.into_any_element(),
+                        true,
+                    ));
+                }
+                let entity = cx.entity().downgrade();
+                let appearance_open = self.appearance_menu_open;
+                menu.child(
+                    div()
+                        .id("browser-appearance-hover")
+                        .debug_selector(|| "browser-appearance-hover".into())
+                        .w_full()
+                        .relative()
+                        .on_hover(cx.listener(|this, hovered: &bool, window, cx| {
+                            if *hovered {
+                                this.appearance_hover.record_origin(window.mouse_position());
+                                if !this.appearance_menu_open {
+                                    this.appearance_menu_open = true;
+                                    cx.notify();
+                                }
+                            }
+                        }))
+                        .child(appearance)
+                        .child(
+                            gpui::canvas(
+                                |_, _, _| (),
+                                move |trigger, _, window, _| {
+                                    if !appearance_open {
+                                        return;
+                                    }
+                                    let entity = entity.clone();
+                                    window.on_mouse_event(
+                                        move |event: &gpui::MouseMoveEvent, phase, _, cx| {
+                                            if phase != gpui::DispatchPhase::Bubble {
+                                                return;
+                                            }
+                                            let _ = entity.update(cx, |this, cx| {
+                                                if !this.appearance_hover.contains_pointer(
+                                                    trigger,
+                                                    this.appearance_menu_bounds,
+                                                    event.position,
+                                                    true,
+                                                ) {
+                                                    this.appearance_menu_open = false;
+                                                    this.appearance_menu_bounds = None;
+                                                    this.appearance_hover.reset();
+                                                    cx.notify();
+                                                }
+                                            });
+                                        },
+                                    );
+                                },
+                            )
+                            .absolute()
+                            .inset_0(),
+                        ),
+                )
+            };
+            #[cfg(target_os = "macos")]
+            let menu = menu.child(div().h(px(1.0)).my(px(4.0)).bg(theme.border));
+            #[cfg(target_os = "macos")]
+            let menu = menu
+                .child(
+                    browser_menu_row(
+                        &theme,
+                        "browser-clear-cookies",
+                        icons::BROWSER_COOKIE,
+                        "Clear cookies",
+                    )
+                    .when(self.native.is_some(), |el| {
+                        el.on_click(cx.listener(|this, _, window, cx| {
+                            this.confirm_clear_data(true, window, cx)
+                        }))
+                    })
+                    .when(self.native.is_none(), |el| el.opacity(0.4).cursor_default()),
+                )
+                .child(
+                    browser_menu_row(
+                        &theme,
+                        "browser-clear-cache",
+                        icons::BROWSER_BRUSH,
+                        "Clear cache",
+                    )
+                    .when(self.native.is_some(), |el| {
+                        el.on_click(cx.listener(|this, _, window, cx| {
+                            this.confirm_clear_data(false, window, cx)
+                        }))
+                    })
+                    .when(self.native.is_none(), |el| el.opacity(0.4).cursor_default()),
+                );
+            menu_trigger
+                .relative()
+                .child(crate::popover::anchored_menu_below_end(
+                    "browser-options-menu",
+                    menu.into_any_element(),
+                    self.toolbar_menu.closing_since(),
+                ))
+        } else {
+            menu_trigger
+        };
+        #[cfg(target_os = "macos")]
+        let menu_trigger = if let Some((path, bytes)) = &self.screenshot {
+            let path_copy = path.to_string_lossy().into_owned();
+            let path_reveal = path.clone();
+            let bytes = bytes.clone();
+            let action = |id: &'static str, text: &'static str| {
+                div()
+                    .id(id)
+                    .px(px(8.0))
+                    .py(px(5.0))
+                    .rounded(px(5.0))
+                    .text_size(px(11.0))
+                    .cursor_pointer()
+                    .bg(crate::theme::wash(0.06))
+                    .hover(|el| el.bg(crate::theme::wash(0.12)))
+                    .child(text)
+            };
+            let notice = crate::popover::popover_card(&theme.for_popup())
+                .w(px(270.0))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(div().text_size(px(12.0)).child("Screenshot saved"))
+                        .child(
+                            div()
+                                .id("browser-screenshot-dismiss")
+                                .cursor_pointer()
+                                .px(px(5.0))
+                                .child("×")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.screenshot = None;
+                                    cx.notify();
+                                })),
+                        ),
+                )
+                .child(
+                    div()
+                        .mt(px(8.0))
+                        .flex()
+                        .flex_wrap()
+                        .gap(px(5.0))
+                        .child(
+                            action("browser-screenshot-copy-path", "Copy path").on_click(
+                                move |_, _, cx| {
+                                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                        path_copy.clone(),
+                                    ));
+                                    crate::toast::success(cx, "Path copied");
+                                },
+                            ),
+                        )
+                        .child(
+                            action("browser-screenshot-reveal", "Reveal in Finder")
+                                .on_click(move |_, _, cx| cx.reveal_path(&path_reveal)),
+                        )
+                        .child(
+                            action("browser-screenshot-copy-image", "Copy image").on_click(
+                                move |_, _, cx| {
+                                    let image = gpui::Image::from_bytes(
+                                        gpui::ImageFormat::Png,
+                                        bytes.clone(),
+                                    );
+                                    cx.write_to_clipboard(gpui::ClipboardItem::new_image(&image));
+                                    crate::toast::success(cx, "Image copied");
+                                },
+                            ),
+                        ),
+                );
+            menu_trigger
+                .relative()
+                .child(crate::popover::anchored_menu_below_end(
+                    "browser-screenshot-notice",
+                    notice.into_any_element(),
+                    None,
+                ))
+        } else {
+            menu_trigger
+        };
         let toolbar = surface_chrome::toolbar(&theme)
             .when(!external, |el| el.child(back).child(forward).child(reload))
-            .child(address)
-            .child(open);
+            .child(address);
+        #[cfg(target_os = "macos")]
+        let toolbar = toolbar.child(select).child(devtools);
+        let toolbar = toolbar.child(open).child(menu_trigger);
 
         let body = div()
             .id("browser-page")
@@ -667,6 +1250,11 @@ impl Render for BrowserSurface {
             } else {
                 let native = native.handle();
                 let resize_inset = self.resize_inset;
+                let dark = match crate::settings::current(cx).browser_appearance {
+                    crate::appearance::AppearanceMode::System => theme.appearance.is_dark(),
+                    crate::appearance::AppearanceMode::Light => false,
+                    crate::appearance::AppearanceMode::Dark => true,
+                };
                 let right_occlusion = self.right_occlusion;
                 body.child(
                     gpui::canvas(
@@ -680,9 +1268,13 @@ impl Render for BrowserSurface {
                             let dragging = cx.has_active_drag();
                             window.on_present(move || {
                                 if let Some(native) = native.upgrade() {
-                                    native
-                                        .borrow_mut()
-                                        .sync(bounds, mask, dragging, resize_inset);
+                                    native.borrow_mut().sync(
+                                        bounds,
+                                        mask,
+                                        dragging,
+                                        resize_inset,
+                                        dark,
+                                    );
                                 }
                             });
                         },

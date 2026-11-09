@@ -551,6 +551,14 @@ impl super::BrowserSurface {
                     }
                     self.address_edited = false;
                 }
+                if !page.loading
+                    && page.error.is_none()
+                    && (self.page.loading || page.url != self.page.url)
+                {
+                    if let Some(url) = &page.url {
+                        self.context.recent.borrow_mut().record(url, &page.title);
+                    }
+                }
                 if page != self.page {
                     self.page = page;
                     cx.emit(super::BrowserEvent::Changed);

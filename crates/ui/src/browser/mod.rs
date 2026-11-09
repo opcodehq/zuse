@@ -13,6 +13,7 @@ mod windows_webview;
 use windows_webview as native;
 pub mod model;
 pub(crate) mod profile;
+mod recent;
 mod view;
 
 use crate::composer::{ComposerInput, ComposerInputEvent};
@@ -126,12 +127,14 @@ pub enum BrowserEvent {
     Changed,
     NewTab(Option<String>),
     Close,
+    ElementSelected(crate::context_items::ContextItem),
 }
 
 /// A profile's website data, allocated on first navigation. Default contexts are
 /// ephemeral, for unresolved identities and isolated fixtures.
 #[derive(Clone, Default)]
 pub struct BrowserContext {
+    recent: std::rc::Rc<std::cell::RefCell<recent::Recent>>,
     #[cfg(any(target_os = "macos", target_os = "linux", windows))]
     data: native::BrowserData,
 }
@@ -141,6 +144,7 @@ impl BrowserContext {
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         {
             Self {
+                recent: recent::shared(profile.root.clone()),
                 data: native::BrowserData::for_profile(profile),
             }
         }
@@ -153,7 +157,6 @@ impl BrowserContext {
 }
 
 pub struct BrowserSurface {
-    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
     context: BrowserContext,
     address: Entity<ComposerInput>,
     focus: FocusHandle,
@@ -161,6 +164,20 @@ pub struct BrowserSurface {
     pub favicon: Option<std::sync::Arc<gpui::Image>>,
     address_edited: bool,
     validation: Option<String>,
+    toolbar_menu: crate::popover::Popup<()>,
+    #[cfg(target_os = "macos")]
+    appearance_menu_open: bool,
+    #[cfg(target_os = "macos")]
+    appearance_menu_bounds: Option<gpui::Bounds<gpui::Pixels>>,
+    #[cfg(target_os = "macos")]
+    appearance_hover: crate::popover::HoverIntent<()>,
+    hovered_toolbar_button: Option<&'static str>,
+    #[cfg(target_os = "macos")]
+    screenshot: Option<(std::path::PathBuf, Vec<u8>)>,
+    #[cfg(target_os = "macos")]
+    selecting_element: bool,
+    #[cfg(target_os = "macos")]
+    selection_generation: u64,
     remote: bool,
     previews: zuse_protocol::PreviewSnapshot,
     previews_loading: bool,
@@ -205,7 +222,7 @@ impl BrowserSurface {
         cx: &mut Context<Self>,
     ) -> Self {
         let address = cx.new(|cx| {
-            ComposerInput::with_context("Website or localhost:3000", "PaletteSearch", cx)
+            ComposerInput::with_context("Search or enter a website", "PaletteSearch", cx)
                 .with_text_metrics(crate::typography::TEXT_XS, 16.0)
                 .with_single_line()
                 .with_accessibility_role(gpui::Role::TextInput)
@@ -241,9 +258,8 @@ impl BrowserSurface {
             }
         });
         #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
-        let _ = (window, context);
+        let _ = window;
         Self {
-            #[cfg(any(target_os = "macos", target_os = "linux", windows))]
             context,
             address,
             focus: cx.focus_handle(),
@@ -251,6 +267,20 @@ impl BrowserSurface {
             favicon: None,
             address_edited: false,
             validation: None,
+            toolbar_menu: Default::default(),
+            #[cfg(target_os = "macos")]
+            appearance_menu_open: false,
+            #[cfg(target_os = "macos")]
+            appearance_menu_bounds: None,
+            #[cfg(target_os = "macos")]
+            appearance_hover: Default::default(),
+            hovered_toolbar_button: None,
+            #[cfg(target_os = "macos")]
+            screenshot: None,
+            #[cfg(target_os = "macos")]
+            selecting_element: false,
+            #[cfg(target_os = "macos")]
+            selection_generation: 0,
             remote,
             previews: zuse_protocol::PreviewSnapshot::default(),
             previews_loading: true,
@@ -327,6 +357,10 @@ impl BrowserSurface {
             return;
         }
         self.presentation = presentation;
+        #[cfg(target_os = "macos")]
+        if presentation != Presentation::Live {
+            self.cancel_selection();
+        }
         #[cfg(any(target_os = "macos", target_os = "linux", windows))]
         if let Some(native) = &mut self.native {
             native.present(presentation);
@@ -411,6 +445,8 @@ impl BrowserSurface {
                 return;
             }
         };
+        #[cfg(target_os = "macos")]
+        self.cancel_selection();
         self.validation = None;
         self.address
             .update(cx, |input, cx| input.set_text(url.clone(), cx));
@@ -459,8 +495,98 @@ impl BrowserSurface {
     }
 
     fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let url = self.address.read(cx).text().to_owned();
-        self.navigate(&url, window, cx);
+        let input = self.address.read(cx).text().to_owned();
+        match model::address_bar_input(&input) {
+            Ok(url) => self.navigate(&url, window, cx),
+            Err(message) => {
+                self.validation = Some(message.into());
+                cx.notify();
+            }
+        }
+    }
+
+    fn close_toolbar_menu(&mut self, cx: &mut Context<Self>) {
+        #[cfg(target_os = "macos")]
+        {
+            self.appearance_menu_open = false;
+            self.appearance_menu_bounds = None;
+            self.appearance_hover.reset();
+        }
+        if self.toolbar_menu.begin_close() {
+            crate::popover::reap_popup(cx, |this: &mut Self| &mut this.toolbar_menu);
+            cx.notify();
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn cancel_selection(&mut self) {
+        if self.selecting_element {
+            self.selecting_element = false;
+            self.selection_generation = self.selection_generation.wrapping_add(1);
+            if let Some(native) = &self.native {
+                native.cancel_selection();
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn toggle_select_element(&mut self, cx: &mut Context<Self>) {
+        if self.selecting_element {
+            self.cancel_selection();
+        } else if let (Some(native), Some(url)) = (&self.native, &self.page.url) {
+            self.selection_generation = self.selection_generation.wrapping_add(1);
+            self.selecting_element = true;
+            native.select_element(url.clone(), self.selection_generation);
+        }
+        cx.notify();
+    }
+
+    #[cfg(target_os = "macos")]
+    fn toggle_devtools(&mut self, cx: &mut Context<Self>) {
+        if let Some(native) = &self.native {
+            if let Err(message) = native.toggle_devtools() {
+                crate::toast::info(cx, message);
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn save_screenshot(&mut self, cx: &mut Context<Self>) {
+        self.close_toolbar_menu(cx);
+        if let Some(native) = &self.native {
+            native.save_screenshot(self.native_tx.clone());
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn confirm_clear_data(&mut self, cookies: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_toolbar_menu(cx);
+        let (title, detail) = if cookies {
+            (
+                "Clear cookies?",
+                "This clears cookies for all tabs in this browser profile and may sign you out of websites.",
+            )
+        } else {
+            (
+                "Clear cache?",
+                "This clears cached website files for all tabs in this browser profile.",
+            )
+        };
+        let answer = window.prompt(
+            gpui::PromptLevel::Warning,
+            title,
+            Some(detail),
+            &["Clear", "Cancel"],
+            cx,
+        );
+        let data = self.context.data.clone();
+        let tx = self.native_tx.clone();
+        cx.spawn(async move |_, _| {
+            if matches!(answer.await, Ok(0)) {
+                data.clear_data(cookies, tx);
+            }
+        })
+        .detach();
     }
 
     fn reload(&mut self, cx: &mut Context<Self>) {
@@ -576,6 +702,17 @@ impl BrowserSurface {
                 native.present(self.presentation);
                 if finished && let Some(url) = &page.url {
                     native.discover_favicon(url.clone());
+                    if page.error.is_none() {
+                        self.context.recent.borrow_mut().record(url, &page.title);
+                    }
+                }
+                #[cfg(target_os = "macos")]
+                if self.selecting_element
+                    && (page.url != self.page.url || (!self.page.loading && page.loading))
+                {
+                    self.selecting_element = false;
+                    self.selection_generation = self.selection_generation.wrapping_add(1);
+                    native.cancel_selection();
                 }
                 if page != self.page {
                     self.page = page;
@@ -583,6 +720,70 @@ impl BrowserSurface {
                 }
                 cx.notify();
             }
+            #[cfg(target_os = "macos")]
+            native::NativeEvent::ElementSelected {
+                page,
+                generation,
+                result,
+            } => {
+                if !self.selecting_element || generation != self.selection_generation {
+                    return;
+                }
+                self.selecting_element = false;
+                if self.page.url.as_deref() == Some(&page) {
+                    match result {
+                        Ok(Some(details)) => {
+                            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&details) {
+                                let selector = value["selector"].as_str().unwrap_or("element");
+                                let text = value["text"].as_str().unwrap_or("");
+                                let tag = value["tag"].as_str().unwrap_or("element");
+                                let summary: String = text.chars().take(60).collect();
+                                let label = if summary.is_empty() {
+                                    tag.to_string()
+                                } else if text.chars().count() > 60 {
+                                    format!("{tag} · {summary}…")
+                                } else {
+                                    format!("{tag} · {summary}")
+                                };
+                                let mut body = format!(
+                                    "Selected browser element from {page}:\nElement: {selector}"
+                                );
+                                if !text.is_empty() {
+                                    body.push_str(&format!("\nText: {text}"));
+                                }
+                                let context = crate::context_items::ContextItem::new(
+                                    format!("browser-element:{}", uuid::Uuid::new_v4()),
+                                    label,
+                                    body,
+                                );
+                                cx.emit(BrowserEvent::ElementSelected(context));
+                            }
+                        }
+                        Err(error) => {
+                            crate::toast::error(cx, format!("Could not select element: {error}"))
+                        }
+                        _ => {}
+                    }
+                }
+                cx.notify();
+            }
+            #[cfg(target_os = "macos")]
+            native::NativeEvent::InspectorUnavailable => crate::toast::info(
+                cx,
+                "Make the browser panel wider or taller to open developer tools inside it.",
+            ),
+            #[cfg(target_os = "macos")]
+            native::NativeEvent::DataCleared(message) => crate::toast::success(cx, message),
+            #[cfg(target_os = "macos")]
+            native::NativeEvent::ScreenshotSaved(result) => match result {
+                Ok(screenshot) => {
+                    self.screenshot = Some(screenshot);
+                    cx.notify();
+                }
+                Err(error) => {
+                    crate::toast::error(cx, format!("Could not save screenshot: {error}"))
+                }
+            },
             native::NativeEvent::NewTab(url) => {
                 if self.presentation == Presentation::Live {
                     cx.emit(BrowserEvent::NewTab(Some(url)));
@@ -612,13 +813,21 @@ impl BrowserSurface {
                 // server's favicon must be fetched directly.
                 let direct = url::Url::parse(&url).is_ok_and(|parsed| model::loopback(&parsed));
                 let download = gpui_tokio::Tokio::spawn(cx, async move {
-                    let mut builder = reqwest::Client::builder()
-                        .timeout(std::time::Duration::from_secs(5))
-                        .redirect(reqwest::redirect::Policy::limited(3));
-                    if direct {
-                        builder = builder.no_proxy();
-                    }
-                    let client = builder.build().ok()?;
+                    // Keep separate pools so loopback requests never use a proxy.
+                    static DIRECT: std::sync::OnceLock<Option<reqwest::Client>> =
+                        std::sync::OnceLock::new();
+                    static PROXIED: std::sync::OnceLock<Option<reqwest::Client>> =
+                        std::sync::OnceLock::new();
+                    let pool = if direct { &DIRECT } else { &PROXIED };
+                    let client = pool
+                        .get_or_init(|| {
+                            let builder = reqwest::Client::builder()
+                                .timeout(std::time::Duration::from_secs(5))
+                                .redirect(reqwest::redirect::Policy::limited(3));
+                            let builder = if direct { builder.no_proxy() } else { builder };
+                            builder.build().ok()
+                        })
+                        .as_ref()?;
                     let mut response =
                         client.get(url).send().await.ok()?.error_for_status().ok()?;
                     if response.content_length().is_some_and(|n| n > 1024 * 1024) {
@@ -652,6 +861,10 @@ impl BrowserSurface {
                         if this.favicon_generation == generation
                             && this.page.url.as_deref() == Some(&page)
                         {
+                            this.context
+                                .recent
+                                .borrow_mut()
+                                .set_icon(&page, bytes.clone());
                             this.favicon = Some(std::sync::Arc::new(gpui::Image::from_bytes(
                                 gpui::ImageFormat::Png,
                                 bytes,
@@ -828,6 +1041,51 @@ impl BrowserSurface {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "macos")]
+    #[gpui::test]
+    fn browser_options_and_appearance_menu_render_and_accept_selection(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        cx.update(|cx| {
+            gpui_base::init(cx);
+            crate::composer::init(cx, Default::default());
+            cx.set_global(crate::theme::Theme::default());
+            crate::settings::init(crate::settings::UiSettings::default(), dir.path(), cx);
+        });
+        let (browser, cx) = cx.add_window_view(|window, cx| {
+            BrowserSurface::new(BrowserContext::default(), false, window, cx)
+        });
+        cx.update(|window, cx| window.draw(cx).clear());
+        let options = cx.debug_bounds("browser-options").unwrap().center();
+        cx.simulate_click(options, gpui::Modifiers::default());
+        cx.update(|window, cx| window.draw(cx).clear());
+        let appearance = cx
+            .debug_bounds("browser-appearance-hover")
+            .unwrap()
+            .center();
+        cx.simulate_mouse_move(appearance, None, gpui::Modifiers::default());
+        cx.update(|window, cx| window.draw(cx).clear());
+        browser.read_with(cx, |browser, _| assert!(browser.appearance_menu_open));
+        let screenshot = cx.debug_bounds("browser-screenshot").unwrap().center();
+        cx.simulate_mouse_move(screenshot, None, gpui::Modifiers::default());
+        cx.update(|window, cx| window.draw(cx).clear());
+        browser.read_with(cx, |browser, _| assert!(!browser.appearance_menu_open));
+        cx.simulate_mouse_move(appearance, None, gpui::Modifiers::default());
+        cx.update(|window, cx| window.draw(cx).clear());
+        let dark = cx.debug_bounds("browser-appearance-dark").unwrap().center();
+        cx.simulate_mouse_move(dark, None, gpui::Modifiers::default());
+        cx.update(|window, cx| window.draw(cx).clear());
+        browser.read_with(cx, |browser, _| assert!(browser.appearance_menu_open));
+        cx.simulate_click(dark, gpui::Modifiers::default());
+        cx.update(|_, cx| {
+            assert_eq!(
+                crate::settings::current(cx).browser_appearance,
+                crate::appearance::AppearanceMode::Dark
+            );
+        });
+    }
+
     #[gpui::test]
     fn address_enter_rejects_unsupported_schemes_and_escape_restores_url(
         cx: &mut gpui::TestAppContext,

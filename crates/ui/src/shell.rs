@@ -4195,6 +4195,19 @@ impl Shell {
                         this.add_browser_surface(url.clone(), window, cx);
                     }
                 }
+                crate::browser::BrowserEvent::ElementSelected(details) => {
+                    if this.panel_key(cx) == owner
+                        && this.resolved_right_active(cx) == RightSurface::Browser(id)
+                    {
+                        let composer = this.composer.clone();
+                        let details = details.clone();
+                        cx.defer(move |cx| {
+                            composer.update(cx, |composer, cx| {
+                                composer.stage_context(details, cx);
+                            })
+                        });
+                    }
+                }
                 crate::browser::BrowserEvent::Close => {
                     this.close_right_surface(RightSurface::Browser(id), window, cx)
                 }

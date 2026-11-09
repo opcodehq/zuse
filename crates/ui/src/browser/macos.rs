@@ -7,6 +7,7 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, class, define_class, msg_send, sel};
 use objc2_app_kit::{
+    NSAppearance, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSAutoresizingMaskOptions,
     NSColor, NSEvent, NSEventMask, NSEventModifierFlags, NSView, NSWindowOrderingMode,
 };
 use objc2_foundation::{
@@ -88,6 +89,30 @@ impl BrowserData {
             configuration.setWebsiteDataStore(data.store.as_ref().unwrap());
         }
         configuration
+    }
+    pub(super) fn clear_data(&self, cookies: bool, tx: Sender) {
+        let data = self.0.borrow();
+        let Some(store) = &data.store else { return };
+        unsafe {
+            let types = if cookies {
+                objc2_foundation::NSSet::from_slice(&[objc2_web_kit::WKWebsiteDataTypeCookies])
+            } else {
+                objc2_foundation::NSSet::from_slice(&[
+                    objc2_web_kit::WKWebsiteDataTypeDiskCache,
+                    objc2_web_kit::WKWebsiteDataTypeMemoryCache,
+                ])
+            };
+            let date = objc2_foundation::NSDate::dateWithTimeIntervalSince1970(0.0);
+            let message = if cookies {
+                "Cookies cleared"
+            } else {
+                "Cache cleared"
+            };
+            let done = block2::RcBlock::new(move || {
+                let _ = tx.try_send(NativeEvent::DataCleared(message));
+            });
+            store.removeDataOfTypes_modifiedSince_completionHandler(&types, &date, &done);
+        }
     }
     pub(super) fn register_preview(&self, address: &str) {
         let Ok(url) = url::Url::parse(address) else {
@@ -199,7 +224,28 @@ pub(super) enum NativeEvent {
     Finished,
     NewTab(String),
     Key(gpui::Keystroke),
-    Favicon { page: String, url: String },
+    Favicon {
+        page: String,
+        url: String,
+    },
+    DataCleared(&'static str),
+    InspectorUnavailable,
+    ScreenshotSaved(Result<(std::path::PathBuf, Vec<u8>), String>),
+    ElementSelected {
+        page: String,
+        generation: u64,
+        result: Result<Option<String>, String>,
+    },
+}
+
+// DuckDuckGo's desktop results have a fixed minimum width. Request its compact
+// layout in the embedded pane, while leaving other sites on WebKit's default UA.
+const COMPACT_SEARCH_USER_AGENT: &str = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1";
+
+fn set_page_user_agent(view: &WKWebView, url: &str) {
+    let agent = super::model::compact_search_page(url)
+        .then(|| NSString::from_str(COMPACT_SEARCH_USER_AGENT));
+    unsafe { view.setCustomUserAgent(agent.as_deref()) };
 }
 
 struct ObserverState {
@@ -224,9 +270,10 @@ define_class!(
     }
     unsafe impl WKNavigationDelegate for Observer {
         #[unsafe(method(webView:decidePolicyForNavigationAction:decisionHandler:))]
-        fn policy(&self, _view: &WKWebView, action: &WKNavigationAction, decision: &block2::Block<dyn Fn(WKNavigationActionPolicy)>) {
+        fn policy(&self, view: &WKWebView, action: &WKNavigationAction, decision: &block2::Block<dyn Fn(WKNavigationActionPolicy)>) {
             let url = unsafe { action.request().URL() }.and_then(|u| u.absoluteString()).map(|u| u.to_string()).unwrap_or_default();
             if allowed_navigation(&url) && unsafe { action.targetFrame() }.is_some_and(|frame| unsafe { frame.isMainFrame() }) {
+                set_page_user_agent(view, &url);
                 *self.ivars().requested_url.borrow_mut() = Some(url.clone());
             }
             decision.call((if allowed_navigation(&url) { WKNavigationActionPolicy::Allow } else { WKNavigationActionPolicy::Cancel },));
@@ -320,6 +367,40 @@ define_class!(
     }
 );
 
+// Wry already uses WebKit's private inspector API on macOS. Its frontend loads
+// asynchronously, so attach when ready; WebKit's attach action defaults to bottom.
+struct InspectorState {
+    opening: Cell<bool>,
+    view: Retained<WKWebView>,
+    tx: Sender,
+}
+
+define_class!(
+    #[unsafe(super(NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "ZuseInspectorDelegate"]
+    #[ivars = InspectorState]
+    struct InspectorDelegate;
+    unsafe impl NSObjectProtocol for InspectorDelegate {}
+    impl InspectorDelegate {
+        #[unsafe(method(inspectorFrontendLoaded:))]
+        fn frontend_loaded(&self, inspector: &AnyObject) {
+            if self.ivars().opening.replace(false) {
+                unsafe { let _: () = msg_send![inspector, attach]; }
+                // Do not show a floating inspector if WebKit rejected docking
+                // (for example, the pane was resized while it was loading).
+                let attached = unsafe { self.ivars().view.superview() }.is_some_and(|parent| parent.subviews().len() > 1);
+                if attached {
+                    unsafe { let _: () = msg_send![inspector, show]; }
+                } else {
+                    unsafe { let _: () = msg_send![inspector, close]; }
+                    let _ = self.ivars().tx.try_send(NativeEvent::InspectorUnavailable);
+                }
+            }
+        }
+    }
+);
+
 pub(super) struct NativePage(Rc<RefCell<Host>>);
 
 pub(super) struct Host {
@@ -328,6 +409,9 @@ pub(super) struct Host {
     view: Retained<WKWebView>,
     observer: Retained<Observer>,
     clip: Retained<BrowserClipView>,
+    container: Retained<NSView>,
+    _inspector_delegate: Retained<InspectorDelegate>,
+    dark: Option<bool>,
     clip_mask: Retained<AnyObject>,
     parent: Retained<NSView>,
     visible_bounds: Option<Bounds<Pixels>>,
@@ -347,6 +431,7 @@ impl NativePage {
         let new_tab = tx.clone();
         let web = wry::WebViewBuilder::new()
             .with_webview_configuration(data.configuration(mtm))
+            .with_devtools(true)
             .with_visible(false)
             .with_focused(false)
             .with_new_window_req_handler(move |url, _| {
@@ -394,7 +479,34 @@ impl NativePage {
                 break;
             }
         }
-        clip.addSubview(&view);
+        // The clipping view covers the app window, but WebKit docks its inspector
+        // relative to the web view's immediate parent. Keep that parent pane-sized.
+        let container = NSView::new(mtm);
+        container.setAutoresizesSubviews(true);
+        clip.addSubview(&container);
+        view.setAutoresizingMask(
+            NSAutoresizingMaskOptions::ViewWidthSizable
+                | NSAutoresizingMaskOptions::ViewHeightSizable,
+        );
+        container.addSubview(&view);
+        let inspector_delegate: Retained<InspectorDelegate> = unsafe {
+            let object = mtm.alloc().set_ivars(InspectorState {
+                opening: Cell::new(false),
+                view: view.clone(),
+                tx: tx.clone(),
+            });
+            msg_send![super(object), init]
+        };
+        unsafe {
+            let inspector: *mut AnyObject = msg_send![&*view, _inspector];
+            if !inspector.is_null() {
+                let supports_delegate: bool =
+                    msg_send![inspector, respondsToSelector: sel!(setDelegate:)];
+                if supports_delegate {
+                    let _: () = msg_send![inspector, setDelegate: &*inspector_delegate];
+                }
+            }
+        }
 
         let observer = Observer::new(tx.clone(), mtm);
         unsafe {
@@ -469,6 +581,9 @@ impl NativePage {
             view,
             observer,
             clip,
+            container,
+            _inspector_delegate: inspector_delegate,
+            dark: None,
             clip_mask,
             parent,
             visible_bounds: None,
@@ -497,10 +612,151 @@ impl NativePage {
     pub fn load(&self, url: &str) -> Result<(), String> {
         let host = self.0.borrow();
         host.data.register_preview(url);
+        set_page_user_agent(&host.view, url);
         host.observer.ivars().error.borrow_mut().take();
         *host.observer.ivars().requested_url.borrow_mut() = Some(url.into());
         host.web.load_url(url).map_err(|e| e.to_string())
     }
+    pub(super) fn select_element(&self, page: String, generation: u64) {
+        let host = self.0.borrow();
+        let tx = host.tx.clone();
+        let completion = block2::RcBlock::new(move |value: *mut AnyObject, error: *mut NSError| {
+            let result = unsafe {
+                if !error.is_null() {
+                    Err((&*error).localizedDescription().to_string())
+                } else {
+                    Ok(value
+                        .as_ref()
+                        .and_then(|v| v.downcast_ref::<NSString>())
+                        .map(|s| s.to_string()))
+                }
+            };
+            let _ = tx.try_send(NativeEvent::ElementSelected {
+                page: page.clone(),
+                generation,
+                result,
+            });
+        });
+        unsafe {
+            let world =
+                objc2_web_kit::WKContentWorld::defaultClientWorld(MainThreadMarker::new().unwrap());
+            host.view
+                .callAsyncJavaScript_arguments_inFrame_inContentWorld_completionHandler(
+                    &NSString::from_str(include_str!("select_element.js")),
+                    None,
+                    None,
+                    &world,
+                    Some(&completion),
+                );
+        }
+    }
+    pub(super) fn cancel_selection(&self) {
+        let host = self.0.borrow();
+        unsafe {
+            let world =
+                objc2_web_kit::WKContentWorld::defaultClientWorld(MainThreadMarker::new().unwrap());
+            host.view
+                .callAsyncJavaScript_arguments_inFrame_inContentWorld_completionHandler(
+                    &NSString::from_str(
+                        "if (globalThis.zuseCancelSelection) globalThis.zuseCancelSelection();",
+                    ),
+                    None,
+                    None,
+                    &world,
+                    None,
+                );
+        }
+    }
+    pub(super) fn toggle_devtools(&self) -> Result<(), &'static str> {
+        let host = self.0.borrow();
+        if host._inspector_delegate.ivars().opening.replace(false) || host.web.is_devtools_open() {
+            host.web.close_devtools();
+            return Ok(());
+        }
+        // WebKit will otherwise open a separate window instead of attaching.
+        let Some(bounds) = host.bounds else {
+            return Err("Browser is not ready yet");
+        };
+        if f32::from(bounds.size.width) < 500.0 || f32::from(bounds.size.height) < 334.0 {
+            return Err(
+                "Make the browser panel wider or taller to open developer tools inside it.",
+            );
+        }
+        unsafe {
+            let inspector: *mut AnyObject = msg_send![&*host.view, _inspector];
+            if inspector.is_null() {
+                return Err("Developer tools are unavailable");
+            }
+            let can_connect: bool = msg_send![inspector, respondsToSelector: sel!(connect)];
+            let can_attach: bool = msg_send![inspector, respondsToSelector: sel!(attach)];
+            let can_delegate: bool = msg_send![inspector, respondsToSelector: sel!(setDelegate:)];
+            if !can_connect || !can_attach || !can_delegate {
+                return Err("Docked developer tools are unavailable on this macOS version");
+            }
+            host._inspector_delegate.ivars().opening.set(true);
+            // Connect silently; the delegate attaches at the bottom before showing.
+            let _: () = msg_send![inspector, connect];
+        }
+        Ok(())
+    }
+
+    pub(super) fn save_screenshot(&self, tx: Sender) {
+        let completion = block2::RcBlock::new(
+            move |image: *mut objc2_app_kit::NSImage, error: *mut NSError| {
+                let result = unsafe {
+                    if !error.is_null() {
+                        Err((&*error).localizedDescription().to_string())
+                    } else {
+                        image
+                            .as_ref()
+                            .and_then(|image| image.TIFFRepresentation())
+                            .and_then(|data| {
+                                objc2_app_kit::NSBitmapImageRep::imageRepWithData(&data)
+                            })
+                            .and_then(|image| {
+                                image.representationUsingType_properties(
+                                    objc2_app_kit::NSBitmapImageFileType::PNG,
+                                    &NSDictionary::new(),
+                                )
+                            })
+                            .map(|data| data.as_bytes_unchecked().to_vec())
+                            .ok_or_else(|| "Could not capture the page".to_string())
+                    }
+                };
+                let tx = tx.clone();
+                std::thread::spawn(move || {
+                    let result = result.and_then(|bytes| {
+                        use std::io::Write;
+                        let home = std::env::var_os("HOME").ok_or("Home directory unavailable")?;
+                        let dir = std::path::PathBuf::from(home)
+                            .join("Downloads")
+                            .join("Zuse Screenshots");
+                        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map_err(|e| e.to_string())?
+                            .as_nanos();
+                        let path = dir.join(format!("screenshot-{now}.png"));
+                        let mut file = std::fs::OpenOptions::new()
+                            .write(true)
+                            .create_new(true)
+                            .open(&path)
+                            .map_err(|e| e.to_string())?;
+                        file.write_all(&bytes).map_err(|e| e.to_string())?;
+                        Ok((path, bytes))
+                    });
+                    let _ = tx.try_send(NativeEvent::ScreenshotSaved(result));
+                });
+            },
+        );
+        unsafe {
+            self.0
+                .borrow()
+                .view
+                .takeSnapshotWithConfiguration_completionHandler(None, &completion)
+        };
+    }
+
     pub fn reload(&self) {
         let host = self.0.borrow();
         host.observer.ivars().error.borrow_mut().take();
@@ -586,7 +842,22 @@ impl Host {
         mask: Bounds<Pixels>,
         dragging: bool,
         resize_inset: Pixels,
+        dark: bool,
     ) {
+        if self.dark != Some(dark) {
+            let name = unsafe {
+                if dark {
+                    NSAppearanceNameDarkAqua
+                } else {
+                    NSAppearanceNameAqua
+                }
+            };
+            let appearance = NSAppearance::appearanceNamed(name);
+            unsafe {
+                let _: () = msg_send![&*self.container, setAppearance: appearance.as_deref()];
+            }
+            self.dark = Some(dark);
+        }
         // WebKit may fill newly exposed tiles a frame after a viewport change.
         // Match its page background beneath those tiles instead of exposing
         // the application's dark window background at the resize edge.
@@ -651,13 +922,18 @@ impl Host {
             } else {
                 self.parent.bounds().size.height - web_y - web_height
             };
-            self.view.setFrame(objc2_foundation::NSRect::new(
+            self.container.setFrame(objc2_foundation::NSRect::new(
                 objc2_foundation::NSPoint::new(f64::from(f32::from(bounds.origin.x)), web_y),
                 objc2_foundation::NSSize::new(
                     f64::from(f32::from(bounds.size.width)).max(0.),
                     web_height,
                 ),
             ));
+            // When docked, WebKit owns the page/inspector split and must be
+            // allowed to resize the page as the divider moves.
+            if self.container.subviews().len() == 1 {
+                self.view.setFrame(self.container.bounds());
+            }
             unsafe {
                 // Leave the implicit transaction open for the matching Metal
                 // presentation. Committing here would expose native geometry early.

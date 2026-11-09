@@ -242,7 +242,10 @@ impl Shell {
                     .role(gpui::Role::MenuItem)
                     .aria_label(choice.label())
                     .gap(px(10.0))
-                    .text_size(crate::typography::text_md())
+                    .font_family(theme.font_sans.clone())
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .text_size(crate::typography::text_sm())
+                    .py(px(5.0))
                     .child(
                         icon(choice.icon())
                             .size(px(14.0))
@@ -264,7 +267,7 @@ impl Shell {
             })
             .collect::<Vec<_>>();
         popover::popover_card(&theme)
-            .w(px(288.0))
+            .w(px(200.0))
             .on_mouse_down_out(cx.listener(|this, _, _, cx| this.close_right_plus(cx)))
             .child(div().flex().flex_col().children(rows))
     }

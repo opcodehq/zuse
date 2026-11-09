@@ -100,6 +100,53 @@ pub fn normalize_address(input: &str) -> Result<String, &'static str> {
     Ok(parsed.into())
 }
 
+/// Interpret text entered by a person in the address bar as a URL or a search.
+pub fn address_bar_input(input: &str) -> Result<String, &'static str> {
+    let text = input.trim();
+    if text.is_empty() || text.chars().any(char::is_control) {
+        return normalize_address(input);
+    }
+
+    let authority = text.split(['/', '?', '#']).next().unwrap_or(text);
+    let has_scheme = authority.split_once(':').is_some_and(|(scheme, rest)| {
+        !scheme.is_empty()
+            && scheme
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphabetic())
+            && scheme
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+            && (rest.is_empty() || !rest.chars().all(|c| c.is_ascii_digit()))
+    });
+    let looks_like_address = has_scheme
+        || (!text.chars().any(char::is_whitespace)
+            && (authority.contains('.') || authority.contains(':') || authority == "localhost"));
+    if looks_like_address {
+        if text.chars().any(char::is_whitespace) {
+            return Err("Enter a valid website or localhost address.");
+        }
+        return normalize_address(text);
+    }
+
+    let mut search = url::Url::parse("https://duckduckgo.com/").expect("valid search URL");
+    search.query_pairs_mut().append_pair("q", text);
+    Ok(search.into())
+}
+
+/// DuckDuckGo serves a compact layout to mobile browsers. Its desktop layout
+/// has a minimum width that overflows the browser pane.
+#[cfg(any(target_os = "macos", test))]
+pub(super) fn compact_search_page(address: &str) -> bool {
+    url::Url::parse(address).is_ok_and(|url| {
+        url.scheme() == "https"
+            && matches!(
+                url.host_str(),
+                Some("duckduckgo.com" | "www.duckduckgo.com")
+            )
+    })
+}
+
 /// Chat links require an explicit web authority; never infer a scheme or
 /// silently strip controls, credentials, malformed escapes or backslashes.
 pub fn transcript_address(input: &str) -> Result<String, &'static str> {
@@ -182,6 +229,55 @@ mod tests {
             assert_eq!(normalize_address(input), Ok(expected.into()), "{input}");
         }
     }
+    #[test]
+    fn address_bar_searches_questions_and_preserves_addresses() {
+        for (input, expected) in [
+            (
+                "what is an index.html file",
+                "https://duckduckgo.com/?q=what+is+an+index.html+file",
+            ),
+            ("rust", "https://duckduckgo.com/?q=rust"),
+            (
+                "c++ & rust?",
+                "https://duckduckgo.com/?q=c%2B%2B+%26+rust%3F",
+            ),
+            ("example.com/path", "https://example.com/path"),
+            ("localhost:3000", "http://localhost:3000/"),
+            ("[::1]:8080", "http://[::1]:8080/"),
+            ("https://example.com", "https://example.com/"),
+        ] {
+            assert_eq!(address_bar_input(input), Ok(expected.into()), "{input}");
+        }
+        for input in [
+            "",
+            "javascript:alert(1)",
+            "file:///tmp/a",
+            "https://user:pass@example.com",
+            "https://example.com/\nsecret",
+            "https://example.com/a b",
+        ] {
+            assert!(address_bar_input(input).is_err(), "{input}");
+        }
+    }
+
+    #[test]
+    fn compact_layout_is_limited_to_duckduckgo() {
+        for url in [
+            "https://duckduckgo.com/?q=rust",
+            "https://www.duckduckgo.com/",
+        ] {
+            assert!(compact_search_page(url), "{url}");
+        }
+        for url in [
+            "https://duckduckgo.com.example.org/",
+            "https://example.com/",
+            "http://duckduckgo.com/",
+            "not a url",
+        ] {
+            assert!(!compact_search_page(url), "{url}");
+        }
+    }
+
     #[test]
     fn rejects_non_web_schemes_credentials_and_bad_input() {
         for input in [

@@ -728,7 +728,11 @@ impl Composer {
         if comments.is_empty() {
             self.tray.annotations = AnnotationPreview::default();
         }
-        let contexts = self.staged_contexts(cx);
+        let contexts: Vec<_> = self
+            .staged_contexts(cx)
+            .into_iter()
+            .filter(|context| !context.source_key.starts_with("browser-element:"))
+            .collect();
         if comments.is_empty() && tiles.is_empty() && contexts.is_empty() {
             return None;
         }
@@ -852,6 +856,42 @@ impl Composer {
             .into_any_element()
     }
 
+    /// Browser selections sit inside the composer, ahead of the user's text.
+    pub(crate) fn browser_context_row(
+        &mut self,
+        theme: &Theme,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let contexts: Vec<_> = self
+            .staged_contexts(cx)
+            .into_iter()
+            .filter(|context| context.source_key.starts_with("browser-element:"))
+            .collect();
+        if contexts.is_empty() {
+            return None;
+        }
+        let pills: Vec<_> = contexts
+            .iter()
+            .enumerate()
+            .map(|(ix, context)| self.context_pill(ix, context, theme, window, cx))
+            .collect();
+        Some(
+            div()
+                .id("composer-browser-contexts")
+                .h(px(36.0))
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap(px(6.0))
+                .px(px(16.0))
+                .pt(px(6.0))
+                .overflow_x_scroll()
+                .children(pills)
+                .into_any_element(),
+        )
+    }
+
     /// One staged context item: the message badge it will become (hover or
     /// click shows its Markdown), with a remove ×.
     fn context_pill(
@@ -898,7 +938,12 @@ impl Composer {
                     .text_color(theme.text_muted),
             )
             .into_any_element();
-        crate::badges::render_with(
+        let render = if context.source_key.starts_with("browser-element:") {
+            crate::badges::render_browser_context
+        } else {
+            crate::badges::render_with
+        };
+        render(
             format!("tray-context-{}", context.id),
             &badge,
             theme,

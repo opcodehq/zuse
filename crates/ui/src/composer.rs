@@ -12936,8 +12936,15 @@ impl Render for Composer {
         } else {
             composer_total_height(content_height)
         };
-        let target_height = base_height + appshot_strip_height(appshot_count);
-        dock_layout.extra_height = appshot_strip_height(appshot_count);
+        let browser_context_row = self.browser_context_row(&theme, window, cx);
+        let browser_context_height = if browser_context_row.is_some() {
+            36.0
+        } else {
+            0.0
+        };
+        let extra_height = appshot_strip_height(appshot_count) + browser_context_height;
+        let target_height = base_height + extra_height;
+        dock_layout.extra_height = extra_height;
         let dock_owns_layout = self.dock_frame.is_some_and(|frame| frame.active)
             || dock_height_changed
             || self.dock_reflow.active();
@@ -13011,6 +13018,7 @@ impl Render for Composer {
         let surface_radius = COMPOSER_RADIUS;
         let textarea_height = (pill_height
             - appshot_strip_height(appshot_count)
+            - browser_context_height
             - PILL_BORDER_V
             - ACTIONS_ROW_HEIGHT)
             .max(0.0);
@@ -13371,6 +13379,7 @@ impl Render for Composer {
             .flex()
             .flex_col()
             .children(appshot_strip)
+            .children(browser_context_row)
             .child(
                 div()
                     .h(px(textarea_height))
