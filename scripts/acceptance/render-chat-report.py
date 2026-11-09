@@ -165,6 +165,7 @@ if prior_path.exists():
         cards.append(f'<article class="chart-card"><h3>{title}</h3><p class="subtitle">Zuse before / after · medians of 3 runs</p>{rows}<p class="caption">{(1-after/before)*100:.1f}% fewer encoded download bytes</p></article>')
     section = '<section id="efficiency-pass"><div class="section-head"><h2>This efficiency pass: measured byte savings</h2></div><div class="chart-grid">' + ''.join(cards) + '</div><p class="caption">Same canonical fixture and 3G profile. These are two separate three-run batches; they do not isolate individual changes or establish confidence intervals.</p></section>'
     html = html.replace('<section id="t3-approach">', section + '\n<section id="t3-approach">', 1)
+html = re.sub(r'(<b>Zuse runtime build:</b>)', r'\1 <strong>Current-main CI qualification:</strong> after the port, the existing localization and offline CJK fonts yield 8,354,245 aggregate Brotli bytes (about 167 seconds of transfer alone at 50,000 B/s). The release cap is 9 MiB. Startup charts below retain the earlier pre-localization build and are not current-main timings.<br>', html, count=1)
 html = re.sub(r'\n{3,}', '\n\n', html)
 html_path.write_text(html)
 Path('.context/t3-benchmark/chat-summary.json').write_text(json.dumps(report["summary"], indent=2))

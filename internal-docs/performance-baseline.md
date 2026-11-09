@@ -293,7 +293,12 @@ gzipped. The `web-release` size profile and Binaryen size optimization produce
 16,739,992 bytes raw, 6,299,841 bytes gzipped and 3,691,510 bytes with Brotli.
 The preferred download is 53% smaller than the original gzip delivery. The
 entire generated browser directory is about 3.72 MB with Brotli; release builds
-enforce a 5 MiB aggregate budget and emit `network-budget.json`.
+originally enforced a 5 MiB aggregate budget and emit `network-budget.json`.
+After porting to current main, its existing localization and offline CJK fonts
+produce 8,354,245 aggregate Brotli bytes in CI. The fixed regression cap is now
+9 MiB; this does not establish a current first-usable timing. At 50,000 bytes/s,
+that complete artifact alone requires about 167 seconds of transfer. The older
+startup measurements below remain historical and do not describe this build.
 
 Chromium with 400 ms emulated latency, 50,000 bytes/s download and 25,000 bytes/s
 upload opened the compiled UI in 77.7 seconds from an empty cache. A cached

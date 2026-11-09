@@ -83,3 +83,7 @@ Raw samples are in `.context/t3-benchmark/chat-results.json`; screenshots and wi
 - Reusable runner: `scripts/acceptance/compare-startup.mjs`. It requires Node 22+, `CHROME_BIN`, and `T3_BENCH_AUTH_FILE` pointing to a private JSON file containing the disposable T3 origin and its Set-Cookie strings. `BENCH_RUNS` defaults to 3; `BENCH_MODE=warm-only` measures independently prewarmed reloads. Never use real user profiles for this test.
 
 The current runtime uses dictionary compression, keyed chat/session deltas and verified history reuse. Stop is measured after an accepted prompt has been acknowledged before disconnect; the earlier batch did not explicitly await that acknowledgment. The report’s before/after batches are descriptive and do not isolate each change.
+
+## Current-main cold-download qualification
+
+After porting this work to current main, CI measured **8,354,245 aggregate Brotli bytes** with the existing localization and offline CJK fonts. That complete artifact needs approximately 167 seconds of transfer at 50,000 B/s, before latency, compilation or paint; this is not a measured first-usable time. The 3.72 MB / 76.9 s startup comparison above belongs to the earlier pre-localization build. The fixed release regression budget is 9 MiB against the current artifact, and remains enforced. Deferring or splitting large font assets is still future work; this PR preserves their offline coverage.

@@ -128,7 +128,10 @@ Release browser builds use the `web-release` size profile and Binaryen 123 with
 shared-memory features enabled. Build with `bash scripts/build-web.sh --release`.
 The Node.js post-build hook writes deterministic Brotli and gzip sidecars and a
 `network-budget.json` report. Release builds fail if compressed assets exceed
-5 MiB in total (override explicitly with `ZUSE_WEB_MAX_BROTLI_BYTES`). The report's
+9 MiB in total (override explicitly with `ZUSE_WEB_MAX_BROTLI_BYTES`). This cap
+is based on the current build with offline CJK fonts and localization: CI measured
+8,354,245 Brotli bytes. The earlier 5 MiB target and startup timings came from a
+pre-localization build. The report's
 400 kbps estimate is transfer time only, excluding compilation and latency.
 
 Both the direct engine and relay negotiate sidecars; builds without them use
