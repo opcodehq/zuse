@@ -426,9 +426,7 @@ impl Zots {
                 );
                 request.cwd = self.workspace(&zot.id)?.to_string_lossy().into_owned();
                 request.worktree = None;
-                request.sandbox = zuse_protocol::SandboxLevel::WorkspaceWrite;
-                request.plan = true;
-                request.auto_approve = false;
+                request.plan = false;
                 let context = self
                     .files(&zot.id, false)?
                     .into_iter()
@@ -992,6 +990,13 @@ fn validate_config(config: &ZotConfig, device: &str) -> Result<()> {
         "follow-up limit must not exceed 32"
     );
     ensure!(config.repositories.len() <= 128, "too many repositories");
+    ensure!(
+        config
+            .avatar
+            .as_ref()
+            .is_none_or(|a| a.mascot.len() <= 32 && a.color.len() <= 32),
+        "Zot avatar is too large"
+    );
     Ok(())
 }
 fn write_file(
@@ -1131,6 +1136,7 @@ mod tests {
             worker_device_id: "local".into(),
             max_concurrent_workers: 4,
             max_followups: 3,
+            avatar: None,
         }
     }
     fn command(zot: &str, id: &str, action: ZotAction) -> ZotCommand {

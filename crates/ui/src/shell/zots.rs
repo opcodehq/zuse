@@ -1,32 +1,25 @@
 //! Coordinator chrome; commands use the same engine authority as external clients.
+use super::zot_forms::{Form, Kind, ZotAfter};
 use super::*;
+use zuse_protocol::presentation::zot_mascots;
 use zuse_protocol::presentation::zot_panel::{ZotTab, ZotTabs, zot_owns_chat};
 use zuse_protocol::zots::*;
 
 #[derive(Default)]
 pub(super) struct ZotUi {
-    pub form: Option<Form>,
+    /// New Zot or Zot settings. Outlives the route so Back returns to the draft.
+    pub(super) page: Option<Form>,
+    pub(super) dialog: Option<Form>,
+    pub(super) panel_hidden: bool,
     tabs: ZotTabs,
     files: Vec<ZotFile>,
-    loaded: Option<(String, u32, u32)>,
+    pub(super) loaded: Option<(String, u32, u32)>,
     events: Vec<ZotEvent>,
     loading: bool,
-    pending: bool,
-    retry: Option<ZotCommand>,
+    pub(super) pending: bool,
+    pub(super) retry: Option<ZotCommand>,
     history: bool,
     confirm_delete: bool,
-}
-pub(super) struct Form {
-    id: String,
-    zot: Option<Zot>,
-    file: Option<ZotFile>,
-    decision: Option<ZotDecision>,
-    worker: Option<Option<String>>,
-    inputs: Vec<Entity<ComposerInput>>,
-    repositories: Vec<ZotRepository>,
-    home: String,
-    worker_device: String,
-    _subscriptions: Vec<Subscription>,
 }
 fn action(
     id: impl Into<SharedString>,
@@ -58,7 +51,6 @@ fn section(text: impl Into<SharedString>, theme: &Theme) -> gpui::Div {
 }
 fn muted(text: impl Into<SharedString>, theme: &Theme) -> gpui::Div {
     div()
-        .px(px(6.0))
         .py(px(4.0))
         .text_size(crate::typography::ui_rems(12.0))
         .text_color(theme.text_faint)
@@ -79,10 +71,11 @@ fn list_row(
         .id(id.into())
         .role(gpui::Role::Button)
         .aria_label(SharedString::from(title.clone()))
+        .mx(px(-8.0))
         .flex()
         .items_center()
         .gap(px(8.0))
-        .px(px(6.0))
+        .px(px(8.0))
         .py(px(5.0))
         .rounded(px(6.0))
         .cursor_pointer()
@@ -103,13 +96,97 @@ fn list_row(
         .into_any_element()
 }
 
+fn thread_action(
+    id: String,
+    glyph: &'static str,
+    label: &'static str,
+    theme: &Theme,
+    callback: impl Fn(&mut Shell, &gpui::ClickEvent, &mut Window, &mut Context<Shell>) + 'static,
+    cx: &mut Context<Shell>,
+) -> AnyElement {
+    div()
+        .id(SharedString::from(id))
+        .role(gpui::Role::Button)
+        .aria_label(label)
+        .size(px(24.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(6.0))
+        .bg(theme.element_active)
+        .cursor_pointer()
+        .text_color(theme.text_muted)
+        .hover(|d| d.text_color(theme.text_strong))
+        .tooltip(crate::settings::widgets::text_tooltip(label))
+        .child(icon(glyph).size(px(13.0)))
+        .on_click(cx.listener(move |this, event, window, cx| {
+            cx.stop_propagation();
+            callback(this, event, window, cx)
+        }))
+        .into_any_element()
+}
+
+/// One pixel character, `pixel` logical pixels per sprite cell.
+pub(super) fn zot_mascot(avatar: &ZotAvatar, pixel: f32) -> impl IntoElement + use<> {
+    let runs = zot_mascots::sprite_runs(avatar);
+    let side = pixel * zot_mascots::SPRITE_SIZE as f32;
+    gpui::canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            for &(x, y, width, rgb) in &runs {
+                let cell = gpui::point(px(f32::from(x) * pixel), px(f32::from(y) * pixel));
+                let extent = gpui::size(px(f32::from(width) * pixel), px(pixel));
+                window.paint_quad(gpui::fill(
+                    gpui::Bounds::new(bounds.origin + cell, extent),
+                    gpui::rgb(rgb),
+                ));
+            }
+        },
+    )
+    .size(px(side))
+    .flex_none()
+}
+
+pub(super) fn zot_avatar(zot: &Zot) -> ZotAvatar {
+    zot.config
+        .avatar
+        .clone()
+        .unwrap_or_else(|| zot_mascots::default_avatar(&zot.id))
+}
+
+pub(super) const ZOT_PANEL_WIDTH: f32 = 340.0;
+
+/// A document worth listing: seeded placeholders stay empty, and the
+/// instructions file mirrors the purpose edited with the Zot itself.
+fn is_document(file: &ZotFile) -> bool {
+    file.path != "INSTRUCTIONS.md" && !file.content.trim().is_empty()
+}
+
+/// Drive and History only appear once they have something to show.
+fn visible_tabs(files: &[ZotFile]) -> Vec<ZotTab> {
+    ZotTab::ALL
+        .into_iter()
+        .filter(|tab| match tab {
+            ZotTab::Drive => files.iter().any(is_document),
+            ZotTab::History => files.iter().any(|f| f.version > 1),
+            _ => true,
+        })
+        .collect()
+}
+
 impl Shell {
     pub(super) fn selected_zot(&self, cx: &App) -> Option<Zot> {
         let state = self.state.read(cx);
         state
             .zots
             .iter()
-            .find(|z| Some(&z.coordinator_chat_id) == state.selected_chat.as_ref())
+            .find(|z| {
+                let selected = state.selected_chat.as_ref();
+                Some(&z.coordinator_chat_id) == selected
+                    || z.previous_coordinator_chats
+                        .iter()
+                        .any(|c| Some(c) == selected)
+            })
             .cloned()
     }
     pub(super) fn render_zot_sidebar(
@@ -125,7 +202,9 @@ impl Shell {
             return Empty.into_any_element();
         }
         let zots = state.zots.clone();
-        let selected = state.selected_chat.clone();
+        // A Zot page owns the main area, so no conversation reads as current.
+        let creating = self.creating_zot();
+        let selected = state.selected_chat.clone().filter(|_| !creating);
         let titles: std::collections::HashMap<String, String> = state
             .chats
             .iter()
@@ -151,6 +230,7 @@ impl Shell {
                     .justify_center()
                     .rounded(px(5.0))
                     .cursor_pointer()
+                    .when(creating, |d| d.bg(theme.bg_selected))
                     .hover(|d| d.bg(theme.element_hover))
                     .tooltip(crate::settings::widgets::text_tooltip("New Zot"))
                     .child(
@@ -158,7 +238,7 @@ impl Shell {
                             .size(px(13.0))
                             .text_color(theme.text_muted),
                     )
-                    .on_click(cx.listener(|this, _, _, cx| this.open_zot_form(None, None, cx))),
+                    .on_click(cx.listener(|this, _, _, cx| this.open_new_zot(cx))),
             );
         let mut list = div()
             .flex()
@@ -176,14 +256,6 @@ impl Shell {
                     .iter()
                     .any(|c| Some(c) == selected.as_ref());
             let needs = zot.decisions.iter().filter(|d| d.answer.is_none()).count();
-            let initial = zot
-                .config
-                .name
-                .chars()
-                .next()
-                .unwrap_or('Z')
-                .to_uppercase()
-                .to_string();
             list = list.child(
                 div()
                     .id(SharedString::from(format!("zot-{}", zot.id)))
@@ -204,19 +276,7 @@ impl Shell {
                     })
                     .when(active, |d| d.bg(theme.bg_selected))
                     .when(!active, |d| d.hover(|d| d.bg(theme.element_hover)))
-                    .child(
-                        div()
-                            .size(px(18.0))
-                            .flex_none()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(5.0))
-                            .bg(theme.accent_wash)
-                            .text_size(crate::typography::ui_rems(10.0))
-                            .text_color(theme.accent_strong)
-                            .child(initial),
-                    )
+                    .child(zot_mascot(&zot_avatar(&zot), 1.0))
                     .child(
                         div()
                             .flex_1()
@@ -243,13 +303,7 @@ impl Shell {
                                 .child(needs.to_string()),
                         )
                     })
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.route = Route::Chat;
-                        this.zot_ui.form = None;
-                        this.state
-                            .update(cx, |s, cx| s.select_chat(Some(id.clone()), cx));
-                        cx.notify();
-                    })),
+                    .on_click(cx.listener(move |this, _, _, cx| this.open_chat(id.clone(), cx))),
             );
             // A Zot's threads live under it instead of under their projects.
             let count = zot.workers.len();
@@ -307,13 +361,9 @@ impl Shell {
                         )
                         .child(div().flex_1().min_w_0().truncate().child(title))
                         .child(div().size(px(6.0)).flex_none().rounded_full().bg(dot))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.route = Route::Chat;
-                            this.zot_ui.form = None;
-                            this.state
-                                .update(cx, |s, cx| s.select_chat(Some(chat.clone()), cx));
-                            cx.notify();
-                        })),
+                        .on_click(
+                            cx.listener(move |this, _, _, cx| this.open_chat(chat.clone(), cx)),
+                        ),
                 );
             }
         }
@@ -337,470 +387,18 @@ impl Shell {
             _ => theme.text_faint.opacity(0.5),
         }
     }
-    fn open_zot_form(&mut self, zot: Option<Zot>, file: Option<ZotFile>, cx: &mut Context<Self>) {
-        let state = self.state.read(cx);
-        let home = zot
-            .as_ref()
-            .map(|z| z.config.home_device_id.clone())
-            .or_else(|| state.local_device_id.clone())
-            .unwrap_or_default();
-        let repositories = zot
-            .as_ref()
-            .map(|z| z.config.repositories.clone())
-            .unwrap_or_else(|| {
-                state
-                    .selected_space_row()
-                    .map(|s| {
-                        vec![ZotRepository {
-                            device_id: s.device_id.clone(),
-                            space_id: s.id.clone(),
-                        }]
-                    })
-                    .unwrap_or_default()
-            });
-        let worker_device = zot
-            .as_ref()
-            .map(|z| z.config.worker_device_id.clone())
-            .unwrap_or_else(|| home.clone());
-        let values = if let Some(file) = file.as_ref().filter(|f| f.version == 0) {
-            vec![("Name", file.path.clone()), ("Content", String::new())]
-        } else if let Some(file) = &file {
-            vec![("Content", file.content.clone())]
-        } else {
-            vec![
-                (
-                    "Name",
-                    zot.as_ref()
-                        .map(|z| z.config.name.clone())
-                        .unwrap_or_default(),
-                ),
-                (
-                    "Purpose",
-                    zot.as_ref()
-                        .map(|z| z.config.purpose.clone())
-                        .unwrap_or_default(),
-                ),
-                (
-                    "Agent",
-                    zot.as_ref()
-                        .map(|z| z.config.coordinator_model.harness.clone())
-                        .unwrap_or_else(|| "claude-code".into()),
-                ),
-                (
-                    "Model (empty uses agent default)",
-                    zot.as_ref()
-                        .and_then(|z| z.config.coordinator_model.model.clone())
-                        .unwrap_or_default(),
-                ),
-                (
-                    "Concurrent workers",
-                    zot.as_ref()
-                        .map(|z| z.config.max_concurrent_workers.to_string())
-                        .unwrap_or_else(|| "4".into()),
-                ),
-                (
-                    "Automatic follow-ups",
-                    zot.as_ref()
-                        .map(|z| z.config.max_followups.to_string())
-                        .unwrap_or_else(|| "3".into()),
-                ),
-            ]
-        };
-        let mut subscriptions = vec![];
-        let inputs = values
-            .into_iter()
-            .map(|(label, value)| {
-                let input = cx.new(|cx| ComposerInput::new(label, cx));
-                input.update(cx, |i, cx| i.set_text(value, cx));
-                subscriptions.push(
-                    cx.subscribe(&input, |_: &mut Shell, _, _: &ComposerInputEvent, cx| {
-                        cx.notify()
-                    }),
-                );
-                input
-            })
-            .collect();
-        self.zot_ui.form = Some(Form {
-            id: zot
-                .as_ref()
-                .map(|z| z.id.clone())
-                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
-            zot,
-            file,
-            decision: None,
-            worker: None,
-            inputs,
-            repositories,
-            home,
-            worker_device,
-            _subscriptions: subscriptions,
-        });
-        self.route = Route::Chat;
-        cx.notify();
-    }
-    fn submit_zot_form(&mut self, cx: &mut Context<Self>) {
-        let Some(form) = self.zot_ui.form.as_ref() else {
-            return;
-        };
-        let values: Vec<String> = form
-            .inputs
-            .iter()
-            .map(|i| i.read(cx).text().to_owned())
-            .collect();
-        let (id, revision, action) = if let Some(decision) = &form.decision {
-            let zot = form.zot.as_ref().unwrap();
-            let mut decision = decision.clone();
-            decision.answer = Some(values[0].clone());
-            (
-                zot.id.clone(),
-                Some(zot.revision),
-                ZotAction::Decide { decision },
-            )
-        } else if let Some(worker) = &form.worker {
-            let zot = form.zot.as_ref().unwrap();
-            let action = if let Some(chat_id) = worker {
-                ZotAction::MessageWorker {
-                    chat_id: chat_id.clone(),
-                    text: values[0].clone(),
-                    automatic: false,
-                }
-            } else {
-                let Some(repository) = form
-                    .repositories
-                    .iter()
-                    .find(|r| r.device_id == form.worker_device)
-                else {
-                    self.show_notice(
-                        crate::toast::ToastKind::Error,
-                        "Select a repository on the worker environment",
-                        cx,
-                    );
-                    return;
-                };
-                ZotAction::Delegate {
-                    worker: ZotWorker {
-                        chat_id: String::new(),
-                        device_id: repository.device_id.clone(),
-                        space_id: repository.space_id.clone(),
-                        objective: values[0].clone(),
-                        followups: 0,
-                    },
-                    model: ZotModel {
-                        harness: values[1].clone(),
-                        model: (!values[2].is_empty()).then(|| values[2].clone()),
-                    },
-                    base: values[3].clone(),
-                }
-            };
-            (zot.id.clone(), Some(zot.revision), action)
-        } else if let Some(file) = &form.file {
-            let zot = form.zot.as_ref().unwrap();
-            let (path, content) = if file.version == 0 {
-                (values[0].trim().to_owned(), values[1].clone())
-            } else {
-                (file.path.clone(), values[0].clone())
-            };
-            if path.is_empty() {
-                self.show_notice(crate::toast::ToastKind::Error, "Name the document", cx);
-                return;
-            }
-            (
-                zot.id.clone(),
-                Some(zot.revision),
-                ZotAction::WriteFile {
-                    path,
-                    content,
-                    expected_version: file.version,
-                },
-            )
-        } else {
-            let (Ok(max_concurrent_workers), Ok(max_followups)) =
-                (values[4].parse(), values[5].parse())
-            else {
-                self.show_notice(
-                    crate::toast::ToastKind::Error,
-                    "Enter valid worker limits",
-                    cx,
-                );
-                return;
-            };
-            let config = ZotConfig {
-                name: values[0].clone(),
-                purpose: values[1].clone(),
-                home_device_id: form.home.clone(),
-                repositories: form.repositories.clone(),
-                coordinator_model: ZotModel {
-                    harness: values[2].clone(),
-                    model: (!values[3].is_empty()).then(|| values[3].clone()),
-                },
-                worker_device_id: form.worker_device.clone(),
-                max_concurrent_workers,
-                max_followups,
-            };
-            if let Some(zot) = &form.zot {
-                (
-                    zot.id.clone(),
-                    Some(zot.revision),
-                    ZotAction::Configure { config },
-                )
-            } else {
-                (form.id.clone(), None, ZotAction::Create { config })
-            }
-        };
-        self.send_zot_command(id, revision, action, true, cx);
-    }
-    fn send_zot_command(
-        &mut self,
-        id: String,
-        expected_revision: Option<u32>,
-        action: ZotAction,
-        close_form: bool,
+    fn zot_tab_bar(
+        &self,
+        visible: &[ZotTab],
+        editing: bool,
+        theme: &Theme,
         cx: &mut Context<Self>,
-    ) {
-        if self.zot_ui.pending {
-            return;
-        }
-        let Some(engine) = self.state.read(cx).engine().cloned() else {
-            return;
-        };
-        let home = self
-            .zot_ui
-            .form
-            .as_ref()
-            .map(|f| f.home.clone())
-            .or_else(|| {
-                self.state
-                    .read(cx)
-                    .zots
-                    .iter()
-                    .find(|z| z.id == id)
-                    .map(|z| z.config.home_device_id.clone())
-            });
-        let mut command = ZotCommand {
-            command_id: uuid::Uuid::new_v4().to_string(),
-            zot_id: id,
-            expected_revision,
-            action,
-        };
-        if let ZotAction::Delegate { worker, .. } = &mut command.action {
-            worker.chat_id = format!("zot-worker-{}", command.command_id);
-        }
-        if let Some(previous) = &self.zot_ui.retry {
-            let mut comparable = command.clone();
-            comparable.command_id = previous.command_id.clone();
-            if let ZotAction::Delegate { worker, .. } = &mut comparable.action {
-                worker.chat_id = format!("zot-worker-{}", previous.command_id);
-            }
-            if serde_json::to_value(&comparable).ok() == serde_json::to_value(previous).ok() {
-                command = previous.clone();
-            }
-        }
-        self.zot_ui.retry = Some(command.clone());
-        let mut params = serde_json::to_value(command).unwrap();
-        if let Some(home) = home {
-            params["targetDeviceId"] = serde_json::json!(home);
-        }
-        self.zot_ui.pending = true;
-        cx.spawn(async move |this, cx| {
-            let result = engine
-                .client()
-                .call(zuse_protocol::control::ZOT_COMMAND, params)
-                .await;
-            let _ = this.update(cx, |this, cx| {
-                this.zot_ui.pending = false;
-                match result {
-                    Ok(value) => {
-                        this.zot_ui.retry = None;
-                        this.zot_ui.loaded = None;
-                        if close_form {
-                            this.zot_ui.form = None;
-                        }
-                        if close_form {
-                            if let Ok(Some(zot)) = serde_json::from_value::<Option<Zot>>(value) {
-                                this.state.update(cx, |s, cx| {
-                                    s.select_chat(Some(zot.coordinator_chat_id), cx)
-                                });
-                            }
-                        }
-                    }
-                    Err(error) => {
-                        this.show_notice(crate::toast::ToastKind::Error, error.to_string(), cx)
-                    }
-                }
-                cx.notify();
-            });
-        })
-        .detach();
-        cx.notify();
-    }
-    pub(super) fn render_zot_form(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
-        let form = self.zot_ui.form.as_ref().unwrap();
-        let file = form.file.as_ref().map(|f| f.path.clone());
-        let inputs = form.inputs.clone();
-        let labels: Vec<&str> = if form.file.as_ref().is_some_and(|f| f.version == 0) {
-            vec!["Name", "Content"]
-        } else if form.file.is_some() {
-            vec!["Content"]
-        } else if form.decision.is_some() {
-            vec!["Your answer"]
-        } else if let Some(worker) = &form.worker {
-            if worker.is_some() {
-                vec!["Message"]
-            } else {
-                vec!["Objective", "Agent", "Model", "Base branch"]
-            }
-        } else {
-            vec![
-                "Name",
-                "Purpose",
-                "Agent",
-                "Model",
-                "Concurrent workers",
-                "Automatic follow-ups",
-            ]
-        };
-        let devices = self.state.read(cx).devices.clone();
-        let spaces = self.state.read(cx).spaces.clone();
-        let selected = form.repositories.clone();
-        let home = form.home.clone();
-        let worker_device = form.worker_device.clone();
-        let title = file
-            .filter(|path| !path.is_empty() && form.file.as_ref().is_some_and(|f| f.version > 0))
-            .unwrap_or_else(|| {
-                if form.file.is_some() {
-                    return "New document".into();
-                }
-                if form.decision.is_some() {
-                    "Answer decision".into()
-                } else if form.worker.is_some() {
-                    "Worker task".into()
-                } else if form.zot.is_some() {
-                    "Zot settings".into()
-                } else {
-                    "Create a Zot".into()
-                }
-            });
-        div()
-            .id("zot-form")
-            .flex_1()
-            .min_w_0()
-            .h_full()
-            .overflow_y_scroll()
-            .p(px(24.0))
-            .flex()
-            .flex_col()
-            .gap(px(12.0))
-            .child(title)
-            .children(inputs.into_iter().enumerate().map(|(index, input)| {
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(4.0))
-                    .child(labels[index])
-                    .child(div().min_h(px(36.0)).child(input))
-            }))
-            .when(form.file.is_none() && form.decision.is_none(), |view| {
-                view.child("Home environment")
-                    .children(devices.iter().map(|device| {
-                        let id = device.id.clone();
-                        action(
-                            format!("zot-home-{id}"),
-                            format!("{}{}", if id == home { "✓ " } else { "" }, device.name),
-                            theme,
-                            move |this, _, _, cx| {
-                                if let Some(f) = this.zot_ui.form.as_mut() {
-                                    if f.zot.is_none() {
-                                        f.home = id.clone();
-                                    }
-                                }
-                                cx.notify();
-                            },
-                            cx,
-                        )
-                    }))
-                    .child("Default worker environment")
-                    .children(devices.iter().map(|device| {
-                        let id = device.id.clone();
-                        action(
-                            format!("zot-worker-{id}"),
-                            format!(
-                                "{}{}",
-                                if id == worker_device { "✓ " } else { "" },
-                                device.name
-                            ),
-                            theme,
-                            move |this, _, _, cx| {
-                                if let Some(f) = this.zot_ui.form.as_mut() {
-                                    f.worker_device = id.clone();
-                                }
-                                cx.notify();
-                            },
-                            cx,
-                        )
-                    }))
-                    .child("Repositories")
-                    .children(spaces.into_iter().map(|space| {
-                        let checked = selected.iter().any(|r| r.space_id == space.id);
-                        let id = space.id.clone();
-                        action(
-                            format!("zot-repo-{id}"),
-                            format!(
-                                "{}{}",
-                                if checked { "✓ " } else { "" },
-                                space.name.unwrap_or(space.path)
-                            ),
-                            theme,
-                            move |this, _, _, cx| {
-                                if let Some(f) = this.zot_ui.form.as_mut() {
-                                    if f.repositories.iter().any(|r| r.space_id == id) {
-                                        f.repositories.retain(|r| r.space_id != id);
-                                    } else {
-                                        f.repositories.push(ZotRepository {
-                                            space_id: id.clone(),
-                                            device_id: space.device_id.clone(),
-                                        });
-                                    }
-                                }
-                                cx.notify();
-                            },
-                            cx,
-                        )
-                    }))
-            })
-            .child(
-                div()
-                    .flex()
-                    .gap(px(8.0))
-                    .child(action(
-                        "zot-save",
-                        if self.zot_ui.pending {
-                            "Saving…"
-                        } else {
-                            "Save"
-                        },
-                        theme,
-                        |this, _, _, cx| this.submit_zot_form(cx),
-                        cx,
-                    ))
-                    .child(action(
-                        "zot-cancel",
-                        "Cancel",
-                        theme,
-                        |this, _, _, cx| {
-                            this.zot_ui.form = None;
-                            cx.notify();
-                        },
-                        cx,
-                    )),
-            )
-            .into_any_element()
-    }
-    fn zot_tab_bar(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+    ) -> AnyElement {
         let tabs = self.zot_ui.tabs;
         let selected_bg = theme.element_active;
         let mut strip = div().flex().items_center().gap(px(2.0));
-        for tab in ZotTab::ALL {
-            let active = tab == tabs.active;
+        for &tab in visible {
+            let active = tab == tabs.active && !editing;
             let path = match tab {
                 ZotTab::Overview => icons::WIDGET,
                 ZotTab::Threads => icons::CHAT_ROUND_LINE,
@@ -832,6 +430,10 @@ impl Shell {
                 })
                 .child(icon(path).size(px(15.0)).text_color(color))
                 .on_click(cx.listener(move |this, _, _, cx| {
+                    if this.zot_editor_open(cx) {
+                        this.zot_ui.page = None;
+                        cx.notify();
+                    }
                     if this.zot_ui.tabs.select(tab) {
                         let history = tab == ZotTab::History;
                         if this.zot_ui.history != history {
@@ -887,9 +489,9 @@ impl Shell {
         div()
             .flex()
             .items_center()
-            .h(px(44.0))
+            .h(px(40.0))
             .flex_none()
-            .px(px(8.0))
+            .px(px(10.0))
             .border_b_1()
             .border_color(theme.border)
             .child(strip)
@@ -903,20 +505,33 @@ impl Shell {
                                 version: 0,
                                 content: String::new(),
                             };
-                            this.open_zot_form(new_doc.clone(), Some(file), cx)
+                            if let Some(zot) = new_doc.clone() {
+                                this.open_zot_dialog(zot, Kind::File(file), cx)
+                            }
                         }),
                     ),
                 )
             })
             .child(
-                icon_button("zot-settings", icons::SETTINGS, "Zot settings").on_click(
-                    cx.listener(move |this, _, _, cx| this.open_zot_form(zot.clone(), None, cx)),
-                ),
+                icon_button("zot-edit", icons::PEN, "Edit Zot")
+                    .when(editing, |d| d.bg(theme.element_active))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if this.zot_editor_open(cx) {
+                            this.zot_ui.page = None;
+                            cx.notify();
+                        } else if let Some(zot) = zot.clone() {
+                            this.open_zot_editor(zot, cx);
+                        }
+                    })),
             )
             .into_any_element()
     }
 
-    pub(super) fn render_zot_inspector(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn render_zot_inspector(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let Some(zot) = self.selected_zot(cx) else {
             return Empty.into_any_element();
         };
@@ -964,219 +579,378 @@ impl Shell {
         } else {
             vec![]
         };
+        let visible = visible_tabs(&files);
+        if !visible.contains(&self.zot_ui.tabs.active) {
+            self.zot_ui.tabs.select(ZotTab::Overview);
+        }
+        let editing = self.zot_editor_open(cx);
+        let tab_bar = self.zot_tab_bar(&visible, editing, &theme, cx);
+        if editing {
+            let editor = self.render_zot_editor(&zot, window, cx);
+            return Self::zot_inspector_frame(&theme, tab_bar, editor);
+        }
         let body = match self.zot_ui.tabs.active {
             ZotTab::Overview => self.zot_overview(&zot, &theme, cx),
             ZotTab::Threads => self.zot_threads(&zot, &theme, cx),
             ZotTab::Drive => self.zot_drive(&zot, files, &theme, cx),
             ZotTab::History => self.zot_history(&zot, files, &theme, cx),
         };
+        let body = div()
+            .id("zot-inspector-body")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .px(px(18.0))
+            .py(px(16.0))
+            .flex()
+            .flex_col()
+            .gap(px(18.0))
+            .child(body)
+            .into_any_element();
+        Self::zot_inspector_frame(&theme, tab_bar, body)
+    }
+
+    fn zot_inspector_frame(theme: &Theme, tab_bar: AnyElement, body: AnyElement) -> AnyElement {
         div()
             .id("zot-inspector")
-            .w(px(340.0))
+            .w(px(ZOT_PANEL_WIDTH))
             .h_full()
             .flex_none()
             .flex()
             .flex_col()
+            // The content row spans the window; clear the title bar's controls.
+            .pt(px(Theme::TITLEBAR_HEIGHT))
             .border_l_1()
             .border_color(theme.border)
-            .child(self.zot_tab_bar(&theme, cx))
-            .child(
-                div()
-                    .id("zot-inspector-body")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .p(px(12.0))
-                    .flex()
-                    .flex_col()
-                    .gap(px(14.0))
-                    .child(body),
-            )
+            .child(tab_bar)
+            .child(body)
             .into_any_element()
     }
 
     fn zot_overview(&mut self, zot: &Zot, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
-        let working = zot
+        use zuse_protocol::SessionStatus as S;
+        let working: Vec<_> = zot
             .workers
             .iter()
-            .filter(|w| {
-                self.zot_thread_status(&w.chat_id, cx)
-                    == Some(zuse_protocol::SessionStatus::Working)
-            })
-            .count();
+            .filter(|w| self.zot_thread_status(&w.chat_id, cx) == Some(S::Working))
+            .cloned()
+            .collect();
         let (status_color, status) = match zot.status {
             ZotStatus::Active => (theme.success, "Active"),
             ZotStatus::Paused => (theme.warning, "Paused"),
             ZotStatus::Stopped => (theme.text_faint, "Stopped"),
             ZotStatus::Archived => (theme.text_faint, "Archived"),
         };
-        let id = zot.id.clone();
-        let rev = zot.revision;
         let toggle = if zot.status == ZotStatus::Active {
             ZotStatus::Paused
         } else {
             ZotStatus::Active
         };
-        let mut view = div().flex().flex_col().gap(px(14.0)).child(
+        let (id, rev) = (zot.id.clone(), zot.revision);
+        let hero = div()
+            .flex()
+            .items_center()
+            .gap(px(12.0))
+            .child(
+                div()
+                    .size(px(60.0))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(12.0))
+                    .bg(theme.element_hover)
+                    .child(zot_mascot(&zot_avatar(zot), 3.0)),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.0))
+                    .child(
+                        div()
+                            .truncate()
+                            .text_size(crate::typography::ui_rems(16.0))
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(theme.text_strong)
+                            .child(zot.config.name.clone()),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.0))
+                            .text_size(crate::typography::ui_rems(12.0))
+                            .text_color(theme.text_muted)
+                            .child(div().size(px(6.0)).rounded_full().bg(status_color))
+                            .child(status),
+                    ),
+            )
+            .when(
+                matches!(zot.status, ZotStatus::Active | ZotStatus::Paused),
+                |d| {
+                    d.child(action(
+                        "zot-pause",
+                        if toggle == ZotStatus::Paused {
+                            "Pause"
+                        } else {
+                            "Resume"
+                        },
+                        theme,
+                        move |this, _, _, cx| {
+                            this.send_zot_command(
+                                id.clone(),
+                                Some(rev),
+                                ZotAction::SetStatus { status: toggle },
+                                ZotAfter::Stay,
+                                cx,
+                            )
+                        },
+                        cx,
+                    ))
+                },
+            );
+        let decisions: Vec<_> = zot
+            .decisions
+            .iter()
+            .filter(|d| d.answer.is_none())
+            .cloned()
+            .collect();
+        let events: Vec<_> = self
+            .zot_ui
+            .events
+            .iter()
+            .filter(|e| e.zot_id == zot.id && !e.acknowledged && e.kind != "settled")
+            .cloned()
+            .collect();
+        let waiting = decisions.len() + events.len();
+        let stat = |value: usize, label: &'static str, alert: bool| {
             div()
+                .flex_1()
+                .py(px(10.0))
                 .flex()
                 .flex_col()
-                .gap(px(6.0))
+                .items_center()
+                .gap(px(2.0))
+                .rounded(px(10.0))
+                .bg(crate::settings::widgets::block_fill(theme))
                 .child(
                     div()
-                        .text_size(crate::typography::ui_rems(15.0))
-                        .text_color(theme.text_strong)
-                        .child(zot.config.name.clone()),
+                        .text_size(crate::typography::ui_rems(18.0))
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(if alert {
+                            theme.warning
+                        } else {
+                            theme.text_strong
+                        })
+                        .child(value.to_string()),
                 )
-                .when(!zot.config.purpose.is_empty(), |d| {
-                    d.child(
-                        div()
-                            .text_size(crate::typography::ui_rems(12.5))
-                            .text_color(theme.text_muted)
-                            .child(zot.config.purpose.clone()),
-                    )
-                })
                 .child(
                     div()
-                        .flex()
-                        .items_center()
-                        .gap(px(8.0))
-                        .text_size(crate::typography::ui_rems(11.5))
+                        .text_size(crate::typography::ui_rems(11.0))
                         .text_color(theme.text_faint)
-                        .child(div().size(px(6.0)).rounded_full().bg(status_color))
-                        .child(status)
-                        .child(format!(
-                            "· {} thread{} · {working} working",
-                            zot.workers.len(),
-                            if zot.workers.len() == 1 { "" } else { "s" }
-                        ))
-                        .child(div().flex_1())
-                        .when(
-                            matches!(zot.status, ZotStatus::Active | ZotStatus::Paused),
-                            |d| {
-                                d.child(action(
-                                    "zot-pause",
-                                    if toggle == ZotStatus::Paused {
-                                        "Pause"
-                                    } else {
-                                        "Resume"
-                                    },
-                                    theme,
-                                    move |this, _, _, cx| {
-                                        this.send_zot_command(
-                                            id.clone(),
-                                            Some(rev),
-                                            ZotAction::SetStatus { status: toggle },
-                                            false,
-                                            cx,
-                                        )
-                                    },
-                                    cx,
-                                ))
-                            },
-                        ),
-                ),
-        );
-        let mut needs = div()
+                        .child(label),
+                )
+        };
+        let mut view = div()
+            .flex()
+            .flex_col()
+            .gap(px(16.0))
+            .child(hero)
+            .when(!zot.config.purpose.trim().is_empty(), |d| {
+                d.child(
+                    div()
+                        .text_size(crate::typography::ui_rems(12.5))
+                        .line_height(crate::typography::ui_rems(18.0))
+                        .text_color(theme.text_muted)
+                        .child(zot.config.purpose.clone()),
+                )
+            })
+            .child(
+                div()
+                    .flex()
+                    .gap(px(6.0))
+                    .child(stat(zot.workers.len(), "Threads", false))
+                    .child(stat(working.len(), "Working", false))
+                    .child(stat(waiting, "Needs you", waiting > 0)),
+            );
+        if waiting > 0 {
+            let mut needs = div()
+                .flex()
+                .flex_col()
+                .gap(px(2.0))
+                .child(section("Needs you", theme));
+            for decision in decisions {
+                let z = zot.clone();
+                needs = needs.child(list_row(
+                    format!("zot-decision-{}", decision.id),
+                    icons::INFO_CIRCLE,
+                    theme.warning,
+                    decision.question.clone(),
+                    Some("Answer".into()),
+                    theme,
+                    move |this, _, _, cx| {
+                        this.open_zot_dialog(z.clone(), Kind::Decision(decision.clone()), cx);
+                    },
+                    cx,
+                ));
+            }
+            for event in events {
+                let id = event.worker_chat_id.clone();
+                needs = needs.child(list_row(
+                    format!("zot-event-{}", event.id),
+                    icons::CHAT_ROUND_LINE,
+                    theme.text_muted,
+                    event.summary,
+                    None,
+                    theme,
+                    move |this, _, _, cx| this.open_chat(id.clone(), cx),
+                    cx,
+                ));
+            }
+            view = view.child(needs);
+        }
+        if !working.is_empty() {
+            let mut running = div()
+                .flex()
+                .flex_col()
+                .gap(px(2.0))
+                .child(section("Working now", theme));
+            for worker in working {
+                let id = worker.chat_id.clone();
+                running = running.child(list_row(
+                    format!("zot-working-{id}"),
+                    icons::CHAT_ROUND_LINE,
+                    theme.busy,
+                    worker.objective.clone(),
+                    None,
+                    theme,
+                    move |this, _, _, cx| this.open_chat(id.clone(), cx),
+                    cx,
+                ));
+            }
+            view = view.child(running);
+        }
+        let names: Vec<(String, String)> = {
+            let state = self.state.read(cx);
+            zot.config
+                .repositories
+                .iter()
+                .filter_map(|repository| {
+                    let space = state.spaces.iter().find(|s| s.id == repository.space_id)?;
+                    let name = space
+                        .name
+                        .clone()
+                        .or_else(|| space.path.rsplit('/').next().map(str::to_owned))?;
+                    Some((space.id.clone(), name))
+                })
+                .collect()
+        };
+        let mut repositories = div()
             .flex()
             .flex_col()
             .gap(px(2.0))
-            .child(section("Needs you", theme));
-        let mut empty = true;
-        for decision in zot.decisions.iter().filter(|d| d.answer.is_none()).cloned() {
-            empty = false;
+            .child(section("Repositories", theme));
+        if names.is_empty() {
             let z = zot.clone();
-            needs = needs.child(list_row(
-                format!("zot-decision-{}", decision.id),
-                icons::INFO_CIRCLE,
-                theme.warning,
-                decision.question.clone(),
-                Some("Answer".into()),
-                theme,
-                move |this, _, _, cx| {
-                    this.open_zot_form(Some(z.clone()), None, cx);
-                    let input = cx.new(|cx| ComposerInput::new("Your answer", cx));
-                    if let Some(form) = this.zot_ui.form.as_mut() {
-                        form.inputs = vec![input];
-                        form.decision = Some(decision.clone());
-                    }
-                },
-                cx,
-            ));
-        }
-        for event in self
-            .zot_ui
-            .events
-            .clone()
-            .into_iter()
-            .filter(|e| e.zot_id == zot.id && !e.acknowledged && e.kind != "settled")
-        {
-            empty = false;
-            let id = event.worker_chat_id.clone();
-            needs = needs.child(list_row(
-                format!("zot-event-{}", event.id),
-                icons::CHAT_ROUND_LINE,
+            repositories = repositories.child(list_row(
+                "zot-add-repositories",
+                icons::PLUS,
                 theme.text_muted,
-                event.summary,
+                "Choose repositories".to_owned(),
                 None,
                 theme,
-                move |this, _, _, cx| {
-                    this.state
-                        .update(cx, |s, cx| s.select_chat(Some(id.clone()), cx));
-                },
+                move |this, _, _, cx| this.open_zot_editor(z.clone(), cx),
                 cx,
             ));
         }
-        if empty {
-            needs = needs.child(muted("Nothing needs you right now.", theme));
+        for (id, name) in names {
+            repositories = repositories.child(
+                div()
+                    .id(SharedString::from(format!("zot-overview-repo-{id}")))
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .py(px(5.0))
+                    .text_size(crate::typography::ui_rems(12.5))
+                    .text_color(theme.text)
+                    .child(
+                        icon(icons::FOLDER)
+                            .size(px(13.0))
+                            .flex_none()
+                            .text_color(theme.text_muted),
+                    )
+                    .child(div().flex_1().min_w_0().truncate().child(name)),
+            );
         }
-        view = view.child(needs);
+        view.child(repositories).into_any_element()
+    }
+
+    pub(super) fn zot_manage(
+        &mut self,
+        zot: &Zot,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let mut manage = div()
             .flex()
             .flex_col()
             .gap(px(2.0))
             .child(section("Manage", theme));
-        for (key, label, action_kind) in [
-            ("zot-fresh", "Start a fresh conversation", 0),
-            ("zot-stop", "Stop Zot", 1),
-            ("zot-archive", "Archive Zot and threads", 2),
+        for (key, glyph, label, kind) in [
+            ("zot-fresh", icons::RESTART, "Start a fresh conversation", 0),
+            ("zot-stop", icons::STOP, "Stop Zot", 1),
+            (
+                "zot-archive",
+                icons::ARCHIVE_MINIMALISTIC,
+                "Archive Zot and threads",
+                2,
+            ),
         ] {
             let z = zot.clone();
-            manage = manage.child(action(
+            manage = manage.child(list_row(
                 key,
-                label,
+                glyph,
+                theme.text_muted,
+                label.to_owned(),
+                None,
                 theme,
                 move |this, _, _, cx| {
-                    let (action, close) = match action_kind {
-                        0 => (ZotAction::FreshConversation, true),
+                    let (action, after) = match kind {
+                        0 => (ZotAction::FreshConversation, ZotAfter::OpenCoordinator),
                         1 => (
                             ZotAction::SetStatus {
                                 status: ZotStatus::Stopped,
                             },
-                            false,
+                            ZotAfter::LeavePage,
                         ),
                         _ => (
                             ZotAction::SetStatus {
                                 status: ZotStatus::Archived,
                             },
-                            false,
+                            ZotAfter::LeavePage,
                         ),
                     };
-                    this.send_zot_command(z.id.clone(), Some(z.revision), action, close, cx)
+                    this.send_zot_command(z.id.clone(), Some(z.revision), action, after, cx)
                 },
                 cx,
             ));
         }
+        let z = zot.clone();
         if self.zot_ui.confirm_delete {
-            let z = zot.clone();
             manage = manage
                 .child(muted(
                     "Delete this Zot? Its threads and documents are kept.",
                     theme,
                 ))
-                .child(action(
+                .child(list_row(
                     "zot-delete-confirm",
-                    "Delete Zot",
+                    icons::TRASH_BIN_MINIMALISTIC,
+                    theme.danger,
+                    "Delete Zot".to_owned(),
+                    None,
                     theme,
                     move |this, _, _, cx| {
                         this.zot_ui.confirm_delete = false;
@@ -1184,16 +958,19 @@ impl Shell {
                             z.id.clone(),
                             Some(z.revision),
                             ZotAction::Delete,
-                            false,
+                            ZotAfter::LeavePage,
                             cx,
                         );
                     },
                     cx,
                 ));
         } else {
-            manage = manage.child(action(
+            manage = manage.child(list_row(
                 "zot-delete",
-                "Delete…",
+                icons::TRASH_BIN_MINIMALISTIC,
+                theme.danger,
+                "Delete…".to_owned(),
+                None,
                 theme,
                 |this, _, _, cx| {
                     this.zot_ui.confirm_delete = true;
@@ -1202,7 +979,7 @@ impl Shell {
                 cx,
             ));
         }
-        view.child(manage).into_any_element()
+        manage.into_any_element()
     }
 
     fn zot_threads(&mut self, zot: &Zot, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
@@ -1217,7 +994,9 @@ impl Shell {
                     "zot-new-worker",
                     "New thread",
                     theme,
-                    move |this, _, _, cx| this.open_zot_worker_form(new_zot.clone(), None, cx),
+                    move |this, _, _, cx| {
+                        this.open_zot_dialog(new_zot.clone(), Kind::Thread(None), cx)
+                    },
                     cx,
                 )),
         );
@@ -1239,23 +1018,39 @@ impl Shell {
             };
             let dot = self.zot_status_color(&id, theme, cx);
             let open = id.clone();
-            let mut actions = div().flex().gap(px(2.0)).pl(px(18.0));
+            let row_group = SharedString::from(format!("zot-thread-row-{id}"));
+            let mut actions = div()
+                .absolute()
+                .right(px(4.0))
+                .top(px(0.0))
+                .bottom(px(0.0))
+                .flex()
+                .items_center()
+                .gap(px(1.0))
+                .invisible()
+                .group_hover(row_group.clone(), |d| d.visible());
             let z = zot.clone();
             let message = id.clone();
-            actions = actions.child(action(
+            actions = actions.child(thread_action(
                 format!("zot-message-{id}"),
-                "Message",
+                icons::CHAT_ROUND_LINE,
+                "Send a message",
                 theme,
                 move |this, _, _, cx| {
-                    this.open_zot_worker_form(z.clone(), Some(message.clone()), cx)
+                    this.open_zot_dialog(z.clone(), Kind::Thread(Some(message.clone())), cx)
                 },
                 cx,
             ));
-            for (label, kind) in [("Stop", 0), ("Archive", 1), ("Release", 2)] {
+            for (label, glyph, kind) in [
+                ("Stop", icons::STOP, 0),
+                ("Release from Zot", icons::ARROW_UP_RIGHT, 2),
+                ("Archive", icons::ARCHIVE_MINIMALISTIC, 1),
+            ] {
                 let chat_id = id.clone();
                 let z = zot.clone();
-                actions = actions.child(action(
+                actions = actions.child(thread_action(
                     format!("zot-worker-{kind}-{id}"),
+                    glyph,
                     label,
                     theme,
                     move |this, _, _, cx| {
@@ -1265,56 +1060,56 @@ impl Shell {
                             1 => ZotAction::ArchiveWorker { chat_id },
                             _ => ZotAction::ReleaseWorker { chat_id },
                         };
-                        this.send_zot_command(z.id.clone(), Some(z.revision), action, false, cx);
+                        this.send_zot_command(
+                            z.id.clone(),
+                            Some(z.revision),
+                            action,
+                            ZotAfter::Stay,
+                            cx,
+                        );
                     },
                     cx,
                 ));
             }
             threads = threads.child(
                 div()
+                    .id(SharedString::from(format!("zot-open-{id}")))
+                    .group(row_group)
+                    .role(gpui::Role::Button)
+                    .aria_label(SharedString::from(worker.objective.clone()))
+                    .relative()
+                    .mx(px(-8.0))
                     .flex()
-                    .flex_col()
-                    .py(px(4.0))
+                    .items_center()
+                    .gap(px(10.0))
+                    .px(px(8.0))
+                    .py(px(5.0))
+                    .rounded(px(6.0))
+                    .cursor_pointer()
+                    .hover(|d| d.bg(theme.element_hover))
+                    .child(div().size(px(7.0)).flex_none().rounded_full().bg(dot))
                     .child(
                         div()
-                            .id(SharedString::from(format!("zot-open-{id}")))
-                            .role(gpui::Role::Button)
-                            .aria_label(SharedString::from(worker.objective.clone()))
+                            .flex_1()
+                            .min_w_0()
                             .flex()
-                            .items_center()
-                            .gap(px(10.0))
-                            .px(px(6.0))
-                            .py(px(5.0))
-                            .rounded(px(6.0))
-                            .cursor_pointer()
-                            .hover(|d| d.bg(theme.element_hover))
-                            .child(div().size(px(7.0)).flex_none().rounded_full().bg(dot))
+                            .flex_col()
                             .child(
                                 div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .flex()
-                                    .flex_col()
-                                    .child(
-                                        div()
-                                            .truncate()
-                                            .text_size(crate::typography::ui_rems(13.0))
-                                            .text_color(theme.text)
-                                            .child(worker.objective.clone()),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_size(crate::typography::ui_rems(11.0))
-                                            .text_color(theme.text_faint)
-                                            .child(status),
-                                    ),
+                                    .truncate()
+                                    .text_size(crate::typography::ui_rems(13.0))
+                                    .text_color(theme.text)
+                                    .child(worker.objective.clone()),
                             )
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.state
-                                    .update(cx, |s, cx| s.select_chat(Some(open.clone()), cx));
-                            })),
+                            .child(
+                                div()
+                                    .text_size(crate::typography::ui_rems(11.0))
+                                    .text_color(theme.text_faint)
+                                    .child(status),
+                            ),
                     )
-                    .child(actions),
+                    .child(actions)
+                    .on_click(cx.listener(move |this, _, _, cx| this.open_chat(open.clone(), cx))),
             );
         }
         let mut view = div().flex().flex_col().gap(px(14.0)).child(threads);
@@ -1332,8 +1127,7 @@ impl Shell {
             None,
             theme,
             move |this, _, _, cx| {
-                this.state
-                    .update(cx, |s, cx| s.select_chat(Some(current.clone()), cx));
+                this.open_chat(current.clone(), cx);
             },
             cx,
         ));
@@ -1347,8 +1141,7 @@ impl Shell {
                 None,
                 theme,
                 move |this, _, _, cx| {
-                    this.state
-                        .update(cx, |s, cx| s.select_chat(Some(id.clone()), cx));
+                    this.open_chat(id.clone(), cx);
                 },
                 cx,
             ));
@@ -1401,7 +1194,7 @@ impl Shell {
                                     followups: 0,
                                 },
                             },
-                            false,
+                            ZotAfter::Stay,
                             cx,
                         );
                     },
@@ -1420,6 +1213,7 @@ impl Shell {
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let files: Vec<_> = files.into_iter().filter(is_document).collect();
         let mut view = div()
             .flex()
             .flex_col()
@@ -1488,7 +1282,7 @@ impl Shell {
                         )
                     })
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.open_zot_form(Some(z.clone()), Some(file.clone()), cx)
+                        this.open_zot_dialog(z.clone(), Kind::File(file.clone()), cx)
                     })),
             );
         }
@@ -1577,7 +1371,7 @@ impl Shell {
                                         version: file.version,
                                         expected_version: current,
                                     },
-                                    false,
+                                    ZotAfter::Stay,
                                     cx,
                                 )
                             },
@@ -1588,40 +1382,28 @@ impl Shell {
         }
         view.into_any_element()
     }
-    fn open_zot_worker_form(&mut self, zot: Zot, worker: Option<String>, cx: &mut Context<Self>) {
-        self.open_zot_form(Some(zot.clone()), None, cx);
-        let values = if worker.is_some() {
-            vec![("Message", String::new())]
-        } else {
-            vec![
-                ("Objective", String::new()),
-                ("Agent", zot.config.coordinator_model.harness),
-                (
-                    "Model",
-                    zot.config.coordinator_model.model.unwrap_or_default(),
-                ),
-                ("Base branch", "HEAD".into()),
-            ]
-        };
-        let mut subscriptions = vec![];
-        let inputs = values
-            .into_iter()
-            .map(|(label, value)| {
-                let input = cx.new(|cx| ComposerInput::new(label, cx));
-                input.update(cx, |i, cx| i.set_text(value, cx));
-                subscriptions.push(
-                    cx.subscribe(&input, |_: &mut Shell, _, _: &ComposerInputEvent, cx| {
-                        cx.notify()
-                    }),
-                );
-                input
-            })
-            .collect();
-        if let Some(form) = self.zot_ui.form.as_mut() {
-            form.inputs = inputs;
-            form.worker = Some(worker);
-            form._subscriptions = subscriptions;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn file(path: &str, version: u32, content: &str) -> ZotFile {
+        ZotFile {
+            path: path.into(),
+            version,
+            content: content.into(),
         }
-        cx.notify();
+    }
+
+    #[test]
+    fn empty_drive_and_history_tabs_stay_hidden() {
+        let seeded = [
+            file("INSTRUCTIONS.md", 1, "Ship the release"),
+            file("NOTES.md", 1, ""),
+        ];
+        assert_eq!(visible_tabs(&seeded), [ZotTab::Overview, ZotTab::Threads]);
+        let written = [file("NOTES.md", 2, "Decided on Tuesday")];
+        assert_eq!(visible_tabs(&written), ZotTab::ALL);
     }
 }

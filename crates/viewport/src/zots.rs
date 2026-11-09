@@ -500,6 +500,7 @@ impl WorkspaceView {
                         worker_device_id: form.worker_device.clone(),
                         max_concurrent_workers: 4,
                         max_followups: 3,
+                        avatar: None,
                     },
                 };
                 if form.zot.is_some() {

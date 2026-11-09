@@ -1826,6 +1826,7 @@ impl SessionsEngine {
                 request.prompt = prompt_text;
                 request.resume = None; // dispatch re-injects the remembered session
                 let harness_id = host.harness_for_request(&chat_id, &request);
+                sessions.inner.await_ipc_port().await;
                 lock(&sessions.inner.continuing_turns).insert(chat_id.clone());
                 match host
                     .dispatch_with_source_context(
@@ -2267,12 +2268,24 @@ impl Inner {
         // incoming RPC supplied a field with the same wire shape.
         request.mcp = self.zuse_mcp(chat_id);
     }
+    /// Boot recovers runs before the IPC server binds, and a run launched
+    /// without a port has no Zuse tools for its whole life. Engines that never
+    /// serve a port only lose this short wait.
+    async fn await_ipc_port(&self) {
+        for _ in 0..IPC_PORT_WAIT_POLLS {
+            if self.ipc_port.load(std::sync::atomic::Ordering::Relaxed) != 0 {
+                return;
+            }
+            tokio::time::sleep(IPC_PORT_POLL).await;
+        }
+    }
+
     fn zuse_mcp(&self, chat_id: &str) -> Option<zuse_protocol::McpServer> {
         let port = self.ipc_port.load(std::sync::atomic::Ordering::Relaxed);
         if port == 0 {
             return None;
         }
-        let command = std::env::current_exe().ok()?.to_str()?.to_owned();
+        let command = mcp_command(std::env::current_exe().ok()?.to_str()?);
         Some(zuse_protocol::McpServer {
             name: "zuse".into(),
             command,
@@ -4520,6 +4533,15 @@ fn continuation_prompt(request: &str) -> String {
     )
 }
 
+const IPC_PORT_POLL: std::time::Duration = std::time::Duration::from_millis(50);
+const IPC_PORT_WAIT_POLLS: usize = 40;
+
+/// Linux reports a binary replaced while running as `<path> (deleted)`; agents
+/// must launch the rebuilt or updated file at that path instead.
+fn mcp_command(executable: &str) -> String {
+    executable.trim_end_matches(" (deleted)").to_owned()
+}
+
 #[cfg(test)]
 mod update_checkpoint_tests {
     use super::*;
@@ -4613,6 +4635,29 @@ mod tests {
         assert!(publisher.await.unwrap().is_ok());
         assert_eq!(lock(&ledger).front().unwrap().epoch, turn.steering_epoch());
         assert!(!turn.steer_cancelled("new"));
+    }
+
+    #[tokio::test]
+    async fn recovered_runs_wait_until_the_engine_has_a_port() {
+        let dir = tempfile::tempdir().unwrap();
+        let sessions = SessionsEngine::new(
+            "host-device".into(),
+            Arc::new(RunJournal::open(dir.path()).unwrap()),
+            Arc::new(HarnessRegistry::new()),
+        );
+        let binder = sessions.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            binder.set_ipc_port(27654);
+        });
+        sessions.inner.await_ipc_port().await;
+        assert!(sessions.inner.zuse_mcp("chat").is_some());
+    }
+
+    #[test]
+    fn replaced_executables_still_launch_the_mcp_server() {
+        assert_eq!(mcp_command("/opt/zuse (deleted)"), "/opt/zuse");
+        assert_eq!(mcp_command("/opt/zuse"), "/opt/zuse");
     }
 
     #[test]

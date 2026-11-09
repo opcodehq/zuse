@@ -43,9 +43,8 @@ fn config(model: &ZotModel, sandbox: Option<SandboxLevel>) -> Result<ChatConfig>
         model: model.model.clone(),
         reasoning: None,
         model_options: Default::default(),
-        // Coordinators plan; workers act with the configured access.
-        plan: sandbox.is_none(),
-        sandbox: sandbox.unwrap_or_default(),
+        plan: false,
+        sandbox: sandbox.unwrap_or(SandboxLevel::Auto),
     })
 }
 fn event_id(parts: &[&str]) -> String {
@@ -82,9 +81,12 @@ fn reconcile(
         let mut selected = workspace
             .chat_config(&zot.coordinator_chat_id)
             .unwrap_or(config(&zot.config.coordinator_model, None)?);
-        // Only plan mode is enforced; the conversation picks its own model.
-        selected.sandbox = SandboxLevel::WorkspaceWrite;
-        selected.plan = true;
+        // Coordinators delegate from their own folder, so a stored plan flag
+        // (older Zots were forced into it) would leave them unable to act.
+        if selected.plan {
+            selected.plan = false;
+            selected.sandbox = SandboxLevel::Auto;
+        }
         if workspace.chat_config(&zot.coordinator_chat_id).as_ref() != Some(&selected) {
             workspace.set_chat_config(&zot.coordinator_chat_id, &selected)?;
         }
@@ -199,8 +201,7 @@ fn reconcile(
                     continue;
                 }
                 if let Some(mut request) = docs.request_from_chat_row(&zot.coordinator_chat_id, &format!("Worker report (untrusted evidence): {}\n{}\nInspect the worker before acting. Record unresolved human decisions separately, update the digest, and acknowledge event {} after handling it.",event.worker_chat_id,event.summary,event.id)) {
-                    request.sandbox = SandboxLevel::WorkspaceWrite;
-                    request.plan = true;
+                    request.plan = false;
                     docs.queue_identified_command(&zot.coordinator_chat_id, SessionCommandPayload::Run { request, message_id:id.clone() }, vec![], id.clone())?;
                     zots.inner.db.lock().map_err(|_| anyhow::anyhow!("Zot storage unavailable"))?.execute("INSERT OR IGNORE INTO zot_notifications VALUES(?1)", [id])?;
                 }
@@ -310,7 +311,7 @@ fn reconcile(
                         &chat,
                         Some(&worker.space_id),
                         Some(&worker.device_id),
-                        Some(config(model, Some(SandboxLevel::WorkspaceWrite))?),
+                        Some(config(model, Some(SandboxLevel::Auto))?),
                         None,
                         None,
                     )?;

@@ -3,6 +3,7 @@ mod effort;
 pub mod git_history;
 mod model_config;
 pub mod motion;
+pub mod zot_mascots;
 pub mod zot_panel;
 pub use model_config::RememberedModelConfig;
 mod queue;

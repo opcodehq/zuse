@@ -113,8 +113,8 @@ impl EngineRpc {
                         ),
                         reasoning: None,
                         model_options: Default::default(),
-                        sandbox: zuse_protocol::SandboxLevel::WorkspaceWrite,
-                        plan: true,
+                        sandbox: zuse_protocol::SandboxLevel::Auto,
+                        plan: false,
                     }),
                     Some(cwd),
                     None,
@@ -131,8 +131,8 @@ impl EngineRpc {
                     model: None,
                     reasoning: None,
                     model_options: Default::default(),
-                    sandbox: zuse_protocol::SandboxLevel::WorkspaceWrite,
-                    plan: true,
+                    sandbox: zuse_protocol::SandboxLevel::Auto,
+                    plan: false,
                 });
             // The conversation's own model picker chooses the model after
             // creation; only an explicit model change through the API applies.
@@ -145,8 +145,8 @@ impl EngineRpc {
                     config.model = zot.config.coordinator_model.model.clone();
                 }
             }
-            config.sandbox = zuse_protocol::SandboxLevel::WorkspaceWrite;
-            config.plan = true;
+            config.sandbox = zuse_protocol::SandboxLevel::Auto;
+            config.plan = false;
             self.workspace
                 .set_chat_config(&zot.coordinator_chat_id, &config)
                 .map_err(|e| RpcError::Failed(e.to_string()))?;
@@ -239,6 +239,7 @@ mod tests {
             worker_device_id: core.device_id.clone(),
             max_concurrent_workers: 1,
             max_followups: 3,
+            avatar: None,
         };
         value(&service,"ZotCommand",serde_json::json!({"commandId":"create","zotId":"release","expectedRevision":null,"action":{"type":"create","config":config}})).await;
         let launch = serde_json::json!({"commandId":"launch","zotId":"release","expectedRevision":null,"action":{"type":"delegate","worker":{"chatId":"zot-worker-launch","deviceId":core.device_id,"spaceId":"repo","objective":"Inspect the repository","followups":0},"model":{"harness":"mock","model":null},"base":"main"}});
@@ -328,6 +329,7 @@ mod tests {
             worker_device_id: core.device_id.clone(),
             max_concurrent_workers: 4,
             max_followups: 3,
+            avatar: None,
         };
         let command = ZotCommand {
             command_id: "create".into(),
@@ -343,7 +345,9 @@ mod tests {
         );
         let coordinator = first["coordinatorChatId"].as_str().unwrap();
         let row = core.workspace.chat(coordinator).unwrap().unwrap();
-        assert!(row.config.unwrap().plan, "coordinators run in plan mode");
+        let config = row.config.unwrap();
+        assert!(!config.plan, "coordinators must be able to act");
+        assert_eq!(config.sandbox, zuse_protocol::SandboxLevel::Auto);
         let grant = core.zots.grant(coordinator);
         assert!(service.handle(zuse_protocol::control::CALL,serde_json::json!({"token":grant,"method":"ZotFiles","params":{"zotId":"release"}})).await.is_err(),"idle sessions cannot use retained credentials");
         let files = value(

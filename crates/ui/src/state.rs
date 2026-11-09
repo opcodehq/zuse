@@ -1625,6 +1625,16 @@ impl AppState {
         changed || self.selected_space != previous_selection
     }
 
+    /// Whether the selected chat is a Zot's coordinator, current or earlier.
+    /// These run in the Zot's own folder, with no repository or checkout.
+    pub fn selected_chat_is_zot_coordinator(&self) -> bool {
+        self.selected_chat.as_ref().is_some_and(|chat| {
+            self.zots.iter().any(|z| {
+                &z.coordinator_chat_id == chat || z.previous_coordinator_chats.contains(chat)
+            })
+        })
+    }
+
     pub fn apply_zots(&mut self, zots: Vec<zuse_protocol::zots::Zot>) -> bool {
         if self.zots == zots {
             return false;

@@ -30,6 +30,17 @@ pub struct ZotConfig {
     pub worker_device_id: String,
     pub max_concurrent_workers: u32,
     pub max_followups: u32,
+    /// Saved pixel character; absent uses one derived from the Zot's id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub avatar: Option<ZotAvatar>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ZotAvatar {
+    pub mascot: String,
+    pub color: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]

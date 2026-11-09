@@ -10,6 +10,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
+/// Worker stack for engine runtimes. RPC dispatch is one deep async call
+/// chain, and unoptimized builds overflow Tokio's 2 MiB default.
+pub const RUNTIME_STACK_SIZE: usize = 16 * 1024 * 1024;
+
 pub use zuse_protocol::{EngineInfo, HarnessId, WorkspaceScope};
 use zuse_rpc::{RpcError, RpcReply, RpcService, methods};
 

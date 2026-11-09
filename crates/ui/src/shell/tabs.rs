@@ -156,6 +156,7 @@ impl Shell {
         self.overlay_owns_keyboard(cx)
             || self.sync_flow.has_visible_overlay()
             || self.delete_confirm.is_some()
+            || self.zot_ui.dialog.is_some()
             || self.delete_space_confirm.is_some()
             || self.chat_rename.is_some()
             || self.rename_space_dialog.is_some()
@@ -1166,7 +1167,10 @@ impl Shell {
                                 icons::sidebar_glyph(
                                     motion::state_t(
                                         "toggle-changes",
-                                        self.right_pane_open(cx) && fit.right,
+                                        self.selected_zot(cx)
+                                            .map_or(self.right_pane_open(cx) && fit.right, |_| {
+                                                !self.zot_ui.panel_hidden
+                                            }),
                                         motion::GLYPH_STATE,
                                         self.reduced_motion,
                                     ),
@@ -1188,7 +1192,9 @@ impl Shell {
         // The conversation's own top-bar actions, in the reference order:
         // Open in, the environment summary, then the bottom terminal; the
         // right pane's toggle anchors the far edge.
-        let session_info_toggle = (!takeover && !on_canvas).then(|| {
+        // A Zot's coordinator has no repository, branch or environment to show.
+        let zot_coordinator = self.state.read(cx).selected_chat_is_zot_coordinator();
+        let session_info_toggle = (!takeover && !on_canvas && !zot_coordinator).then(|| {
             let open = self.session_info_visible();
             header_icon_button(
                 "toggle-session-info",
@@ -1207,12 +1213,12 @@ impl Shell {
             )
             .when(open, |button| button.bg(theme.text.opacity(0.10)))
         });
-        let open_in = if !takeover && !on_canvas {
+        let open_in = if !takeover && !on_canvas && !zot_coordinator {
             self.render_open_in(&theme, cx)
         } else {
             None
         };
-        let terminal_toggle = (!takeover && !on_canvas).then(|| {
+        let terminal_toggle = (!takeover && !on_canvas && !zot_coordinator).then(|| {
             let open = self.terminal_open(cx);
             header_icon_button(
                 "toggle-bottom-terminal",
@@ -1228,7 +1234,15 @@ impl Shell {
             .when(open, |button| button.bg(theme.text.opacity(0.10)))
         });
         // The left cluster: owner avatar, branch and copy (reference top bar).
-        let identity = if !takeover && !on_canvas {
+        let identity = if !takeover && !on_canvas && zot_coordinator {
+            // With no branch to show, the conversation tabs take this row.
+            Some(
+                div()
+                    .pt(px(10.))
+                    .child(self.render_thread_conversations(cx))
+                    .into_any_element(),
+            )
+        } else if !takeover && !on_canvas {
             self.render_top_bar_branch(&theme, cx)
         } else {
             None
