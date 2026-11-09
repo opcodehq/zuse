@@ -69,9 +69,13 @@ pub enum AccountError {
         "Account service URLs must be HTTPS origins (local HTTP requires ZUSE_ALLOW_LOOPBACK_ACCOUNT_HTTP=1)."
     )]
     InvalidEndpoint,
-    #[error("Zuse couldn't open its local sign-in callback. Check that 127.0.0.1 is reachable, then retry.")]
+    #[error(
+        "Zuse couldn't open its local sign-in callback. Check that 127.0.0.1 is reachable, then retry."
+    )]
     CallbackUnavailable,
-    #[error("Sign-in is misconfigured: the identity provider rejected Zuse's http://127.0.0.1 callback. Allow it as a redirect URI for this client.")]
+    #[error(
+        "Sign-in is misconfigured: the identity provider rejected Zuse's http://127.0.0.1 callback. Allow it as a redirect URI for this client."
+    )]
     RedirectRejected,
     #[error("Sign in from Zuse on the computer that runs this engine.")]
     BrowserRequired,

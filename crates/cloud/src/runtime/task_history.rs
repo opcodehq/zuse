@@ -151,7 +151,9 @@ impl RuntimeControl {
                 .bind(id).bind(&upload.session_id).bind(generation).bind(&upload.cursor.epoch).bind(upload.cursor.version).bind(total).bind(metadata).bind(now).fetch_one(&mut **tx).await?);
             (start, entries)
         };
-        let exists: bool = if let Some(exists) = head_exists { exists } else {
+        let exists: bool = if let Some(exists) = head_exists {
+            exists
+        } else {
             sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM zuse_rust_task_history_sessions WHERE workspace_id=$1 AND session_id=$2 AND runtime_generation=$3 AND stream_epoch=$4 AND stream_version=$5 AND message_count>=$6)")
                 .bind(id).bind(&upload.session_id).bind(generation).bind(&upload.cursor.epoch).bind(upload.cursor.version).bind(start+entries.len() as i64).fetch_one(&mut **tx).await?
         };
@@ -161,7 +163,10 @@ impl RuntimeControl {
         super::tool_output::allow_refs(tx, id, &upload.session_id, &entries).await?;
         let mut messages = Vec::with_capacity(entries.len());
         let mut oversized = Vec::new();
-        let cursor = format!("{generation}:{}:{}", upload.cursor.epoch, upload.cursor.version);
+        let cursor = format!(
+            "{generation}:{}:{}",
+            upload.cursor.epoch, upload.cursor.version
+        );
         for (index, entry) in entries.iter().enumerate() {
             let sequence = start + index as i64 + 1;
             let plain = entry.to_string();
@@ -629,56 +634,128 @@ mod tests {
         // ciphertext without dropping the other entries in the same batch.
         let mut oversized = value.clone();
         oversized["cursor"]["version"] = json!(6);
-        oversized["transcript"]["reset"][0]["parts"][0]["text"] = json!("x".repeat(MAX_ENTRY_BYTES));
-        let cursor = zuse_cloud_projection::Cursor { epoch: next.cursor.epoch.clone(), version: 6 };
-        let mixed = projection_key.seal("computer", "session", &cursor, None, &oversized).unwrap();
+        oversized["transcript"]["reset"][0]["parts"][0]["text"] =
+            json!("x".repeat(MAX_ENTRY_BYTES));
+        let cursor = zuse_cloud_projection::Cursor {
+            epoch: next.cursor.epoch.clone(),
+            version: 6,
+        };
+        let mixed = projection_key
+            .seal("computer", "session", &cursor, None, &oversized)
+            .unwrap();
         let mut tx = pool.begin().await.unwrap();
-        control.save_task_history_tx(&mut tx, &row, &mixed, 31).await.unwrap();
+        control
+            .save_task_history_tx(&mut tx, &row, &mixed, 31)
+            .await
+            .unwrap();
         tx.rollback().await.unwrap();
-        let count:i64=sqlx::query_scalar("SELECT count(*) FROM zuse_rust_task_history_messages").fetch_one(&pool).await.unwrap();
-        assert_eq!(count,70,"rolling back a batch must retain the original messages");
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM zuse_rust_task_history_messages")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            count, 70,
+            "rolling back a batch must retain the original messages"
+        );
         let mut tx = pool.begin().await.unwrap();
-        control.save_task_history_tx(&mut tx, &row, &mixed, 32).await.unwrap();
+        control
+            .save_task_history_tx(&mut tx, &row, &mixed, 32)
+            .await
+            .unwrap();
         tx.commit().await.unwrap();
         let sequences:Vec<i64>=sqlx::query_scalar("SELECT message_sequence FROM zuse_rust_task_history_messages ORDER BY message_sequence").fetch_all(&pool).await.unwrap();
-        assert_eq!(sequences.len(),69);
-        assert!(!sequences.contains(&7),"the first entry of this head starts at sequence seven");
+        assert_eq!(sequences.len(), 69);
+        assert!(
+            !sequences.contains(&7),
+            "the first entry of this head starts at sequence seven"
+        );
         assert!(sequences.contains(&70));
-        let references=json!([{"parts":[
+        let references = json!([{"parts":[
             {"kind":"tool","resolved":true,"outputRef":"session/output","diffRef":"session/output"},
             {"kind":"tool","resolved":true,"outputRef":"session/diff","diffRef":"other/private"},
             {"kind":"tool","resolved":false,"outputRef":"session/pending"},
             {"kind":"text","resolved":true,"outputRef":"session/text"},
             {"kind":"tool","resolved":true,"outputRef":"session/../invalid"}]}]);
         for _ in 0..2 {
-            let mut tx=pool.begin().await.unwrap();
-            super::super::tool_output::allow_refs(&mut tx,"computer","session",references.as_array().unwrap()).await.unwrap();
+            let mut tx = pool.begin().await.unwrap();
+            super::super::tool_output::allow_refs(
+                &mut tx,
+                "computer",
+                "session",
+                references.as_array().unwrap(),
+            )
+            .await
+            .unwrap();
             tx.commit().await.unwrap();
         }
-        let refs:Vec<String>=sqlx::query_scalar("SELECT blob_ref FROM zuse_rust_tool_output_refs ORDER BY blob_ref").fetch_all(&pool).await.unwrap();
-        assert_eq!(refs,vec!["session/diff","session/output"]);
+        let refs: Vec<String> =
+            sqlx::query_scalar("SELECT blob_ref FROM zuse_rust_tool_output_refs ORDER BY blob_ref")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(refs, vec!["session/diff", "session/output"]);
         // Summary and outbox publication must remain deduplicated and atomic
         // when sent as a single SQL statement.
         let event_tables = crate::events::store::MIGRATION
             .split("CREATE FUNCTION zuse_rust_workspace_event_outbox")
-            .next().unwrap();
+            .next()
+            .unwrap();
         sqlx::raw_sql(event_tables).execute(&pool).await.unwrap();
         for _ in 0..2 {
             let mut tx = pool.begin().await.unwrap();
-            crate::events::store::projection_summary(&mut tx,"computer","session",70,Some("message-69"),None,40).await.unwrap();
+            crate::events::store::projection_summary(
+                &mut tx,
+                "computer",
+                "session",
+                70,
+                Some("message-69"),
+                None,
+                40,
+            )
+            .await
+            .unwrap();
             tx.commit().await.unwrap();
         }
         let mut tx = pool.begin().await.unwrap();
-        crate::events::store::projection_summary(&mut tx,"computer","session",71,Some("message-70"),Some("running"),41).await.unwrap();
+        crate::events::store::projection_summary(
+            &mut tx,
+            "computer",
+            "session",
+            71,
+            Some("message-70"),
+            Some("running"),
+            41,
+        )
+        .await
+        .unwrap();
         tx.rollback().await.unwrap();
-        let count:i64=sqlx::query_scalar("SELECT count(*) FROM zuse_rust_account_event_outbox").fetch_one(&pool).await.unwrap();
-        assert_eq!(count,1,"duplicate and rolled-back summaries must not publish events");
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM zuse_rust_account_event_outbox")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            count, 1,
+            "duplicate and rolled-back summaries must not publish events"
+        );
         let mut tx = pool.begin().await.unwrap();
-        crate::events::store::projection_summary(&mut tx,"computer","session",71,Some("message-70"),Some("running"),42).await.unwrap();
+        crate::events::store::projection_summary(
+            &mut tx,
+            "computer",
+            "session",
+            71,
+            Some("message-70"),
+            Some("running"),
+            42,
+        )
+        .await
+        .unwrap();
         tx.commit().await.unwrap();
         let events:Vec<Value>=sqlx::query_scalar("SELECT jsonb_build_object('owner',owner_id,'payload',payload) FROM zuse_rust_account_event_outbox ORDER BY outbox_id").fetch_all(&pool).await.unwrap();
-        assert_eq!(events.len(),2);
-        assert_eq!(events[1],json!({"owner":"owner","payload":{"messageCount":71,"lastMessageId":"message-70","lastMessageStatus":"running"}}));
+        assert_eq!(events.len(), 2);
+        assert_eq!(
+            events[1],
+            json!({"owner":"owner","payload":{"messageCount":71,"lastMessageId":"message-70","lastMessageStatus":"running"}})
+        );
         sqlx::query(
             "UPDATE api_cloud_workspaces SET desired_state='deleted' WHERE workspace_id='computer'",
         )

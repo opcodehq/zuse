@@ -285,9 +285,14 @@ impl RuntimeControl {
         }
 
         let fence_required = maintenance::run(
-            &mut tx, id, destruction_fence(&row), generation,
-            &request.storage_incarnation_id, now,
-        ).await?;
+            &mut tx,
+            id,
+            destruction_fence(&row),
+            generation,
+            &request.storage_incarnation_id,
+            now,
+        )
+        .await?;
         let canonical = super::task_commands::command_mode(&row);
         if canonical {
             self.task_fence_previous_executions_tx(
@@ -455,7 +460,13 @@ pub(super) fn runtime_auth(row: &Value, credential: &str, now: i64) -> Result<()
         || row["request_config"]["cloudMailboxLifecyclePending"]["action"] == "delete"
         || row["request_config"]["cloudMailboxLifecycleDelivered"]["action"] == "delete"
     {
-        super::log_fence("runtime_auth", row["workspace_id"].as_str().unwrap_or(""), row, credential, now);
+        super::log_fence(
+            "runtime_auth",
+            row["workspace_id"].as_str().unwrap_or(""),
+            row,
+            credential,
+            now,
+        );
         return Err(ApiError::unauthorized("workspace_runtime_fenced"));
     }
     Ok(())

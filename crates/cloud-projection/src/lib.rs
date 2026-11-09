@@ -2,9 +2,9 @@
 #[cfg(not(target_arch = "wasm32"))]
 mod cache;
 #[cfg(not(target_arch = "wasm32"))]
-mod secure_cache;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod protected_metadata;
+#[cfg(not(target_arch = "wasm32"))]
+mod secure_cache;
 use aes_gcm::{
     Aes256Gcm, KeyInit, Nonce,
     aead::{Aead, Payload},

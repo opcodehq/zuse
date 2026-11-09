@@ -332,8 +332,9 @@ impl CloudConversation {
         };
         self.composer
             .update(cx, |composer, cx| composer.set_cloud_status(status, cx));
-        self.transcript
-            .update(cx, |transcript, cx| transcript.set_external_activity(line, cx));
+        self.transcript.update(cx, |transcript, cx| {
+            transcript.set_external_activity(line, cx)
+        });
     }
 
     pub(super) fn branch_label(&self) -> Option<String> {
@@ -1044,7 +1045,10 @@ mod tests {
         for n in 0..=TranscriptCache::CAPACITY {
             cache.put(format!("chat-{n}"), vec![entry(&format!("m{n}"))]);
         }
-        assert!(cache.get("chat-0").is_none(), "the oldest conversation is evicted");
+        assert!(
+            cache.get("chat-0").is_none(),
+            "the oldest conversation is evicted"
+        );
         // Revisiting refreshes a conversation's place.
         cache.put("chat-1".into(), vec![entry("again")]);
         cache.put("extra".into(), vec![entry("x")]);
@@ -1125,7 +1129,11 @@ mod tests {
         cx.run_until_parked();
         view.read_with(cx, |view, cx| {
             let echoes = view.state.read(cx).pending_echoes();
-            assert_eq!(echoes.len(), 1, "the prompt is the conversation's first message");
+            assert_eq!(
+                echoes.len(),
+                1,
+                "the prompt is the conversation's first message"
+            );
             assert!(matches!(
                 &echoes[0].parts[..],
                 [zuse_model::MessagePart::Text { text, .. }] if text == "Build a small website"

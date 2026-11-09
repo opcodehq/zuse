@@ -504,24 +504,55 @@ impl Pickers {
     /// models. Fresh replies and the cached copy shown before them both land
     /// here.
     fn apply_cloud_context(&mut self, value: Value, owner: &str, cx: &mut Context<Self>) {
-        self.cloud.context=value.clone();
-        let provider=self.cloud.task_binding.as_ref().map(|binding|binding.provider.clone()).unwrap_or_else(|| {
-            let project=self.state.read(cx).cloud_project.clone();
-            providers::select(&value,self.cloud.provider_preference.as_deref(),project.as_ref().and_then(|p|p["providerId"].as_str())).unwrap_or_else(|_|self.cloud.provider_preference.clone().unwrap_or_default())
-        });
-        if self.cloud.task_binding.is_none() { self.state.update(cx,|state,_| { if let Some(project)=&mut state.cloud_project { project["providerId"]=json!(provider); } }); }
-        let catalog=if value["providerAgentCatalogs"].is_object(){value["providerAgentCatalogs"][provider].clone()}else{value["agentCatalog"].clone()};
-        if self.cloud.task_binding.is_none() { self.cloud.catalog=None;self.cloud.models.clear();self.cloud.harnesses=Loadable::Idle; }
+        self.cloud.context = value.clone();
+        let provider = self
+            .cloud
+            .task_binding
+            .as_ref()
+            .map(|binding| binding.provider.clone())
+            .unwrap_or_else(|| {
+                let project = self.state.read(cx).cloud_project.clone();
+                providers::select(
+                    &value,
+                    self.cloud.provider_preference.as_deref(),
+                    project.as_ref().and_then(|p| p["providerId"].as_str()),
+                )
+                .unwrap_or_else(|_| self.cloud.provider_preference.clone().unwrap_or_default())
+            });
+        if self.cloud.task_binding.is_none() {
+            self.state.update(cx, |state, _| {
+                if let Some(project) = &mut state.cloud_project {
+                    project["providerId"] = json!(provider);
+                }
+            });
+        }
+        let catalog = if value["providerAgentCatalogs"].is_object() {
+            value["providerAgentCatalogs"][provider].clone()
+        } else {
+            value["agentCatalog"].clone()
+        };
+        if self.cloud.task_binding.is_none() {
+            self.cloud.catalog = None;
+            self.cloud.models.clear();
+            self.cloud.harnesses = Loadable::Idle;
+        }
         self.receive_cloud_models(catalog, cx);
-        if self.cloud.task_binding.is_none() { self.align_cloud_model(cx); }
+        if self.cloud.task_binding.is_none() {
+            self.align_cloud_model(cx);
+        }
         self.cloud.rows = value["projects"]
             .as_array()
             .cloned()
             .unwrap_or_default()
             .into_iter()
             .map(|mut row| {
-                row["accountId"] = value["ownerId"].as_str().map(|s|json!(s)).unwrap_or_else(||json!(owner));
-                if row["providerId"].is_null() || row["providerId"]=="box"{row["providerId"]=json!("boxd");}
+                row["accountId"] = value["ownerId"]
+                    .as_str()
+                    .map(|s| json!(s))
+                    .unwrap_or_else(|| json!(owner));
+                if row["providerId"].is_null() || row["providerId"] == "box" {
+                    row["providerId"] = json!("boxd");
+                }
                 row
             })
             .collect();
@@ -756,9 +787,12 @@ impl Pickers {
             .map(|p| p["projectId"].clone());
         let destination = self.cloud_destination(cx);
         let ready = self.cloud_launch_provider(cx).is_ok();
-        let computer_rows = if (destination.is_some() || self.cloud.task_binding.is_some()) && ready {
+        let computer_rows = if (destination.is_some() || self.cloud.task_binding.is_some()) && ready
+        {
             self.cloud_computer_rows(cx)
-        } else { div().into_any_element() };
+        } else {
+            div().into_any_element()
+        };
         let selected_provider = self
             .cloud_launch_provider(cx)
             .ok()
@@ -792,7 +826,11 @@ impl Pickers {
             .child(
                 zuse_viewport::creation_style::option(
                     "add-computer",
-                    if self.cloud_destination(cx).is_none() { "Add project to Cloud…" } else { "Cloud setup…" },
+                    if self.cloud_destination(cx).is_none() {
+                        "Add project to Cloud…"
+                    } else {
+                        "Cloud setup…"
+                    },
                     "cloud-dither",
                     false,
                 )
@@ -861,27 +899,58 @@ mod project_selection_tests {
     struct UnlinkedComputerRows(Entity<Pickers>);
     impl Render for UnlinkedComputerRows {
         fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-            div().w(px(600.)).h(px(400.)).child(self.0.update(cx, |p,cx| p.cloud_rows(cx)))
+            div()
+                .w(px(600.))
+                .h(px(400.))
+                .child(self.0.update(cx, |p, cx| p.cloud_rows(cx)))
         }
     }
     #[gpui::test]
-    fn unlinked_project_offers_connect_instead_of_unusable_cloud_computer(cx: &mut gpui::TestAppContext) {
-        cx.update(|cx| {gpui_base::init(cx);cx.set_global(Theme::dark());});
-        let window=cx.add_window(|_,cx| {
-            let state=cx.new(|_| {let mut s=AppState::new();s.apply_cloud_account(json!({"user":{"id":"fixture-user"},"orgId":null}));s});
-            UnlinkedComputerRows(cx.new(|cx| {let mut p=Pickers::new(state,cx);p.cloud.owner=Some("fixture-user".into());p.cloud.loaded=true;p.cloud.context=provider_context();p}))
+    fn unlinked_project_offers_connect_instead_of_unusable_cloud_computer(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(|cx| {
+            gpui_base::init(cx);
+            cx.set_global(Theme::dark());
         });
-        cx.update_window(window.into(), |_,w,cx| w.draw(cx).clear()).unwrap();
+        let window = cx.add_window(|_, cx| {
+            let state = cx.new(|_| {
+                let mut s = AppState::new();
+                s.apply_cloud_account(json!({"user":{"id":"fixture-user"},"orgId":null}));
+                s
+            });
+            UnlinkedComputerRows(cx.new(|cx| {
+                let mut p = Pickers::new(state, cx);
+                p.cloud.owner = Some("fixture-user".into());
+                p.cloud.loaded = true;
+                p.cloud.context = provider_context();
+                p
+            }))
+        });
+        cx.update_window(window.into(), |_, w, cx| w.draw(cx).clear())
+            .unwrap();
         {
-            let mut visual=gpui::VisualTestContext::from_window(window.into(),cx);
-            assert!(visual.debug_bounds("cloud-computer-options").is_none(),"an unlinked local project cannot select a cloud computer");
-            assert!(visual.debug_bounds("connect-project-to-cloud").is_some(),"explicit connection action is available");
+            let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+            assert!(
+                visual.debug_bounds("cloud-computer-options").is_none(),
+                "an unlinked local project cannot select a cloud computer"
+            );
+            assert!(
+                visual.debug_bounds("connect-project-to-cloud").is_some(),
+                "explicit connection action is available"
+            );
         }
-        window.update(cx,|_,w,_| w.remove_window()).unwrap();cx.run_until_parked();
+        window.update(cx, |_, w, _| w.remove_window()).unwrap();
+        cx.run_until_parked();
     }
     #[gpui::test]
-    fn unavailable_cloud_provider_offers_setup_instead_of_choose_computer(cx: &mut gpui::TestAppContext) {
-        cx.update(|cx| {gpui_base::init(cx);cx.set_global(Theme::dark());});
+    fn unavailable_cloud_provider_offers_setup_instead_of_choose_computer(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(|cx| {
+            gpui_base::init(cx);
+            cx.set_global(Theme::dark());
+        });
         let window=cx.add_window(|_,cx| {
             let state=cx.new(|_| {let mut s=AppState::new();s.apply_cloud_account(json!({"user":{"id":"fixture-user"},"orgId":null}));s});
             UnlinkedComputerRows(cx.new(|cx| {
@@ -891,13 +960,15 @@ mod project_selection_tests {
                 p
             }))
         });
-        cx.update_window(window.into(), |_,w,cx| w.draw(cx).clear()).unwrap();
+        cx.update_window(window.into(), |_, w, cx| w.draw(cx).clear())
+            .unwrap();
         {
-            let mut visual=gpui::VisualTestContext::from_window(window.into(),cx);
+            let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
             assert!(visual.debug_bounds("cloud-computer-options").is_none());
             assert!(visual.debug_bounds("connect-project-to-cloud").is_some());
         }
-        window.update(cx,|_,w,_| w.remove_window()).unwrap();cx.run_until_parked();
+        window.update(cx, |_, w, _| w.remove_window()).unwrap();
+        cx.run_until_parked();
     }
     #[gpui::test]
     fn clicking_computer_provider_keeps_repository_and_loads_its_models(

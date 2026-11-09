@@ -4,8 +4,10 @@ use serde_json::Value;
 use zuse_protocol::cloud_catalog::CloudAgentCatalog;
 
 pub(super) fn preparation_catalog_error(error: &zuse_rpc::RpcError) -> bool {
-    matches!(error, zuse_rpc::RpcError::Closed | zuse_rpc::RpcError::Transport(_))
-        || matches!(error, zuse_rpc::RpcError::Failed(message)
+    matches!(
+        error,
+        zuse_rpc::RpcError::Closed | zuse_rpc::RpcError::Transport(_)
+    ) || matches!(error, zuse_rpc::RpcError::Failed(message)
             if message == "The workspace is busy. Wait for its current operation to finish.")
 }
 
@@ -15,13 +17,17 @@ mod tests {
     use serde_json::json;
 
     #[gpui::test]
-    fn saved_task_model_survives_busy_catalog_and_scoped_catalog_recovery(cx: &mut gpui::TestAppContext) {
-        let runtime=tokio::runtime::Runtime::new().unwrap();let _entered=runtime.enter();
-        let(send,_requests)=tokio::sync::mpsc::channel(1);
-        let(_responses,receive)=tokio::sync::mpsc::channel(1);
-        let controller=crate::state::EngineHandle::from_test_client(zuse_rpc::RpcClient::new(send,receive));
-        let state=cx.new(|_|AppState::new());
-        let pickers=cx.new(|cx|Pickers::new(state,cx));
+    fn saved_task_model_survives_busy_catalog_and_scoped_catalog_recovery(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _entered = runtime.enter();
+        let (send, _requests) = tokio::sync::mpsc::channel(1);
+        let (_responses, receive) = tokio::sync::mpsc::channel(1);
+        let controller =
+            crate::state::EngineHandle::from_test_client(zuse_rpc::RpcClient::new(send, receive));
+        let state = cx.new(|_| AppState::new());
+        let pickers = cx.new(|cx| Pickers::new(state, cx));
         pickers.update(cx,|pickers,cx| {
             let choice=ChatConfig {harness:HarnessId::Codex,model:Some("saved-model".into()),reasoning:Some(ReasoningLevel::High),model_options:Default::default(),sandbox:SandboxLevel::WorkspaceWrite,plan:false};
             let target=crate::state::CloudTarget {controller,subject:"owner".into(),organization:Some("org".into()),workspace:"task".into(),initial_session:"session".into()};
@@ -49,20 +55,34 @@ mod tests {
     #[test]
     fn only_transport_and_exact_busy_catalog_failures_are_preparation() {
         assert!(preparation_catalog_error(&zuse_rpc::RpcError::Closed));
-        assert!(preparation_catalog_error(&zuse_rpc::RpcError::Transport("reconnecting".into())));
-        assert!(preparation_catalog_error(&zuse_rpc::RpcError::Failed("The workspace is busy. Wait for its current operation to finish.".into())));
-        assert!(!preparation_catalog_error(&zuse_rpc::RpcError::Capability("cloud_access_denied".into())));
-        assert!(!preparation_catalog_error(&zuse_rpc::RpcError::Failed("Busy-looking but unrelated error".into())));
+        assert!(preparation_catalog_error(&zuse_rpc::RpcError::Transport(
+            "reconnecting".into()
+        )));
+        assert!(preparation_catalog_error(&zuse_rpc::RpcError::Failed(
+            "The workspace is busy. Wait for its current operation to finish.".into()
+        )));
+        assert!(!preparation_catalog_error(&zuse_rpc::RpcError::Capability(
+            "cloud_access_denied".into()
+        )));
+        assert!(!preparation_catalog_error(&zuse_rpc::RpcError::Failed(
+            "Busy-looking but unrelated error".into()
+        )));
     }
 }
 
 impl Pickers {
-    pub(super) fn receive_cloud_model_error(&mut self, error: zuse_rpc::RpcError, cx: &mut Context<Self>) {
+    pub(super) fn receive_cloud_model_error(
+        &mut self,
+        error: zuse_rpc::RpcError,
+        cx: &mut Context<Self>,
+    ) {
         self.cloud.model_waiting = preparation_catalog_error(&error);
         let error = error.to_string();
         let error = if error.contains("Sign in to access cloud workspaces") {
             "Cloud could not connect to your signed-in account. Restart GPUI or reconnect in Settings → General.".to_owned()
-        } else { error };
+        } else {
+            error
+        };
         self.cloud.set_context_error(error.clone());
         self.cloud.model_error = Some(error.clone());
         if self.cloud.catalog.is_none() {
@@ -119,7 +139,10 @@ impl Pickers {
                 self.cloud.model_error = None;
                 self.cloud.model_waiting = false;
                 super::remember_model_labels(
-                    catalog.providers.iter().flat_map(|provider| provider.models.iter()),
+                    catalog
+                        .providers
+                        .iter()
+                        .flat_map(|provider| provider.models.iter()),
                 );
                 self.cloud.models = catalog
                     .providers
@@ -183,7 +206,8 @@ impl Pickers {
         if self.cloud_task_choice().is_some()
             && (self.cloud.model_waiting
                 || self.cloud.model_read_pending()
-                || matches!(self.cloud.harnesses, Loadable::Idle | Loadable::Loading)) {
+                || matches!(self.cloud.harnesses, Loadable::Idle | Loadable::Loading))
+        {
             return None;
         }
         // Loading is quiet: the model picker shows its own placeholder, and a

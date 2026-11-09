@@ -399,7 +399,10 @@ impl Render for AccountCard {
                     .py(px(10.))
                     .border_t_1()
                     .border_color(c.border)
-                    .child(s::description_text(tr(cx, msg::providers::accounts_waiting)))
+                    .child(s::description_text(tr(
+                        cx,
+                        msg::providers::accounts_waiting,
+                    )))
                     .child(
                         div()
                             .flex()

@@ -360,9 +360,12 @@ impl Authority {
     }
     pub async fn prepare_storage(&self, bootstrap: &CloudRuntimeBootstrap) -> Result<String> {
         if bootstrap.extra.get("startupBindingVersion") == Some(&json!(2)) {
-            let enrollment = bootstrap.extra.get("storageEnrollmentId").and_then(Value::as_str)
+            let enrollment = bootstrap
+                .extra
+                .get("storageEnrollmentId")
+                .and_then(Value::as_str)
                 .filter(|id| !id.is_empty() && id.len() <= 512)
-                .ok_or_else(||anyhow::anyhow!("runtime_storage_enrollment_rejected"))?;
+                .ok_or_else(|| anyhow::anyhow!("runtime_storage_enrollment_rejected"))?;
             return Ok(enrollment.to_owned());
         }
         self.storage(bootstrap, None).await
@@ -373,7 +376,14 @@ impl Authority {
         enrollment: &str,
     ) -> Result<()> {
         if bootstrap.extra.get("startupBindingVersion") == Some(&json!(2)) {
-            ensure!(bootstrap.extra.get("storageEnrollmentId").and_then(Value::as_str) == Some(enrollment), "runtime_storage_enrollment_rejected");
+            ensure!(
+                bootstrap
+                    .extra
+                    .get("storageEnrollmentId")
+                    .and_then(Value::as_str)
+                    == Some(enrollment),
+                "runtime_storage_enrollment_rejected"
+            );
             // The caller committed local storage. The first authenticated gateway
             // bind durably commits the same enrollment at the authority.
             return Ok(());
@@ -419,7 +429,10 @@ impl Authority {
         .await?;
         Ok(())
     }
-    fn storage_request(bootstrap: &CloudRuntimeBootstrap, enrollment: Option<&str>) -> Result<zuse_protocol::cloud::CloudStorageEnrollment> {
+    fn storage_request(
+        bootstrap: &CloudRuntimeBootstrap,
+        enrollment: Option<&str>,
+    ) -> Result<zuse_protocol::cloud::CloudStorageEnrollment> {
         use zuse_protocol::cloud::{CloudStorageEnrollment, CloudStoragePhase};
         Ok(CloudStorageEnrollment {
             phase: if enrollment.is_some() {
@@ -517,10 +530,15 @@ impl Authority {
             gateway_epoch: bootstrap.gateway_epoch,
             expires_at: bootstrap.runtime_credential_expires_at,
             storage_binding: if bootstrap.extra.get("startupBindingVersion") == Some(&json!(2)) {
-                let id = bootstrap.extra.get("storageEnrollmentId").and_then(Value::as_str)
-                    .ok_or_else(||anyhow::anyhow!("runtime_storage_enrollment_rejected"))?;
+                let id = bootstrap
+                    .extra
+                    .get("storageEnrollmentId")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| anyhow::anyhow!("runtime_storage_enrollment_rejected"))?;
                 Some(json!(Self::storage_request(bootstrap, Some(id))?))
-            } else { None },
+            } else {
+                None
+            },
         })
     }
 }

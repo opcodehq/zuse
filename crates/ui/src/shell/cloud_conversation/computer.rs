@@ -894,8 +894,17 @@ impl CloudConversation {
             .child(
                 popover::menu_row(&theme, false, "computer-open-in-back")
                     .id("computer-open-in-back")
-                    .child(icon(icons::ALT_ARROW_LEFT).size(px(14.)).text_color(theme.text_muted))
-                    .child(div().flex_1().text_color(theme.text_muted).child("Computer"))
+                    .child(
+                        icon(icons::ALT_ARROW_LEFT)
+                            .size(px(14.))
+                            .text_color(theme.text_muted),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_color(theme.text_muted)
+                            .child("Computer"),
+                    )
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.computer.page = Page::Summary;
                         cx.notify();
@@ -925,7 +934,14 @@ impl CloudConversation {
             page = page.child(
                 popover::menu_row(&theme, false, format!("cloud-open-in-{}", target.id))
                     .id(SharedString::from(format!("cloud-open-in-{}", target.id)))
-                    .child(div().size(px(16.)).flex().items_center().justify_center().child(glyph))
+                    .child(
+                        div()
+                            .size(px(16.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(glyph),
+                    )
                     .child(target.label)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         cx.emit(CloudConversationEvent::OpenPathIn(
@@ -980,7 +996,12 @@ impl CloudConversation {
             .flex()
             .items_center()
             .gap(px(6.))
-            .child(div().size(px(6.)).rounded_full().bg(summary.tone.color(&theme)))
+            .child(
+                div()
+                    .size(px(6.))
+                    .rounded_full()
+                    .bg(summary.tone.color(&theme)),
+            )
             .child(summary.label)
             .into_any_element();
         let mut menu = div()
@@ -1045,7 +1066,14 @@ impl CloudConversation {
                         .flex()
                         .items_center()
                         .gap(px(8.))
-                        .child(div().size(px(13.)).flex().items_center().justify_center().child(glyph))
+                        .child(
+                            div()
+                                .size(px(13.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(glyph),
+                        )
                         .child(div().flex_1().child(step.title))
                         .child(div().text_color(theme.text_muted).child(step.state.label())),
                 );
@@ -1065,7 +1093,11 @@ impl CloudConversation {
             menu = menu.child(
                 popover::menu_row(&theme, false, "computer-setup-settings")
                     .id("computer-setup-settings")
-                    .child(icon(icons::SETTINGS).size(px(14.)).text_color(theme.text_muted))
+                    .child(
+                        icon(icons::SETTINGS)
+                            .size(px(14.))
+                            .text_color(theme.text_muted),
+                    )
                     .child("Open Cloud settings")
                     .on_click(cx.listener(|_, _, window, cx| {
                         window.dispatch_action(Box::new(OpenCloudSettings), cx)
@@ -1124,9 +1156,17 @@ impl CloudConversation {
             popover::menu_row(&theme, false, "computer-ssh")
                 .id("computer-ssh")
                 .opacity(if running { 1. } else { 0.45 })
-                .child(icon(icons::TERMINAL).size(px(14.)).text_color(theme.text_muted))
+                .child(
+                    icon(icons::TERMINAL)
+                        .size(px(14.))
+                        .text_color(theme.text_muted),
+                )
                 .child(div().flex_1().child("Open via SSH"))
-                .child(icon(icons::ALT_ARROW_RIGHT).size(px(12.)).text_color(theme.text_muted))
+                .child(
+                    icon(icons::ALT_ARROW_RIGHT)
+                        .size(px(12.))
+                        .text_color(theme.text_muted),
+                )
                 .on_click(cx.listener(move |this, _, _, cx| {
                     if running {
                         this.computer.page = Page::Ssh;
@@ -1160,9 +1200,17 @@ impl CloudConversation {
                     gpui::Toggled::False
                 })
                 .opacity(if sync_busy || !loaded { 0.5 } else { 1. })
-                .child(icon(icons::REFRESH).size(px(14.)).text_color(theme.text_muted))
+                .child(
+                    icon(icons::REFRESH)
+                        .size(px(14.))
+                        .text_color(theme.text_muted),
+                )
                 .child(div().flex_1().child("Sync to a local folder"))
-                .child(crate::settings::widgets::toggle_switch(&theme, enabled, "cloud-sync"))
+                .child(crate::settings::widgets::toggle_switch(
+                    &theme,
+                    enabled,
+                    "cloud-sync",
+                ))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     if !sync_busy && loaded {
                         this.change_sync(methods::CLOUD_SYNC_CONFIGURE, !enabled, None, cx);
@@ -1179,7 +1227,11 @@ impl CloudConversation {
                     .gap(px(6.))
                     .text_color(theme.text_muted)
                     .child(div().size(px(6.)).rounded_full().bg(phase.1.color(&theme)))
-                    .child(if sync_busy { "Updating sync…" } else { phase.0 }),
+                    .child(if sync_busy {
+                        "Updating sync…"
+                    } else {
+                        phase.0
+                    }),
             );
             if let Some(path) = sync["localPath"].as_str().map(str::to_owned) {
                 let reveal = path.clone();
@@ -1209,7 +1261,11 @@ impl CloudConversation {
                                 .cursor_pointer()
                                 .hover(|el| el.bg(theme.element_hover))
                                 .tooltip(crate::settings::widgets::text_tooltip("Open folder"))
-                                .child(icon(icons::FOLDER_OPEN).size(px(13.)).text_color(theme.text_muted))
+                                .child(
+                                    icon(icons::FOLDER_OPEN)
+                                        .size(px(13.))
+                                        .text_color(theme.text_muted),
+                                )
                                 .child(div().min_w_0().truncate().child(path))
                                 .on_click(cx.listener(move |_, _, _, cx| {
                                     cx.reveal_path(std::path::Path::new(&reveal))
@@ -1240,9 +1296,17 @@ impl CloudConversation {
                 menu = menu.child(
                     popover::menu_row(&theme, false, "cloud-sync-open-in")
                         .id("cloud-sync-open-in")
-                        .child(icon(icons::FOLDER_OPEN).size(px(14.)).text_color(theme.text_muted))
+                        .child(
+                            icon(icons::FOLDER_OPEN)
+                                .size(px(14.))
+                                .text_color(theme.text_muted),
+                        )
                         .child(div().flex_1().child("Open synced folder in…"))
-                        .child(icon(icons::ALT_ARROW_RIGHT).size(px(12.)).text_color(theme.text_muted))
+                        .child(
+                            icon(icons::ALT_ARROW_RIGHT)
+                                .size(px(12.))
+                                .text_color(theme.text_muted),
+                        )
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.computer.page = Page::OpenIn;
                             cx.notify();
@@ -1253,7 +1317,11 @@ impl CloudConversation {
                 popover::menu_row(&theme, false, "cloud-sync-folder")
                     .id("cloud-sync-folder")
                     .opacity(if sync_busy { 0.5 } else { 1. })
-                    .child(icon(icons::FOLDER).size(px(14.)).text_color(theme.text_muted))
+                    .child(
+                        icon(icons::FOLDER)
+                            .size(px(14.))
+                            .text_color(theme.text_muted),
+                    )
                     .child("Change folder…")
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if !sync_busy {
@@ -1265,7 +1333,11 @@ impl CloudConversation {
                 menu = menu.child(
                     popover::menu_row(&theme, false, "cloud-sync-retry")
                         .id("cloud-sync-retry")
-                        .child(icon(icons::REFRESH).size(px(14.)).text_color(theme.text_muted))
+                        .child(
+                            icon(icons::REFRESH)
+                                .size(px(14.))
+                                .text_color(theme.text_muted),
+                        )
                         .child("Retry sync")
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.change_sync(methods::CLOUD_SYNC_RETRY, true, None, cx)
@@ -1312,7 +1384,11 @@ impl CloudConversation {
                                 _ => icons::RESTART,
                             })
                             .size(px(14.))
-                            .text_color(if danger { theme.danger } else { theme.text_muted }),
+                            .text_color(if danger {
+                                theme.danger
+                            } else {
+                                theme.text_muted
+                            }),
                         )
                         .child(action.label())
                         .on_click(cx.listener(move |this, _, _, cx| {
@@ -1330,12 +1406,22 @@ impl CloudConversation {
                 repair.push(
                     popover::menu_row(&theme, false, format!("check-{action:?}"))
                         .id(SharedString::from(format!("check-{action:?}")))
-                        .child(icon(icons::REFRESH).size(px(14.)).text_color(theme.text_muted))
-                        .child(div().flex_1().child(format!("Check {}", action.label().to_lowercase())))
+                        .child(
+                            icon(icons::REFRESH)
+                                .size(px(14.))
+                                .text_color(theme.text_muted),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .child(format!("Check {}", action.label().to_lowercase())),
+                        )
                         .child(div().text_color(theme.text_muted).child(phase.to_owned()))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.computer_action(action, true, cx)
-                        }))
+                        .on_click(
+                            cx.listener(move |this, _, _, cx| {
+                                this.computer_action(action, true, cx)
+                            }),
+                        )
                         .into_any_element(),
                 );
             }
@@ -1344,7 +1430,11 @@ impl CloudConversation {
             repair.push(
                 popover::menu_row(&theme, false, "computer-retry-original")
                     .id("computer-retry-original")
-                    .child(icon(icons::REFRESH).size(px(14.)).text_color(theme.text_muted))
+                    .child(
+                        icon(icons::REFRESH)
+                            .size(px(14.))
+                            .text_color(theme.text_muted),
+                    )
                     .child("Retry original request")
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.computer_action(pending.action, false, cx)
@@ -1355,7 +1445,11 @@ impl CloudConversation {
         repair.push(
             popover::menu_row(&theme, false, "computer-refresh")
                 .id("computer-refresh")
-                .child(icon(icons::REFRESH).size(px(14.)).text_color(theme.text_muted))
+                .child(
+                    icon(icons::REFRESH)
+                        .size(px(14.))
+                        .text_color(theme.text_muted),
+                )
                 .child("Refresh status")
                 .on_click(cx.listener(|this, _, _, cx| this.refresh_computer(cx)))
                 .into_any_element(),
@@ -1382,7 +1476,12 @@ impl CloudConversation {
                                 .size(px(14.))
                                 .text_color(theme.text_muted),
                         )
-                        .child(div().flex_1().text_color(theme.text_muted).child("Computer"))
+                        .child(
+                            div()
+                                .flex_1()
+                                .text_color(theme.text_muted)
+                                .child("Computer"),
+                        )
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.computer.page = Page::Summary;
                             this.computer.confirm = None;
@@ -1436,7 +1535,10 @@ impl CloudConversation {
             menu = menu.child(
                 div().p(px(8.)).child(
                     popover::dialog_card(&theme)
-                        .child(popover::dialog_title(&theme, &format!("{}?", action.label())))
+                        .child(popover::dialog_title(
+                            &theme,
+                            &format!("{}?", action.label()),
+                        ))
                         .child(popover::dialog_body(&theme, action.detail()))
                         .child(
                             div()

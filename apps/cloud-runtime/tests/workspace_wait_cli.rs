@@ -12,16 +12,14 @@ impl Drop for Directory {
 }
 #[test]
 fn workspace_wait_cli_is_local_fenced_and_usable_while_the_runtime_owns_storage() {
-    let root = Directory(
-        std::env::temp_dir().join(format!(
+    let root = Directory(std::env::temp_dir().join(format!(
             "zuse-workspace-wait-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_nanos()
-        )),
-    );
+        )));
     std::fs::create_dir(&root.0).unwrap();
     for (state, generation, succeeds, error) in [
         ("ready", "1", true, ""),

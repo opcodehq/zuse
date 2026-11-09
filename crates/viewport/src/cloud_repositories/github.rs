@@ -310,11 +310,7 @@ impl RepositoryPanel {
             .child(
                 cs::button(
                     "github-operation-cancel",
-                    if finished {
-                        "Close"
-                    } else {
-                        "Cancel"
-                    },
+                    if finished { "Close" } else { "Cancel" },
                     false,
                     busy,
                     false,

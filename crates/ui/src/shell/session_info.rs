@@ -539,7 +539,12 @@ impl Shell {
         .id("cloud-session-info-computer")
         .child(
             row_meta(&theme)
-                .child(div().size(px(6.0)).rounded_full().bg(summary.tone.color(&theme)))
+                .child(
+                    div()
+                        .size(px(6.0))
+                        .rounded_full()
+                        .bg(summary.tone.color(&theme)),
+                )
                 .child(summary.label),
         );
         let repository_row = summary.repository.clone().map(|repository| {
@@ -637,7 +642,9 @@ impl Shell {
                 let (used, total) = (bytes(&resources[used]), bytes(&resources[total]));
                 performance.push(meter(
                     label,
-                    used.zip(total).filter(|(_, t)| *t > 0.0).map(|(u, t)| u / t),
+                    used.zip(total)
+                        .filter(|(_, t)| *t > 0.0)
+                        .map(|(u, t)| u / t),
                     match (used, total) {
                         (Some(used), Some(total)) => format!("{used:.1} of {total:.1} GB"),
                         _ => "—".into(),
@@ -675,7 +682,10 @@ impl Shell {
                     this.close_session_info_overlay(cx);
                     conversation.update(cx, |view, cx| view.open_computer(cx));
                 }))
-                .child(popover::picker_icon_slot(row_glyph(icons::SETTINGS, &theme)))
+                .child(popover::picker_icon_slot(row_glyph(
+                    icons::SETTINGS,
+                    &theme,
+                )))
                 .child(div().flex_1().child("Computer details and sync"))
         };
         let folder = synced.map(|path| {
@@ -686,7 +696,10 @@ impl Shell {
                     this.close_session_info_overlay(cx);
                     cx.reveal_path(std::path::Path::new(&reveal_path));
                 }))
-                .child(popover::picker_icon_slot(row_glyph(icons::FOLDER_OPEN, &theme)))
+                .child(popover::picker_icon_slot(row_glyph(
+                    icons::FOLDER_OPEN,
+                    &theme,
+                )))
                 .child(div().flex_1().child("Open synced folder"))
         });
         let body = div()
@@ -726,7 +739,9 @@ impl Shell {
                 .right(px(SESSION_CARD_INSET))
                 .opacity(ease)
                 .occlude()
-                .on_mouse_down_out(cx.listener(|this, _, _, cx| this.close_session_info_overlay(cx)))
+                .on_mouse_down_out(
+                    cx.listener(|this, _, _, cx| this.close_session_info_overlay(cx)),
+                )
                 .child(crate::frost::frosted(
                     SUMMARY_CARD_RADIUS,
                     crate::frost::MENU_BLUR,

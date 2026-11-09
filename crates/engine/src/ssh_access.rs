@@ -113,7 +113,10 @@ async fn sudo(args: &[&str]) -> Result<()> {
 /// Authorize `public_key` and make sure the loopback sshd runs. Returns the
 /// user to log in as and the folder sessions should open.
 pub async fn prepare(public_key: &str, workspace_root: Option<&Path>) -> Result<Value> {
-    ensure!(valid_public_key(public_key), "That is not an SSH public key.");
+    ensure!(
+        valid_public_key(public_key),
+        "That is not an SSH public key."
+    );
     let dir = ssh_dir();
     std::fs::create_dir_all(&dir)?;
     #[cfg(unix)]
@@ -263,9 +266,14 @@ mod tests {
         let mut stream = open_tunnel().await.unwrap();
         let first = stream.next().await.unwrap();
         let tunnel = first["tunnel"].as_str().unwrap().to_owned();
-        write_tunnel(&tunnel, &STANDARD.encode(b"hello")).await.unwrap();
+        write_tunnel(&tunnel, &STANDARD.encode(b"hello"))
+            .await
+            .unwrap();
         let echoed = stream.next().await.unwrap();
-        assert_eq!(STANDARD.decode(echoed["data"].as_str().unwrap()).unwrap(), b"hello");
+        assert_eq!(
+            STANDARD.decode(echoed["data"].as_str().unwrap()).unwrap(),
+            b"hello"
+        );
         close_tunnel(&tunnel).await;
         server.await.unwrap();
     }

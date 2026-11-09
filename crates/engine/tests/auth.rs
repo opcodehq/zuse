@@ -1150,9 +1150,20 @@ async fn account_browser_redirect_rejection_fails_loudly_without_device_codes() 
         identity,
     )
     .unwrap();
-    let error = account.sign_in_in_browser().await.err().expect("rejected redirect is an error");
-    assert!(matches!(error, zuse_engine::account::AccountError::RedirectRejected));
-    assert_eq!(devices.load(Ordering::SeqCst), 0, "never falls back to device authorization");
+    let error = account
+        .sign_in_in_browser()
+        .await
+        .err()
+        .expect("rejected redirect is an error");
+    assert!(matches!(
+        error,
+        zuse_engine::account::AccountError::RedirectRejected
+    ));
+    assert_eq!(
+        devices.load(Ordering::SeqCst),
+        0,
+        "never falls back to device authorization"
+    );
     tokio::time::sleep(Duration::from_millis(50)).await;
     let status = account.status();
     assert!(status.login.is_none());

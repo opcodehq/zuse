@@ -165,10 +165,20 @@ const ALLOCATION_READ: &[(&str, &str)] = &[
 ];
 
 const DISPATCH_READ: &[(&str, &str)] = &[
-    ALLOCATION_READ[0], ALLOCATION_READ[1], ALLOCATION_READ[2],
-    ALLOCATION_READ[3], ALLOCATION_READ[4], ALLOCATION_READ[5],
-    ("leaseUntil", "SELECT(SELECT to_jsonb(lease_expires_at) FROM zuse_rust_jobs WHERE job_id=$1->>'job' AND lease_token=$1->>'lease' AND state='running' AND lease_expires_at>GREATEST(($1->>'now')::bigint,(extract(epoch FROM clock_timestamp())*1000)::bigint) AND resource_generation=($2#>>'{workspace,generation}')::bigint FOR UPDATE)"),
-    ("journal", "SELECT(SELECT to_jsonb(c) FROM zuse_rust_provider_creates c WHERE operation_id=$1->>'operation' FOR UPDATE)"),
+    ALLOCATION_READ[0],
+    ALLOCATION_READ[1],
+    ALLOCATION_READ[2],
+    ALLOCATION_READ[3],
+    ALLOCATION_READ[4],
+    ALLOCATION_READ[5],
+    (
+        "leaseUntil",
+        "SELECT(SELECT to_jsonb(lease_expires_at) FROM zuse_rust_jobs WHERE job_id=$1->>'job' AND lease_token=$1->>'lease' AND state='running' AND lease_expires_at>GREATEST(($1->>'now')::bigint,(extract(epoch FROM clock_timestamp())*1000)::bigint) AND resource_generation=($2#>>'{workspace,generation}')::bigint FOR UPDATE)",
+    ),
+    (
+        "journal",
+        "SELECT(SELECT to_jsonb(c) FROM zuse_rust_provider_creates c WHERE operation_id=$1->>'operation' FOR UPDATE)",
+    ),
 ];
 
 pub(super) struct AllocationSnapshot {
@@ -184,7 +194,8 @@ impl RuntimeControl {
         tx: &mut Transaction<'_, Postgres>,
         job: &crate::jobs::Job,
     ) -> Result<Option<AllocationSnapshot>, ApiError> {
-        self.read_allocation_snapshot(tx, job, ALLOCATION_READ).await
+        self.read_allocation_snapshot(tx, job, ALLOCATION_READ)
+            .await
     }
     pub(super) async fn allocation_dispatch_snapshot(
         &self,

@@ -1282,21 +1282,22 @@ impl Shell {
         } else {
             None
         };
-        let terminal_toggle = (!takeover && !on_canvas && self.cloud_conversation.is_none()).then(|| {
-            let open = self.terminal_open(cx);
-            header_icon_button(
-                "toggle-bottom-terminal",
-                icons::PANEL_BOTTOM,
-                "Toggle bottom terminal",
-                &theme,
-                cx.listener(|this, _, window, cx| this.toggle_terminal(window, cx)),
-            )
-            .role(gpui::Role::Button)
-            .aria_label(tr(cx, msg::common::toggle_bottom_terminal))
-            .aria_selected(open)
-            .flex_none()
-            .when(open, |button| button.bg(theme.text.opacity(0.10)))
-        });
+        let terminal_toggle =
+            (!takeover && !on_canvas && self.cloud_conversation.is_none()).then(|| {
+                let open = self.terminal_open(cx);
+                header_icon_button(
+                    "toggle-bottom-terminal",
+                    icons::PANEL_BOTTOM,
+                    "Toggle bottom terminal",
+                    &theme,
+                    cx.listener(|this, _, window, cx| this.toggle_terminal(window, cx)),
+                )
+                .role(gpui::Role::Button)
+                .aria_label(tr(cx, msg::common::toggle_bottom_terminal))
+                .aria_selected(open)
+                .flex_none()
+                .when(open, |button| button.bg(theme.text.opacity(0.10)))
+            });
         // The left cluster: owner avatar, branch and copy (reference top bar).
         let identity = if !takeover && !on_canvas {
             self.render_top_bar_branch(&theme, cx)

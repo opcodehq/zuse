@@ -669,5 +669,4 @@ mod tests {
             .unwrap();
         assert!(broker.cached.lock().await.is_none());
     }
-
 }

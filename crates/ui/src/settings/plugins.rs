@@ -548,7 +548,9 @@ impl PluginsCard {
                 .call(methods::DISCOVER_LOCAL_MCP_SERVERS, json!({}))
                 .await;
             let _ = this.update(cx, |card, cx| {
-                let Some(import) = card.import.as_mut() else { return };
+                let Some(import) = card.import.as_mut() else {
+                    return;
+                };
                 import.loading = false;
                 match result.map(|v| {
                     serde_json::from_value::<Vec<zuse_protocol::plugin_setup::DetectedServer>>(
@@ -565,7 +567,9 @@ impl PluginsCard {
                             .collect();
                         import.servers = servers;
                     }
-                    Ok(Err(_)) => import.error = Some("This computer's MCP settings couldn't be read.".into()),
+                    Ok(Err(_)) => {
+                        import.error = Some("This computer's MCP settings couldn't be read.".into())
+                    }
                     Err(error) => import.error = Some(error.to_string()),
                 }
                 cx.notify();
@@ -582,7 +586,10 @@ impl PluginsCard {
         }
     }
     fn run_import(&mut self, cx: &mut Context<Self>) {
-        let Some(tenant) = self.plugins.snapshot["tenantId"].as_str().map(str::to_owned) else {
+        let Some(tenant) = self.plugins.snapshot["tenantId"]
+            .as_str()
+            .map(str::to_owned)
+        else {
             return;
         };
         let Some(import) = self.import.as_mut().filter(|i| i.submitted.is_none()) else {
@@ -592,7 +599,10 @@ impl PluginsCard {
         let mut skipped = 0;
         for index in import.selected.clone() {
             let request = import.servers[index]
-                .request(&tenant, zuse_protocol::plugins::PluginReturnTo::Desktop { port: 0 })
+                .request(
+                    &tenant,
+                    zuse_protocol::plugins::PluginReturnTo::Desktop { port: 0 },
+                )
                 .ok()
                 .and_then(|r| serde_json::to_value(r).ok());
             match request {
@@ -622,7 +632,11 @@ impl PluginsCard {
                 "Checking the agent apps on this computer.",
             )));
         } else if let Some(error) = &import.error {
-            card = card.child(widgets::card_row(theme, true).child(widgets::row_copy(theme, "Couldn't read local settings", error)));
+            card = card.child(widgets::card_row(theme, true).child(widgets::row_copy(
+                theme,
+                "Couldn't read local settings",
+                error,
+            )));
         } else if import.servers.is_empty() {
             card = card.child(widgets::card_row(theme, true).child(widgets::row_copy(
                 theme,
@@ -654,7 +668,11 @@ impl PluginsCard {
                         .cursor_pointer()
                         .role(gpui::Role::CheckBox)
                         .aria_label(SharedString::from(server.name.clone()))
-                        .aria_toggled(if on { gpui::Toggled::True } else { gpui::Toggled::False })
+                        .aria_toggled(if on {
+                            gpui::Toggled::True
+                        } else {
+                            gpui::Toggled::False
+                        })
                         .tab_index(0)
                         .on_click(cx.listener(move |this, _, _, cx| this.toggle_import(index, cx)))
                         .child(
@@ -664,7 +682,11 @@ impl PluginsCard {
                                 .child(widgets::row_title(theme, server.name.clone()))
                                 .child(widgets::meta_line(theme, meta)),
                         )
-                        .child(widgets::toggle_switch(theme, on, format!("plugins-import-{index}"))),
+                        .child(widgets::toggle_switch(
+                            theme,
+                            on,
+                            format!("plugins-import-{index}"),
+                        )),
                 );
             }
         }
@@ -1365,8 +1387,12 @@ impl PluginsCard {
                         ),
                     )
                     .child(
-                        row("plugins-import-local", crate::icons::PLUS, "Import from this computer")
-                            .on_click(cx.listener(|this, _, _, cx| this.open_import(cx))),
+                        row(
+                            "plugins-import-local",
+                            crate::icons::PLUS,
+                            "Import from this computer",
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| this.open_import(cx))),
                     )
                     .into_any_element(),
                 None,

@@ -54,7 +54,13 @@ fn memory() -> Option<(u64, u64)> {
     let field = |name: &str| {
         info.lines()
             .find_map(|line| line.strip_prefix(name))
-            .and_then(|rest| rest.trim().trim_end_matches("kB").trim().parse::<u64>().ok())
+            .and_then(|rest| {
+                rest.trim()
+                    .trim_end_matches("kB")
+                    .trim()
+                    .parse::<u64>()
+                    .ok()
+            })
             .map(|kib| kib * 1024)
     };
     let total = field("MemTotal:")?;

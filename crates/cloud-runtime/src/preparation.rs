@@ -15,14 +15,21 @@ pub async fn wait_startup_binding(
     mut updates: tokio::sync::watch::Receiver<zuse_protocol::cloud::CloudRuntimeBootstrap>,
     cancel: &tokio_util::sync::CancellationToken,
 ) -> anyhow::Result<()> {
-    if bootstrap.extra.get("startupBindingVersion") != Some(&serde_json::json!(2)) { return Ok(()); }
+    if bootstrap.extra.get("startupBindingVersion") != Some(&serde_json::json!(2)) {
+        return Ok(());
+    }
     loop {
         {
             let current = updates.borrow();
-            anyhow::ensure!(current.workspace_id == bootstrap.workspace_id
-                && current.runtime_generation == bootstrap.runtime_generation
-                && current.gateway_epoch == bootstrap.gateway_epoch, "runtime_authority_fenced");
-            if current.extra.get("startupBindingCommitted") == Some(&serde_json::json!(true)) { return Ok(()); }
+            anyhow::ensure!(
+                current.workspace_id == bootstrap.workspace_id
+                    && current.runtime_generation == bootstrap.runtime_generation
+                    && current.gateway_epoch == bootstrap.gateway_epoch,
+                "runtime_authority_fenced"
+            );
+            if current.extra.get("startupBindingCommitted") == Some(&serde_json::json!(true)) {
+                return Ok(());
+            }
         }
         tokio::select! {
             _ = cancel.cancelled() => anyhow::bail!("runtime_preparation_cancelled"),
@@ -82,17 +89,30 @@ mod tests {
         let (started, observed) = oneshot::channel();
         let (release, paused) = oneshot::channel();
         let task = tokio::spawn(access_with_progress(
-            async { paused.await.unwrap(); Ok(()) },
-            async { started.send(()).unwrap(); Err::<(), _>(anyhow::anyhow!("access_failed")) },
+            async {
+                paused.await.unwrap();
+                Ok(())
+            },
+            async {
+                started.send(()).unwrap();
+                Err::<(), _>(anyhow::anyhow!("access_failed"))
+            },
         ));
-        timeout(Duration::from_secs(1), observed).await.unwrap().unwrap();
+        timeout(Duration::from_secs(1), observed)
+            .await
+            .unwrap()
+            .unwrap();
         assert!(!task.is_finished());
         release.send(()).unwrap();
-        assert_eq!(task.await.unwrap().unwrap().unwrap_err().to_string(), "access_failed");
+        assert_eq!(
+            task.await.unwrap().unwrap().unwrap_err().to_string(),
+            "access_failed"
+        );
         let rejected = access_with_progress(
             async { anyhow::bail!("progress_fenced") },
             std::future::pending::<anyhow::Result<()>>(),
-        ).await;
+        )
+        .await;
         assert_eq!(rejected.unwrap_err().to_string(), "progress_fenced");
     }
 

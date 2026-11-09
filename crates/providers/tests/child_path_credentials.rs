@@ -17,13 +17,19 @@ async fn credential_injected_task_path_reaches_the_real_shell_child() {
     std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o700)).unwrap();
 
     let mut child = Command::new("/bin/sh");
-    ChildEnvironment::new("PATH", Zeroizing::new(task_bin.to_str().unwrap().to_owned()))
-        .apply(&mut child);
+    ChildEnvironment::new(
+        "PATH",
+        Zeroizing::new(task_bin.to_str().unwrap().to_owned()),
+    )
+    .apply(&mut child);
     // This is the same order used by Codex, Claude and ACP after authority
     // credentials/workload settings have been applied to the native command.
     zuse_providers::compose_child_path(&mut child, &vendor_bin.join("agent"));
     let output = child.args(["-c", "gh"]).output().await.unwrap();
 
     assert!(output.status.success());
-    assert_eq!(String::from_utf8(output.stdout).unwrap(), "PRIVATE_TASK_GH\n");
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "PRIVATE_TASK_GH\n"
+    );
 }

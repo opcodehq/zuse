@@ -26,8 +26,6 @@ pub mod creation;
 pub mod deletion;
 mod effects;
 mod fast_start;
-mod startup_binding;
-mod statement_batch;
 pub mod github;
 mod grant_receipts;
 pub mod grants;
@@ -43,6 +41,8 @@ pub mod recreation;
 pub mod repair;
 pub mod restore;
 pub mod scope;
+mod startup_binding;
+mod statement_batch;
 pub mod task_commands;
 pub mod task_history;
 pub mod tool_output;
@@ -123,7 +123,7 @@ pub struct RuntimeControl {
     scope_authority: std::sync::OnceLock<Arc<scope::ScopeAuthority>>,
     pool: PgPool,
     admission_batch_schema: tokio::sync::OnceCell<bool>,
-    startup_schema: tokio::sync::OnceCell<(bool,bool,bool)>,
+    startup_schema: tokio::sync::OnceCell<(bool, bool, bool)>,
     pub(crate) project_cache_inflight: std::sync::atomic::AtomicBool,
     pub(crate) project_cache_control: crate::project_caches::worker::CacheControl,
     task_command_schema_ready: tokio::sync::OnceCell<bool>,
@@ -198,12 +198,14 @@ impl RuntimeControl {
         if row["request_config"]["managedCandidateSha256"].is_null() {
             return Ok(());
         }
-        let pin = self.staging_candidate.as_ref()
+        let pin = self
+            .staging_candidate
+            .as_ref()
             .ok_or_else(|| ApiError::forbidden("staging_managed_base_candidate_not_selected"))?;
         if self.statement_batch_available().await? {
-            return self.candidate_row_allowed_batched(pin,row,now).await;
+            return self.candidate_row_allowed_batched(pin, row, now).await;
         }
-        pin.row_allowed(&self.pool,row,now).await
+        pin.row_allowed(&self.pool, row, now).await
     }
     pub fn with_credential_authority(
         mut self,
@@ -222,15 +224,17 @@ impl RuntimeControl {
             .max_connections(if fast_start { 8 } else { 4 })
             .min_connections(if fast_start { 2 } else { 0 })
             .test_before_acquire(!fast_start)
-            .before_acquire(move |connection, metadata| Box::pin(async move {
-                // A recently used connection need not pay another network RTT
-                // before every query. Idle connections still get a liveness test;
-                // durable transaction/effect fencing handles failures during use.
-                if fast_start && metadata.idle_for >= Duration::from_secs(15) {
-                    connection.ping().await?;
-                }
-                Ok(true)
-            }))
+            .before_acquire(move |connection, metadata| {
+                Box::pin(async move {
+                    // A recently used connection need not pay another network RTT
+                    // before every query. Idle connections still get a liveness test;
+                    // durable transaction/effect fencing handles failures during use.
+                    if fast_start && metadata.idle_for >= Duration::from_secs(15) {
+                        connection.ping().await?;
+                    }
+                    Ok(true)
+                })
+            })
             .acquire_timeout(Duration::from_secs(5))
             .after_connect(|c, _| {
                 Box::pin(async move {
@@ -291,7 +295,10 @@ impl RuntimeControl {
             .ready()
             .await
             .map_err(|error| anyhow::anyhow!("Runtime-control is not ready ({})", error.code))?;
-        control.statement_batch_available().await.map_err(|error|anyhow::anyhow!(error.code))?;
+        control
+            .statement_batch_available()
+            .await
+            .map_err(|error| anyhow::anyhow!(error.code))?;
         Ok(Arc::new(control))
     }
     pub fn from_pool(pool: PgPool, master: MasterKey, signer: TicketSigner) -> Self {
@@ -434,7 +441,9 @@ impl RuntimeControl {
             .internal_codex_tool_observations(
                 &early,
                 env::var("ZUSE_DEPLOYMENT_ENVIRONMENT").ok().as_deref(),
-                env::var("ZUSE_CLOUD_INTERNAL_CODEX_OBSERVATION_OWNER").ok().as_deref(),
+                env::var("ZUSE_CLOUD_INTERNAL_CODEX_OBSERVATION_OWNER")
+                    .ok()
+                    .as_deref(),
                 now,
             )
             .await;
@@ -442,7 +451,9 @@ impl RuntimeControl {
             .internal_codex_tool_observations(
                 &early,
                 env::var("ZUSE_DEPLOYMENT_ENVIRONMENT").ok().as_deref(),
-                env::var("ZUSE_CLOUD_INTERNAL_CODEX_MEMORY_TRANSPORT_OWNER").ok().as_deref(),
+                env::var("ZUSE_CLOUD_INTERNAL_CODEX_MEMORY_TRANSPORT_OWNER")
+                    .ok()
+                    .as_deref(),
                 now,
             )
             .await;
@@ -542,8 +553,12 @@ impl RuntimeControl {
                 json!(receipt.runtime_credential_expires_at_ms);
             config["runtimeBootstrapReceipt"] =
                 serde_json::to_value(&receipt).map_err(|_| rejected())?;
-            if self.fast_start_accounts.iter().any(|account| account == owner)
-                && rpc_protocol == zuse_protocol::cloud_gateway::RUST_RPC {
+            if self
+                .fast_start_accounts
+                .iter()
+                .any(|account| account == owner)
+                && rpc_protocol == zuse_protocol::cloud_gateway::RUST_RPC
+            {
                 startup_binding::prepare(&mut config, &row, generation, now)?;
             }
             let mut timings = config
@@ -668,7 +683,8 @@ impl RuntimeControl {
             }
             if startup_binding::negotiated(&config, &row, generation) {
                 response["startupBindingVersion"] = json!(2);
-                response["storageEnrollmentId"] = config["rustStorageEnrollment"]["enrollmentId"].clone();
+                response["storageEnrollmentId"] =
+                    config["rustStorageEnrollment"]["enrollmentId"].clone();
             }
             response["internalCodexToolObservations"] =
                 json!(internal_observations && internal_observations::same_binding(&early, &row));
@@ -678,7 +694,8 @@ impl RuntimeControl {
             if config["agent"] == "codex" && config["managedBaseReadiness"] == "uncertified-staging"
             {
                 let admission = lifecycle::memory_authority::pilot_admission(
-                    &row, response["internalCodexMemoryTransportReset"] == true,
+                    &row,
+                    response["internalCodexMemoryTransportReset"] == true,
                 );
                 sqlx::query("UPDATE api_cloud_workspaces SET request_config=jsonb_set(request_config,'{rustMemoryTransportAdmission}',$2) WHERE workspace_id=$1")
                     .bind(id).bind(admission).execute(&mut *tx).await?;
@@ -772,18 +789,31 @@ impl RuntimeControl {
         self.runtime_scope_access(id, credential, now).await?;
         let mut tx = self.pool.begin().await?;
         let (row, generation, epoch) = locked_workspace(&mut tx, id).await?;
-        if row["runtime_credential_hash"].as_str().is_none_or(|h| !equal(h, &hash(credential)))
-            || row["request_config"]["runtimeCredentialExpiresAtMs"].as_i64().unwrap_or(0) <= now {
+        if row["runtime_credential_hash"]
+            .as_str()
+            .is_none_or(|h| !equal(h, &hash(credential)))
+            || row["request_config"]["runtimeCredentialExpiresAtMs"]
+                .as_i64()
+                .unwrap_or(0)
+                <= now
+        {
             return Err(ApiError::unauthorized("workspace_runtime_fenced"));
         }
-        let (_, enrollment) = self.enroll_storage_tx(&mut tx, &row, generation, epoch, request, now).await?;
+        let (_, enrollment) = self
+            .enroll_storage_tx(&mut tx, &row, generation, epoch, request, now)
+            .await?;
         tx.commit().await?;
         Ok(json!({"enrollmentId":enrollment}))
     }
 
     async fn enroll_storage_tx(
-        &self, tx: &mut Transaction<'_, Postgres>, row: &Value, generation: i64,
-        epoch: i64, request: zuse_protocol::cloud::CloudStorageEnrollment, now: i64,
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        row: &Value,
+        generation: i64,
+        epoch: i64,
+        request: zuse_protocol::cloud::CloudStorageEnrollment,
+        now: i64,
     ) -> Result<(Value, String), ApiError> {
         use zuse_protocol::cloud::CloudStoragePhase;
         if request.capabilities.as_ref().is_some_and(|caps| {
@@ -1084,10 +1114,15 @@ impl RuntimeControl {
         credential: &str,
         now: i64,
     ) -> Result<crate::gateway::Grant, ApiError> {
-        self.gateway_authorize_with_storage(id, protocol, credential, now, None).await
+        self.gateway_authorize_with_storage(id, protocol, credential, now, None)
+            .await
     }
     pub async fn gateway_authorize_with_storage(
-        &self, id: &str, protocol: &str, credential: &str, now: i64,
+        &self,
+        id: &str,
+        protocol: &str,
+        credential: &str,
+        now: i64,
         storage: Option<zuse_protocol::cloud::CloudStorageEnrollment>,
     ) -> Result<crate::gateway::Grant, ApiError> {
         let early: Value = sqlx::query_scalar(
@@ -1164,7 +1199,8 @@ impl RuntimeControl {
         let expected_rpc = negotiate_rpc(
             &row["request_config"],
             row["request_config"]["runtimeRpcProtocol"].as_str(),
-        )?.to_owned();
+        )?
+        .to_owned();
         if (expected_rpc == zuse_protocol::cloud_gateway::RUST_RPC)
             != (protocol == zuse_protocol::cloud_gateway::RUST_PROTOCOL)
         {
@@ -1202,10 +1238,14 @@ impl RuntimeControl {
             if claims["role"] != "runtime"
                 || expected_rpc != zuse_protocol::cloud_gateway::RUST_RPC
                 || !startup_binding::negotiated(&row["request_config"], &row, generation)
-                || storage.phase != zuse_protocol::cloud::CloudStoragePhase::Commit {
+                || storage.phase != zuse_protocol::cloud::CloudStoragePhase::Commit
+            {
                 return Err(ApiError::conflict("runtime_storage_enrollment_rejected"));
             }
-            row = self.enroll_storage_tx(&mut tx, &row, generation, epoch, storage, now).await?.0;
+            row = self
+                .enroll_storage_tx(&mut tx, &row, generation, epoch, storage, now)
+                .await?
+                .0;
         }
         if claims["role"] == "runtime"
             && expected_rpc == zuse_protocol::cloud_gateway::RUST_RPC
@@ -1418,16 +1458,22 @@ async fn locked_workspace_with(
     // lock a workspace before its Rust ownership/generation fence is held.
     // Keep both original lock modes while paying one network round trip.
     let statement = match mode {
-        WorkspaceLock::Exclusive => "WITH owner AS MATERIALIZED (SELECT generation FROM zuse_rust_control_owners WHERE resource_kind='workspace' AND resource_id=$1 AND backend='rust' FOR SHARE), workspace AS MATERIALIZED (SELECT to_jsonb(w) AS row FROM api_cloud_workspaces w WHERE workspace_id=$1 AND EXISTS(SELECT 1 FROM owner) FOR UPDATE) SELECT (SELECT generation FROM owner),(SELECT row FROM workspace)",
-        WorkspaceLock::Command => "WITH owner AS MATERIALIZED (SELECT generation FROM zuse_rust_control_owners WHERE resource_kind='workspace' AND resource_id=$1 AND backend='rust' FOR SHARE), workspace AS MATERIALIZED (SELECT to_jsonb(w) AS row FROM api_cloud_workspaces w WHERE workspace_id=$1 AND EXISTS(SELECT 1 FROM owner) FOR NO KEY UPDATE) SELECT (SELECT generation FROM owner),(SELECT row FROM workspace)",
-        WorkspaceLock::Artifact => "WITH owner AS MATERIALIZED (SELECT generation FROM zuse_rust_control_owners WHERE resource_kind='workspace' AND resource_id=$1 AND backend='rust' FOR SHARE), workspace AS MATERIALIZED (SELECT to_jsonb(w) AS row FROM api_cloud_workspaces w WHERE workspace_id=$1 AND EXISTS(SELECT 1 FROM owner) FOR KEY SHARE) SELECT (SELECT generation FROM owner),(SELECT row FROM workspace)",
+        WorkspaceLock::Exclusive => {
+            "WITH owner AS MATERIALIZED (SELECT generation FROM zuse_rust_control_owners WHERE resource_kind='workspace' AND resource_id=$1 AND backend='rust' FOR SHARE), workspace AS MATERIALIZED (SELECT to_jsonb(w) AS row FROM api_cloud_workspaces w WHERE workspace_id=$1 AND EXISTS(SELECT 1 FROM owner) FOR UPDATE) SELECT (SELECT generation FROM owner),(SELECT row FROM workspace)"
+        }
+        WorkspaceLock::Command => {
+            "WITH owner AS MATERIALIZED (SELECT generation FROM zuse_rust_control_owners WHERE resource_kind='workspace' AND resource_id=$1 AND backend='rust' FOR SHARE), workspace AS MATERIALIZED (SELECT to_jsonb(w) AS row FROM api_cloud_workspaces w WHERE workspace_id=$1 AND EXISTS(SELECT 1 FROM owner) FOR NO KEY UPDATE) SELECT (SELECT generation FROM owner),(SELECT row FROM workspace)"
+        }
+        WorkspaceLock::Artifact => {
+            "WITH owner AS MATERIALIZED (SELECT generation FROM zuse_rust_control_owners WHERE resource_kind='workspace' AND resource_id=$1 AND backend='rust' FOR SHARE), workspace AS MATERIALIZED (SELECT to_jsonb(w) AS row FROM api_cloud_workspaces w WHERE workspace_id=$1 AND EXISTS(SELECT 1 FROM owner) FOR KEY SHARE) SELECT (SELECT generation FROM owner),(SELECT row FROM workspace)"
+        }
     };
     let (generation, row): (Option<i64>, Option<Value>) = sqlx::query_as(statement)
         .bind(id)
         .fetch_one(&mut **tx)
         .await?;
-    let owner_generation = generation
-        .ok_or_else(|| ApiError::unauthorized("workspace_runtime_fenced"))?;
+    let owner_generation =
+        generation.ok_or_else(|| ApiError::unauthorized("workspace_runtime_fenced"))?;
     let row = row.ok_or_else(rejected)?;
     let generation = row["request_config"]["runtimeGeneration"]
         .as_i64()
@@ -1463,7 +1509,11 @@ pub(super) fn fence_reason(row: &Value, credential: &str, now: i64) -> &'static 
         .is_none_or(|h| !equal(h, &hash(credential)))
     {
         "credential_mismatch"
-    } else if row["request_config"]["runtimeCredentialExpiresAtMs"].as_i64().unwrap_or(0) <= now {
+    } else if row["request_config"]["runtimeCredentialExpiresAtMs"]
+        .as_i64()
+        .unwrap_or(0)
+        <= now
+    {
         "credential_expired"
     } else if !enrollment_matches(row) {
         "bootstrap_receipt_mismatch"

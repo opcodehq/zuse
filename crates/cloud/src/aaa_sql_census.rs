@@ -77,7 +77,12 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for Census {
         let mut visit = SummaryVisit::default();
         event.record(&mut visit);
         let summary = visit.0.unwrap_or_default().to_lowercase();
-        let kind = summary.split_whitespace().next().unwrap_or("?").trim_matches('"').to_owned();
+        let kind = summary
+            .split_whitespace()
+            .next()
+            .unwrap_or("?")
+            .trim_matches('"')
+            .to_owned();
         let mut tally = TALLY.lock().unwrap();
         let t = tally.entry(key).or_default();
         t.statements += 1;

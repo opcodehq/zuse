@@ -25,10 +25,10 @@ pub mod engine;
 #[cfg(feature = "engine")]
 pub mod task_progress;
 
-pub mod repository;
 pub mod preparation;
-pub mod workspace_wait;
+pub mod repository;
 pub mod startup;
+pub mod workspace_wait;
 
 pub mod environment;
 pub mod tool_output;

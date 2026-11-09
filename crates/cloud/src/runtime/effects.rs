@@ -130,35 +130,39 @@ async fn write_created_result(
     operation: &str,
     result: &Result<crate::providers::Machine, crate::providers::ProviderError>,
 ) -> Result<(), ApiError> {
-        let (state, id) = match result {
-            Ok(m) => ("confirmed", Some(m.id.as_str())),
-            Err(crate::providers::ProviderError::Rejected) => ("rejected", None),
-            Err(_) => ("unknown", None),
-        };
-        sqlx::query("UPDATE zuse_rust_provider_creates SET outcome=$2,machine_id=COALESCE($3,machine_id),updated_at=$4 WHERE operation_id=$1").bind(operation).bind(state).bind(id).bind(chrono::Utc::now().timestamp_millis()).execute(pool).await?;
+    let (state, id) = match result {
+        Ok(m) => ("confirmed", Some(m.id.as_str())),
+        Err(crate::providers::ProviderError::Rejected) => ("rejected", None),
+        Err(_) => ("unknown", None),
+    };
+    sqlx::query("UPDATE zuse_rust_provider_creates SET outcome=$2,machine_id=COALESCE($3,machine_id),updated_at=$4 WHERE operation_id=$1").bind(operation).bind(state).bind(id).bind(chrono::Utc::now().timestamp_millis()).execute(pool).await?;
     Ok(())
 }
 
 impl RuntimeControl {
     pub(super) async fn allocation_created_identity(
-        &self, workspace: &str, operation: &str, name: &str,
+        &self,
+        workspace: &str,
+        operation: &str,
+        name: &str,
     ) -> Result<Option<String>, ApiError> {
         if self.startup_schema.get().is_some_and(|schema| schema.2) {
-            read_created_identity(&self.pool,workspace,operation,name).await
+            read_created_identity(&self.pool, workspace, operation, name).await
         } else {
-            created_identity(&self.pool,workspace,operation,name).await
+            created_identity(&self.pool, workspace, operation, name).await
         }
     }
     pub(super) async fn record_allocation_result(
-        &self, operation: &str,
+        &self,
+        operation: &str,
         result: &Result<crate::providers::Machine, crate::providers::ProviderError>,
     ) -> Result<(), ApiError> {
         // Cache table availability only. Read and persist the original receipt
         // on every call; no ownership, outcome or authorization is cached.
         if self.startup_schema.get().is_some_and(|schema| schema.2) {
-            write_created_result(&self.pool,operation,result).await
+            write_created_result(&self.pool, operation, result).await
         } else {
-            created(&self.pool,operation,result).await
+            created(&self.pool, operation, result).await
         }
     }
 }

@@ -139,7 +139,8 @@ impl DetectedServer {
         let command = self.command.clone().ok_or(LOCAL_CONFIG_INVALID)?;
         LocalServerDraft {
             name: self.name.clone(),
-            config: serde_json::json!({"command": command, "args": self.args, "env": self.env}).to_string(),
+            config: serde_json::json!({"command": command, "args": self.args, "env": self.env})
+                .to_string(),
         }
         .request(tenant)
     }

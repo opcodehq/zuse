@@ -42,10 +42,14 @@ impl GuideStep {
     }
     fn summary(self) -> &'static str {
         match self {
-            GuideStep::Github => "Install the Zuse app on the accounts whose code agents should work on.",
+            GuideStep::Github => {
+                "Install the Zuse app on the accounts whose code agents should work on."
+            }
             GuideStep::Repositories => "Pick the repositories cloud computers can check out.",
             GuideStep::Agent => "Sign in with Codex, Claude or Grok so tasks run on your own plan.",
-            GuideStep::Machine => "Optional: tools, packages and instructions every repository gets, built into your image.",
+            GuideStep::Machine => {
+                "Optional: tools, packages and instructions every repository gets, built into your image."
+            }
             GuideStep::Environment => "Optional: a repository's own setup commands and services.",
         }
     }
@@ -125,17 +129,13 @@ impl RepositoryPanel {
         let required = GuideStep::ALL.iter().filter(|s| !s.optional()).count();
         let mut bar = row().gap(px(4.)).mt(px(10.));
         for step in GuideStep::ALL.iter().filter(|s| !s.optional()) {
-            bar = bar.child(
-                div()
-                    .flex_1()
-                    .h(px(3.))
-                    .rounded_full()
-                    .bg(if self.guide_step_done(*step) {
-                        lime()
-                    } else {
-                        palette::rgb(BORDER).into()
-                    }),
-            );
+            bar = bar.child(div().flex_1().h(px(3.)).rounded_full().bg(
+                if self.guide_step_done(*step) {
+                    lime()
+                } else {
+                    palette::rgb(BORDER).into()
+                },
+            ));
         }
         div()
             .px(px(10.))
@@ -183,9 +183,8 @@ impl RepositoryPanel {
             .text_size(px(10.))
             .font_weight(FontWeight::MEDIUM);
         if done {
-            base.bg(lime().opacity(0.16)).child(
-                icon("check").size(px(11.)).text_color(lime()),
-            )
+            base.bg(lime().opacity(0.16))
+                .child(icon("check").size(px(11.)).text_color(lime()))
         } else if current {
             base.border_1()
                 .border_color(lime())
@@ -212,7 +211,10 @@ impl RepositoryPanel {
                 None
             };
             let row_view = div()
-                .id(SharedString::from(format!("cloud-guide-step-{}", step.slug())))
+                .id(SharedString::from(format!(
+                    "cloud-guide-step-{}",
+                    step.slug()
+                )))
                 .role(Role::Tab)
                 .aria_label(step.title())
                 .aria_selected(selected)
@@ -223,7 +225,9 @@ impl RepositoryPanel {
                 .px(px(12.))
                 .py(px(9.))
                 .cursor_pointer()
-                .when(index > 0, |v| v.border_t_1().border_color(palette::rgb(BORDER)))
+                .when(index > 0, |v| {
+                    v.border_t_1().border_color(palette::rgb(BORDER))
+                })
                 .when(selected, |v| v.bg(s::frame_bg().opacity(0.6)))
                 .hover(|v| v.bg(s::frame_bg().opacity(0.4)))
                 .on_click(cx.listener(move |this, _, _, cx| this.guide_go(step, cx)))
@@ -245,7 +249,11 @@ impl RepositoryPanel {
         let last = current.index() + 1 == GuideStep::ALL.len();
         let ready = self.guide_step_done(current) || current.optional();
         let next_label = if last {
-            if self.guide_required_done() { "Start using Cloud" } else { "Finish later" }
+            if self.guide_required_done() {
+                "Start using Cloud"
+            } else {
+                "Finish later"
+            }
         } else if current.optional() && !self.guide_step_done(current) {
             "Skip"
         } else {
@@ -259,17 +267,18 @@ impl RepositoryPanel {
                     .on_click(cx.listener(move |this, _, _, cx| this.guide_go(previous, cx))),
             );
         }
-        let continue_button = crate::styling::dither_action("cloud-guide-continue", next_label, ready, true)
-            .tab_index(if ready { 0 } else { -1 })
-            .when(ready, |b| {
-                b.on_click(cx.listener(move |this, _, _, cx| {
-                    if last {
-                        this.guide_close(cx);
-                    } else {
-                        this.guide_go(GuideStep::ALL[current.index() + 1], cx);
-                    }
-                }))
-            });
+        let continue_button =
+            crate::styling::dither_action("cloud-guide-continue", next_label, ready, true)
+                .tab_index(if ready { 0 } else { -1 })
+                .when(ready, |b| {
+                    b.on_click(cx.listener(move |this, _, _, cx| {
+                        if last {
+                            this.guide_close(cx);
+                        } else {
+                            this.guide_go(GuideStep::ALL[current.index() + 1], cx);
+                        }
+                    }))
+                });
         actions = actions.child(continue_button);
         row()
             .items_center()
@@ -294,7 +303,9 @@ impl RepositoryPanel {
                 div()
                     .text_size(px(11.))
                     .text_color(palette::rgb(MUTED))
-                    .when(!ready, |v| v.child(SharedString::from(waiting_copy(current)))),
+                    .when(!ready, |v| {
+                        v.child(SharedString::from(waiting_copy(current)))
+                    }),
             )
             .child(actions)
     }
@@ -331,13 +342,27 @@ impl RepositoryPanel {
             "Setup",
             None,
             Some(
-                cs::button("cloud-guide-open", if complete { "Review setup" } else { "Continue setup" }, !complete, false, false)
-                    .on_click(cx.listener(|this, _, _, cx| this.guide_reopen(cx)))
-                    .into_any_element(),
+                cs::button(
+                    "cloud-guide-open",
+                    if complete {
+                        "Review setup"
+                    } else {
+                        "Continue setup"
+                    },
+                    !complete,
+                    false,
+                    false,
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.guide_reopen(cx)))
+                .into_any_element(),
             ),
             cs::setting_row(
                 true,
-                if complete { "Cloud is ready" } else { "Setup isn't finished" },
+                if complete {
+                    "Cloud is ready"
+                } else {
+                    "Setup isn't finished"
+                },
                 if complete {
                     "GitHub, repositories and a coding agent are connected."
                 } else {

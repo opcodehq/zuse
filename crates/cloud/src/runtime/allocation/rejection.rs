@@ -106,16 +106,24 @@ impl RuntimeControl {
         operation: &Value,
     ) -> Result<(), ApiError> {
         let mut tx = self.pool.begin().await?;
-        let (row, generation, lease_until, observed_operation, capacity_observation) =
-            if let Some(snapshot) = self.allocation_dispatch_snapshot(&mut tx, job).await? {
-                (snapshot.workspace, snapshot.generation, snapshot.capacity["leaseUntil"].as_i64(),
-                    Some(snapshot.operation), Some(snapshot.capacity))
-            } else {
-                let (row, generation, _) = locked_workspace(&mut tx, &job.resource_id).await?;
-                let lease_until:Option<i64>=sqlx::query_scalar("SELECT lease_expires_at FROM zuse_rust_jobs WHERE job_id=$1 AND lease_token=$2 AND state='running' AND lease_expires_at>$3 AND resource_generation=$4 FOR UPDATE")
+        let (row, generation, lease_until, observed_operation, capacity_observation) = if let Some(
+            snapshot,
+        ) =
+            self.allocation_dispatch_snapshot(&mut tx, job).await?
+        {
+            (
+                snapshot.workspace,
+                snapshot.generation,
+                snapshot.capacity["leaseUntil"].as_i64(),
+                Some(snapshot.operation),
+                Some(snapshot.capacity),
+            )
+        } else {
+            let (row, generation, _) = locked_workspace(&mut tx, &job.resource_id).await?;
+            let lease_until:Option<i64>=sqlx::query_scalar("SELECT lease_expires_at FROM zuse_rust_jobs WHERE job_id=$1 AND lease_token=$2 AND state='running' AND lease_expires_at>$3 AND resource_generation=$4 FOR UPDATE")
                     .bind(&job.id).bind(&job.lease_token).bind(clock_ms()).bind(generation).fetch_optional(&mut *tx).await?;
-                (row, generation, lease_until, None, None)
-            };
+            (row, generation, lease_until, None, None)
+        };
         let now = clock_ms();
         if lease_until.is_none()
             || generation != job.generation
@@ -128,7 +136,9 @@ impl RuntimeControl {
         {
             return Err(ApiError::conflict("cloud_allocation_fenced"));
         }
-        let current:Value=if let Some(operation)=observed_operation { operation } else {
+        let current: Value = if let Some(operation) = observed_operation {
+            operation
+        } else {
             sqlx::query_scalar("SELECT to_jsonb(a) FROM zuse_rust_allocations a WHERE operation_id=$1 AND workspace_id=$2 AND generation=$3 FOR UPDATE")
                 .bind(operation["operation_id"].as_str()).bind(&job.resource_id).bind(generation).fetch_one(&mut *tx).await?
         };
@@ -146,7 +156,9 @@ impl RuntimeControl {
         {
             return Err(ApiError::conflict("cloud_allocation_fenced"));
         }
-        let journal_ready: bool = if capacity_observation.is_some() { true } else {
+        let journal_ready: bool = if capacity_observation.is_some() {
+            true
+        } else {
             sqlx::query_scalar("SELECT to_regclass('zuse_rust_provider_creates') IS NOT NULL")
                 .fetch_one(&mut *tx)
                 .await?
@@ -155,8 +167,11 @@ impl RuntimeControl {
             tx.commit().await?;
             return Ok(());
         }
-        let journal: Option<Value> = if let Some(observed)=&capacity_observation {
-            observed.get("journal").filter(|journal| !journal.is_null()).cloned()
+        let journal: Option<Value> = if let Some(observed) = &capacity_observation {
+            observed
+                .get("journal")
+                .filter(|journal| !journal.is_null())
+                .cloned()
         } else {
             sqlx::query_scalar("SELECT to_jsonb(c) FROM zuse_rust_provider_creates c WHERE operation_id=$1 FOR UPDATE")
                 .bind(current["operation_id"].as_str()).fetch_optional(&mut *tx).await?
@@ -197,7 +212,8 @@ impl RuntimeControl {
                 "cloud_provider_allocation_outcome_unknown",
             ));
         }
-        self.allocation_snapshot_capacity(&mut tx, &row, capacity_observation.as_ref(), now).await?;
+        self.allocation_snapshot_capacity(&mut tx, &row, capacity_observation.as_ref(), now)
+            .await?;
         if prior_rejected {
             sqlx::query("UPDATE zuse_rust_provider_creates SET outcome='pending',updated_at=$2 WHERE operation_id=$1 AND outcome='rejected' AND machine_id IS NULL").bind(current["operation_id"].as_str()).bind(now).execute(&mut *tx).await?;
         } else {

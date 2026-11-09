@@ -204,7 +204,8 @@ impl RuntimeControl {
             && !blocked(row)
             && !super::preparation_hold::active(row, operation);
         let mut current = if saved(row, &request, source) || !unbound {
-            self.allocation_scope_access(row, operation, clock_ms()).await?;
+            self.allocation_scope_access(row, operation, clock_ms())
+                .await?;
             self.initial_boot_allocation_fence(job, &request, source, name, None)
                 .await?
         } else {
@@ -230,7 +231,8 @@ impl RuntimeControl {
         }
         for attempt in 0..2 {
             if let Some(proof) = overlapped.take() {
-                self.allocation_scope_access(&current, operation, clock_ms()).await?;
+                self.allocation_scope_access(&current, operation, clock_ms())
+                    .await?;
                 current = self
                     .initial_boot_allocation_fence(job, &request, source, name, proof.as_ref())
                     .await?;
@@ -256,7 +258,8 @@ impl RuntimeControl {
                 )
                 .await
                 .map_err(provider_error)?;
-            self.allocation_scope_access(&current, operation, clock_ms()).await?;
+            self.allocation_scope_access(&current, operation, clock_ms())
+                .await?;
             current = self
                 .initial_boot_allocation_fence(job, &request, source, name, proof.as_ref())
                 .await?;

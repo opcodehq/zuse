@@ -336,16 +336,16 @@ impl WorkspaceView {
             }
         } else {
             if !self.cloud_controller {
-            choices.push((
-                crate::localization::message(
-                    cx,
-                    zuse_i18n::messages::chat::computer_switcher_this_computer,
-                ),
-                "monitor",
-                Pick::Computer,
-                !self.cloud.mode,
-                None,
-            ));
+                choices.push((
+                    crate::localization::message(
+                        cx,
+                        zuse_i18n::messages::chat::computer_switcher_this_computer,
+                    ),
+                    "monitor",
+                    Pick::Computer,
+                    !self.cloud.mode,
+                    None,
+                ));
             }
             let project = if self.cloud.mode {
                 self.cloud

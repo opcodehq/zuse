@@ -380,16 +380,24 @@ impl RuntimeControl {
         let mut tx = self.pool.begin().await?;
         let (row, _, _) = locked_workspace(&mut tx, workspace).await?;
         super::mailbox::runtime_auth(&row, credential, at)?;
-        let generation=row["request_config"]["runtimeGeneration"].as_i64().unwrap_or(1);
-        let fence=super::mailbox::destruction_fence(&row);
+        let generation = row["request_config"]["runtimeGeneration"]
+            .as_i64()
+            .unwrap_or(1);
+        let fence = super::mailbox::destruction_fence(&row);
         tx.commit().await?;
-        self.scope_access(workspace,None,true).await?;
-        let result = self.read_asset(required(&row,"account_id")?,workspace,id).await?;
-        self.scope_access(workspace,None,true).await?;
-        let mut tx=self.pool.begin().await?;
-        let (current,current_generation,_)=locked_workspace(&mut tx,workspace).await?;
-        super::mailbox::runtime_auth(&current,credential,chrono::Utc::now().timestamp_millis())?;
-        if current_generation!=generation||super::mailbox::destruction_fence(&current)!=fence||current["account_id"]!=row["account_id"]||current["request_config"]["sharingPolicy"]!=row["request_config"]["sharingPolicy"] {
+        self.scope_access(workspace, None, true).await?;
+        let result = self
+            .read_asset(required(&row, "account_id")?, workspace, id)
+            .await?;
+        self.scope_access(workspace, None, true).await?;
+        let mut tx = self.pool.begin().await?;
+        let (current, current_generation, _) = locked_workspace(&mut tx, workspace).await?;
+        super::mailbox::runtime_auth(&current, credential, chrono::Utc::now().timestamp_millis())?;
+        if current_generation != generation
+            || super::mailbox::destruction_fence(&current) != fence
+            || current["account_id"] != row["account_id"]
+            || current["request_config"]["sharingPolicy"] != row["request_config"]["sharingPolicy"]
+        {
             return Err(ApiError::conflict("cloud_asset_workspace_fenced"));
         }
         tx.commit().await?;

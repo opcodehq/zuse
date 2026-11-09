@@ -502,58 +502,201 @@ pub(super) async fn exercise<F: Fn(&str) -> Value>(
 // Native steering transfers inference ownership onto a control transport lane.
 // Exercise real encrypted admission, runtime lease and authenticated progress.
 async fn steer_inference_remains_active<F: Fn(&str) -> Value>(
-    control: &Arc<RuntimeControl>, pool: &PgPool, now: i64, prepare: &F,
+    control: &Arc<RuntimeControl>,
+    pool: &PgPool,
+    now: i64,
+    prepare: &F,
 ) {
     use zuse_protocol::cloud_task_commands::{ExecutionState, Progress};
     let id = "steer-inference";
     let session = format!("session-{id}");
-    sqlx::query_scalar::<_, Value>(WRITE_V2.as_str()).bind(prepare(id)).fetch_one(pool).await.unwrap();
-    online(pool,id,now).await;
+    sqlx::query_scalar::<_, Value>(WRITE_V2.as_str())
+        .bind(prepare(id))
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    online(pool, id, now).await;
     // Prior Run has already transferred ownership at the canonical steer boundary.
-    sqlx::query("UPDATE zuse_rust_task_command_execution SET state='cancelled' WHERE workspace_id=$1").bind(id).execute(pool).await.unwrap();
+    sqlx::query(
+        "UPDATE zuse_rust_task_command_execution SET state='cancelled' WHERE workspace_id=$1",
+    )
+    .bind(id)
+    .execute(pool)
+    .await
+    .unwrap();
     sqlx::query("UPDATE zuse_rust_mailbox_commands SET state='applied',ever_leased=true WHERE workspace_id=$1").bind(id).execute(pool).await.unwrap();
-    let submit = |cid: &str, action: Value| serde_json::from_value(json!({"commandId":cid,"sessionId":session,"action":action})).unwrap();
+    let submit = |cid: &str, action: Value| {
+        serde_json::from_value(json!({"commandId":cid,"sessionId":session,"action":action}))
+            .unwrap()
+    };
     control.task_command_submit(id,&access(),submit("live-steer",json!({"type":"submit","messageId":"steer-mid","payload":{"kind":"steer","prompt":"Continue with extra context","messageId":"steer-mid"}})),now).await.unwrap();
-    let leased=control.command_lease(id,"stop-runtime-fixture",&lease(id,false),now).await.unwrap();
-    assert_eq!(leased.leases.len(),1);
-    assert_eq!(leased.leases[0].command.command_id,"live-steer");
+    let leased = control
+        .command_lease(id, "stop-runtime-fixture", &lease(id, false), now)
+        .await
+        .unwrap();
+    assert_eq!(leased.leases.len(), 1);
+    assert_eq!(leased.leases[0].command.command_id, "live-steer");
     let lane:String=sqlx::query_scalar("SELECT lane FROM zuse_rust_mailbox_commands WHERE workspace_id=$1 AND command_id='live-steer'").bind(id).fetch_one(pool).await.unwrap();
-    assert_eq!(lane,format!("task-control:{session}"),"Steer must bypass ordinary Run transport ordering");
-    let progress=|revision,state|Progress{command_id:"live-steer".into(),fingerprint:leased.leases[0].command.fingerprint.clone(),storage_incarnation_id:format!("disk:{id}"),revision,state,turn_id:Some("steer-owned-turn".into()),error_code:None};
-    for (revision,state) in [(1,ExecutionState::Starting),(2,ExecutionState::Running)] {
-        control.task_command_progress(id,"stop-runtime-fixture",&progress(revision,state),now).await.unwrap();
+    assert_eq!(
+        lane,
+        format!("task-control:{session}"),
+        "Steer must bypass ordinary Run transport ordering"
+    );
+    let progress = |revision, state| Progress {
+        command_id: "live-steer".into(),
+        fingerprint: leased.leases[0].command.fingerprint.clone(),
+        storage_incarnation_id: format!("disk:{id}"),
+        revision,
+        state,
+        turn_id: Some("steer-owned-turn".into()),
+        error_code: None,
+    };
+    for (revision, state) in [(1, ExecutionState::Starting), (2, ExecutionState::Running)] {
+        control
+            .task_command_progress(id, "stop-runtime-fixture", &progress(revision, state), now)
+            .await
+            .unwrap();
     }
     sqlx::query("UPDATE zuse_rust_mailbox_commands SET state='applied' WHERE workspace_id=$1 AND command_id='live-steer'").bind(id).execute(pool).await.unwrap();
-    let stopped=control.task_command_submit(id,&access(),stop(id,"stop-steer",Some("steer-owned-turn")),now).await.unwrap();
-    assert_eq!(stopped["interruptCommandId"],"live-steer","Stop must target live inference owned by Steer");
+    let stopped = control
+        .task_command_submit(
+            id,
+            &access(),
+            stop(id, "stop-steer", Some("steer-owned-turn")),
+            now,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        stopped["interruptCommandId"], "live-steer",
+        "Stop must target live inference owned by Steer"
+    );
     // Stop admission alone does not terminalize inference. Clear queue pause only
     // to exercise the independent held-row busy guard (no fake execution ACK).
-    control.task_command_submit(id,&access(),submit("unpause-steer",json!({"type":"pause-queue","paused":false})),now).await.unwrap();
-    let queue=|qid: &str|json!({"type":"queue","queueId":qid,"messageId":format!("mid:{qid}"),"input":{"text":"Next context"},"holdForTurnEnd":true});
-    control.task_command_submit(id,&access(),submit("held-steer",queue("held-steer-q")),now).await.unwrap();
+    control
+        .task_command_submit(
+            id,
+            &access(),
+            submit(
+                "unpause-steer",
+                json!({"type":"pause-queue","paused":false}),
+            ),
+            now,
+        )
+        .await
+        .unwrap();
+    let queue = |qid: &str| json!({"type":"queue","queueId":qid,"messageId":format!("mid:{qid}"),"input":{"text":"Next context"},"holdForTurnEnd":true});
+    control
+        .task_command_submit(
+            id,
+            &access(),
+            submit("held-steer", queue("held-steer-q")),
+            now,
+        )
+        .await
+        .unwrap();
     control.work_task_drain_once(now).await.unwrap();
-    let actor=access();
-    let (drain,stop_again)=tokio::join!(control.work_task_drain_once(now),control.task_command_submit(id,&actor,stop(id,"parallel-stop-steer",Some("steer-owned-turn")),now));
-    drain.unwrap();assert_eq!(stop_again.unwrap()["interruptCommandId"],"live-steer");
+    let actor = access();
+    let (drain, stop_again) = tokio::join!(
+        control.work_task_drain_once(now),
+        control.task_command_submit(
+            id,
+            &actor,
+            stop(id, "parallel-stop-steer", Some("steer-owned-turn")),
+            now
+        )
+    );
+    drain.unwrap();
+    assert_eq!(stop_again.unwrap()["interruptCommandId"], "live-steer");
     let state:String=sqlx::query_scalar("SELECT state FROM zuse_rust_task_command_queue WHERE workspace_id=$1 AND queue_id='held-steer-q'").bind(id).fetch_one(pool).await.unwrap();
-    assert_eq!(state,"queued","held queue cannot promote while Steer inference runs");
-    control.task_command_submit(id,&access(),submit("next-steer-q",queue("next-steer-q")),now).await.unwrap();
-    control.task_command_submit(id,&access(),submit("next-steer",json!({"type":"steer-now","queueId":"next-steer-q","revision":1})),now).await.unwrap();
-    let next=native(control,pool,id,"next-steer").await;
-    assert_eq!(next.based_on.unwrap().turn_id.as_deref(),Some("steer-owned-turn"));
-    control.task_command_submit(id,&access(),run(id,"blocked-run"),now).await.unwrap();
-    let eligible=|guard: &str|format!("SELECT count(*) FROM zuse_rust_mailbox_commands c WHERE c.workspace_id='{id}' AND c.command_id='blocked-run' {guard}");
-    let count:i64=sqlx::query_scalar(&eligible(crate::runtime::task_commands::dispatch::EXECUTION_GUARD)).fetch_one(pool).await.unwrap();
-    assert_eq!(count,0,"ordinary Run cannot dispatch over live Steer inference");
+    assert_eq!(
+        state, "queued",
+        "held queue cannot promote while Steer inference runs"
+    );
+    control
+        .task_command_submit(
+            id,
+            &access(),
+            submit("next-steer-q", queue("next-steer-q")),
+            now,
+        )
+        .await
+        .unwrap();
+    control
+        .task_command_submit(
+            id,
+            &access(),
+            submit(
+                "next-steer",
+                json!({"type":"steer-now","queueId":"next-steer-q","revision":1}),
+            ),
+            now,
+        )
+        .await
+        .unwrap();
+    let next = native(control, pool, id, "next-steer").await;
+    assert_eq!(
+        next.based_on.unwrap().turn_id.as_deref(),
+        Some("steer-owned-turn")
+    );
+    control
+        .task_command_submit(id, &access(), run(id, "blocked-run"), now)
+        .await
+        .unwrap();
+    let eligible = |guard: &str| {
+        format!(
+            "SELECT count(*) FROM zuse_rust_mailbox_commands c WHERE c.workspace_id='{id}' AND c.command_id='blocked-run' {guard}"
+        )
+    };
+    let count: i64 = sqlx::query_scalar(&eligible(
+        crate::runtime::task_commands::dispatch::EXECUTION_GUARD,
+    ))
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        count, 0,
+        "ordinary Run cannot dispatch over live Steer inference"
+    );
     // Unconsumed extra steering is terminalized only as fixture cleanup; it must
     // not become an unrelated queued control barrier after the real turn ends.
     sqlx::query("UPDATE zuse_rust_task_command_execution SET state='completed' WHERE workspace_id=$1 AND command_id='next-steer'").bind(id).execute(pool).await.unwrap();
-    control.task_command_progress(id,"stop-runtime-fixture",&progress(3,ExecutionState::Completed),now+1).await.unwrap();
-    let count:i64=sqlx::query_scalar(&eligible(crate::runtime::task_commands::dispatch::EXECUTION_GUARD)).fetch_one(pool).await.unwrap();
-    assert_eq!(count,1,"completed Steer and message-less pending controls do not block Run");
+    control
+        .task_command_progress(
+            id,
+            "stop-runtime-fixture",
+            &progress(3, ExecutionState::Completed),
+            now + 1,
+        )
+        .await
+        .unwrap();
+    let count: i64 = sqlx::query_scalar(&eligible(
+        crate::runtime::task_commands::dispatch::EXECUTION_GUARD,
+    ))
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        count, 1,
+        "completed Steer and message-less pending controls do not block Run"
+    );
     sqlx::query("UPDATE zuse_rust_task_command_execution SET state='completed' WHERE workspace_id=$1 AND command_id='blocked-run'").bind(id).execute(pool).await.unwrap();
-    control.task_command_submit(id,&access(),submit("final-unpause",json!({"type":"pause-queue","paused":false})),now+2).await.unwrap();
-    control.work_task_drain_once(now+40_000).await.unwrap();
+    control
+        .task_command_submit(
+            id,
+            &access(),
+            submit(
+                "final-unpause",
+                json!({"type":"pause-queue","paused":false}),
+            ),
+            now + 2,
+        )
+        .await
+        .unwrap();
+    control.work_task_drain_once(now + 40_000).await.unwrap();
     let state:String=sqlx::query_scalar("SELECT state FROM zuse_rust_task_command_queue WHERE workspace_id=$1 AND queue_id='held-steer-q'").bind(id).fetch_one(pool).await.unwrap();
-    assert_eq!(state,"claimed","factual Steer completion releases held queue once");
+    assert_eq!(
+        state, "claimed",
+        "factual Steer completion releases held queue once"
+    );
 }

@@ -146,7 +146,12 @@ impl AppState {
             .notice
             .as_ref()
             .filter(|(id, _)| self.selected_chat.as_ref() == Some(id))
-            .or_else(|| self.chat_configuration.watch_notice.as_ref().filter(|(id, _)| self.selected_chat.as_ref() == Some(id)))
+            .or_else(|| {
+                self.chat_configuration
+                    .watch_notice
+                    .as_ref()
+                    .filter(|(id, _)| self.selected_chat.as_ref() == Some(id))
+            })
             .cloned()
     }
 
@@ -244,12 +249,14 @@ impl AppState {
                 }
                 let alive = this.update(cx, |state, cx| {
                     if state.chat_configuration.generation != generation
-                        || state.chat_configuration.target.as_ref() != Some(&target) {
+                        || state.chat_configuration.target.as_ref() != Some(&target)
+                    {
                         return false;
                     }
                     state.chat_configuration.confirmed = None;
                     if let Some(notice) = configuration_watch_notice(error.as_ref()) {
-                        state.chat_configuration.watch_notice = Some((target.chat_id.clone(), notice));
+                        state.chat_configuration.watch_notice =
+                            Some((target.chat_id.clone(), notice));
                     }
                     cx.notify();
                     true
@@ -744,104 +751,172 @@ mod tests {
     #[async_trait::async_trait]
     impl RpcService for ReopeningHost {
         async fn handle(&self, method: &str, params: Value) -> Result<RpcReply, RpcError> {
-            if method == methods::WATCH_CHAT_CONFIG && self.opens.fetch_add(1, Ordering::SeqCst) == 0 {
+            if method == methods::WATCH_CHAT_CONFIG
+                && self.opens.fetch_add(1, Ordering::SeqCst) == 0
+            {
                 return match self.first {
                     "closed" => Ok(RpcReply::Stream(futures::stream::empty().boxed())),
                     "denied" => Err(RpcError::Capability("cloud_access_denied".into())),
-                    "foreign" => Ok(RpcReply::Stream(futures::stream::once(async {
-                        json!({"chatId":"chat","deviceId":"another-host","config":null})
-                    }).boxed())),
+                    "foreign" => Ok(RpcReply::Stream(
+                        futures::stream::once(async {
+                            json!({"chatId":"chat","deviceId":"another-host","config":null})
+                        })
+                        .boxed(),
+                    )),
                     _ => unreachable!(),
                 };
             }
             self.host.handle(method, params).await
         }
     }
-    fn reopening_state(cx: &gpui::TestAppContext, first: &'static str) -> (gpui::Entity<AppState>, Arc<ReopeningHost>) {
-        let host=Arc::new(ReopeningHost {host:Host::new(false),first,opens:0.into()});
-        let state=cx.update(|cx| {
-            let state=cx.new(|_|AppState::new());
-            state.update(cx,|state,cx| {
-                state.chats=vec![row(&host.host.config.lock().unwrap())];
-                state.selected_chat=Some("chat".into());
-                state.set_test_engine(crate::state::EngineHandle::from_test_client(zuse_rpc::memory_client(host.clone())));
+    fn reopening_state(
+        cx: &gpui::TestAppContext,
+        first: &'static str,
+    ) -> (gpui::Entity<AppState>, Arc<ReopeningHost>) {
+        let host = Arc::new(ReopeningHost {
+            host: Host::new(false),
+            first,
+            opens: 0.into(),
+        });
+        let state = cx.update(|cx| {
+            let state = cx.new(|_| AppState::new());
+            state.update(cx, |state, cx| {
+                state.chats = vec![row(&host.host.config.lock().unwrap())];
+                state.selected_chat = Some("chat".into());
+                state.set_test_engine(crate::state::EngineHandle::from_test_client(
+                    zuse_rpc::memory_client(host.clone()),
+                ));
                 state.reconcile_configuration_watch(cx);
             });
             state
         });
-        (state,host)
+        (state, host)
     }
 
     #[test]
     fn native_config_watch_reconnects_are_not_send_failures_but_real_errors_are_actionable() {
-        for error in [None,Some(RpcError::Closed),Some(RpcError::Transport("connection changed".into()))] {
+        for error in [
+            None,
+            Some(RpcError::Closed),
+            Some(RpcError::Transport("connection changed".into())),
+        ] {
             assert!(configuration_watch_notice(error.as_ref()).is_none());
         }
-        for error in [RpcError::Capability("cloud_access_denied".into()),RpcError::UnknownMethod("WatchChatConfig".into()),RpcError::Failed("The execution host changed".into())] {
-            assert!(configuration_watch_notice(Some(&error)).unwrap().contains("Refresh access"));
+        for error in [
+            RpcError::Capability("cloud_access_denied".into()),
+            RpcError::UnknownMethod("WatchChatConfig".into()),
+            RpcError::Failed("The execution host changed".into()),
+        ] {
+            assert!(
+                configuration_watch_notice(Some(&error))
+                    .unwrap()
+                    .contains("Refresh access")
+            );
         }
     }
 
     #[gpui::test]
-    fn native_config_closed_read_recovers_without_send_failure_or_any_mutation(cx: &mut gpui::TestAppContext) {
-        let runtime=tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-        let _runtime=runtime.enter();
-        let(state,host)=reopening_state(cx,"closed");
-        settle(cx,&runtime,||host.opens.load(Ordering::SeqCst)==1);
+    fn native_config_closed_read_recovers_without_send_failure_or_any_mutation(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _runtime = runtime.enter();
+        let (state, host) = reopening_state(cx, "closed");
+        settle(cx, &runtime, || host.opens.load(Ordering::SeqCst) == 1);
         // Drive the real memory RPC's stream closure and the existing safe
         // read retry; no user action or configuration write is submitted.
         for _ in 0..12 {
-            cx.run_until_parked();runtime.block_on(tokio::task::yield_now());
-            assert!(cx.read(|cx|state.read(cx).configuration_notice().is_none()));
+            cx.run_until_parked();
+            runtime.block_on(tokio::task::yield_now());
+            assert!(cx.read(|cx| state.read(cx).configuration_notice().is_none()));
             cx.executor().advance_clock(Duration::from_millis(250));
         }
-        settle(cx,&runtime,||cx.read(|cx|!state.read(cx).configuration_blocked()));
-        assert_eq!(host.opens.load(Ordering::SeqCst),2);
-        assert_eq!(host.host.writes.load(Ordering::SeqCst),0);
+        settle(cx, &runtime, || {
+            cx.read(|cx| !state.read(cx).configuration_blocked())
+        });
+        assert_eq!(host.opens.load(Ordering::SeqCst), 2);
+        assert_eq!(host.host.writes.load(Ordering::SeqCst), 0);
         cx.read(|cx| {
-            let state=state.read(cx);
-            assert_eq!(state.selected_chat.as_deref(),Some("chat"));
+            let state = state.read(cx);
+            assert_eq!(state.selected_chat.as_deref(), Some("chat"));
             assert!(state.configuration_notice().is_none());
-            assert_eq!(state.selected_chat_row().unwrap().config.as_ref(),Some(&config("original",SandboxLevel::WorkspaceWrite)));
+            assert_eq!(
+                state.selected_chat_row().unwrap().config.as_ref(),
+                Some(&config("original", SandboxLevel::WorkspaceWrite))
+            );
         });
     }
 
     #[gpui::test]
-    fn native_config_recovered_snapshot_clears_read_error_without_manual_refresh(cx: &mut gpui::TestAppContext) {
-        let runtime=tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-        let _runtime=runtime.enter();
-        let(state,host)=reopening_state(cx,"denied");
-        settle(cx,&runtime,||cx.read(|cx|state.read(cx).configuration_notice().is_some()));
-        assert!(cx.read(|cx|state.read(cx).configuration_blocked()));
-        // Recovery of this read must not clear an unrelated uncertain write.
-        cx.update(|cx|state.update(cx,|state,_| {
-            state.chat_configuration.notice=Some(("chat".into(),"An earlier write is unconfirmed; review saved choices.".into()));
-        }));
-        cx.executor().advance_clock(Duration::from_secs(2));
-        settle(cx,&runtime,||cx.read(|cx|!state.read(cx).configuration_blocked()));
-        cx.read(|cx| {
-            let state=state.read(cx);
-            assert!(state.chat_configuration.watch_notice.is_none());
-            assert!(state.configuration_notice().unwrap().1.contains("earlier write is unconfirmed"));
+    fn native_config_recovered_snapshot_clears_read_error_without_manual_refresh(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _runtime = runtime.enter();
+        let (state, host) = reopening_state(cx, "denied");
+        settle(cx, &runtime, || {
+            cx.read(|cx| state.read(cx).configuration_notice().is_some())
         });
-        assert_eq!(host.host.writes.load(Ordering::SeqCst),0);
-        assert_eq!(host.opens.load(Ordering::SeqCst),2);
+        assert!(cx.read(|cx| state.read(cx).configuration_blocked()));
+        // Recovery of this read must not clear an unrelated uncertain write.
+        cx.update(|cx| {
+            state.update(cx, |state, _| {
+                state.chat_configuration.notice = Some((
+                    "chat".into(),
+                    "An earlier write is unconfirmed; review saved choices.".into(),
+                ));
+            })
+        });
+        cx.executor().advance_clock(Duration::from_secs(2));
+        settle(cx, &runtime, || {
+            cx.read(|cx| !state.read(cx).configuration_blocked())
+        });
+        cx.read(|cx| {
+            let state = state.read(cx);
+            assert!(state.chat_configuration.watch_notice.is_none());
+            assert!(
+                state
+                    .configuration_notice()
+                    .unwrap()
+                    .1
+                    .contains("earlier write is unconfirmed")
+            );
+        });
+        assert_eq!(host.host.writes.load(Ordering::SeqCst), 0);
+        assert_eq!(host.opens.load(Ordering::SeqCst), 2);
     }
 
     #[gpui::test]
     fn native_config_foreign_host_read_stays_blocked_and_actionable(cx: &mut gpui::TestAppContext) {
-        let runtime=tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-        let _runtime=runtime.enter();
-        let(state,host)=reopening_state(cx,"foreign");
-        settle(cx,&runtime,||cx.read(|cx|state.read(cx).configuration_notice().is_some()));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _runtime = runtime.enter();
+        let (state, host) = reopening_state(cx, "foreign");
+        settle(cx, &runtime, || {
+            cx.read(|cx| state.read(cx).configuration_notice().is_some())
+        });
         cx.read(|cx| {
-            let state=state.read(cx);
+            let state = state.read(cx);
             assert!(state.configuration_blocked());
             assert!(state.chat_configuration.confirmed.is_none());
-            assert!(state.configuration_notice().unwrap().1.contains("host changed"));
-            assert_eq!(state.selected_chat.as_deref(),Some("chat"));
-            assert_eq!(state.selected_chat_row().unwrap().device_id,"host");
+            assert!(
+                state
+                    .configuration_notice()
+                    .unwrap()
+                    .1
+                    .contains("host changed")
+            );
+            assert_eq!(state.selected_chat.as_deref(), Some("chat"));
+            assert_eq!(state.selected_chat_row().unwrap().device_id, "host");
         });
-        assert_eq!(host.host.writes.load(Ordering::SeqCst),0);
+        assert_eq!(host.host.writes.load(Ordering::SeqCst), 0);
     }
 }

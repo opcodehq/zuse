@@ -406,37 +406,78 @@ for a in ('claude','codex','grok'):shutil.copyfile('/usr/bin/true',d/a);(d/a).ch
 
 #[tokio::test]
 async fn negotiated_storage_uses_gateway_bind_and_preparation_waits_for_commit() {
-    use zuse_cloud_runtime::{Authority, preparation::wait_startup_binding};
     use tokio::time::{Duration, timeout};
     use tokio_util::sync::CancellationToken;
-    let mut boot=bootstrap();
-    boot.extra.insert("startupBindingVersion".into(),json!(2));
-    boot.extra.insert("storageEnrollmentId".into(),json!("original-enrollment"));
+    use zuse_cloud_runtime::{Authority, preparation::wait_startup_binding};
+    let mut boot = bootstrap();
+    boot.extra.insert("startupBindingVersion".into(), json!(2));
+    boot.extra
+        .insert("storageEnrollmentId".into(), json!("original-enrollment"));
     // No authority is listening: negotiated preparation/commit must not send HTTP.
-    let authority=Authority::new("http://127.0.0.1:9").unwrap();
-    assert_eq!(authority.prepare_storage(&boot).await.unwrap(),"original-enrollment");
-    assert!(authority.commit_storage(&boot,"replacement-enrollment").await.is_err());
-    authority.commit_storage(&boot,"original-enrollment").await.unwrap();
-    let grant=authority.gateway(&boot).unwrap();
-    let binding=grant.storage_binding.unwrap();
-    assert_eq!(binding["phase"],"commit");
-    assert_eq!(binding["enrollmentId"],"original-enrollment");
-    assert_eq!(binding["storageIncarnationId"],"original-storage");
-    assert_eq!(binding["runtimeGeneration"],2);
-    let (updates, receiver)=tokio::sync::watch::channel(boot.clone());
-    let cancel=CancellationToken::new();
-    assert!(timeout(Duration::from_millis(20),wait_startup_binding(&boot,receiver.clone(),&cancel)).await.is_err(),"local storage commit alone cannot authorize publication");
-    let mut connected=boot.clone();
-    connected.extra.insert("startupBindingCommitted".into(),json!(true));
+    let authority = Authority::new("http://127.0.0.1:9").unwrap();
+    assert_eq!(
+        authority.prepare_storage(&boot).await.unwrap(),
+        "original-enrollment"
+    );
+    assert!(
+        authority
+            .commit_storage(&boot, "replacement-enrollment")
+            .await
+            .is_err()
+    );
+    authority
+        .commit_storage(&boot, "original-enrollment")
+        .await
+        .unwrap();
+    let grant = authority.gateway(&boot).unwrap();
+    let binding = grant.storage_binding.unwrap();
+    assert_eq!(binding["phase"], "commit");
+    assert_eq!(binding["enrollmentId"], "original-enrollment");
+    assert_eq!(binding["storageIncarnationId"], "original-storage");
+    assert_eq!(binding["runtimeGeneration"], 2);
+    let (updates, receiver) = tokio::sync::watch::channel(boot.clone());
+    let cancel = CancellationToken::new();
+    assert!(
+        timeout(
+            Duration::from_millis(20),
+            wait_startup_binding(&boot, receiver.clone(), &cancel)
+        )
+        .await
+        .is_err(),
+        "local storage commit alone cannot authorize publication"
+    );
+    let mut connected = boot.clone();
+    connected
+        .extra
+        .insert("startupBindingCommitted".into(), json!(true));
     updates.send_replace(connected.clone());
-    wait_startup_binding(&boot,receiver.clone(),&cancel).await.unwrap();
-    connected.runtime_generation+=1;
+    wait_startup_binding(&boot, receiver.clone(), &cancel)
+        .await
+        .unwrap();
+    connected.runtime_generation += 1;
     updates.send_replace(connected);
-    assert!(wait_startup_binding(&boot,receiver.clone(),&cancel).await.is_err(),"a replacement generation cannot release the wait");
+    assert!(
+        wait_startup_binding(&boot, receiver.clone(), &cancel)
+            .await
+            .is_err(),
+        "a replacement generation cannot release the wait"
+    );
     updates.send_replace(boot.clone());
     cancel.cancel();
-    assert!(wait_startup_binding(&boot,receiver.clone(),&cancel).await.is_err());
-    let legacy=bootstrap();
-    wait_startup_binding(&legacy,receiver,&CancellationToken::new()).await.unwrap();
-    assert!(authority.gateway(&legacy).unwrap().storage_binding.is_none());
+    assert!(
+        wait_startup_binding(&boot, receiver.clone(), &cancel)
+            .await
+            .is_err()
+    );
+    let legacy = bootstrap();
+    wait_startup_binding(&legacy, receiver, &CancellationToken::new())
+        .await
+        .unwrap();
+    assert!(
+        authority
+            .gateway(&legacy)
+            .unwrap()
+            .storage_binding
+            .is_none()
+    );
 }

@@ -9,10 +9,10 @@ mod ci;
 mod create;
 #[path = "source_control_creation_sources.rs"]
 mod creation_sources;
-#[path = "source_control_review_threads.rs"]
-mod review_threads;
 #[path = "source_control_launcher.rs"]
 mod launcher;
+#[path = "source_control_review_threads.rs"]
+mod review_threads;
 pub use launcher::GitHubCommandLauncher;
 
 use std::io;
@@ -1047,7 +1047,7 @@ impl GitHubCli {
     fn with_runner(runner: Arc<dyn ProcessRunner>) -> Self {
         Self {
             runner,
-            managed_launcher:None,
+            managed_launcher: None,
             pr_cache: Default::default(),
             store: None,
             account: Default::default(),
@@ -1070,7 +1070,13 @@ impl GitHubCli {
     /// `None` when it can't be told — including a token in the environment,
     /// which may belong to another account — and then nothing is stored.
     async fn store_account(&self) -> Option<String> {
-        if self.managed_launcher.as_ref().is_some_and(|slot|slot.is_required()){return None;}
+        if self
+            .managed_launcher
+            .as_ref()
+            .is_some_and(|slot| slot.is_required())
+        {
+            return None;
+        }
 
         if ["GH_TOKEN", "GITHUB_TOKEN"]
             .iter()

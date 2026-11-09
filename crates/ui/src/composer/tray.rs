@@ -43,8 +43,12 @@ const TEXT_ACTION_HEIGHT: f32 = 28.0;
 /// Compact staged-image tiles in the attachment row.
 const THUMB: f32 = 40.0;
 
-fn is_configuration_notice(message: &str, key: Option<&str>, notice: Option<&(String,String)>) -> bool {
-    notice.is_some_and(|(chat,text)| key == Some(chat.as_str()) && message == text)
+fn is_configuration_notice(
+    message: &str,
+    key: Option<&str>,
+    notice: Option<&(String, String)>,
+) -> bool {
+    notice.is_some_and(|(chat, text)| key == Some(chat.as_str()) && message == text)
 }
 const THUMB_RADIUS: f32 = 7.0;
 /// `ContextPill` hover intent: open after a short dwell, close after a grace
@@ -645,12 +649,12 @@ impl Composer {
         let row = TrayPill::new("native-cloud-models", message).glyph(crate::icons::DITHER_CLOUD);
         Some(if retry {
             row.action(
-                tray_text_action("retry-cloud-models", "Retry", None, theme).on_click(
-                    cx.listener(|this, _, _, cx| {
+                tray_text_action("retry-cloud-models", "Retry", None, theme).on_click(cx.listener(
+                    |this, _, _, cx| {
                         this.pickers
                             .update(cx, |picker, cx| picker.refresh_cloud_models(cx));
-                    }),
-                ),
+                    },
+                )),
             )
         } else {
             row
@@ -1266,7 +1270,11 @@ impl Composer {
         // A failed send in this composer outranks the transcript's error.
         if let Some(message) = self.visible_failure() {
             let offline = message.as_ref() == "Engine not connected";
-            let configuration = is_configuration_notice(message.as_ref(), self.failure_key.as_deref(), self.state.read(cx).configuration_notice().as_ref());
+            let configuration = is_configuration_notice(
+                message.as_ref(),
+                self.failure_key.as_deref(),
+                self.state.read(cx).configuration_notice().as_ref(),
+            );
             let cloud_launch = self.cloud.request.is_some();
             let sign_in = if cloud_launch {
                 None
@@ -1274,12 +1282,16 @@ impl Composer {
                 self.sign_in_row(None, harness, label, theme, cx)
             };
             let actions = if configuration {
-                vec![tray_text_action("refresh-chat-choices", "Refresh access", None, theme)
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.state.update(cx, |state,cx| state.refresh_selected_configuration(cx));
-                        this.permission_open = false;
-                        cx.notify();
-                    })).into_any_element()]
+                vec![
+                    tray_text_action("refresh-chat-choices", "Refresh access", None, theme)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.state
+                                .update(cx, |state, cx| state.refresh_selected_configuration(cx));
+                            this.permission_open = false;
+                            cx.notify();
+                        }))
+                        .into_any_element(),
+                ]
             } else if cloud_launch {
                 vec![
                     tray_text_action("retry-cloud-launch", "Retry", None, theme)
@@ -2072,12 +2084,32 @@ mod tests {
 
     #[test]
     fn configuration_notice_title_never_relabels_an_actual_or_foreign_send_failure() {
-        let notice=("chat".to_owned(),"Read configuration failed".to_owned());
-        assert!(is_configuration_notice("Read configuration failed",Some("chat"),Some(&notice)));
-        assert!(!is_configuration_notice("Actual send failed",Some("chat"),Some(&notice)));
-        assert!(!is_configuration_notice("Read configuration failed",Some("different-chat"),Some(&notice)));
-        assert!(!is_configuration_notice("Read configuration failed",None,Some(&notice)));
-        assert!(!is_configuration_notice("Actual send failed",Some("chat"),None));
+        let notice = ("chat".to_owned(), "Read configuration failed".to_owned());
+        assert!(is_configuration_notice(
+            "Read configuration failed",
+            Some("chat"),
+            Some(&notice)
+        ));
+        assert!(!is_configuration_notice(
+            "Actual send failed",
+            Some("chat"),
+            Some(&notice)
+        ));
+        assert!(!is_configuration_notice(
+            "Read configuration failed",
+            Some("different-chat"),
+            Some(&notice)
+        ));
+        assert!(!is_configuration_notice(
+            "Read configuration failed",
+            None,
+            Some(&notice)
+        ));
+        assert!(!is_configuration_notice(
+            "Actual send failed",
+            Some("chat"),
+            None
+        ));
     }
 
     fn entry(id: &str, role: MessageRole, parts: Vec<MessagePart>) -> SessionMessageEntry {

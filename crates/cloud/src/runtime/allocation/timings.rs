@@ -15,8 +15,12 @@ impl Observations {
     ) -> Result<T, E> {
         let started = Instant::now();
         let result = effect.await;
-        tracing::info!(phase=name, duration_ms=started.elapsed().as_millis() as u64,
-            succeeded=result.is_ok(), "Cloud startup provider phase");
+        tracing::info!(
+            phase = name,
+            duration_ms = started.elapsed().as_millis() as u64,
+            succeeded = result.is_ok(),
+            "Cloud startup provider phase"
+        );
         self.record(
             name,
             started.elapsed().as_millis().min(u64::MAX as u128) as u64,

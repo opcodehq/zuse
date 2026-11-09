@@ -248,7 +248,9 @@ mod database {
     ) -> (StatusCode, Json<Value>) {
         state.installation_reads.fetch_add(1, Ordering::SeqCst);
         if state.overlap_scoped.load(Ordering::SeqCst) {
-            tokio::time::timeout(Duration::from_secs(1), state.scope_overlap_ready.notified()).await.expect("token scoping must proceed while installation verification is blocked");
+            tokio::time::timeout(Duration::from_secs(1), state.scope_overlap_ready.notified())
+                .await
+                .expect("token scoping must proceed while installation verification is blocked");
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
         if state.fail_installation.load(Ordering::SeqCst) {
@@ -292,7 +294,9 @@ mod database {
         }
     }
     async fn scoped(State(state): State<Arc<Fixture>>, Json(value): Json<Value>) -> Json<Value> {
-        if state.overlap_scoped.load(Ordering::SeqCst) { state.scope_overlap_ready.notify_one(); }
+        if state.overlap_scoped.load(Ordering::SeqCst) {
+            state.scope_overlap_ready.notify_one();
+        }
         if state.gate_scoped.load(Ordering::SeqCst) {
             state.scoped_started.notify_one();
             state.scoped_release.notified().await;

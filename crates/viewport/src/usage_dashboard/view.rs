@@ -246,7 +246,10 @@ impl UsageDashboard {
                         .px(px(20.))
                         .border_b_1()
                         .border_color(rgb(BORDER))
-                        .child(label(tr(cx, msg::usage::usage_dashboard_usage), 14.).font_weight(FontWeight::MEDIUM)),
+                        .child(
+                            label(tr(cx, msg::usage::usage_dashboard_usage), 14.)
+                                .font_weight(FontWeight::MEDIUM),
+                        ),
                 )
             })
             .child(controls);

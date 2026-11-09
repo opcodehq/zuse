@@ -232,25 +232,59 @@ pub struct PreparedEnvironment {
 }
 /// Install a task-bound environment receipt after an exact verified cache overlay.
 /// Startup services and runtime secret delivery remain separate fresh operations.
-pub(crate) fn adopt_prepared_cache(data:&Path,checkout:&Path,workspace:&str,incarnation:&str,configured:&EnvironmentRecipe,expected_digest:&str)->Result<()> {
-    let checkout=std::fs::canonicalize(checkout)?;
-    let (recipe,source)=load_recipe(&checkout,configured)?;
+pub(crate) fn adopt_prepared_cache(
+    data: &Path,
+    checkout: &Path,
+    workspace: &str,
+    incarnation: &str,
+    configured: &EnvironmentRecipe,
+    expected_digest: &str,
+) -> Result<()> {
+    let checkout = std::fs::canonicalize(checkout)?;
+    let (recipe, source) = load_recipe(&checkout, configured)?;
     recipe.validate().map_err(anyhow::Error::msg)?;
-    ensure!(recipe.secret_bindings.is_empty(),"project_cache_runtime_secrets_forbidden");
-    let digest=format!("{:x}",Sha256::digest(serde_json::to_vec(&recipe)?));
-    ensure!(digest==expected_digest,"project_cache_recipe_mismatch");
-    ensure!(!data.join("environment-ready.json").exists(),"project_cache_environment_already_initialized");
-    record(&data.join("environment-ready.json"),&PreparedEnvironment{version:1,workspace:workspace.into(),incarnation:incarnation.into(),checkout,source,recipe,digest,state:"ready".into()})
+    ensure!(
+        recipe.secret_bindings.is_empty(),
+        "project_cache_runtime_secrets_forbidden"
+    );
+    let digest = format!("{:x}", Sha256::digest(serde_json::to_vec(&recipe)?));
+    ensure!(digest == expected_digest, "project_cache_recipe_mismatch");
+    ensure!(
+        !data.join("environment-ready.json").exists(),
+        "project_cache_environment_already_initialized"
+    );
+    record(
+        &data.join("environment-ready.json"),
+        &PreparedEnvironment {
+            version: 1,
+            workspace: workspace.into(),
+            incarnation: incarnation.into(),
+            checkout,
+            source,
+            recipe,
+            digest,
+            state: "ready".into(),
+        },
+    )
 }
 /// A new cache build explicitly refreshes dependency inputs. Retained task
 /// resume does not call this operation. Its caller journals the original build
 /// intent before either initialization or refresh can have effects.
-pub(crate) async fn refresh_project_cache(checkout:&Path,recipe:&EnvironmentRecipe)->Result<()> {
-    ensure!(recipe.secret_bindings.is_empty(),"project_cache_runtime_secrets_forbidden");
-    if let Some(command)=&recipe.scripts.refresh {
-        let (success,stdout,stderr)=run_command_with_environment(checkout,recipe,command,&PrivateEnvironment::new()).await?;
-        let _stdout=zeroize::Zeroizing::new(stdout);let _stderr=zeroize::Zeroizing::new(stderr);
-        ensure!(success,"environment_dependency_refresh_failed");
+pub(crate) async fn refresh_project_cache(
+    checkout: &Path,
+    recipe: &EnvironmentRecipe,
+) -> Result<()> {
+    ensure!(
+        recipe.secret_bindings.is_empty(),
+        "project_cache_runtime_secrets_forbidden"
+    );
+    if let Some(command) = &recipe.scripts.refresh {
+        let (success, stdout, stderr) =
+            run_command_with_environment(checkout, recipe, command, &PrivateEnvironment::new())
+                .await?;
+        let _stdout = zeroize::Zeroizing::new(stdout);
+        let _stderr = zeroize::Zeroizing::new(stderr);
+        ensure!(success, "environment_dependency_refresh_failed");
     }
     Ok(())
 }

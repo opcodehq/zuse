@@ -400,20 +400,33 @@ impl RuntimeControl {
         job: &jobs::Job,
     ) -> Result<(Value, Value, Result<(), ApiError>), ApiError> {
         let mut tx = self.pool.begin().await?;
-        let (workspace,generation,operation,active,capacity_observation) =
-            if let Some(snapshot)=self.allocation_snapshot(&mut tx,job).await? {
-                (snapshot.workspace,snapshot.generation,snapshot.operation,snapshot.live,Some(snapshot.capacity))
-            } else {
-                let (workspace,generation,_)=locked_workspace(&mut tx,&job.resource_id).await?;
-                let active:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM zuse_rust_jobs WHERE job_id=$1 AND lease_token=$2 AND state='running' AND lease_expires_at>$3)")
+        let (workspace, generation, operation, active, capacity_observation) = if let Some(
+            snapshot,
+        ) =
+            self.allocation_snapshot(&mut tx, job).await?
+        {
+            (
+                snapshot.workspace,
+                snapshot.generation,
+                snapshot.operation,
+                snapshot.live,
+                Some(snapshot.capacity),
+            )
+        } else {
+            let (workspace, generation, _) = locked_workspace(&mut tx, &job.resource_id).await?;
+            let active:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM zuse_rust_jobs WHERE job_id=$1 AND lease_token=$2 AND state='running' AND lease_expires_at>$3)")
                     .bind(&job.id).bind(&job.lease_token).bind(clock_ms()).fetch_one(&mut *tx).await?;
-                let operation:Value=sqlx::query_scalar("SELECT to_jsonb(a) FROM zuse_rust_allocations a WHERE operation_id=$1 AND workspace_id=$2 AND generation=$3")
+            let operation:Value=sqlx::query_scalar("SELECT to_jsonb(a) FROM zuse_rust_allocations a WHERE operation_id=$1 AND workspace_id=$2 AND generation=$3")
                     .bind(job.payload["operationId"].as_str()).bind(&job.resource_id).bind(job.generation).fetch_one(&mut *tx).await?;
-                (workspace,generation,operation,active,None)
-            };
-        let held=super::repair::leases_blocked(&workspace)||super::recreation::leases_blocked(&workspace);
-        if !active || generation!=job.generation || blocked(&workspace)
-            || (workspace["desired_state"]!="ready" && !held) {
+            (workspace, generation, operation, active, None)
+        };
+        let held = super::repair::leases_blocked(&workspace)
+            || super::recreation::leases_blocked(&workspace);
+        if !active
+            || generation != job.generation
+            || blocked(&workspace)
+            || (workspace["desired_state"] != "ready" && !held)
+        {
             return Err(ApiError::conflict("cloud_allocation_fenced"));
         }
         if workspace["request_config"]["rustAllocationOperationId"] != operation["operation_id"] {
@@ -428,7 +441,12 @@ impl RuntimeControl {
         {
             Ok(())
         } else {
-            self.allocation_snapshot_capacity(&mut tx,&workspace,capacity_observation.as_ref(),clock_ms())
+            self.allocation_snapshot_capacity(
+                &mut tx,
+                &workspace,
+                capacity_observation.as_ref(),
+                clock_ms(),
+            )
             .await
         };
         tx.commit().await?;
@@ -444,12 +462,13 @@ impl RuntimeControl {
             return Ok(());
         }
         let name = required(operation, "machine_name")?;
-        let known = self.allocation_created_identity(
-            required(workspace, "workspace_id")?,
-            required(operation, "operation_id")?,
-            name,
-        )
-        .await?;
+        let known = self
+            .allocation_created_identity(
+                required(workspace, "workspace_id")?,
+                required(operation, "operation_id")?,
+                name,
+            )
+            .await?;
         let observed = if let Some(id) = known {
             provider.inspect_id(&id).await.map_err(provider_error)?
         } else {
@@ -576,8 +595,11 @@ impl RuntimeControl {
                     None
                 } else {
                     self.allocation_created_identity(
-                        &job.resource_id, required(&operation, "operation_id")?, name,
-                    ).await?
+                        &job.resource_id,
+                        required(&operation, "operation_id")?,
+                        name,
+                    )
+                    .await?
                 };
                 let found = if let Some(known) = known {
                     Some(
@@ -719,11 +741,17 @@ impl RuntimeControl {
                     && workspace["request_config"]["agent"] == "codex"
                     && crate::managed_bases::bootstrap::InitialRuntimeBootstrap::from_config(
                         &workspace["request_config"],
-                    )?.is_some();
+                    )?
+                    .is_some();
                 if !prepared_fence {
                     self.save_allocation_observed(
-                        job, "launching", Some(id), false, &provider.startup_observations(),
-                    ).await?;
+                        job,
+                        "launching",
+                        Some(id),
+                        false,
+                        &provider.startup_observations(),
+                    )
+                    .await?;
                 }
                 // Prepared dispatch has just committed the same checks and
                 // launching transition in initial_boot_allocation_fence, after
@@ -940,15 +968,22 @@ impl RuntimeControl {
         } else {
             None
         };
-        let (row, generation, live, observed_operation, capacity_observation) =
-            if let Some(snapshot) = snapshot {
-                (snapshot.workspace, snapshot.generation, snapshot.live,
-                    Some(snapshot.operation), Some(snapshot.capacity))
-            } else {
-                let (row, generation, _) = locked_workspace(&mut tx, &job.resource_id).await?;
-                let live:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM zuse_rust_jobs WHERE job_id=$1 AND lease_token=$2 AND state='running' AND lease_expires_at>$3)").bind(&job.id).bind(&job.lease_token).bind(clock_ms()).fetch_one(&mut *tx).await?;
-                (row, generation, live, None, None)
-            };
+        let (row, generation, live, observed_operation, capacity_observation) = if let Some(
+            snapshot,
+        ) = snapshot
+        {
+            (
+                snapshot.workspace,
+                snapshot.generation,
+                snapshot.live,
+                Some(snapshot.operation),
+                Some(snapshot.capacity),
+            )
+        } else {
+            let (row, generation, _) = locked_workspace(&mut tx, &job.resource_id).await?;
+            let live:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM zuse_rust_jobs WHERE job_id=$1 AND lease_token=$2 AND state='running' AND lease_expires_at>$3)").bind(&job.id).bind(&job.lease_token).bind(clock_ms()).fetch_one(&mut *tx).await?;
+            (row, generation, live, None, None)
+        };
         let now = clock_ms();
         if !live
             || generation != job.generation
@@ -966,7 +1001,9 @@ impl RuntimeControl {
         if phase == "launching" {
             // Enrollment may arrive while provider inspection is in flight.
             // Recheck under the current workspace lock before ANY boot upload.
-            let operation: Value = if let Some(operation) = observed_operation { operation } else {
+            let operation: Value = if let Some(operation) = observed_operation {
+                operation
+            } else {
                 sqlx::query_scalar("SELECT to_jsonb(a) FROM zuse_rust_allocations a WHERE operation_id=$1 AND workspace_id=$2 AND generation=$3")
                     .bind(job.payload["operationId"].as_str()).bind(&job.resource_id).bind(job.generation).fetch_one(&mut *tx).await?
             };
@@ -977,7 +1014,8 @@ impl RuntimeControl {
         // Allocated is an observation/receipt after the external effect, not
         // authorization for another effect. Always retain that original result.
         if !complete && phase != "allocated" {
-            self.allocation_snapshot_capacity(&mut tx, &row, capacity_observation.as_ref(), now).await?;
+            self.allocation_snapshot_capacity(&mut tx, &row, capacity_observation.as_ref(), now)
+                .await?;
         }
         let operation: Option<Value> = sqlx::query_scalar("UPDATE zuse_rust_allocations SET phase=$2,sealed_boot_token=CASE WHEN $3 THEN NULL ELSE sealed_boot_token END,updated_at=$4 WHERE operation_id=$1 AND workspace_id=$5 AND generation=$6 RETURNING to_jsonb(zuse_rust_allocations)")
             .bind(job.payload["operationId"].as_str()).bind(phase).bind(complete).bind(now).bind(&job.resource_id).bind(job.generation).fetch_optional(&mut *tx).await?;

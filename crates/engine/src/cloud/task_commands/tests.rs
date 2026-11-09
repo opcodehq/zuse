@@ -263,18 +263,77 @@ fn only_explicit_foreground_runs_request_wake_and_background_actions_preserve_sl
 
 #[test]
 fn passive_attachment_requires_confirmed_explicit_run_and_current_actor_scope() {
-    let directory=tempfile::tempdir().unwrap();let mut config=crate::auth::AuthConfig::new("http://127.0.0.1:9",directory.path());config.workos_client_id=None;
-    let auth=Auth::new(config);let account=auth.user_id().unwrap();let mut params=run(".",vec![]);params["wake"]=json!("explicit-resume");
-    let request=normalize(methods::QUEUE_COMMAND,&params).unwrap();let receipt=json!({"durablyAdmitted":true,"commandId":request.command_id});
-    let hint=passive_attachment(&auth,&account,None,"workspace",&request,&receipt).unwrap().unwrap();assert_eq!(hint["mode"],"passive");assert_eq!(hint["accountId"],account);
-    assert!(passive_attachment(&auth,"other",None,"workspace",&request,&receipt).is_err());
-    assert!(passive_attachment(&auth,&account,Some("other-org"),"workspace",&request,&receipt).is_err());
-    for receipt in [json!({"durablyAdmitted":false,"commandId":request.command_id}),json!({"durablyAdmitted":true,"commandId":"different"})] {assert!(passive_attachment(&auth,&account,None,"workspace",&request,&receipt).unwrap().is_none());}
-    let mut background=request.clone();background.wake=wire::WakePolicy::PreserveSleep;assert!(passive_attachment(&auth,&account,None,"workspace",&background,&receipt).unwrap().is_none());
-    let mut control=request.clone();if let wire::Action::Submit{payload,..}=&mut control.action{*payload=SessionCommandPayload::Interrupt{};}assert!(passive_attachment(&auth,&account,None,"workspace",&control,&receipt).unwrap().is_none());
-    for (method,extra)in [(methods::QUEUE_MESSAGE,json!({"text":"later"})),(methods::UPDATE_QUEUED_MESSAGE,json!({"id":"row","revision":1,"text":"edit"})),(methods::CREATE_THREAD_SESSION,json!({"title":"empty"}))] {
-        let mut p=json!({"chatId":"session-a","cloudCommandId":"action-a","wake":"explicit-resume"});for(k,v)in extra.as_object().unwrap(){p[k]=v.clone();}
-        let mut background=normalize(method,&p).unwrap();background.wake=wire::WakePolicy::ExplicitResume;
-        assert!(passive_attachment(&auth,&account,None,"workspace",&background,&receipt).unwrap().is_none());
+    let directory = tempfile::tempdir().unwrap();
+    let mut config = crate::auth::AuthConfig::new("http://127.0.0.1:9", directory.path());
+    config.workos_client_id = None;
+    let auth = Auth::new(config);
+    let account = auth.user_id().unwrap();
+    let mut params = run(".", vec![]);
+    params["wake"] = json!("explicit-resume");
+    let request = normalize(methods::QUEUE_COMMAND, &params).unwrap();
+    let receipt = json!({"durablyAdmitted":true,"commandId":request.command_id});
+    let hint = passive_attachment(&auth, &account, None, "workspace", &request, &receipt)
+        .unwrap()
+        .unwrap();
+    assert_eq!(hint["mode"], "passive");
+    assert_eq!(hint["accountId"], account);
+    assert!(passive_attachment(&auth, "other", None, "workspace", &request, &receipt).is_err());
+    assert!(
+        passive_attachment(
+            &auth,
+            &account,
+            Some("other-org"),
+            "workspace",
+            &request,
+            &receipt
+        )
+        .is_err()
+    );
+    for receipt in [
+        json!({"durablyAdmitted":false,"commandId":request.command_id}),
+        json!({"durablyAdmitted":true,"commandId":"different"}),
+    ] {
+        assert!(
+            passive_attachment(&auth, &account, None, "workspace", &request, &receipt)
+                .unwrap()
+                .is_none()
+        );
+    }
+    let mut background = request.clone();
+    background.wake = wire::WakePolicy::PreserveSleep;
+    assert!(
+        passive_attachment(&auth, &account, None, "workspace", &background, &receipt)
+            .unwrap()
+            .is_none()
+    );
+    let mut control = request.clone();
+    if let wire::Action::Submit { payload, .. } = &mut control.action {
+        *payload = SessionCommandPayload::Interrupt {};
+    }
+    assert!(
+        passive_attachment(&auth, &account, None, "workspace", &control, &receipt)
+            .unwrap()
+            .is_none()
+    );
+    for (method, extra) in [
+        (methods::QUEUE_MESSAGE, json!({"text":"later"})),
+        (
+            methods::UPDATE_QUEUED_MESSAGE,
+            json!({"id":"row","revision":1,"text":"edit"}),
+        ),
+        (methods::CREATE_THREAD_SESSION, json!({"title":"empty"})),
+    ] {
+        let mut p =
+            json!({"chatId":"session-a","cloudCommandId":"action-a","wake":"explicit-resume"});
+        for (k, v) in extra.as_object().unwrap() {
+            p[k] = v.clone();
+        }
+        let mut background = normalize(method, &p).unwrap();
+        background.wake = wire::WakePolicy::ExplicitResume;
+        assert!(
+            passive_attachment(&auth, &account, None, "workspace", &background, &receipt)
+                .unwrap()
+                .is_none()
+        );
     }
 }

@@ -183,18 +183,21 @@ impl WorkspaceView {
                                     .text_ellipsis()
                                     .child(details.title.clone()),
                             )
-                            .when_some(queue_error_label(item["_cloudQueueError"].as_str()), |view, message| {
-                                view.child(
-                                    div()
-                                        .id(("queued-message-error", i))
-                                        .role(Role::Status)
-                                        .aria_label(message)
-                                        .text_size(px(10.))
-                                        .text_color(rgb(0xe2b876))
-                                        .text_ellipsis()
-                                        .child(message),
-                                )
-                            }),
+                            .when_some(
+                                queue_error_label(item["_cloudQueueError"].as_str()),
+                                |view, message| {
+                                    view.child(
+                                        div()
+                                            .id(("queued-message-error", i))
+                                            .role(Role::Status)
+                                            .aria_label(message)
+                                            .text_size(px(10.))
+                                            .text_color(rgb(0xe2b876))
+                                            .text_ellipsis()
+                                            .child(message),
+                                    )
+                                },
+                            ),
                     )
                     .when_some(details.blocked, |view, status| {
                         view.child(label(status).text_size(px(10.)).text_color(rgb(0xe2b876)))
@@ -287,14 +290,20 @@ mod error_tests {
         let original = json!({"id":"head","input":{"text":"keep draft","fileRefs":["src/main.rs"]},"revision":4});
         let second = json!({"id":"next","input":{"text":"next"},"revision":1});
         let mut rows = vec![original.clone(), second.clone()];
-        retain_queue_error(&mut rows, &json!("cloud_task_queue_relative_reference_required"));
+        retain_queue_error(
+            &mut rows,
+            &json!("cloud_task_queue_relative_reference_required"),
+        );
         assert_eq!(rows[0]["input"], original["input"]);
         assert_eq!(rows[0]["revision"], 4);
         assert_eq!(rows[1], second);
         let details = queue_row_details(&rows[0]);
         assert!(details.valid_id && matches!(details.blocked, None | Some("Review required")));
         assert!(details.allows(QueueAction::Remove));
-        assert_eq!(queue_error_label(rows[0]["_cloudQueueError"].as_str()), Some("Fix file references · edit or remove"));
+        assert_eq!(
+            queue_error_label(rows[0]["_cloudQueueError"].as_str()),
+            Some("Fix file references · edit or remove")
+        );
         retain_queue_error(&mut rows, &Value::Null);
         assert_eq!(rows, vec![original, second]);
     }
@@ -303,7 +312,13 @@ mod error_tests {
     fn error_labels_never_expose_unrecognized_server_content() {
         assert_eq!(queue_error_label(None), None);
         assert_eq!(queue_error_label(Some("")), None);
-        assert_eq!(queue_error_label(Some("unexpected secret or SQL details")), Some("Message kept · edit or remove"));
-        assert_eq!(queue_error_label(Some("cloud_task_queue_runtime_recovery_required")), Some("Review interrupted action to continue"));
+        assert_eq!(
+            queue_error_label(Some("unexpected secret or SQL details")),
+            Some("Message kept · edit or remove")
+        );
+        assert_eq!(
+            queue_error_label(Some("cloud_task_queue_runtime_recovery_required")),
+            Some("Review interrupted action to continue")
+        );
     }
 }

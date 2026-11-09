@@ -880,18 +880,20 @@ impl WorkspaceView {
                 |this, id, _, cx| this.select_cloud_archive_session(&id, cx),
                 cx,
             ))
-            .child(if self.cloud_archive.read.is_some() && self.cloud_archive.before.is_none() {
-                div()
-                    .flex_1()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .text_color(rgb(MUTED))
-                    .child(tr(cx, msg::native::loading_saved_conversation))
-                    .into_any_element()
-            } else {
-                self.cloud_archive.view.clone().unwrap().into_any_element()
-            })
+            .child(
+                if self.cloud_archive.read.is_some() && self.cloud_archive.before.is_none() {
+                    div()
+                        .flex_1()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_color(rgb(MUTED))
+                        .child(tr(cx, msg::native::loading_saved_conversation))
+                        .into_any_element()
+                } else {
+                    self.cloud_archive.view.clone().unwrap().into_any_element()
+                },
+            )
             .child(
                 row()
                     .flex_none()

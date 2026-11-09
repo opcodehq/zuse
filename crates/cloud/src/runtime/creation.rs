@@ -154,10 +154,16 @@ impl RuntimeControl {
             .filter(|g| g.enabled(&access.owner_id));
         // The selected personal pilot admits compute locally. Repository access
         // remains gated by the fresh selected-user Git grant during preparation.
-        let deferred_repository_access = self.fast_start_accounts.iter().any(|owner| owner == &access.owner_id)
-            && access.membership.is_none() && self.authority.is_some()
-            && body.provider_id == "boxd" && body.agent == "codex"
-            && body.agent_connection_id.is_some() && github_authority.is_some();
+        let deferred_repository_access = self
+            .fast_start_accounts
+            .iter()
+            .any(|owner| owner == &access.owner_id)
+            && access.membership.is_none()
+            && self.authority.is_some()
+            && body.provider_id == "boxd"
+            && body.agent == "codex"
+            && body.agent_connection_id.is_some()
+            && github_authority.is_some();
         let repository_authorization = if deferred_repository_access {
             None
         } else if let Some(github) = &github_authority {
@@ -790,7 +796,13 @@ impl RuntimeControl {
             .create_transcript_key(owner, &id)
             .map_err(|_| ApiError::unavailable("cloud_transcript_key_unavailable"))?;
         let mut config = json!({"rustActorId":access.actor.account_id,"runtimeGeneration":1,"gatewayEpoch":1,"rustCreateRequestDigest":digest,"rustNativeTranscriptEnabled":self.transcript_objects.is_some(),"rustCommandMailboxEnabled":mailbox,"runtimeRpcProtocol":zuse_protocol::cloud_gateway::RUST_RPC,"title":title,"agent":body.agent,"initialTurnId":turn,"providerAuthMode":if brokered{"broker-v1"}else{"legacy-image"},"runtimeMode":intent["runtimeMode"],"permissions":intent["permissions"],"repositoryCache":"account-image","rustRepositoryCheckout":{"branch":branch,"baseRef":body.base_ref},"startupTimings":{"requestedAt":now}});
-        if managed && brokered && self.fast_start_accounts.iter().any(|account| account == owner) {
+        if managed
+            && brokered
+            && self
+                .fast_start_accounts
+                .iter()
+                .any(|account| account == owner)
+        {
             config["rustFastStartVersion"] = json!(1);
         }
         if let Some(authority) = &cache_pilot {

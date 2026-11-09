@@ -3,7 +3,8 @@
 use super::*;
 
 fn digest(recipe: &MachineRecipe) -> Result<String, ApiError> {
-    let bytes = serde_json::to_vec(recipe).map_err(|_| ApiError::bad_request("invalid_machine_recipe"))?;
+    let bytes =
+        serde_json::to_vec(recipe).map_err(|_| ApiError::bad_request("invalid_machine_recipe"))?;
     Ok(format!("{:x}", Sha256::digest(bytes)))
 }
 
@@ -15,8 +16,14 @@ impl ComputerControl {
         now: i64,
     ) -> Result<MachineVersion, ApiError> {
         let actor = access.membership.as_ref().map(|m| serde_json::json!({"subject":access.actor.account_id,"membershipId":m.id,"organizationId":m.organization_id,"role":m.role.slug}));
-        self.save_machine_as(&access.owner_id, &access.actor.account_id, actor, request, now)
-            .await
+        self.save_machine_as(
+            &access.owner_id,
+            &access.actor.account_id,
+            actor,
+            request,
+            now,
+        )
+        .await
     }
     pub(crate) async fn save_machine_as(
         &self,
@@ -58,7 +65,11 @@ impl ComputerControl {
         tx.commit().await?;
         Ok(MachineVersion {
             revision,
-            image_state: if request.recipe.is_empty() { "none".into() } else { "queued".into() },
+            image_state: if request.recipe.is_empty() {
+                "none".into()
+            } else {
+                "queued".into()
+            },
             image_error: None,
             recipe: request.recipe,
             created_at: now,
@@ -97,7 +108,13 @@ impl Store {
             .await?;
             image.unwrap_or_else(|| ("queued".to_owned(), None))
         };
-        Ok(MachineVersion { revision, recipe, created_at, image_state, image_error })
+        Ok(MachineVersion {
+            revision,
+            recipe,
+            created_at,
+            image_state,
+            image_error,
+        })
     }
     pub async fn save_machine_scoped(
         &self,

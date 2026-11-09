@@ -51,7 +51,11 @@ struct Liveness {
 }
 impl Liveness {
     fn new(now: std::time::Instant) -> Self {
-        Self { received: now, pinged: now, ticked: now }
+        Self {
+            received: now,
+            pinged: now,
+            ticked: now,
+        }
     }
     fn received(&mut self, now: std::time::Instant) {
         self.received = now;
@@ -117,9 +121,13 @@ fn request(
     );
     if let Some(binding) = &grant.storage_binding {
         let encoded = binding.to_string();
-        if encoded.len() > 4096 { return Err(rejected()); }
-        request.headers_mut().insert(zuse_protocol::cloud::STARTUP_BIND_HEADER,
-            encoded.parse().map_err(|_| rejected())?);
+        if encoded.len() > 4096 {
+            return Err(rejected());
+        }
+        request.headers_mut().insert(
+            zuse_protocol::cloud::STARTUP_BIND_HEADER,
+            encoded.parse().map_err(|_| rejected())?,
+        );
     }
     Ok(request)
 }

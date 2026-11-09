@@ -343,8 +343,10 @@ impl CloudApi {
         }
         if !status.is_success() {
             #[cfg(not(target_arch = "wasm32"))]
-            if !self.hosted && matches!(status.as_u16(), 401 | 403)
-                && (path == ["v1", "cloud", "projects"] || path == ["v1", "cloud", "workspaces"]) {
+            if !self.hosted
+                && matches!(status.as_u16(), 401 | 403)
+                && (path == ["v1", "cloud", "projects"] || path == ["v1", "cloud", "workspaces"])
+            {
                 sidebar_cache::clear_all();
                 // Keep authority failures distinct from repository editing errors.
                 return Err(CloudHttpFailure(status).into());
@@ -544,9 +546,12 @@ impl CloudApi {
             if path == ["v1", "cloud", "context"] && status == reqwest::StatusCode::CONFLICT {
                 let value: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
                 let message = match value["error"].as_str() {
-                    Some("staging_managed_base_candidate_expired") =>
-                        "Cloud computer setup expired on the server. Your projects and chats are still available.",
-                    _ => "Cloud setup is temporarily unavailable. Refresh Cloud settings to try again.",
+                    Some("staging_managed_base_candidate_expired") => {
+                        "Cloud computer setup expired on the server. Your projects and chats are still available."
+                    }
+                    _ => {
+                        "Cloud setup is temporarily unavailable. Refresh Cloud settings to try again."
+                    }
                 };
                 anyhow::bail!("{message}");
             }
@@ -584,9 +589,16 @@ impl CloudApi {
         {
             #[cfg(not(target_arch = "wasm32"))]
             if !self.hosted {
-                return Ok(sidebar_cache::read(self.origin.as_str(), &account, organization.as_deref(), method));
+                return Ok(sidebar_cache::read(
+                    self.origin.as_str(),
+                    &account,
+                    organization.as_deref(),
+                    method,
+                ));
             }
-            return Ok(json!({"accountId":account,"organizationId":organization,"apiOrigin":self.origin.as_str(),"provisional":true,"cacheMiss":true}));
+            return Ok(
+                json!({"accountId":account,"organizationId":organization,"apiOrigin":self.origin.as_str(),"provisional":true,"cacheMiss":true}),
+            );
         }
         // This branch only decrypts a platform-protected local snapshot. It does
         // not refresh authorization or create an execution connection. The UI
@@ -1010,7 +1022,11 @@ impl CloudApi {
                             body,
                             org.as_deref(),
                             &[],
-                            if save { reqwest::Method::PUT } else { reqwest::Method::GET },
+                            if save {
+                                reqwest::Method::PUT
+                            } else {
+                                reqwest::Method::GET
+                            },
                         )
                         .await?
                     }
@@ -1563,7 +1579,13 @@ impl CloudApi {
         }
         #[cfg(not(target_arch = "wasm32"))]
         if !self.hosted && sidebar_cache::supports(method) {
-            sidebar_cache::store(self.origin.as_str(), &account, organization.as_deref(), method, &result);
+            sidebar_cache::store(
+                self.origin.as_str(),
+                &account,
+                organization.as_deref(),
+                method,
+                &result,
+            );
         }
         Ok(result)
     }
@@ -1596,15 +1618,31 @@ mod beta_tests {
         assert!(beta_enabled_for(None, "https://api-rust-stag.zuse.sh"));
         assert!(beta_enabled_for(None, "http://127.0.0.1:27655"));
         assert!(beta_enabled_for(Some("1"), "https://api.zuse.sh"));
-        assert!(!beta_enabled_for(Some("0"), "https://api-rust-stag.zuse.sh"));
+        assert!(!beta_enabled_for(
+            Some("0"),
+            "https://api-rust-stag.zuse.sh"
+        ));
     }
     #[test]
     fn the_account_and_billing_stay_outside_the_beta() {
         use zuse_protocol::methods;
-        for method in [methods::CLOUD_CREATE, methods::CLOUD_WORKSPACES, methods::CLOUD_CONTEXT, methods::CLOUD_RPC, methods::CLOUD_SYNC_STATUS, methods::CLOUD_HISTORY] {
+        for method in [
+            methods::CLOUD_CREATE,
+            methods::CLOUD_WORKSPACES,
+            methods::CLOUD_CONTEXT,
+            methods::CLOUD_RPC,
+            methods::CLOUD_SYNC_STATUS,
+            methods::CLOUD_HISTORY,
+        ] {
             assert!(beta_gated(method), "{method}");
         }
-        for method in [methods::CLOUD_ACCOUNT_STATUS, methods::CLOUD_ACCOUNT_SIGN_IN, methods::CLOUD_BILLING_SUMMARY, methods::CLOUD_PREPAID_BALANCE, methods::ENGINE_INFO] {
+        for method in [
+            methods::CLOUD_ACCOUNT_STATUS,
+            methods::CLOUD_ACCOUNT_SIGN_IN,
+            methods::CLOUD_BILLING_SUMMARY,
+            methods::CLOUD_PREPAID_BALANCE,
+            methods::ENGINE_INFO,
+        ] {
             assert!(!beta_gated(method), "{method}");
         }
     }
@@ -1886,20 +1924,54 @@ mod context_failure_tests {
     use super::*;
     #[tokio::test]
     async fn expired_compute_context_is_not_reported_as_busy_workspace() {
-        let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address=listener.local_addr().unwrap();
-        let router=axum::Router::new().route("/v1/cloud/context",axum::routing::get(|| async {
-            (axum::http::StatusCode::CONFLICT,axum::Json(json!({"error":"staging_managed_base_candidate_expired"})))
-        })).route("/v1/cloud/projects",axum::routing::get(|| async {
-            (axum::http::StatusCode::FORBIDDEN,axum::Json(json!({"error":"workspace_access_denied"})))
-        }));
-        let server=tokio::spawn(async move {axum::serve(listener,router).await.unwrap()});
-        let api=CloudApi::new(&format!("http://{address}")).unwrap();
-        let error=api.request_scoped("fixture-token", &["v1","cloud","context"],None,None,&[]).await.unwrap_err().to_string();
-        assert!(error.contains("setup expired"),"{error}");
-        assert!(!error.contains("workspace is busy"),"{error}");
-        let error=api.request_scoped("fixture-token", &["v1","cloud","projects"],None,None,&[]).await.unwrap_err().to_string();
-        assert_eq!(error,"You do not have access to this workspace.");
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let router = axum::Router::new()
+            .route(
+                "/v1/cloud/context",
+                axum::routing::get(|| async {
+                    (
+                        axum::http::StatusCode::CONFLICT,
+                        axum::Json(json!({"error":"staging_managed_base_candidate_expired"})),
+                    )
+                }),
+            )
+            .route(
+                "/v1/cloud/projects",
+                axum::routing::get(|| async {
+                    (
+                        axum::http::StatusCode::FORBIDDEN,
+                        axum::Json(json!({"error":"workspace_access_denied"})),
+                    )
+                }),
+            );
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let api = CloudApi::new(&format!("http://{address}")).unwrap();
+        let error = api
+            .request_scoped(
+                "fixture-token",
+                &["v1", "cloud", "context"],
+                None,
+                None,
+                &[],
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("setup expired"), "{error}");
+        assert!(!error.contains("workspace is busy"), "{error}");
+        let error = api
+            .request_scoped(
+                "fixture-token",
+                &["v1", "cloud", "projects"],
+                None,
+                None,
+                &[],
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+        assert_eq!(error, "You do not have access to this workspace.");
         server.abort();
     }
 }

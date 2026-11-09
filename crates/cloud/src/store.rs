@@ -576,7 +576,9 @@ impl Workspace {
                             Some("repository_preparation_failed")
                         }
                         Some("environment_setup_failed") => Some("environment_setup_failed"),
-                        Some("credential_preparation_failed") => Some("credential_preparation_failed"),
+                        Some("credential_preparation_failed") => {
+                            Some("credential_preparation_failed")
+                        }
                         _ => None,
                     };
                     steps[stage] = json!({"state":step["state"],"errorCode":error,"startedAt":step["startedAt"].as_i64(),"updatedAt":step["updatedAt"].as_i64()});
@@ -771,17 +773,23 @@ mod archive_projection_tests {
 
     #[test]
     fn parallel_preparation_projection_exposes_safe_stage_facts_without_secrets() {
-        let public = Workspace { row: json!({"request_config":{
-            "rustPreparationVersion":1,
-            "preparation":{
-                "repository":{"state":"running","startedAt":10,"updatedAt":10},
-                "credentials":{"state":"failed","errorCode":"credential_preparation_failed",
-                    "startedAt":11,"updatedAt":20,"secret":"never-public"},
-                "agent":{"state":"completed","secret":"never-public"}
-            }
-        }}) }.public();
+        let public = Workspace {
+            row: json!({"request_config":{
+                "rustPreparationVersion":1,
+                "preparation":{
+                    "repository":{"state":"running","startedAt":10,"updatedAt":10},
+                    "credentials":{"state":"failed","errorCode":"credential_preparation_failed",
+                        "startedAt":11,"updatedAt":20,"secret":"never-public"},
+                    "agent":{"state":"completed","secret":"never-public"}
+                }
+            }}),
+        }
+        .public();
         assert_eq!(public["preparation"]["repository"]["state"], "running");
-        assert_eq!(public["preparation"]["credentials"]["errorCode"], "credential_preparation_failed");
+        assert_eq!(
+            public["preparation"]["credentials"]["errorCode"],
+            "credential_preparation_failed"
+        );
         assert!(public["preparation"].get("agent").is_none());
         assert!(!public.to_string().contains("never-public"));
         assert_eq!(public["preparation"]["credentials"]["updatedAt"], 20);

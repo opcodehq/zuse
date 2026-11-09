@@ -686,12 +686,14 @@ impl WorkspaceView {
                             })),
                     );
                 if enabled {
-                    menu = menu.child(control("cloud-sync-retry", tr(cx, msg::native::retry_sync)).on_click(
-                        cx.listener(|this, _, _, cx| {
-                            this.request_cloud_sync(methods::CLOUD_SYNC_RETRY, true, None);
-                            cx.notify();
-                        }),
-                    ));
+                    menu = menu.child(
+                        control("cloud-sync-retry", tr(cx, msg::native::retry_sync)).on_click(
+                            cx.listener(|this, _, _, cx| {
+                                this.request_cloud_sync(methods::CLOUD_SYNC_RETRY, true, None);
+                                cx.notify();
+                            }),
+                        ),
+                    );
                 }
             }
             menu = menu.child(

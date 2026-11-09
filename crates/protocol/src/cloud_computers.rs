@@ -362,9 +362,20 @@ impl Default for MachineRecipe {
 /// Home paths a recipe may never write: credentials, runtime state and the
 /// agents' own login stores.
 const MACHINE_PROTECTED: &[&str] = &[
-    ".ssh", ".gnupg", ".zuse-data", ".zuse", ".config/zuse", ".codex/auth.json",
-    ".claude/.credentials.json", ".claude.json", ".aws", ".docker", ".kube",
-    ".netrc", ".git-credentials", ".npmrc.token",
+    ".ssh",
+    ".gnupg",
+    ".zuse-data",
+    ".zuse",
+    ".config/zuse",
+    ".codex/auth.json",
+    ".claude/.credentials.json",
+    ".claude.json",
+    ".aws",
+    ".docker",
+    ".kube",
+    ".netrc",
+    ".git-credentials",
+    ".npmrc.token",
 ];
 const MACHINE_TEXT_LIMIT: usize = 64 * 1024;
 
@@ -380,7 +391,9 @@ impl MachineRecipe {
         if self.version != 1 || !(60..=3600).contains(&self.setup_timeout_seconds) {
             return Err("invalid_machine_recipe");
         }
-        if self.setup_script.len() > MACHINE_TEXT_LIMIT || self.instructions.len() > MACHINE_TEXT_LIMIT {
+        if self.setup_script.len() > MACHINE_TEXT_LIMIT
+            || self.instructions.len() > MACHINE_TEXT_LIMIT
+        {
             return Err("machine_recipe_text_too_large");
         }
         if self.skills.len() > 64 || self.files.len() > 32 {
@@ -390,12 +403,14 @@ impl MachineRecipe {
         for skill in &self.skills {
             let valid = !skill.name.is_empty()
                 && skill.name.len() <= 64
-                && skill
-                    .name
-                    .bytes()
-                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_')
+                && skill.name.bytes().all(|b| {
+                    b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_'
+                })
                 && !skill.name.starts_with('-');
-            if !valid || skill.content.len() > MACHINE_TEXT_LIMIT || !names.insert(skill.name.as_str()) {
+            if !valid
+                || skill.content.len() > MACHINE_TEXT_LIMIT
+                || !names.insert(skill.name.as_str())
+            {
                 return Err("invalid_machine_skill");
             }
         }
@@ -406,7 +421,9 @@ impl MachineRecipe {
             let valid = !path.is_empty()
                 && path.len() <= 200
                 && !path.starts_with('/')
-                && segments.iter().all(|s| !s.is_empty() && *s != "." && *s != "..")
+                && segments
+                    .iter()
+                    .all(|s| !s.is_empty() && *s != "." && *s != "..")
                 && path.bytes().all(|b| b.is_ascii_graphic())
                 && !MACHINE_PROTECTED
                     .iter()
@@ -533,18 +550,37 @@ mod machine_recipe_tests {
     fn machine_recipe_rejects_credential_paths_and_bad_names() {
         let mut recipe = MachineRecipe {
             setup_script: "sudo apt-get install -y ffmpeg".into(),
-            skills: vec![MachineSkill { name: "release-notes".into(), content: "# Release notes".into() }],
-            files: vec![MachineFile { path: ".gitconfig".into(), content: "[user]\n".into() }],
+            skills: vec![MachineSkill {
+                name: "release-notes".into(),
+                content: "# Release notes".into(),
+            }],
+            files: vec![MachineFile {
+                path: ".gitconfig".into(),
+                content: "[user]\n".into(),
+            }],
             ..Default::default()
         };
         assert_eq!(recipe.validate(), Ok(()));
         assert!(!recipe.is_empty());
-        for path in [".ssh/config", ".claude/.credentials.json", "../etc/passwd", "/root/x", "a//b", ".codex/auth.json"] {
-            recipe.files = vec![MachineFile { path: path.into(), content: String::new() }];
+        for path in [
+            ".ssh/config",
+            ".claude/.credentials.json",
+            "../etc/passwd",
+            "/root/x",
+            "a//b",
+            ".codex/auth.json",
+        ] {
+            recipe.files = vec![MachineFile {
+                path: path.into(),
+                content: String::new(),
+            }];
             assert_eq!(recipe.validate(), Err("invalid_machine_file"), "{path}");
         }
         recipe.files = vec![];
-        recipe.skills = vec![MachineSkill { name: "Bad Name".into(), content: String::new() }];
+        recipe.skills = vec![MachineSkill {
+            name: "Bad Name".into(),
+            content: String::new(),
+        }];
         assert_eq!(recipe.validate(), Err("invalid_machine_skill"));
         assert!(MachineRecipe::default().is_empty());
     }

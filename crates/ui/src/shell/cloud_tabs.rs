@@ -874,7 +874,11 @@ mod tests {
             cx.set_global(Theme::default());
             crate::app_menus::init(cx);
             crate::history::init(
-                Default::default(), Default::default(), Default::default(), Default::default(), cx,
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                cx,
             );
         });
         let controller = crate::state::EngineHandle::from_test_client(zuse_rpc::memory_client(

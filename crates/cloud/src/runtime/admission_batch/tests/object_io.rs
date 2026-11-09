@@ -580,7 +580,7 @@ async fn v2_large_tool_put_keeps_control_and_new_admission_independent_and_recon
             .is_empty()
     );
     assert_eq!(sqlx::query_scalar::<_,String>("SELECT state FROM zuse_rust_task_command_execution WHERE workspace_id='execution-task' AND command_id='run:second'").fetch_one(&application).await.unwrap(),"outcome-unknown");
-    super::interrupts::exercise(&control,&application,&access,now,&prepare).await;
+    super::interrupts::exercise(&control, &application, &access, now, &prepare).await;
     application.close().await;
     pool.close().await;
     sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))

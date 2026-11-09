@@ -19,7 +19,12 @@ impl ObjectWriteIntent {
         purpose: &str,
         now: i64,
     ) -> Result<Self, ApiError> {
-        if key.len() > 1024 || !matches!(purpose, "tool" | "asset-chunk" | "asset-manifest" | "transcript") {
+        if key.len() > 1024
+            || !matches!(
+                purpose,
+                "tool" | "asset-chunk" | "asset-manifest" | "transcript"
+            )
+        {
             return Err(ApiError::bad_request("invalid_object_write_intent"));
         }
         let workspace = required(row, "workspace_id")?.to_owned();

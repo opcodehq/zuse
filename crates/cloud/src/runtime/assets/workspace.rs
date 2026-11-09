@@ -155,10 +155,17 @@ impl RuntimeControl {
         }
         let objects = self.transcript_objects.as_ref().ok_or_else(failed)?;
         let key = format!("{}/{seq}.json", prefix(id, &asset), seq = request.seq);
-        let intent=super::super::object_writes::ObjectWriteIntent::prepare(&mut io,&current,&key,"asset-chunk",now).await?;
+        let intent = super::super::object_writes::ObjectWriteIntent::prepare(
+            &mut io,
+            &current,
+            &key,
+            "asset-chunk",
+            now,
+        )
+        .await?;
         intent.authorize_result(&early)?;
         io.commit().await?;
-        let authorized=self.workspace_asset_authorize(id,access,true).await?;
+        let authorized = self.workspace_asset_authorize(id, access, true).await?;
         intent.authorize_result(&authorized)?;
         // A durable attempt owns this possible PUT even if cancellation drops
         // the HTTP future and a late remote completion follows workspace delete.
@@ -183,17 +190,23 @@ impl RuntimeControl {
                 .put_archive(&key, sealed.as_ref().ok_or_else(failed)?.as_bytes())
                 .await?;
         }
-        let authorized=self.workspace_asset_authorize(id,access,true).await?;
+        let authorized = self.workspace_asset_authorize(id, access, true).await?;
         intent.authorize_result(&authorized)?;
         let mut tx = self.pool.begin().await?;
-        let current=self.workspace_asset_locked(id, access, fence, &mut tx).await?;
-        if current["request_config"]["sharingPolicy"]!=authorized["request_config"]["sharingPolicy"]{return Err(ApiError::conflict("workspace_sharing_changed"));}
+        let current = self
+            .workspace_asset_locked(id, access, fence, &mut tx)
+            .await?;
+        if current["request_config"]["sharingPolicy"]
+            != authorized["request_config"]["sharingPolicy"]
+        {
+            return Err(ApiError::conflict("workspace_sharing_changed"));
+        }
         let affected=sqlx::query("UPDATE zuse_rust_task_asset_chunks SET ready=true,ciphertext=NULL,updated_at=$6 WHERE workspace_id=$1 AND asset_id=$2 AND chunk_sequence=$3 AND sha256=$4 AND size_bytes=$5").bind(id).bind(&asset).bind(request.seq as i32).bind(&hash).bind(bytes.len() as i32).bind(now).execute(&mut *tx).await?;
         if affected.rows_affected() != 1 {
             return Err(ApiError::conflict("cloud_task_asset_receipt_changed"));
         }
         sqlx::query("UPDATE zuse_rust_launch_assets SET chunks=jsonb_set(chunks,ARRAY[$3::text],$4::jsonb),updated_at=$5 WHERE workspace_id=$1 AND asset_id=$2").bind(id).bind(&asset).bind(request.seq.to_string()).bind(json!({"size":bytes.len(),"sha256":hash})).bind(now).execute(&mut *tx).await?;
-        intent.commit(&mut tx,&current).await?;
+        intent.commit(&mut tx, &current).await?;
         tx.commit().await?;
         Ok(json!({"workspaceId":id,"assetId":asset,"seq":request.seq}))
     }
@@ -267,9 +280,12 @@ impl RuntimeControl {
         let after = self.workspace_asset_authorize(id, access, false).await?;
         if super::super::mailbox::destruction_fence(&after) != fence
             || after["account_id"] != before["account_id"]
-            || after["request_config"]["runtimeGeneration"]!=before["request_config"]["runtimeGeneration"]
-            || after["request_config"]["rustRuntimeStorage"]["storageIncarnationId"]!=before["request_config"]["rustRuntimeStorage"]["storageIncarnationId"]
-            || (!before["provider_sandbox_id"].is_null()&&after["provider_sandbox_id"]!=before["provider_sandbox_id"])
+            || after["request_config"]["runtimeGeneration"]
+                != before["request_config"]["runtimeGeneration"]
+            || after["request_config"]["rustRuntimeStorage"]["storageIncarnationId"]
+                != before["request_config"]["rustRuntimeStorage"]["storageIncarnationId"]
+            || (!before["provider_sandbox_id"].is_null()
+                && after["provider_sandbox_id"] != before["provider_sandbox_id"])
         {
             return Err(ApiError::conflict("cloud_asset_workspace_fenced"));
         }
@@ -396,23 +412,36 @@ impl RuntimeControl {
         if super::super::mailbox::destruction_fence(&row) != fence {
             return Err(ApiError::conflict("cloud_asset_workspace_fenced"));
         }
-        let key=format!("{}.json",prefix(id,&asset_id));
-        let intent=super::super::object_writes::ObjectWriteIntent::prepare(&mut io,&row,&key,"asset-manifest",now).await?;
+        let key = format!("{}.json", prefix(id, &asset_id));
+        let intent = super::super::object_writes::ObjectWriteIntent::prepare(
+            &mut io,
+            &row,
+            &key,
+            "asset-manifest",
+            now,
+        )
+        .await?;
         intent.authorize_result(&early)?;
         io.commit().await?;
-        let authorized=self.workspace_asset_authorize(id,access,true).await?;
+        let authorized = self.workspace_asset_authorize(id, access, true).await?;
         intent.authorize_result(&authorized)?;
-        objects.put_archive(&key,sealed.as_bytes()).await?;
-        let authorized=self.workspace_asset_authorize(id,access,true).await?;
+        objects.put_archive(&key, sealed.as_bytes()).await?;
+        let authorized = self.workspace_asset_authorize(id, access, true).await?;
         intent.authorize_result(&authorized)?;
         let mut tx = self.pool.begin().await?;
-        let current=self.workspace_asset_locked(id, access, fence, &mut tx).await?;
-        if current["request_config"]["sharingPolicy"]!=authorized["request_config"]["sharingPolicy"]{return Err(ApiError::conflict("workspace_sharing_changed"));}
+        let current = self
+            .workspace_asset_locked(id, access, fence, &mut tx)
+            .await?;
+        if current["request_config"]["sharingPolicy"]
+            != authorized["request_config"]["sharingPolicy"]
+        {
+            return Err(ApiError::conflict("workspace_sharing_changed"));
+        }
         let changed=sqlx::query("UPDATE zuse_rust_launch_assets SET state='ready',updated_at=$4 WHERE workspace_id=$1 AND asset_id=$2 AND manifest=$3").bind(id).bind(&asset_id).bind(serde_json::from_str::<Value>(&sealed).map_err(|_|failed())?).bind(now).execute(&mut *tx).await?;
         if changed.rows_affected() != 1 {
             return Err(ApiError::conflict("launch_asset_manifest_conflict"));
         }
-        intent.commit(&mut tx,&current).await?;
+        intent.commit(&mut tx, &current).await?;
         tx.commit().await?;
         Ok(json!({"workspaceId":id,"asset":expected}))
     }

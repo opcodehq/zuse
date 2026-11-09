@@ -150,10 +150,15 @@ enum Command {
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .with_span_events(if std::env::var("ZUSE_DEPLOYMENT_ENVIRONMENT").as_deref() == Ok("staging")
-            && std::env::var("ZUSE_CLOUD_STARTUP_TRACING").as_deref() == Ok("1") {
-            tracing_subscriber::fmt::format::FmtSpan::CLOSE
-        } else { tracing_subscriber::fmt::format::FmtSpan::NONE })
+        .with_span_events(
+            if std::env::var("ZUSE_DEPLOYMENT_ENVIRONMENT").as_deref() == Ok("staging")
+                && std::env::var("ZUSE_CLOUD_STARTUP_TRACING").as_deref() == Ok("1")
+            {
+                tracing_subscriber::fmt::format::FmtSpan::CLOSE
+            } else {
+                tracing_subscriber::fmt::format::FmtSpan::NONE
+            },
+        )
         .init();
     let args = Args::parse();
     match args.command.unwrap_or(Command::Serve) {

@@ -250,24 +250,36 @@ impl WorkspaceView {
                     .py(px(4.))
                     .gap(px(2.))
                     .child(
-                        sidebar_action("sidebar-new-chat", crate::localization::text("chat-chat_view_new_chat", cx), "pen-new-square")
-                            .child(label("Ctrl+N").text_size(px(12.)).text_color(rgb(MUTED)))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.start_new_session(window, cx)
-                            })),
+                        sidebar_action(
+                            "sidebar-new-chat",
+                            crate::localization::text("chat-chat_view_new_chat", cx),
+                            "pen-new-square",
+                        )
+                        .child(label("Ctrl+N").text_size(px(12.)).text_color(rgb(MUTED)))
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.start_new_session(window, cx)),
+                        ),
                     )
                     .child(
-                        sidebar_action("sidebar-new-project", crate::localization::text("projects-projects_sidebar_new_project", cx), "folder-with-files")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.open_project_setup(cx);
-                            })),
+                        sidebar_action(
+                            "sidebar-new-project",
+                            crate::localization::text("projects-projects_sidebar_new_project", cx),
+                            "folder-with-files",
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.open_project_setup(cx);
+                        })),
                     )
                     .when(self.cloud_account["user"].is_object(), |v| {
                         v.child(
-                            sidebar_action("sidebar-plugins", crate::localization::text("plugins-plugins_back", cx), "settings-plugins")
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.open_plugins_browse(cx);
-                                })),
+                            sidebar_action(
+                                "sidebar-plugins",
+                                crate::localization::text("plugins-plugins_back", cx),
+                                "settings-plugins",
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.open_plugins_browse(cx);
+                            })),
                         )
                     }),
             )
@@ -368,15 +380,24 @@ impl WorkspaceView {
                                 .p_4()
                                 .gap_2()
                                 .child(label(if query.is_empty() {
-                                    crate::localization::text("projects-projects_sidebar_no_threads_yet", cx)
+                                    crate::localization::text(
+                                        "projects-projects_sidebar_no_threads_yet",
+                                        cx,
+                                    )
                                 } else {
                                     crate::localization::text("native-no_matching_threads", cx)
                                 }))
                                 .child(
                                     label(if query.is_empty() {
-                                        crate::localization::text("native-start_conversation_shortcut", cx)
+                                        crate::localization::text(
+                                            "native-start_conversation_shortcut",
+                                            cx,
+                                        )
                                     } else {
-                                        crate::localization::text("native-try_title_project_branch", cx)
+                                        crate::localization::text(
+                                            "native-try_title_project_branch",
+                                            cx,
+                                        )
                                     })
                                     .text_size(px(11.))
                                     .text_color(rgb(FAINT)),
@@ -472,7 +493,10 @@ impl WorkspaceView {
                                                         "project-menu-{id}"
                                                     )),
                                                     "more-horizontal",
-                                                    crate::localization::text("native-project_actions", cx),
+                                                    crate::localization::text(
+                                                        "native-project_actions",
+                                                        cx,
+                                                    ),
                                                 )
                                                 .size(px(22.))
                                                 .on_mouse_down(MouseButton::Left, |_, _, cx| {

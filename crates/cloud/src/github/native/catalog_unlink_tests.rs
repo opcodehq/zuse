@@ -80,7 +80,7 @@ async fn catalog_unlink_during_repository_io_does_not_become_unrestricted_sql_nu
     let authority = NativeGithub {
         membership_epoch: std::sync::atomic::AtomicU64::new(0),
         observation_gates: Default::default(),
-            fast_start_accounts: Default::default(),
+        fast_start_accounts: Default::default(),
         pool: pool.clone(),
         master: MasterKey::parse(&URL_SAFE_NO_PAD.encode([73; 32])).unwrap(),
         accounts: BTreeSet::from(["fixture-actor".into()]),

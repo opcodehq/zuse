@@ -188,9 +188,19 @@ impl NativeGithub {
         Ok(Some(Arc::new(Self {
             membership_epoch: std::sync::atomic::AtomicU64::new(0),
             observation_gates: Default::default(),
-            fast_start_accounts: if std::env::var("ZUSE_DEPLOYMENT_ENVIRONMENT").as_deref() == Ok("staging") {
-                std::env::var("ZUSE_CLOUD_FAST_START_ACCOUNTS").unwrap_or_default().split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned).collect()
-            } else { BTreeSet::new() },
+            fast_start_accounts: if std::env::var("ZUSE_DEPLOYMENT_ENVIRONMENT").as_deref()
+                == Ok("staging")
+            {
+                std::env::var("ZUSE_CLOUD_FAST_START_ACCOUNTS")
+                    .unwrap_or_default()
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_owned)
+                    .collect()
+            } else {
+                BTreeSet::new()
+            },
             pool,
             master,
             accounts,
@@ -562,13 +572,29 @@ impl NativeGithub {
         // the fresh local revocation/binding checks below succeed.
         let ((installation, scope_epoch), value) = if self.fast_start_accounts.contains(owner) {
             let (installation, scoped) = tokio::join!(
-                self.verify_repository_links(owner, repository, &credentials.access_token, scope_epoch, links),
+                self.verify_repository_links(
+                    owner,
+                    repository,
+                    &credentials.access_token,
+                    scope_epoch,
+                    links
+                ),
                 self.scoped_token_request(&credentials.access_token, target, name),
             );
             (installation?, scoped?)
         } else {
-            let installation = self.verify_repository_links(owner, repository, &credentials.access_token, scope_epoch, links).await?;
-            let scoped = self.scoped_token_request(&credentials.access_token, target, name).await?;
+            let installation = self
+                .verify_repository_links(
+                    owner,
+                    repository,
+                    &credentials.access_token,
+                    scope_epoch,
+                    links,
+                )
+                .await?;
+            let scoped = self
+                .scoped_token_request(&credentials.access_token, target, name)
+                .await?;
             (installation, scoped)
         };
         let token = value["token"]
@@ -605,13 +631,33 @@ impl NativeGithub {
             email: user.email,
         })
     }
-    #[tracing::instrument(name="cloud_admission_stage", skip_all, fields(operation="github_scoped_token"))]
-    async fn scoped_token_request(&self, token: &str, target: &str, repository: &str) -> Result<Value, ApiError> {
-        let (status, value) = self.response(
-            self.http.post(self.api(&format!("/applications/{}/token/scoped", self.config.client_id)))
-                .basic_auth(&self.config.client_id, Some(self.config.client_secret.as_str()))
-                .json(&json!({"access_token":token,"target":target,"repositories":[repository]})),
-        ).await?;
+    #[tracing::instrument(
+        name = "cloud_admission_stage",
+        skip_all,
+        fields(operation = "github_scoped_token")
+    )]
+    async fn scoped_token_request(
+        &self,
+        token: &str,
+        target: &str,
+        repository: &str,
+    ) -> Result<Value, ApiError> {
+        let (status, value) = self
+            .response(
+                self.http
+                    .post(self.api(&format!(
+                        "/applications/{}/token/scoped",
+                        self.config.client_id
+                    )))
+                    .basic_auth(
+                        &self.config.client_id,
+                        Some(self.config.client_secret.as_str()),
+                    )
+                    .json(
+                        &json!({"access_token":token,"target":target,"repositories":[repository]}),
+                    ),
+            )
+            .await?;
         if status != 200 && status != 201 {
             return Err(ApiError::forbidden("github_scoped_token_failed"));
         }

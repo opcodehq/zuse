@@ -78,7 +78,9 @@ pub async fn serve(
         }
         let connection_started = std::time::Instant::now();
         let mut grant = authority.gateway(&bootstrap)?;
-        if identity.acknowledged() { grant.storage_binding = None; }
+        if identity.acknowledged() {
+            grant.storage_binding = None;
+        }
         let link_cancel = cancel.child_token();
         let (connected, mut connection) = tokio::sync::oneshot::channel();
         let mut connection_pending = true;
@@ -182,7 +184,10 @@ mod reconnect_tests {
         for ms in [super::RECONNECT_START_MS, 1_000, super::RECONNECT_MAX_MS] {
             for _ in 0..64 {
                 let value = super::jittered(ms);
-                assert!(value >= ms * 3 / 4 && value <= ms * 5 / 4 + 1, "{ms} -> {value}");
+                assert!(
+                    value >= ms * 3 / 4 && value <= ms * 5 / 4 + 1,
+                    "{ms} -> {value}"
+                );
             }
         }
     }

@@ -288,7 +288,9 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
         )
         .route(
             "/v1/cloud/machine",
-            get(machine).put(save_machine).layer(DefaultBodyLimit::max(1536 * 1024)),
+            get(machine)
+                .put(save_machine)
+                .layer(DefaultBodyLimit::max(1536 * 1024)),
         )
         .route(
             "/v1/cloud/projects/{id}/environment",
@@ -776,11 +778,16 @@ async fn gateway_upgrade(
         .as_ref()
         .ok_or_else(|| ApiError::unavailable("cloud_runtime_disabled"))?
         .clone();
-    let storage = headers.get(zuse_protocol::cloud::STARTUP_BIND_HEADER).map(|value| {
-        if value.as_bytes().len() > 4096 { return Err(ApiError::bad_request("invalid_runtime_storage_binding")); }
-        serde_json::from_slice::<zuse_protocol::cloud::CloudStorageEnrollment>(value.as_bytes())
-            .map_err(|_| ApiError::bad_request("invalid_runtime_storage_binding"))
-    }).transpose()?;
+    let storage = headers
+        .get(zuse_protocol::cloud::STARTUP_BIND_HEADER)
+        .map(|value| {
+            if value.as_bytes().len() > 4096 {
+                return Err(ApiError::bad_request("invalid_runtime_storage_binding"));
+            }
+            serde_json::from_slice::<zuse_protocol::cloud::CloudStorageEnrollment>(value.as_bytes())
+                .map_err(|_| ApiError::bad_request("invalid_runtime_storage_binding"))
+        })
+        .transpose()?;
     let grant = control
         .gateway_authorize_with_storage(
             &id,
@@ -2253,7 +2260,9 @@ fn project_create_precondition(headers: &HeaderMap) -> Result<bool, ApiError> {
     if values.len() == 1 && values[0].to_str().ok().map(str::trim) == Some("*") {
         return Ok(true);
     }
-    Err(ApiError::bad_request("cloud_project_create_precondition_invalid"))
+    Err(ApiError::bad_request(
+        "cloud_project_create_precondition_invalid",
+    ))
 }
 async fn project_connect(
     State(state): State<AppState>,

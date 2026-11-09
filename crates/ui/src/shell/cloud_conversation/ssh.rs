@@ -132,7 +132,10 @@ pub(super) fn terminal_command(prepared: &Prepared) -> String {
     format!(
         "ssh -t {} {}",
         prepared.host,
-        quote(&format!("cd {} && exec \"$SHELL\" -l", quote(&prepared.path)))
+        quote(&format!(
+            "cd {} && exec \"$SHELL\" -l",
+            quote(&prepared.path)
+        ))
     )
 }
 
@@ -170,10 +173,16 @@ mod tests {
 
     #[test]
     fn host_entries_route_through_the_proxy_with_a_private_known_hosts() {
-        let entry = host_entry("workspace_1", "zuse", "'/Applications/Zuse.app/zuse' ssh-proxy --ipc-port 27654");
+        let entry = host_entry(
+            "workspace_1",
+            "zuse",
+            "'/Applications/Zuse.app/zuse' ssh-proxy --ipc-port 27654",
+        );
         assert!(entry.starts_with("Host zuse-workspace_1\n"));
         assert!(entry.contains("  User zuse\n"));
-        assert!(entry.contains("  ProxyCommand '/Applications/Zuse.app/zuse' ssh-proxy --ipc-port 27654 %h\n"));
+        assert!(entry.contains(
+            "  ProxyCommand '/Applications/Zuse.app/zuse' ssh-proxy --ipc-port 27654 %h\n"
+        ));
         assert!(entry.contains("IdentitiesOnly yes"));
         assert!(entry.contains("known_hosts"));
     }

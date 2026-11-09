@@ -68,14 +68,21 @@ impl crate::runtime::allocation::AllocationProvider for AllowanceProvider {
     ) -> Result<(), crate::providers::ProviderError> {
         // The provider contract is idempotent for the same launch. A guest that
         // has not enrolled yet can receive this exact delivery again.
-        let identity=json!({"machine":machine,"operation":launch.operation_id,"workspace":launch.workspace_id,
+        let identity = json!({"machine":machine,"operation":launch.operation_id,"workspace":launch.workspace_id,
             "generation":launch.generation,"storage":launch.incarnation,"bootSha256":format!("{:x}",Sha256::digest(launch.boot_token.as_bytes()))});
-        let mut receipt=self.launch_receipt.lock().unwrap();
-        if let Some(prior)=receipt.as_ref() { assert_eq!(prior,&identity,"retry changed its original launch binding"); }
-        else { *receipt=Some(identity); self.launches.fetch_add(1,std::sync::atomic::Ordering::SeqCst); }
+        let mut receipt = self.launch_receipt.lock().unwrap();
+        if let Some(prior) = receipt.as_ref() {
+            assert_eq!(
+                prior, &identity,
+                "retry changed its original launch binding"
+            );
+        } else {
+            *receipt = Some(identity);
+            self.launches
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
         Ok(())
     }
-
 }
 fn copy(
     body: &crate::runtime::creation::CreateWorkspace,
@@ -210,7 +217,11 @@ async fn admission_case(expanded_capacity_only: bool, defer_repository: bool) {
         TicketSigner::from_jwk(&jwk.to_string(), "https://api.example.test").unwrap(),
     )
     .with_creation_accounts(vec!["user-test".into()])
-    .with_fast_start_accounts(if defer_repository { vec!["user-test".into()] } else { vec![] })
+    .with_fast_start_accounts(if defer_repository {
+        vec!["user-test".into()]
+    } else {
+        vec![]
+    })
     .with_credential_authority(authority.clone());
     let github =
         crate::github::native::admission_fixture::connected(&application, "user-test", "user-test")
@@ -371,18 +382,46 @@ async fn admission_case(expanded_capacity_only: bool, defer_repository: bool) {
     let counts:(i64,i64,i64) = sqlx::query_as("SELECT (SELECT count(*) FROM api_cloud_project_builds),(SELECT count(*) FROM api_cloud_snapshots),(SELECT count(*) FROM zuse_rust_allocations)").fetch_one(&pool).await.unwrap();
     assert_eq!(counts, (0, 0, 1));
     if defer_repository {
-        assert_eq!(github.reads.load(std::sync::atomic::Ordering::SeqCst),before_reads,"admission must not wait for GitHub HTTP");
-        assert_eq!(row["request_config"]["rustRepositoryAuthorizationMode"],"preparation-v1");
-        assert_eq!(row["request_config"]["rustGithubUserId"],42);
+        assert_eq!(
+            github.reads.load(std::sync::atomic::Ordering::SeqCst),
+            before_reads,
+            "admission must not wait for GitHub HTTP"
+        );
+        assert_eq!(
+            row["request_config"]["rustRepositoryAuthorizationMode"],
+            "preparation-v1"
+        );
+        assert_eq!(row["request_config"]["rustGithubUserId"], 42);
         // The same task's later Git grant must observe current repository policy.
         sqlx::query("UPDATE zuse_rust_github_installations SET allowed_repositories='[]'::jsonb WHERE owner_id='user-test'").execute(&pool).await.unwrap();
-        assert_eq!(github.github.scoped_git("user-test","user-test","example/repo").await.err().unwrap().code,"github_repository_access_denied");
-        assert!(github.reads.load(std::sync::atomic::Ordering::SeqCst)>before_reads,"Git delivery must still make fresh provider checks");
+        assert_eq!(
+            github
+                .github
+                .scoped_git("user-test", "user-test", "example/repo")
+                .await
+                .err()
+                .unwrap()
+                .code,
+            "github_repository_access_denied"
+        );
+        assert!(
+            github.reads.load(std::sync::atomic::Ordering::SeqCst) > before_reads,
+            "Git delivery must still make fresh provider checks"
+        );
         application.close().await;
         pool.close().await;
-        sqlx::query(&format!("DROP SCHEMA {schema} CASCADE")).execute(&admin).await.unwrap();
-        sqlx::query("DROP OWNED BY zuse_cloud_staging").execute(&admin).await.unwrap();
-        sqlx::query("DROP ROLE zuse_cloud_staging").execute(&admin).await.unwrap();
+        sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query("DROP OWNED BY zuse_cloud_staging")
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query("DROP ROLE zuse_cloud_staging")
+            .execute(&admin)
+            .await
+            .unwrap();
         return;
     }
     let op = row["request_config"]["rustAllocationOperationId"]
@@ -824,7 +863,7 @@ async fn admission_case(expanded_capacity_only: bool, defer_repository: bool) {
             machine: Default::default(),
             creates: Default::default(),
             launches: Default::default(),
-        launch_receipt: Default::default(),
+            launch_receipt: Default::default(),
         };
         let first = candidate_control
             .allocate_once(&p, chrono::Utc::now().timestamp_millis() + 10000)
@@ -832,7 +871,10 @@ async fn admission_case(expanded_capacity_only: bool, defer_repository: bool) {
         // A positive create immediately continues to the next fresh fence;
         // retirement during create must now reject this same worker pass.
         if mode == 1 {
-            assert_eq!(first.err().unwrap().code,"staging_managed_base_candidate_unavailable");
+            assert_eq!(
+                first.err().unwrap().code,
+                "staging_managed_base_candidate_unavailable"
+            );
         } else {
             assert!(first.is_err());
         }

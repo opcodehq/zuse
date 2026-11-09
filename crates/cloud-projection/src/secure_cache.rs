@@ -265,7 +265,10 @@ mod file {
                 file.sync_all()
             })
         };
-        if written.and_then(|()| std::fs::rename(&temporary, &path)).is_err() {
+        if written
+            .and_then(|()| std::fs::rename(&temporary, &path))
+            .is_err()
+        {
             let _ = std::fs::remove_file(&temporary);
         }
     }
@@ -385,19 +388,29 @@ mod file_store_tests {
         assert!(file::read(&service, "a").is_none());
         file::write(&service, "a", b"first");
         file::write(&service, "b", b"other");
-        assert_eq!(file::read(&service, "a").as_deref(), Some(b"first".as_slice()));
+        assert_eq!(
+            file::read(&service, "a").as_deref(),
+            Some(b"first".as_slice())
+        );
         file::write(&service, "a", b"rotated");
-        assert_eq!(file::read(&service, "a").as_deref(), Some(b"rotated".as_slice()));
+        assert_eq!(
+            file::read(&service, "a").as_deref(),
+            Some(b"rotated".as_slice())
+        );
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let root = std::env::temp_dir().join(format!("zuse-secure-cache-{}", std::process::id()));
+            let root =
+                std::env::temp_dir().join(format!("zuse-secure-cache-{}", std::process::id()));
             let mode = std::fs::metadata(&root).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode, 0o700, "the key store is private to its user");
         }
         file::clear(&service, Some("a"));
         assert!(file::read(&service, "a").is_none());
-        assert_eq!(file::read(&service, "b").as_deref(), Some(b"other".as_slice()));
+        assert_eq!(
+            file::read(&service, "b").as_deref(),
+            Some(b"other".as_slice())
+        );
         file::clear(&service, None);
         assert!(file::read(&service, "b").is_none());
     }

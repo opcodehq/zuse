@@ -86,7 +86,11 @@ fn codex_servers(text: &str) -> Vec<DetectedServer> {
             let args = entry
                 .get("args")
                 .and_then(|v| v.as_array())
-                .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(str::to_owned))
+                        .collect()
+                })
                 .unwrap_or_default();
             let env = entry
                 .get("env")
@@ -155,11 +159,24 @@ mod tests {
         )
         .unwrap();
         let servers = discover(root);
-        let names: Vec<_> = servers.iter().map(|s| (s.source.as_str(), s.name.as_str())).collect();
+        let names: Vec<_> = servers
+            .iter()
+            .map(|s| (s.source.as_str(), s.name.as_str()))
+            .collect();
         // Each app's servers come back in name order.
-        assert_eq!(names, [("Claude", "docs"), ("Claude", "github"), ("Codex", "linear")]);
+        assert_eq!(
+            names,
+            [
+                ("Claude", "docs"),
+                ("Claude", "github"),
+                ("Codex", "linear")
+            ]
+        );
         assert_eq!(servers[1].env["GITHUB_TOKEN"], "secret");
-        assert_eq!(servers[0].url.as_deref(), Some("https://docs.example.com/mcp"));
+        assert_eq!(
+            servers[0].url.as_deref(),
+            Some("https://docs.example.com/mcp")
+        );
         assert!(servers[0].command.is_none());
         assert_eq!(servers[2].summary(), "npx -y linear-mcp");
         assert_eq!(servers[2].env["LINEAR_KEY"], "k");
@@ -188,8 +205,23 @@ mod tests {
             Ok(zuse_protocol::plugins::PluginRequest::AddLocalServer { .. })
         ));
         // Local servers stay personal, exactly like the manual form.
-        assert!(stdio.request("organization:team", zuse_protocol::plugins::PluginReturnTo::Web).is_err());
-        let insecure = DetectedServer { url: Some("http://plain.example/mcp".into()), command: None, ..stdio };
-        assert!(insecure.request("personal:me", zuse_protocol::plugins::PluginReturnTo::Web).is_err());
+        assert!(
+            stdio
+                .request(
+                    "organization:team",
+                    zuse_protocol::plugins::PluginReturnTo::Web
+                )
+                .is_err()
+        );
+        let insecure = DetectedServer {
+            url: Some("http://plain.example/mcp".into()),
+            command: None,
+            ..stdio
+        };
+        assert!(
+            insecure
+                .request("personal:me", zuse_protocol::plugins::PluginReturnTo::Web)
+                .is_err()
+        );
     }
 }

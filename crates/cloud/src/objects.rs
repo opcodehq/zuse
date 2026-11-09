@@ -614,11 +614,23 @@ mod tests {
         let mut client = R2::new("https://fixture.invalid/", "bucket", "access", "secret").unwrap();
         client.endpoint = endpoint.parse().unwrap();
         assert!(client.purge_prefix("workspaces/").await.is_err());
-        for bad in ["workspaces//", "workspaces/../", "workspaces/w/../", "workspaces/w/key", "other/w/", "workspaces/w//x/"] {
+        for bad in [
+            "workspaces//",
+            "workspaces/../",
+            "workspaces/w/../",
+            "workspaces/w/key",
+            "other/w/",
+            "workspaces/w//x/",
+        ] {
             assert!(client.purge_prefix(bad).await.is_err(), "{bad}");
         }
         // A directory inside a workspace is a valid scope (expired launch assets).
-        assert!(client.purge_prefix("workspaces/never-created/api-assets/").await.unwrap());
+        assert!(
+            client
+                .purge_prefix("workspaces/never-created/api-assets/")
+                .await
+                .unwrap()
+        );
         mode.store(2, Ordering::SeqCst);
         assert!(client.purge_prefix(prefix).await.is_err());
         assert_eq!(map.lock().unwrap().len(), 103);

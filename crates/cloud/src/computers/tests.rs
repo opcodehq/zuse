@@ -509,14 +509,19 @@ async fn machine_recipes_are_revisioned_validated_and_report_image_state() {
     assert!(url.contains("127.0.0.1") || url.contains("localhost"));
     let admin = PgPool::connect(&url).await.unwrap();
     let schema = format!("machine_{}", uuid::Uuid::new_v4().simple());
-    sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        .execute(&admin)
+        .await
+        .unwrap();
     let copy = schema.clone();
     let pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(6)
         .after_connect(move |connection, _| {
             let schema = copy.clone();
             Box::pin(async move {
-                sqlx::query(&format!("SET search_path={schema}")).execute(connection).await?;
+                sqlx::query(&format!("SET search_path={schema}"))
+                    .execute(connection)
+                    .await?;
                 Ok(())
             })
         })
@@ -537,7 +542,10 @@ async fn machine_recipes_are_revisioned_validated_and_report_image_state() {
             crate::crypto::MasterKey::parse("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap(),
             vec!["user-alice".into()],
         ))
-        .with_computer_control(ComputerControl::from_pool(pool.clone(), vec!["user-alice".into()]));
+        .with_computer_control(ComputerControl::from_pool(
+            pool.clone(),
+            vec!["user-alice".into()],
+        ));
     let app = router(
         AppState {
             store,
@@ -550,7 +558,12 @@ async fn machine_recipes_are_revisioned_validated_and_report_image_state() {
         vec![],
     );
     let path = "/v1/cloud/machine";
-    assert_eq!(call(&app, "GET", path, "invalid", false, Value::Null).await.0, StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        call(&app, "GET", path, "invalid", false, Value::Null)
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
     let initial = call(&app, "GET", path, "alice", false, Value::Null).await;
     assert_eq!(initial.0, StatusCode::OK);
     assert_eq!(initial.1["revision"], 0);
@@ -572,10 +585,29 @@ async fn machine_recipes_are_revisioned_validated_and_report_image_state() {
     assert_eq!(rejected.0, StatusCode::BAD_REQUEST);
     assert!(!rejected.1.to_string().contains("never"));
     // Writes stay closed for accounts without computer setup enabled.
-    let bob = call(&app, "PUT", path, "bob", false, json!({"expectedRevision":0,"recipe":{"setupScript":"x"}})).await;
+    let bob = call(
+        &app,
+        "PUT",
+        path,
+        "bob",
+        false,
+        json!({"expectedRevision":0,"recipe":{"setupScript":"x"}}),
+    )
+    .await;
     assert_eq!(bob.0, StatusCode::FORBIDDEN);
-    let cleared = call(&app, "PUT", path, "alice", false, json!({"expectedRevision":1,"recipe":{}})).await;
+    let cleared = call(
+        &app,
+        "PUT",
+        path,
+        "alice",
+        false,
+        json!({"expectedRevision":1,"recipe":{}}),
+    )
+    .await;
     assert_eq!(cleared.0, StatusCode::OK);
     assert_eq!(cleared.1["imageState"], "none");
-    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE")).execute(&admin).await.unwrap();
+    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+        .execute(&admin)
+        .await
+        .unwrap();
 }

@@ -13,7 +13,11 @@ impl Listener {
     pub fn allocation_from_env() -> anyhow::Result<Self> {
         #[cfg(unix)]
         if let Some(root) = std::env::var_os("ZUSE_CLOUD_EVENT_SIGNAL_DIRECTORY") {
-            return Ok(Self { inner: Some(crate::events::hint::Listener::bind(&PathBuf::from(root).join("allocation"))?) });
+            return Ok(Self {
+                inner: Some(crate::events::hint::Listener::bind(
+                    &PathBuf::from(root).join("allocation"),
+                )?),
+            });
         }
         Ok(Self::disabled())
     }
@@ -51,7 +55,9 @@ pub(crate) fn send() {
     #[cfg(unix)]
     if let Some(path) = directory() {
         send_to(&path);
-        if let Some(root) = path.parent() { send_to(&root.join("allocation")); }
+        if let Some(root) = path.parent() {
+            send_to(&root.join("allocation"));
+        }
     }
 }
 #[cfg(unix)]

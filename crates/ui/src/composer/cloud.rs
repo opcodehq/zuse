@@ -276,7 +276,11 @@ impl Composer {
     }
 
     /// Show the cloud computer's stage above the composer (`busy` spins).
-    pub(crate) fn set_cloud_status(&mut self, status: Option<(String, bool)>, cx: &mut Context<Self>) {
+    pub(crate) fn set_cloud_status(
+        &mut self,
+        status: Option<(String, bool)>,
+        cx: &mut Context<Self>,
+    ) {
         if self.cloud.status != status {
             self.cloud.status = status;
             cx.notify();
@@ -288,7 +292,11 @@ impl Composer {
     }
     /// The one status line above the composer while a cloud computer starts:
     /// a new chat's launch, then the conversation's computer stage.
-    pub(super) fn cloud_status_row(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<super::tray::TrayPill> {
+    pub(super) fn cloud_status_row(
+        &self,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Option<super::tray::TrayPill> {
         let (label, busy) = match self.cloud_creation_activity(cx) {
             Some((label, busy)) => (label.to_owned(), busy),
             None => self.cloud.status.clone()?,

@@ -11,8 +11,12 @@ use zuse_rpc::methods;
 
 /// Host aliases are `zuse-<workspace id>`.
 pub fn workspace_from_host(host: &str) -> Option<&str> {
-    host.strip_prefix("zuse-")
-        .filter(|id| !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'))
+    host.strip_prefix("zuse-").filter(|id| {
+        !id.is_empty()
+            && id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    })
 }
 
 /// One payload of a `CloudRpc` reply stream: each item is the computer's own
@@ -50,7 +54,13 @@ impl Scope {
     }
 }
 
-async fn unary(client: &zuse_rpc::RpcClient, scope: &Scope, request: u64, method: &str, params: Value) -> Result<Value> {
+async fn unary(
+    client: &zuse_rpc::RpcClient,
+    scope: &Scope,
+    request: u64,
+    method: &str,
+    params: Value,
+) -> Result<Value> {
     let mut reply = client
         .subscribe_scoped(methods::CLOUD_RPC, scope.rpc(request, method, params))
         .await?;
@@ -69,12 +79,17 @@ pub async fn run(ipc_port: u16, host: &str) -> Result<()> {
     let client = std::sync::Arc::new(
         zuse_rpc::connect_ws(&format!("ws://127.0.0.1:{ipc_port}"))
             .await
-            .map_err(|e| anyhow!("Zuse isn't running on this computer ({e}). Open Zuse, then retry."))?,
+            .map_err(|e| {
+                anyhow!("Zuse isn't running on this computer ({e}). Open Zuse, then retry.")
+            })?,
     );
     let mut account = client
         .subscribe_scoped(methods::CLOUD_ACCOUNT_STATUS, json!({}))
         .await?;
-    let status = account.recv().await.context("No account status from Zuse.")?;
+    let status = account
+        .recv()
+        .await
+        .context("No account status from Zuse.")?;
     let subject = status["user"]["id"]
         .as_str()
         .context("Sign in to Zuse to reach cloud computers.")?
@@ -102,16 +117,24 @@ pub async fn run(ipc_port: u16, host: &str) -> Result<()> {
             Some("ready") => break,
             Some("blocked" | "failed") => bail!(
                 "{}",
-                value["message"].as_str().unwrap_or("The computer could not start.")
+                value["message"]
+                    .as_str()
+                    .unwrap_or("The computer could not start.")
             ),
             _ => {}
         }
     }
     let mut tunnel_stream = client
-        .subscribe_scoped(methods::CLOUD_RPC, scope.rpc(1, methods::SSH_TUNNEL, json!({})))
+        .subscribe_scoped(
+            methods::CLOUD_RPC,
+            scope.rpc(1, methods::SSH_TUNNEL, json!({})),
+        )
         .await?;
     let tunnel = loop {
-        let frame = tunnel_stream.recv().await.context("The computer refused SSH.")?;
+        let frame = tunnel_stream
+            .recv()
+            .await
+            .context("The computer refused SSH.")?;
         if let Some(value) = payload(&frame)?
             && let Some(id) = value["tunnel"].as_str()
         {
@@ -137,14 +160,27 @@ pub async fn run(ipc_port: u16, host: &str) -> Result<()> {
                 };
                 request += 1;
                 let data = STANDARD.encode(&buffer[..n]);
-                if unary(&client, &scope, request, methods::SSH_TUNNEL_WRITE, json!({"tunnel": tunnel, "data": data}))
-                    .await
-                    .is_err()
+                if unary(
+                    &client,
+                    &scope,
+                    request,
+                    methods::SSH_TUNNEL_WRITE,
+                    json!({"tunnel": tunnel, "data": data}),
+                )
+                .await
+                .is_err()
                 {
                     break;
                 }
             }
-            let _ = unary(&client, &scope, request + 1, methods::SSH_TUNNEL_CLOSE, json!({"tunnel": tunnel})).await;
+            let _ = unary(
+                &client,
+                &scope,
+                request + 1,
+                methods::SSH_TUNNEL_CLOSE,
+                json!({"tunnel": tunnel}),
+            )
+            .await;
         })
     };
     let mut stdout = tokio::io::stdout();
@@ -156,7 +192,9 @@ pub async fn run(ipc_port: u16, host: &str) -> Result<()> {
             continue;
         };
         if let Some(data) = value["data"].as_str() {
-            let bytes = STANDARD.decode(data).context("Invalid data from the computer.")?;
+            let bytes = STANDARD
+                .decode(data)
+                .context("Invalid data from the computer.")?;
             stdout.write_all(&bytes).await?;
             stdout.flush().await?;
         }
@@ -172,7 +210,10 @@ mod tests {
 
     #[test]
     fn hosts_name_one_workspace() {
-        assert_eq!(workspace_from_host("zuse-workspace_123"), Some("workspace_123"));
+        assert_eq!(
+            workspace_from_host("zuse-workspace_123"),
+            Some("workspace_123")
+        );
         assert_eq!(workspace_from_host("zuse-"), None);
         assert_eq!(workspace_from_host("other"), None);
         assert_eq!(workspace_from_host("zuse-a;rm -rf"), None);
@@ -180,8 +221,14 @@ mod tests {
 
     #[test]
     fn reply_frames_unwrap_to_their_payload() {
-        assert_eq!(payload(&json!({"id":1,"item":{"tunnel":"t"}})).unwrap(), Some(json!({"tunnel":"t"})));
-        assert_eq!(payload(&json!({"id":1,"ok":{"ok":true}})).unwrap(), Some(json!({"ok":true})));
+        assert_eq!(
+            payload(&json!({"id":1,"item":{"tunnel":"t"}})).unwrap(),
+            Some(json!({"tunnel":"t"}))
+        );
+        assert_eq!(
+            payload(&json!({"id":1,"ok":{"ok":true}})).unwrap(),
+            Some(json!({"ok":true}))
+        );
         assert!(payload(&json!({"id":1,"err":"nope"})).is_err());
         assert_eq!(payload(&json!({"id":1,"done":true})).unwrap(), None);
     }

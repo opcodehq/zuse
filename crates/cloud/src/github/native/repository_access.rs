@@ -92,9 +92,14 @@ impl NativeGithub {
         token: &str,
     ) -> Result<(i64, i64), ApiError> {
         let (scope_epoch, links) = self.repository_links(owner, repository).await?;
-        self.verify_repository_links(owner, repository, token, scope_epoch, links).await
+        self.verify_repository_links(owner, repository, token, scope_epoch, links)
+            .await
     }
-    pub(super) async fn repository_links(&self, owner: &str, repository: &str) -> Result<(i64, Vec<sqlx::postgres::PgRow>), ApiError> {
+    pub(super) async fn repository_links(
+        &self,
+        owner: &str,
+        repository: &str,
+    ) -> Result<(i64, Vec<sqlx::postgres::PgRow>), ApiError> {
         let (target, _) = repository
             .split_once('/')
             .filter(|(a, b)| valid_component(a) && valid_component(b))
@@ -106,15 +111,31 @@ impl NativeGithub {
             .first()
             .ok_or_else(|| ApiError::forbidden("github_repository_access_denied"))?
             .try_get("epoch")?;
-        if !links.iter().any(|row| row.try_get::<Value,_>("metadata").ok().is_some_and(|metadata|
-            metadata["account"]["login"].as_str().is_some_and(|login| login.eq_ignore_ascii_case(target)))) {
+        if !links.iter().any(|row| {
+            row.try_get::<Value, _>("metadata")
+                .ok()
+                .is_some_and(|metadata| {
+                    metadata["account"]["login"]
+                        .as_str()
+                        .is_some_and(|login| login.eq_ignore_ascii_case(target))
+                })
+        }) {
             return Err(ApiError::forbidden("github_repository_access_denied"));
         }
         Ok((scope_epoch, links))
     }
     #[tracing::instrument(name="cloud_admission_stage", skip_all, fields(owner=%owner, operation="github_installation_verification"))]
-    pub(super) async fn verify_repository_links(&self, owner: &str, repository: &str, token: &str, scope_epoch: i64, links: Vec<sqlx::postgres::PgRow>) -> Result<(i64, i64), ApiError> {
-        let (target, _) = repository.split_once('/').ok_or_else(|| ApiError::bad_request("invalid_github_repository"))?;
+    pub(super) async fn verify_repository_links(
+        &self,
+        owner: &str,
+        repository: &str,
+        token: &str,
+        scope_epoch: i64,
+        links: Vec<sqlx::postgres::PgRow>,
+    ) -> Result<(i64, i64), ApiError> {
+        let (target, _) = repository
+            .split_once('/')
+            .ok_or_else(|| ApiError::bad_request("invalid_github_repository"))?;
         for row in links {
             let Some(id) = row.try_get::<Option<i64>, _>("installation_id")? else {
                 continue;
