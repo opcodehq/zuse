@@ -3672,6 +3672,10 @@ pub struct Transcript {
     /// identity, so the virtual list must explicitly discard cached heights.
     typography_generation: u32,
     content_width: f32,
+    /// Reading column width, captured in `render` before the list lays out.
+    /// Row rendering runs while the list holds its RefCell mutably, so rows
+    /// must use this instead of reading the `ListState` back.
+    reading_column_width: f32,
     /// Review fixture: every work group renders open.
     #[cfg(feature = "browser-fixture")]
     fixture_open_groups: bool,
@@ -4089,6 +4093,7 @@ impl Transcript {
             rendered_rows: HashSet::new(),
             typography_generation: crate::typography::generation(cx),
             content_width: crate::settings::transcript_width(cx),
+            reading_column_width: crate::settings::transcript_width(cx),
             #[cfg(feature = "browser-fixture")]
             fixture_open_groups: false,
             code_fences_generation: crate::settings::code_fences_generation(cx),
@@ -7276,12 +7281,7 @@ impl Transcript {
             .and_then(|id| self.state.read(cx).chats.iter().find(|chat| chat.id == id))
             .and_then(|chat| chat.config.as_ref())
             .map(|config| crate::pickers::harness_brand_icon(config.harness).0);
-        let list_width = f32::from(self.list.viewport_bounds().size.width);
-        let column = if list_width > 0.0 {
-            self.content_width.min(list_width.max(1.0))
-        } else {
-            self.content_width
-        };
+        let column = self.reading_column_width;
         let working = run == RunStatus::Working;
         let reduce_motion = cx.reduce_motion();
         if working {
@@ -11549,6 +11549,7 @@ impl Render for Transcript {
             } else {
                 self.content_width
             };
+            self.reading_column_width = column;
             released.extend(diagrams.set_view((column.max(1.0), 480.0), window.scale_factor()));
             released
         };
@@ -14800,6 +14801,31 @@ mod tests {
                 let _ = window.draw(cx);
             })
             .unwrap();
+        }
+
+        #[test]
+        fn workflow_board_row_renders_inside_list_layout() {
+            with_window(|transcript, window, cx| {
+                let entry = assistant(
+                    "workflow",
+                    MessageStatus::Complete,
+                    vec![workflow_part(None, Some(SubagentStatus::Running))],
+                );
+                transcript.update(cx, |this, cx| {
+                    this.rows = rows_for_entry(&entry, false, false, &mut parse);
+                    assert!(
+                        this.rows
+                            .iter()
+                            .any(|row| matches!(row.kind, RowKind::WorkflowRun { .. }))
+                    );
+                    this.list.reset(this.rows.len());
+                    this.rail_enabled = false;
+                    cx.notify();
+                });
+                // The second frame has measured bounds, like any settled chat.
+                draw(window, cx);
+                draw(window, cx);
+            });
         }
 
         #[test]
