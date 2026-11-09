@@ -24,6 +24,7 @@ pub mod git_workspace;
 pub mod input_answers;
 pub mod invocation;
 pub mod managed_connection;
+pub mod rpc_probe;
 pub mod methods;
 pub mod motion;
 pub mod permission;
@@ -93,3 +94,4 @@ pub mod usage;
 
 pub mod keybindings;
 pub mod simulators;
+pub mod list_delta;

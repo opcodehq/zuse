@@ -212,8 +212,8 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: trunk@0.21.14
-      - run: node --test apps/web/tests/voice_media.mjs apps/web/tests/browser_frame.mjs apps/web/tests/environment.mjs
-      - run: bash scripts/build-web.sh
+      - run: node --test apps/web/tests/voice_media.mjs apps/web/tests/browser_frame.mjs apps/web/tests/environment.mjs apps/web/tests/initializer.mjs apps/web/tests/rpc-compression.mjs
+      - run: bash scripts/build-web.sh --release
       - run: bash scripts/build-web.sh --features browser-input-fixture --dist ../../.context/browser-input-fixture-dist
       - run: cargo +nightly check -p zuse-remote --target wasm32-unknown-unknown
         env:

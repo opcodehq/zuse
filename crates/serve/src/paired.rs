@@ -159,7 +159,7 @@ pub(crate) async fn session<S, E>(
     let Ok((mut channel, first, control)) = authenticated else {
         return;
     };
-    let (out_tx, mut out_rx) = mpsc::channel::<String>(16);
+    let (out_tx, mut out_rx) = mpsc::channel::<zuse_rpc::OutputFrame>(crate::SOCKET_OUTPUT_CAPACITY);
     let (in_tx, in_rx) = mpsc::channel::<String>(16);
     let service = Arc::new(Authorized {
         inner: server.service,
@@ -167,7 +167,7 @@ pub(crate) async fn session<S, E>(
         device,
     });
     let dispatch = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(
-        zuse_rpc::serve_connection(service, out_tx, in_rx),
+        zuse_rpc::serve_connection_bounded(service, out_tx, in_rx, crate::SOCKET_OUTPUT_BYTES),
     ));
     {
         let exchange = async {

@@ -10,3 +10,6 @@ pub use transcript_delta::*;
 
 pub mod cloud;
 pub mod cloud_billing;
+
+pub mod transcript_resume;
+pub use transcript_resume::TranscriptResume;

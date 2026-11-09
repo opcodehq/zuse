@@ -102,12 +102,12 @@ impl WorkspaceView {
     }
     pub(super) fn prefetch_model_catalogs(&mut self) {
         self.sync_catalog_target();
-        self.load_catalogs_for(true, false);
-        if self.model_host.target.is_some() {
-            self.load_catalogs_for(false, false);
-        }
+        self.load_catalogs(self.model_host.target.is_none(), false, false);
     }
     pub(super) fn load_catalogs_for(&mut self, local: bool, force: bool) {
+        self.load_catalogs(local, force, true);
+    }
+    fn load_catalogs(&mut self, local: bool, force: bool, all: bool) {
         if !self.connected {
             return;
         }
@@ -140,6 +140,17 @@ impl WorkspaceView {
             && !providers.iter().any(|id| id == harness)
         {
             providers.push(harness.into());
+        }
+        if !all {
+            let active = self
+                .selected
+                .as_ref()
+                .and_then(|chat| chat["config"]["harness"].as_str())
+                .or_else(|| {
+                    rows.get(self.provider_index)
+                        .and_then(|row| row["id"].as_str())
+                });
+            providers.retain(|provider| Some(provider.as_str()) == active);
         }
         for provider in providers {
             let catalog = if local {
@@ -245,7 +256,7 @@ impl WorkspaceView {
                 if let Some(chat) = self.selected.clone() {
                     self.sync_model_from_chat(&chat);
                 }
-                self.load_catalogs_for(false, false);
+                self.prefetch_model_catalogs();
             }
             Err(error) => {
                 self.model_host.confirmed = false;
@@ -270,6 +281,28 @@ impl WorkspaceView {
 mod tests {
     use super::*;
     use std::prelude::v1::test;
+    #[gpui::test]
+    fn only_active_agent_is_discovered_until_the_picker_requests_other_agents(cx: &mut TestAppContext) {
+        let mut f=fixture(cx);
+        f.window.update(cx,|view,_,_|{
+            view.providers=serde_json::from_value(json!([
+                {"id":"codex","installed":true,"enabled":true},
+                {"id":"claude-code","installed":true,"enabled":true},
+                {"id":"cursor","installed":true,"enabled":true}
+            ])).unwrap();
+            view.provider_index=0;
+            view.prefetch_model_catalogs();
+            assert!(view.picker_catalog.providers.contains_key("codex"));
+            assert!(!view.picker_catalog.providers.contains_key("claude-code"));
+            assert!(!view.picker_catalog.providers.contains_key("cursor"));
+            view.load_picker_catalogs(false);
+            assert!(view.picker_catalog.providers.contains_key("claude-code"));
+            assert!(view.picker_catalog.providers.contains_key("cursor"));
+        }).unwrap();
+        let requests:Vec<_>=std::iter::from_fn(||f.requests.try_recv().ok())
+            .filter(|request|request["method"]==methods::LIST_MODELS).collect();
+        assert_eq!(requests.len(),3,"selected agent is not requested twice when the picker opens");
+    }
     struct Fixture {
         window: WindowHandle<WorkspaceView>,
         requests: UnboundedReceiver<Value>,

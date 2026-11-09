@@ -180,6 +180,14 @@ fff-search = "=0.11.0"
 lto = "thin"
 strip = "symbols"
 
+# Browser downloads pay for every byte on mobile connections. Keep the native
+# release profile independent from the size-oriented browser distribution.
+[profile.web-release]
+inherits = "release"
+opt-level = "s"
+codegen-units = 1
+panic = "abort"
+
 [profile.dev]
 # gpui is slow unoptimized; match zed's approach for deps
 opt-level = 0

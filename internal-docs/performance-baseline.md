@@ -285,3 +285,148 @@ failures described in `cleanup-audit.md` and the baseline plugin-form mouse-focu
 test failure remain unresolved; this is not a claim of a green full UI suite.
 Raw results and binary identities are retained under
 `.context/latency-rebalance/throughput/`.
+
+## Browser slow-network baseline — 2026-11-08
+
+The release WASM originally measured 25,695,813 bytes raw and 7,911,494 bytes
+gzipped. The `web-release` size profile and Binaryen size optimization produce
+16,739,992 bytes raw, 6,299,841 bytes gzipped and 3,691,510 bytes with Brotli.
+The preferred download is 53% smaller than the original gzip delivery. The
+entire generated browser directory is about 3.72 MB with Brotli; release builds
+enforce a 5 MiB aggregate budget and emit `network-budget.json`.
+
+Chromium with 400 ms emulated latency, 50,000 bytes/s download and 25,000 bytes/s
+upload opened the compiled UI in 77.7 seconds from an empty cache. A cached
+reload took 6.1 seconds (3.4 seconds in an earlier run) and transferred zero
+WASM bytes. Stop reached the provider in 0.83 seconds. A 32 KiB attachment
+upload took 1.7 seconds with exact byte preservation. Imported history, composer
+submission, incremental text appends, provider interruption and reconnect without
+replaying a run passed through the real engine and an isolated local provider.
+The final flow through interruption received about 29 KB of RPC traffic.
+
+The runner is `scripts/acceptance/slow-network.mjs`; its JSON measurements and
+screenshots live under `.context/slow-network-*`. Release build, 29 server tests
+and 13 browser JavaScript tests pass. Startup recovery also has a rejected-stream
+regression and a browser test that blocks WASM, observes Retry and recovers.
+These are emulated desktop-browser results, not physical mobile-radio or hosted
+deployment measurements. The first visit still needs roughly a minute on this
+profile; caching improves repeat visits without eliminating that initial cost.
+
+## Chat and agent runtime on 3G — 2026-11-09
+
+This earlier Zuse-only smoke check measures an already loaded application, rather than its startup
+download. Chrome 151 uses 50,000 bytes/s down, 25,000 bytes/s up and 400 ms HTTP
+latency. A disposable loopback proxy additionally delays each WebSocket direction
+by 200 ms; a read-only identity RPC measured 401 ms round trip. The proxy is
+necessary because DevTools request latency alone does not establish a packet-level
+WebSocket RTT. These remain desktop emulations, without mobile CPU throttling,
+radio variation or packet loss.
+
+The real engine imports 3,000 fixture source rows, which its import normalization
+represents as 1,502 transcript entries. A local streaming Claude-protocol fixture
+runs through the real composer and provider adapter without external model calls.
+
+| Runtime measurement | Result |
+| --- | ---: |
+| Legacy complete-history payload | 2,128,061 bytes |
+| Initial recent-history payload, 32 entries | 45,612 bytes (97.9% less) |
+| Click to initial history and two animation frames | 2.65 s |
+| Explicit expansion to 64 entries | 3.69 s / 91,052 bytes |
+| Send to first streamed text append | 1.15 s |
+| Stop click to provider interruption | 0.80 s |
+| 32 KiB attachment upload, exact bytes verified | 1.74 s |
+| History restored after silent-link recovery, 68 entries | 93,854 bytes |
+
+Silent fault injection drops read-only probes without closing the socket. The
+browser detects the missing response and restores its selected subscriptions;
+the complete recovery took 81.9 seconds including the probe interval, its
+60-second deadline and history download. No run or interrupt was replayed.
+This is a bounded detection deadline, not immediate offline detection.
+
+A second run closed the socket while the fixture agent was actively generating.
+History restored and live text resumed in 5.90 seconds, with exactly the original
+two run commands; the agent was not launched again. Stop then reached that same
+running agent in 0.79 seconds. This run independently measured 401 ms socket RTT,
+2.64-second chat opening and a 1.15-second first text append. Its raw evidence is
+`.context/chat-runtime-3g-active.json`.
+
+Opening a chat requests at most 32 recent entries within a 64 KiB entry budget,
+plus envelope and replay metadata. At least one intact entry is retained even
+when it exceeds the budget. The server keeps all durable history, anchors loaded
+content during live arrivals and filters replay watermarks to visible IDs.
+Load earlier messages fetches older content explicitly while retaining the current
+transcript and composer. Each expansion currently resends the enlarged suffix;
+there is no claim of page-only transfer or a hard bound on long-running visible
+history. Legacy full-history RPCs and full provider context remain available.
+Transcript materialization for this request runs on a blocking worker so it does
+not occupy an async RPC worker during opening.
+
+Model discovery starts with the selected agent, loading the other enabled agents
+when the picker opens. The three-agent regression makes one initial model request
+instead of three, then loads the other two once on demand. Remote chats discover
+models on their execution host without prefetching unrelated local catalogs.
+
+The release browser and engine builds pass. Targeted validation passes three
+history-window tests, 21 existing engine RPC tests (one ignored), two responsiveness
+probe tests, seven transcript UI tests and five model-catalog UI tests. Coverage
+includes intact UTF-8 and oversized messages, every older page being reachable,
+anchoring live updates, releasing canceled watches, stale replies, preserved drafts
+and recovery without replaying commands. The full viewport suite has 45 passing
+tests and the previously recorded plugin-form mouse-focus failure at
+`plugin_setup.rs:871`; it is not fully green.
+
+Reproduce with Node 22+, a WebGPU Chromium executable and matching compiled
+`dist/web` and `target/debug/zuse-server`:
+
+```sh
+CHROME_BIN=/path/to/chrome ZUSE_RUNTIME_ONLY=1 \
+  ZUSE_NETWORK_HISTORY_ROWS=3000 ZUSE_NETWORK_SOCKET_RTT_MS=400 \
+  ZUSE_RUNTIME_BLACKHOLE=1 node scripts/acceptance/slow-network.mjs
+```
+
+For the active-agent disconnect check, replace `ZUSE_RUNTIME_BLACKHOLE=1` with
+`ZUSE_RUNTIME_ACTIVE_RECONNECT=1`; set
+`ZUSE_NETWORK_OUTPUT=chat-runtime-3g-active.json` to retain both reports.
+
+`appShellUnthrottled: true` explicitly records the excluded initial application
+download. Raw measurements are in `.context/chat-runtime-3g.json`, with build and
+validation logs under `.context/chat-*`. The matched T3 startup comparison and
+the matched chat comparison are in `t3-network-benchmark.md`; this earlier fixture
+alone does not establish a matched T3 agent-runtime speed comparison.
+
+## Earlier matched T3 chat follow-up (superseded by the next pass below)
+
+The earlier Zuse-only numbers above are retained as historical evidence. Its source history normalized to 1,502 entries; it is not the new canonical mixed-role comparison. The current fixture uses 1,500 alternating user/assistant messages with exact text and roles checked in both products, three paired runs per app, the same streaming provider and actual encoded-byte 3G limits.
+
+See [the matched benchmark](t3-network-benchmark.md) and [the offline bar-chart report](zuse-vs-t3-3g.html) for all twelve comparative metrics, samples and limitations. Zuse's median history receipt is 0.552 s, first text 0.795 s, and active reconnect 2.475 s; T3's are 1.047 s, 1.468 s and 4.777 s. T3 is faster for older pages and Stop and uses fewer text-stream bytes. The native Zuse engine in this run is a debug build; the browser uses `web-release`.
+
+Direct browser links now negotiate gzip for useful frames of at least 256 bytes, retaining text for small or incompressible messages. Browser decoding enforces a 16 MiB decoded limit and retains pending decoding across canceled receive futures. Ordinary transcript deltas omit unchanged history metadata. These changes preserve full tool blobs, history and provider context. Paired/account/relay framing remains outside this compression change.
+
+Validation adds three compression JavaScript cases, two transport cases (including Stop under blocked downlink), four history-window cases and seven transcript UI cases. The serve suite passes 30 tests. The previously recorded viewport plugin-form failure remains.
+
+An additional fast-link acceptance run exercises negotiated compression across a
+2,002-entry history, older expansion, streaming, Stop, active-agent reconnect,
+attachment integrity, cached reload and startup retry. All ten checks pass;
+`.context/chat-compressed-acceptance.json` records this functional smoke check.
+Its 10 ms HTTP latency and 20 ms socket RTT are intentionally not 3G timing data.
+
+## Dictionary compression and cached-history reuse
+
+The next pass replaces independent gzip frames with a per-connection zlib-rs
+deflate dictionary and batches already-ready NDJSON envelopes without adding a
+timer. Opening older history verifies a SHA256 hint and sends only missing rows;
+stale content falls back to a reset. Chat/session watches send keyed list deltas.
+Browser output queues retain an 8 MiB byte lease through transport writes,
+including paired/account/relay browser paths. Command admission now materializes
+only the last valid transcript row instead of the complete history.
+
+Coverage includes cached-row integrity, stale-hint fallback, live deltas after
+prepend, a 1,000-row list with one changed row, ordered removal, atomic rejection
+of malformed list updates, byte admission through dequeue/write, legacy framing,
+dictionary isolation, UTF-8 and a bounded lifetime for truncated compressed
+frames. The full native RPC suite passes 34 tests; engine RPC coverage passes
+39 with one ignored; serve passes 30; transcript UI passes seven.
+
+Current matched medians and all samples are in `t3-network-benchmark.md` and the HTML report. The previous batch is retained at `.context/t3-benchmark/chat-before-efficiency.json`; current raw samples are `.context/t3-benchmark/chat-results.json`.
+
+The final codec/browser build also passes all ten fast-link acceptance checks in `.context/chat-efficient-acceptance.json`: history and older pages, streaming, Stop, active reconnect without replay, attachment integrity, cached reload and startup retry. This is functional coverage, not additional 3G timing data.

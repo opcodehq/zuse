@@ -38,6 +38,23 @@ impl Drop for RequestTasks {
 pub async fn serve_connection(
     service: Arc<dyn RpcService>,
     out: mpsc::Sender<String>,
+    inbound: mpsc::Receiver<String>,
+) {
+    serve_connection_inner(service, crate::output::Output::Plain(out), inbound).await;
+}
+
+pub async fn serve_connection_bounded(
+    service: Arc<dyn RpcService>,
+    out: mpsc::Sender<crate::OutputFrame>,
+    inbound: mpsc::Receiver<String>,
+    byte_limit: usize,
+) {
+    serve_connection_inner(service, crate::output::Output::bounded(out, byte_limit), inbound).await;
+}
+
+async fn serve_connection_inner(
+    service: Arc<dyn RpcService>,
+    out: crate::output::Output,
     mut inbound: mpsc::Receiver<String>,
 ) {
     let mut running = RequestTasks::default();
@@ -84,7 +101,7 @@ pub async fn serve_connection(
 
 async fn handle_request(
     service: Arc<dyn RpcService>,
-    out: mpsc::Sender<String>,
+    out: crate::output::Output,
     id: u64,
     method: String,
     params: serde_json::Value,
@@ -104,7 +121,7 @@ async fn handle_request(
             let permit = out.reserve().await.map_err(|_| RpcError::Closed)?;
             match serde_json::to_string(&frame) {
                 Ok(json) => {
-                    permit.send(json);
+                    permit.send(json).await.map_err(|_| RpcError::Closed)?;
                     Ok(())
                 }
                 Err(err) => {
@@ -173,7 +190,7 @@ async fn handle_request(
                 return;
             }
         };
-        permit.send(json);
+        if permit.send(json).await.is_err() { return; }
         // An opening preview retains its slot through full hydration. Idle
         // established watches must not monopolize history-opening admission.
         if !pending {

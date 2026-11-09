@@ -12,6 +12,13 @@ pub(super) struct TranscriptState {
     deadline: Option<Task<()>>,
     healthy_since: Option<Instant>,
     pub notice: Option<String>,
+    scope: Option<(String, String)>,
+    rows: usize,
+    bytes: usize,
+    pub has_more: bool,
+    pub loading_earlier: bool,
+    next_anchor: Option<String>,
+    resume_requested: bool,
 }
 
 impl WorkspaceView {
@@ -50,12 +57,26 @@ impl WorkspaceView {
             self.cancel(id);
         }
         self.transcript_state = TranscriptState {
+            scope: self.transcript_state.scope.clone(),
+            rows: self.transcript_state.rows,
+            bytes: self.transcript_state.bytes,
             generation: uuid::Uuid::new_v4(),
             ..Default::default()
         };
         self.context_confirmed = false;
     }
     pub(super) fn begin_transcript(&mut self, cx: &mut Context<Self>) {
+        let scope = self.selected.as_ref().map(|chat| {
+            (
+                chat["id"].as_str().unwrap_or_default().to_owned(),
+                chat["deviceId"].as_str().unwrap_or_default().to_owned(),
+            )
+        });
+        if scope != self.transcript_state.scope {
+            self.transcript_state.scope = scope;
+            self.transcript_state.rows = 32;
+            self.transcript_state.bytes = 64 * 1024;
+        }
         self.stop_transcript();
         self.release_ui_blocks(cx);
         self.subscribe_transcript(cx);
@@ -65,20 +86,32 @@ impl WorkspaceView {
             return;
         }
         if let Some(chat) = self.selected.clone() {
+            let resume = zuse_model::TranscriptResume::capture(&self.messages);
+            self.transcript_state.resume_requested = resume.is_some();
             self.transcript_watch = Some(self.call(
                 methods::WATCH_DOC_MESSAGES,
-                zuse_protocol::presentation::chat_request(&chat, json!({})),
+                zuse_protocol::presentation::chat_request(
+                    &chat,
+                    json!({
+                        "resume": resume,
+                        "tailLimit": self.transcript_state.rows.max(32),
+                        "tailBytes": self.transcript_state.bytes.max(64 * 1024),
+                        "tailAnchor": if self.transcript_state.loading_earlier { self.transcript_state.next_anchor.as_deref() } else { self.messages.first().map(|entry| entry.id.as_str()) },
+                    }),
+                ),
             ));
             let id = self.transcript_watch.unwrap();
             let generation = self.transcript_state.generation;
             self.transcript_state.deadline = Some(cx.spawn(async move |this, cx| {
                 cx.background_executor()
-                    .timer(Duration::from_secs(15))
+                    // A single intact message may exceed the opening byte
+                    // budget. Avoid repeatedly downloading it on a slow link.
+                    .timer(Duration::from_secs(60))
                     .await;
                 let _ = this.update(cx, |this, cx| {
                     if this.transcript_watch == Some(id)
                         && this.transcript_state.generation == generation
-                        && !this.transcript_state.ready
+                        && (!this.transcript_state.ready || this.transcript_state.loading_earlier)
                     {
                         this.recover_transcript(
                             "The host did not send its initial history snapshot".into(),
@@ -88,6 +121,27 @@ impl WorkspaceView {
                 });
             }));
         }
+    }
+    pub(super) fn load_earlier_messages(&mut self, cx: &mut Context<Self>) {
+        if !self.connected
+            || !self.transcript_state.has_more
+            || self.transcript_state.loading_earlier
+        {
+            return;
+        }
+        if let Some(id) = self.transcript_watch.take() {
+            self.cancel(id);
+        }
+        self.transcript_state.rows = self
+            .transcript_state
+            .rows
+            .max(self.messages.len())
+            .max(32)
+            .saturating_mul(2);
+        self.transcript_state.bytes = self.transcript_state.bytes.max(64 * 1024).saturating_mul(2);
+        self.transcript_state.loading_earlier = true;
+        self.subscribe_transcript(cx);
+        cx.notify();
     }
     pub(super) fn retry_transcript(&mut self, cx: &mut Context<Self>) {
         if !self.connected {
@@ -152,18 +206,21 @@ impl WorkspaceView {
                 }
             };
             let reset = matches!(&update.frame, zuse_model::TranscriptFrame::Reset { .. });
-            if !self.transcript_state.ready && !reset {
+            let resumed = self.transcript_state.resume_requested && value["historyResumed"] == true;
+            if (!self.transcript_state.ready || self.transcript_state.loading_earlier) && !reset && !resumed {
                 self.recover_transcript("The host omitted the initial history snapshot".into(), cx);
                 return;
             }
-            let follow = self.transcript_scroll.max_offset().y + self.transcript_scroll.offset().y
-                <= px(24.);
+            let follow = !self.transcript_state.loading_earlier
+                && self.transcript_scroll.max_offset().y + self.transcript_scroll.offset().y
+                    <= px(24.);
             if let Err(error) = apply_transcript_frame(&mut self.messages, update.frame) {
                 self.recover_transcript(error.to_string(), cx);
                 return;
             }
             self.clear_closed_secret(cx);
-            if reset {
+            if reset || resumed {
+                self.transcript_state.resume_requested = false;
                 self.transcript_state.deadline = None;
                 self.transcript_state.ready = true;
                 self.transcript_state
@@ -171,6 +228,11 @@ impl WorkspaceView {
                     .get_or_insert_with(Instant::now);
             }
             self.transcript_state.notice = None;
+            self.transcript_state.loading_earlier = false;
+            if reset || resumed || value.get("historyHasMore").is_some() {
+                self.transcript_state.has_more = value["historyHasMore"].as_bool().unwrap_or(false);
+                self.transcript_state.next_anchor = value["historyNextAnchor"].as_str().map(str::to_owned);
+            }
             self.context_usage = update.context_usage;
             self.context_confirmed = true;
             if !self
@@ -204,6 +266,83 @@ mod tests {
     use super::*;
     use futures::channel::mpsc;
     use std::prelude::v1::test;
+
+    #[gpui::test]
+    fn bounded_history_expands_on_demand_without_blocking_the_composer(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let mut f = fixture(cx);
+        let initial = watch(&f, cx);
+        f.window
+            .update(cx, |view, _, cx| {
+                view.input
+                    .update(cx, |input, cx| input.set_value("Keep typing".into(), cx))
+            })
+            .unwrap();
+        tick(cx, 1);
+        f.window.update(cx,|view,_,cx| {
+            view.receive(json!({"id":initial,"item":{"reset":[entry()],"historyHasMore":true,"historyNextAnchor":"older-0"}}),cx);
+            view.receive(json!({"id":initial,"item":{"count":1}}),cx);
+            assert!(view.transcript_state.has_more, "omitted unchanged metadata preserves pagination");
+            assert_eq!(view.transcript_state.next_anchor.as_deref(), Some("older-0"));
+            view.load_earlier_messages(cx);
+            let expanded=view.transcript_watch.unwrap();
+            assert_ne!(initial,expanded);
+            assert!(!view.transcript_blocked());
+            assert_eq!(view.messages.len(),1);
+            assert!(view.transcript_state.loading_earlier);
+            view.load_earlier_messages(cx);
+            assert_eq!(view.transcript_watch,Some(expanded),"repeated clicks cannot duplicate history reads");
+            view.receive(json!({"id":initial,"item":{"reset":[]}}),cx);
+            assert_eq!(view.messages.len(),1,"retired read cannot replace current history");
+            view.receive(json!({"id":expanded,"item":{"reset":[entry()],"historyHasMore":false}}),cx);
+            assert!(!view.transcript_state.has_more);
+            assert!(!view.transcript_state.loading_earlier);
+            assert_eq!(view.input.read(cx).value(cx),"Keep typing");
+            view.begin_transcript(cx);
+            assert_eq!(view.transcript_state.rows,64,"same-host reconnect keeps expanded window");
+        }).unwrap();
+        let requests: Vec<_> = std::iter::from_fn(|| f.requests.try_recv().ok())
+            .filter(|request| request["method"] == methods::WATCH_DOC_MESSAGES)
+            .collect();
+        assert_eq!(requests[0]["params"]["tailLimit"], 32);
+        assert_eq!(requests[1]["params"]["tailLimit"], 64);
+        assert_eq!(requests[1]["params"]["tailBytes"], 128 * 1024);
+        assert_eq!(requests[1]["params"]["tailAnchor"], "older-0");
+        assert_eq!(requests[2]["params"]["tailAnchor"], "outgoing");
+    }
+
+    #[gpui::test]
+    fn older_history_requires_a_reset_and_retries_the_same_page(cx: &mut gpui::TestAppContext) {
+        let mut f = fixture(cx);
+        let initial = watch(&f, cx);
+        f.window.update(cx, |view, _, cx| {
+            view.receive(json!({"id":initial,"item":{"reset":[entry()],"historyHasMore":true,"historyNextAnchor":"older-0"}}), cx);
+            view.load_earlier_messages(cx);
+            let expanded = view.transcript_watch.unwrap();
+            view.receive(json!({"id":expanded,"item":{"count":1}}), cx);
+            assert_eq!(view.messages.len(), 1, "bad pages preserve the visible transcript");
+            assert!(view.transcript_watch.is_none());
+        }).unwrap();
+        tick(cx, 200);
+        let fresh = watch(&f, cx);
+        f.window
+            .update(cx, |view, _, cx| {
+                view.receive(
+                    json!({"id":fresh,"item":{"reset":[entry()],"historyHasMore":false}}),
+                    cx,
+                );
+                assert!(!view.transcript_blocked());
+                assert!(!view.transcript_state.loading_earlier);
+            })
+            .unwrap();
+        let requests: Vec<_> = std::iter::from_fn(|| f.requests.try_recv().ok())
+            .filter(|request| request["method"] == methods::WATCH_DOC_MESSAGES)
+            .collect();
+        assert_eq!(requests.len(), 3);
+        assert_eq!(requests[1]["params"]["tailAnchor"], "older-0");
+        assert_eq!(requests[2]["params"]["tailAnchor"], "older-0");
+    }
     struct Fixture {
         window: WindowHandle<WorkspaceView>,
         _events: UnboundedSender<Value>,
@@ -360,7 +499,7 @@ mod tests {
     ) {
         let f = fixture(cx);
         let old = watch(&f, cx);
-        tick(cx, 15_000);
+        tick(cx, 60_000);
         f.window
             .update(cx, |view, _, _| {
                 assert!(view.transcript_watch.is_none());
