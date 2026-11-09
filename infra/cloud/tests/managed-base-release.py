@@ -190,6 +190,7 @@ print(json.dumps(dict(runId=r['runId'],provider=r['provider'],releaseSha256=r['r
         import copy
         spec = importlib.util.spec_from_file_location('disabled_candidate_fixture', Path(__file__).with_name('managed-base-derive.py'))
         fixture = importlib.util.module_from_spec(spec); spec.loader.exec_module(fixture)
+        (fixture.ROOT/'.context').mkdir(exist_ok=True)
         temp = tempfile.TemporaryDirectory(dir=fixture.ROOT/'.context', prefix='candidate-disabled-test-')
         self.addCleanup(temp.cleanup)
         f = fixture.fixture(Path(temp.name)); service = fixture.disabled_fixture(f)
