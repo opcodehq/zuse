@@ -25,13 +25,32 @@ Rust retains scheduling, permissions, persistence, renewal and account affinity.
 Reasoning/signatures are preserved only for a compatible model, route, account
 and authorization generation. Unsupported requested features fail before dispatch.
 
+The Zuse model picker also includes `local/codex/<model>`,
+`local/claude/<model>` and `local/grok/<model>` when the matching CLI has an
+active local login. Catalog discovery uses the existing provider adapters; an
+explicit refresh reaches their catalog caches. These models run through Zuse's
+own tools, permissions and durable agent loop. Selecting the standalone Codex,
+Claude Code or Grok provider continues to run that provider's CLI harness.
+
+Local requests read the current CLI credential without importing it into the
+model-account vault. Claude uses the existing Keychain-first lookup; Codex uses
+its Codex subscription endpoint and workspace header, and delegates expired-token
+refresh to the local Codex app server. Grok accepts the official `auth.x.ai` and legacy `accounts.x.ai/sign-in` logins;
+enterprise credentials are never dispatched to the public API. Claude/Grok
+refresh tokens remain CLI-owned: if their access token is rejected, renew the
+login in the CLI and retry. Account/token changes invalidate native reasoning
+compatibility. Offline fixtures cover discovery and dispatch. Live smoke requests using the
+existing local Claude and Codex logins passed on 2026-11-09. Grok still needs
+live acceptance testing on a machine with a Grok login.
+
 Subscription routes retain the existing account service. Explicit API connections
 are configured in `<profile>/harness/providers.json`; missing subscriptions never
 silently select an API connection. See [configuration and evaluation](harness-efficiency.md).
 The subscription request shape follows the
 [official transport requirements](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations).
-Protocol fixtures establish offline behavior; successful live authorization is
-still an acceptance gate.
+Protocol fixtures establish offline behavior. Live smoke tests establish local
+Claude/Codex authorization; hosted account routes and Grok remain separate
+acceptance gates.
 
 See [native capabilities and configuration](harness-native-capabilities.md) for
 parallel reads, child admission, local skills, syntax outlines and lazy external MCP tools.
@@ -48,6 +67,18 @@ cargo test -p zuse-engine --lib harness_models
 cargo test -p zuse-engine --lib harness_api
 cargo build -p zuse-harness --examples --release
 ```
+
+The ignored live smoke test reads the chosen CLI's active login, discovers its
+models and sends one small prompt through Zuse's native transport. It prints no
+credentials or provider response bodies. Run it explicitly for personal testing:
+
+```sh
+ZUSE_LIVE_PROVIDER=claude cargo test -p zuse-engine --lib harness_local::live_tests::live_local_subscription -- --ignored --nocapture
+ZUSE_LIVE_PROVIDER=codex cargo test -p zuse-engine --lib harness_local::live_tests::live_local_subscription -- --ignored --nocapture
+```
+
+Set `ZUSE_LIVE_PROVIDER=grok` to test Grok, and optionally `ZUSE_LIVE_MODEL` to
+choose a concrete model ID from that provider's catalog.
 
 Native search fixtures require `rg` on PATH. Protocol fixtures use local HTTP
 servers and require no model credentials. The suite covers fragmented streams,
