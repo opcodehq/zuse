@@ -38,6 +38,19 @@ jobs:
       - run: python3 -m unittest discover -s scripts -p test_release_notes.py -v
       - run: python3 -m unittest discover -s scripts -p test_cargo_dev.py -v
 
+  control-sdk:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo run --locked -p zuse-protocol --example control_types -- --check
+      - run: cargo test --locked -p zuse-control
+      - run: npm ci && npm test
+        working-directory: packages/sdk
   engine:
     runs-on: ubuntu-24.04
     env:
@@ -113,6 +126,11 @@ jobs:
       - run: cargo test -p zuse-engine --lib native_recovery::tests
       - run: cargo test -p zuse-engine --lib sessions::tests
       - run: cargo test -p zuse-engine -p zuse-mcp --lib plugin
+      - run: cargo test -p zuse-engine --lib zots
+      - run: cargo test -p zuse-update --lib control::tests
+      - run: cargo build -p zuse-cli -p zuse-control
+      - run: npm ci && npm run test:engine
+        working-directory: packages/sdk
 
   native:
     strategy:

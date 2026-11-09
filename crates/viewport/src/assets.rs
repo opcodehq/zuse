@@ -72,7 +72,17 @@ assets!(
     "star",
     "danger-triangle",
     "trash-bin-minimalistic",
-    "pen"
+    "pen",
+    "widget",
+    "chat-round-line",
+    "folder-open",
+    "history",
+    "document",
+    "document-add",
+    "settings",
+    "info-circle",
+    "more-horizontal",
+    "restart"
 );
 
 pub(super) fn icon(name: &str) -> Svg {

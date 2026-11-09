@@ -1207,6 +1207,7 @@ impl Pickers {
     /// Whether the current agent offers plan mode at all.
     pub fn plan_mode_available(&self, cx: &App) -> bool {
         !self.cloud_launch_frozen()
+            && !self.state.read(cx).selected_chat_is_zot_coordinator()
             && !matches!(
                 self.resolved(cx).harness,
                 Some(HarnessId::Pi | HarnessId::Muse)
