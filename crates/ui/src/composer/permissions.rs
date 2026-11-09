@@ -1,4 +1,4 @@
-//! Per-chat permissions follow the same configuration used by Run and queues.
+//! Access picks configure the current chat and become the global new-chat default.
 use super::*;
 use crate::{icons, popover};
 
@@ -44,6 +44,9 @@ impl Composer {
         let Some(chat_id) = self.state.read(cx).selected_chat.clone() else {
             self.pickers
                 .update(cx, |pickers, cx| pickers.set_draft_sandbox(level, cx));
+            if self.pickers.read(cx).resolved(cx).sandbox == level {
+                self.remember_permission(level, cx);
+            }
             cx.notify();
             return;
         };
@@ -60,7 +63,9 @@ impl Composer {
                 cx,
             )
         });
-        if !accepted {
+        if accepted {
+            self.remember_permission(level, cx);
+        } else {
             self.failure = Some(
                 self.state
                     .read(cx)
@@ -74,6 +79,13 @@ impl Composer {
             self.failure_key = Some(chat_id);
         }
         cx.notify();
+    }
+    fn remember_permission(&self, level: SandboxLevel, cx: &mut Context<Self>) {
+        crate::settings::update(crate::settings::SavePolicy::Immediate, cx, |settings| {
+            settings.default_permission_mode =
+                zuse_protocol::presentation::PermissionMode::from_sandbox(level);
+        });
+        cx.refresh_windows();
     }
     pub(super) fn permission_blocked(&self, cx: &App) -> bool {
         self.state.read(cx).configuration_blocked()
@@ -138,7 +150,8 @@ impl Composer {
         let harness = resolved.harness;
         let selected = effective(resolved.sandbox, harness.as_ref());
         let pending = self.state.read(cx).configuration_saving();
-        let unconfirmed = !self.cached_cloud() && !pending && self.state.read(cx).configuration_blocked();
+        let unconfirmed =
+            !self.cached_cloud() && !pending && self.state.read(cx).configuration_blocked();
         // Safe modes rest muted and brighten on hover; full access stays in
         // the warning tone so the unlocked state is never mistaken for them.
         let full_access = selected == SandboxLevel::DangerFullAccess;
@@ -404,10 +417,10 @@ mod tests {
     }
 
     #[gpui::test]
-    fn draft_permission_is_local_and_existing_chat_is_preserved_offline(
+    fn permission_choice_persists_globally_and_existing_chat_is_preserved_offline(
         cx: &mut gpui::TestAppContext,
     ) {
-        let (_directory, handle) = composer_focus_window(cx);
+        let (directory, handle) = composer_focus_window(cx);
         handle
             .update(cx, |composer, window, cx| {
                 composer.choose_permission(SandboxLevel::DangerFullAccess, window, cx);
@@ -417,6 +430,12 @@ mod tests {
                 );
                 assert!(!composer.state.read(cx).configuration_saving());
                 assert!(composer.failure.is_none());
+                assert_eq!(
+                    crate::settings::UiSettings::load(directory.path())
+                        .default_permission_mode
+                        .sandbox(),
+                    SandboxLevel::DangerFullAccess
+                );
                 composer.state.update(cx, |state, cx| {
                     state.chats = vec![
                         serde_json::from_value(serde_json::json!({
@@ -451,6 +470,10 @@ mod tests {
                         .contains("Connect to the execution host")
                 );
                 assert_eq!(composer.failure_key.as_deref(), Some("readonly"));
+                assert_eq!(
+                    crate::settings::default_permission_mode(cx).sandbox(),
+                    SandboxLevel::DangerFullAccess
+                );
                 composer.state.update(cx, |state, cx| {
                     state.selected_chat = None;
                     cx.notify();
@@ -462,9 +485,51 @@ mod tests {
             .read_with(cx, |composer, cx| {
                 assert_eq!(
                     composer.pickers.read(cx).resolved(cx).sandbox,
-                    SandboxLevel::WorkspaceWrite
+                    SandboxLevel::DangerFullAccess
                 );
             })
             .unwrap();
+        // Reload settings as on restart, then open a composer in another project.
+        cx.update(|cx| {
+            crate::settings::init(
+                crate::settings::UiSettings::load(directory.path()),
+                directory.path(),
+                cx,
+            );
+        });
+        let next = cx.add_window(|_, cx| {
+            let state = cx.new(|_| {
+                let mut state = AppState::new();
+                state.selected_space = Some("another-project".into());
+                state
+            });
+            Composer::new(state, cx)
+        });
+        next.update(cx, |composer, window, cx| {
+            assert_eq!(
+                composer.pickers.read(cx).resolved(cx).sandbox,
+                SandboxLevel::DangerFullAccess
+            );
+            composer.choose_permission(SandboxLevel::WorkspaceWrite, window, cx);
+            assert_eq!(
+                crate::settings::UiSettings::load(directory.path())
+                    .default_permission_mode
+                    .sandbox(),
+                SandboxLevel::WorkspaceWrite
+            );
+            composer.choose_permission(SandboxLevel::ReadOnly, window, cx);
+            composer
+                .pickers
+                .update(cx, |pickers, cx| pickers.toggle_plan_mode(cx));
+            assert_eq!(
+                composer.pickers.read(cx).resolved(cx).sandbox,
+                SandboxLevel::WorkspaceWrite
+            );
+            assert_eq!(
+                crate::settings::default_permission_mode(cx).sandbox(),
+                SandboxLevel::ReadOnly
+            );
+        })
+        .unwrap();
     }
 }

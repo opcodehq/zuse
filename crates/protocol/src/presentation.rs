@@ -59,9 +59,23 @@ pub enum PermissionMode {
     /// "Approve for me": the agent's automatic approver decides.
     Auto,
     FullAccess,
+    ReadOnly,
 }
 impl PermissionMode {
-    pub const ALL: [Self; 3] = [Self::ApprovalRequired, Self::Auto, Self::FullAccess];
+    pub const ALL: [Self; 4] = [
+        Self::ApprovalRequired,
+        Self::Auto,
+        Self::FullAccess,
+        Self::ReadOnly,
+    ];
+    pub fn from_sandbox(level: crate::SandboxLevel) -> Self {
+        match level {
+            crate::SandboxLevel::WorkspaceWrite => Self::ApprovalRequired,
+            crate::SandboxLevel::Auto => Self::Auto,
+            crate::SandboxLevel::DangerFullAccess => Self::FullAccess,
+            crate::SandboxLevel::ReadOnly => Self::ReadOnly,
+        }
+    }
     pub fn label(self) -> &'static str {
         access_details(self.sandbox()).label
     }
@@ -70,6 +84,7 @@ impl PermissionMode {
             Self::ApprovalRequired => crate::SandboxLevel::WorkspaceWrite,
             Self::Auto => crate::SandboxLevel::Auto,
             Self::FullAccess => crate::SandboxLevel::DangerFullAccess,
+            Self::ReadOnly => crate::SandboxLevel::ReadOnly,
         }
     }
     /// Defaults apply only before a conversation exists. An existing chat
@@ -522,6 +537,16 @@ mod permission_tests {
     use super::*;
     use crate::SandboxLevel;
     #[test]
+    fn every_access_choice_round_trips_as_a_new_chat_default() {
+        for level in ACCESS_LEVELS {
+            let mode = PermissionMode::from_sandbox(level);
+            let stored = serde_json::to_value(mode).unwrap();
+            let loaded: PermissionMode = serde_json::from_value(stored).unwrap();
+            assert_eq!(loaded.for_chat(None), level);
+            assert!(PermissionMode::ALL.contains(&loaded));
+        }
+    }
+    #[test]
     fn new_defaults_never_rewrite_existing_or_legacy_chat_permissions() {
         let mut chat: crate::Chat = serde_json::from_value(serde_json::json!({"id":"c","deviceId":"d","archived":false,"createdAt":"2026-01-01T00:00:00Z","config":{"harness":"codex","sandbox":"read-only"}})).unwrap();
         assert_eq!(
@@ -565,7 +590,12 @@ mod permission_tests {
         assert_eq!(PermissionMode::Auto.label(), "Approve for me");
         assert_eq!(
             ACCESS_LEVELS.map(|level| access_details(level).label),
-            ["Ask for approval", "Approve for me", "Full access", "Read only"]
+            [
+                "Ask for approval",
+                "Approve for me",
+                "Full access",
+                "Read only"
+            ]
         );
     }
 }

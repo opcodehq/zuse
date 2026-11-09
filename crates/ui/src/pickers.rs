@@ -1193,7 +1193,12 @@ impl Pickers {
         let key=self.state.read(cx).selected_chat.clone().unwrap_or_else(|| "new-chat".into());
         let current=self.resolved(cx).sandbox;
         let sandbox=if current==SandboxLevel::ReadOnly {
-            self.plan_previous_sandbox.remove(&key).unwrap_or_else(||crate::settings::default_permission_mode(cx).sandbox())
+            self.plan_previous_sandbox.remove(&key).unwrap_or_else(|| {
+                match crate::settings::default_permission_mode(cx).sandbox() {
+                    SandboxLevel::ReadOnly => SandboxLevel::WorkspaceWrite,
+                    sandbox => sandbox,
+                }
+            })
         } else {
             self.plan_previous_sandbox.insert(key,current);
             SandboxLevel::ReadOnly
