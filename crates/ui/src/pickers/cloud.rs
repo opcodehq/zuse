@@ -14,6 +14,11 @@ pub(crate) struct CloudCanvasChoices {
 #[derive(Default)]
 struct ProviderPreferences(HashMap<(String, Option<String>), String>);
 impl gpui::Global for ProviderPreferences {}
+/// The last cloud context each account and organization received, so a new
+/// composer (every opened cloud chat has one) shows its models at once.
+#[derive(Default)]
+struct CloudContextCache(HashMap<(String, Option<String>), Value>);
+impl gpui::Global for CloudContextCache {}
 use connections::ConnectionChoices;
 
 #[derive(Default)]
@@ -440,6 +445,17 @@ impl Pickers {
             return;
         };
         self.cloud.loaded = true;
+        // The last context this account saw paints immediately; the fresh
+        // read below replaces it.
+        let cached = cx
+            .default_global::<CloudContextCache>()
+            .0
+            .get(&(owner.clone(), organization.clone()))
+            .cloned();
+        let had_cache = cached.is_some();
+        if let Some(value) = cached {
+            self.apply_cloud_context(value, &owner, cx);
+        }
         let request_owner = owner.clone();
         let request_organization = organization.clone();
         let job = gpui_tokio::Tokio::spawn(cx, async move {
@@ -459,29 +475,14 @@ impl Pickers {
                     Ok(Ok(value))
                         if value["accountId"].as_str() == Some(owner.as_str()) && value["organizationId"].as_str()==organization.as_deref() =>
                     {
-                        this.cloud.context=value.clone();
-                        let provider=this.cloud.task_binding.as_ref().map(|binding|binding.provider.clone()).unwrap_or_else(|| {
-                            let project=this.state.read(cx).cloud_project.clone();
-                            providers::select(&value,this.cloud.provider_preference.as_deref(),project.as_ref().and_then(|p|p["providerId"].as_str())).unwrap_or_else(|_|this.cloud.provider_preference.clone().unwrap_or_default())
-                        });
-                        if this.cloud.task_binding.is_none() { this.state.update(cx,|state,_| { if let Some(project)=&mut state.cloud_project { project["providerId"]=json!(provider); } }); }
-                        let catalog=if value["providerAgentCatalogs"].is_object(){value["providerAgentCatalogs"][provider].clone()}else{value["agentCatalog"].clone()};
-                        if this.cloud.task_binding.is_none() { this.cloud.catalog=None;this.cloud.models.clear();this.cloud.harnesses=Loadable::Idle; }
-                        this.receive_cloud_models(catalog, cx);
-                        if this.cloud.task_binding.is_none() { this.align_cloud_model(cx); }
-                        this.cloud.rows = value["projects"]
-                            .as_array()
-                            .cloned()
-                            .unwrap_or_default()
-                            .into_iter()
-                            .map(|mut row| {
-                                row["accountId"] = value["ownerId"].as_str().map(|s|json!(s)).unwrap_or_else(||json!(owner));
-                                if row["providerId"].is_null() || row["providerId"]=="box"{row["providerId"]=json!("boxd");}
-                                row
-                            })
-                            .collect();
-                        this.cloud.error = None;
+                        cx.default_global::<CloudContextCache>()
+                            .0
+                            .insert((owner.clone(), organization.clone()), value.clone());
+                        this.apply_cloud_context(value, &owner, cx);
                     }
+                    // A cached catalog is already on screen; a failed refresh
+                    // keeps it rather than replacing it with an error.
+                    Ok(Err(_)) | Err(_) if had_cache => {}
                     result => {
                         let error = match result {
                             Ok(Err(error)) => error,
@@ -495,6 +496,33 @@ impl Pickers {
                 cx.notify();
             });
         }));
+    }
+    /// Show a cloud context: its destinations and the selected provider's
+    /// models. Fresh replies and the cached copy shown before them both land
+    /// here.
+    fn apply_cloud_context(&mut self, value: Value, owner: &str, cx: &mut Context<Self>) {
+        self.cloud.context=value.clone();
+        let provider=self.cloud.task_binding.as_ref().map(|binding|binding.provider.clone()).unwrap_or_else(|| {
+            let project=self.state.read(cx).cloud_project.clone();
+            providers::select(&value,self.cloud.provider_preference.as_deref(),project.as_ref().and_then(|p|p["providerId"].as_str())).unwrap_or_else(|_|self.cloud.provider_preference.clone().unwrap_or_default())
+        });
+        if self.cloud.task_binding.is_none() { self.state.update(cx,|state,_| { if let Some(project)=&mut state.cloud_project { project["providerId"]=json!(provider); } }); }
+        let catalog=if value["providerAgentCatalogs"].is_object(){value["providerAgentCatalogs"][provider].clone()}else{value["agentCatalog"].clone()};
+        if self.cloud.task_binding.is_none() { self.cloud.catalog=None;self.cloud.models.clear();self.cloud.harnesses=Loadable::Idle; }
+        self.receive_cloud_models(catalog, cx);
+        if self.cloud.task_binding.is_none() { self.align_cloud_model(cx); }
+        self.cloud.rows = value["projects"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|mut row| {
+                row["accountId"] = value["ownerId"].as_str().map(|s|json!(s)).unwrap_or_else(||json!(owner));
+                if row["providerId"].is_null() || row["providerId"]=="box"{row["providerId"]=json!("boxd");}
+                row
+            })
+            .collect();
+        self.cloud.error = None;
     }
     /// Cloud status only matters once the account has cloud destinations; a
     /// failed or signed-out lookup with nothing to offer stays out of the

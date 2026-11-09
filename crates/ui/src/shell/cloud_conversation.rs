@@ -40,6 +40,41 @@ pub(super) struct CloudConversation {
     _subscriptions: Vec<Subscription>,
 }
 impl gpui::EventEmitter<CloudConversationEvent> for CloudConversation {}
+
+/// The transcripts of recently closed cloud conversations, so reopening one
+/// shows its messages immediately instead of an empty chat while history
+/// loads. Keyed by account and conversation; display only, never authority.
+#[derive(Default)]
+struct TranscriptCache {
+    entries: std::collections::HashMap<String, Vec<zuse_model::SessionMessageEntry>>,
+    order: std::collections::VecDeque<String>,
+}
+impl gpui::Global for TranscriptCache {}
+impl TranscriptCache {
+    const CAPACITY: usize = 24;
+    fn key(target: &CloudTarget) -> String {
+        format!(
+            "{}\u{1f}{}\u{1f}{}\u{1f}{}",
+            target.subject,
+            target.organization.as_deref().unwrap_or_default(),
+            target.workspace,
+            target.initial_session
+        )
+    }
+    fn get(&self, key: &str) -> Option<Vec<zuse_model::SessionMessageEntry>> {
+        self.entries.get(key).cloned()
+    }
+    fn put(&mut self, key: String, entries: Vec<zuse_model::SessionMessageEntry>) {
+        self.order.retain(|existing| existing != &key);
+        self.order.push_back(key.clone());
+        self.entries.insert(key, entries);
+        while self.order.len() > Self::CAPACITY {
+            if let Some(oldest) = self.order.pop_front() {
+                self.entries.remove(&oldest);
+            }
+        }
+    }
+}
 impl CloudConversation {
     pub(super) fn new(
         target: CloudTarget,
@@ -49,12 +84,19 @@ impl CloudConversation {
         cx: &mut Context<Self>,
     ) -> Self {
         let session = target.initial_session.clone();
+        let cache_key = TranscriptCache::key(&target);
+        let cached = cx.default_global::<TranscriptCache>().get(&cache_key);
         let state = cx.new(|_| {
             let mut state = AppState::new();
             // Account-owned rendering is available before a guest connects.
             state.connection = ConnectionStatus::Ready;
             state.selected_chat = Some(session);
             state.auto_selected = true;
+            // The last transcript this app showed for the chat paints at
+            // once; the history read replaces it, like any saved page.
+            if let Some(entries) = cached {
+                state.apply_transcript(entries);
+            }
             state
         });
         let transcript = cx.new(|cx| Transcript::new(state.clone(), cx));
@@ -72,6 +114,16 @@ impl CloudConversation {
             composer.focus_pending = true;
         });
         let subscriptions = vec![
+            cx.on_release({
+                let state = state.clone();
+                move |_: &mut Self, cx: &mut App| {
+                    let entries = state.read(cx).transcript.clone();
+                    if !entries.is_empty() {
+                        cx.default_global::<TranscriptCache>()
+                            .put(cache_key, entries);
+                    }
+                }
+            }),
             cx.subscribe(&composer, |this: &mut Self, _, event, cx| match event {
                 ComposerEvent::CloudLaunchChanged => this.refresh_history(cx),
                 ComposerEvent::CloudForegroundAdmitted => this.foreground_admitted(cx),
@@ -941,6 +993,29 @@ impl Shell {
 mod tests {
     use super::*;
     use gpui::{AppContext, TestAppContext};
+    #[test]
+    fn transcript_cache_keeps_the_most_recent_conversations() {
+        let mut cache = TranscriptCache::default();
+        let entry = |id: &str| zuse_model::SessionMessageEntry {
+            id: id.into(),
+            role: zuse_model::MessageRole::User,
+            parts: vec![],
+            created_at: 0,
+            device_id: String::new(),
+            status: None,
+            continuation_of: None,
+            duration_ms: None,
+        };
+        for n in 0..=TranscriptCache::CAPACITY {
+            cache.put(format!("chat-{n}"), vec![entry(&format!("m{n}"))]);
+        }
+        assert!(cache.get("chat-0").is_none(), "the oldest conversation is evicted");
+        // Revisiting refreshes a conversation's place.
+        cache.put("chat-1".into(), vec![entry("again")]);
+        cache.put("extra".into(), vec![entry("x")]);
+        assert_eq!(cache.get("chat-1").unwrap()[0].id, "again");
+        assert!(cache.get("chat-2").is_none());
+    }
     struct PendingController;
     #[async_trait::async_trait]
     impl zuse_rpc::RpcService for PendingController {
