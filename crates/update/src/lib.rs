@@ -3,11 +3,14 @@
 //! (its own report-only checker, the "Check for Updates…" menu item, the
 //! sidebar update strip, and the desktop install paths).
 //!
-//! Release layout (see `.github/workflows/release.yml` and `edge/src/install.sh`):
-//! artifacts live in the `zuse-native-releases` R2 bucket, served pre-auth at
-//! `{edge}/releases/*`. `manifest.json` carries the latest version plus a
-//! sha256 per artifact; `latest.txt` (version only) remains as the fallback for
-//! releases published before the manifest existed.
+//! Release layout (see `.github/workflows/release.yml`): stable releases are
+//! GitHub releases, and each one's `SHA256SUMS` names its version and carries a
+//! sha256 per artifact. Preview builds report their plain workspace version, so
+//! previews cannot be ordered against each other and are not offered.
+//!
+//! A deployment that hosts its own feed sets `ZUSE_RELEASES_URL` or
+//! `ZUSE_EDGE_URL`; that feed serves `manifest.json` (or the older, version-only
+//! `latest.txt`) and the artifacts from one base URL.
 //!
 //! Install kinds and their update paths:
 //! - **Managed** (`~/.zuse/app/<ver>` + `current` symlink — the curl|sh
@@ -101,12 +104,7 @@ pub struct FileMeta {
 /// Artifact-name platform pair matching the packaging scripts. Unsupported
 /// updater targets retain their real OS name rather than impersonating Linux.
 pub fn platform_key() -> (&'static str, &'static str) {
-    let os = std::env::consts::OS;
-    let arch = match (os, std::env::consts::ARCH) {
-        ("macos", "aarch64") => "arm64",
-        (_, arch) => arch,
-    };
-    (os, arch)
+    (std::env::consts::OS, std::env::consts::ARCH)
 }
 
 fn managed_updates_supported(os: &str) -> bool {
@@ -139,10 +137,10 @@ pub fn headless_artifact(version: &str) -> String {
     format!("zuse-{version}-{os}-{arch}.tar.gz")
 }
 
-/// `zuse-<ver>-macos-<arch>-app.tar.gz` — the macOS app update payload.
+/// `zuse-<ver>-macos-<arch>.tar.gz` — the macOS package holding `Zuse.app`.
 pub fn mac_app_artifact(version: &str) -> String {
     let (_, arch) = platform_key();
-    format!("zuse-{version}-macos-{arch}-app.tar.gz")
+    format!("zuse-{version}-macos-{arch}.tar.gz")
 }
 
 fn parse_version(v: &str) -> Option<Vec<u64>> {
@@ -165,11 +163,18 @@ pub fn version_newer(latest: &str, current: &str) -> bool {
     }
 }
 
-/// Fetch the newest release metadata: `manifest.json`, falling back to
+/// Fetch the newest release metadata: the GitHub release's `SHA256SUMS` by
+/// default, or a configured feed's `manifest.json`, falling back to
 /// `latest.txt` (version only, no checksums) for pre-manifest releases.
 pub async fn fetch_latest(edge_url: &str) -> anyhow::Result<Manifest> {
-    let base = release_base(edge_url)?;
     let client = http_client()?;
+    let base = match release_source(edge_url)? {
+        ReleaseSource::GitHub => {
+            let url = format!("{RELEASES_PAGE}/latest/download/SHA256SUMS");
+            return fetch_github_latest(&client, &url).await;
+        }
+        ReleaseSource::Feed(base) => base,
+    };
     let manifest_url = format!("{base}/manifest.json");
     match fetch_release_metadata(&client, &manifest_url).await {
         Ok(response) if response.status.is_success() => {
@@ -204,6 +209,72 @@ pub async fn fetch_latest(edge_url: &str) -> anyhow::Result<Manifest> {
     Ok(Manifest {
         version,
         files: BTreeMap::new(),
+    })
+}
+
+/// Read a GitHub release's checksums as its manifest. A repository with no
+/// stable release yet answers 404, which means there is nothing newer to offer.
+async fn fetch_github_latest(client: &reqwest::Client, url: &str) -> anyhow::Result<Manifest> {
+    let response = fetch_release_metadata(client, url)
+        .await
+        .context("checking GitHub for a new release")?;
+    if response.status == reqwest::StatusCode::NOT_FOUND {
+        return Ok(Manifest {
+            version: current_version().to_owned(),
+            files: BTreeMap::new(),
+        });
+    }
+    anyhow::ensure!(
+        response.status.is_success(),
+        "checking GitHub for a new release: HTTP {}",
+        response.status
+    );
+    manifest_from_checksums(
+        std::str::from_utf8(&response.body).context("reading SHA256SUMS as UTF-8")?,
+    )
+}
+
+/// The version in a packaged artifact's name
+/// (`zuse-<version>-<os>-<arch>…`), or `None` for other release files.
+fn artifact_version(name: &str) -> Option<&str> {
+    let rest = name.strip_prefix("zuse-")?;
+    ["-linux-", "-macos-", "-windows-"]
+        .iter()
+        .find_map(|os| rest.find(os).map(|end| &rest[..end]))
+}
+
+/// Build a manifest from `SHA256SUMS`. Every download is verified against it,
+/// so a malformed file fails the check instead of dropping a checksum.
+fn manifest_from_checksums(checksums: &str) -> anyhow::Result<Manifest> {
+    let mut version: Option<&str> = None;
+    let mut files = BTreeMap::new();
+    for line in checksums.lines() {
+        let Some((digest, name)) = line.trim().split_once(char::is_whitespace) else {
+            continue;
+        };
+        let name = name.trim_start().trim_start_matches('*');
+        let Some(artifact) = artifact_version(name) else {
+            continue;
+        };
+        anyhow::ensure!(
+            digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit()),
+            "SHA256SUMS has an invalid checksum for {name}"
+        );
+        anyhow::ensure!(
+            *version.get_or_insert(artifact) == artifact,
+            "SHA256SUMS mixes release versions"
+        );
+        files.insert(
+            name.to_owned(),
+            FileMeta {
+                sha256: Some(digest.to_owned()),
+            },
+        );
+    }
+    let version = version.context("SHA256SUMS lists no release artifacts")?;
+    Ok(Manifest {
+        version: version.to_owned(),
+        files,
     })
 }
 
@@ -323,17 +394,39 @@ pub const RELEASES_PAGE: &str = "https://github.com/opcodehq/zuse/releases";
 /// installation cannot replace itself.
 pub const LATEST_RELEASE_PAGE: &str = "https://github.com/opcodehq/zuse/releases/latest";
 
-fn release_base(edge_url: &str) -> anyhow::Result<String> {
+/// The edge URL used when none is configured. It serves no releases, so it
+/// selects the GitHub release source.
+pub const LOCAL_EDGE_URL: &str = "http://127.0.0.1:27655";
+
+#[derive(Debug, PartialEq, Eq)]
+enum ReleaseSource {
+    GitHub,
+    /// Base URL serving the release metadata and artifacts.
+    Feed(String),
+}
+
+fn release_source(edge_url: &str) -> anyhow::Result<ReleaseSource> {
     if let Ok(url) = std::env::var("ZUSE_RELEASES_URL")
         && !url.trim().is_empty()
     {
-        return validate_release_override(&url);
+        return validate_release_override(&url).map(ReleaseSource::Feed);
     }
     #[cfg(windows)]
     if let Some(url) = windows::release_url()? {
-        return Ok(url.trim_end_matches('/').to_owned());
+        return Ok(ReleaseSource::Feed(url.trim_end_matches('/').to_owned()));
     }
-    Ok(format!("{}/releases", edge_url.trim_end_matches('/')))
+    let edge_url = edge_url.trim_end_matches('/');
+    if edge_url == LOCAL_EDGE_URL {
+        return Ok(ReleaseSource::GitHub);
+    }
+    Ok(ReleaseSource::Feed(format!("{edge_url}/releases")))
+}
+
+fn release_file_url(edge_url: &str, version: &str, file: &str) -> anyhow::Result<String> {
+    Ok(match release_source(edge_url)? {
+        ReleaseSource::GitHub => format!("{RELEASES_PAGE}/download/v{version}/{file}"),
+        ReleaseSource::Feed(base) => format!("{base}/{file}"),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -588,7 +681,7 @@ fn bundle_short_version(plist: &str) -> Option<String> {
 // Download + verify
 // ---------------------------------------------------------------------------
 
-/// Stream `{edge}/releases/<file>` to `dest`, verifying the manifest sha256 when
+/// Stream a release artifact to `dest`, verifying the manifest sha256 when
 /// present. Writes through a `.partial` sidecar so an interrupted download never
 /// leaves a plausible-looking artifact behind.
 pub async fn download_release_file(
@@ -597,7 +690,7 @@ pub async fn download_release_file(
     file: &str,
     dest: &Path,
 ) -> anyhow::Result<()> {
-    let url = format!("{}/{file}", release_base(edge_url)?);
+    let url = release_file_url(edge_url, &manifest.version, file)?;
     let expected = manifest.files.get(file).and_then(|m| m.sha256.as_deref());
     if expected.is_none() {
         tracing::warn!(
@@ -847,6 +940,8 @@ pub async fn stage_mac_app(
             &tarball.to_string_lossy(),
             "-C",
             &unpack.to_string_lossy(),
+            // The package's root is its versioned name, as in the headless path.
+            "--strip-components=1",
         ],
     )
     .map(|()| unpack.join("Zuse.app"));
@@ -1607,6 +1702,94 @@ mod tests {
     }
 
     #[test]
+    fn the_unconfigured_edge_reads_releases_from_github() {
+        assert_eq!(
+            release_source(LOCAL_EDGE_URL).unwrap(),
+            ReleaseSource::GitHub
+        );
+        assert_eq!(
+            release_source(&format!("{LOCAL_EDGE_URL}/")).unwrap(),
+            ReleaseSource::GitHub
+        );
+        assert_eq!(
+            release_file_url(LOCAL_EDGE_URL, "1.2.3", "zuse-1.2.3-linux-x86_64.tar.gz").unwrap(),
+            "https://github.com/opcodehq/zuse/releases/download/v1.2.3/zuse-1.2.3-linux-x86_64.tar.gz"
+        );
+    }
+
+    #[test]
+    fn a_configured_edge_keeps_its_own_feed() {
+        assert_eq!(
+            release_source("https://edge.example/").unwrap(),
+            ReleaseSource::Feed("https://edge.example/releases".into())
+        );
+        assert_eq!(
+            release_file_url("https://edge.example", "1.2.3", "a.tar.gz").unwrap(),
+            "https://edge.example/releases/a.tar.gz"
+        );
+    }
+
+    #[test]
+    fn checksums_become_the_release_manifest() {
+        let linux = "a".repeat(64);
+        let mac = "B".repeat(64);
+        let installer = "c".repeat(64);
+        let manifest = manifest_from_checksums(&format!(
+            "{linux}  zuse-1.2.3-linux-x86_64.tar.gz\n\
+             {mac} *zuse-1.2.3-macos-aarch64.tar.gz\n\
+             {installer}  install.sh\n"
+        ))
+        .unwrap();
+        assert_eq!(manifest.version, "1.2.3");
+        assert_eq!(manifest.files.len(), 2);
+        assert_eq!(
+            manifest.files["zuse-1.2.3-macos-aarch64.tar.gz"].sha256,
+            Some(mac)
+        );
+    }
+
+    #[test]
+    fn malformed_checksums_fail_the_check() {
+        let digest = "a".repeat(64);
+        for checksums in [
+            String::new(),
+            format!("{digest}  install.sh\n"),
+            "abc  zuse-1.2.3-linux-x86_64.tar.gz\n".to_owned(),
+            format!(
+                "{digest}  zuse-1.2.3-linux-x86_64.tar.gz\n\
+                 {digest}  zuse-1.2.4-macos-aarch64.tar.gz\n"
+            ),
+        ] {
+            assert!(
+                manifest_from_checksums(&checksums).is_err(),
+                "accepted {checksums:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn no_stable_github_release_means_nothing_newer() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0; 4096];
+            let _ = socket.read(&mut request).await;
+            socket
+                .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n")
+                .await
+                .unwrap();
+        });
+        let manifest = fetch_github_latest(&http_client().unwrap(), &format!("http://{address}"))
+            .await
+            .unwrap();
+        server.await.unwrap();
+        assert_eq!(manifest.version, current_version());
+        assert!(!version_newer(&manifest.version, current_version()));
+    }
+
+    #[test]
     fn version_compare() {
         assert!(version_newer("0.1.1", "0.1.0"));
         assert!(version_newer("0.2.0", "0.1.9"));
@@ -1665,7 +1848,10 @@ mod tests {
             headless_artifact("0.2.0"),
             format!("zuse-0.2.0-{os}-{arch}.tar.gz")
         );
-        assert!(mac_app_artifact("0.2.0").ends_with("-app.tar.gz"));
+        assert_eq!(
+            mac_app_artifact("0.2.0"),
+            format!("zuse-0.2.0-macos-{arch}.tar.gz")
+        );
     }
 
     #[cfg(windows)]

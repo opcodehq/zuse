@@ -85,9 +85,8 @@ enum DaemonCommand {
     Status,
 }
 
-/// Production edge (Cloudflare Worker + Durable Objects on the zuse.sh zone).
-/// `ZUSE_EDGE_URL` overrides (local dev / self-hosting).
-const DEFAULT_EDGE_URL: &str = "http://127.0.0.1:27655";
+/// Local-only edge. `ZUSE_EDGE_URL` overrides (local dev / self-hosting).
+const DEFAULT_EDGE_URL: &str = zuse_update::LOCAL_EDGE_URL;
 
 /// Production WorkOS AuthKit client id — public knowledge (it appears in every
 /// authorize URL), so baking it in is safe. Overridden by `ZUSE_WORKOS_CLIENT_ID`;
