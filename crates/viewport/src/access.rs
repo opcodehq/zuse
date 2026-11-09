@@ -38,7 +38,7 @@ mod tests {
             assert_eq!(view.sandbox, SandboxLevel::DangerFullAccess);
 
             // Selecting an existing chat still uses its own saved access.
-            view.selected = Some(json!({"id":"existing","deviceId":"local","config":{"harness":"codex","sandbox":"read-only"}}));
+            view.selected = Some(json!({"id":"existing","deviceId":"local","config":{"harness":"codex","sandbox":"auto"}}));
             view.workspace_synced = true;
             view.choose_access(SandboxLevel::WorkspaceWrite, cx);
             assert!(view.access_save.is_some());
@@ -174,9 +174,7 @@ impl WorkspaceView {
         cx.notify();
     }
     fn remember_access(&mut self, level: SandboxLevel) {
-        let Some(mode) = zuse_protocol::presentation::PermissionMode::from_sandbox(level) else {
-            return;
-        };
+        let mode = zuse_protocol::presentation::PermissionMode::from_sandbox(level);
         self.preferences.default_permission_mode = mode;
         self.save_preferences();
     }

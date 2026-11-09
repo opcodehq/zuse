@@ -83,9 +83,7 @@ impl Composer {
         cx.notify();
     }
     fn remember_permission(&self, level: SandboxLevel, cx: &mut Context<Self>) {
-        let Some(mode) = zuse_protocol::presentation::PermissionMode::from_sandbox(level) else {
-            return;
-        };
+        let mode = zuse_protocol::presentation::PermissionMode::from_sandbox(level);
         crate::settings::update(crate::settings::SavePolicy::Immediate, cx, |settings| {
             settings.default_permission_mode = mode;
         });
