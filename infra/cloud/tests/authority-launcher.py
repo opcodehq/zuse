@@ -39,7 +39,9 @@ class CandidateAuthorityTest(unittest.TestCase):
         self.env['ZUSE_AUTH_CANDIDATE_RELEASE']='b'*64
         self.assertNotEqual(self.run_launcher().returncode,0)
         self.env['ZUSE_AUTH_CANDIDATE_RELEASE']=self.identifier
-        (self.harness/'releases'/self.identifier/'codex').write_bytes(b'tampered')
+        # Installed releases are read-only; an attacker with write access
+        # would change that first.
+        binary=self.harness/'releases'/self.identifier/'codex';binary.chmod(0o755);binary.write_bytes(b'tampered')
         self.assertNotEqual(self.run_launcher().returncode,0)
     def test_default_authority_does_not_bypass_missing_channel(self):
         self.env.pop('ZUSE_AUTH_CANDIDATE_RELEASE')
