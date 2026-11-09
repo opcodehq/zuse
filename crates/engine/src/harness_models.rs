@@ -286,7 +286,7 @@ impl HarnessModels {
     pub fn with_local(
         self,
         accounts: crate::agent_accounts::AgentAccounts,
-        registry: Arc<crate::registry::HarnessRegistry>,
+        registry: Weak<crate::registry::HarnessRegistry>,
     ) -> Self {
         let _ = self
             .transport
@@ -1071,11 +1071,15 @@ mod local_tests {
     use super::*;
     use zuse_protocol::{AgentEvent, HarnessId, Model, ReasoningLevel, RunRequest, SteeringMode};
     use zuse_providers::{Harness, HarnessError, RunControls};
-    struct Catalog(HarnessId);
+    struct Catalog {
+        id: HarnessId,
+        // Mirror the real registry -> native harness -> model transport ownership.
+        _models: HarnessModels,
+    }
     #[async_trait]
     impl Harness for Catalog {
         fn id(&self) -> HarnessId {
-            self.0
+            self.id
         }
         fn display_name(&self) -> &str {
             "Fixture"
@@ -1164,14 +1168,17 @@ mod local_tests {
         .unwrap();
         let accounts = crate::agent_accounts::AgentAccounts::new(config);
         let registry = Arc::new(crate::registry::HarnessRegistry::new());
-        registry.register(Arc::new(Catalog(HarnessId::Codex)));
         let models = HarnessModels::configured(
             Arc::new(EmptyAccounts),
             Arc::new(LocalWire),
             ["unused".into(), "unused".into()],
         )
         .unwrap()
-        .with_local(accounts, registry);
+        .with_local(accounts, Arc::downgrade(&registry));
+        registry.register(Arc::new(Catalog {
+            id: HarnessId::Codex,
+            _models: models.clone(),
+        }));
         let inventory = models
             .models(true, &CancellationToken::new())
             .await
@@ -1196,5 +1203,18 @@ mod local_tests {
             .await
             .unwrap();
         assert_eq!(output.text, "local reply");
+        let weak = Arc::downgrade(&registry);
+        drop(registry);
+        assert!(
+            weak.upgrade().is_none(),
+            "local models must not retain their owning registry"
+        );
+        assert!(
+            models
+                .models(false, &CancellationToken::new())
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 }

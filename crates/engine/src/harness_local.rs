@@ -3,7 +3,9 @@ use crate::{
     agent_accounts::AgentAccounts, harness_models::HarnessModel, registry::HarnessRegistry,
 };
 use sha2::{Digest, Sha256};
+#[cfg(test)]
 use std::sync::Arc;
+use std::sync::Weak;
 use zuse_harness::{
     Error,
     transport::{Authentication, Capabilities, Credential, Protocol, Route},
@@ -12,7 +14,8 @@ use zuse_protocol::HarnessId;
 
 pub(crate) struct LocalModels {
     pub accounts: AgentAccounts,
-    pub registry: Arc<HarnessRegistry>,
+    // The registry owns the native harness backed by these models.
+    pub registry: Weak<HarnessRegistry>,
 }
 const PROVIDERS: [(&str, HarnessId); 3] = [
     ("codex", HarnessId::Codex),
@@ -36,23 +39,29 @@ fn parse(id: &str) -> Result<(HarnessId, &str), Error> {
 }
 impl LocalModels {
     pub async fn models(&self, force: bool) -> Vec<HarnessModel> {
-        let inventories = futures::future::join_all(PROVIDERS.map(|(name, harness)| async move {
-            if self.accounts.harness_token(harness).await.is_none() {
-                return vec![];
+        let Some(registry) = self.registry.upgrade() else {
+            return vec![];
+        };
+        let inventories = futures::future::join_all(PROVIDERS.map(|(name, harness)| {
+            let registry = &registry;
+            async move {
+                if self.accounts.harness_token(harness).await.is_none() {
+                    return vec![];
+                }
+                registry
+                    .discover_models_force(harness, force)
+                    .await
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|model| HarnessModel {
+                        id: format!("local/{name}/{}", model.id),
+                        label: format!("{} · {name} (local)", model.label),
+                        context_window_tokens: None,
+                        auto_compact_token_limit: None,
+                        effective_context_window_percent: None,
+                    })
+                    .collect::<Vec<_>>()
             }
-            self.registry
-                .discover_models_force(harness, force)
-                .await
-                .unwrap_or_default()
-                .into_iter()
-                .map(|model| HarnessModel {
-                    id: format!("local/{name}/{}", model.id),
-                    label: format!("{} · {name} (local)", model.label),
-                    context_window_tokens: None,
-                    auto_compact_token_limit: None,
-                    effective_context_window_percent: None,
-                })
-                .collect::<Vec<_>>()
         }))
         .await;
         inventories.into_iter().flatten().collect()
@@ -142,14 +151,20 @@ mod tests {
     use crate::agent_accounts::AgentAccountsConfig;
     use serde_json::json;
 
-    fn setup() -> (tempfile::TempDir, AgentAccountsConfig, LocalModels) {
+    fn setup() -> (
+        tempfile::TempDir,
+        AgentAccountsConfig,
+        LocalModels,
+        Arc<HarnessRegistry>,
+    ) {
         let dir = tempfile::tempdir().unwrap();
         let config = AgentAccountsConfig::isolated(dir.path());
+        let registry = Arc::new(HarnessRegistry::new());
         let local = LocalModels {
             accounts: AgentAccounts::new(config.clone()),
-            registry: Arc::new(HarnessRegistry::new()),
+            registry: Arc::downgrade(&registry),
         };
-        (dir, config, local)
+        (dir, config, local, registry)
     }
     fn write(path: &std::path::Path, body: serde_json::Value) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -157,7 +172,7 @@ mod tests {
     }
     #[tokio::test]
     async fn local_credentials_route_each_provider_and_follow_account_changes() {
-        let (_dir, config, local) = setup();
+        let (_dir, config, local, _registry) = setup();
         write(
             &config.codex_home.join("auth.json"),
             json!({"tokens":{"access_token":"codex-one"}}),
@@ -213,7 +228,7 @@ mod tests {
     }
     #[tokio::test]
     async fn missing_login_and_enterprise_grok_are_not_public_api_credentials() {
-        let (_dir, config, local) = setup();
+        let (_dir, config, local, _registry) = setup();
         assert!(local.models(false).await.is_empty());
         assert!(local.credential("local/claude/test-model").await.is_err());
         write(
@@ -278,14 +293,14 @@ mod live_tests {
             accounts.harness_token(harness).await.is_some(),
             "No active local login for {provider}"
         );
+        let registry = Arc::new(crate::registry::default_registry());
         let local = LocalModels {
             accounts,
-            registry: Arc::new(crate::registry::default_registry()),
+            registry: Arc::downgrade(&registry),
         };
         let model = match std::env::var("ZUSE_LIVE_MODEL") {
             Ok(model) => model,
-            Err(_) => local
-                .registry
+            Err(_) => registry
                 .discover_models_force(harness, true)
                 .await
                 .expect("local CLI model discovery failed")

@@ -398,7 +398,7 @@ impl EngineCore {
             model_connections::ModelConnections::new(data_dir.to_path_buf(), account.clone());
         let harness_models =
             harness_models::HarnessModels::new(model_connections.clone(), data_dir.join("harness"))
-                .map(|models| models.with_local(agent_accounts.clone(), registry.clone()))
+                .map(|models| models.with_local(agent_accounts.clone(), Arc::downgrade(&registry)))
                 .map_err(|error| EngineError::Other(error.to_string()))?;
         #[cfg(unix)]
         registry.register(Arc::new(
