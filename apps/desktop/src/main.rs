@@ -98,7 +98,7 @@ fn edge_url_from_env() -> String {
 
 /// Optional workspace/relay auth: explicit public client wins (empty = dev mode).
 /// Without one, workspace sync remains local-only. General account sign-in uses
-/// engine::account's independent public-client device flow.
+/// engine::account's browser sign-in, whose client follows the API origin.
 fn workos_client_id_from_env(edge_token: &Option<String>) -> Option<String> {
     match std::env::var("ZUSE_WORKOS_CLIENT_ID") {
         Ok(v) if v.trim().is_empty() => None,

@@ -20,6 +20,28 @@ use zuse_protocol::UserProfile;
 
 pub const API_URL: &str = crate::api_origins::DEFAULT_API_URL;
 pub const PUBLIC_CLIENT_ID: &str = "client_01KWGQ818571ARFATQ3G9AR2Y2";
+/// Staging's identity client. Staging only accepts tokens issued to it, and it
+/// is the client that allows the http://127.0.0.1 sign-in callback there.
+pub const STAGING_CLIENT_ID: &str = "client_01KW6ZEZKVMZ0G429A89XZD83Q";
+
+/// The identity client that belongs to `api_url`'s deployment, so pointing the
+/// app at staging signs in with staging's client without extra configuration.
+fn default_client_id(api_url: &str) -> &'static str {
+    let host = reqwest::Url::parse(api_url)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .unwrap_or_default();
+    let staging = host.ends_with(".zuse.sh")
+        && host
+            .trim_end_matches(".zuse.sh")
+            .split(['.', '-'])
+            .any(|part| part == "stag" || part == "staging");
+    if staging {
+        STAGING_CLIENT_ID
+    } else {
+        PUBLIC_CLIENT_ID
+    }
+}
 const IDENTITY_URL: &str = "https://api.workos.com";
 const MAX_RESPONSE: usize = 256 * 1024;
 /// How long a browser sign-in waits for AuthKit to redirect back.
@@ -171,7 +193,7 @@ impl Account {
         let client_id = std::env::var("ZUSE_WORKOS_CLIENT_ID")
             .ok()
             .filter(|s| !s.trim().is_empty())
-            .unwrap_or_else(|| PUBLIC_CLIENT_ID.into());
+            .unwrap_or_else(|| default_client_id(&api_url).into());
         Self::configured(root, endpoint(&api_url)?, client_id, IDENTITY_URL.into())
     }
 
@@ -894,6 +916,25 @@ fn persist(path: &Path, session: &impl Serialize) -> Result<(), AccountError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn staging_origins_sign_in_with_staging_client() {
+        for url in [
+            "https://api-rust-stag.zuse.sh",
+            "https://api-staging.zuse.sh",
+            "https://code-staging.zuse.sh/",
+        ] {
+            assert_eq!(default_client_id(url), STAGING_CLIENT_ID, "{url}");
+        }
+        for url in [
+            "https://api.zuse.sh",
+            "https://api-rust.zuse.sh",
+            "https://stag.example.com",
+            "http://127.0.0.1:27655",
+        ] {
+            assert_eq!(default_client_id(url), PUBLIC_CLIENT_ID, "{url}");
+        }
+    }
     fn token(subject: &str, expires: i64) -> TokenResponse {
         let payload = URL_SAFE_NO_PAD
             .encode(serde_json::to_vec(&json!({"sub":subject,"exp":expires})).unwrap());
