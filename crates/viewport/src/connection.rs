@@ -207,9 +207,14 @@ impl WorkspaceView {
             methods::WATCH_DEVICES,
             methods::LIST_REPOS,
         ] {
-            self.call(method, if matches!(method, methods::WATCH_CHATS | methods::WATCH_SESSIONS) {
-                json!({"delta":true})
-            } else { json!({}) });
+            self.call(
+                method,
+                if matches!(method, methods::WATCH_CHATS | methods::WATCH_SESSIONS) {
+                    json!({"delta":true})
+                } else {
+                    json!({})
+                },
+            );
         }
         self.prefetch_model_catalogs();
         self.refresh_model_config_watch();

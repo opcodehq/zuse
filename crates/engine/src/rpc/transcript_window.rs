@@ -294,7 +294,10 @@ mod tests {
         );
         let initial = stream.next().await.unwrap();
         assert!(initial.history_resumed);
-        assert_eq!(serde_json::to_value(&initial).unwrap()["historyResumed"],true);
+        assert_eq!(
+            serde_json::to_value(&initial).unwrap()["historyResumed"],
+            true
+        );
         let zuse_doc::TranscriptFrame::Delta { ref upsert, .. } = initial.update.frame else {
             panic!("page resent cached suffix")
         };

@@ -463,7 +463,9 @@ impl SessionDoc {
         let messages = self.doc.get_list("messages");
         (0..messages.len()).rev().find_map(|index| {
             let value = messages.get(index)?;
-            entry_from_json(value.get_deep_value().to_json_value()).ok().map(|entry| entry.id)
+            entry_from_json(value.get_deep_value().to_json_value())
+                .ok()
+                .map(|entry| entry.id)
         })
     }
 
@@ -1551,14 +1553,26 @@ mod tests {
         assert_eq!(doc.last_entry_id(), None);
         for i in 0..100 {
             doc.push_message(&SessionMessageEntry {
-                id: format!("message-{i}"), role: MessageRole::User,
-                parts: vec![], created_at: i, device_id: "host".into(),
-                status: Some(MessageStatus::Complete), continuation_of: None, duration_ms: None,
-            }).unwrap();
+                id: format!("message-{i}"),
+                role: MessageRole::User,
+                parts: vec![],
+                created_at: i,
+                device_id: "host".into(),
+                status: Some(MessageStatus::Complete),
+                continuation_of: None,
+                duration_ms: None,
+            })
+            .unwrap();
         }
-        doc.doc.get_list("messages").push("invalid future row").unwrap();
-        assert_eq!(doc.last_entry_id(), doc.read_entries().unwrap().last().map(|row|row.id.clone()));
-        assert_eq!(doc.last_entry_id().as_deref(),Some("message-99"));
+        doc.doc
+            .get_list("messages")
+            .push("invalid future row")
+            .unwrap();
+        assert_eq!(
+            doc.last_entry_id(),
+            doc.read_entries().unwrap().last().map(|row| row.id.clone())
+        );
+        assert_eq!(doc.last_entry_id().as_deref(), Some("message-99"));
     }
 
     #[test]

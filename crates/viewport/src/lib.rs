@@ -1402,7 +1402,9 @@ impl WorkspaceView {
                 }
                 methods::WATCH_CHATS => {
                     self.workspace_synced = true;
-                    if let Err(error) = zuse_protocol::list_delta::apply(&mut self.chats, value, "id") {
+                    if let Err(error) =
+                        zuse_protocol::list_delta::apply(&mut self.chats, value, "id")
+                    {
                         self.error = Some(error.into());
                         self.cancel(id);
                         self.call(methods::WATCH_CHATS, json!({"delta":true}));
@@ -1465,7 +1467,9 @@ impl WorkspaceView {
                     }
                 }
                 methods::WATCH_SESSIONS => {
-                    if let Err(error) = zuse_protocol::list_delta::apply(&mut self.sessions, value, "chatId") {
+                    if let Err(error) =
+                        zuse_protocol::list_delta::apply(&mut self.sessions, value, "chatId")
+                    {
                         self.error = Some(error.into());
                         self.cancel(id);
                         self.call(methods::WATCH_SESSIONS, json!({"delta":true}));

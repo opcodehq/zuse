@@ -166,7 +166,8 @@ async fn session(server: BrowserServer, mut socket: WebSocket) {
     let (grants, current) = tokio::sync::watch::channel(grant);
     let lifetime = current.clone();
     let (mut writer, mut reader) = socket.split();
-    let (output, mut outgoing) = mpsc::channel::<zuse_rpc::OutputFrame>(crate::SOCKET_OUTPUT_CAPACITY);
+    let (output, mut outgoing) =
+        mpsc::channel::<zuse_rpc::OutputFrame>(crate::SOCKET_OUTPUT_CAPACITY);
     let (input, incoming) = mpsc::channel::<String>(16);
     let service = Arc::new(Authorized {
         inner: server.service,

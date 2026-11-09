@@ -51,14 +51,14 @@
 //! whose checkout always lives on the routed target device.
 
 mod archive_review;
-mod transcript_window;
-mod list_watch;
 mod creation_sources;
 mod desktop_import;
 mod dictation;
 mod external_chats;
 mod git_workspace;
+mod list_watch;
 mod simulators;
+mod transcript_window;
 mod visuals;
 mod voice_chat;
 mod voice_remote;
@@ -1981,8 +1981,12 @@ fn doc_message_envelopes(
                     None => (current, None),
                 };
                 let resumed = if prev.is_none() {
-                    window.as_mut().and_then(|window| window.resume_frame(&current.entries))
-                } else { None };
+                    window
+                        .as_mut()
+                        .and_then(|window| window.resume_frame(&current.entries))
+                } else {
+                    None
+                };
                 let history_resumed = resumed.is_some();
                 let frame = match prev.as_ref() {
                     None => resumed.unwrap_or_else(|| TranscriptFrame::Reset {
@@ -2008,10 +2012,17 @@ fn doc_message_envelopes(
                         // Ordinary live updates never rebuild this metadata.
                         let mut baseline = if window.is_some() {
                             zuse_doc::TranscriptBaseline {
-                                entries: current.entries.iter().filter_map(|entry| {
-                                    current.replay_baseline.entries.get(&entry.id)
-                                        .map(|parts| (entry.id.clone(), parts.clone()))
-                                }).collect(),
+                                entries: current
+                                    .entries
+                                    .iter()
+                                    .filter_map(|entry| {
+                                        current
+                                            .replay_baseline
+                                            .entries
+                                            .get(&entry.id)
+                                            .map(|parts| (entry.id.clone(), parts.clone()))
+                                    })
+                                    .collect(),
                             }
                         } else {
                             (*current.replay_baseline).clone()
@@ -2024,9 +2035,14 @@ fn doc_message_envelopes(
                             }
                         }
                         if window.is_some() {
-                            let visible = current.entries.iter().map(|entry| entry.id.as_str())
+                            let visible = current
+                                .entries
+                                .iter()
+                                .map(|entry| entry.id.as_str())
                                 .collect::<std::collections::HashSet<_>>();
-                            baseline.entries.retain(|id, _| visible.contains(id.as_str()));
+                            baseline
+                                .entries
+                                .retain(|id, _| visible.contains(id.as_str()));
                         }
                         Some(baseline)
                     }
@@ -2044,7 +2060,11 @@ fn doc_message_envelopes(
                     continue;
                 }
                 previous_usage = usage;
-                let outgoing_history = if history == previous_history { None } else { history.clone() };
+                let outgoing_history = if history == previous_history {
+                    None
+                } else {
+                    history.clone()
+                };
                 previous_history = history;
                 let value = zuse_doc::TranscriptUpdate {
                     frame,
@@ -3642,8 +3662,18 @@ impl RpcService for EngineRpc {
                                 .and_then(|v| v.as_u64())
                                 .unwrap_or(64 * 1024)
                                 .min(usize::MAX as u64) as usize,
-                        ).with_anchor(params.get("tailAnchor").and_then(|value| value.as_str()).map(str::to_owned))
-                        .with_resume(params.get("resume").and_then(|value| serde_json::from_value(value.clone()).ok()))
+                        )
+                        .with_anchor(
+                            params
+                                .get("tailAnchor")
+                                .and_then(|value| value.as_str())
+                                .map(str::to_owned),
+                        )
+                        .with_resume(
+                            params
+                                .get("resume")
+                                .and_then(|value| serde_json::from_value(value.clone()).ok()),
+                        )
                     });
                 let p: ChatParams = parse_params(params)?;
                 // An open transcript keeps its chat's checkout diff live (and
@@ -3973,7 +4003,9 @@ impl RpcService for EngineRpc {
                 let rx = self.workspace.watch_chats();
                 if params["delta"] == true {
                     Ok(RpcReply::TypedStream(list_watch::stream(rx, |row| &row.id)))
-                } else { Ok(RpcReply::Stream(watch_stream(rx))) }
+                } else {
+                    Ok(RpcReply::Stream(watch_stream(rx)))
+                }
             }
             methods::WATCH_SIDEBAR_PREFERENCES => Ok(RpcReply::Stream(watch_stream(
                 self.workspace.watch_sidebar_preferences(),
@@ -3990,8 +4022,12 @@ impl RpcService for EngineRpc {
                     .workspace
                     .merged_sessions_watch(self.sessions.watch_sessions());
                 if params["delta"] == true {
-                    Ok(RpcReply::TypedStream(list_watch::stream(merged, |row| &row.chat_id)))
-                } else { Ok(RpcReply::Stream(watch_stream(merged))) }
+                    Ok(RpcReply::TypedStream(list_watch::stream(merged, |row| {
+                        &row.chat_id
+                    })))
+                } else {
+                    Ok(RpcReply::Stream(watch_stream(merged)))
+                }
             }
             methods::LOCAL_DEVICE => {
                 RpcReply::value(&serde_json::json!({ "deviceId": self.doc_host.device_id() }))

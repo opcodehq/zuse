@@ -159,7 +159,8 @@ pub(crate) async fn session<S, E>(
     let Ok((mut channel, first, control)) = authenticated else {
         return;
     };
-    let (out_tx, mut out_rx) = mpsc::channel::<zuse_rpc::OutputFrame>(crate::SOCKET_OUTPUT_CAPACITY);
+    let (out_tx, mut out_rx) =
+        mpsc::channel::<zuse_rpc::OutputFrame>(crate::SOCKET_OUTPUT_CAPACITY);
     let (in_tx, in_rx) = mpsc::channel::<String>(16);
     let service = Arc::new(Authorized {
         inner: server.service,

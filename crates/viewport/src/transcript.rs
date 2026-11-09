@@ -207,7 +207,10 @@ impl WorkspaceView {
             };
             let reset = matches!(&update.frame, zuse_model::TranscriptFrame::Reset { .. });
             let resumed = self.transcript_state.resume_requested && value["historyResumed"] == true;
-            if (!self.transcript_state.ready || self.transcript_state.loading_earlier) && !reset && !resumed {
+            if (!self.transcript_state.ready || self.transcript_state.loading_earlier)
+                && !reset
+                && !resumed
+            {
                 self.recover_transcript("The host omitted the initial history snapshot".into(), cx);
                 return;
             }
@@ -231,7 +234,8 @@ impl WorkspaceView {
             self.transcript_state.loading_earlier = false;
             if reset || resumed || value.get("historyHasMore").is_some() {
                 self.transcript_state.has_more = value["historyHasMore"].as_bool().unwrap_or(false);
-                self.transcript_state.next_anchor = value["historyNextAnchor"].as_str().map(str::to_owned);
+                self.transcript_state.next_anchor =
+                    value["historyNextAnchor"].as_str().map(str::to_owned);
             }
             self.context_usage = update.context_usage;
             self.context_confirmed = true;

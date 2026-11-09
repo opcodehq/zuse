@@ -313,7 +313,17 @@ async fn socket(
     }
     let connections = server.connections.clone();
     ws.max_message_size(2 * 1024 * 1024)
-        .on_upgrade(move |socket| connections.track_future(browser_socket(server, socket, match options.rpc_compression.as_deref() { Some("deflate-stream-v1") => browser_io::Compression::DeflateStream, Some("gzip-v1") => browser_io::Compression::Gzip, _ => browser_io::Compression::None })))
+        .on_upgrade(move |socket| {
+            connections.track_future(browser_socket(
+                server,
+                socket,
+                match options.rpc_compression.as_deref() {
+                    Some("deflate-stream-v1") => browser_io::Compression::DeflateStream,
+                    Some("gzip-v1") => browser_io::Compression::Gzip,
+                    _ => browser_io::Compression::None,
+                },
+            ))
+        })
 }
 
 #[derive(Default, Deserialize)]
@@ -322,7 +332,11 @@ struct BrowserRpcOptions {
     rpc_compression: Option<String>,
 }
 
-async fn browser_socket(server: BrowserServer, socket: axum::extract::ws::WebSocket, compression: browser_io::Compression) {
+async fn browser_socket(
+    server: BrowserServer,
+    socket: axum::extract::ws::WebSocket,
+    compression: browser_io::Compression,
+) {
     // An upgrade completing after listener shutdown must not start RPC work.
     if server.shutdown.is_cancelled() {
         return;

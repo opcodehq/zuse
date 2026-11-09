@@ -282,26 +282,36 @@ mod tests {
     use super::*;
     use std::prelude::v1::test;
     #[gpui::test]
-    fn only_active_agent_is_discovered_until_the_picker_requests_other_agents(cx: &mut TestAppContext) {
-        let mut f=fixture(cx);
-        f.window.update(cx,|view,_,_|{
-            view.providers=serde_json::from_value(json!([
-                {"id":"codex","installed":true,"enabled":true},
-                {"id":"claude-code","installed":true,"enabled":true},
-                {"id":"cursor","installed":true,"enabled":true}
-            ])).unwrap();
-            view.provider_index=0;
-            view.prefetch_model_catalogs();
-            assert!(view.picker_catalog.providers.contains_key("codex"));
-            assert!(!view.picker_catalog.providers.contains_key("claude-code"));
-            assert!(!view.picker_catalog.providers.contains_key("cursor"));
-            view.load_picker_catalogs(false);
-            assert!(view.picker_catalog.providers.contains_key("claude-code"));
-            assert!(view.picker_catalog.providers.contains_key("cursor"));
-        }).unwrap();
-        let requests:Vec<_>=std::iter::from_fn(||f.requests.try_recv().ok())
-            .filter(|request|request["method"]==methods::LIST_MODELS).collect();
-        assert_eq!(requests.len(),3,"selected agent is not requested twice when the picker opens");
+    fn only_active_agent_is_discovered_until_the_picker_requests_other_agents(
+        cx: &mut TestAppContext,
+    ) {
+        let mut f = fixture(cx);
+        f.window
+            .update(cx, |view, _, _| {
+                view.providers = serde_json::from_value(json!([
+                    {"id":"codex","installed":true,"enabled":true},
+                    {"id":"claude-code","installed":true,"enabled":true},
+                    {"id":"cursor","installed":true,"enabled":true}
+                ]))
+                .unwrap();
+                view.provider_index = 0;
+                view.prefetch_model_catalogs();
+                assert!(view.picker_catalog.providers.contains_key("codex"));
+                assert!(!view.picker_catalog.providers.contains_key("claude-code"));
+                assert!(!view.picker_catalog.providers.contains_key("cursor"));
+                view.load_picker_catalogs(false);
+                assert!(view.picker_catalog.providers.contains_key("claude-code"));
+                assert!(view.picker_catalog.providers.contains_key("cursor"));
+            })
+            .unwrap();
+        let requests: Vec<_> = std::iter::from_fn(|| f.requests.try_recv().ok())
+            .filter(|request| request["method"] == methods::LIST_MODELS)
+            .collect();
+        assert_eq!(
+            requests.len(),
+            3,
+            "selected agent is not requested twice when the picker opens"
+        );
     }
     struct Fixture {
         window: WindowHandle<WorkspaceView>,
