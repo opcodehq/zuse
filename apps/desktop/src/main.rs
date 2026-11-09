@@ -242,7 +242,7 @@ fn main() -> anyhow::Result<()> {
 
     match cli.command {
         Some(Command::Headless) => {
-            let runtime = tokio::runtime::Runtime::new()?;
+            let runtime = zuse_engine::runtime()?;
             runtime.block_on(async {
                 let engine = zuse_engine::Engine::new(engine_config_from_env());
                 engine.run().await

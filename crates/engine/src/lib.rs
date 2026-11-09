@@ -11,6 +11,21 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 pub use zuse_protocol::{EngineInfo, HarnessId, WorkspaceScope};
+
+/// Stack for every engine worker thread. Tokio's 2 MiB default is too small
+/// for unoptimized builds: one RPC into cloud settings nests several large
+/// async frames (the engine and cloud dispatchers alone take ~0.6 MiB on x86,
+/// more on arm64), which overflowed and aborted the engine. Stacks are
+/// reserved address space, so this costs no memory until it is used.
+pub const WORKER_STACK_BYTES: usize = 16 * 1024 * 1024;
+
+/// The multi-threaded runtime the engine runs on, headless or embedded.
+pub fn runtime() -> std::io::Result<tokio::runtime::Runtime> {
+    tokio::runtime::Builder::new_multi_thread()
+        .thread_stack_size(WORKER_STACK_BYTES)
+        .enable_all()
+        .build()
+}
 use zuse_rpc::{RpcError, RpcReply, RpcService, methods};
 
 use zuse_sync::DocsStore;

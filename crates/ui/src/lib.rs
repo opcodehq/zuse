@@ -165,7 +165,8 @@ pub fn fixture_http_client(
 pub fn run_app(config: UiConfig) {
     // Retain ownership for the whole application lifetime. The bridge's
     // default runtime has only two workers, insufficient for a desktop engine.
-    let runtime = tokio::runtime::Runtime::new().expect("desktop Tokio runtime");
+    // The embedded engine runs here too, so it needs the engine's stacks.
+    let runtime = zuse_engine::runtime().expect("desktop Tokio runtime");
     let runtime_handle = runtime.handle().clone();
     let app = gpui_platform::application()
         .with_assets(icons::Assets)
