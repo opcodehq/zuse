@@ -33,6 +33,23 @@ class CargoDevTests(unittest.TestCase):
         self.assertEqual(target_directory(root, {"CI": "true", "CARGO_TARGET_DIR": "/custom cache"}),
                          Path("/custom cache"))
 
+    def test_launcher_blocks_oversized_cache_but_allows_inspection(self):
+        with tempfile.TemporaryDirectory(prefix="zuse budget ") as temporary:
+            target = Path(temporary)
+            (target / "debug").mkdir()
+            # Sparse file exercises the real launcher guard without allocating 20 GiB.
+            with (target / "debug/old-artifact").open("wb") as artifact:
+                artifact.truncate(20 * 1024**3 + 1)
+            env = dict(os.environ, CARGO_TARGET_DIR=str(target))
+            command = ["python3", str(ROOT / "scripts/cargo_dev.py")]
+            result = subprocess.run(command + ["check"], env=env, text=True, capture_output=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Stop builds", result.stderr)
+            self.assertTrue((target / "debug/old-artifact").exists())
+            result = subprocess.run(command + ["--print-target-dir"], env=env,
+                                    text=True, capture_output=True, check=True)
+            self.assertEqual(result.stdout.strip(), str(target))
+
     def test_fingerprint_tracks_key_rotation_without_recording_secret(self):
         env = build_environment(env={"CI": "true", "HUGEICONS_LICENSE_KEY": "first-secret"})
         self.assertNotIn("first-secret", env["HUGEICONS_BUILD_KEY"])

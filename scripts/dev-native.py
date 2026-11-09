@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Rebuild and relaunch the native UI while its development engine stays alive."""
 import argparse
-import json
 import os
 from pathlib import Path
 import signal
@@ -10,6 +9,7 @@ import subprocess
 import time
 
 from cargo_dev import build_environment
+from build_cache import prepare
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -63,11 +63,10 @@ def main():
         with socket.socket() as probe:
             probe.bind(("127.0.0.1", args.ipc_port))
         seen = snapshot()
+        target = prepare(env=env)
         if subprocess.call(build, cwd=ROOT, env=env):
             return 1
-        metadata = json.loads(subprocess.check_output(
-            ["cargo", "metadata", "--locked", "--no-deps", "--format-version=1"], cwd=ROOT, env=env))
-        binary = str(Path(metadata["target_directory"]) / "debug/zuse")
+        binary = str(target / "debug/zuse")
         engine = subprocess.Popen([binary, "headless"], cwd=ROOT, env=env, start_new_session=True)
         deadline = time.monotonic() + 30
         while True:
@@ -91,6 +90,11 @@ def main():
             time.sleep(0.25)
             seen = snapshot()
             print("Rebuilding native UI…", flush=True)
+            try:
+                prepare(env=env, target=target)
+            except RuntimeError as error:
+                print(f"{error} Keeping the current UI and engine running.", flush=True)
+                continue
             if subprocess.call(build, cwd=ROOT, env=env):
                 print("Build failed; keeping the current UI. Save a fix to retry.", flush=True)
                 continue

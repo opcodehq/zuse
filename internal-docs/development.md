@@ -30,12 +30,21 @@ wait for one another. Switching branches may still rebuild changed crates;
 sharing avoids maintaining a full dependency tree for every worktree. Bare
 `cargo` uses the usual checkout-local target and does not get this sharing.
 
-Development builds keep source line information for workspace crates and omit
-dependency debug symbols, while retaining optimized dependencies for GPUI.
-Incremental compilation stays enabled locally for quick edits. For full
-workspace variable/type debugging, set `CARGO_PROFILE_DEV_DEBUG=2`; dependency
-debugging additionally requires overriding `[profile.dev.package."*"].debug`.
-CI omits debug information and incremental output entirely.
+Development builds omit debug symbols and incremental output to reduce disk
+usage, while retaining optimized dependencies for GPUI. For workspace debugging,
+set `CARGO_PROFILE_DEV_DEBUG=2`; dependency debugging additionally requires
+an override of `[profile.dev.package."*"].debug`. Set `CARGO_INCREMENTAL=1` to
+opt into faster incremental edits at the cost of more disk space.
+
+Cargo and native/browser development launchers check the development cache
+before builds and stop if it exceeds 20 GiB, printing a cleanup command. Stop
+concurrent builds, then run `python3 scripts/build_cache.py --clean` to remove
+oversized development artifacts from the shared cache (or pass `--target-dir`
+for an old checkout-local cache). Cargo clean does not lock out concurrent
+builds, so cleanup is explicit. Release outputs and source files remain.
+This is a pre-build retention budget, not a filesystem quota: one build can
+exceed it. Bare `cargo` bypasses the guard and cache sharing. Changing profile
+settings does not remove old artifacts.
 
 The launcher also supplies a hash of the icon license configuration. This lets
 Cargo reuse unchanged icons and their UI dependents without writing the license
