@@ -8123,12 +8123,10 @@ impl Transcript {
                 .gap(px(Theme::SPACE_SM))
                 .pt(px(Theme::SPACE_LG))
                 .text_size(crate::typography::text_xs())
-                .child(crate::loaders::mini_glyph_spinner(
+                .child(crate::loaders::dither_ring(
                     format!("working-mark-{}", cx.entity_id()),
-                    2.5,
-                    theme.glyph,
-                    cx.entity_id(),
-                    cx,
+                    14.0,
+                    theme.text_muted,
                 ))
                 .child(
                     div()

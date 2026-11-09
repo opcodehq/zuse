@@ -8688,14 +8688,8 @@ impl Shell {
         let working = status == zuse_protocol::ChatIndicator::Working && !queued && !undelivered;
         let compact_status = sidebar.then(|| {
             let glyph = if working {
-                loaders::mini_glyph_spinner(
-                    format!("{row_id}-working"),
-                    2.0,
-                    theme.glyph,
-                    self.sidebar_pane.entity_id(),
-                    cx,
-                )
-                .into_any_element()
+                loaders::dither_ring(format!("{row_id}-working"), 13.0, theme.text_muted)
+                    .into_any_element()
             } else if status == zuse_protocol::ChatIndicator::Completed && !queued && !undelivered {
                 icon(icons::CHECK)
                     .size(px(11.0))
@@ -8795,14 +8789,8 @@ impl Shell {
                             .text_color(status_color)
                             .into_any_element()
                     } else if working {
-                        loaders::mini_glyph_spinner(
-                            format!("{row_id}-working"),
-                            2.0,
-                            theme.glyph,
-                            self.sidebar_pane.entity_id(),
-                            cx,
-                        )
-                        .into_any_element()
+                        loaders::dither_ring(format!("{row_id}-working"), 13.0, theme.text_muted)
+                            .into_any_element()
                     } else {
                         attention_mark(13.0)
                     };
@@ -9274,12 +9262,10 @@ impl Shell {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .child(loaders::mini_glyph_spinner(
+                            .child(loaders::dither_ring(
                                 format!("{row_id}-working"),
-                                1.5,
-                                theme.glyph,
-                                self.sidebar_pane.entity_id(),
-                                cx,
+                                10.0,
+                                theme.text_muted,
                             )),
                     )
                     .into_any_element()
