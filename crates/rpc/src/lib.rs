@@ -22,10 +22,14 @@ mod chat_config;
 mod client;
 pub use chat_config::ChatConfigTarget;
 pub mod cloud;
+#[cfg(feature = "relay")]
 pub mod managed;
+#[cfg(feature = "relay")]
 mod paired;
+#[cfg(feature = "relay")]
 pub mod paired_link;
 pub mod reconnect;
+#[cfg(feature = "relay")]
 pub use paired::{connect_paired, connect_paired_channel};
 #[cfg(feature = "relay")]
 pub mod device_room;
