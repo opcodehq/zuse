@@ -1152,32 +1152,66 @@ impl Render for BrowserSurface {
             let path_copy = path.to_string_lossy().into_owned();
             let path_reveal = path.clone();
             let bytes = bytes.clone();
-            let action = |id: &'static str, text: &'static str| {
-                div()
+            // Secondary actions are outlined; the primary one takes the accent.
+            let action = |id: &'static str, text: &'static str, primary: bool| {
+                let base = div()
                     .id(id)
-                    .px(px(8.0))
-                    .py(px(5.0))
-                    .rounded(px(5.0))
-                    .text_size(px(11.0))
+                    .h(px(28.0))
+                    .px(px(12.0))
+                    .rounded(px(8.0))
+                    .flex()
+                    .items_center()
+                    .text_size(px(12.0))
+                    .font_weight(gpui::FontWeight::MEDIUM)
                     .cursor_pointer()
-                    .bg(crate::theme::wash(0.06))
-                    .hover(|el| el.bg(crate::theme::wash(0.12)))
-                    .child(text)
+                    .child(text);
+                if primary {
+                    base.bg(theme.accent_strong)
+                        .text_color(theme.on_accent)
+                        .hover(|el| el.opacity(0.9))
+                } else {
+                    base.border_1()
+                        .border_color(theme.border_strong)
+                        .bg(crate::theme::wash(0.04))
+                        .hover(|el| el.bg(crate::theme::wash(0.1)))
+                }
             };
             let notice = crate::popover::popover_card(&theme.for_popup())
-                .w(px(270.0))
+                .w(px(340.0))
+                .px(px(14.0))
+                .py(px(12.0))
+                .gap(px(12.0))
                 .child(
                     div()
                         .flex()
                         .items_center()
-                        .justify_between()
-                        .child(div().text_size(px(12.0)).child("Screenshot saved"))
+                        .gap(px(10.0))
+                        .child(
+                            crate::icons::icon(crate::icons::CHECK_CIRCLE)
+                                .size(px(18.0))
+                                .flex_none()
+                                .text_color(theme.success),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .text_size(px(13.0))
+                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .child("Screenshot saved"),
+                        )
                         .child(
                             div()
                                 .id("browser-screenshot-dismiss")
+                                .size(px(22.0))
+                                .flex_none()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded_full()
                                 .cursor_pointer()
-                                .px(px(5.0))
-                                .child("×")
+                                .text_color(theme.text_muted)
+                                .hover(|el| el.bg(crate::theme::wash(0.1)).text_color(theme.text))
+                                .child(crate::icons::icon(crate::icons::CLOSE).size(px(12.0)))
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.screenshot = None;
                                     cx.notify();
@@ -1186,12 +1220,12 @@ impl Render for BrowserSurface {
                 )
                 .child(
                     div()
-                        .mt(px(8.0))
                         .flex()
                         .flex_wrap()
-                        .gap(px(5.0))
+                        .justify_end()
+                        .gap(px(8.0))
                         .child(
-                            action("browser-screenshot-copy-path", "Copy path").on_click(
+                            action("browser-screenshot-copy-path", "Copy path", false).on_click(
                                 move |_, _, cx| {
                                     cx.write_to_clipboard(gpui::ClipboardItem::new_string(
                                         path_copy.clone(),
@@ -1201,11 +1235,11 @@ impl Render for BrowserSurface {
                             ),
                         )
                         .child(
-                            action("browser-screenshot-reveal", "Reveal in Finder")
+                            action("browser-screenshot-reveal", "Reveal in Finder", false)
                                 .on_click(move |_, _, cx| cx.reveal_path(&path_reveal)),
                         )
                         .child(
-                            action("browser-screenshot-copy-image", "Copy image").on_click(
+                            action("browser-screenshot-copy-image", "Copy image", true).on_click(
                                 move |_, _, cx| {
                                     let image = gpui::Image::from_bytes(
                                         gpui::ImageFormat::Png,
