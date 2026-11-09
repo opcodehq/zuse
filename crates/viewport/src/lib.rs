@@ -1471,8 +1471,8 @@ impl WorkspaceView {
                         return;
                     }
                     if self.cloud.guest {
-                        self.chats = self
-                            .receive_cloud_conversations(&Value::Array(self.chat_rows.clone()));
+                        self.chats =
+                            self.receive_cloud_conversations(&Value::Array(self.chat_rows.clone()));
                     }
                     if let Some(chat) = self
                         .cloud
