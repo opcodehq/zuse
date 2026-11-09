@@ -25,6 +25,9 @@ pub(super) struct Launch {
     native_staged: Vec<StagedAttachment>,
     rejected_drafts: Vec<(String, Vec<StagedAttachment>)>,
     pause_command: Option<String>,
+    /// The cloud computer's stage, set by the conversation that owns this
+    /// composer and shown in the tray's single status line.
+    status: Option<(String, bool)>,
 }
 impl Launch {
     pub(super) fn admitted(&self) -> bool {
@@ -272,11 +275,42 @@ impl Composer {
         cx.notify();
     }
 
+    /// Show the cloud computer's stage above the composer (`busy` spins).
+    pub(crate) fn set_cloud_status(&mut self, status: Option<(String, bool)>, cx: &mut Context<Self>) {
+        if self.cloud.status != status {
+            self.cloud.status = status;
+            cx.notify();
+        }
+    }
+    #[cfg(test)]
+    pub(crate) fn cloud_status(&self) -> Option<&(String, bool)> {
+        self.cloud.status.as_ref()
+    }
+    /// The one status line above the composer while a cloud computer starts:
+    /// a new chat's launch, then the conversation's computer stage.
+    pub(super) fn cloud_status_row(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<super::tray::TrayPill> {
+        let (label, busy) = match self.cloud_creation_activity(cx) {
+            Some((label, busy)) => (label.to_owned(), busy),
+            None => self.cloud.status.clone()?,
+        };
+        let pill = super::tray::TrayPill::new("native-cloud-status", label);
+        Some(if busy {
+            pill.icon_element(crate::loaders::mini_mono_spinner(
+                "native-cloud-status-spinner",
+                2.,
+                theme.text_muted,
+                cx.entity_id(),
+                cx,
+            ))
+        } else {
+            pill.glyph(crate::icons::DITHER_CLOUD)
+        })
+    }
     pub(super) fn cloud_creation_activity(&self, cx: &App) -> Option<(&str, bool)> {
         if self.cloud.request.is_none() || self.state.read(cx).selected_chat.is_some() {
             return None;
         }
-        Some((self.cloud.message.as_deref().unwrap_or(if self.cloud.task.is_some() {"Accepting cloud message…"} else if self.cloud.admitted() {"Cloud startup needs attention. Your message is queued."} else {"Cloud startup needs attention. Your message is saved here; delivery is unconfirmed."}), self.cloud.task.is_some()))
+        Some((self.cloud.message.as_deref().unwrap_or(if self.cloud.task.is_some() {"Starting computer"} else if self.cloud.admitted() {"Cloud startup needs attention. Your message is queued."} else {"Cloud startup needs attention. Your message is saved here; delivery is unconfirmed."}), self.cloud.task.is_some()))
     }
     pub(crate) fn cloud_activity(&self) -> Option<(&str, bool)> {
         if self.cloud.task.is_some() {
@@ -340,6 +374,13 @@ impl Composer {
         }
     }
 
+    /// The first message of a cloud chat that is still being created.
+    pub(crate) fn cloud_launch_prompt(&self) -> Option<String> {
+        self.cloud.request.as_ref()?["firstMessage"]
+            .as_str()
+            .filter(|text| !text.trim().is_empty())
+            .map(str::to_owned)
+    }
     pub(crate) fn cloud_launch_pending(&self, cx: &App) -> bool {
         self.cloud.request.is_some() && self.state.read(cx).selected_chat.is_none()
     }
@@ -699,9 +740,9 @@ impl Composer {
         let accepted = self.cloud.accepted.clone();
         self.cloud.message = Some(
             if staged.is_empty() {
-                "Accepting cloud message…"
+                "Starting computer"
             } else {
-                "Uploading cloud attachments…"
+                "Uploading attachments…"
             }
             .into(),
         );
@@ -781,7 +822,7 @@ impl Composer {
             if this
                 .update(cx, |this, cx| {
                     this.cloud.accepted = Some(workspace);
-                    this.cloud.message = Some("Starting cloud workspace…".into());
+                    this.cloud.message = Some("Starting computer".into());
                     cx.notify();
                 })
                 .is_err()

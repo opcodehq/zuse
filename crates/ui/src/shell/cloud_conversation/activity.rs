@@ -64,14 +64,9 @@ pub(super) fn command(
         busy,
     })
 }
-/// Once execution owns the turn, the ordinary transcript owns its working
-/// indicator. Keep the composer tray for preparation, queued prompts and issues.
-pub(super) fn show_in_tray(row: &Value, activity: &Activity, pending: bool) -> bool {
-    pending || activity.next.is_some() || !activity.busy || row["state"] != "ready"
-}
-
-/// A saved initial prompt waits in the normal composer tray until the
-/// transcript owns its user message. Never render that message twice.
+/// The launch prompt, until the transcript holds a user message of its own.
+/// The conversation shows it as that first message meanwhile, whatever the
+/// launch command's state, so the chat never goes blank.
 pub(super) fn pending_initial_prompt(
     first: Option<&str>,
     rows: &Value,
@@ -90,10 +85,6 @@ pub(super) fn pending_initial_prompt(
             row["commandId"]
                 .as_str()
                 .is_some_and(|id| id.starts_with("launch:"))
-                && matches!(
-                    row["executionState"].as_str(),
-                    Some("admitted" | "accepted" | "queued" | "starting")
-                )
         })
         .and_then(|row| row["text"].as_str())
         .or(first)
@@ -108,28 +99,7 @@ mod tests {
         super::command(rows, &[])
     }
     #[test]
-    fn ready_turn_uses_normal_chat_activity_and_preparation_uses_one_tray() {
-        let running = Activity {
-            label: "Agent working…".into(),
-            next: None,
-            busy: true,
-        };
-        assert!(!show_in_tray(&json!({"state":"ready"}), &running, false));
-        assert!(show_in_tray(
-            &json!({"state":"allocating"}),
-            &running,
-            false
-        ));
-        assert!(show_in_tray(&json!({"state":"ready"}), &running, true));
-        let issue = Activity {
-            label: "Check message outcome".into(),
-            next: None,
-            busy: false,
-        };
-        assert!(show_in_tray(&json!({"state":"ready"}), &issue, false));
-    }
-    #[test]
-    fn initial_prompt_waits_in_tray_only_until_transcript_owns_it() {
+    fn launch_prompt_shows_until_the_transcript_owns_a_user_message() {
         assert_eq!(
             pending_initial_prompt(Some("First prompt"), &json!([]), &[]).as_deref(),
             Some("First prompt")
@@ -147,6 +117,14 @@ mod tests {
             .expect("valid user message"),
         ];
         assert!(pending_initial_prompt(Some("First prompt"), &rows, &messages).is_none());
+        // A launch past its queue (running, waiting) still has no transcript
+        // message of its own; the chat must not go blank meanwhile.
+        let running =
+            json!([{"commandId":"launch:task", "text":"Saved prompt", "executionState":"running"}]);
+        assert_eq!(
+            pending_initial_prompt(None, &running, &[]).as_deref(),
+            Some("Saved prompt")
+        );
         assert!(pending_initial_prompt(None, &json!([{"commandId":"follow-up", "text":"Next prompt", "executionState":"queued"}]), &[]).is_none());
     }
     #[test]

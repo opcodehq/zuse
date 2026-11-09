@@ -146,21 +146,47 @@ impl Shell {
             })
             .collect()
     }
+    /// The conversation target for a cloud task row, when it can open.
+    fn cloud_row_target(&self, row: &Value, cx: &App) -> Option<crate::state::CloudTarget> {
+        let workspace = row["workspaceId"].as_str().filter(|id| !id.is_empty())?;
+        let session = row["initialSessionId"].as_str().filter(|id| !id.is_empty())?;
+        let state = self.state.read(cx);
+        Some(crate::state::CloudTarget {
+            controller: state.engine()?.controller(),
+            subject: state.cloud_user_id()?.to_owned(),
+            organization: state.cloud_organization_id().map(str::to_owned),
+            workspace: workspace.to_owned(),
+            initial_session: session.to_owned(),
+        })
+    }
+    /// Open the cloud task behind a `cloud:<workspace>` sidebar row.
+    pub(super) fn open_cloud_sidebar_row(&mut self, id: &str, cx: &mut Context<Self>) {
+        let Some(workspace) = id.strip_prefix(super::CLOUD_ROW_PREFIX) else {
+            return;
+        };
+        let row = self
+            .state
+            .read(cx)
+            .cloud_sidebar_workspaces()
+            .into_iter()
+            .find(|row| row["workspaceId"].as_str() == Some(workspace));
+        let Some(row) = row else { return };
+        if let Some(target) = self.cloud_row_target(&row, cx) {
+            self.open_cloud_conversation(target, row, serde_json::json!({}), cx);
+        }
+    }
+    /// A cloud task drawn exactly like a local chat row: the project's
+    /// avatar, its title and age, and the same activity corner. Only the
+    /// click target differs.
     pub(super) fn render_cloud_sidebar_row(
         &self,
         row: Value,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> Option<(String, f32, AnyElement)> {
+        self.cloud_row_target(&row, cx)?;
         let workspace = row["workspaceId"].as_str()?.to_owned();
-        let session = row["initialSessionId"].as_str()?.to_owned();
-        if workspace.is_empty() || session.is_empty() {
-            return None;
-        }
         let state = self.state.read(cx);
-        let controller = state.engine()?.controller();
-        let subject = state.cloud_user_id()?.to_owned();
-        let organization = state.cloud_organization_id().map(str::to_owned);
         let selected = self
             .cloud_conversation
             .as_ref()
@@ -170,73 +196,68 @@ impl Shell {
                 .and_then(|engine| engine.cloud_workspace())
                 .as_deref()
                 == Some(workspace.as_str());
-        let target = crate::state::CloudTarget {
-            controller,
-            subject,
-            organization,
-            workspace: workspace.clone(),
-            initial_session: session,
-        };
-        let label = transcript::single_line(
+        let title = transcript::single_line(
             row["title"]
                 .as_str()
-                .or_else(|| row["branch"].as_str())
-                .unwrap_or("New chat"),
+                .filter(|title| !title.trim().is_empty())
+                .unwrap_or("New session"),
         );
+        let now = Utc::now();
+        let updated = row["updatedAt"]
+            .as_i64()
+            .or_else(|| row["createdAt"].as_i64())
+            .and_then(chrono::DateTime::from_timestamp_millis)
+            .unwrap_or(now);
+        let time_ago = zuse_protocol::view::format_time_ago(updated, now);
+        // Starting and resuming read as activity, like a local run; an idle
+        // or sleeping computer shows its age, like any idle chat.
         let status = match row["state"].as_str() {
-            Some("paused") => "Sleeping",
-            Some("pausing") => "Going to sleep",
-            Some("ready") => "Ready",
-            Some("failed" | "error") => "Needs attention",
-            _ => "Starting",
+            Some("ready" | "paused" | "pausing" | "archived") => zuse_protocol::ChatIndicator::Idle,
+            Some("failed" | "error" | "blocked") => zuse_protocol::ChatIndicator::Errored,
+            _ => zuse_protocol::ChatIndicator::Working,
         };
+        let project_group = self.settings.sidebar_organization == SidebarOrganization::ByProject;
         let height = sidebar_row_height(
             self.sidebar_compact_rows(),
             self.sidebar_project_labels(),
-            self.settings.sidebar_organization == SidebarOrganization::ByProject,
+            project_group,
         );
-        let element = div()
-            .id(SharedString::from(format!("cloud-session-{workspace}")))
-            .debug_selector({
-                let workspace = workspace.clone();
-                move || format!("cloud-session-{workspace}")
+        let id = format!("{}{workspace}", super::CLOUD_ROW_PREFIX);
+        let project = self.cloud_row_project_name(&row, cx);
+        let element = self.render_chat_row(
+            id.clone(),
+            title.into(),
+            time_ago.into(),
+            project.into(),
+            None,
+            None,
+            None,
+            status,
+            selected,
+            false,
+            false,
+            None,
+            None,
+            self.settings.sidebar_show_project_icon && !project_group,
+            project_group,
+            None,
+            theme,
+            cx,
+        );
+        Some((id, height, element))
+    }
+    fn cloud_row_project_name(&self, row: &Value, cx: &App) -> String {
+        let state = self.state.read(cx);
+        let project_id = row["projectId"].as_str().unwrap_or_default();
+        state
+            .cloud_sidebar_projects()
+            .into_iter()
+            .find(|project| project["projectId"].as_str() == Some(project_id))
+            .and_then(|project| {
+                zuse_protocol::presentation::cloud_project_group(&project, &state.spaces)
+                    .map(|group| group.name)
             })
-            .h(px(height))
-            .w_full()
-            .px(px(8.))
-            .rounded_md()
-            .flex()
-            .items_center()
-            .gap(px(7.))
-            .cursor_pointer()
-            .when(selected, |view| view.bg(theme.bg_selected))
-            .hover(|view| view.bg(theme.element_hover))
-            .child(
-                icon(icons::DITHER_CLOUD)
-                    .size(px(13.))
-                    .text_color(theme.text_muted),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .overflow_hidden()
-                    .text_ellipsis()
-                    .text_size(px(12.))
-                    .text_color(theme.text)
-                    .child(SharedString::from(label)),
-            )
-            .child(
-                div()
-                    .text_size(px(10.))
-                    .text_color(theme.text_muted)
-                    .child(status),
-            )
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.open_cloud_conversation(target.clone(), row.clone(), serde_json::json!({}), cx)
-            }))
-            .into_any_element();
-        Some((format!("cloud:{workspace}"), height, element))
+            .unwrap_or_else(|| "Cloud".into())
     }
 }
 
@@ -342,8 +363,8 @@ mod tests {
         });
         let shell = host.read_with(cx, |host, _| host.shell.clone());
         cx.update(|window, cx| window.draw(cx).clear());
-        assert!(cx.debug_bounds("cloud-session-task-1").is_some());
-        assert!(cx.debug_bounds("cloud-session-task-2").is_some());
+        assert!(cx.debug_bounds("chat-cloud:task-1").is_some());
+        assert!(cx.debug_bounds("chat-cloud:task-2").is_some());
         let pencil = cx
             .debug_bounds("sidebar-group-new-chat-project:cloud-project:project")
             .expect("cloud project must have the same pencil action as a local project");
@@ -377,16 +398,10 @@ impl Shell {
         if state.cloud_user_id().is_none() {
             return None;
         }
-        let loading = state.cloud_sidebar_loading();
-        let label = if let Some(error) = state.cloud_sidebar_error() {
-            error.to_owned()
-        } else if loading {
-            "Refreshing cloud projects…".into()
-        } else if state.cloud_sidebar_stale() {
-            "Saved cloud projects".into()
-        } else {
-            return None;
-        };
+        // Background refreshes stay silent: the rows are already on screen
+        // and update in place. Only a failure the user can act on shows.
+        let loading = false;
+        let label = state.cloud_sidebar_error()?.to_owned();
         Some(
             div()
                 .id("cloud-sidebar-sync-status")

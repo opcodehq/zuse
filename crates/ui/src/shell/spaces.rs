@@ -2047,6 +2047,15 @@ struct ActiveChatRow {
     group: Option<(String, String)>,
 }
 
+/// The time a chat sorts by in the sidebar, in epoch milliseconds.
+fn sidebar_sort_time(sort: SidebarSort, chat: &zuse_protocol::Chat) -> i64 {
+    match sort {
+        SidebarSort::Created => chat.created_at,
+        SidebarSort::LastUpdated => chat.last_message_at.unwrap_or(chat.created_at),
+    }
+    .timestamp_millis()
+}
+
 pub(super) fn compare_sidebar_chats(
     sort: SidebarSort,
     left: &zuse_protocol::Chat,
@@ -5626,6 +5635,8 @@ impl Shell {
                 .then(|| rows.first().map(|row| row.chat.id.clone()))
                 .flatten();
             let mut rendered_rows = Vec::with_capacity(rows.len());
+            // Each local row's sort time, so cloud tasks interleave by it.
+            let mut row_times: Vec<i64> = Vec::with_capacity(rows.len());
             for (group_index, row) in rows.into_iter().enumerate() {
                 let ActiveChatRow {
                     status,
@@ -5776,6 +5787,7 @@ impl Shell {
                         },
                     ))
                     .into_any_element();
+                row_times.push(sidebar_sort_time(self.settings.sidebar_sort, &chat));
                 rendered_rows.push((format!("c:{}", chat.id), slot_height, element));
             }
 
@@ -5789,8 +5801,21 @@ impl Shell {
                     })
                 {
                     for row in &cloud.rows {
+                        let time = match self.settings.sidebar_sort {
+                            SidebarSort::Created => row["createdAt"].as_i64(),
+                            SidebarSort::LastUpdated => row["updatedAt"].as_i64(),
+                        }
+                        .or_else(|| row["createdAt"].as_i64())
+                        .unwrap_or_default();
                         if let Some(row) = self.render_cloud_sidebar_row(row.clone(), theme, cx) {
-                            rendered_rows.push(row);
+                            // Newest first, alongside local chats of the same
+                            // group, rather than after all of them.
+                            let at = row_times
+                                .iter()
+                                .position(|other| *other < time)
+                                .unwrap_or(row_times.len());
+                            row_times.insert(at, time);
+                            rendered_rows.insert(at, row);
                         }
                     }
                 }

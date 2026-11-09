@@ -563,63 +563,31 @@ impl Composer {
     ) -> Option<AnyElement> {
         let theme = Theme::of(cx).clone();
         let mut rows = Vec::new();
-        if let Some(request) = self
-            .cloud
-            .request
-            .as_ref()
-            .filter(|_| self.state.read(cx).selected_chat.is_none())
-        {
-            rows.push(TrayRow::Element(
-                zuse_viewport::cloud_queue::queue(
-                    zuse_viewport::cloud_queue::Prompt::from_request(request),
-                    self.cloud_creation_activity(cx)
-                        .expect("retained creation request")
-                        .0
-                        .to_owned(),
-                    self.cloud_creation_activity(cx)
-                        .expect("retained creation request")
-                        .1,
-                    !crate::motion::reduced_motion(cx),
-                    theme.text,
-                    theme.text_muted,
-                    theme.border.opacity(0.4),
-                )
-                .into_any_element(),
-            ));
-            if self.cloud.task.is_none() && self.visible_failure().is_none() {
-                rows.push(TrayRow::Element(
-                    div()
-                        .w_full()
-                        .flex()
-                        .justify_end()
-                        .px(px(12.))
-                        .py(px(4.))
-                        .child(
-                            tray_text_action("retry-cloud-launch", "Retry", None, &theme).on_click(
-                                cx.listener(|this, _, _, cx| {
-                                    let text = this.input.read(cx).text().to_owned();
-                                    this.send_cloud(text, cx);
-                                }),
-                            ),
-                        )
-                        .into_any_element(),
-                ));
-            }
-        } else if let Some((message, retry)) = self.pickers.read(cx).cloud_model_notice(cx) {
-            let row =
-                TrayPill::new("native-cloud-models", message).glyph(crate::icons::DITHER_CLOUD);
+        // The prompt itself is already in the transcript; the tray only says
+        // what the cloud computer is doing.
+        if let Some(row) = self.cloud_status_row(&theme, cx) {
+            let retry = self.cloud_launch_pending(cx)
+                && self.cloud.task.is_none()
+                && self.visible_failure().is_none();
             rows.push(TrayRow::Pill(if retry {
                 row.action(
-                    tray_text_action("retry-cloud-models", "Retry", None, &theme).on_click(
+                    tray_text_action("retry-cloud-launch", "Retry", None, &theme).on_click(
                         cx.listener(|this, _, _, cx| {
-                            this.pickers
-                                .update(cx, |picker, cx| picker.refresh_cloud_models(cx));
+                            let text = this.input.read(cx).text().to_owned();
+                            this.send_cloud(text, cx);
                         }),
                     ),
                 )
             } else {
                 row
             }));
+            if self.cloud_launch_pending(cx) {
+                // Nothing else in the tray while the launch owns it.
+            } else if let Some(notice) = self.cloud_model_notice_row(&theme, cx) {
+                rows.push(TrayRow::Pill(notice));
+            }
+        } else if let Some(notice) = self.cloud_model_notice_row(&theme, cx) {
+            rows.push(TrayRow::Pill(notice));
         }
         rows.extend(self.live_cloud_row(&theme, cx).map(TrayRow::Pill));
         rows.extend(self.connection_row(cx).map(TrayRow::Pill));
@@ -665,14 +633,28 @@ impl Composer {
             );
         }
         let surface = tray_surface(&theme, cx.has_active_drag())
-            .when(self.cloud_launch_pending(cx), |surface| {
-                surface.bg(zuse_viewport::cloud_queue::background())
-            })
             .debug_selector(|| "composer-tray".into())
             .children(rows);
         Some(
             crate::frost::frosted(TRAY_RADIUS, crate::frost::MENU_BLUR, surface).into_any_element(),
         )
+    }
+
+    fn cloud_model_notice_row(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<TrayPill> {
+        let (message, retry) = self.pickers.read(cx).cloud_model_notice(cx)?;
+        let row = TrayPill::new("native-cloud-models", message).glyph(crate::icons::DITHER_CLOUD);
+        Some(if retry {
+            row.action(
+                tray_text_action("retry-cloud-models", "Retry", None, theme).on_click(
+                    cx.listener(|this, _, _, cx| {
+                        this.pickers
+                            .update(cx, |picker, cx| picker.refresh_cloud_models(cx));
+                    }),
+                ),
+            )
+        } else {
+            row
+        })
     }
 
     /// "No connection" while offline; a quiet reconnecting row while only the

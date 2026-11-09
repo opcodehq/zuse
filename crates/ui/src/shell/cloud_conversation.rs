@@ -148,7 +148,13 @@ impl CloudConversation {
         this.watch_account(cx);
         this
     }
+    #[cfg(test)]
     fn activity(&self, cx: &App) -> Option<activity::Activity> {
+        self.computer_activity(cx)
+            .or_else(|| self.agent_activity(cx))
+    }
+    /// The cloud computer's own stage (starting, cloning, environment).
+    fn computer_activity(&self, cx: &App) -> Option<activity::Activity> {
         if self.access_revoked {
             return None;
         }
@@ -179,50 +185,97 @@ impl CloudConversation {
                     )
                 }));
         activity::preparation(&self.computer.metadata, initial)
-            .or_else(|| {
-                self.composer
-                    .read(cx)
-                    .cloud_activity()
-                    .map(|(label, busy)| activity::Activity {
-                        label: label.into(),
-                        next: None,
-                        busy,
-                    })
+    }
+    /// The message's progress once it is with the agent.
+    fn agent_activity(&self, cx: &App) -> Option<activity::Activity> {
+        if self.access_revoked {
+            return None;
+        }
+        self.composer
+            .read(cx)
+            .cloud_activity()
+            .map(|(label, busy)| activity::Activity {
+                label: label.into(),
+                next: None,
+                busy,
             })
             .or_else(|| activity::command(&self.admissions, &self.state.read(cx).transcript))
     }
-    fn render_activity(&self, pending: bool, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let activity = self.activity(cx)?;
-        if !activity::show_in_tray(&self.computer.metadata, &activity, pending) {
-            return None;
+    /// Id of the stand-in for the launch prompt until history delivers it.
+    fn launch_echo_id(&self) -> String {
+        format!("launch-echo:{}", self.target.workspace)
+    }
+    /// Put progress where an ordinary chat shows it: the prompt as the first
+    /// message right away, the computer's stage in the composer's status
+    /// line, and the agent's progress in the working line under the messages.
+    /// Every setter ignores unchanged values, so this is safe on each frame.
+    fn sync_progress(&mut self, cx: &mut Context<Self>) {
+        let pending = activity::pending_initial_prompt(
+            self.first_message.as_deref(),
+            &self.admissions,
+            &self.state.read(cx).transcript,
+        );
+        let echo = self.launch_echo_id();
+        let session = self.state.read(cx).selected_chat.clone();
+        if let Some(session) = session {
+            let shown = self
+                .state
+                .read(cx)
+                .pending_echoes()
+                .iter()
+                .any(|entry| entry.id == echo);
+            match (pending, shown) {
+                (Some(text), false) => self.state.update(cx, |state, cx| {
+                    let device = state.local_device_id.clone().unwrap_or_default();
+                    state.push_echo(
+                        &session,
+                        zuse_model::SessionMessageEntry {
+                            id: echo.clone(),
+                            role: zuse_model::MessageRole::User,
+                            parts: vec![zuse_model::MessagePart::Text {
+                                id: format!("text:{echo}"),
+                                text,
+                            }],
+                            created_at: chrono::Utc::now().timestamp_millis(),
+                            device_id: device,
+                            status: None,
+                            continuation_of: None,
+                            duration_ms: None,
+                        },
+                    );
+                    cx.notify();
+                }),
+                (None, true) => self.state.update(cx, |state, cx| {
+                    state.remove_echo(&session, &echo);
+                    cx.notify();
+                }),
+                _ => {}
+            }
         }
-        let theme = Theme::of(cx).clone();
-        Some(
-            div()
-                .id("native-cloud-activity")
-                .debug_selector(|| "native-cloud-activity".into())
-                .w_full()
-                .flex()
-                .items_center()
-                .gap(px(8.))
-                .px(px(12.))
-                .py(px(6.))
-                .border_b_1()
-                .border_color(theme.border.opacity(0.4))
-                .text_size(px(11.))
-                .text_color(theme.text_muted)
-                .when(activity.busy, |row| {
-                    row.child(crate::loaders::mini_mono_spinner(
-                        "native-cloud-activity-spinner",
-                        2.,
-                        theme.text_muted,
-                        cx.entity_id(),
-                        cx,
-                    ))
-                })
-                .child(div().flex_1().min_w_0().child(activity.label))
-                .into_any_element(),
-        )
+        let computer = self.computer_activity(cx);
+        let agent = self.agent_activity(cx);
+        // Issues (a failed stage, a message that needs checking) stay in the
+        // status line; routine progress is the working line's.
+        let status = computer
+            .as_ref()
+            .map(|stage| (stage.label.clone(), stage.busy))
+            .or_else(|| {
+                agent
+                    .as_ref()
+                    .filter(|activity| !activity.busy)
+                    .map(|activity| (activity.label.clone(), false))
+            });
+        let line = if computer.as_ref().is_some_and(|stage| stage.busy) {
+            Some(SharedString::from("Waiting for computer…"))
+        } else {
+            agent
+                .filter(|activity| activity.busy)
+                .map(|activity| SharedString::from(activity.label))
+        };
+        self.composer
+            .update(cx, |composer, cx| composer.set_cloud_status(status, cx));
+        self.transcript
+            .update(cx, |transcript, cx| transcript.set_external_activity(line, cx));
     }
 
     pub(super) fn branch_label(&self) -> Option<String> {
@@ -668,17 +721,12 @@ impl CloudConversation {
 impl Render for CloudConversation {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx).clone();
-        let pending = activity::pending_initial_prompt(
-            self.first_message.as_deref(),
-            &self.admissions,
-            &self.state.read(cx).transcript,
-        );
-        let activity = self.render_activity(pending.is_some(), cx);
+        self.sync_progress(cx);
         let composer_visible = self.authorized && self.computer.composer_enabled();
         let composer_width =
             settings::current(cx).transcript_width + 2. * crate::composer::COMPOSER_OUTER_PAD;
         let notice = self.error.clone();
-        let show_tray = activity.is_some() || pending.is_some() || notice.is_some();
+        let show_tray = notice.is_some();
         div()
             .id("native-cloud-conversation")
             .size_full()
@@ -706,20 +754,6 @@ impl Render for CloudConversation {
                                     .border_color(theme.border)
                                     .bg(theme.bg)
                                     .overflow_hidden()
-                                    .children(activity)
-                                    .when_some(pending, |tray, text| {
-                                        tray.child(
-                                            div()
-                                                .id("native-cloud-pending-prompt")
-                                                .debug_selector(|| {
-                                                    "native-cloud-pending-prompt".into()
-                                                })
-                                                .px(px(12.))
-                                                .py(px(8.))
-                                                .text_size(px(12.))
-                                                .child(text),
-                                        )
-                                    })
                                     .when_some(notice, |tray, text| {
                                         tray.child(
                                             div()
@@ -740,6 +774,80 @@ impl Render for CloudConversation {
 }
 
 impl Shell {
+    /// A new cloud chat between Send and the conversation opening. It already
+    /// reads as the conversation it becomes: the prompt is the first message,
+    /// with the working line under it, laid out where the transcript puts
+    /// them, so nothing moves when the conversation takes over.
+    pub(super) fn render_cloud_launch_outlet(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = Theme::of(cx).clone();
+        let Some(prompt) = self.composer.read(cx).cloud_launch_prompt() else {
+            return div().into_any_element();
+        };
+        let width = crate::settings::transcript_width(cx);
+        let clearance = (self.bottom_stack.get() - self.terminal_geometry.get().height).max(0.0)
+            + Theme::TRANSCRIPT_FADE_BAND
+            + 8.0;
+        div()
+            .id("cloud-launch-outlet")
+            .debug_selector(|| "cloud-launch-outlet".into())
+            .size_full()
+            .flex()
+            .flex_col()
+            .justify_end()
+            .pb(px(clearance))
+            .child(
+                div().w_full().flex().justify_center().px(px(48.0)).child(
+                    div()
+                        .w_full()
+                        .max_w(px(width))
+                        .min_w_0()
+                        .child(
+                            div().w_full().flex().justify_end().child(
+                                div()
+                                    .id("cloud-launch-prompt")
+                                    .debug_selector(|| "cloud-launch-prompt".into())
+                                    .min_w_0()
+                                    .max_w(px(width * 0.8))
+                                    .bg(theme.user_bubble_fill())
+                                    .rounded(px(12.0))
+                                    .rounded_tr(px(4.0))
+                                    .px(px(14.0))
+                                    .py(px(8.0))
+                                    .text_size(crate::typography::text_md())
+                                    .line_height(crate::typography::ui_rems(
+                                        crate::transcript::USER_LINE_HEIGHT,
+                                    ))
+                                    .text_color(theme.text)
+                                    .opacity(0.65)
+                                    .child(prompt),
+                            ),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .gap(px(Theme::SPACE_SM))
+                                .pt(px(Theme::SPACE_LG))
+                                .child(crate::loaders::mini_glyph_spinner(
+                                    "cloud-launch-working",
+                                    2.5,
+                                    theme.glyph,
+                                    cx.entity_id(),
+                                    cx,
+                                ))
+                                .child(
+                                    div()
+                                        .text_size(crate::typography::text_xs())
+                                        .text_color(theme.text_muted)
+                                        .child("Waiting for computer…"),
+                                ),
+                        ),
+                ),
+            )
+            .into_any_element()
+    }
+
     /// Cloud conversations keep their selected session in task state, not the
     /// navigation controller. Both kinds need the same chat chrome.
     pub(super) fn has_conversation(&self, cx: &App) -> bool {
@@ -891,16 +999,10 @@ mod tests {
             .unwrap();
         {
             let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
-            let tray = visual
-                .debug_bounds("native-cloud-queue-tray")
-                .expect("one compact tray");
-            let status = visual
-                .debug_bounds("native-cloud-activity")
-                .expect("stage inside tray");
-            let prompt = visual
-                .debug_bounds("native-cloud-pending-prompt")
-                .expect("pending prompt inside tray");
-            assert!(status.top() >= tray.top() && prompt.bottom() <= tray.bottom());
+            assert!(
+                visual.debug_bounds("native-cloud-queue-tray").is_none(),
+                "the prompt is never parked in a queue card"
+            );
             assert!(
                 visual.debug_bounds("native-cloud-terminal").is_none(),
                 "no permanent cloud toolbar"
@@ -911,6 +1013,19 @@ mod tests {
             visual.simulate_click(button.center(), gpui::Modifiers::default());
         }
         cx.run_until_parked();
+        view.read_with(cx, |view, cx| {
+            let echoes = view.state.read(cx).pending_echoes();
+            assert_eq!(echoes.len(), 1, "the prompt is the conversation's first message");
+            assert!(matches!(
+                &echoes[0].parts[..],
+                [zuse_model::MessagePart::Text { text, .. }] if text == "Build a small website"
+            ));
+            assert_eq!(
+                view.composer.read(cx).cloud_status(),
+                Some(&("Starting computer".to_owned(), true)),
+                "the computer's stage is the composer's one status line"
+            );
+        });
         assert!(view.read_with(cx, |view, _| view.computer.open));
         view.update(cx, |view, cx| {
             view.close_computer(cx);
@@ -1320,7 +1435,6 @@ mod tests {
         view.update(cx,|view,cx| {
             let composer=view.composer.entity_id();let state=view.state.entity_id();
             assert_eq!(view.activity(cx).unwrap().label,"Starting computer");
-            assert!(view.render_activity(false, cx).is_some());
             view.computer.metadata=json!({"state":"ready","preparation":{"repository":{"state":"completed"},"environment":{"state":"completed"}}});
             assert!(view.activity(cx).unwrap().busy,"initial launch before history waits visibly");
             let entry=|id:&str,role,text:&str|zuse_model::SessionMessageEntry{id:id.into(),role,parts:vec![zuse_model::MessagePart::Text{id:format!("text:{id}"),text:text.into()}],created_at:0,device_id:String::new(),status:None,continuation_of:None,duration_ms:None};
@@ -1342,7 +1456,6 @@ mod tests {
             for terminal in ["completed","failed","cancelled"] {
                 view.admissions=json!([{"commandId":"launch:task","messageId":"first","text":"Build this","executionState":terminal}]);
                 assert!(view.activity(cx).is_none(),"terminal receipt clears loader");
-                assert!(view.render_activity(false, cx).is_none());
             }
             assert_eq!(view.composer.entity_id(),composer);assert_eq!(view.state.entity_id(),state,"activity never replaces desktop/controller state");
             view.authorized=true;
@@ -1351,7 +1464,6 @@ mod tests {
             view.revoke(cx);
             assert!(view.admissions.is_null(),"revocation clears admission presentation from old account");
             assert!(view.activity(cx).is_none(),"revocation is terminal, not a new computer starting");
-            assert!(view.render_activity(false, cx).is_none());
             assert!(view.error.as_deref().unwrap().contains("Cloud access changed"));
 
         });

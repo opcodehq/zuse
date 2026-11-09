@@ -1108,6 +1108,9 @@ impl Shell {
     }
 }
 
+/// Sidebar row ids for cloud tasks: `cloud:<workspace id>`.
+pub(crate) const CLOUD_ROW_PREFIX: &str = "cloud:";
+
 fn sidebar_row_height(compact: bool, show_label: bool, nested: bool) -> f32 {
     if compact || nested || !show_label {
         SIDEBAR_ROW_SINGLE_HEIGHT
@@ -8905,7 +8908,11 @@ impl Shell {
         let project_icon = (project_icon && search_query.is_none() && !nested).then(|| {
             self.render_project_icon(&id, spaces::SIDEBAR_PROJECT_AVATAR_SIZE, selected, cx)
         });
-        let corner_hovered = !preview && self.chat_status_hover.as_deref() == Some(row_id.as_str());
+        // A cloud task row (`cloud:<workspace>`) opens its conversation; the
+        // local-only actions (archive, rename, the chat menu) don't apply.
+        let cloud = id.starts_with(CLOUD_ROW_PREFIX);
+        let corner_hovered =
+            !preview && !cloud && self.chat_status_hover.as_deref() == Some(row_id.as_str());
         let archived_muted = archived && search_query.is_none() && !selected && !corner_hovered;
         let project_icon = project_icon.map(|icon| {
             div()
@@ -9178,7 +9185,7 @@ impl Shell {
         let select_id = id.clone();
         let menu_id = id.clone();
         let search_query_none = search_query.is_none();
-        let rename_input = (search_query_none && !preview)
+        let rename_input = (search_query_none && !preview && !cloud)
             .then(|| self.rename_input_for(&id, ChatRenameSurface::Sidebar))
             .flatten();
         // Hover fades over transition-colors (zuse session-row.tsx) — both
@@ -9251,6 +9258,10 @@ impl Shell {
                 })
                 .cursor_pointer()
                 .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
+                    if cloud {
+                        this.open_cloud_sidebar_row(&select_id, cx);
+                        return;
+                    }
                     // The palette's copy of the row only opens; the sidebar's
                     // double-click edits the title in place.
                     if event.click_count() >= 2 && search_query_none {
@@ -9262,6 +9273,9 @@ impl Shell {
                 .on_mouse_down(
                     MouseButton::Right,
                     cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                        if cloud {
+                            return;
+                        }
                         this.chat_menu.open(ChatMenuState {
                             tab: None,
                             chat_id: menu_id.clone(),
@@ -12595,7 +12609,7 @@ impl Shell {
                 })
                 .into_any_element()
         } else if cloud_starting {
-            div().into_any_element()
+            self.render_cloud_launch_outlet(cx)
         } else if !has_spaces && !no_project {
             // Onboarding (first boot / after the destructive wipe): no folders
             // to work in yet — one clear affordance.

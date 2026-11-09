@@ -118,6 +118,9 @@ impl Pickers {
             Ok(catalog) => {
                 self.cloud.model_error = None;
                 self.cloud.model_waiting = false;
+                super::remember_model_labels(
+                    catalog.providers.iter().flat_map(|provider| provider.models.iter()),
+                );
                 self.cloud.models = catalog
                     .providers
                     .iter()

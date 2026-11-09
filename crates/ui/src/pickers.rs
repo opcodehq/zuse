@@ -26,6 +26,30 @@ pub(crate) use creation_sources::CreationIssueTitle;
 
 use crate::roll_text::{roll_text, rolling};
 use std::collections::{HashMap, HashSet};
+
+/// Labels of every model a catalog has shown in this app, by id. A picker
+/// whose own catalog hasn't arrived yet (a cloud chat just opened) names
+/// its model as the catalog will, instead of showing the raw id first.
+/// Pickers live on the UI thread, so one table per thread is one per app
+/// (and keeps tests, which each run on their own thread, independent).
+thread_local! {
+    static KNOWN_MODEL_LABELS: std::cell::RefCell<HashMap<String, String>> =
+        Default::default();
+}
+
+pub(crate) fn remember_model_labels<'a>(models: impl IntoIterator<Item = &'a Model>) {
+    KNOWN_MODEL_LABELS.with_borrow_mut(|known| {
+        for model in models {
+            if !model.label.trim().is_empty() {
+                known.insert(model.id.clone(), model.label.clone());
+            }
+        }
+    });
+}
+
+fn known_model_label(id: &str) -> Option<String> {
+    KNOWN_MODEL_LABELS.with_borrow(|known| known.get(id).cloned())
+}
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -1554,6 +1578,7 @@ impl Pickers {
                                     .map(|model| model.label.clone())
                             })
                             .or_else(|| self.defaults.label_for(id).map(str::to_owned))
+                            .or_else(|| known_model_label(id))
                             .unwrap_or_else(|| id.to_owned()),
                     ),
                     None => remembered.map(|m| m.label.clone()),
@@ -2154,6 +2179,7 @@ impl Pickers {
             return;
         }
         if let Loadable::Ready(models) = &loaded {
+            remember_model_labels(models.iter());
             let fresh = self
                 .defaults
                 .remember_labels(models.iter().map(|m| (m.id.as_str(), m.label.as_str())));

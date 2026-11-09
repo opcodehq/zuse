@@ -289,6 +289,14 @@ impl Shell {
         selected: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        if let Some(workspace) = chat_id.strip_prefix(super::CLOUD_ROW_PREFIX) {
+            let (name, space) = self.cloud_row_project(workspace, cx);
+            let art = match space {
+                Some(space) => self.project_artwork(Some(&space), selected, cx),
+                None => monogram(&name, false, Theme::of(cx)),
+            };
+            return project_icon_frame(chat_id, &name, "Cloud computer", size, art);
+        }
         let state = self.state.read(cx);
         let chat = state.chats.iter().find(|chat| chat.id == chat_id);
         // The tooltip names this row's own project; the artwork is shared.
@@ -303,6 +311,44 @@ impl Shell {
             .to_string();
         let art = self.project_icon_art(chat_id, selected, cx);
         project_icon_frame(chat_id, &name, &device, size, art)
+    }
+
+    /// A cloud task's project name, and the local checkout of the same
+    /// repository when this device has one (its artwork is the project's).
+    fn cloud_row_project(&self, workspace: &str, cx: &App) -> (String, Option<zuse_protocol::Space>) {
+        let state = self.state.read(cx);
+        let project_id = state
+            .cloud_sidebar_workspaces()
+            .into_iter()
+            .find(|row| row["workspaceId"].as_str() == Some(workspace))
+            .and_then(|row| row["projectId"].as_str().map(str::to_owned));
+        let project = project_id.and_then(|id| {
+            state
+                .cloud_sidebar_projects()
+                .into_iter()
+                .find(|project| project["projectId"].as_str() == Some(id.as_str()))
+        });
+        let Some(project) = project else {
+            return ("Cloud project".into(), None);
+        };
+        let group = zuse_protocol::presentation::cloud_project_group(&project, &state.spaces);
+        let identity = project["repositoryIdentity"].as_str().unwrap_or_default();
+        let space = (!identity.is_empty())
+            .then(|| {
+                state.spaces.iter().find(|space| {
+                    [&space.remote_repository, &space.repository_id]
+                        .into_iter()
+                        .flatten()
+                        .any(|id| id.eq_ignore_ascii_case(identity))
+                })
+            })
+            .flatten()
+            .cloned();
+        let name = group
+            .map(|group| group.name)
+            .or_else(|| project["displayName"].as_str().map(str::to_owned))
+            .unwrap_or_else(|| "Cloud project".into());
+        (name, space)
     }
 
     /// Artwork for a chat's project, shared by every space of the project:
