@@ -454,28 +454,34 @@ impl RpcService for ControlOnly {
     }
 }
 async fn control_socket(State(server): State<BrowserServer>, ws: WebSocketUpgrade) -> Response {
-    ws.max_message_size(2 * 1024 * 1024).on_upgrade(move |socket| async move {
-        let (mut writer, mut reader) = socket.split();
-        let (out, mut replies) = mpsc::channel::<String>(128);
-        let (requests, inbound) = mpsc::channel::<String>(128);
-        let dispatch = tokio::spawn(zuse_rpc::serve_connection(Arc::new(ControlOnly(server.service)), out, inbound));
-        loop {
-            tokio::select! {
-                reply = replies.recv() => match reply {
-                    Some(reply) => if writer.send(Message::Text(reply.into())).await.is_err() { break; },
-                    None => break,
-                },
-                frame = reader.next() => match frame {
-                    Some(Ok(Message::Text(text))) => if requests.send(text.to_string()).await.is_err() { break; },
-                    Some(Ok(Message::Ping(data))) => if writer.send(Message::Pong(data)).await.is_err() { break; },
-                    Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
-                    _ => {},
-                }
-            }
-        }
-        drop(requests);
-        dispatch.abort();
-    }).into_response()
+    let connections = server.connections.clone();
+    ws.max_message_size(2 * 1024 * 1024)
+        .on_upgrade(move |socket| connections.track_future(control_connection(server, socket)))
+        .into_response()
+}
+
+async fn control_connection(server: BrowserServer, socket: axum::extract::ws::WebSocket) {
+    if server.shutdown.is_cancelled() {
+        return;
+    }
+    let (writer, reader) = socket.split();
+    let (out, outgoing) = mpsc::channel::<zuse_rpc::OutputFrame>(SOCKET_OUTPUT_CAPACITY);
+    let (incoming, inbound) = mpsc::channel::<String>(16);
+    let dispatch =
+        tokio_util::task::AbortOnDropHandle::new(tokio::spawn(zuse_rpc::serve_connection_bounded(
+            Arc::new(ControlOnly(server.service)),
+            out,
+            inbound,
+            SOCKET_OUTPUT_BYTES,
+        )));
+    // SDK callers keep the per-operation authorization wrapper. Sharing the
+    // byte budget and duplex pump also keeps Stop readable during large replies.
+    tokio::select! { biased;
+        _ = server.shutdown.cancelled() => {},
+        _ = browser_io::exchange(writer, reader, outgoing, incoming, browser_io::Compression::None, false) => {},
+    }
+    dispatch.abort();
+    let _ = dispatch.await;
 }
 
 #[cfg(test)]
