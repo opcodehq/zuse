@@ -11733,7 +11733,7 @@ impl Render for Transcript {
                 .child(if loading {
                     tr(cx, msg::chat::cloud_history_loading)
                 } else {
-                    "Load earlier messages".into()
+                    tr(cx, msg::chat::cloud_history_load_earlier)
                 })
                 .on_click(move |_, _, cx| {
                     state.update(cx, |state, cx| {

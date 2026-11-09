@@ -54,7 +54,9 @@ const observer='(()=>{'+codec+String.raw`
 function providerEvents(file){return fs.existsSync(file)?fs.readFileSync(file,'utf8').trim().split('\n').filter(Boolean).map(JSON.parse):[];}
 async function measure(app,run,data,sampleRoot){
  const proxy=await socketDelayProxy(app==='t3'?data.t3.origin:data.zuse.url,profile.socketRoundTripMs);
- const browser=await cdpBrowser(sampleRoot);const {call,evaluate,click,type,screenshot}=browser;
+ let browser;
+ try{browser=await cdpBrowser(sampleRoot);}catch(error){await proxy.close();throw error;}
+ const {call,evaluate,click,type,screenshot}=browser;
  let stage='startup';const result={app,run};
  const proof=()=>evaluate('window.__chatBench');
  const setStage=async value=>{stage=value;console.error(app,run,value);proxy.setStage(value);await evaluate('window.__chatBench.stage='+JSON.stringify(value));};

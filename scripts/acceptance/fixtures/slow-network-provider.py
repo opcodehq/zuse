@@ -7,8 +7,13 @@ import threading
 import time
 
 
+_output_lock = threading.Lock()
+
+
 def emit(value):
-    print(json.dumps(value), flush=True)
+    with _output_lock:
+        sys.stdout.write(json.dumps(value) + "\n")
+        sys.stdout.flush()
 
 
 if "--version" in sys.argv:

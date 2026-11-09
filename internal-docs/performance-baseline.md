@@ -346,6 +346,13 @@ Silent fault injection drops read-only probes without closing the socket. The
 browser detects the missing response and restores its selected subscriptions;
 the complete recovery took 81.9 seconds including the probe interval, its
 60-second deadline and history download. No run or interrupt was replayed.
+
+The current direct-link probe keeps that 60-second idle deadline, but now allows
+opt-in encoded transfer-size notices and queued upload bytes to extend it during
+large transfers. Ordinary completed frames account for downlink progress. A
+15-minute absolute limit prevents continuous downstream traffic from hiding a
+failed uplink forever; timely EngineInfo replies still schedule the next probe.
+The sizing allowance uses 25,000 B/s, half the benchmark downlink rate.
 This is a bounded detection deadline, not immediate offline detection.
 
 A second run closed the socket while the fixture agent was actively generating.

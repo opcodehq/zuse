@@ -397,6 +397,7 @@ async fn socket(
                     Some("gzip-v1") => browser_io::Compression::Gzip,
                     _ => browser_io::Compression::None,
                 },
+                options.rpc_progress,
             ))
         })
 }
@@ -405,12 +406,15 @@ async fn socket(
 #[serde(rename_all = "camelCase")]
 struct BrowserRpcOptions {
     rpc_compression: Option<String>,
+    #[serde(default)]
+    rpc_progress: bool,
 }
 
 async fn browser_socket(
     server: BrowserServer,
     socket: axum::extract::ws::WebSocket,
     compression: browser_io::Compression,
+    transfer_notices: bool,
 ) {
     // An upgrade completing after listener shutdown must not start RPC work.
     if server.shutdown.is_cancelled() {
@@ -424,7 +428,7 @@ async fn browser_socket(
     ));
     tokio::select! { biased;
         _ = server.shutdown.cancelled() => {},
-        _ = browser_io::exchange(writer, reader, out_rx, in_tx, compression) => {},
+        _ = browser_io::exchange(writer, reader, out_rx, in_tx, compression, transfer_notices) => {},
     }
     dispatch.abort();
     let _ = dispatch.await;

@@ -112,6 +112,16 @@ impl Socket {
             )
         });
         let url = compressed_url.as_deref().unwrap_or(url);
+        let progress_url = (protocol.is_none()
+            && invitation.is_none()
+            && !url.contains("rpcProgress="))
+        .then(|| {
+            format!(
+                "{url}{}rpcProgress=true",
+                if url.contains('?') { '&' } else { '?' }
+            )
+        });
+        let url = progress_url.as_deref().unwrap_or(url);
         let socket = match protocol {
             Some(protocol) => WebSocket::new_with_str(url, protocol),
             None => WebSocket::new(url),
@@ -266,6 +276,10 @@ impl Socket {
                 .poll(self.clock.elapsed().as_millis() as u64)
             {
                 zuse_protocol::rpc_probe::Action::Send => {
+                    self.plain_probe.outgoing_buffer(
+                        self.clock.elapsed().as_millis() as u64,
+                        self.socket.buffered_amount() as u64,
+                    );
                     self.send(zuse_protocol::rpc_probe::REQUEST)?;
                     self.poll_heartbeat()
                 }
@@ -377,6 +391,8 @@ impl Socket {
             };
             match (&mut self.channel, frame) {
                 (None, Incoming::Binary(bytes)) => {
+                    self.plain_probe
+                        .received_frame(self.clock.elapsed().as_millis() as u64);
                     let owned = js_sys::Uint8Array::new_with_length(bytes.len() as u32);
                     owned.copy_from(&bytes);
                     let decoder = self.decoder.clone();
@@ -392,20 +408,30 @@ impl Socket {
                     );
                 }
                 (None, Incoming::Text(text)) => {
-                    if self.plain_probe.awaiting_reply() {
+                    let now = self.clock.elapsed().as_millis() as u64;
+                    self.plain_probe.received_frame(now);
+                    let mut transfer_notice = false;
+                    if self.plain_probe.awaiting_reply() || text.starts_with(r#"{"id":0,"#) {
                         for line in text.lines() {
                             if let Ok(frame) = serde_json::from_str::<serde_json::Value>(line)
                                 && frame["id"] == 0
-                                && frame["ok"]["deviceId"]
+                            {
+                                if let Some(bytes) = frame["transportBytes"].as_u64() {
+                                    self.plain_probe.incoming_transfer(now, bytes);
+                                    transfer_notice = true;
+                                } else if frame["ok"]["deviceId"]
                                     .as_str()
                                     .is_some_and(|id| !id.is_empty())
-                            {
-                                self.plain_probe
-                                    .acknowledge(self.clock.elapsed().as_millis() as u64);
+                                {
+                                    self.plain_probe.acknowledge(now);
+                                }
                             }
                         }
-                        // The dispatcher ignores id=0. Preserve all envelopes
-                        // when a probe shares a compressed batch with updates.
+                    }
+                    // A notice is a separate transport frame. Normal RPC
+                    // batches still reach the dispatcher, including id=0 ACKs.
+                    if transfer_notice && text.lines().count() == 1 {
+                        continue;
                     }
                     return Ok(text);
                 }

@@ -62,6 +62,7 @@ pub(crate) async fn exchange<W, R, E>(
     mut outgoing: mpsc::Receiver<zuse_rpc::OutputFrame>,
     incoming: mpsc::Sender<String>,
     compression: Compression,
+    transfer_notices: bool,
 ) where
     W: Sink<Message> + Unpin,
     R: Stream<Item = Result<Message, E>> + Unpin,
@@ -100,6 +101,20 @@ pub(crate) async fn exchange<W, R, E>(
                     None => return,
                 },
             };
+            let encoded_bytes = match &message {
+                Message::Text(text) => text.len(),
+                Message::Binary(bytes) => bytes.len(),
+                _ => 0,
+            };
+            if transfer_notices
+                && encoded_bytes >= zuse_protocol::rpc_probe::TRANSFER_NOTICE_THRESHOLD
+            {
+                let notice =
+                    Message::Text(format!(r#"{{"id":0,"transportBytes":{encoded_bytes}}}"#).into());
+                if writer.send(notice).await.is_err() {
+                    return;
+                }
+            }
             if writer.send(message).await.is_err() {
                 return;
             }
@@ -139,7 +154,7 @@ mod tests {
             _: &str,
             _: serde_json::Value,
         ) -> Result<zuse_rpc::RpcReply, zuse_rpc::RpcError> {
-            zuse_rpc::RpcReply::value(&"large response".repeat(1000))
+            zuse_rpc::RpcReply::value(&"large response".repeat(20_000))
         }
     }
 
@@ -219,7 +234,14 @@ mod tests {
                 .send(r#"{"id":1,"method":"large"}"#.into())
                 .await
                 .unwrap();
-            let task = tokio::spawn(exchange(sink, stream, outgoing, incoming, compression));
+            let task = tokio::spawn(exchange(
+                sink,
+                stream,
+                outgoing,
+                incoming,
+                compression,
+                false,
+            ));
             waiting.await.unwrap();
             let cancel = r#"{"id":1,"cancel":true}"#;
             peer.send(Ok(Message::Text(cancel.into()))).await.unwrap();
@@ -235,6 +257,80 @@ mod tests {
                 .await
                 .unwrap()
                 .unwrap();
+            drop(requests);
+            dispatcher.await.unwrap();
+        }
+    }
+    #[tokio::test]
+    async fn transfer_notices_are_opt_in_and_count_encoded_bytes_before_large_writes() {
+        for (compression, progress, expect_notice) in [
+            (Compression::None, true, true),
+            (Compression::None, false, false),
+            (Compression::DeflateStream, true, false),
+            (Compression::Gzip, true, false),
+        ] {
+            let (delivered, mut messages) = mpsc::channel(4);
+            let sink = Box::pin(futures::sink::unfold(
+                delivered,
+                |sender, message| async move {
+                    sender.send(message).await.map_err(|_| ())?;
+                    Ok::<_, ()>(sender)
+                },
+            ));
+            let (mut peer, reader) = futures::channel::mpsc::unbounded::<Result<Message, ()>>();
+            let (out, outgoing) = mpsc::channel(1);
+            let (requests, inbound) = mpsc::channel(1);
+            let dispatcher = tokio::spawn(zuse_rpc::serve_connection_bounded(
+                std::sync::Arc::new(Fixture),
+                out,
+                inbound,
+                64 * 1024,
+            ));
+            let (incoming, _received) = mpsc::channel(1);
+            let task = tokio::spawn(exchange(
+                sink,
+                reader,
+                outgoing,
+                incoming,
+                compression,
+                progress,
+            ));
+            requests
+                .send(r#"{"id":1,"method":"large"}"#.into())
+                .await
+                .unwrap();
+            let first = tokio::time::timeout(std::time::Duration::from_secs(2), messages.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            if expect_notice {
+                let Message::Text(notice) = first else {
+                    panic!("missing transfer notice");
+                };
+                let notice: serde_json::Value = serde_json::from_str(notice.as_str()).unwrap();
+                assert_eq!(notice["id"], 0);
+                let Message::Text(data) = messages.recv().await.unwrap() else {
+                    panic!("wrong legacy data");
+                };
+                assert_eq!(notice["transportBytes"], data.len());
+                assert_eq!(
+                    serde_json::from_str::<serde_json::Value>(&data).unwrap()["id"],
+                    1
+                );
+            } else {
+                match first {
+                    Message::Text(data) => assert_eq!(
+                        serde_json::from_str::<serde_json::Value>(&data).unwrap()["id"],
+                        1
+                    ),
+                    Message::Binary(data) => {
+                        assert!(data.len() < zuse_protocol::rpc_probe::TRANSFER_NOTICE_THRESHOLD)
+                    }
+                    _ => panic!("wrong data frame"),
+                }
+            }
+            peer.send(Ok(Message::Close(None))).await.unwrap();
+            task.await.unwrap();
             drop(requests);
             dispatcher.await.unwrap();
         }

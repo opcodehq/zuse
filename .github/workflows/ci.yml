@@ -82,6 +82,7 @@ jobs:
       - run: cargo test -p zuse-protocol --lib custom_acp::tests
       - run: cargo test -p zuse-client --test live
       - run: cargo test -p zuse-protocol --lib methods::retry_tests
+      - run: cargo test -p zuse-protocol --lib rpc_probe
       - run: cargo test -p zuse-protocol --lib browser_link
       - run: cargo test -p zuse-protocol --lib notifications
       - run: cargo test -p zuse-protocol --lib completion_sound
@@ -152,7 +153,9 @@ jobs:
           libvulkan-dev libasound2-dev libwebkit2gtk-4.1-dev libjson-glib-dev
       - run: cargo check -p zuse -p zuse-cli -p zuse-relay -p zuse-remote
       - if: runner.os == 'Linux'
-        run: cargo test -p zuse-viewport --lib history::tests
+        run: |
+          cargo test -p zuse-viewport --lib history::tests
+          cargo test -p zuse-viewport --lib transcript::tests
       - name: Native remote connection recovery
         run: |
           cargo test -p zuse-ui --lib state::account_connection::tests

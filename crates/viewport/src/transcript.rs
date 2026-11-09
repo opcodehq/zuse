@@ -272,6 +272,33 @@ mod tests {
     use std::prelude::v1::test;
 
     #[gpui::test]
+    fn sidebar_delta_resync_keeps_internal_errors_out_of_the_ui(cx: &mut gpui::TestAppContext) {
+        let f = fixture(cx);
+        f.window
+            .update(cx, |view, _, cx| {
+                for method in [methods::WATCH_CHATS, methods::WATCH_SESSIONS] {
+                    let id = view.call(method, json!({"delta":true}));
+                    view.receive(json!({"id":id,"item":{"count":999999}}), cx);
+                    assert!(
+                        view.error.is_none(),
+                        "automatic list recovery is not a user error"
+                    );
+                    assert!(!view.pending.contains_key(&id));
+                    let fresh = *view
+                        .pending
+                        .iter()
+                        .find(|(_, name)| name.as_str() == method)
+                        .unwrap()
+                        .0;
+                    assert_ne!(fresh, id);
+                    view.receive(json!({"id":fresh,"item":{"reset":[]}}), cx);
+                    assert!(view.error.is_none());
+                }
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
     fn bounded_history_expands_on_demand_without_blocking_the_composer(
         cx: &mut gpui::TestAppContext,
     ) {
