@@ -265,6 +265,9 @@ struct Inner {
     /// alone gets the continuation prompt; transcript, preview and title keep
     /// what the user wrote.
     continuing_turns: Mutex<std::collections::HashSet<String>>,
+    /// Journal seq each chat's current turn started at, so a `Done` from the
+    /// previous turn can't be mistaken for this one's.
+    turn_starts: Mutex<HashMap<String, u64>>,
     registry: Arc<HarnessRegistry>,
     /// Set-once (first wins), cleared on runtime retirement: sessions and
     /// doc-host reference each other through Arcs, so this back-edge must be
@@ -411,6 +414,7 @@ impl SessionsEngine {
                 ipc_port: std::sync::atomic::AtomicU16::new(0),
                 journal,
                 continuing_turns: Mutex::new(Default::default()),
+                turn_starts: Mutex::new(HashMap::new()),
                 registry,
                 doc_host: Mutex::new(None),
                 runs: Mutex::new(HashMap::new()),
@@ -607,6 +611,15 @@ impl SessionsEngine {
     /// never counts: its runs are fenced, and a status left behind by one
     /// must not block updates forever.
     pub fn any_active(&self) -> bool {
+        self.active_turn_count() > 0
+            || lock(&self.inner.runs)
+                .values()
+                .any(|r| r.voice_active.live())
+    }
+
+    /// Unarchived chats with a turn working or waiting on the user, whether or
+    /// not any sidebar shows them.
+    pub fn active_turn_count(&self) -> usize {
         let active: Vec<String> = lock(&self.inner.statuses)
             .iter()
             .filter(|(_, session)| is_active(session))
@@ -622,10 +635,7 @@ impl SessionsEngine {
                     .is_some_and(|chat| chat.archived)
             })
         };
-        active.iter().any(|chat_id| !archived(chat_id))
-            || lock(&self.inner.runs)
-                .values()
-                .any(|r| r.voice_active.live())
+        active.iter().filter(|chat_id| !archived(chat_id)).count()
     }
 
     /// A text prompt for `chat_id` would land in the mailbox of a live
@@ -1448,6 +1458,15 @@ impl SessionsEngine {
     /// streaming entry stamped `aborted`; this waits (bounded) for that
     /// settlement. Background work the runtime held dies with it.
     pub async fn terminate(&self, chat_id: &str) -> Result<bool, EngineError> {
+        // Only the update's own shutdown keeps a turn resumable; anything
+        // else ending it, like the user pressing Stop, is final.
+        if !self
+            .inner
+            .shutting_down
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            self.inner.journal.clear_update_restart(chat_id);
+        }
         let target = lock(&self.inner.runs).get(chat_id).map(|h| {
             (
                 h.run_id.clone(),
@@ -1799,54 +1818,70 @@ impl SessionsEngine {
     /// Completed and idle sessions are never restarted. Normal quit/Stop do not
     /// create checkpoints and retain their existing semantics.
     pub fn checkpoint_for_update(&self) -> Result<(), EngineError> {
-        let runs = lock(&self.inner.runs);
-        for chat_id in runs.keys() {
-            if !self.turn_in_flight(chat_id) {
-                continue;
+        // Storage can be slow, so the run table is only held to list chats.
+        // Repeat until a pass finds no run admitted during the last one.
+        let mut visited = std::collections::HashSet::new();
+        loop {
+            let chats: Vec<String> = lock(&self.inner.runs)
+                .keys()
+                .filter(|chat_id| !visited.contains(*chat_id))
+                .cloned()
+                .collect();
+            if chats.is_empty() {
+                return Ok(());
             }
-            let mut request = self.last_request(chat_id).ok_or_else(|| {
-                EngineError::Other(format!(
-                    "running agent {chat_id} has no saved run configuration"
-                ))
+            for chat_id in chats {
+                self.checkpoint_turn(&chat_id)?;
+                visited.insert(chat_id);
+            }
+        }
+    }
+
+    fn checkpoint_turn(&self, chat_id: &str) -> Result<(), EngineError> {
+        // A turn already being stopped must not come back after the restart.
+        let stopping = lock(&self.inner.runs)
+            .get(chat_id)
+            .is_some_and(|run| *run.cancel.borrow());
+        if stopping || !self.turn_in_flight(chat_id) {
+            return Ok(());
+        }
+        let mut request = self.last_request(chat_id).ok_or_else(|| {
+            EngineError::Other(format!(
+                "running agent {chat_id} has no saved run configuration"
+            ))
+        })?;
+        let handle = self.doc_handle(chat_id)?;
+        let entries = handle.doc().read_entries()?;
+        let entry = entries
+            .iter()
+            .rev()
+            .find(|entry| entry.role == MessageRole::User)
+            .ok_or_else(|| {
+                EngineError::Other(format!("running agent {chat_id} has no saved user message"))
             })?;
-            let handle = self.doc_handle(chat_id)?;
-            let entries = handle.doc().read_entries()?;
-            let entry = entries
-                .iter()
-                .rev()
-                .find(|entry| entry.role == MessageRole::User)
-                .ok_or_else(|| {
-                    EngineError::Other(format!("running agent {chat_id} has no saved user message"))
-                })?;
-            if let Some(text) = entry.parts.iter().find_map(|part| match part {
-                MessagePart::Text { text, .. } => Some(text.clone()),
-                _ => None,
-            }) {
-                request.prompt = text;
-            }
-            self.inner.journal.save_update_restart(
-                chat_id,
-                &crate::run_journal::UpdateRestart {
-                    message_id: entry.id.clone(),
-                    request,
-                    saved_at: now_ms(),
-                },
-            )?;
-            self.inner.journal.clear_resume_attempts(chat_id);
-            // Completion can race the checkpoint write while the run is still
-            // present. A finished turn must never be replayed on relaunch.
-            if matches!(
-                self.inner.journal.last_event(chat_id)?,
-                Some((
-                    _,
-                    AgentEvent::Done {
-                        status: DoneStatus::Completed | DoneStatus::Errored,
-                        ..
-                    }
-                ))
-            ) {
-                self.inner.journal.clear_update_restart(chat_id);
-            }
+        if let Some(text) = entry.parts.iter().find_map(|part| match part {
+            MessagePart::Text { text, .. } => Some(text.clone()),
+            _ => None,
+        }) {
+            request.prompt = text;
+        }
+        self.inner.journal.save_update_restart(
+            chat_id,
+            &crate::run_journal::UpdateRestart {
+                message_id: entry.id.clone(),
+                request,
+                saved_at: now_ms(),
+            },
+        )?;
+        self.inner.journal.clear_resume_attempts(chat_id);
+        // Completion can race the checkpoint write while the run is still
+        // present. A finished turn must never be replayed on relaunch.
+        let turn_start = lock(&self.inner.turn_starts)
+            .get(chat_id)
+            .copied()
+            .unwrap_or(u64::MAX);
+        if done_ends_turn(self.inner.journal.last_event(chat_id)?.as_ref(), turn_start) {
+            self.inner.journal.clear_update_restart(chat_id);
         }
         Ok(())
     }
@@ -2100,6 +2135,14 @@ impl Inner {
         fresh_start: bool,
         completed_turn: Option<String>,
     ) {
+        let starting_turn = status == SessionStatus::Working
+            && (fresh_start
+                || lock(&self.statuses)
+                    .get(chat_id)
+                    .is_none_or(|s| !is_active(s)));
+        if starting_turn && let Ok(seq) = self.journal.next_seq(chat_id) {
+            lock(&self.turn_starts).insert(chat_id.to_owned(), seq);
+        }
         let now = Utc::now();
         let session = {
             let mut statuses = lock(&self.statuses);
@@ -4393,6 +4436,22 @@ fn background_task(record: &zuse_providers::BackgroundTaskRecord) -> zuse_protoc
     }
 }
 
+/// Whether the journal's last event finished the turn that started at
+/// `turn_start`. A turn can be working before it journals anything, leaving
+/// the previous turn's `Done` last.
+fn done_ends_turn(last: Option<&(u64, AgentEvent)>, turn_start: u64) -> bool {
+    matches!(
+        last,
+        Some((
+            seq,
+            AgentEvent::Done {
+                status: DoneStatus::Completed | DoneStatus::Errored,
+                ..
+            },
+        )) if *seq >= turn_start
+    )
+}
+
 /// What the harness receives when a restart cut its turn short. Tools may have
 /// finished without their results being recorded, so re-running the request
 /// could repeat commits or pushes. The request stays in the text for a harness
@@ -4401,6 +4460,30 @@ fn continuation_prompt(request: &str) -> String {
     format!(
         "Zuse restarted while you were working, which interrupted your last turn. Check the current state of the work before doing anything else, then finish only what is still undone. Some steps may have completed without their results reaching you, so verify before repeating anything with side effects, such as commits, pushes, or migrations. If the work is already done, say so briefly.\n\nThe request you were working on:\n\n{request}"
     )
+}
+
+#[cfg(test)]
+mod update_checkpoint_tests {
+    use super::*;
+
+    fn done(seq: u64, status: DoneStatus) -> (u64, AgentEvent) {
+        let event = serde_json::from_value(serde_json::json!({
+            "type": "done",
+            "status": status,
+        }));
+        (seq, event.expect("a done event"))
+    }
+
+    #[test]
+    fn only_a_done_from_this_turn_counts_as_finishing_it() {
+        let finished = done(5, DoneStatus::Completed);
+        assert!(done_ends_turn(Some(&finished), 5));
+        assert!(!done_ends_turn(Some(&finished), 6), "the previous turn's");
+        assert!(!done_ends_turn(Some(&finished), u64::MAX), "no known start");
+        assert!(done_ends_turn(Some(&done(7, DoneStatus::Errored)), 6));
+        assert!(!done_ends_turn(Some(&done(7, DoneStatus::Interrupted)), 6));
+        assert!(!done_ends_turn(None, 0));
+    }
 }
 
 #[cfg(test)]
@@ -5180,10 +5263,12 @@ mod tests {
         core.sessions
             .set_status("chat-archived", SessionStatus::Working, true);
         assert!(core.sessions.any_active());
+        assert_eq!(core.sessions.active_turn_count(), 1);
         core.workspace
             .set_chat_archived("chat-archived", true)
             .unwrap();
         assert!(!core.sessions.any_active());
+        assert_eq!(core.sessions.active_turn_count(), 0);
         core.shutdown().await;
     }
 

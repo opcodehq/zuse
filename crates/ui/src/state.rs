@@ -161,6 +161,11 @@ trait EngineBackend: Send + Sync {
         Ok(())
     }
     fn cancel_update_restart(&self) {}
+    /// Agent turns an app restart would interrupt. A remote engine outlives
+    /// this app, so none of its turns are.
+    fn interrupted_by_restart(&self) -> usize {
+        0
+    }
     /// Graceful teardown (drains runs / flushes docs for the in-process engine).
     async fn shutdown(&self);
 }
@@ -204,6 +209,15 @@ impl EngineBackend for InProcessEngine {
             }
         }
         Ok(())
+    }
+    fn interrupted_by_restart(&self) -> usize {
+        match self.runtime.try_lock() {
+            Ok(runtime) => runtime
+                .as_ref()
+                .map_or(0, |runtime| runtime.core().sessions.active_turn_count()),
+            // Busy for a moment: count as active so a restart re-checks.
+            Err(_) => 1,
+        }
     }
     fn cancel_update_restart(&self) {
         if let Ok(runtime) = self.runtime.try_lock()
@@ -672,6 +686,10 @@ impl EngineHandle {
 
     pub fn cancel_update_restart(&self) {
         self.inner.cancel_update_restart();
+    }
+
+    pub fn interrupted_by_restart(&self) -> usize {
+        self.inner.interrupted_by_restart()
     }
 
     pub async fn shutdown(&self) {

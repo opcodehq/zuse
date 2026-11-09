@@ -82,6 +82,15 @@ fn flow_after_stage(
     }
 }
 
+/// The release the pill is offering: what's ready to install, else the newest
+/// one found.
+fn offered_version<'a>(flow: &'a Flow, available: Option<&'a str>) -> Option<&'a str> {
+    match flow {
+        Flow::Ready { version, .. } => Some(version),
+        _ => available,
+    }
+}
+
 fn install_attempt_path(data_dir: &Path) -> PathBuf {
     data_dir.join("update-install-attempt")
 }
@@ -265,10 +274,7 @@ impl AppUpdate {
 
     /// The offered version with its changelog, once that has loaded.
     pub fn release_notes(&self) -> Option<(&str, &[zuse_update::ReleaseNotesSection])> {
-        let offered = match &self.flow {
-            Flow::Ready { version, .. } => version.as_str(),
-            _ => self.available()?,
-        };
+        let offered = offered_version(&self.flow, self.available())?;
         let (version, sections) = self.release_notes.as_ref()?;
         (version == offered).then_some((offered, sections.as_slice()))
     }
@@ -276,7 +282,7 @@ impl AppUpdate {
     /// Fetch the offered release's changelog for the update pill. A failure
     /// only costs the hover card; the next status change tries again.
     fn load_release_notes(&mut self, cx: &mut Context<Self>) {
-        let Some(version) = self.available().map(str::to_owned) else {
+        let Some(version) = offered_version(&self.flow, self.available()).map(str::to_owned) else {
             return;
         };
         if self
@@ -411,6 +417,7 @@ impl AppUpdate {
                     tracing::info!(%version, staged = %staged.display(), "update staged");
                     zuse_update::prune_stale_stages(&this.data_dir, version);
                 }
+                this.load_release_notes(cx);
                 cx.notify();
             })
             .ok();
@@ -625,6 +632,16 @@ mod tests {
             version: version.into(),
             staged: PathBuf::from(format!("/stage/{version}")),
         }
+    }
+
+    #[test]
+    fn the_ready_update_is_the_offered_one_even_with_a_newer_release_out() {
+        assert_eq!(
+            offered_version(&ready("0.24.0"), Some("0.25.0")),
+            Some("0.24.0")
+        );
+        assert_eq!(offered_version(&Flow::Idle, Some("0.25.0")), Some("0.25.0"));
+        assert_eq!(offered_version(&Flow::Idle, None), None);
     }
 
     #[test]

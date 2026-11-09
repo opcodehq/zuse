@@ -10502,12 +10502,6 @@ impl Shell {
                                 this.on_update_strip_click(action, cx)
                             }),
                         )
-                        .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
-                            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                                cx.stop_propagation();
-                                this.on_update_strip_click(action, cx);
-                            }
-                        }))
                 })
                 .child(lead)
                 .child(label)
@@ -10591,6 +10585,7 @@ impl Shell {
     ) -> Option<AnyElement> {
         use crate::app_update::{AppUpdate, Flow, Prompt};
         let update = AppUpdate::global(cx)?;
+        update.read(cx).prompt()?;
         let theme = Theme::of(cx).for_popup();
         let current = zuse_update::current_version();
         let working = self.restart_blockers(cx);

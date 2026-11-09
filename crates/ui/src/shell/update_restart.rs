@@ -4,7 +4,6 @@
 
 use std::time::{Duration, Instant};
 
-use chrono::Utc;
 use gpui::{App, Context};
 
 use super::Shell;
@@ -98,22 +97,14 @@ impl RestartPlan {
 }
 
 impl Shell {
-    /// Chats a "when agents finish" restart waits for. One waiting on the
-    /// user counts: restarting would pull the question out from under them.
-    /// Background work doesn't; it stops with the restart.
+    /// Agents a restart would interrupt: this process's engine only, counting
+    /// a chat waiting on the user (restarting would pull the question out from
+    /// under them) but not background work, which stops with the restart.
     pub(super) fn restart_blockers(&self, cx: &App) -> usize {
         self.state
             .read(cx)
-            .sidebar_chats(Utc::now(), None)
-            .into_iter()
-            .filter(|(indicator, _)| {
-                matches!(
-                    indicator,
-                    zuse_protocol::ChatIndicator::Working
-                        | zuse_protocol::ChatIndicator::AwaitingInput
-                )
-            })
-            .count()
+            .engine()
+            .map_or(0, |engine| engine.interrupted_by_restart())
     }
 
     /// The pill's Restart: straight through when nothing would be

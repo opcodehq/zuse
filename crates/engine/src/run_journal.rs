@@ -124,6 +124,14 @@ impl RunJournal {
         Ok(checkpoints)
     }
 
+    /// The seq the chat's next event will get.
+    pub(crate) fn next_seq(&self, chat_id: &str) -> Result<u64, JournalError> {
+        if let Some(journal) = self.lock().get(chat_id) {
+            return Ok(journal.next_seq);
+        }
+        Ok(scan_tail(&self.path_for(chat_id))?.0)
+    }
+
     pub(crate) fn clear_update_restart(&self, chat_id: &str) {
         let _ = std::fs::remove_file(self.update_restart_path(chat_id));
     }
