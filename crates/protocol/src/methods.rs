@@ -276,6 +276,8 @@ pub const CLOUD_ENVIRONMENT: &str = "CloudEnvironment";
 pub const CLOUD_RPC: &str = "CloudRpc";
 pub const CLOUD_WORKSPACES: &str = "CloudWorkspaces";
 pub const CLOUD_HISTORY: &str = "CloudHistory";
+/// CPU, memory and disk of the machine the engine runs on.
+pub const MACHINE_RESOURCES: &str = "MachineResources";
 /// Explicit lifecycle mutation. Never automatically retry on reconnect.
 pub const CLOUD_CLEANUP_MIRROR: &str = "CloudCleanupMirror";
 pub const CLOUD_DELETE: &str = "CloudDelete";
@@ -346,6 +348,7 @@ pub fn retryable_read(method: &str, params: &serde_json::Value) -> bool {
         | CLOUD_HISTORY
         | CLOUD_WORKSPACE
         | CLOUD_SYNC_STATUS
+        | MACHINE_RESOURCES
         | AUTH_STATUS
         | LOCAL_DEVICE
         | LIST_HARNESSES

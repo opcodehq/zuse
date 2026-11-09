@@ -31,6 +31,7 @@ use zuse_rpc::{RpcError, RpcReply, RpcService, methods};
 use zuse_sync::DocsStore;
 
 pub mod account;
+pub mod machine_resources;
 pub mod agent_accounts;
 mod api_origins;
 pub mod local_mcp;

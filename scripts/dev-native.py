@@ -100,6 +100,17 @@ def cargo_build_command(full_debug=False, environment=None, packages=("zuse",)):
     return [*command, "build", "--locked", "-p", "zuse", "--timings"]
 
 
+UI_ONLY_PACKAGES = ("crates/ui/", "crates/viewport/")
+
+
+def ui_only_input(path):
+    """True for inputs only the windowed UI compiles in; the engine never runs them."""
+    relative = Path(path).resolve().as_posix()
+    root = ROOT.resolve().as_posix() + "/"
+    relative = relative[len(root):] if relative.startswith(root) else relative
+    return relative.startswith(UI_ONLY_PACKAGES)
+
+
 def watched_package_names(cargo, roots):
     roots = set(roots)
     return [item["name"] for item in cargo["packages"]
@@ -180,20 +191,22 @@ def main():
         binary = str(target / "debug/zuse")
         if not build(command, env, target):
             return 1
-        engine = subprocess.Popen([binary, "headless"], cwd=ROOT, env=env, start_new_session=True)
-        deadline = time.monotonic() + 30
-        while True:
-            if engine.poll() is not None:
-                raise RuntimeError("Development engine exited before opening IPC")
-            try:
-                with socket.create_connection(("127.0.0.1", args.ipc_port), timeout=0.2):
-                    break
-            except OSError:
-                if time.monotonic() > deadline:
-                    raise RuntimeError("Development engine did not open IPC within 30 seconds")
-                time.sleep(0.1)
+        def start_engine():
+            process = subprocess.Popen([binary, "headless"], cwd=ROOT, env=env, start_new_session=True)
+            deadline = time.monotonic() + 30
+            while True:
+                if process.poll() is not None:
+                    raise RuntimeError("Development engine exited before opening IPC")
+                try:
+                    with socket.create_connection(("127.0.0.1", args.ipc_port), timeout=0.2):
+                        return process
+                except OSError:
+                    if time.monotonic() > deadline:
+                        raise RuntimeError("Development engine did not open IPC within 30 seconds")
+                    time.sleep(0.1)
+        engine = start_engine()
         ui = subprocess.Popen([binary], cwd=ROOT, env=env, start_new_session=True)
-        print(f"Watching {len(seen)} runtime/build inputs across {len(roots)} local packages. UI reloads keep the engine running. Ctrl+C stops both.", flush=True)
+        print(f"Watching {len(seen)} runtime/build inputs across {len(roots)} local packages. UI-only changes keep the engine running; engine changes restart it. Ctrl+C stops both.", flush=True)
         while engine.poll() is None:
             time.sleep(0.5)
             current = watcher.scan()
@@ -217,6 +230,12 @@ def main():
                 print("Executable unchanged; keeping the current UI.", flush=True)
                 continue
             stop(ui)
+            if any(not ui_only_input(name) for name in changed):
+                # Engine code changed: a UI reload alone would keep running
+                # the old engine.
+                print("Restarting the development engine for engine changes…", flush=True)
+                stop(engine)
+                engine = start_engine()
             ui = subprocess.Popen([binary], cwd=ROOT, env=env, start_new_session=True)
         raise RuntimeError("Development engine exited")
     except KeyboardInterrupt:

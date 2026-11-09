@@ -3115,6 +3115,10 @@ impl EngineRpc {
                 RpcReply::value(&response)
             }
             methods::ENGINE_INFO => RpcReply::value(&self.engine_info),
+            methods::MACHINE_RESOURCES => {
+                let root = std::env::current_dir().unwrap_or_else(|_| "/".into());
+                RpcReply::value(&crate::machine_resources::snapshot(&root).await)
+            }
             methods::ENGINE_READY => RpcReply::value(&serde_json::json!({ "ready": true })),
             methods::LIST_HARNESSES => RpcReply::value(&self.registry.descriptors()),
             methods::INSTALL_HARNESS => {

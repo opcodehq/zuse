@@ -5,6 +5,7 @@ use crate::state::CloudTarget;
 use serde_json::{Value, json};
 mod activity;
 mod computer;
+pub(super) use computer::Tone;
 mod history;
 
 pub(super) enum CloudConversationEvent {
@@ -979,6 +980,32 @@ impl Shell {
             self.track_current_cloud_canvas(cx);
         }
         let session = target.initial_session.clone();
+        // The computer record names its project only by id; carry the
+        // repository's name in from the account's project list.
+        let mut row = row;
+        let project_id = row["projectId"]
+            .as_str()
+            .or_else(|| launch["projectId"].as_str())
+            .map(str::to_owned);
+        if let Some(project) = project_id.and_then(|id| {
+            self.state
+                .read(cx)
+                .cloud_sidebar_projects()
+                .into_iter()
+                .find(|project| project["projectId"].as_str() == Some(id.as_str()))
+        }) && let Some(object) = row.as_object_mut()
+        {
+            for key in ["displayName", "repositoryIdentity"] {
+                if let Some(value) = project.get(key).filter(|value| value.is_string()) {
+                    let field = if key == "displayName" {
+                        "repositoryDisplayName"
+                    } else {
+                        key
+                    };
+                    object.entry(field).or_insert_with(|| value.clone());
+                }
+            }
+        }
         let view = cx.new(|cx| CloudConversation::new(target, row, launch, self.boot.clone(), cx));
         self.subscribe_cloud_conversation(&view, cx);
         self.cloud_tabs.set_current(view.clone(), cx);

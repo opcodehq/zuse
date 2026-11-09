@@ -290,10 +290,30 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         if let Some(workspace) = chat_id.strip_prefix(super::CLOUD_ROW_PREFIX) {
-            let (name, space) = self.cloud_row_project(workspace, cx);
-            let art = match space {
+            let (name, space, owner) = self.cloud_row_project(workspace, cx);
+            // The repository owner's GitHub avatar, over the local checkout's
+            // artwork (or the monogram) while it loads or when it can't.
+            let fallback = match space {
                 Some(space) => self.project_artwork(Some(&space), selected, cx),
                 None => monogram(&name, false, Theme::of(cx)),
+            };
+            let art = match owner {
+                Some(owner) => div()
+                    .relative()
+                    .size_full()
+                    .child(fallback)
+                    .child(
+                        gpui::img(SharedString::from(format!(
+                            "https://github.com/{owner}.png?size=80"
+                        )))
+                        .absolute()
+                        .inset_0()
+                        .size_full()
+                        .rounded(px(4.0))
+                        .object_fit(gpui::ObjectFit::Cover),
+                    )
+                    .into_any_element(),
+                None => fallback,
             };
             return project_icon_frame(chat_id, &name, "Cloud computer", size, art);
         }
@@ -315,7 +335,11 @@ impl Shell {
 
     /// A cloud task's project name, and the local checkout of the same
     /// repository when this device has one (its artwork is the project's).
-    fn cloud_row_project(&self, workspace: &str, cx: &App) -> (String, Option<zuse_protocol::Space>) {
+    fn cloud_row_project(
+        &self,
+        workspace: &str,
+        cx: &App,
+    ) -> (String, Option<zuse_protocol::Space>, Option<String>) {
         let state = self.state.read(cx);
         let project_id = state
             .cloud_sidebar_workspaces()
@@ -329,7 +353,7 @@ impl Shell {
                 .find(|project| project["projectId"].as_str() == Some(id.as_str()))
         });
         let Some(project) = project else {
-            return ("Cloud project".into(), None);
+            return ("Cloud project".into(), None, None);
         };
         let group = zuse_protocol::presentation::cloud_project_group(&project, &state.spaces);
         let identity = project["repositoryIdentity"].as_str().unwrap_or_default();
@@ -348,7 +372,11 @@ impl Shell {
             .map(|group| group.name)
             .or_else(|| project["displayName"].as_str().map(str::to_owned))
             .unwrap_or_else(|| "Cloud project".into());
-        (name, space)
+        let owner = identity
+            .strip_prefix("github.com/")
+            .and_then(github_owner)
+            .map(str::to_owned);
+        (name, space, owner)
     }
 
     /// Artwork for a chat's project, shared by every space of the project:

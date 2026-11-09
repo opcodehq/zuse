@@ -514,10 +514,18 @@ impl Shell {
             return None;
         }
         let theme = Theme::of(cx).for_popup();
-        let (summary, synced) = {
+        let (summary, synced, resources) = {
             let view = conversation.read(cx);
-            (view.computer_summary(), view.synced_folder())
+            (
+                view.computer_summary(),
+                view.synced_folder(),
+                view.resources().clone(),
+            )
         };
+        let running = matches!(summary.tone, super::cloud_conversation::Tone::Running);
+        if running {
+            conversation.update(cx, |view, cx| view.want_resources(cx));
+        }
         let computer = summary
             .provider
             .clone()
@@ -542,6 +550,101 @@ impl Shell {
             info_row(&theme, row_glyph(icons::GIT_BRANCH, &theme), branch.into())
                 .id("cloud-session-info-branch")
         });
+        // Its size, and when it sleeps on its own.
+        let size_row = info_row(
+            &theme,
+            row_glyph(icons::CLOCK_CIRCLE, &theme),
+            if summary.sleeping {
+                "Wakes when you send a message".into()
+            } else {
+                "Sleeps after 10 min idle".into()
+            },
+        )
+        .id("cloud-session-info-idle")
+        .when_some(summary.size.clone(), |row, size| {
+            row.child(row_meta(&theme).child(size))
+        });
+        // Performance: one row with CPU at a glance, unfolding to the bars.
+        let cpu = resources["cpuPercent"].as_f64();
+        let (performance_header, performance_open) = self.session_info_section(
+            "cloud-performance",
+            false,
+            row_glyph(icons::MONITOR, &theme),
+            "Performance",
+            Some(SharedString::from(match (running, cpu) {
+                (false, _) => "Not running".to_owned(),
+                (true, Some(cpu)) => format!("{cpu:.0}% CPU"),
+                (true, None) => "Measuring…".to_owned(),
+            })),
+            &theme,
+            cx,
+        );
+        let mut performance = vec![performance_header];
+        if performance_open && running {
+            let bytes = |value: &serde_json::Value| value.as_u64().map(|v| v as f64 / 1e9);
+            let meter = |label: &'static str, fraction: Option<f64>, detail: String| {
+                let fraction = fraction.unwrap_or(0.0).clamp(0.0, 1.0) as f32;
+                let tone = if fraction > 0.9 {
+                    theme.danger
+                } else if fraction > 0.7 {
+                    theme.warning
+                } else {
+                    theme.success
+                };
+                sub_row(&theme)
+                    .flex_col()
+                    .items_start()
+                    .gap(px(4.0))
+                    .py(px(4.0))
+                    .child(
+                        div()
+                            .w_full()
+                            .flex()
+                            .justify_between()
+                            .child(label)
+                            .child(div().text_color(theme.text_muted).child(detail)),
+                    )
+                    .child(
+                        div()
+                            .w_full()
+                            .h(px(4.0))
+                            .rounded_full()
+                            .bg(theme.text.opacity(0.08))
+                            .child(
+                                div()
+                                    .h_full()
+                                    .w(gpui::relative(fraction))
+                                    .rounded_full()
+                                    .bg(tone),
+                            ),
+                    )
+                    .into_any_element()
+            };
+            let cores = resources["cores"].as_u64();
+            performance.push(meter(
+                "CPU",
+                cpu.map(|cpu| cpu / 100.0),
+                match (cpu, cores) {
+                    (Some(cpu), Some(cores)) => format!("{cpu:.0}% of {cores} cores"),
+                    (Some(cpu), None) => format!("{cpu:.0}%"),
+                    _ => "—".into(),
+                },
+            ));
+            for (label, used, total) in [
+                ("Memory", "memoryUsedBytes", "memoryTotalBytes"),
+                ("Disk", "diskUsedBytes", "diskTotalBytes"),
+            ] {
+                let (used, total) = (bytes(&resources[used]), bytes(&resources[total]));
+                performance.push(meter(
+                    label,
+                    used.zip(total).filter(|(_, t)| *t > 0.0).map(|(u, t)| u / t),
+                    match (used, total) {
+                        (Some(used), Some(total)) => format!("{used:.1} of {total:.1} GB"),
+                        _ => "—".into(),
+                    },
+                ));
+            }
+        }
         let sleep = {
             let conversation = conversation.clone();
             action_row(&theme, "cloud-session-info-sleep")
@@ -596,6 +699,9 @@ impl Shell {
             .child(computer_row)
             .children(repository_row)
             .children(branch_row)
+            .child(size_row)
+            .child(fade_rule(&theme))
+            .children(performance)
             .child(fade_rule(&theme))
             .child(sleep)
             .children(folder)

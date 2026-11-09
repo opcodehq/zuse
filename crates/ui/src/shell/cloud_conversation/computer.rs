@@ -87,6 +87,7 @@ pub(in crate::shell) struct ComputerSummary {
     pub provider: Option<String>,
     pub branch: Option<String>,
     pub created: Option<String>,
+    pub size: Option<String>,
 }
 #[derive(Clone)]
 struct Pending {
@@ -112,6 +113,13 @@ pub(super) struct State {
     sync_change: Option<Task<()>>,
     sync_folder: Option<Task<()>>,
     sync_error: Option<String>,
+    /// The menu's second page: every action on the computer.
+    more: bool,
+    /// The machine's last CPU, memory and disk snapshot, and the poll that
+    /// keeps it current while the summary shows it.
+    pub(super) resources: Value,
+    resources_poll: Option<Task<()>>,
+    resources_wanted: Option<std::time::Instant>,
 }
 impl State {
     #[cfg(test)]
@@ -301,6 +309,8 @@ fn request(mut scope: Value, action: Action, key: &str, row: &Value, check: bool
 impl CloudConversation {
     pub(super) fn close_computer(&mut self, cx: &mut Context<Self>) {
         self.computer.open = false;
+        self.computer.more = false;
+        self.computer.confirm = None;
         if self.computer.menu.begin_close() {
             popover::reap_popup(cx, |this: &mut Self| &mut this.computer.menu);
         }
@@ -580,9 +590,12 @@ impl CloudConversation {
             "deleting" | "deleted" => ("Deleted", Tone::Idle),
             _ => ("Starting…", Tone::Busy),
         };
+        let config = &self.config;
         let repository = row["repositoryDisplayName"]
             .as_str()
+            .or_else(|| config["repositoryDisplayName"].as_str())
             .or_else(|| row["repositoryIdentity"].as_str())
+            .or_else(|| config["repositoryIdentity"].as_str())
             .map(str::to_owned)
             .or_else(|| {
                 row["repositoryUrl"].as_str().map(|url| {
@@ -611,6 +624,17 @@ impl CloudConversation {
             repository,
             provider,
             branch: self.branch_label(),
+            size: row["computerSizeId"]
+                .as_str()
+                .or_else(|| self.config["sizeId"].as_str())
+                .filter(|size| !size.is_empty())
+                .map(|size| {
+                    let mut chars = size.chars();
+                    chars
+                        .next()
+                        .map(|first| first.to_uppercase().collect::<String>() + chars.as_str())
+                        .unwrap_or_default()
+                }),
             created: row["createdAt"]
                 .as_i64()
                 .and_then(chrono::DateTime::from_timestamp_millis)
@@ -620,6 +644,56 @@ impl CloudConversation {
                         .to_string()
                 }),
         }
+    }
+    /// Keep the machine's CPU, memory and disk current while something shows
+    /// them. Each call extends the want; the poll stops a few seconds after
+    /// the last one. Reads go to the computer's own engine, so they need it
+    /// connected.
+    pub(in crate::shell) fn want_resources(&mut self, cx: &mut Context<Self>) {
+        self.computer.resources_wanted = Some(std::time::Instant::now());
+        if self.computer.resources_poll.is_some() {
+            return;
+        }
+        self.computer.resources_poll = Some(cx.spawn(async move |this, cx| {
+            loop {
+                let engine = this
+                    .update(cx, |this, cx| {
+                        let wanted = this
+                            .computer
+                            .resources_wanted
+                            .is_some_and(|at| at.elapsed() < Duration::from_secs(4));
+                        if !wanted {
+                            return Err(());
+                        }
+                        Ok(this.state.read(cx).engine().cloned())
+                    })
+                    .ok()
+                    .and_then(Result::ok);
+                let Some(engine) = engine else {
+                    let _ = this.update(cx, |this, _| this.computer.resources_poll = None);
+                    return;
+                };
+                if let Some(engine) = engine {
+                    let job = gpui_tokio::Tokio::spawn(cx, async move {
+                        engine
+                            .client()
+                            .call(methods::MACHINE_RESOURCES, json!({}))
+                            .await
+                    });
+                    if let Ok(Ok(value)) = job.await {
+                        let _ = this.update(cx, |this, cx| {
+                            this.computer.resources = value;
+                            cx.notify();
+                        });
+                    }
+                }
+                cx.background_executor().timer(Duration::from_secs(3)).await;
+            }
+        }));
+    }
+    /// The last machine snapshot, when one arrived.
+    pub(in crate::shell) fn resources(&self) -> &Value {
+        &self.computer.resources
     }
     /// Pause a running computer, or wake a sleeping one.
     pub(in crate::shell) fn toggle_sleep(&mut self, cx: &mut Context<Self>) {
@@ -754,7 +828,7 @@ impl CloudConversation {
             menu = menu.child(
                 popover::menu_row(&theme, false, "computer-setup-settings")
                     .id("computer-setup-settings")
-                    .child(icon(icons::SETTINGS).size(px(14.)))
+                    .child(icon(icons::SETTINGS).size(px(14.)).text_color(theme.text_muted))
                     .child("Open Cloud settings")
                     .on_click(cx.listener(|_, _, window, cx| {
                         window.dispatch_action(Box::new(OpenCloudSettings), cx)
@@ -762,9 +836,10 @@ impl CloudConversation {
             );
         }
 
-        // Sleep and wake.
+        // Every action lives on the "More" page.
+        let mut more_rows: Vec<AnyElement> = Vec::new();
         let lifecycle_enabled = !busy && self.computer.execution_controls_enabled();
-        menu = menu.child(popover::menu_separator()).child(
+        more_rows.push(
             popover::menu_row(&theme, false, "native-cloud-lifecycle")
                 .id("native-cloud-lifecycle")
                 .opacity(if lifecycle_enabled { 1. } else { 0.45 })
@@ -774,7 +849,8 @@ impl CloudConversation {
                     } else {
                         icons::MOON
                     })
-                    .size(px(14.)),
+                    .size(px(14.))
+                    .text_color(theme.text_muted),
                 )
                 .child(if summary.sleeping {
                     "Wake computer"
@@ -783,13 +859,14 @@ impl CloudConversation {
                 } else {
                     "Reconnect"
                 })
-                .on_click(cx.listener(|this, _, _, cx| this.toggle_sleep(cx))),
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_sleep(cx)))
+                .into_any_element(),
         );
         if editable(&row) && !busy && self.ready(cx) && self.computer.execution_controls_enabled() {
-            menu = menu.child(
+            more_rows.push(
                 popover::menu_row(&theme, false, "computer-stop-agent")
                     .id("computer-stop-agent")
-                    .child(icon(icons::STOP).size(px(14.)))
+                    .child(icon(icons::STOP).size(px(14.)).text_color(theme.text_muted))
                     .child("Stop agent")
                     .on_click(cx.listener(|this, _, _, cx| {
                         if this.operation.is_none()
@@ -799,7 +876,8 @@ impl CloudConversation {
                             this.composer
                                 .update(cx, |composer, cx| composer.interrupt_selected(cx));
                         }
-                    })),
+                    }))
+                    .into_any_element(),
             );
         }
 
@@ -828,7 +906,7 @@ impl CloudConversation {
                     gpui::Toggled::False
                 })
                 .opacity(if sync_busy || !loaded { 0.5 } else { 1. })
-                .child(icon(icons::REFRESH).size(px(14.)))
+                .child(icon(icons::REFRESH).size(px(14.)).text_color(theme.text_muted))
                 .child(div().flex_1().child("Sync to a local folder"))
                 .child(crate::settings::widgets::toggle_switch(&theme, enabled, "cloud-sync"))
                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -908,7 +986,7 @@ impl CloudConversation {
                 popover::menu_row(&theme, false, "cloud-sync-folder")
                     .id("cloud-sync-folder")
                     .opacity(if sync_busy { 0.5 } else { 1. })
-                    .child(icon(icons::FOLDER).size(px(14.)))
+                    .child(icon(icons::FOLDER).size(px(14.)).text_color(theme.text_muted))
                     .child("Change folder…")
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if !sync_busy {
@@ -920,7 +998,7 @@ impl CloudConversation {
                 menu = menu.child(
                     popover::menu_row(&theme, false, "cloud-sync-retry")
                         .id("cloud-sync-retry")
-                        .child(icon(icons::REFRESH).size(px(14.)))
+                        .child(icon(icons::REFRESH).size(px(14.)).text_color(theme.text_muted))
                         .child("Retry sync")
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.change_sync(methods::CLOUD_SYNC_RETRY, true, None, cx)
@@ -966,7 +1044,8 @@ impl CloudConversation {
                                 Action::Recreate | Action::RetryRecreate => icons::REFRESH,
                                 _ => icons::RESTART,
                             })
-                            .size(px(14.)),
+                            .size(px(14.))
+                            .text_color(if danger { theme.danger } else { theme.text_muted }),
                         )
                         .child(action.label())
                         .on_click(cx.listener(move |this, _, _, cx| {
@@ -984,7 +1063,7 @@ impl CloudConversation {
                 repair.push(
                     popover::menu_row(&theme, false, format!("check-{action:?}"))
                         .id(SharedString::from(format!("check-{action:?}")))
-                        .child(icon(icons::REFRESH).size(px(14.)))
+                        .child(icon(icons::REFRESH).size(px(14.)).text_color(theme.text_muted))
                         .child(div().flex_1().child(format!("Check {}", action.label().to_lowercase())))
                         .child(div().text_color(theme.text_muted).child(phase.to_owned()))
                         .on_click(cx.listener(move |this, _, _, cx| {
@@ -998,7 +1077,7 @@ impl CloudConversation {
             repair.push(
                 popover::menu_row(&theme, false, "computer-retry-original")
                     .id("computer-retry-original")
-                    .child(icon(icons::REFRESH).size(px(14.)))
+                    .child(icon(icons::REFRESH).size(px(14.)).text_color(theme.text_muted))
                     .child("Retry original request")
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.computer_action(pending.action, false, cx)
@@ -1006,8 +1085,61 @@ impl CloudConversation {
                     .into_any_element(),
             );
         }
-        if !repair.is_empty() {
-            menu = menu.child(popover::menu_separator()).children(repair);
+        repair.push(
+            popover::menu_row(&theme, false, "computer-refresh")
+                .id("computer-refresh")
+                .child(icon(icons::REFRESH).size(px(14.)).text_color(theme.text_muted))
+                .child("Refresh status")
+                .on_click(cx.listener(|this, _, _, cx| this.refresh_computer(cx)))
+                .into_any_element(),
+        );
+        if self.computer.more {
+            // The "More" page replaces the summary page: a way back, then
+            // the actions, then whatever they report.
+            menu = div()
+                .id("native-computer-more")
+                .flex()
+                .flex_col()
+                .text_size(crate::typography::text_xs())
+                .child(
+                    popover::menu_row(&theme, false, "computer-more-back")
+                        .id("computer-more-back")
+                        .child(
+                            icon(icons::ALT_ARROW_LEFT)
+                                .size(px(14.))
+                                .text_color(theme.text_muted),
+                        )
+                        .child(div().flex_1().text_color(theme.text_muted).child("Computer"))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.computer.more = false;
+                            this.computer.confirm = None;
+                            cx.notify();
+                        })),
+                )
+                .child(popover::menu_separator())
+                .children(more_rows)
+                .child(popover::menu_separator())
+                .children(repair);
+        } else {
+            menu = menu.child(popover::menu_separator()).child(
+                popover::menu_row(&theme, false, "computer-more")
+                    .id("computer-more")
+                    .child(
+                        icon(icons::MORE_HORIZONTAL)
+                            .size(px(14.))
+                            .text_color(theme.text_muted),
+                    )
+                    .child(div().flex_1().child("More"))
+                    .child(
+                        icon(icons::ALT_ARROW_RIGHT)
+                            .size(px(12.))
+                            .text_color(theme.text_muted),
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.computer.more = true;
+                        cx.notify();
+                    })),
+            );
         }
         if busy {
             menu = menu.child(
