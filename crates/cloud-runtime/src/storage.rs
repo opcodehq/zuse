@@ -57,8 +57,19 @@ impl DataLock {
             .create(true)
             .truncate(false)
             .open(path)?;
-        file.try_lock()
-            .map_err(|_| anyhow::anyhow!("runtime_data_lock_held"))?;
+        // A child forked by this process shares the lock's open file until it
+        // execs (close-on-exec only applies then), so a lock just released can
+        // read as held for a moment. Another live runtime holds it for good.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        loop {
+            match file.try_lock() {
+                Ok(()) => break,
+                Err(_) if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                Err(_) => return Err(anyhow::anyhow!("runtime_data_lock_held")),
+            }
+        }
         Ok(Self { _file: file })
     }
 }
