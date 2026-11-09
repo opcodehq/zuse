@@ -1,5 +1,6 @@
 //! Native Devices cards use the profile-owned browser and pairing authorities.
 use super::access_widgets::{details, field};
+use crate::localization::message as tr;
 use crate::{
     composer::ComposerInput,
     settings::widgets,
@@ -8,6 +9,7 @@ use crate::{
 };
 use gpui::{prelude::*, *};
 use serde_json::{Value, json};
+use zuse_i18n::messages as msg;
 use zuse_rpc::methods;
 
 pub struct PairingCard {
@@ -301,6 +303,7 @@ impl PairingCard {
                     } else {
                         "Turn on"
                     },
+                    cx,
                 )
                 .when(busy || running && !managed, |button| {
                     button.opacity(0.5).cursor_default()
@@ -314,15 +317,15 @@ impl PairingCard {
             )
             .into_any_element();
         let connect = r::frame(
-            "Connect another device",
-            "Create a temporary link that authorizes another Zuse app or browser to use this computer.",
+            crate::localization::text("settings-connect_link_card_connect_another_device", cx),
+            crate::localization::text("settings-connect_link_card_create_a_temporary_link_that_authorizes_another_zuse_app_or_browser_to", cx),
             None,
         )
         .child(
             s::card().child(
-                r::connect_row(ready)
+                r::connect_row(ready, cx)
                     .child(
-                        r::small_button("native-create-invitation", "Create link")
+                        r::small_button("native-create-invitation", crate::localization::text("settings-connect_link_card_create_link", cx))
                             .when(!ready || busy, |v| v.opacity(0.5).cursor_default())
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 if ready && !busy {
@@ -334,12 +337,15 @@ impl PairingCard {
         )
         .into_any_element();
         let devices = r::frame(
-            "Connected devices",
+            crate::localization::text("chat-environment_summary_connected_devices", cx),
             "Manage devices that have connected to this computer.",
             Some(
-                r::button("native-refresh-pairings", "Refresh")
-                    .on_click(cx.listener(|this, _, _, cx| this.refresh(cx)))
-                    .into_any_element(),
+                r::button(
+                    "native-refresh-pairings",
+                    crate::localization::text("settings-organizations_refresh", cx),
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.refresh(cx)))
+                .into_any_element(),
             ),
         )
         .child(
@@ -368,25 +374,36 @@ impl PairingCard {
                             r::details(
                                 peer.label.clone(),
                                 if peer.paired_at.is_some() {
-                                    "Connected"
+                                    crate::localization::text(
+                                        "settings-cloud_workspace_auth_ready",
+                                        cx,
+                                    )
                                 } else if peer.expires_at.is_some_and(|expiry| {
                                     expiry <= chrono::Utc::now().timestamp().max(0) as u64
                                 }) {
-                                    "Invitation expired"
+                                    ("Invitation expired").to_string()
                                 } else {
-                                    "Invitation pending"
+                                    crate::localization::text(
+                                        "settings-organizations_invitation_pending",
+                                        cx,
+                                    )
                                 },
                             )
                             .flex_1(),
                         )
                         .child(
-                            r::small_button(("native-revoke-pairing", index), "Revoke")
-                                .border_color(gpui::transparent_black())
-                                .text_color(zuse_viewport::settings_style::destructive_text())
-                                .on_click(cx.listener(move |this, _, _, cx| {
+                            r::small_button(
+                                ("native-revoke-pairing", index),
+                                crate::localization::text("settings-organizations_revoke", cx),
+                            )
+                            .border_color(gpui::transparent_black())
+                            .text_color(zuse_viewport::settings_style::destructive_text())
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| {
                                     this.request(methods::REVOKE_PAIRING, json!({"pairId":id}), cx);
                                     cx.notify();
-                                })),
+                                },
+                            )),
                         )
                 })),
         )
@@ -401,14 +418,14 @@ impl PairingCard {
                 .on_click(cx.listener(|this,_,_,cx|{this.advanced=!this.advanced;cx.notify();}))))
             .when(self.advanced,|view| view.child(r::frame("Relay access","Configure an outbound relay for connections across networks.",None)
                 .child(s::card()
-                    .child(widgets::card_row(&theme,true).child(details(&theme,"Relay",if relay_running {self.relay_status["origin"].as_str().unwrap_or("Running")}else{"Stopped"}))
+                    .child(widgets::card_row(&theme,true).child(details(&theme,&tr(cx, msg::native::relay),if relay_running {self.relay_status["origin"].as_str().unwrap_or("Running")}else{"Stopped"}))
                         .child(r::button("native-relay-access",if relay_running {"Stop relay"}else{"Start relay"})
                             .on_click(cx.listener(move|this,_,_,cx|if relay_running {this.request(methods::STOP_RELAY_ACCESS,json!({}),cx)}else{this.start_relay(cx)}))))
-                    .child(widgets::card_row(&theme,false).child(details(&theme,"Start when Zuse opens","Start relay once to save its configuration."))
-                        .child(widgets::toggle_switch(&theme,self.relay_status["autoStart"]==true,"native-relay-auto-start").id("native-relay-auto-start").role(Role::Switch).aria_label("Start relay when Zuse opens").aria_toggled(if self.relay_status["autoStart"]==true {gpui::Toggled::True}else{gpui::Toggled::False}).tab_index(0)
+                    .child(widgets::card_row(&theme,false).child(details(&theme,&tr(cx, msg::native::start_when_zuse_opens),&tr(cx, msg::native::start_relay_once_to_save_its_configuration)))
+                        .child(widgets::toggle_switch(&theme,self.relay_status["autoStart"]==true,"native-relay-auto-start").id("native-relay-auto-start").role(Role::Switch).aria_label(tr(cx, msg::native::start_relay_when_zuse_opens)).aria_toggled(if self.relay_status["autoStart"]==true {gpui::Toggled::True}else{gpui::Toggled::False}).tab_index(0)
                             .on_click(cx.listener(|this,_,_,cx|this.request(methods::SET_RELAY_AUTO_START,json!({"enabled":this.relay_status["autoStart"]!=true}),cx)))))
-                    .when(!relay_running,|v|v.child(widgets::card_row(&theme,false).child(details(&theme,"Relay URL","Leave both fields blank to resume the saved relay.")).child(field(&theme,self.relay_origin.clone())))
-                        .child(widgets::card_row(&theme,false).child(details(&theme,"Host credential","Private token file on this computer.")).child(field(&theme,self.relay_credential.clone()))))
+                    .when(!relay_running,|v|v.child(widgets::card_row(&theme,false).child(details(&theme,&tr(cx, msg::native::relay_url),&tr(cx, msg::native::leave_both_fields_blank_to_resume_the_saved_relay))).child(field(&theme,self.relay_origin.clone())))
+                        .child(widgets::card_row(&theme,false).child(details(&theme,&tr(cx, msg::native::host_credential),&tr(cx, msg::native::private_token_file_on_this_computer))).child(field(&theme,self.relay_credential.clone()))))
                     .when_some(self.relay_status["error"].as_str(),|v,error|v.child(widgets::error_strip(&theme,error.to_owned()))))))
             .when(self.dialog.is_none(),|v|v.when_some(self.error.clone(),|v,error|v.child(widgets::error_strip(&theme,error))))
             .into_any_element());
@@ -429,20 +446,20 @@ impl PairingCard {
                 }
                 Dialog::Invitation => {
                     body=body.child(r::details("Device name","A name you recognize in Connected devices.")).child(field(&theme,self.name.clone()))
-                        .child(r::button("native-generate-invitation",if busy {"Creating…"}else{"Create link"})
+                        .child(r::button("native-generate-invitation",if busy {crate::localization::text("projects-github_creating", cx)}else{crate::localization::text("settings-connect_link_card_create_link", cx)})
                             .on_click(cx.listener(|this,_,_,cx|this.create(cx))));
                     if let Some(target)=self.invitation.clone() {
                         let copy=target.clone();
                         body=body.child(r::details("Private connection link","Share this link only with the device you want to connect."))
-                            .child(div().flex().gap(px(8.)).child(r::button("native-copy-invitation","Copy link").on_click(move|_,_,cx|if let Ok(link)=copy.export_link(){cx.write_to_clipboard(ClipboardItem::new_string(link));}))
-                                .child(r::button("native-open-invitation","Open link").on_click(move|_,_,cx|if let Ok(link)=target.export_link(){cx.open_url(&link);} )));
+                            .child(div().flex().gap(px(8.)).child(r::button("native-copy-invitation",crate::localization::text("settings-connect_link_card_copy_link", cx)).on_click(move|_,_,cx|if let Ok(link)=copy.export_link(){cx.write_to_clipboard(ClipboardItem::new_string(link));}))
+                                .child(r::button("native-open-invitation",crate::localization::text("chat-markdown_body_open_link", cx)).on_click(move|_,_,cx|if let Ok(link)=target.export_link(){cx.open_url(&link);} )));
                     }
                 }
                 Dialog::Computer => { body=body.child(field(&theme,self.destination.clone())); }
                 _ => {}
             }
             body=body.when_some(self.error.clone(),|v,error|v.child(widgets::error_strip(&theme,error)));
-            let mut footer=r::dialog_footer().child(r::button("close-remote-dialog",if matches!(dialog,Dialog::Invitation){"Done"}else{"Cancel"})
+            let mut footer=r::dialog_footer().child(r::button("close-remote-dialog",if matches!(dialog,Dialog::Invitation){crate::localization::text("settings-cloud_api_keys_done", cx)}else{crate::localization::text("settings-organizations_cancel", cx)})
                 .track_focus(&self.dialog_focus).on_click(cx.listener(|this,_,window,cx|this.close_dialog(window,cx))));
             if !matches!(dialog,Dialog::Invitation) {
                 let caption=if busy {"Updating…"}else{match dialog {Dialog::Network if running=>"Turn off",Dialog::Network=>"Turn on",Dialog::Computer=>"Connect",_=>"Revoke access"}};

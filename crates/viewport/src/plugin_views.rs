@@ -1,10 +1,12 @@
 //! Installed plugin settings and the separate discovery page.
 use super::*;
+use crate::localization::message as tr;
 use crate::{
     assets::icon,
     plugin_catalog as catalog, settings_style as s,
     shell::{BG, BORDER, MUTED, TEXT, column, control, icon_button, row},
 };
+use zuse_i18n::messages as msg;
 use zuse_protocol::plugins::PluginDefinition;
 
 impl WorkspaceView {
@@ -166,8 +168,11 @@ impl WorkspaceView {
                             .unwrap_or_default()
                     )))
                     .child(
-                        s::button("authorize-account", "Continue in browser")
-                            .on_click(move |_, _, cx| cx.open_url(&url)),
+                        s::button(
+                            "authorize-account",
+                            tr(cx, msg::native::continue_in_browser),
+                        )
+                        .on_click(move |_, _, cx| cx.open_url(&url)),
                     ),
             );
         }
@@ -203,7 +208,7 @@ impl WorkspaceView {
         column()
             .relative()
             .child(
-                s::button("plugins-add", "Add")
+                s::button("plugins-add", tr(cx, msg::chat::chat_composer_add_menu))
                     .child(icon("alt-arrow-down").size(px(12.)))
                     .aria_expanded(self.plugins_add_menu)
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -235,28 +240,36 @@ impl WorkspaceView {
                                 cx.notify();
                             }))
                             .child(
-                                control("plugins-add-browse", "Browse plugins")
-                                    .h(px(28.))
-                                    .justify_start()
-                                    .w_full()
-                                    .on_click(
-                                        cx.listener(|this, _, _, cx| this.open_plugins_browse(cx)),
-                                    ),
+                                control(
+                                    "plugins-add-browse",
+                                    tr(cx, msg::plugins::plugins_settings_browse),
+                                )
+                                .h(px(28.))
+                                .justify_start()
+                                .w_full()
+                                .on_click(
+                                    cx.listener(|this, _, _, cx| this.open_plugins_browse(cx)),
+                                ),
                             )
                             .when(self.cloud_account["user"].is_object(), |view| {
                                 view.child(
-                                    control("add-plugin-server", "Add MCP server")
-                                        .h(px(28.))
-                                        .justify_start()
-                                        .w_full()
-                                        .on_click(cx.listener(|this, _, window, cx| {
+                                    control(
+                                        "add-plugin-server",
+                                        tr(cx, msg::plugins::plugins_add_server),
+                                    )
+                                    .h(px(28.))
+                                    .justify_start()
+                                    .w_full()
+                                    .on_click(cx.listener(
+                                        |this, _, window, cx| {
                                             this.plugins_add_menu = false;
                                             this.open_plugin_setup(
                                                 crate::plugin_setup::SetupTarget::Server,
                                                 window,
                                                 cx,
                                             );
-                                        })),
+                                        },
+                                    )),
                                 )
                             }),
                     )
@@ -354,16 +367,26 @@ impl WorkspaceView {
                         view.child(
                             row()
                                 .gap_2()
-                                .child(s::button("plugins-browse", "Browse plugins").on_click(
-                                    cx.listener(|this, _, _, cx| this.open_plugins_browse(cx)),
-                                ))
+                                .child(
+                                    s::button(
+                                        "plugins-browse",
+                                        tr(cx, msg::plugins::plugins_settings_browse),
+                                    )
+                                    .on_click(
+                                        cx.listener(|this, _, _, cx| this.open_plugins_browse(cx)),
+                                    ),
+                                )
                                 .when(!signed_in, |view| {
-                                    view.child(s::button("plugins-sign-in", "Sign in").on_click(
-                                        cx.listener(|this, _, _, cx| {
-                                            this.call(methods::CLOUD_ACCOUNT_SIGN_IN, json!({}));
-                                            cx.notify();
-                                        }),
-                                    ))
+                                    view.child(
+                                        s::button("plugins-sign-in", tr(cx, msg::common::signIn))
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.call(
+                                                    methods::CLOUD_ACCOUNT_SIGN_IN,
+                                                    json!({}),
+                                                );
+                                                cx.notify();
+                                            })),
+                                    )
                                 }),
                         )
                     }),
@@ -397,10 +420,14 @@ impl WorkspaceView {
                     .child(column().flex_1().min_w_0().gap(px(2.)).child(s::title_text(name).text_size(px(13.)).truncate()).child(s::description_text(description).text_size(px(12.)).truncate()))
                     .child(icon_button(("disconnect-plugin",index),"link-broken","Disconnect plugin")
                         .when(!can_manage,|view|view.opacity(0.5)).on_click(cx.listener(move|this,_,_,cx|if can_manage{this.plugin_action(json!({"action":"disconnect","tenantId":this.plugin_state.snapshot["tenantId"],"connectionId":remove}));cx.notify();})))
-                    .child(s::toggle(("toggle-plugin",index),enabled,"Enable plugin").tab_index(0)
+                    .child(s::toggle(("toggle-plugin",index),enabled,tr(cx, msg::native::enable_plugin)).tab_index(0)
                         .when(!can_manage,|view|view.opacity(0.5)).on_click(cx.listener(move|this,_,_,cx|if can_manage{this.plugin_action(json!({"action":"setEnabled","tenantId":this.plugin_state.snapshot["tenantId"],"connectionId":id,"enabled":!enabled}));cx.notify();}))));
             }
-            view = view.child(s::frame().child(s::header("Connected", "")).child(card));
+            view = view.child(
+                s::frame()
+                    .child(s::header(tr(cx, msg::plugins::plugins_connected), ""))
+                    .child(card),
+            );
         }
         view.into_any_element()
     }
@@ -460,9 +487,9 @@ impl WorkspaceView {
                             (SharedString::from(format!("{key}-connect")), index),
                             if connected { "check" } else { "plus" },
                             if connected {
-                                "Connected"
+                                crate::localization::text("plugins-plugins_connected", cx)
                             } else {
-                                "Connect plugin"
+                                ("Connect plugin").to_string()
                             },
                         )
                         .when(
@@ -558,16 +585,114 @@ impl WorkspaceView {
                 Self::plugin_detail_action,
             ));
         } else {
-            content=content.child(column().items_start().gap_4()
-                .child(column().min_w_0().gap_1().child(div().text_size(px(20.)).line_height(px(28.)).font_weight(FontWeight::MEDIUM).child("Plugins")).child(s::description_text("Connect your tools so agents can work across them in any chat.").text_size(px(12.))))
-                .child(row().gap(px(6.)).child(row().w(px(224.)).h(px(28.)).px(px(10.)).gap_2().rounded(px(7.)).bg(s::frame_bg().opacity(0.55)).child(icon("magnifer").size(px(14.)).text_color(rgb(MUTED))).child(self.plugin_search.clone()))
-                    .when(self.cloud_account["user"].is_object(),|view|view.child(s::button("browse-add-server","Add MCP server").on_click(cx.listener(|this,_,window,cx|this.open_plugin_setup(crate::plugin_setup::SetupTarget::Server,window,cx)))))
-                    .child(icon_button("refresh-plugins","refresh","Refresh plugins").on_click(cx.listener(|this,_,_,cx|{this.plugin_action(this.plugin_state.refresh());cx.notify();})))))
-                .child(row().h(px(28.)).p(px(2.)).rounded(px(7.)).bg(s::frame_bg().opacity(0.55)).self_start()
-                    .children([(false,"Browse"),(true,"Connected")].map(|(connected,title)|control(if connected{"plugin-tab-connected"}else{"plugin-tab-browse"},title).h(px(24.)).rounded(px(5.))
-                        .when(connected && connected_count > 0, |view|view.gap(px(6.)).child(div().text_color(rgb(MUTED)).child(connected_count.to_string())))
-                        .when(self.plugin_connected_only==connected,|view|view.bg(rgb(BG)))
-                        .on_click(cx.listener(move|this,_,_,cx|{this.plugin_connected_only=connected;this.plugin_catalog_page=0;cx.notify();})))));
+            content = content
+                .child(
+                    column()
+                        .items_start()
+                        .gap_4()
+                        .child(
+                            column()
+                                .min_w_0()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .text_size(px(20.))
+                                        .line_height(px(28.))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .child(tr(cx, msg::plugins::plugins_back)),
+                                )
+                                .child(
+                                    s::description_text(tr(cx, msg::plugins::plugins_subtitle))
+                                        .text_size(px(12.)),
+                                ),
+                        )
+                        .child(
+                            row()
+                                .gap(px(6.))
+                                .child(
+                                    row()
+                                        .w(px(224.))
+                                        .h(px(28.))
+                                        .px(px(10.))
+                                        .gap_2()
+                                        .rounded(px(7.))
+                                        .bg(s::frame_bg().opacity(0.55))
+                                        .child(
+                                            icon("magnifer").size(px(14.)).text_color(rgb(MUTED)),
+                                        )
+                                        .child(self.plugin_search.clone()),
+                                )
+                                .when(self.cloud_account["user"].is_object(), |view| {
+                                    view.child(
+                                        s::button(
+                                            "browse-add-server",
+                                            tr(cx, msg::plugins::plugins_add_server),
+                                        )
+                                        .on_click(
+                                            cx.listener(|this, _, window, cx| {
+                                                this.open_plugin_setup(
+                                                    crate::plugin_setup::SetupTarget::Server,
+                                                    window,
+                                                    cx,
+                                                )
+                                            }),
+                                        ),
+                                    )
+                                })
+                                .child(
+                                    icon_button(
+                                        "refresh-plugins",
+                                        "refresh",
+                                        crate::localization::text("plugins-plugins_refresh", cx),
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _, _, cx| {
+                                            this.plugin_action(this.plugin_state.refresh());
+                                            cx.notify();
+                                        },
+                                    )),
+                                ),
+                        ),
+                )
+                .child(
+                    row()
+                        .h(px(28.))
+                        .p(px(2.))
+                        .rounded(px(7.))
+                        .bg(s::frame_bg().opacity(0.55))
+                        .self_start()
+                        .children([(false, "Browse"), (true, "Connected")].map(
+                            |(connected, title)| {
+                                control(
+                                    if connected {
+                                        "plugin-tab-connected"
+                                    } else {
+                                        "plugin-tab-browse"
+                                    },
+                                    title,
+                                )
+                                .h(px(24.))
+                                .rounded(px(5.))
+                                .when(connected && connected_count > 0, |view| {
+                                    view.gap(px(6.)).child(
+                                        div()
+                                            .text_color(rgb(MUTED))
+                                            .child(connected_count.to_string()),
+                                    )
+                                })
+                                .when(self.plugin_connected_only == connected, |view| {
+                                    view.bg(rgb(BG))
+                                })
+                                .on_click(cx.listener(
+                                    move |this, _, _, cx| {
+                                        this.plugin_connected_only = connected;
+                                        this.plugin_catalog_page = 0;
+                                        cx.notify();
+                                    },
+                                ))
+                            },
+                        )),
+                );
             content = content.children(status);
             if !self.cloud_account["user"].is_object() {
                 let busy = self.cloud_account.is_null()
@@ -596,9 +721,9 @@ impl WorkspaceView {
             } else if !self.plugin_state.snapshot["catalog"].is_array() {
                 content = content.child(div().py(px(32.)).text_color(rgb(MUTED)).child(
                     if self.plugin_request.is_some() {
-                        "Loading plugins…"
+                        crate::localization::text("plugins-plugins_loading", cx)
                     } else {
-                        "Plugins are unavailable. Refresh to try again."
+                        ("Plugins are unavailable. Refresh to try again.").to_string()
                     },
                 ));
             } else if listing.sections.is_empty() {
@@ -624,7 +749,7 @@ impl WorkspaceView {
                 }
                 if listing.more {
                     content = content.child(
-                        s::button("plugins-show-more", "Show more")
+                        s::button("plugins-show-more", tr(cx, msg::plugins::plugins_show_more))
                             .self_start()
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.plugin_catalog_page += 1;
@@ -639,16 +764,16 @@ impl WorkspaceView {
             .min_h_0()
             .child(
                 row().h(px(36.)).flex_none().px_3().child(
-                    control("plugins-back-to-settings", "Back to settings")
-                        .child(icon("alt-arrow-left").size(px(14.)))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.close_plugins_browse();
-                            this.settings = true;
-                            this.select_settings_section(
-                                crate::settings_view::Section::Plugins,
-                                cx,
-                            );
-                        })),
+                    control(
+                        "plugins-back-to-settings",
+                        tr(cx, msg::native::back_to_settings),
+                    )
+                    .child(icon("alt-arrow-left").size(px(14.)))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.close_plugins_browse();
+                        this.settings = true;
+                        this.select_settings_section(crate::settings_view::Section::Plugins, cx);
+                    })),
                 ),
             )
             .child(

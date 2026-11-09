@@ -1,0 +1,330 @@
+# Imported from Zuse desktop catalogs. See migration.json for provenance.
+# Edit individual translations here; do not regenerate this file.
+
+providers-add_computer_dialog_your_computers = 您的電腦
+
+providers-add_computer_dialog_connect_a_computer = 連線電腦
+
+providers-add_computer_dialog_rename_reconnect_or_remove_computers_saved_on_this_device = 重新命名、重新連線或移除儲存在此裝置上的電腦。
+
+providers-add_computer_dialog_review_this_link_then_press_connect_to_pair_with_the_other_computer = 檢視此連結，然後按「連線」與另一臺電腦配對。
+
+providers-add_computer_dialog_use_a_connect_link_or_your_existing_ssh_setup = 使用連線連結或現有的 SSH 設定。
+
+providers-add_computer_dialog_add_computer = 新增電腦
+
+providers-add_computer_dialog_manage = 管理
+
+providers-add_computer_dialog_saved_computers = 已儲存的電腦
+
+providers-add_computer_dialog_on_your_account = 來自您的帳戶
+
+providers-add_computer_dialog_hide = 隱藏
+
+providers-add_computer_dialog_removing_a_computer_only_forgets_it_here_its_projects_and_data_remain = 移除電腦只是在這裡不再顯示它，其專案和資料不受影響。
+
+providers-add_computer_dialog_on_the_other_computer_open_settings_remote_access_connect_a_device_the = 在另一臺電腦上，開啟設定 → 遠端存取 → 連線裝置，然後複製連結。任何 Zuse 連線連結都可以在此處使用。
+
+providers-add_computer_dialog_connect_link = 連線連結
+
+providers-add_computer_dialog_zuse_connect_pair = zuse:///connect/pair?...
+
+providers-add_computer_dialog_linux_computer = Linux 電腦
+
+providers-add_computer_dialog_sign_in_to_see_the_computers_on_your_zuse_account = 登入以檢視您 Zuse 帳戶中的電腦。
+
+providers-add_computer_dialog_computers_signed_in_to_your_zuse_account_appear_here_automatically = 登入到您 Zuse 帳戶的電腦會自動顯示在這裡。
+
+providers-add_computer_dialog_suggestions = 建議
+
+providers-add_computer_dialog_tailnet = Tailnet
+
+providers-add_computer_dialog_ssh_config = SSH 配置
+
+providers-add_computer_dialog_host = 主機
+
+providers-add_computer_dialog_server_example_com = server.example.com
+
+providers-add_computer_dialog_build_computer = 建置用電腦
+
+providers-model_picker_change_model = 切換模型
+
+providers-model_picker_change_default_model_for_new_chats = 更改新聊天的預設模型
+
+providers-model_picker_change_model_applies_to_next_message = 切換模型 — 對下一條訊息生效
+
+providers-model_picker_model_provider = 模型提供商
+
+providers-model_picker_all_models = 所有模型
+
+providers-model_picker_checking_available_agents = 正在檢查可用的代理程式…
+
+providers-model_picker_no_models_match = 沒有匹配的模型。
+
+providers-model_picker_no_authenticated_agents = 沒有已登入的代理程式。
+
+providers-model_picker_models = 模型
+
+providers-model_picker_all = 全部
+
+providers-model_picker_live_from_local_daemon = 來自本機守護處理程序的即時資料
+
+providers-model_picker_current = 目前
+
+providers-model_picker_open_in_new_tab = 在新索引標籤中開啟
+
+providers-model_picker_default_model = 預設模型
+
+providers-model_picker_make_default_model = 設為預設模型
+
+providers-model_picker_make_default = 設為預設
+
+providers-model_picker_selected = 已選擇
+
+providers-opencode_provider_manager_providers = 提供商
+
+providers-opencode_provider_manager_refresh_providers = 重新整理提供商
+
+providers-opencode_provider_manager_loading_providers = 正在載入提供商…
+
+providers-opencode_provider_manager_add_your_first_provider = 新增您的第一個提供商
+
+providers-opencode_provider_manager_add_provider = 新增提供商
+
+providers-opencode_provider_manager_custom_endpoint = 自訂端點
+
+providers-opencode_provider_manager_custom = 自訂 ·{ " " }
+
+providers-opencode_provider_manager_model = { " " }模型
+
+providers-opencode_provider_manager_remove_credential = 刪除憑證
+
+providers-opencode_provider_manager_search_providers = 搜尋提供商
+
+providers-opencode_provider_manager_connected = 已連線
+
+providers-opencode_provider_manager_get_an_api_key = 獲取 API 金鑰
+
+providers-opencode_provider_manager_api_key = API 金鑰
+
+providers-opencode_provider_manager_hide_key = 隱藏金鑰
+
+providers-opencode_provider_manager_reveal_key = 顯示金鑰
+
+providers-opencode_provider_manager_bring_any_endpoint_that_speaks_a_known_api_shape_vllm_lm_studio_groq_l = 接入任何符合已知 API 格式的端點——vLLM、LM Studio、Groq、LiteLLM、閘道或代理伺服器。
+
+providers-opencode_provider_manager_name = 名稱
+
+providers-opencode_provider_manager_my_gateway = 我的閘道器
+
+providers-opencode_provider_manager_type = 型別
+
+providers-opencode_provider_manager_base_url = Base URL
+
+providers-opencode_provider_manager_sk = sk-…
+
+providers-opencode_provider_manager_models = 模型
+
+providers-opencode_provider_manager_model_id = 模型 ID
+
+providers-opencode_provider_manager_display_name_optional = 顯示名稱（可選）
+
+providers-opencode_provider_manager_remove_model = 刪除模型
+
+providers-opencode_provider_manager_add_model = 新增模型
+
+providers-opencode_provider_manager_add_endpoint = 新增端點
+
+providers-opencode_provider_manager_saving = 正在儲存…
+
+providers-opencode_provider_manager_configure = 配置
+
+providers-opencode_provider_manager_filter_models = 篩選模型
+
+providers-opencode_provider_manager_advanced = 高階
+
+providers-opencode_provider_manager_show_in_picker = 在選擇器中顯示
+
+providers-provider_card_update_cli = 更新 CLI
+
+providers-provider_card_install = 安裝
+
+providers-provider_card_sandboxed_with_auto_review = 沙箱執行，自動檢閱
+
+providers-provider_card_local_edits_and_commands_run_through_the_bundled_sdk_sandbox_calls_rej = 本機編輯和命令透過內建 SDK 沙箱執行。被自動檢閱拒絕的呼叫會直接攔截，不再彈出提示。
+
+providers-provider_card_api_key_optional = API 金鑰（可選）
+
+providers-provider_card_at_least_one_model_must_stay_visible = 至少保留一個可見模型
+
+providers-provider_card_custom = 自訂
+
+providers-provider_card_enter_a_model_id = 輸入模型 ID
+
+providers-provider_card_subscribe = 訂閱
+
+providers-provider_card_signed_in_refreshing = 已登入。正在重新整理…
+
+providers-provider_card_waiting_for_browser_sign_in = 正在等待瀏覽器登入…
+
+providers-provider_card_open_browser_again = 再次開啟瀏覽器
+
+providers-provider_card_try_again = 再試一次
+
+providers-provider_card_or_run_manually = 或手動執行
+
+providers-add_computer_dialog_connected_to = 連線到{ " " }{ $connectedLabel }
+
+providers-opencode_provider_manager_remove = 刪除{ " " }{ $name }
+
+providers-opencode_provider_manager_openai_compatible = OpenAI 相容
+
+providers-opencode_provider_manager_openrouter_compatible = OpenRouter 相容
+
+providers-opencode_provider_manager_anthropic_compatible = Anthropic 相容
+
+providers-opencode_provider_manager_google_compatible = Google 相容
+
+providers-opencode_provider_manager_other_npm_package = 其他 npm 包…
+
+providers-provider_card_requires_a_subscription = { $value1 }{ " " }需要{ " " }{ $plan }{ " " }訂閱
+
+providers-provider_card_enable = 啟用{ " " }{ $value1 }
+
+providers-provider_card_requires_subscription = 需要{ " " }{ $plan }{ " " }訂閱
+
+providers-provider_card_custom_model_id = 自訂{ " " }{ $value1 }{ " " }模型 ID
+
+providers-provider_card_starting_sign_in = 正在發起{ " " }{ $label }{ " " }登入…
+
+providers-add_computer_dialog_show_hidden_computers_sentence = 顯示已隱藏的電腦（{ $value }）
+
+providers-add_computer_dialog_computer_name_optional_sentence = 電腦名稱 <part0>可選</part0>
+
+providers-add_computer_dialog_username_optional_sentence = 使用者名稱 <part0>可選</part0>
+
+providers-add_computer_dialog_port_optional_sentence = 埠 <part0>可選</part0>
+
+providers-add_computer_dialog_label_optional_sentence = 標籤 <part0>可選</part0>
+
+providers-add_computer_dialog_zuse_will_forget_this_computer_on_this_device_projects_and_d_sentence = Zuse 會在這臺裝置上移除此電腦的記錄。{ $value }{ " " }上的專案和資料不會被刪除。
+
+providers-opencode_provider_manager_configured_sentence = 已配置{ " " }{ $value }{ " " }個
+
+providers-opencode_provider_manager_no_providers_match_sentence = 沒有與「{ $query }」匹配的提供商。
+
+providers-opencode_provider_manager_view_all_providers_sentence = 檢視全部{ " " }{ $value }{ " " }個提供商
+
+providers-opencode_provider_manager_id_sentence = ID：<part0>{ $value }</part0>
+
+providers-opencode_provider_manager_models_of_shown_sentence = <part0>模型</part0><part1>已顯示{ " " }{ $total }{ " " }箇中的{ " " }{ $selected }{ " " }個</part1>
+
+providers-opencode_provider_manager_no_models_match_sentence = 沒有與「{ $query }」匹配的模型。
+
+providers-provider_card_models_shown_sentence = <part0>模型</part0><part1>已顯示{ " " }{ $value }{ " " }個</part1>
+
+providers-provider_card_custom_ids_are_passed_directly_to_sentence = 自訂 ID 直接傳遞到{ " " }{ $value }。
+
+providers-provider_card_requires_subscription_sentence = 需要{ " " }{ $value }{ " " }訂閱
+
+providers-provider_card_sessions_will_fail_if_your_plan_doesn_apos_t_include_subscri_sentence = 如果您的方案不包含{ " " }{ $value }，工作階段將會失敗。請先訂閱（或確認現有方案）再使用{ " " }{ $value2 }。
+
+providers-provider_card_sign_in_to_sentence = 登入{ " " }{ $label }
+
+providers-provider_card_or_run_sentence = 或執行 <part0>${ " " }{ $manualCommand }</part0>
+
+providers-add_computer_dialog_label_for = { $value1 }{ " " }的標籤
+
+providers-add_computer_dialog_edit_label_for = 編輯{ " " }{ $value1 }{ " " }的標籤
+
+providers-add_computer_dialog_retry = 重試{ " " }{ $value1 }
+
+providers-add_computer_dialog_disconnect = 斷開{ " " }{ $value1 }
+
+providers-add_computer_dialog_remove = 刪除{ " " }{ $value1 }
+
+providers-add_computer_dialog_could_not_load_account_computers = 無法載入帳戶電腦：{ $accountDiscoveryError }
+
+providers-model_picker_match = { $value1 }{ " " }匹配{ $value2 }
+
+providers-model_picker_model = { $value1 }{ " " }模型{ $value2 }
+
+providers-model_picker_context_window = { $value1 }{ " " }上下文視窗
+
+providers-model_picker_credit_multiplier = { $value1 }{ " " }點數倍率
+
+providers-provider_card_remove_custom_model = 移除自訂模型{ " " }{ $modelId }
+
+providers-muse_sign_in_hint = Muse Code 管理登入。在終端機中執行 <part0>muse login</part0>，或使用 <part1>muse auth set</part1> 儲存 Meta API 金鑰。Zuse 不會傳遞 META_API_KEY。
+
+providers-pi_setup_hint = Pi 管理身分驗證和工具權限。在終端機中執行 <part0>pi</part0>，然後使用 <part1>/login</part1> 登入。
+
+providers-pi_binary_path = Pi 可執行檔案路徑
+
+providers-pi_binary_placeholder = 在 PATH 中查詢 pi
+
+providers-pi_binary_help = 輸入可執行檔案的絕對路徑，或留空以搜尋 PATH。
+
+providers-provider_row_configure = 配置{ " " }{ $label }
+
+providers-updating = 正在更新…
+
+providers-updated = 已更新
+
+providers-update_failed = 失敗
+
+providers-cancel_update = 取消更新
+
+providers-update_to_version = 將{ " " }{ $name }{ " " }更新至 v{ $version }
+
+providers-update_to_latest = 將{ " " }{ $name }{ " " }更新至最新版本
+
+providers-sign_in_failed = 登入失敗。
+
+providers-sign_in_incomplete = 登入在完成前結束了。
+
+providers-update_incomplete = 更新在完成前結束了。
+
+providers-remove_computer_account_description = 從您的帳戶移除{ " " }{ $value }，釋放一個電腦名額。透過 Zuse 的遠端存取將停止。電腦上的專案和資料會保留。
+
+providers-accounts_title = 帳戶
+
+providers-accounts_name = 帳戶名稱
+
+providers-accounts_hint = 新聊天使用預設帳戶開始。聊天達到限額時，您可以在輸入框中將其切換到其他帳戶。
+
+providers-accounts_default = 預設登入
+
+providers-accounts_waiting = 請在瀏覽器中完成登入。
+
+providers-accounts_open_browser = 開啟瀏覽器
+
+providers-accounts_signed_in = 已登入
+
+providers-accounts_remove_description = 將此帳戶從設定中移除。使用此帳戶的聊天將無法繼續。登入檔案和對話記錄會保留。
+
+providers-model_picker_switch_pending = 目前工作完成後切換
+
+providers-accounts_default_detail = CLI 登入或 API 金鑰
+
+providers-accounts_suggested_name = 帳戶{ " " }{ $index }
+
+providers-accounts_actions = { $name }{ " " }操作
+
+providers-accounts_sign_in_again = 重新登入
+
+providers-accounts_rename = 重新命名
+
+providers-accounts_connect = 連線其他帳戶
+
+providers-accounts_use_for_new_chats = 用於新聊天
+
+providers-accounts_default_badge = 預設
+
+providers-accounts_add = 新增帳戶
+
+providers-accounts_use = 用於新聊天
+
+providers-accounts_selected = 已選擇
+
+providers-model_picker_unavailable_selection = { $model }（不可用）

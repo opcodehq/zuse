@@ -1,0 +1,4 @@
+// Resource ID 1 is the icon the window toolkit loads for every Zuse window.
+// The toolkit embeds the application manifest (DPI awareness, Windows 10+,
+// common controls) itself.
+1 ICON "zuse.ico"

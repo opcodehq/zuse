@@ -261,6 +261,7 @@ fn chat(id: &str, device_id: &str) -> Chat {
         checkout_id: None,
         source_context: None,
         config: Some(ChatConfig {
+            plan: false,
             harness: HarnessId::Mock,
             model: Some("mock-1".into()),
             reasoning: None,
@@ -299,6 +300,7 @@ fn session(chat_id: &str, device_id: &str, status: SessionStatus) -> Session {
     Session {
         last_completed_turn: None,
         running_subagents: 0,
+        awaiting_input: None,
         background_tasks: Vec::new(),
         chat_id: chat_id.into(),
         device_id: device_id.into(),
@@ -2240,7 +2242,7 @@ fn config_compare_set_rejects_permission_and_owner_changes() {
     let expected = row.config.clone();
     let mut desired = expected.clone().unwrap();
     desired.model = Some("model-2".into());
-    row.config.as_mut().unwrap().sandbox = SandboxLevel::ReadOnly;
+    row.config.as_mut().unwrap().sandbox = SandboxLevel::DangerFullAccess;
     doc.set_chat_config("chat-1", row.config.as_ref().unwrap())
         .unwrap();
     assert!(
@@ -2252,7 +2254,7 @@ fn config_compare_set_rejects_permission_and_owner_changes() {
         !doc.compare_set_chat_config("chat-1", "dev-b", &row.config, &desired)
             .unwrap()
     );
-    desired.sandbox = SandboxLevel::ReadOnly;
+    desired.sandbox = SandboxLevel::DangerFullAccess;
     assert!(
         doc.compare_set_chat_config("chat-1", "dev-a", &row.config, &desired)
             .unwrap()

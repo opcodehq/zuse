@@ -1,4 +1,5 @@
 //! User review of interrupted native tools, bound to the selected conversation.
+use crate::localization::message as tr;
 use crate::{
     composer::ComposerInput,
     settings::widgets,
@@ -7,6 +8,7 @@ use crate::{
 };
 use gpui::{prelude::*, *};
 use serde_json::json;
+use zuse_i18n::messages as msg;
 use zuse_protocol::{
     methods,
     recovery::{RecoveryAction, RecoverySnapshot, ResolveRecovery},
@@ -155,40 +157,67 @@ impl Render for RecoveryCard {
                 .role(Role::Button)
                 .child(text)
         };
-        let mut view = div()
+        // The entry point reads as one of the session card's rows: icon slot,
+        // label, and the card's hover wash.
+        let wash = theme.ink(0.06);
+        let entry = div()
+            .id("inspect-native-recovery")
+            .tab_index(0)
+            .role(Role::Button)
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .min_h(px(28.))
+            .px(px(10.))
+            .rounded(px(6.))
+            .cursor_pointer()
+            .hover(move |style| style.bg(wash))
+            .text_size(crate::typography::text_xs())
+            .text_color(theme.text_muted)
+            .child(
+                crate::icons::icon(crate::icons::RESTART)
+                    .size(px(16.))
+                    .flex_none()
+                    .text_color(theme.text_muted),
+            )
+            .child(div().flex_1().min_w_0().truncate().child(if self.busy {
+                "Loading recovery…"
+            } else {
+                "Review interrupted tools"
+            }))
+            .on_click(cx.listener(|this, _, _, cx| this.request(None, cx)));
+        let view = div()
             .flex()
             .flex_col()
             .gap(px(8.))
             .text_color(theme.text)
             .text_size(px(12.))
-            .child(
-                button(
-                    "inspect-native-recovery".into(),
-                    if self.busy {
-                        "Loading recovery…"
-                    } else {
-                        "Review interrupted tools"
-                    },
-                )
-                .on_click(cx.listener(|this, _, _, cx| this.request(None, cx))),
-            );
+            .child(entry);
         if !self.open {
             return view;
         }
-        view = view.child(div().text_color(theme.text_muted).child("Inspect the tool and its effects before authorizing a retry. Saving a review does not run anything."));
+        // The review itself lines up with the rows' labels.
+        let mut details = div()
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .pl(px(34.))
+            .pr(px(10.))
+            .pb(px(4.));
+        details = details.child(div().text_color(theme.text_muted).child(tr(cx, msg::native::inspect_the_tool_and_its_effects_before_authorizing_a_retry_saving_a_review_does_e9dcec1f)));
         if let Some(error) = &self.error {
-            view = view.child(
+            details = details.child(
                 div()
                     .text_color(theme.warning)
                     .child(SharedString::from(error.clone())),
             );
         }
         if let Some(notice) = &self.notice {
-            view = view.child(SharedString::from(notice.clone()));
+            details = details.child(SharedString::from(notice.clone()));
         }
         if let Some(snapshot) = &self.snapshot {
             if snapshot.calls.is_empty() {
-                view = view.child("No uncertain tool outcomes remain.");
+                details = details.child(tr(cx, msg::native::no_uncertain_tool_outcomes_remain));
             }
             let mut calls = div()
                 .id("recovery-calls")
@@ -213,10 +242,10 @@ impl Render for RecoveryCard {
                         })),
                 );
             }
-            view = view.child(calls);
+            details = details.child(calls);
             if let Some(call) = self.selected.and_then(|index| snapshot.calls.get(index)) {
                 let input = serde_json::to_string_pretty(&call.input).unwrap_or_default();
-                view = view
+                details = details
                     .child(SharedString::from(format!(
                         "{} · {}\n{}",
                         call.agent_name, call.tool, call.call_id
@@ -255,6 +284,6 @@ impl Render for RecoveryCard {
                     );
             }
         }
-        view
+        view.child(details)
     }
 }

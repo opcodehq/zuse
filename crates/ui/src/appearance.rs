@@ -19,8 +19,10 @@
 //! per-view prepaint cache for the frame, which is the only thing that forces
 //! already-laid-out elements to re-run their paint with the new palette.
 
+use crate::localization::message as tr;
 use gpui::{App, Global, Subscription, Window};
 use serde::{Deserialize, Serialize};
+use zuse_i18n::messages as msg;
 use zuse_theme::{AccentSelection, SurfacePreference, ThemeSelection};
 
 use crate::settings::{self, SavePolicy};
@@ -46,6 +48,18 @@ impl AppearanceMode {
             Self::Light => "Light",
             Self::Dark => "Dark",
         }
+    }
+
+    pub fn localized_label(self, cx: &App) -> String {
+        use msg::{common, settings};
+        tr(
+            cx,
+            match self {
+                Self::System => common::system,
+                Self::Light => settings::settings_page_light,
+                Self::Dark => settings::settings_page_dark,
+            },
+        )
     }
 
     /// Shared glyph for appearance controls throughout the app.

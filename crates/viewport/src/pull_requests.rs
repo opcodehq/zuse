@@ -1,7 +1,9 @@
 //! Browser PR board/inspection through the owning engine's source-control service.
 use super::*;
+use crate::localization::message as tr;
 use crate::shell::{column, control, label, markdown_block, row};
 use std::{collections::HashSet, sync::Arc};
+use zuse_i18n::messages as msg;
 use zuse_protocol::{
     ChangeRequestDetail, ChangeRequestFilter, ChangeRequestListItem, ChangeRequestPage,
 };
@@ -19,6 +21,10 @@ pub(super) struct PullRequests {
     next: Option<String>,
     total: Option<u64>,
     reads: HashMap<u64, Read>,
+    watch: Option<u64>,
+    watch_seeded: bool,
+    /// The error the live watch last showed, so recovery clears only that.
+    watch_error: Option<String>,
     selected: Option<String>,
     detail: Option<ChangeRequestDetail>,
     patch: Arc<Vec<String>>,
@@ -41,6 +47,9 @@ impl PullRequests {
             next: None,
             total: None,
             reads: HashMap::new(),
+            watch: None,
+            watch_seeded: false,
+            watch_error: None,
             selected: None,
             detail: None,
             patch: Arc::new(vec![]),
@@ -105,6 +114,9 @@ impl WorkspaceView {
         self.pull_requests.notice = None;
     }
     pub(super) fn interrupt_pull_requests(&mut self) {
+        if let Some(id) = self.pull_requests.watch.take() {
+            self.cancel(id);
+        }
         for id in std::mem::take(&mut self.pull_requests.reads).into_keys() {
             self.cancel(id);
         }
@@ -169,6 +181,15 @@ impl WorkspaceView {
         for id in std::mem::take(&mut self.pull_requests.reads).into_keys() {
             self.cancel(id);
         }
+        if let Some(id) = self.pull_requests.watch.take() {
+            self.cancel(id);
+        }
+        let watch = self.call(
+            methods::WATCH_CHANGE_REQUEST,
+            self.pr_params(json!({"url":item.url})),
+        );
+        self.pull_requests.watch = Some(watch);
+        self.pull_requests.watch_seeded = false;
         self.pull_requests.selected = Some(item.url.clone());
         self.pull_requests.detail = None;
         self.pull_requests.patch = Arc::new(vec![]);
@@ -197,6 +218,13 @@ impl WorkspaceView {
         let Some(url) = self.pull_requests.selected.clone() else {
             return;
         };
+        if self.pull_requests.watch.is_none() && self.connected {
+            let id = self.call(
+                methods::WATCH_CHANGE_REQUEST,
+                self.pr_params(json!({"url":url})),
+            );
+            self.pull_requests.watch = Some(id);
+        }
         self.pr_read(
             Read::Detail,
             methods::GET_CHANGE_REQUEST,
@@ -247,6 +275,76 @@ impl WorkspaceView {
         frame: &Value,
         cx: &mut Context<Self>,
     ) -> bool {
+        if self.pull_requests.watch == Some(id) {
+            if let Some(value) = frame.get("item").or_else(|| frame.get("ok")) {
+                if let Ok(status) = serde_json::from_value::<
+                    zuse_protocol::git_workspace::SourceControlFrame,
+                >(value.clone())
+                {
+                    if status.reset {
+                        self.pull_requests.detail = None;
+                        self.pull_requests.patch = Arc::new(vec![]);
+                    }
+                    reconcile_watch_error(
+                        &mut self.pull_requests.error,
+                        &mut self.pull_requests.watch_error,
+                        status.error,
+                    );
+                    if status.refreshing {
+                        cx.notify();
+                        return true;
+                    }
+                    if !self.pull_requests.watch_seeded && status.snapshot.is_some() {
+                        self.pull_requests.watch_seeded = true;
+                        if self.pull_requests.detail.is_some() {
+                            cx.notify();
+                            return true;
+                        }
+                    }
+                    let selected = self.pull_requests.selected.clone();
+                    let mut revisions_changed = false;
+                    if let Some(mut detail) = status
+                        .snapshot
+                        .and_then(|v| serde_json::from_value::<ChangeRequestDetail>(v).ok())
+                        .filter(|detail| Some(&detail.url) == selected.as_ref())
+                    {
+                        if let Some(old) = &self.pull_requests.detail {
+                            if old.head_ref_oid == detail.head_ref_oid
+                                && old.base_ref_oid == detail.base_ref_oid
+                            {
+                                detail.review_threads = old.review_threads.clone();
+                            } else {
+                                revisions_changed = true;
+                                self.pull_requests.patch = Arc::new(vec![]);
+                                let stale: Vec<_> = self
+                                    .pull_requests
+                                    .reads
+                                    .iter()
+                                    .filter(|(_, read)| matches!(read, Read::Diff | Read::Detail))
+                                    .map(|(id, _)| *id)
+                                    .collect();
+                                for stale in stale {
+                                    self.pull_requests.reads.remove(&stale);
+                                    self.cancel(stale);
+                                }
+                            }
+                        }
+                        self.pull_requests.detail = Some(detail);
+                        if revisions_changed && self.pull_requests.tab == "diff" {
+                            self.pr_tab("diff", cx);
+                        }
+                    }
+                }
+            }
+            if frame.get("err").is_some() || frame["done"] == true {
+                self.pull_requests.watch = None;
+                self.pending.remove(&id);
+                self.pull_requests.error =
+                    Some("Live PR updates disconnected. Refresh to reconnect.".into());
+            }
+            cx.notify();
+            return true;
+        }
         let write = self
             .pull_requests
             .posting
@@ -425,9 +523,9 @@ impl WorkspaceView {
                             .gap_2()
                             .child(label(format!("#{}", item.number)))
                             .child(label(if item.is_draft {
-                                "Draft".into()
+                                crate::localization::text("projects-pr_pane_draft", cx).into()
                             } else {
-                                format!("{:?}", item.state)
+                                (format!("{:?}", item.state)).to_string()
                             }))
                             .child(div().flex_1())
                             .child(label(format!("+{} −{}", item.additions, item.deletions))),
@@ -478,11 +576,18 @@ impl WorkspaceView {
                     .h(px(40.))
                     .px_3()
                     .gap_2()
-                    .child(label("Pull requests"))
+                    .child(label(tr(cx, msg::native::pull_requests)))
                     .child(div().flex_1())
                     .child(
-                        control("refresh-prs", if busy { "Loading…" } else { "Refresh" })
-                            .on_click(cx.listener(|this, _, _, cx| this.refresh_pull_requests(cx))),
+                        control(
+                            "refresh-prs",
+                            if busy {
+                                crate::localization::text("common-loading", cx)
+                            } else {
+                                crate::localization::text("common-refresh", cx)
+                            },
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| this.refresh_pull_requests(cx))),
                     ),
             )
             .when_some(self.pull_requests.error.clone(), |d, error| {
@@ -497,12 +602,15 @@ impl WorkspaceView {
                     .px_3()
                     .gap_2()
                     .child(
-                        control("pr-back", "All pull requests").on_click(cx.listener(
-                            |this, _, _, cx| {
+                        control("pr-back", tr(cx, msg::native::all_pull_requests)).on_click(
+                            cx.listener(|this, _, _, cx| {
                                 if this.pull_requests.posting.is_some() {
                                     return;
                                 }
                                 this.save_pr_draft(cx);
+                                if let Some(id) = this.pull_requests.watch.take() {
+                                    this.cancel(id);
+                                }
                                 for id in std::mem::take(&mut this.pull_requests.reads).into_keys()
                                 {
                                     this.cancel(id);
@@ -510,11 +618,11 @@ impl WorkspaceView {
                                 this.pull_requests.selected = None;
                                 this.pull_requests.detail = None;
                                 cx.notify();
-                            },
-                        )),
+                            }),
+                        ),
                     )
                     .child(
-                        control("pr-open-browser", "Open on GitHub")
+                        control("pr-open-browser", tr(cx, msg::native::open_on_github))
                             .on_click(move |_, _, cx| cx.open_url(&url)),
                     ),
             );
@@ -575,7 +683,7 @@ impl WorkspaceView {
                     if self.pull_requests.tab == "checks" {
                         body = body
                             .when(detail.status_check_rollup.is_empty(), |d| {
-                                d.child(label("No checks reported."))
+                                d.child(label(tr(cx, msg::native::no_checks_reported)))
                             })
                             .children(detail.status_check_rollup.iter().map(|check| {
                                 column()
@@ -679,7 +787,7 @@ impl WorkspaceView {
                     ),
                 )
                 .when(!busy && self.pull_requests.items.is_empty(), |d| {
-                    d.child(label("No pull requests in this view.").p_3())
+                    d.child(label(tr(cx, msg::native::no_pull_requests_in_this_view)).p_3())
                 })
                 .child(
                     uniform_list(
@@ -692,22 +800,63 @@ impl WorkspaceView {
                     .track_scroll(&self.pull_requests.scroll),
                 )
                 .when(self.pull_requests.next.is_some(), |d| {
-                    d.child(control("pr-load-more", "Load more").mx_3().mb_3().on_click(
-                        cx.listener(|this, _, _, cx| {
+                    d.child(
+                        control(
+                            "pr-load-more",
+                            tr(cx, msg::settings::diagnostics_pane_load_more),
+                        )
+                        .mx_3()
+                        .mb_3()
+                        .on_click(cx.listener(|this, _, _, cx| {
                             if this.pull_requests.reads.is_empty() {
                                 this.load_pr_page(true);
                             }
                             cx.notify();
-                        }),
-                    ))
+                        })),
+                    )
                 });
         }
         view.into_any_element()
     }
 }
 
+fn reconcile_watch_error(
+    shown: &mut Option<String>,
+    from_watch: &mut Option<String>,
+    frame: Option<String>,
+) {
+    match frame {
+        Some(error) => {
+            *shown = Some(error.clone());
+            *from_watch = Some(error);
+        }
+        None => {
+            if from_watch
+                .take()
+                .is_some_and(|error| shown.as_ref() == Some(&error))
+            {
+                *shown = None;
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_recovered_watch_clears_only_its_own_error() {
+        let (mut shown, mut from_watch) = (None, None);
+        super::reconcile_watch_error(&mut shown, &mut from_watch, Some("offline".into()));
+        assert_eq!(shown.as_deref(), Some("offline"));
+        super::reconcile_watch_error(&mut shown, &mut from_watch, None);
+        assert_eq!(shown, None);
+
+        super::reconcile_watch_error(&mut shown, &mut from_watch, Some("offline".into()));
+        shown = Some("Comment failed to post".into());
+        super::reconcile_watch_error(&mut shown, &mut from_watch, None);
+        assert_eq!(shown.as_deref(), Some("Comment failed to post"));
+    }
+
     use super::*;
     use std::prelude::v1::test;
 

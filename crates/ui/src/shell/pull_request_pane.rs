@@ -586,7 +586,7 @@ impl Shell {
     /// panel, clipped to the animated width.
     pub(super) fn render_pull_request_pane(
         &mut self,
-        window: &Window,
+        _window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let visible = self.pull_request_pane_visible_width();
@@ -598,8 +598,6 @@ impl Shell {
         }
         let theme = Theme::of(cx).clone();
         let target = self.pull_request_pane_target();
-        let covers_board = target >= self.pull_request_pane_available() - 0.5;
-        let corner = Self::window_corner_radius(window);
         let content = match self
             .active_pull_request_page()
             .or_else(|| self.pull_request_pane.closing.clone())
@@ -612,7 +610,7 @@ impl Shell {
                     .size_full()
                     .flex()
                     .flex_col()
-                    .child(crate::surface_chrome::toolbar(&theme).child(toolbar))
+                    .child(crate::surface_chrome::flowing_header().child(toolbar))
                     .child(div().flex_1().min_h_0().child(page))
                     .into_any_element()
             }
@@ -630,20 +628,21 @@ impl Shell {
             .size_full()
             .flex()
             .flex_col()
-            // Covering the board, the pane's left edge is the sidebar seam,
-            // which already carries a hairline.
-            .when(!covers_board, |el| {
-                el.border_l_1().border_color(theme.border)
-            })
-            .when(corner > 0.0, |el| {
-                el.rounded_tr(px(corner)).rounded_br(px(corner))
-            })
+            .rounded(px(zuse_viewport::workspace_style::RADIUS))
+            .border_1()
+            .border_color(crate::theme::hairline(0.05))
             .bg(theme.panel_bg())
             .overflow_hidden()
             // The titlebar is a glass overlay over the full-height content
             // row; the pane's own chrome starts below it.
-            .pt(px(Theme::TITLEBAR_HEIGHT))
+            .pt(px(
+                Theme::TITLEBAR_HEIGHT - zuse_viewport::workspace_style::GUTTER
+            ))
             .child(content);
+        let panel = div()
+            .size_full()
+            .p(px(zuse_viewport::workspace_style::GUTTER))
+            .child(panel);
         let transition = self.active_tween_endpoints(self.pull_request_pane.tween);
         let content_width = stable_panel_content_width(target, transition).max(visible);
         div()
@@ -758,6 +757,7 @@ impl Shell {
                 },
                 &theme,
                 cx.listener(move |this, _, _, cx| this.close_pull_request_tab(ix, cx)),
+                cx,
             )
             .aria_label(label)
             .tooltip(move |_, cx| {

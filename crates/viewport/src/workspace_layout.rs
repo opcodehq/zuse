@@ -1,7 +1,9 @@
 //! Sidebar sizing and layout events for the browser host.
 use super::*;
+use crate::localization::message as tr;
 use crate::shell::{BORDER, column};
 use crate::workspace_style as layout;
+use zuse_i18n::messages as msg;
 
 impl WorkspaceView {
     pub(super) fn workspace_main(
@@ -97,7 +99,7 @@ impl WorkspaceView {
             .child(
                 div()
                     .id("sidebar-resize")
-                    .aria_label("Resize sidebar")
+                    .aria_label(tr(cx, msg::native::resize_sidebar))
                     .role(Role::Slider)
                     .aria_value(format!("{} pixels", self.sidebar_width()))
                     .aria_numeric_value(self.sidebar_width() as f64)

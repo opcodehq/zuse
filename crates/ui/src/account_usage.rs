@@ -415,7 +415,7 @@ impl AccountUsage {
                         format!("{:.0}% left", (1.0 - used) * 100.0),
                         theme.text,
                     ))
-                    .child(crate::context_usage::stick_meter(
+                    .child(crate::context_usage::dither_meter(
                         used as f64,
                         usage_level(used) != UsageLevel::Normal,
                         theme,
@@ -502,7 +502,7 @@ impl AccountUsage {
     fn card(&self, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
         let theme = &Theme::of(cx).for_popup();
         let context =
-            crate::context_usage::context_section(self.state.read(cx).context_usage, theme);
+            crate::context_usage::context_section(self.state.read(cx).context_usage, theme, cx);
         let has_context = context.is_some();
         let plan = self.plan_section(theme, cx);
         popover::popover_card_flush(theme)

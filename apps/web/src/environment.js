@@ -7,6 +7,7 @@ export function observeEnvironment(report) {
       reduced: motion.matches,
       visible: document.visibilityState !== 'hidden',
       focused: document.hasFocus(),
+      languages: Array.from(navigator.languages),
     }});
     if (value !== previous) { previous = value; report(value); }
   };
@@ -14,5 +15,18 @@ export function observeEnvironment(report) {
   document.addEventListener('visibilitychange', changed);
   window.addEventListener('focus', changed);
   window.addEventListener('blur', changed);
+  window.addEventListener('languagechange', () => {
+    report(JSON.stringify({localization: {languages: Array.from(navigator.languages)}}));
+  });
+  window.addEventListener('storage', (event) => {
+    if (event.key === 'zuse.language.v1' || event.key === null) {
+      let preference = 'system';
+      try { preference = localStorage.getItem('zuse.language.v1') || 'system'; } catch {}
+      report(JSON.stringify({localization: {preference}}));
+    }
+  });
+  let preference = 'system';
+  try { preference = localStorage.getItem('zuse.language.v1') || 'system'; } catch {}
+  report(JSON.stringify({localization: {preference, languages: Array.from(navigator.languages)}}));
   changed();
 }

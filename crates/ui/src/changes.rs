@@ -32,10 +32,12 @@
 //!   code plane: gutters, comment affordances, and sticky headers stay fixed,
 //!   while the virtual list measures each logical row's resulting height.
 
+use crate::localization::message as tr;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::time::Duration;
+use zuse_i18n::messages as msg;
 
 use gpui::{
     AnyElement, App, Context, Entity, FocusHandle, Focusable as _, ListAlignment, ListState,
@@ -1635,7 +1637,6 @@ struct CommentDraft {
 /// The Changes pane entity. Lazy: no RPC until [`Changes::ensure_watch`] runs
 /// (the shell calls it when the pane first opens).
 pub struct Changes {
-    pub(crate) review_mode: bool,
     git_controls: Entity<crate::git_controls::GitPanel>,
     state: Entity<AppState>,
     diffs: Vec<CheckoutDiff>,
@@ -1751,7 +1752,6 @@ impl Changes {
         let settings = crate::settings::current(cx);
         let mode = DiffMode::from_split(settings.diff_split);
         Self {
-            review_mode: false,
             git_controls,
             state,
             mode,
@@ -2296,6 +2296,12 @@ impl Changes {
             self.sync(cx);
         }
         cx.notify();
+    }
+
+    pub(crate) fn set_git_active(&mut self, active: bool, cx: &mut Context<Self>) {
+        self.git_controls.update(cx, |panel, cx| {
+            panel.set_active(active && self.commit.is_none(), cx)
+        });
     }
 
     /// Everything the pane needs kicked when (re)shown: the watch plus the
@@ -3572,7 +3578,7 @@ impl Changes {
                         )
                     }),
             )
-            .child("Viewed")
+            .child(tr(cx, msg::chat::changes_review_viewed))
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(move |this, _, _, cx| {
                 cx.stop_propagation();
@@ -4419,7 +4425,9 @@ impl Changes {
                     .py(px(6.))
                     .text_size(px(11.))
                     .text_color(theme.warning)
-                    .child("Partial snapshot — some changes could not be loaded.")
+                    .child(crate::localization::element(
+                        zuse_i18n::messages::native::partial_changes,
+                    ))
                     .into_any_element()
             })
     }
@@ -5291,7 +5299,7 @@ impl Render for Changes {
                         .child(message),
                 )
             })
-            .when(self.commit.is_none() && !self.review_mode, |d| {
+            .when(self.commit.is_none(), |d| {
                 d.child(self.git_controls.clone())
             })
             .child(content)
@@ -5301,6 +5309,17 @@ impl Render for Changes {
 
 #[cfg(feature = "browser-fixture")]
 impl Changes {
+    pub(crate) fn fixture_seed_git(&mut self, frame: serde_json::Value, cx: &mut Context<Self>) {
+        let target = zuse_viewport::git_controls::Target {
+            chat_id: "fixture-git".into(),
+            cwd: "/tmp/fieldnotes".into(),
+            device_id: "local".into(),
+            archived: false,
+        };
+        self.git_controls
+            .update(cx, |panel, _| panel.fixture_seed(target, frame));
+    }
+
     /// Show `patch` as the selected chat's working-tree diff, for the
     /// isolated review fixture (no engine streams one).
     pub fn fixture_seed_diff(&mut self, patch: &str, cx: &mut Context<Self>) {

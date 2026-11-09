@@ -44,6 +44,10 @@ name = "appshots-fixture"
 required-features = ["appshots-fixture"]
 
 [[example]]
+name = "ui-block-fixture"
+required-features = ["appshots-fixture"]
+
+[[example]]
 name = "tool-images-fixture"
 required-features = ["appshots-fixture"]
 
@@ -72,6 +76,7 @@ name = "compact-picker-fixture"
 required-features = ["compact-picker-fixture"]
 
 [dependencies]
+zuse-i18n.workspace = true
 zuse-model.workspace = true
 zuse-icons.workspace = true
 zuse-remote.workspace = true
@@ -175,3 +180,7 @@ required-features = ["appshots-fixture"]
 [[example]]
 name = "approval-rules-fixture"
 required-features = ["appshots-fixture", "browser-fixture"]
+
+[[example]]
+name = "shortcut-visual-fixture"
+required-features = ["browser-fixture"]

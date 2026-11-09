@@ -1,6 +1,8 @@
 //! Account-synced sections; local workspaces keep their settings on this device.
 use super::*;
+use crate::localization::message as tr;
 use crate::settings::SidebarSection;
+use zuse_i18n::messages as msg;
 use zuse_protocol::{SidebarPinChange, SidebarSectionChange};
 
 pub(super) struct SectionDialog {
@@ -227,27 +229,9 @@ impl Shell {
             cx.notify();
             return;
         }
-        let Some(engine) = state.engine().cloned() else {
-            self.show_notice(crate::toast::ToastKind::Error, "Engine not connected", cx);
-            cx.notify();
-            return;
-        };
-        // A separate task preserves every archive request; the single-row mutation
-        // slot intentionally replaces previous work and cannot be used in a loop.
-        cx.spawn(async move |this, cx| {
-            let mut failed = 0;
-            for chat_id in ids {
-                if engine.client().call(methods::MUTATE, serde_json::json!({"op":"setChatArchived", "chatId":chat_id, "archived":true})).await.is_err() { failed += 1; }
-            }
-            if failed > 0 {
-                let _ = this.update(cx, |this, cx| {
-                    if this.state.read(cx).engine().is_some_and(|current| current.same_connection(&engine)) {
-                        this.show_notice(crate::toast::ToastKind::Error, format!("Could not archive {failed} sessions. Try again."), cx);
-                        cx.notify();
-                    }
-                });
-            }
-        }).detach();
+        for chat_id in ids {
+            self.set_chat_archived(chat_id, true, cx);
+        }
         cx.notify();
     }
 
@@ -350,7 +334,7 @@ impl Shell {
                         .items_center()
                         .text_size(crate::typography::text_xs())
                         .text_color(theme.text_muted.opacity(0.5))
-                        .child("Drop sessions here"),
+                        .child(tr(cx, msg::native::drop_sessions_here)),
                 )
             })
             .children(rows.into_iter().map(|(_, _, row)| row))
@@ -534,7 +518,7 @@ impl Shell {
                     div()
                         .mt(px(8.0))
                         .text_color(theme.text_muted)
-                        .child("Group sessions however you like"),
+                        .child(tr(cx, msg::native::group_sessions_however_you_like)),
                 )
                 .child(
                     div()
@@ -542,18 +526,18 @@ impl Shell {
                         .child(popover::dialog_field(input.into_any_element())),
                 )
                 .child(
-                    div()
-                        .mt(px(16.0))
-                        .flex()
-                        .justify_end()
-                        .gap(px(8.0))
+                    popover::dialog_footer(&theme)
                         .child(
-                            popover::btn_ghost(&theme, "Cancel", "section-cancel")
-                                .id("section-cancel")
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.section_dialog = None;
-                                    cx.notify();
-                                })),
+                            popover::btn_ghost(
+                                &theme,
+                                &tr(cx, msg::common::cancel),
+                                "section-cancel",
+                            )
+                            .id("section-cancel")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.section_dialog = None;
+                                cx.notify();
+                            })),
                         )
                         .child(
                             popover::btn_primary(
@@ -954,9 +938,22 @@ mod tests {
                     .state
                     .update(cx, |state, _| state.set_test_engine(engine));
                 shell.archive_sidebar_section("a", cx);
+                let state = shell.state.read(cx);
+                for id in ["regular", "other"] {
+                    assert!(
+                        state
+                            .chats
+                            .iter()
+                            .find(|chat| chat.id == id)
+                            .unwrap()
+                            .archived,
+                        "Rows must disappear before any RPC reply"
+                    );
+                }
             })
             .unwrap();
-        for (index, expected) in ["regular", "other"].into_iter().enumerate() {
+        let mut remaining = std::collections::HashSet::from(["regular", "other"]);
+        for index in 0..2 {
             cx.run_until_parked();
             let request: serde_json::Value = serde_json::from_str(
                 &requests
@@ -965,7 +962,7 @@ mod tests {
             )
             .unwrap();
             assert_eq!(request["params"]["op"], "setChatArchived");
-            assert_eq!(request["params"]["chatId"], expected);
+            assert!(remaining.remove(request["params"]["chatId"].as_str().unwrap()));
             assert_eq!(request["params"]["archived"], true);
             let reply = if index == 0 {
                 serde_json::json!({"id":request["id"],"err":"rejected"})
@@ -986,7 +983,7 @@ mod tests {
                     shell
                         .sidebar_notice
                         .as_ref()
-                        .is_some_and(|text| text.contains("1 sessions"))
+                        .is_some_and(|text| text.contains("rejected"))
                 );
                 assert_eq!(
                     shell.active_sidebar_sections(cx)[0].session_ids.len(),
@@ -994,6 +991,17 @@ mod tests {
                     "Archiving preserves section membership"
                 );
                 assert_eq!(shell.state.read(cx).chats.len(), 3);
+                assert_eq!(
+                    shell
+                        .state
+                        .read(cx)
+                        .chats
+                        .iter()
+                        .filter(|chat| chat.archived)
+                        .count(),
+                    1,
+                    "Only the rejected archive should roll back"
+                );
             })
             .unwrap();
     }

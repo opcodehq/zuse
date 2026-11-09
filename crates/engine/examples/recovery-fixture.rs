@@ -91,6 +91,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     let id = format!("zuse:{}", uuid::Uuid::new_v4());
     let config = ChatConfig {
+        plan: false,
         harness: HarnessId::Zuse,
         model: None,
         reasoning: None,

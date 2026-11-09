@@ -1,9 +1,11 @@
+use crate::localization::message as tr;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     rc::Rc,
     sync::Arc,
     time::{Duration, Instant},
 };
+use zuse_i18n::messages as msg;
 
 use gpui::{
     AnyElement, App, Context, Entity, Focusable as _, HighlightStyle, ListAlignment, ListOffset,
@@ -2205,7 +2207,7 @@ impl FilesSurface {
                                         .ml_auto()
                                         .cursor_pointer()
                                         .text_color(theme.text)
-                                        .child("Retry")
+                                        .child(tr(cx, msg::chat::attempts_retry))
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.retry_pending_close(cx)
                                         })),
@@ -2216,7 +2218,7 @@ impl FilesSurface {
                                             .id("files-keep-open")
                                             .cursor_pointer()
                                             .text_color(theme.text_muted)
-                                            .child("Keep Open")
+                                            .child(tr(cx, msg::native::keep_open))
                                             .on_click(
                                                 cx.listener(|this, _, _, cx| this.keep_open(cx)),
                                             ),
@@ -2227,7 +2229,7 @@ impl FilesSurface {
                                         .id("files-discard-close-changes")
                                         .cursor_pointer()
                                         .text_color(theme.danger_muted)
-                                        .child("Discard Changes")
+                                        .child(tr(cx, msg::native::discard_changes))
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.discard_changes_and_close(cx)
                                         })),
@@ -2274,7 +2276,7 @@ impl FilesSurface {
                                                     .id("files-keep-external-edits")
                                                     .cursor_pointer()
                                                     .text_color(theme.text_muted)
-                                                    .child("Keep Editing")
+                                                    .child(tr(cx, msg::native::keep_editing))
                                                     .on_click(cx.listener(|this, _, _, cx| {
                                                         this.keep_external_edits(cx)
                                                     })),
@@ -2284,7 +2286,7 @@ impl FilesSurface {
                                                     .id("files-reload-external")
                                                     .cursor_pointer()
                                                     .text_color(theme.text)
-                                                    .child("Reload from Disk")
+                                                    .child(tr(cx, msg::native::reload_from_disk))
                                                     .on_click(cx.listener(|this, _, _, cx| {
                                                         this.request_reload_active_document(cx)
                                                     })),
@@ -2297,7 +2299,7 @@ impl FilesSurface {
                                                     .id("files-cancel-reload")
                                                     .cursor_pointer()
                                                     .text_color(theme.text_muted)
-                                                    .child("Cancel")
+                                                    .child(tr(cx, msg::common::cancel))
                                                     .on_click(cx.listener(|this, _, _, cx| {
                                                         this.cancel_reload_confirmation(cx)
                                                     })),
@@ -2307,7 +2309,7 @@ impl FilesSurface {
                                                     .id("files-confirm-reload")
                                                     .cursor_pointer()
                                                     .text_color(theme.text)
-                                                    .child("Discard & Reload")
+                                                    .child(tr(cx, msg::native::discard_reload))
                                                     .on_click(cx.listener(|this, _, _, cx| {
                                                         this.confirm_reload_active_document(cx)
                                                     })),
@@ -2515,7 +2517,7 @@ impl FilesSurface {
                             element
                                 .cursor_pointer()
                                 .role(gpui::Role::Button)
-                                .aria_label("Save file")
+                                .aria_label(tr(cx, msg::commands::default_keybindings_save_file))
                                 .hover(|style| style.bg(crate::theme::wash(0.14)))
                                 .on_mouse_down(gpui::MouseButton::Left, |_, window, _| {
                                     window.prevent_default()
@@ -2878,7 +2880,10 @@ impl FilesSurface {
                         .items_center()
                         .text_size(px(10.0))
                         .text_color(theme.warning_muted)
-                        .child("Large file preview is truncated and read-only."),
+                        .child(tr(
+                            cx,
+                            msg::native::large_file_preview_is_truncated_and_read_only,
+                        )),
                 )
             })
             .child(code_scroll)

@@ -2,12 +2,14 @@
 //! platform, last-seen, an Online/Offline badge, a "This device" badge, click-to-copy id,
 //! and a Rename dialog (Mutate renameDevice).
 
+use crate::localization::message as tr;
 use chrono::{DateTime, Utc};
 use gpui::{
     AnyElement, ClipboardItem, Context, Entity, SharedString, Subscription, Task, Window, div,
     prelude::*, px,
 };
 use std::time::Duration;
+use zuse_i18n::messages as msg;
 
 use zuse_protocol::WorkspaceScope;
 use zuse_rpc::methods;
@@ -212,7 +214,7 @@ impl DevicesPage {
         let card = popover::dialog_card(&theme)
             .id("rename-device-card")
             .role(gpui::Role::Dialog)
-            .aria_label("Rename device")
+            .aria_label(tr(cx, msg::native::rename_device))
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
                 if event.keystroke.key == "escape" {
                     this.rename = None;
@@ -227,30 +229,33 @@ impl DevicesPage {
                     .child(popover::dialog_field(input.into_any_element())),
             )
             .child(
-                div()
-                    .mt(px(16.0))
-                    .flex()
-                    .flex_row()
-                    .justify_end()
-                    .gap(px(8.0))
+                popover::dialog_footer(&theme)
                     .child(
-                        widgets::text_action(&theme, widgets::ActionTone::Quiet, "Cancel")
-                            .id("rename-cancel")
-                            .tab_index(0)
-                            .role(gpui::Role::Button)
-                            .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.rename = None;
-                                cx.notify();
-                            })),
+                        widgets::text_action(
+                            &theme,
+                            widgets::ActionTone::Quiet,
+                            tr(cx, msg::settings::organizations_cancel),
+                        )
+                        .id("rename-cancel")
+                        .tab_index(0)
+                        .role(gpui::Role::Button)
+                        .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.rename = None;
+                            cx.notify();
+                        })),
                     )
                     .child(
-                        widgets::text_action(&theme, widgets::ActionTone::Solid, "Rename")
-                            .id("rename-save")
-                            .tab_index(0)
-                            .role(gpui::Role::Button)
-                            .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
-                            .on_click(cx.listener(|this, _, _, cx| this.submit_rename(cx))),
+                        widgets::text_action(
+                            &theme,
+                            widgets::ActionTone::Solid,
+                            tr(cx, msg::settings::model_connections_rename),
+                        )
+                        .id("rename-save")
+                        .tab_index(0)
+                        .role(gpui::Role::Button)
+                        .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
+                        .on_click(cx.listener(|this, _, _, cx| this.submit_rename(cx))),
                     ),
             )
             .into_any_element();
@@ -379,7 +384,11 @@ impl Render for DevicesPage {
                             widgets::text_action(
                                 &theme,
                                 widgets::ActionTone::Quiet,
-                                if id_copied { "Copied" } else { "Copy ID" },
+                                if id_copied {
+                                    crate::localization::text("settings-cloud_api_keys_copied", cx)
+                                } else {
+                                    ("Copy ID").to_string()
+                                },
                             )
                             .id(("device-id", ix))
                             .tab_index(0)
@@ -393,15 +402,21 @@ impl Render for DevicesPage {
                             )),
                         )
                         .child(
-                            widgets::text_action(&theme, widgets::ActionTone::Filled, "Rename")
-                                .id(("device-rename", ix))
-                                .tab_index(0)
-                                .role(gpui::Role::Button)
-                                .aria_label(format!("Rename {}", device.name))
-                                .focus_visible(|s| s.border_2().border_color(theme.accent))
-                                .on_click(cx.listener(move |this, _, _, cx| {
+                            widgets::text_action(
+                                &theme,
+                                widgets::ActionTone::Filled,
+                                tr(cx, msg::settings::model_connections_rename),
+                            )
+                            .id(("device-rename", ix))
+                            .tab_index(0)
+                            .role(gpui::Role::Button)
+                            .aria_label(format!("Rename {}", device.name))
+                            .focus_visible(|s| s.border_2().border_color(theme.accent))
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| {
                                     this.open_rename(rename_id.clone(), rename_name.clone(), cx);
-                                })),
+                                },
+                            )),
                         ),
                 )
                 .into_any_element()
@@ -436,11 +451,21 @@ impl Render for DevicesPage {
             .flex_col()
             .gap(px(16.))
             .when_some(local_block, |el, block| {
-                el.child(widgets::group(&theme, "This computer", "").child(block))
+                el.child(
+                    widgets::group(
+                        &theme,
+                        tr(cx, msg::settings::model_connections_local_scope),
+                        "",
+                    )
+                    .child(block),
+                )
             })
             // A local-only workspace never has other devices to list.
             .when(workspace_scope != Some(WorkspaceScope::Local), |el| {
-                el.child(widgets::group(&theme, "Other devices", "").child(others_block))
+                el.child(
+                    widgets::group(&theme, tr(cx, msg::native::other_devices), "")
+                        .child(others_block),
+                )
             });
 
         let scrollbar = popover::rail(self, "devices-page-scrollbar", &theme, cx);
@@ -463,8 +488,8 @@ impl Render for DevicesPage {
                             widgets::settings_page_column(window)
                                 .child(widgets::section_title(
                                     &theme,
-                                    "Remote access",
-                                    "Use this computer from your phone, a browser, or another computer.",
+                                    &tr(cx, msg::settings::settings_page_remote_access),
+                                    &tr(cx, msg::native::use_this_computer_from_your_phone_a_browser_or_another_computer),
                                 ))
                                 .child(
                                     div().mt(px(20.)).flex().flex_col().gap(px(10.)).p(px(12.))

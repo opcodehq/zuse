@@ -30,6 +30,7 @@ pub mod diff_sync;
 pub mod doc_host;
 mod external_chats;
 mod fs_watch;
+mod git_fetch;
 mod git_workspace;
 pub mod harness_updates;
 pub(crate) mod home_index;
@@ -61,6 +62,7 @@ pub mod run_journal;
 mod secret_broker;
 pub mod sessions;
 pub mod source_control;
+mod source_control_refresh;
 pub mod spaces;
 pub mod terminals;
 pub mod titles;
@@ -75,7 +77,7 @@ pub mod workspace_search;
 mod worktree_settings;
 
 pub use agent_accounts::{AgentAccounts, AgentAccountsConfig};
-pub use auth::{Auth, AuthConfig, AuthState, AuthUser, OrgMembership};
+pub use auth::{Auth, AuthConfig, AuthState, AuthUser, OrgMembership, TerminalSignIn};
 pub use change_requests::{ChangeRequestCacheKey, CheckoutChangeRequests};
 pub use diff_sync::{
     CheckoutDiffSync, DiffFileTextPair, DiffSidecar, DiffSnapshot, TreeSnapshot, TurnSnapshot,
@@ -1063,7 +1065,7 @@ impl Engine {
         // before its profile can open. A clean signed-out install is local and never
         // enters the terminal sign-in flow.
         if workspace_scope == WorkspaceScope::Synced && profile.is_none() {
-            terminal_sign_in(&auth).await?;
+            terminal_sign_in(&auth, TerminalSignIn::detect(false)).await?;
             profile = Self::resolve_profile(&config, &auth, workspace_scope)?;
         }
         let profile = profile
@@ -1170,15 +1172,19 @@ pub async fn serve_ipc(
     Ok(tokio::spawn(zuse_rpc::serve_ws_listener(listener, service)))
 }
 
-/// Block until the WorkOS session is signed in AND org-scoped. On a TTY, print the
-/// headless (paste-code) sign-in URL, read the pasted `state.code` from stdin, and
-/// run workspace onboarding (create / auto-join / numbered picker). Off a TTY this
-/// errors immediately — a daemon under systemd/launchd must load the session that
-/// `zuse login` persisted, never wait on a prompt nobody can see.
-pub async fn terminal_sign_in(auth: &Auth) -> Result<(), EngineError> {
+/// Block until the WorkOS session is signed in AND org-scoped. On a TTY with a
+/// local browser ([`TerminalSignIn::Browser`]), open the AuthKit page and wait for
+/// its redirect to the loopback callback; otherwise (or when the loopback cannot
+/// bind or no browser opens) print the headless paste-code URL and read the pasted
+/// `state.code` from stdin. Then run workspace onboarding (create / auto-join /
+/// numbered picker). Off a TTY this errors immediately — a daemon under
+/// systemd/launchd must load the session that `zuse login` persisted, never wait
+/// on a prompt nobody can see.
+pub async fn terminal_sign_in(auth: &Auth, route: TerminalSignIn) -> Result<(), EngineError> {
     use std::io::IsTerminal;
     let interactive = std::io::stdin().is_terminal();
     let mut state_rx = auth.watch_state();
+    let mut sign_in_started = false;
     let mut stdin_reader: Option<tokio::task::JoinHandle<()>> = None;
     let mut org_reader: Option<tokio::task::JoinHandle<()>> = None;
     loop {
@@ -1212,26 +1218,43 @@ pub async fn terminal_sign_in(auth: &Auth) -> Result<(), EngineError> {
                         "not signed in — run `zuse login` on this machine first".into(),
                     ));
                 }
-                if stdin_reader.is_none() {
-                    let url = auth.start_headless_sign_in();
-                    println!("Sign in to Zuse:\n\n  {url}\n");
-                    println!("Then paste the code shown in the browser here and press enter.");
-                    let auth = auth.clone();
-                    stdin_reader = Some(tokio::spawn(async move {
-                        loop {
-                            let Some(line) = read_stdin_line().await else {
-                                return;
-                            };
-                            let pasted = line.trim();
-                            if pasted.is_empty() {
-                                continue;
-                            }
-                            match auth.complete_sign_in(pasted).await {
-                                Ok(()) => return,
-                                Err(err) => println!("Sign-in failed: {err}"),
-                            }
+                if !sign_in_started {
+                    sign_in_started = true;
+                    let browser = match route {
+                        TerminalSignIn::Browser => {
+                            auth.start_browser_sign_in(crate::auth::open_browser).await
                         }
-                    }));
+                        TerminalSignIn::PasteCode => None,
+                    };
+                    if let Some(url) = browser {
+                        println!(
+                            "Opened your browser to sign in to Zuse. If it did not open, visit:\n\n  {url}\n"
+                        );
+                        println!(
+                            "Waiting for the browser to finish… (no browser here? rerun `zuse login --no-browser`)"
+                        );
+                        // Completion arrives on `state_rx` from the loopback callback.
+                    } else {
+                        let url = auth.start_headless_sign_in();
+                        println!("Sign in to Zuse:\n\n  {url}\n");
+                        println!("Then paste the code shown in the browser here and press enter.");
+                        let auth = auth.clone();
+                        stdin_reader = Some(tokio::spawn(async move {
+                            loop {
+                                let Some(line) = read_stdin_line().await else {
+                                    return;
+                                };
+                                let pasted = line.trim();
+                                if pasted.is_empty() {
+                                    continue;
+                                }
+                                match auth.complete_sign_in(pasted).await {
+                                    Ok(()) => return,
+                                    Err(err) => println!("Sign-in failed: {err}"),
+                                }
+                            }
+                        }));
+                    }
                 }
             }
         }

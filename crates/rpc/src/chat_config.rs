@@ -124,7 +124,7 @@ mod tests {
         };
         assert!(client.read_chat_config(&target).await.unwrap().is_none());
         let config: ChatConfig = serde_json::from_value(
-            json!({"harness":"codex","sandbox":"read-only","model":"chosen"}),
+            json!({"harness":"codex","sandbox":"auto","plan":true,"model":"chosen"}),
         )
         .unwrap();
         client
@@ -149,6 +149,7 @@ mod tests {
             requests[1].1["expectedConfig"],
             json!({"deviceId":"execution-host","config":null})
         );
-        assert_eq!(requests[2].1["config"]["sandbox"], "read-only");
+        assert_eq!(requests[2].1["config"]["sandbox"], "auto");
+        assert_eq!(requests[2].1["config"]["plan"], true);
     }
 }

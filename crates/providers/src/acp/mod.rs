@@ -50,7 +50,7 @@ use tokio::sync::mpsc;
 
 use zuse_protocol::{
     AgentEvent, DoneStatus, HarnessId, Model, ModelOption, ModelOptionChoice, ReasoningLevel,
-    RunRequest, SandboxLevel, SlashCommand, SteeringMode, UserInputAnswer, UserInputQuestion,
+    RunRequest, SlashCommand, SteeringMode, UserInputAnswer, UserInputQuestion,
 };
 
 use crate::jsonrpc::{Incoming, RpcClient};
@@ -2251,6 +2251,7 @@ impl Harness for AcpHarness {
         }
         live.cwd == next.cwd
             && live.sandbox == next.sandbox
+            && live.plan == next.plan
             && live.auto_approve == next.auto_approve
             && (next.model.is_some() || live.model.is_none())
             && (next.reasoning.is_some() || live.reasoning.is_none())
@@ -2914,7 +2915,7 @@ fn bypass_mode(value: &str) -> bool {
     )
 }
 fn read_only_request(request: &RunRequest) -> bool {
-    request.sandbox == SandboxLevel::ReadOnly
+    request.plan
         || request
             .model_options
             .get("mode")
@@ -6365,12 +6366,27 @@ mod tests {
     #[test]
     fn access_mode_selection_respects_sandbox_before_trait_options() {
         let response = json!({"configOptions":[{"id":"mode","category":"mode","type":"select","currentValue":"bypass","options":[{"value":"ask"},{"value":"plan"},{"value":"bypass"}]}]});
-        for (sandbox, auto, chosen) in [
-            (SandboxLevel::ReadOnly, true, "plan"),
-            (SandboxLevel::WorkspaceWrite, true, "ask"),
-            (SandboxLevel::DangerFullAccess, false, "ask"),
+        for (sandbox, plan, auto, chosen) in [
+            (
+                zuse_protocol::SandboxLevel::DangerFullAccess,
+                true,
+                true,
+                "plan",
+            ),
+            (
+                zuse_protocol::SandboxLevel::WorkspaceWrite,
+                false,
+                true,
+                "ask",
+            ),
+            (
+                zuse_protocol::SandboxLevel::DangerFullAccess,
+                false,
+                false,
+                "ask",
+            ),
         ] {
-            let request: RunRequest = serde_json::from_value(json!({"prompt":"","cwd":"/tmp","sandbox":sandbox,"autoApprove":auto,"modelOptions":{"mode":"bypass"}})).unwrap();
+            let request: RunRequest = serde_json::from_value(json!({"prompt":"","cwd":"/tmp","sandbox":sandbox,"plan":plan,"autoApprove":auto,"modelOptions":{"mode":"bypass"}})).unwrap();
             assert_eq!(
                 access_config_set(&response, &request).unwrap(),
                 Some(("mode".into(), json!({"value":chosen})))

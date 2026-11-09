@@ -1,5 +1,7 @@
 //! Conversation tabs share a thread checkout and retain independent agent sessions.
 use super::*;
+use crate::localization::message as tr;
+use zuse_i18n::messages as msg;
 
 const RIGHT_PANE_HEADER_CONTROLS_MIN_WIDTH: f32 = 8.0 + 4.0 + 4.0 + 28.0;
 
@@ -555,11 +557,38 @@ impl Shell {
             .cloned()
             .collect();
         side_chats.sort_by_key(|chat| chat.created_at);
+        // Tabs whose agent is mid-turn trade their harness icon for the
+        // activity glyph, so work in a background tab stays visible.
+        let now = Utc::now();
+        let working: std::collections::HashSet<String> = rows
+            .iter()
+            .chain(&side_chats)
+            .filter(|chat| {
+                state.display_status_for(chat, now) == zuse_protocol::ChatIndicator::Working
+            })
+            .map(|chat| chat.id.clone())
+            .collect();
         let selected_id = selected.id.clone();
         let archived = selected.archived;
         let main_tab = self.active_main_tab(cx);
         let main_tabs = self.main_tab_rows(cx);
         let closable = rows.len() > 1;
+        let tab_spinner = |id: &str, cx: &mut Context<Self>| {
+            div()
+                .size(px(14.))
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(crate::loaders::mini_glyph_spinner(
+                    format!("thread-conversation-working-{id}"),
+                    2.0,
+                    theme.glyph,
+                    cx.entity_id(),
+                    cx,
+                ))
+                .into_any_element()
+        };
         let tab_chip = |id: SharedString, title: SharedString, active: bool| {
             div()
                 .id(id)
@@ -739,15 +768,21 @@ impl Shell {
                         let id = id.clone();
                         move || format!("thread-conversation-{id}")
                     })
-                    .child(match brand {
-                        Some((path, tint)) => icon(path)
-                            .size(px(14.))
-                            .flex_none()
-                            .text_color(tint.unwrap_or(theme.text_muted)),
-                        None => icon(icons::CHAT_ROUND_LINE)
-                            .size(px(14.))
-                            .flex_none()
-                            .text_color(theme.text_muted),
+                    .child(if working.contains(&id) {
+                        tab_spinner(&id, cx)
+                    } else {
+                        match brand {
+                            Some((path, tint)) => icon(path)
+                                .size(px(14.))
+                                .flex_none()
+                                .text_color(tint.unwrap_or(theme.text_muted))
+                                .into_any_element(),
+                            None => icon(icons::CHAT_ROUND_LINE)
+                                .size(px(14.))
+                                .flex_none()
+                                .text_color(theme.text_muted)
+                                .into_any_element(),
+                        }
                     })
                     .child(div().flex_1().min_w_0().truncate().child(title))
                     .when(closable, |d| {
@@ -804,11 +839,14 @@ impl Shell {
                     title.clone(),
                     false,
                 )
-                .child(
+                .child(if working.contains(&id) {
+                    tab_spinner(&id, cx)
+                } else {
                     icon(brand.map_or(icons::CHAT_ROUND_LINE, |(path, _)| path))
                         .size(px(14.))
-                        .text_color(brand.and_then(|(_, tint)| tint).unwrap_or(theme.text_muted)),
-                )
+                        .text_color(brand.and_then(|(_, tint)| tint).unwrap_or(theme.text_muted))
+                        .into_any_element()
+                })
                 .child(match rename {
                     Some(input) => div().w(px(120.)).child(input).into_any_element(),
                     None => div()
@@ -997,7 +1035,7 @@ impl Shell {
                         .px(px(8.))
                         .py(px(6.))
                         .text_color(theme.text_muted)
-                        .child("No earlier chats"),
+                        .child(tr(cx, msg::native::no_earlier_chats)),
                 )
             })
             .children(rows)
@@ -1151,7 +1189,7 @@ impl Shell {
         // Open in, the environment summary, then the bottom terminal; the
         // right pane's toggle anchors the far edge.
         let session_info_toggle = (!takeover && !on_canvas).then(|| {
-            let open = self.session_info_visible(cx);
+            let open = self.session_info_visible();
             header_icon_button(
                 "toggle-session-info",
                 icons::LIST,
@@ -1160,7 +1198,7 @@ impl Shell {
                 cx.listener(|this, _, _, cx| this.toggle_session_info(cx)),
             )
             .role(gpui::Role::Button)
-            .aria_label("Toggle environment summary")
+            .aria_label(tr(cx, msg::chat::top_bar_toggle_environment_summary))
             .aria_selected(open)
             .flex_none()
             .on_mouse_down(
@@ -1184,7 +1222,7 @@ impl Shell {
                 cx.listener(|this, _, window, cx| this.toggle_terminal(window, cx)),
             )
             .role(gpui::Role::Button)
-            .aria_label("Toggle bottom terminal")
+            .aria_label(tr(cx, msg::common::toggle_bottom_terminal))
             .aria_selected(open)
             .flex_none()
             .when(open, |button| button.bg(theme.text.opacity(0.10)))

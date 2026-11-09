@@ -133,14 +133,18 @@ impl WorkspaceView {
                         )
                     })
                     .child(
-                        icon_button(("edit-queued", i), "pen", "Edit queued message")
-                            .size(px(24.))
-                            .when(!edit_enabled, |view| view.opacity(0.35))
-                            .when(edit_enabled, |view| {
-                                view.on_click(cx.listener(move |this, _, _, cx| {
-                                    this.begin_queue_edit(edit.clone(), cx)
-                                }))
-                            }),
+                        icon_button(
+                            ("edit-queued", i),
+                            "pen",
+                            crate::localization::text("chat-queue_chip_edit_queued_message", cx),
+                        )
+                        .size(px(24.))
+                        .when(!edit_enabled, |view| view.opacity(0.35))
+                        .when(edit_enabled, |view| {
+                            view.on_click(cx.listener(move |this, _, _, cx| {
+                                this.begin_queue_edit(edit.clone(), cx)
+                            }))
+                        }),
                     )
                     .when_some(primary, |view, action| {
                         view.child(
@@ -168,16 +172,23 @@ impl WorkspaceView {
                         )
                     })
                     .child(
-                        icon_button(("remove-queued", i), "queue-close", "Remove queued message")
-                            .size(px(24.))
-                            .when(blocked || !details.allows(QueueAction::Remove), |view| {
-                                view.opacity(0.35)
-                            })
-                            .when(!blocked && details.allows(QueueAction::Remove), |view| {
+                        icon_button(
+                            ("remove-queued", i),
+                            "queue-close",
+                            crate::localization::text("chat-queue_chip_remove_queued_message", cx),
+                        )
+                        .size(px(24.))
+                        .when(blocked || !details.allows(QueueAction::Remove), |view| {
+                            view.opacity(0.35)
+                        })
+                        .when(
+                            !blocked && details.allows(QueueAction::Remove),
+                            |view| {
                                 view.on_click(cx.listener(move |this, _, _, cx| {
                                     this.queue_action(QueueAction::Remove, &remove, None, cx)
                                 }))
-                            }),
+                            },
+                        ),
                     )
                     .when(move_enabled, |view| {
                         view.on_drop(cx.listener(move |this, payload: &QueueDrag, _, cx| {

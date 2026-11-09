@@ -256,7 +256,9 @@ pub fn title(item: &PluginDefinition, text: Hsla, muted: Hsla, background: Hsla)
                             .line_height(px(16.))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(muted)
-                            .child("Custom"),
+                            .child(crate::localization::element(
+                                zuse_i18n::messages::chat::browser_pane_custom,
+                            )),
                     )
                 }),
         )

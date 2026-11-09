@@ -1,0 +1,29 @@
+[package]
+name = "zuse-i18n"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+fluent-bundle = "0.16"
+unic-langid = "0.9"
+serde.workspace = true
+serde_json.workspace = true
+icu_decimal = "2.1"
+icu_locale = "2.1"
+# Cached formatters share immutable ICU payloads across desktop worker threads.
+icu_provider = { version = "2.1", features = ["sync"] }
+icu_datetime = "2.1"
+writeable = "0.6"
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+sys-locale = "0.3"
+
+[build-dependencies]
+fluent-syntax = "0.12"
+serde_json.workspace = true
+
+[dev-dependencies]
+sha2.workspace = true
+fluent-syntax = "0.12"

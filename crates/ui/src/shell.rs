@@ -11,8 +11,10 @@
 //! ghost view + `on_drag_move::<Marker>` on the root), the same idiom as Zed's
 //! dock. Double-clicking a handle resets that pane to its default width.
 
+use crate::localization::message as tr;
 use std::path::PathBuf;
 use std::time::Duration;
+use zuse_i18n::messages as msg;
 
 use chrono::{DateTime, Utc};
 use gpui::{
@@ -72,6 +74,7 @@ mod chat_dropzone_tests;
 mod chat_pull_requests;
 #[cfg(test)]
 mod chat_rename_tests;
+mod chat_shortcuts;
 mod command_palette;
 mod file_mutations;
 mod files_panel;
@@ -86,6 +89,8 @@ mod panel_layout;
 mod panel_menu;
 mod pr_watch;
 mod project_setup;
+mod update_notes;
+mod update_restart;
 use panel_layout::{AuxiliaryPanel, FitInputs, HorizontalPanelFit, panel_content_tween};
 mod archives;
 #[cfg(test)]
@@ -223,6 +228,10 @@ enum ChatMenuPage {
 }
 
 /// Hover-intent keys for the chat menu's rows; only Copy owns a submenu.
+/// Height of the new-thread arcade band under the titlebar.
+const NEW_THREAD_ARCADE_HEIGHT: f32 = 200.0;
+/// Shorter windows have no empty space above the heading for the band.
+const NEW_THREAD_ARCADE_MIN_WINDOW: f32 = 640.0;
 const CHAT_MENU_ROW_RENAME: u8 = 0;
 const CHAT_MENU_ROW_PIN: u8 = 1;
 const CHAT_MENU_ROW_ARCHIVE: u8 = 2;
@@ -458,7 +467,6 @@ pub fn apply_keymap(
         ShortcutId::RandomWallpaper,
         ShortcutId::ToggleFiles,
         ShortcutId::ArchiveSession,
-        ShortcutId::OpenModelPicker,
     ] {
         let combo = platform_combo(keymap.get(id));
         if combo.is_empty() || Keystroke::parse(&combo).is_err() {
@@ -467,8 +475,7 @@ pub fn apply_keymap(
         let binding = match id {
             ShortcutId::RandomWallpaper => KeyBinding::new(&combo, RandomWallpaper, None),
             ShortcutId::ToggleFiles => KeyBinding::new(&combo, ToggleFiles, None),
-            ShortcutId::ArchiveSession => KeyBinding::new(&combo, ArchiveSession, None),
-            _ => KeyBinding::new(&combo, OpenModelPicker, None),
+            _ => KeyBinding::new(&combo, ArchiveSession, None),
         };
         cx.bind_keys([binding]);
     }
@@ -702,6 +709,35 @@ pub enum RightSurface {
     PullRequest(u64),
     /// The chat's file tree (one per panel) — keys [`Shell::files`].
     Files,
+}
+
+/// Stage `prompt` in `composer` without sending it, after the composer has
+/// swapped to its session's draft (which runs on a state observation the
+/// caller just queued). A draft already waiting there stays, above it.
+fn stage_prompt(
+    composer: Entity<Composer>,
+    prompt: String,
+    context: Option<crate::context_items::ContextItem>,
+    cx: &mut App,
+) {
+    cx.defer(move |cx| {
+        composer.update(cx, |composer, cx| {
+            if let Some(context) = context {
+                composer.stage_context(context, cx);
+            }
+            composer.input.update(cx, |input, cx| {
+                let draft = input.text().trim_end();
+                let text = if draft.is_empty() {
+                    prompt
+                } else {
+                    format!("{draft}\n\n{prompt}")
+                };
+                input.set_text(text, cx)
+            });
+            composer.focus_pending = true;
+            cx.notify();
+        });
+    });
 }
 
 fn push_unique_right_surface(tabs: &mut Vec<RightSurface>, surface: RightSurface) -> bool {
@@ -1981,6 +2017,10 @@ enum UpdatePromptButton {
     CheckAgain,
     Download,
     Restart,
+    /// "Restart now" beside the safer choice, so it isn't the primary button.
+    RestartAnyway,
+    RestartWhenIdle,
+    CancelRestart,
     OpenDownloads,
 }
 
@@ -1992,7 +2032,15 @@ enum PendingExit {
     InstallUpdate(PathBuf),
 }
 
+fn dismiss_update_prompt(cx: &mut App) {
+    if let Some(update) = crate::app_update::AppUpdate::global(cx) {
+        update.update(cx, |update, cx| update.dismiss_prompt(cx));
+    }
+}
+
 pub struct Shell {
+    update_restart: Option<update_restart::RestartPlan>,
+    update_restart_task: Option<Task<()>>,
     state: Entity<AppState>,
     desktop_import: Entity<crate::desktop_import::Onboarding>,
     sidebar_pane: Entity<SidebarPane>,
@@ -2181,6 +2229,10 @@ pub struct Shell {
     section_menu_active: Option<usize>,
     /// Space id awaiting delete confirmation (hard delete + session cascade).
     delete_space_confirm: Option<String>,
+    /// The keyboard shortcuts panel (Mod+/, or `?` in an empty composer).
+    shortcuts_panel_open: bool,
+    /// The first stop-background-tasks press, waiting for its confirmation.
+    background_stop_armed_at: Option<chat_shortcuts::StopConfirmation>,
     /// The add-space palette (device tabs + folder search), `Some`
     /// while open.
     add_space: Option<AddSpaceFlow>,
@@ -2305,7 +2357,7 @@ pub struct Shell {
     session_info_tween: Option<WidthTween>,
     /// Whether the card showed last frame; a change starts the reveal tween.
     session_info_shown: bool,
-    /// The card opened over a transcript too narrow to show it beside.
+    /// The session card is open over the transcript.
     session_info_overlay: bool,
     /// The card's sections the user toggled away from their default (by key).
     session_info_folded: std::collections::HashSet<&'static str>,
@@ -2317,11 +2369,6 @@ pub struct Shell {
     /// Whether the card showed at the toggle's press (see
     /// `note_session_info_press`).
     session_info_pressed_open: Option<bool>,
-    /// The card last showed docked beside the transcript (else over it).
-    session_info_docked: bool,
-    /// The room the transcript last held free for the docked card, eased
-    /// back from as the card hides because the column stopped fitting it.
-    session_info_last_reserve: f32,
     files_content_tween: Option<WidthTween>,
     /// The last tracked frame: its chat, the window fit, and for each of
     /// `[sidebar, surface host, Files]` the width painted and the width its
@@ -2761,6 +2808,8 @@ impl Shell {
             section_menu_focus: cx.focus_handle(),
             section_menu_active: None,
             delete_space_confirm: None,
+            shortcuts_panel_open: false,
+            background_stop_armed_at: None,
             add_space: None,
             project_setup: None,
             project_parent_setup: None,
@@ -2800,6 +2849,8 @@ impl Shell {
             harness_update_scroll: settings::widgets::PageScroll::default(),
             user_menu: popover::Popup::default(),
             sidebar_notice: None,
+            update_restart: None,
+            update_restart_task: None,
             _app_update_observation: crate::app_update::AppUpdate::global(cx)
                 .map(|update| cx.observe(&update, |_, _, cx| cx.notify())),
             org: None,
@@ -2837,8 +2888,6 @@ impl Shell {
             background_stops: Default::default(),
             summary_pr: Default::default(),
             session_info_pressed_open: None,
-            session_info_docked: false,
-            session_info_last_reserve: 0.0,
             files_content_tween: None,
             painted_columns: None,
             fit_exits: [None; 3],
@@ -4510,7 +4559,7 @@ impl Shell {
     /// transcripts (nested spawns open their own tabs).
     fn on_transcript_event(
         &mut self,
-        _: Entity<Transcript>,
+        transcript: Entity<Transcript>,
         event: &TranscriptEvent,
         cx: &mut Context<Self>,
     ) {
@@ -4541,6 +4590,13 @@ impl Shell {
                 if let Some(source) = source {
                     self.fork_chat(source, *target, cx);
                 }
+            }
+            TranscriptEvent::FindClosed => self.focus_transcript_composer(&transcript, cx),
+            TranscriptEvent::SendUiBlockReply { row_id, text } => {
+                let sent = self.send_transcript_reply(&transcript, text.clone(), cx);
+                transcript.update(cx, |transcript, cx| {
+                    transcript.ui_block_reply_sent(row_id, sent, cx)
+                });
             }
         }
     }
@@ -6109,6 +6165,7 @@ impl Shell {
                                 ShortcutsEvent::ComposerSendBehaviorChanged(behavior) => {
                                     this.settings.composer_send_behavior = *behavior;
                                 }
+                                ShortcutsEvent::QuitGestureChanged => this.pull_settings(cx),
                                 ShortcutsEvent::AppshotsChanged {
                                     enabled,
                                     sound_enabled,
@@ -6126,6 +6183,9 @@ impl Shell {
                                 &this.settings.keymap,
                                 this.settings.composer_send_behavior,
                             );
+                            // The menu's ⌘Q label follows the binding.
+                            let menus = crate::app_menus::app_menus(cx);
+                            cx.set_menus(menus);
                             this.schedule_save(cx);
                             cx.notify();
                         },
@@ -6575,10 +6635,48 @@ impl Shell {
         if archived {
             motion::set_hover(&format!("chat-{chat_id}-hover"), false, true);
         }
-        self.mutate(
-            serde_json::json!({ "op": "setChatArchived", "chatId": chat_id, "archived": archived }),
-            cx,
-        );
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            self.show_notice(crate::toast::ToastKind::Error, "Engine not connected", cx);
+            cx.notify();
+            return;
+        };
+        let start = self.state.update(cx, |state, cx| {
+            let start = state.begin_chat_archive(&chat_id, archived);
+            cx.notify();
+            start
+        });
+        if let Some(request_id) = start {
+            let state = self.state.clone();
+            cx.spawn(async move |this, cx| {
+                let mut archived = archived;
+                loop {
+                    let result = engine.client().call(methods::MUTATE,
+                        serde_json::json!({ "op": "setChatArchived", "chatId": chat_id, "archived": archived }),
+                    ).await;
+                    let next = state.update(cx, |state, cx| {
+                        if !state.engine().is_some_and(|current| current.same_connection(&engine)) {
+                            return None;
+                        }
+                        let next = state.finish_chat_archive(&chat_id, request_id, archived, result.is_ok());
+                        cx.notify();
+                        next
+                    });
+                    if let Err(error) = result {
+                        let _ = this.update(cx, |shell, cx| {
+                            if !shell.state.read(cx).engine().is_some_and(|current| current.same_connection(&engine)) {
+                                return;
+                            }
+                            shell.show_notice(crate::toast::ToastKind::Error, format!("{error}"), cx);
+                            cx.notify();
+                        });
+                    }
+                    match next {
+                        Some(next) => archived = next,
+                        _ => break,
+                    }
+                }
+            }).detach();
+        }
         cx.notify();
     }
 
@@ -6604,6 +6702,7 @@ impl Shell {
     /// the keys it records before they can dispatch.
     pub(super) fn overlay_owns_keyboard(&self, cx: &App) -> bool {
         self.command_palette.is_some()
+            || self.shortcuts_panel_open
             || self.voice.read(cx).stage_open
             || self.section_dialog.is_some()
             || self.section_menu.is_some()
@@ -8206,7 +8305,7 @@ impl Shell {
         let back = div()
             .id("settings-back")
             .role(gpui::Role::Button)
-            .aria_label("Back to app")
+            .aria_label(tr(cx, msg::settings::settings_page_back_to_app))
             .tab_index(0)
             .flex()
             .items_center()
@@ -8227,18 +8326,17 @@ impl Shell {
                     .size(px(14.))
                     .text_color(theme.text_muted),
             )
-            .child("Back to app");
+            .child(tr(cx, msg::settings::settings_page_back_to_app));
         div()
             .id("settings-page")
             .role(gpui::Role::Group)
-            .aria_label("Settings")
+            .aria_label(tr(cx, msg::common::settings))
             .track_focus(&self.settings_focus)
             .tab_group()
             .tab_stop(false)
             .size_full()
             .flex()
             .flex_col()
-            .bg(theme.bg)
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                 match event.keystroke.key.as_str() {
                     "escape" => {
@@ -8267,27 +8365,20 @@ impl Shell {
                     .flex()
                     .items_center()
                     .px(px(12.))
-                    .border_b_1()
-                    .border_color(theme.border)
                     .child(div().w(px(64.)).flex_none())
                     .child(back)
                     .child(div().flex_1()),
             )
+            // Same frame as a chat: the navigation sits on the window glass
+            // and the section is a rounded card inset from the window edges.
             .child(
                 div()
                     .flex_1()
                     .min_h_0()
                     .flex()
-                    .child(
-                        div()
-                            .w(px(sidebar_width))
-                            .h_full()
-                            .flex_none()
-                            .border_r_1()
-                            .border_color(theme.border)
-                            .bg(theme.surface)
-                            .child(nav),
-                    )
+                    .pr(px(zuse_viewport::workspace_style::GUTTER))
+                    .pb(px(zuse_viewport::workspace_style::GUTTER))
+                    .child(div().w(px(sidebar_width)).h_full().flex_none().child(nav))
                     .child(
                         div()
                             .flex_1()
@@ -8295,6 +8386,11 @@ impl Shell {
                             .h_full()
                             .flex()
                             .flex_col()
+                            .overflow_hidden()
+                            .rounded(px(zuse_viewport::workspace_style::RADIUS))
+                            .bg(theme.bg)
+                            .border_1()
+                            .border_color(crate::theme::hairline(0.05))
                             .opacity(self.voice_stage_underlay_opacity(cx))
                             .child(outlet),
                     ),
@@ -8320,27 +8416,27 @@ impl Shell {
     ) -> AnyElement {
         let compact = window.viewport_size().width < px(800.);
         let section_icon = |item: SettingsSection| match item {
-            SettingsSection::Cloud => icons::CLOUD,
-            SettingsSection::Devices => icons::SETTINGS_REMOTE,
-            SettingsSection::Harnesses => icons::SETTINGS_PROVIDERS,
-            SettingsSection::Defaults => icons::SETTINGS_DEFAULTS,
-            SettingsSection::Plugins => icons::SETTINGS_PLUGINS,
-            SettingsSection::Agents => icons::KEY_MINIMALISTIC,
-            SettingsSection::Appearance => icons::TUNING,
-            SettingsSection::Files => icons::FOLDER,
-            SettingsSection::Notifications => icons::BELL,
-            SettingsSection::Voice => icons::MICROPHONE,
-            SettingsSection::Shortcuts => icons::KEYBOARD,
-            SettingsSection::General => icons::SETTINGS_GENERAL,
-            SettingsSection::Appshots => icons::MONITOR,
-            SettingsSection::Archived => icons::ARCHIVE_MINIMALISTIC,
+            SettingsSection::Cloud => icons::DITHER_CLOUD_FILLED,
+            SettingsSection::Devices => icons::DITHER_MONITOR,
+            SettingsSection::Harnesses => icons::DITHER_TERMINAL,
+            SettingsSection::Defaults => icons::DITHER_SLIDERS,
+            SettingsSection::Plugins => icons::DITHER_PLUG,
+            SettingsSection::Agents => icons::DITHER_KEY,
+            SettingsSection::Appearance => icons::DITHER_PEN,
+            SettingsSection::Files => icons::DITHER_FOLDER,
+            SettingsSection::Notifications => icons::DITHER_BELL,
+            SettingsSection::Voice => icons::DITHER_MIC,
+            SettingsSection::Shortcuts => icons::DITHER_KEYBOARD,
+            SettingsSection::General => icons::DITHER_GEAR,
+            SettingsSection::Appshots => icons::DITHER_DOCUMENT,
+            SettingsSection::Archived => icons::DITHER_ARCHIVE,
         };
         settings::widgets::scroll_faded(
             "settings-nav-scroll",
             div()
                 .id("settings-sections")
                 .role(gpui::Role::TabList)
-                .aria_label("Settings sections")
+                .aria_label(tr(cx, msg::native::settings_sections))
                 .w_full()
                 .overflow_y_scroll()
                 .h_full()
@@ -8432,7 +8528,7 @@ impl Shell {
                                     }))
                                     .child(
                                         icon(section_icon(item))
-                                            .size(px(16.0))
+                                            .size(px(14.0))
                                             .text_color(tab_text),
                                     )
                                     .when(!compact, |view| {
@@ -8493,6 +8589,15 @@ impl Shell {
         } else {
             format!("chat-{id}")
         };
+        let pr_error = {
+            let state = self.state.read(cx);
+            state
+                .chats
+                .iter()
+                .find(|chat| chat.id == id)
+                .and_then(|chat| state.change_request_error_for_chat(chat))
+                .map(str::to_owned)
+        };
         let pr_device = self
             .state
             .read(cx)
@@ -8537,12 +8642,15 @@ impl Shell {
         // FAILED (explicit, with the transcript's retry affordance); a send
         // whose delivery path is degraded is QUEUED, not Working — the
         // pending pill tells the truth instead of faking a spinner.
-        let (queued, undelivered) = {
+        let (queued, undelivered, awaiting) = {
             let now = Utc::now();
             let state = self.state.read(cx);
             (
                 state.send_queued(&id, now),
                 state.send_undelivered(&id, now),
+                state
+                    .session_for(&id)
+                    .and_then(|session| session.awaiting_input),
             )
         };
         let status_color = if undelivered {
@@ -8566,6 +8674,16 @@ impl Shell {
             }
         };
         let shows_metadata = branch.is_some() || change_request.is_some();
+        let attention_mark = |size: f32| -> AnyElement {
+            match spaces::status_glyph(status, queued, undelivered, awaiting, theme) {
+                Some((glyph, tone)) => icon(glyph)
+                    .size(px(size))
+                    .flex_none()
+                    .text_color(tone)
+                    .into_any_element(),
+                None => div().size(px(size)).flex_none().into_any_element(),
+            }
+        };
         let queued = queued && !undelivered;
         let working = status == zuse_protocol::ChatIndicator::Working && !queued && !undelivered;
         let compact_status = sidebar.then(|| {
@@ -8584,11 +8702,7 @@ impl Shell {
                     .text_color(status_color)
                     .into_any_element()
             } else {
-                div()
-                    .size(px(6.0))
-                    .rounded_full()
-                    .bg(status_color)
-                    .into_any_element()
+                attention_mark(13.0)
             };
             div()
                 .id(SharedString::from(format!("{row_id}-status")))
@@ -8673,7 +8787,7 @@ impl Shell {
                 Some(label) => {
                     // Glyph slot: Working wears the preset's animated pixel
                     // glyph beside its label, Done wears the check, and the
-                    // remaining statuses use a compact dot.
+                    // remaining statuses use their attention mark.
                     let glyph: AnyElement = if status == zuse_protocol::ChatIndicator::Completed {
                         icon(icons::CHECK)
                             .size(px(11.0))
@@ -8690,12 +8804,7 @@ impl Shell {
                         )
                         .into_any_element()
                     } else {
-                        div()
-                            .size(px(6.0))
-                            .flex_none()
-                            .rounded_full()
-                            .bg(status_color)
-                            .into_any_element()
+                        attention_mark(13.0)
                     };
                     div()
                         .flex()
@@ -8788,10 +8897,10 @@ impl Shell {
                 .into_any_element()
         };
         let mut corner = Some(corner);
-        let (hover, text) = (theme.glass_hover(), theme.text);
+        let hover = theme.glass_hover();
         let selected_wash = crate::theme::glass_selected_bg();
-        // Metadata reads in the subtle text role; titles in default text,
-        // strong once selected.
+        // Metadata reads in the subtle text role, as do read titles;
+        // titles turn strong once selected or unread.
         let subline = theme.text_muted;
         let select_id = id.clone();
         let menu_id = id.clone();
@@ -8812,12 +8921,14 @@ impl Shell {
         // below its near-opaque selected fill, and blending toward it visibly
         // dimmed the active row under the pointer (user report).
         let hover_bg = if selected { selected_wash } else { hover };
-        let rest_text = if selected {
+        // Brightness is the read state: titles rest gray and an unseen finish
+        // stands out in full white, with no status mark beside it.
+        let finished_unseen =
+            status == zuse_protocol::ChatIndicator::Completed && !queued && !undelivered;
+        let rest_text = if selected || (finished_unseen && !archived) {
             theme.text_strong
-        } else if archived {
-            theme.text_muted
         } else {
-            text
+            theme.text_muted
         };
         let row = div()
             .id(SharedString::from(row_id.clone()))
@@ -8963,8 +9074,6 @@ impl Shell {
             // queued) on the avatar and set an unseen finish in bold, as the
             // reference thread list does.
             let avatar_badge = !nested && working && project_icon.is_some();
-            let finished_unseen =
-                status == zuse_protocol::ChatIndicator::Completed && !queued && !undelivered;
             let unread = two_line && finished_unseen;
             let attention_badge = two_line
                 && !working
@@ -9073,12 +9182,15 @@ impl Shell {
             // the pull request's state.
             // A working card wears its spinner as a badge on the avatar (the
             // title stays clean); other activity leads the title.
+            let status_mark = status_label
+                .filter(|_| !finished_unseen)
+                .and(compact_status);
             let (status_glyph, title_glyph) = if nested {
-                (status_label.and(compact_status), None)
+                (status_mark, None)
             } else if avatar_badge || attention_badge || unread {
                 (None, None)
             } else {
-                (None, status_label.and(compact_status))
+                (None, status_mark)
             };
             let lead: Option<AnyElement> = if nested {
                 Some(
@@ -9090,26 +9202,21 @@ impl Shell {
                         .items_center()
                         .justify_center()
                         .child(match status_glyph {
-                            // Running reads as the ring the Threads view
-                            // badges its avatar with.
-                            Some(_) if working => loaders::ring_spinner(
-                                SharedString::from(format!("{row_id}-working-ring")),
-                                13.0,
-                                1.5,
-                                theme.text.opacity(0.15),
-                                theme.text.opacity(0.85),
-                            ),
                             Some(glyph) => glyph,
-                            None => icon(icons::GIT_BRANCH)
-                                .size(px(14.0))
-                                .text_color(
-                                    crate::change_requests::branch_state_color(
-                                        change_request.as_ref(),
-                                        theme,
-                                    )
-                                    .opacity(if archived_muted { 0.4 } else { 0.85 }),
-                                )
-                                .into_any_element(),
+                            None => {
+                                let (glyph, tone) = crate::change_requests::branch_state_glyph(
+                                    change_request.as_ref(),
+                                    theme,
+                                );
+                                icon(glyph)
+                                    .size(px(12.0))
+                                    .text_color(tone.opacity(if archived_muted {
+                                        0.4
+                                    } else {
+                                        0.85
+                                    }))
+                                    .into_any_element()
+                            }
                         })
                         .into_any_element(),
                 )
@@ -9139,7 +9246,7 @@ impl Shell {
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .child(div().size(px(7.0)).rounded_full().bg(attention_color)),
+                                .child(attention_mark(10.0)),
                         )
                         .into_any_element();
                 }
@@ -9157,7 +9264,7 @@ impl Shell {
                                 let id = id.clone();
                                 move || format!("chat-status-{id}")
                             })
-                            .aria_label("Working")
+                            .aria_label(tr(cx, msg::projects::masters_working))
                             .absolute()
                             .right(px(-4.0))
                             .bottom(px(-4.0))
@@ -9167,12 +9274,12 @@ impl Shell {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .child(loaders::ring_spinner(
-                                SharedString::from(format!("{row_id}-working")),
-                                10.0,
+                            .child(loaders::mini_glyph_spinner(
+                                format!("{row_id}-working"),
                                 1.5,
-                                theme.text.opacity(0.15),
-                                theme.text.opacity(0.85),
+                                theme.glyph,
+                                self.sidebar_pane.entity_id(),
+                                cx,
                             )),
                     )
                     .into_any_element()
@@ -9422,6 +9529,13 @@ impl Shell {
                                     )
                                 }
                             }))
+                            .children(pr_error.clone().filter(|_| !preview).map(|error| {
+                                crate::change_requests::unavailable_badge(
+                                    format!("{row_id}-pr-error").into(),
+                                    error,
+                                    theme,
+                                )
+                            }))
                             .child(
                                 div()
                                     .id(SharedString::from(format!("{row_id}-corner")))
@@ -9503,7 +9617,7 @@ impl Shell {
                             .gap(px(4.0))
                             .when_some(branch, |el, branch| {
                                 el.child(
-                                    icon(icons::GIT_BRANCH)
+                                    icon(icons::GIT_STATE_BRANCH)
                                         .size(px(11.0))
                                         .flex_none()
                                         .text_color(subline),
@@ -9543,7 +9657,14 @@ impl Shell {
                                         theme,
                                     )
                                 })
-                            }),
+                            })
+                            .children(pr_error.clone().filter(|_| !preview).map(|error| {
+                                crate::change_requests::unavailable_badge(
+                                    format!("{row_id}-pr-error").into(),
+                                    error,
+                                    theme,
+                                )
+                            })),
                     )
                 })
         };
@@ -10008,7 +10129,7 @@ impl Shell {
                                         .px(px(10.0))
                                         .text_color(theme.text_muted)
                                         .text_size(crate::typography::text_xs())
-                                        .child("Drop here to unpin")
+                                        .child(tr(cx, msg::native::drop_here_to_unpin))
                                 })
                                 .children(regular_items),
                         )
@@ -10090,10 +10211,7 @@ impl Shell {
         )
         .fade_overflow_y(&self.sidebar_scroll);
 
-        let update_strip = self.render_update_strip(theme, cx);
-        // Stacked above the update strip, the banner needs its own gap; alone
-        // it leans on the user-menu block's padding like the strip does.
-        let github_star_banner = self.render_github_star_banner(update_strip.is_some(), theme, cx);
+        let github_star_banner = self.render_github_star_banner(theme, cx);
 
         div()
             .w(px(
@@ -10114,10 +10232,9 @@ impl Shell {
             .when_some(self.render_connection_pill(theme, cx), |el, pill| {
                 el.child(pill)
             })
-            // "Star on GitHub" banner until dismissed (persisted), then the
-            // update strip — both above the user menu, below the lists.
+            // "Star on GitHub" banner until dismissed (persisted), above the
+            // footer, below the lists. App updates live in the footer itself.
             .when_some(github_star_banner, |el, banner| el.child(banner))
-            .when_some(update_strip, |el, strip| el.child(strip))
             .child(
                 div()
                     .px(px(8.))
@@ -10140,6 +10257,7 @@ impl Shell {
         let new_chat_hint: SharedString =
             crate::settings::badge_combo(self.settings.keymap.get(ShortcutId::NewSession)).into();
         let plugins_open = matches!(self.route, Route::Plugins);
+        let pull_requests_open = matches!(self.route, Route::PullRequests);
         let row = |id: &'static str, glyph: &'static str, label: &'static str, active: bool| {
             let fade = format!("{id}-hover");
             div()
@@ -10176,7 +10294,7 @@ impl Shell {
                 .focus_visible(|el| el.border_1().border_color(theme.border_strong))
                 .child(
                     icon(glyph)
-                        .size(px(16.0))
+                        .size(px(14.0))
                         .flex_none()
                         .text_color(if active {
                             theme.text
@@ -10200,11 +10318,11 @@ impl Shell {
             .child(
                 row(
                     "sidebar-new-chat-row",
-                    icons::PEN_NEW_SQUARE,
+                    icons::DITHER_CHAT,
                     "New chat",
                     false,
                 )
-                .aria_label("New chat")
+                .aria_label(tr(cx, msg::chat::chat_view_new_chat))
                 .on_click(cx.listener(|this, _, _, cx| this.open_new_session(None, cx)))
                 .when(!new_chat_hint.is_empty(), |el| {
                     el.child(
@@ -10220,34 +10338,48 @@ impl Shell {
             .child(
                 row(
                     "sidebar-new-project-row",
-                    icons::FOLDER_WITH_FILES,
+                    icons::DITHER_FOLDER,
                     "New project",
                     false,
                 )
-                .aria_label("New project")
+                .aria_label(tr(cx, msg::projects::projects_sidebar_new_project))
                 .on_click(cx.listener(|this, _, _, cx| this.open_add_space(cx))),
             )
             .when(self.state.read(cx).cloud_user_id().is_some(), |view| {
                 view.child(
                     row(
                         "sidebar-plugins-row",
-                        icons::SETTINGS_PLUGINS,
+                        icons::DITHER_PLUG,
                         "Plugins",
                         plugins_open,
                     )
-                    .aria_label("Plugins")
+                    .aria_label(tr(cx, msg::plugins::plugins_back))
                     .on_click(cx.listener(|this, _, _, cx| this.open_plugins_page(cx))),
                 )
             })
+            // Pull requests span every chat, so the entry lives with the
+            // other global destinations rather than in a chat's top bar.
+            .child(
+                row(
+                    "sidebar-pull-requests-row",
+                    icons::PULL_REQUEST,
+                    "Pull requests",
+                    pull_requests_open,
+                )
+                .aria_label(tr(cx, msg::native::pull_requests))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.settings_focus_pending = false;
+                    this.open_pull_requests(cx);
+                })),
+            )
             .into_any_element()
     }
 
-    /// "Star on GitHub" banner, styled like the update strip. Clicking it
+    /// "Star on GitHub" banner: a low-emphasis accent chip. Clicking it
     /// opens the repository; either that or the close button dismisses it for
     /// good — the choice is persisted so it never returns on the next launch.
     fn render_github_star_banner(
         &self,
-        above_update_strip: bool,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
@@ -10261,7 +10393,6 @@ impl Shell {
             div()
                 .id("github-star-banner")
                 .mx(px(Theme::SPACE_SM))
-                .when(above_update_strip, |el| el.mb(px(Theme::SPACE_XS)))
                 .pl(px(Theme::SPACE_SM))
                 .pr(px(Theme::SPACE_XS))
                 .py(px(4.0))
@@ -10290,7 +10421,13 @@ impl Shell {
                         .size(px(12.0))
                         .text_color(tone),
                 )
-                .child(div().flex_1().min_w_0().truncate().child("Star on GitHub"))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .child(tr(cx, msg::projects::projects_sidebar_star_on_github)),
+                )
                 .child(
                     div()
                         .id("github-star-banner-dismiss")
@@ -10319,53 +10456,159 @@ impl Shell {
         cx.notify();
     }
 
-    /// Update strip: shown above the user menu whenever this app's release
-    /// checker ([`crate::app_update`]) has found a newer version. Self-updating
-    /// installs (macOS bundles, Windows installs, Linux managed installs) show
-    /// the background download and then "restart to apply"; installs that
+    /// App update pill: sits in the footer beside the running-agent count
+    /// whenever this app's release checker ([`crate::app_update`]) has found a
+    /// newer version. Self-updating installs (macOS bundles, Windows installs,
+    /// Linux managed installs) go Update → Updating → Restart; installs that
     /// can't replace themselves explain why; advisory installs point at
-    /// `zuse update` or the GitHub releases page and dismiss per version.
-    fn render_update_strip(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
+    /// `zuse update` or the GitHub releases page and dismiss per version. The
+    /// full status line lives in the tooltip so the footer stays one row.
+    fn render_update_pill(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
+        use crate::app_update::{Flow, StripAction};
         let update = crate::app_update::AppUpdate::global(cx)?;
-        let (label, action) = update.read(cx).strip()?;
-        let failed = matches!(
-            update.read(cx).flow(),
-            crate::app_update::Flow::Failed { .. }
-        );
-        let tone = if failed { theme.danger } else { theme.accent };
-        // Follow the selected spectrum with a low-emphasis glass tint rather
-        // than painting the bright text accent as a solid slab.
-        let (chip_bg, chip_bg_hover) = if failed {
-            (theme.danger.opacity(0.14), theme.danger.opacity(0.22))
-        } else {
-            (theme.accent_wash, theme.accent.opacity(0.16))
-        };
+        let (status, action) = update.read(cx).strip()?;
+        let flow = update.read(cx).flow().clone();
+        let notes = update
+            .read(cx)
+            .release_notes()
+            .map(|(version, sections)| (version.to_owned(), sections.to_vec()));
+        let working = self.working_agent_count(cx);
 
-        let mut strip = div()
-            .id("update-strip")
-            .mx(px(Theme::SPACE_SM))
-            // No bottom margin: the user-menu block below carries its own
-            // SPACE_SM padding — doubling it read as a hole (user report).
-            .px(px(Theme::SPACE_SM))
-            .py(px(6.0))
-            .rounded(px(Theme::CONTROL_RADIUS))
-            .bg(chip_bg)
-            .flex()
-            .flex_row()
-            .items_center()
-            .text_size(crate::typography::text_xs())
-            .font_weight(gpui::FontWeight::MEDIUM)
-            .text_color(tone)
-            .child(div().flex_1().min_w_0().child(label));
-        if action != crate::app_update::StripAction::None {
-            strip = strip
-                .cursor_pointer()
-                .hover(move |s| s.bg(chip_bg_hover))
-                .on_click(
-                    cx.listener(move |this, _, _, cx| this.on_update_strip_click(action, cx)),
-                );
+        enum Tone {
+            Quiet,
+            Accent,
+            Solid,
+            Danger,
         }
-        Some(strip.into_any_element())
+        let (glyph, label, tone, tip): (Option<&'static str>, &'static str, Tone, SharedString) =
+            match (&flow, action) {
+                (Flow::Installed, _) => (None, "Restarting", Tone::Quiet, status),
+                (Flow::Downloading { .. }, _) => (
+                    None,
+                    "Updating",
+                    Tone::Quiet,
+                    format!("{status} You can keep working.").into(),
+                ),
+                (_, StripAction::Restart) => (
+                    Some(icons::RESTART),
+                    "Restart",
+                    Tone::Solid,
+                    match working {
+                        0 => format!("{status} — restart to apply").into(),
+                        1 => format!("{status} — 1 running agent resumes after restart").into(),
+                        n => format!("{status} — {n} running agents resume after restart").into(),
+                    },
+                ),
+                (Flow::Failed { .. }, _) => (Some(icons::RESTART), "Retry", Tone::Danger, status),
+                (_, StripAction::None) => (None, "Updating", Tone::Quiet, status),
+                _ => (Some(icons::ARROW_DOWN), "Update", Tone::Accent, status),
+            };
+        let (glyph, label, tone, tip, action) =
+            match self.update_restart.as_ref().map(|plan| plan.stage()) {
+                Some(update_restart::RestartStage::WaitingForAgents) => (
+                    None,
+                    "Waiting",
+                    Tone::Quiet,
+                    SharedString::from("Restarts when your agents finish. Click for options."),
+                    StripAction::Restart,
+                ),
+                Some(update_restart::RestartStage::UpdatingAgents) => (
+                    None,
+                    "Updating",
+                    Tone::Quiet,
+                    SharedString::from("Updating agents, then restarting."),
+                    StripAction::None,
+                ),
+                None => (glyph, label, tone, tip, action),
+            };
+        let (bg, bg_hover, fg) = match tone {
+            Tone::Quiet => (theme.glass_hover(), theme.glass_hover(), theme.text_muted),
+            Tone::Accent => (theme.accent_wash, theme.accent.opacity(0.18), theme.accent),
+            Tone::Solid => (theme.text, theme.text.opacity(0.85), theme.on_solid),
+            Tone::Danger => (
+                theme.danger.opacity(0.14),
+                theme.danger.opacity(0.22),
+                theme.danger,
+            ),
+        };
+        let interactive = action != StripAction::None;
+        let focus_ring = theme.accent;
+        let lead = match glyph {
+            Some(glyph) => icon(glyph)
+                .size(px(12.0))
+                .flex_none()
+                .text_color(fg)
+                .into_any_element(),
+            None => loaders::mini_glyph_spinner(
+                "sidebar-update-progress",
+                1.5,
+                theme.glyph,
+                cx.entity_id(),
+                cx,
+            )
+            .into_any_element(),
+        };
+        Some(
+            div()
+                .id("sidebar-update")
+                .debug_selector(|| "sidebar-update".into())
+                .role(if interactive {
+                    gpui::Role::Button
+                } else {
+                    gpui::Role::Status
+                })
+                .aria_label(tip.clone())
+                .h(px(22.0))
+                .px(px(8.0))
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap(px(4.0))
+                .rounded_full()
+                .border_1()
+                .border_color(gpui::transparent_black())
+                .bg(bg)
+                .text_size(crate::typography::text_xs())
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(fg)
+                .map(|el| match notes {
+                    // Hoverable so the pointer can reach the card's link. It
+                    // sits at the window's bottom edge, so gpui flips it up.
+                    Some((version, sections)) => el.hoverable_tooltip(move |_, cx| {
+                        cx.new(|_| update_notes::UpdateNotesCard {
+                            status: tip.clone(),
+                            version: version.clone(),
+                            sections: sections.clone(),
+                        })
+                        .into()
+                    }),
+                    None => el.tooltip(crate::settings::widgets::text_tooltip_above(tip)),
+                })
+                .when(interactive, |el| {
+                    el.tab_index(0)
+                        .cursor_pointer()
+                        .focus_visible(move |el| el.border_color(focus_ring))
+                        .hover(move |el| el.bg(bg_hover))
+                        .on_click(
+                            cx.listener(move |this, _, _, cx| {
+                                this.on_update_strip_click(action, cx)
+                            }),
+                        )
+                })
+                .child(lead)
+                .child(label)
+                .into_any_element(),
+        )
+    }
+
+    /// Chats with a turn in flight — the same count the footer shows.
+    fn working_agent_count(&self, cx: &App) -> usize {
+        self.state
+            .read(cx)
+            .sidebar_chats(Utc::now(), None)
+            .into_iter()
+            .filter(|(indicator, _)| *indicator == zuse_protocol::ChatIndicator::Working)
+            .count()
     }
 
     /// Download → the background stage; Restart → swap + relaunch; Explain →
@@ -10383,11 +10626,7 @@ impl Shell {
         match action {
             StripAction::None => {}
             StripAction::Download => update.update(cx, |update, cx| update.start_download(cx)),
-            StripAction::Restart => {
-                if let Some(staged) = update.read(cx).staged() {
-                    self.apply_staged_update(staged, cx);
-                }
-            }
+            StripAction::Restart => self.request_update_restart(cx),
             StripAction::Explain => update.update(cx, |update, cx| update.show_result(cx)),
             StripAction::Advise { open_releases } => {
                 if open_releases {
@@ -10408,11 +10647,24 @@ impl Shell {
         let Some(update) = crate::app_update::AppUpdate::global(cx) else {
             return;
         };
+        let engine = self.state.read(cx).engine().cloned();
+        if let Some(engine) = &engine
+            && let Err(error) = engine.prepare_update_restart()
+        {
+            self.show_notice(
+                crate::toast::ToastKind::Error,
+                format!("Could not save running agents: {error}"),
+                cx,
+            );
+            return;
+        }
         if update
             .update(cx, |update, cx| update.install_for_restart(&staged, cx))
             .is_ok()
         {
             crate::app_menus::quit_after_save(cx);
+        } else if let Some(engine) = engine {
+            engine.cancel_update_restart();
         }
     }
 
@@ -10425,8 +10677,19 @@ impl Shell {
     ) -> Option<AnyElement> {
         use crate::app_update::{AppUpdate, Flow, Prompt};
         let update = AppUpdate::global(cx)?;
+        update.read(cx).prompt()?;
         let theme = Theme::of(cx).for_popup();
         let current = zuse_update::current_version();
+        let working = self.restart_blockers(cx);
+        let waiting_for_agents = self
+            .update_restart
+            .as_ref()
+            .is_some_and(|plan| plan.stage() == update_restart::RestartStage::WaitingForAgents);
+        let agent_updates = match self.agent_update_count() {
+            0 => String::new(),
+            1 => " 1 agent update is included.".to_owned(),
+            n => format!(" {n} agent updates are included."),
+        };
         let (title, body, buttons): (SharedString, SharedString, Vec<UpdatePromptButton>) = {
             let update = update.read(cx);
             match update.prompt()? {
@@ -10470,16 +10733,45 @@ impl Shell {
                                         UpdatePromptButton::Download,
                                     ],
                                 ),
-                                Flow::Downloading { .. } | Flow::Installed => (
+                                Flow::Downloading { .. } => (
                                     title,
-                                    "Downloading the update in the background — you can keep working."
+                                    "Downloading in the background — keep working. You'll get a Restart button when it's ready."
                                         .into(),
                                     vec![UpdatePromptButton::Close("Hide")],
                                 ),
+                                Flow::Installed => (
+                                    "Restarting Zuse…".into(),
+                                    "Your update is installed. Zuse will reopen shortly.".into(),
+                                    vec![],
+                                ),
+                                Flow::Ready { version, .. } if waiting_for_agents => (
+                                    "Waiting for agents to finish".into(),
+                                    format!("Zuse restarts to {version} as soon as they're done. Keep working in the meantime.").into(),
+                                    vec![
+                                        UpdatePromptButton::CancelRestart,
+                                        UpdatePromptButton::Close("Keep waiting"),
+                                        UpdatePromptButton::Restart,
+                                    ],
+                                ),
+                                Flow::Ready { version, .. } if working > 0 => (
+                                    format!("Zuse {version} is ready").into(),
+                                    format!(
+                                        "{}. Restart when {} done, or restart now and {} pick up where {} left off. Background tasks stop either way.{agent_updates}",
+                                        if working == 1 { "1 agent is active".to_owned() } else { format!("{working} agents are active") },
+                                        if working == 1 { "it's" } else { "they're" },
+                                        if working == 1 { "it will" } else { "they'll" },
+                                        if working == 1 { "it" } else { "they" },
+                                    )
+                                    .into(),
+                                    vec![
+                                        UpdatePromptButton::Close("Later"),
+                                        UpdatePromptButton::RestartAnyway,
+                                        UpdatePromptButton::RestartWhenIdle,
+                                    ],
+                                ),
                                 Flow::Ready { version, .. } => (
                                     format!("Zuse {version} is ready").into(),
-                                    "Restart to finish updating. If you don't, it installs the next time you quit Zuse."
-                                        .into(),
+                                    format!("Restart to finish updating — it only takes a moment.{agent_updates}").into(),
                                     vec![
                                         UpdatePromptButton::Close("Later"),
                                         UpdatePromptButton::Restart,
@@ -10518,12 +10810,7 @@ impl Shell {
                 },
             }
         };
-        let mut row = div()
-            .mt(px(16.0))
-            .flex()
-            .flex_row()
-            .justify_end()
-            .gap(px(8.0));
+        let mut row = popover::dialog_footer(&theme);
         for button in buttons {
             row = row.child(match button {
                 UpdatePromptButton::Close(label) => {
@@ -10542,25 +10829,43 @@ impl Shell {
                             update.update(cx, |update, cx| update.check_for_updates(cx));
                         }
                     })),
-                UpdatePromptButton::Download => popover::btn_primary(&theme, "Download")
+                UpdatePromptButton::Download => popover::btn_primary(&theme, "Update")
                     .id("update-prompt-download")
                     .on_click(cx.listener(|_, _, _, cx| {
                         if let Some(update) = crate::app_update::AppUpdate::global(cx) {
                             update.update(cx, |update, cx| update.start_download(cx));
                         }
                     })),
-                UpdatePromptButton::Restart => popover::btn_primary(&theme, "Restart to update")
+                UpdatePromptButton::Restart => popover::btn_primary(&theme, "Restart now")
                     .id("update-prompt-restart")
                     .on_click(cx.listener(|this, _, _, cx| {
-                        let Some(update) = crate::app_update::AppUpdate::global(cx) else {
-                            return;
-                        };
-                        let staged = update.read(cx).staged();
-                        update.update(cx, |update, cx| update.dismiss_prompt(cx));
-                        if let Some(staged) = staged {
-                            this.apply_staged_update(staged, cx);
-                        }
+                        dismiss_update_prompt(cx);
+                        this.begin_update_restart(false, cx);
                     })),
+                UpdatePromptButton::RestartAnyway => {
+                    popover::btn_ghost(&theme, "Restart now", "update-prompt-restart")
+                        .id("update-prompt-restart")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            dismiss_update_prompt(cx);
+                            this.begin_update_restart(false, cx);
+                        }))
+                }
+                UpdatePromptButton::RestartWhenIdle => {
+                    popover::btn_primary(&theme, "When agents finish")
+                        .id("update-prompt-when-idle")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            dismiss_update_prompt(cx);
+                            this.begin_update_restart(true, cx);
+                        }))
+                }
+                UpdatePromptButton::CancelRestart => {
+                    popover::btn_ghost(&theme, "Don't restart", "update-prompt-cancel")
+                        .id("update-prompt-cancel")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            dismiss_update_prompt(cx);
+                            this.cancel_update_restart_plan(cx);
+                        }))
+                }
                 UpdatePromptButton::OpenDownloads => {
                     popover::btn_primary(&theme, "Open download page")
                         .id("update-prompt-downloads")
@@ -10608,7 +10913,7 @@ impl Shell {
         div()
             .id("open-pull-requests")
             .role(gpui::Role::Button)
-            .aria_label("Pull requests")
+            .aria_label(tr(cx, msg::native::pull_requests))
             .tab_index(0)
             .debug_selector(|| "open-pull-requests".into())
             .focus_visible(|style| style.border_2().border_color(theme.accent))
@@ -10651,11 +10956,12 @@ impl Shell {
             .into_any_element()
     }
 
-    /// General-account plan and provider limits, followed by native voice,
-    /// Pull requests and Settings actions.
+    /// General-account plan, provider limits and the running-agent count,
+    /// then the app update pill (beside that count, so "restart" reads
+    /// against how many agents it would pause) and Settings.
     fn render_sidebar_footer(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         self.update_sidebar_controls(cx);
-        let pull_requests = self.render_pull_requests_button(theme, cx);
+        let update = self.render_update_pill(theme, cx);
         let settings = self.render_settings_trigger(theme, cx);
         div()
             .w_full()
@@ -10668,9 +10974,7 @@ impl Shell {
                     .min_w_0()
                     .child(self.sidebar_controls.clone()),
             )
-            // Pull requests span every chat, so the entry lives here rather
-            // than in a chat's top bar.
-            .child(pull_requests)
+            .when_some(update, |el, update| el.child(update))
             .child(settings)
             .into_any_element()
     }
@@ -10910,9 +11214,9 @@ impl Shell {
             .debug_selector(|| "settings-trigger".into())
             .role(gpui::Role::Button)
             .aria_label(if settings_open {
-                "Close settings"
+                ("Close settings").to_string()
             } else {
-                "Settings"
+                crate::localization::text("common-settings", cx)
             })
             .aria_toggled(if settings_open {
                 gpui::Toggled::True
@@ -10944,8 +11248,8 @@ impl Shell {
             .focus_visible(|s| s.border_2().border_color(theme.accent))
             .on_click(cx.listener(|this, _, _, cx| this.toggle_settings(cx)))
             .child(
-                icon(icons::SETTINGS)
-                    .size(px(15.0))
+                icon(icons::DITHER_GEAR)
+                    .size(px(14.0))
                     .text_color(if settings_open {
                         theme.text
                     } else {
@@ -11004,14 +11308,9 @@ impl Shell {
                     )),
                 )
                 .child(
-                    div()
-                        .mt(px(16.0))
-                        .flex()
-                        .flex_row()
-                        .justify_end()
-                        .gap(px(8.0))
+                    popover::dialog_footer(&theme)
                         .child(
-                            popover::btn_ghost(&theme, "Cancel", "sync-enable-cancel")
+                            popover::btn_ghost(&theme, &tr(cx, msg::common::cancel), "sync-enable-cancel")
                                 .id("sync-enable-cancel")
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.cancel_auth_setup(cx)
@@ -11053,14 +11352,9 @@ impl Shell {
                     .into(),
                     (None, None) => "Zuse can switch to your synced workspace now.".into(),
                 };
-                let mut actions = div()
-                    .mt(px(16.0))
-                    .flex()
-                    .flex_row()
-                    .justify_end()
-                    .gap(px(8.0))
+                let mut actions = popover::dialog_footer(&theme)
                     .child(
-                        popover::btn_ghost(&theme, "Later", "sync-switch-later")
+                        popover::btn_ghost(&theme, &tr(cx, msg::native::later), "sync-switch-later")
                             .id("sync-switch-later")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.postpone_sync_restart(cx)
@@ -11069,7 +11363,7 @@ impl Shell {
                 if has_local_work {
                     actions = actions
                         .child(
-                            popover::btn_ghost(&theme, "Start fresh", "sync-switch-fresh")
+                            popover::btn_ghost(&theme, &tr(cx, msg::native::start_fresh), "sync-switch-fresh")
                                 .id("sync-switch-fresh")
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.start_synced_switch(false, cx)
@@ -11176,11 +11470,7 @@ impl Shell {
                     .child(popover::dialog_title(&theme, "You're all set"))
                     .child(div().mt(px(6.0)).child(popover::dialog_body(&theme, body)))
                     .child(
-                        div()
-                            .mt(px(16.0))
-                            .flex()
-                            .flex_row()
-                            .justify_end()
+                        popover::dialog_footer(&theme)
                             .child(
                                 popover::btn_primary(&theme, "Continue")
                                     .id("sync-switch-done")
@@ -11209,14 +11499,9 @@ impl Shell {
                     )
                 })
                 .child(
-                    div()
-                        .mt(px(16.0))
-                        .flex()
-                        .flex_row()
-                        .justify_end()
-                        .gap(px(8.0))
+                    popover::dialog_footer(&theme)
                         .child(
-                            popover::btn_ghost(&theme, "Later", "import-failed-dismiss")
+                            popover::btn_ghost(&theme, &tr(cx, msg::native::later), "import-failed-dismiss")
                                 .id("import-failed-dismiss")
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.postpone_sync_restart(cx)
@@ -11257,14 +11542,9 @@ impl Shell {
                     )
                 })
                 .child(
-                    div()
-                        .mt(px(16.0))
-                        .flex()
-                        .flex_row()
-                        .justify_end()
-                        .gap(px(8.0))
+                    popover::dialog_footer(&theme)
                         .child(
-                            popover::btn_ghost(&theme, "Later", "sync-restart-later")
+                            popover::btn_ghost(&theme, &tr(cx, msg::native::later), "sync-restart-later")
                                 .id("sync-restart-later")
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.postpone_sync_restart(cx)
@@ -11291,14 +11571,9 @@ impl Shell {
                     )),
                 )
                 .child(
-                    div()
-                        .mt(px(16.0))
-                        .flex()
-                        .flex_row()
-                        .justify_end()
-                        .gap(px(8.0))
+                    popover::dialog_footer(&theme)
                         .child(
-                            popover::btn_ghost(&theme, "Cancel", "signout-cancel")
+                            popover::btn_ghost(&theme, &tr(cx, msg::common::cancel), "signout-cancel")
                                 .id("signout-cancel")
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.sync_flow = SyncFlow::Idle;
@@ -11433,6 +11708,16 @@ impl Shell {
                 .sidebar_controls
                 .update(cx, |controls, cx| controls.dismiss_on_escape(window, cx))
         {
+            cx.stop_propagation();
+            return;
+        }
+        if event.keystroke.key == "escape" && self.close_shortcuts_panel(cx) {
+            cx.stop_propagation();
+            return;
+        }
+        if event.keystroke.key == "escape" && self.transcript.read(cx).find_open() {
+            self.transcript
+                .update(cx, |transcript, cx| transcript.close_find(cx));
             cx.stop_propagation();
             return;
         }
@@ -11577,6 +11862,7 @@ impl Shell {
         let theme = Theme::of(cx).for_popup();
         let mut overlays: Vec<AnyElement> = Vec::new();
         overlays.push(self.desktop_import.clone().into_any_element());
+        overlays.extend(self.render_shortcuts_panel(viewport, cx));
 
         if let Some(menu_state) = self.chat_menu.get().cloned() {
             let chat_id = menu_state.chat_id;
@@ -11744,14 +12030,9 @@ impl Shell {
                     format!("\u{201C}{title}\u{201D} will be permanently deleted. This can\u{2019}t be undone."),
                 )))
                 .child(
-                    div()
-                        .mt(px(16.0))
-                        .flex()
-                        .flex_row()
-                        .justify_end()
-                        .gap(px(8.0))
+                    popover::dialog_footer(&theme)
                         .child(
-                            popover::btn_ghost(&theme, "Cancel", "delete-chat-cancel")
+                            popover::btn_ghost(&theme, &tr(cx, msg::common::cancel), "delete-chat-cancel")
                                 .id("delete-chat-cancel")
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.delete_confirm = None;
@@ -11783,16 +12064,11 @@ impl Shell {
                             "Discard all uncommitted changes in this working tree? This can’t be undone.",
                         )))
                         .child(
-                            div()
-                                .mt(px(16.0))
-                                .flex()
-                                .flex_row()
-                                .justify_end()
-                                .gap(px(8.0))
+                            popover::dialog_footer(&theme)
                                 .child(
                                     popover::btn_ghost(
                                         &theme,
-                                        "Cancel",
+                                        &tr(cx, msg::common::cancel),
                                         "discard-working-tree-cancel",
                                     )
                                     .id("discard-working-tree-cancel")
@@ -11815,7 +12091,7 @@ impl Shell {
                     .child(popover::dialog_title(&theme, "Couldn’t discard changes"))
                     .child(div().mt(px(6.0)).child(popover::dialog_body(&theme, error)))
                     .child(
-                        div().mt(px(16.0)).flex().justify_end().child(
+                        popover::dialog_footer(&theme).child(
                             popover::btn_primary(&theme, "Close")
                                 .id("discard-working-tree-error-close")
                                 .on_click(cx.listener(|this, _, _, cx| {
@@ -12049,22 +12325,8 @@ impl Shell {
         }
         self.composer
             .update(cx, |composer, cx| composer.set_dock_frame(dock_frame, cx));
-        // The session card: docked, the transcript holds its room free on
-        // the right and the composer follows the column left by half of it;
-        // over a column too tight for that, it floats once opened.
-        let (session_docked, session_reveal, session_reserve) =
-            self.session_info_frame(has_selection, cx);
-        // The transcript's outline control sits top-right; a docked card
-        // takes that corner, so the outline steps left of it.
-        let outline_inset = if session_docked {
-            (session_info::SESSION_CARD_WIDTH + 8.0) * session_reveal.clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
-        self.transcript.update(cx, |transcript, cx| {
-            transcript.set_right_reserve(session_reserve, cx);
-            transcript.set_outline_inset(outline_inset, cx);
-        });
+        // The session card floats over the transcript once opened.
+        let session_reveal = self.session_info_reveal(has_selection);
         // Panel open/close glides the composer width; a window resize or a
         // seam drag is direct manipulation, so the width tracks the pointer.
         let direct_width =
@@ -12072,7 +12334,6 @@ impl Shell {
         let composer_width = self.composer_dock.borrow_mut().layout_width(
             composer_target_width(
                 main_content_width
-                    - session_reserve
                     - if has_selection || cloud_starting {
                         0.
                     } else {
@@ -12113,6 +12374,7 @@ impl Shell {
                 let width = (self.viewport_width - self.sidebar_now()).max(0.0);
                 let bounds = self.composer.read(cx).surface_bounds();
                 let opacity = new_thread_background_opacity(theme.is_frost());
+                let has_artwork = artwork_frame.current.is_some();
                 div()
                     .absolute()
                     .inset_0()
@@ -12134,6 +12396,27 @@ impl Shell {
                         dock_frame.dissolve(),
                         artwork_frame.mix * opacity,
                     ))
+                    // Without artwork, invaders march across a dim band
+                    // under the titlebar; it leaves with the canvas on send.
+                    .when(
+                        !has_artwork && self.viewport_height >= NEW_THREAD_ARCADE_MIN_WINDOW,
+                        |layer| {
+                            layer.child(
+                                div()
+                                    .absolute()
+                                    .top(px(Theme::TITLEBAR_HEIGHT))
+                                    .left_0()
+                                    .right_0()
+                                    .h(px(NEW_THREAD_ARCADE_HEIGHT))
+                                    .opacity(1.0 - dock_frame.dissolve())
+                                    .child(crate::arcade::invaders_header(
+                                        format!("new-thread-invaders-{}", cx.entity_id()),
+                                        NEW_THREAD_ARCADE_HEIGHT,
+                                        theme.text,
+                                    )),
+                            )
+                        },
+                    )
                     .into_any_element()
             });
 
@@ -12224,7 +12507,7 @@ impl Shell {
                                 .text_size(crate::typography::text_sm())
                                 .text_color(theme.text_muted)
                                 .hover(|view| view.text_color(theme.text))
-                                .child("Start without a project")
+                                .child(tr(cx, msg::chat::start_without_project))
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.state
                                         .update(cx, |state, cx| state.select_space(None, cx));
@@ -12282,7 +12565,7 @@ impl Shell {
                             .text_size(px(12.))
                             .text_color(theme.text_muted)
                             .hover(|d| d.text_color(theme.text))
-                            .child("Start without a project")
+                            .child(tr(cx, msg::chat::start_without_project))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 let pickers = this.composer.read(cx).pickers().clone();
                                 pickers.update(cx, |pickers, cx| pickers.start_without_project(cx));
@@ -12317,12 +12600,8 @@ impl Shell {
             let lift = crate::composer::NEW_THREAD_SELECTOR_ROW_HEIGHT + 10.0;
             (self.viewport_height - f32::from(bounds.top()) + lift).max(24.0)
         }) - 8.0 * (1.0 - chip_opacity);
-        let status = div()
-            .relative()
-            .left(px(-session_reserve / 2.0))
-            .child(self.render_status_strip(composer_width, cx));
+        let status = self.render_status_strip(composer_width, cx);
         let session_card = self.render_session_info(
-            session_docked,
             session_reveal,
             self.viewport_height - Theme::TITLEBAR_HEIGHT - self.bottom_stack.get() - 24.0,
             cx,
@@ -12374,18 +12653,24 @@ impl Shell {
                         .absolute()
                         .inset_0()
                         .child(crate::terminal::dock::above_terminal(
-                            crate::edge_fade::edge_faded(
-                                Theme::TRANSCRIPT_FADE_BAND,
-                                true,
-                                true,
-                                div().size_full().child(outlet),
-                            )
-                            // Fully faded BY the titlebar's bottom edge (the
-                            // title text is opaque — overlap read as collision),
-                            // ramping in the band just below it.
-                            .inset_top(Theme::TITLEBAR_HEIGHT)
-                            .band_top(Theme::TRANSCRIPT_FADE_BAND)
-                            .band_bottom(bottom_band),
+                            if has_selection || departing_transcript {
+                                // The transcript fades its scrolling content;
+                                // its find bar retains normal clipping and stacking.
+                                self.transcript.update(cx, |transcript, cx| {
+                                    transcript.set_chrome_fade_bottom(bottom_band, cx);
+                                });
+                                div().size_full().child(outlet).into_any_element()
+                            } else {
+                                crate::edge_fade::edge_faded(
+                                    Theme::TRANSCRIPT_FADE_BAND,
+                                    true,
+                                    true,
+                                    div().size_full().child(outlet),
+                                )
+                                .inset_top(Theme::TITLEBAR_HEIGHT)
+                                .band_bottom(bottom_band)
+                                .into_any_element()
+                            },
                             terminal_geometry.clone(),
                         ))
                 },
@@ -12481,10 +12766,7 @@ impl Shell {
                                 self.reduced_motion,
                                 frame_time,
                             )
-                            // Centered on the transcript, which keeps the
-                            // session card's room free on its right.
                             .floating_clearance(16.)
-                            .shift_x(-session_reserve / 2.0)
                             .reserve_terminal(terminal_geometry.clone()),
                         )
                     })
@@ -12580,7 +12862,7 @@ impl Shell {
             .text_size(px(10.0))
             .text_color(motion::hover_blend(hover_key, theme.text_muted, theme.text))
             .role(gpui::Role::Button)
-            .aria_label("Jump to latest")
+            .aria_label(tr(cx, msg::chat::jump_to_latest_pill_jump_to_latest))
             .on_hover(motion::hover_listener(hover_key))
             .on_click(cx.listener(move |_, _, _, cx| {
                 transcript.update(cx, |transcript, cx| transcript.jump_to_bottom(cx));
@@ -12789,10 +13071,12 @@ impl Shell {
                 .child(SharedString::from("Run failed"))
                 .into_any_element(),
             Indicator::None if sending => strip
-                .child(loaders::working_mark(
+                .child(loaders::mini_glyph_spinner(
                     format!("sending-indicator-{}", cx.entity_id()),
-                    14.0,
-                    theme.text,
+                    2.5,
+                    theme.glyph,
+                    cx.entity_id(),
+                    cx,
                 ))
                 .child(
                     div()
@@ -12943,11 +13227,14 @@ impl Shell {
         } else {
             gpui::Empty.into_any_element()
         };
-        // Flush panel (user request — the inset card is gone): full window
-        // height with a left hairline, glass-friendly like the terminal dock
-        // (translucent over the frost; solid otherwise). The resize grabber
-        // lives outside this clipped container, on the root layout's seam.
+        // Where the workspace runs a gutter the panel is an inset card that
+        // matches the conversation card: same radius, same hairline, the
+        // gutter on every outer side. Without a gutter it stays flush: full
+        // window height with a left hairline. The resize grabber lives outside
+        // this clipped container, on the root layout's seam.
         let panel_bg = theme.panel_bg();
+        let gutter = self.workspace_gutter();
+        let inset = gutter > 0.0;
         let panel = div()
             .id("right-pane-focus")
             .debug_selector(|| "right-pane".into())
@@ -12962,7 +13249,12 @@ impl Shell {
             // In takeover the panel's left edge IS the sidebar seam, which
             // already carries the sidebar tone's right hairline — a second
             // border there doubled up (user report).
-            .when(!self.right_pane_expanded, |el| {
+            .when(inset, |el| {
+                el.rounded(px(zuse_viewport::workspace_style::RADIUS))
+                    .border_1()
+                    .border_color(crate::theme::hairline(0.05))
+            })
+            .when(!inset && !self.right_pane_expanded, |el| {
                 el.border_l_1().border_color(theme.border)
             })
             // With the explorer undocked the panel's right edge IS the
@@ -12971,7 +13263,9 @@ impl Shell {
             // layer rounds itself; see [`Self::window_corner_radius`]). Docked,
             // the explorer column is the rightmost layer and rounds instead.
             .when(
-                Self::window_corner_radius(window) > 0.0 && self.files_visible_width(cx) <= 0.0,
+                !inset
+                    && Self::window_corner_radius(window) > 0.0
+                    && self.files_visible_width(cx) <= 0.0,
                 |el| {
                     let corner = Self::window_corner_radius(window);
                     el.rounded_tr(px(corner)).rounded_br(px(corner))
@@ -12983,7 +13277,7 @@ impl Shell {
             // row; the panel's own chrome starts below it.
             .when(
                 !matches!(self.resolved_right_active(cx), RightSurface::SideChat(_)),
-                |el| el.pt(px(Theme::TITLEBAR_HEIGHT)),
+                |el| el.pt(px(Theme::TITLEBAR_HEIGHT - gutter)),
             )
             .child(content);
         let target = self.right_target(cx);
@@ -12995,7 +13289,12 @@ impl Shell {
             target,
             self.right_visible_width(cx),
             edge_offset,
-            div().h_full().relative().child(panel).into_any_element(),
+            div()
+                .h_full()
+                .relative()
+                .when(inset, |el| el.py(px(gutter)).pr(px(gutter)))
+                .child(panel)
+                .into_any_element(),
         )
     }
 
@@ -13280,6 +13579,7 @@ impl Shell {
                 cx.listener(move |this, _, window, cx| {
                     this.close_right_surface(surface, window, cx);
                 }),
+                cx,
             )
             .aria_label(accessible_label)
             .when_some(detail, |chip, detail| {
@@ -13423,7 +13723,7 @@ impl Shell {
                 }
             }))
             .role(gpui::Role::Button)
-            .aria_label("Add panel")
+            .aria_label(tr(cx, msg::chat::right_pane_add_panel))
             .aria_expanded(plus_open)
             .when(plus_open, |el| el.bg(crate::theme::wash(0.11)))
             .tooltip(crate::settings::widgets::text_tooltip("Add panel"))
@@ -13566,10 +13866,9 @@ impl Shell {
                         .items_center()
                         .justify_center()
                         .rounded(px(6.0))
-                        .bg(theme.text)
+                        .map(|el| popover::dither_key(el, &theme, popover::DitherKey::Primary, 6.0))
                         .text_size(crate::typography::text_md())
                         .font_weight(gpui::FontWeight::MEDIUM)
-                        .text_color(theme.on_solid)
                         .cursor_pointer()
                         .hover(|s| s.opacity(0.9))
                         .on_click(cx.listener(|this, _, _, cx| this.start_sign_in(cx)))
@@ -13769,10 +14068,11 @@ impl Shell {
                             .flex()
                             .items_center()
                             .rounded(px(6.0))
-                            .bg(theme.text)
+                            .map(|el| {
+                                popover::dither_key(el, &theme, popover::DitherKey::Primary, 6.0)
+                            })
                             .text_size(crate::typography::text_md())
                             .font_weight(gpui::FontWeight::MEDIUM)
-                            .text_color(theme.on_solid)
                             .when(submitting, |el| el.opacity(0.5))
                             .cursor_pointer()
                             .hover(|s| s.opacity(0.9))
@@ -14187,6 +14487,25 @@ impl Render for Shell {
                 )
             });
         }
+        let source_control_active = window.is_window_active();
+        let active_review = self.active_main_diff(cx);
+        for (id, changes) in &self.diffs {
+            changes.update(cx, |changes, cx| {
+                changes.set_git_active(
+                    source_control_active
+                        && (active_review == Some(*id)
+                            || (simulator_active && selected == RightSurface::Diff(*id))),
+                    cx,
+                )
+            });
+        }
+        let active_pr = self.pull_request_pane.active_index();
+        let pr_visible = source_control_active && self.pull_request_pane_open();
+        for (index, tab) in self.pull_request_pane.tabs.iter().enumerate() {
+            tab.page.update(cx, |page, cx| {
+                page.set_active(pr_visible && active_pr == Some(index), cx)
+            });
+        }
         let now = Utc::now();
         let wake = shell_clock_wake(self.state.read(cx), now);
         self.clock
@@ -14369,6 +14688,9 @@ impl Render for Shell {
                 window,
                 |this: &mut Shell, window, cx| {
                     motion::window_activation_changed(window.is_window_active(), cx);
+                    if window.is_window_active() {
+                        crate::localization::refresh_system(cx);
+                    }
                     if window.is_window_active()
                         && let Some(update) = crate::app_update::AppUpdate::global(cx)
                     {
@@ -14444,7 +14766,13 @@ impl Render for Shell {
                 el.rounded(px(LINUX_WINDOW_CORNER_RADIUS)).overflow_hidden()
             })
             .text_color(text)
-            .font_family(font)
+            .font(gpui::Font {
+                family: font,
+                fallbacks: Some(zuse_viewport::language_fonts::fallbacks(
+                    crate::localization::localizer(cx).locale(),
+                )),
+                ..Default::default()
+            })
             .text_size(crate::typography::text_base())
             .on_drag_move::<SidebarSessionDrag>(cx.listener(Self::contain_pinned_session_drag))
             .on_drop::<SidebarSessionDrag>(cx.listener(|this, _, _, cx| {
@@ -14540,6 +14868,20 @@ impl Render for Shell {
                 },
             ))
             .on_action(cx.listener(
+                |this, action: &crate::pull_request_detail::AddPullRequestContext, _, cx| {
+                    this.set_route(Route::Chat, cx);
+                    stage_prompt(this.composer.clone(), action.0.clone(), None, cx);
+                },
+            ))
+            .on_action(cx.listener(
+                |this, action: &crate::pull_request_card::SendContextToChat, _, cx| {
+                    let (text, context) = (action.text.clone(), action.context.clone());
+                    this.composer.update(cx, |composer, cx| {
+                        composer.send_with_context(text, context, cx)
+                    });
+                },
+            ))
+            .on_action(cx.listener(
                 |this, action: &crate::pull_request_detail::OpenPullRequest, window, cx| {
                     // From a chat (a sidebar badge, the composer's badge), the
                     // pull request opens beside the focused session, so
@@ -14597,28 +14939,24 @@ impl Render for Shell {
                         this.open_add_space_on_device(&action.device, cx);
                         return;
                     }
+                    // On the chat's own pull request the session opens beside it
+                    // as a side chat tab: it shares the chat's checkout, which
+                    // is already on the pull request's branch. Any other pull
+                    // request gets a new session, so checking it out never
+                    // moves this chat's branch.
+                    if this.pull_request_is_selected_chats(action, cx)
+                        && let Some(composer) = this.open_side_chat_for_prompt(cx)
+                    {
+                        stage_prompt(composer, action.prompt.clone(), action.context.clone(), cx);
+                        return;
+                    }
                     this.open_new_session(Some(action.project_id.clone()), cx);
-                    // Stage after the composer has swapped to the new
-                    // session's draft, which runs on the state observation
-                    // `open_new_session` just queued. A draft already waiting
-                    // there stays, above the prompt.
-                    let composer = this.composer.clone();
-                    let prompt = action.prompt.clone();
-                    cx.defer(move |cx| {
-                        composer.update(cx, |composer, cx| {
-                            composer.input.update(cx, |input, cx| {
-                                let draft = input.text().trim_end();
-                                let text = if draft.is_empty() {
-                                    prompt
-                                } else {
-                                    format!("{draft}\n\n{prompt}")
-                                };
-                                input.set_text(text, cx)
-                            });
-                            composer.focus_pending = true;
-                            cx.notify();
-                        });
-                    });
+                    stage_prompt(
+                        this.composer.clone(),
+                        action.prompt.clone(),
+                        action.context.clone(),
+                        cx,
+                    );
                 },
             ))
             // New session works from anywhere — `open_new_session` routes back
@@ -14694,7 +15032,8 @@ impl Render for Shell {
             }))
             .on_action(cx.listener(|this, _: &OpenModelPicker, window, cx| {
                 if matches!(this.route, Route::Chat) && !this.overlay_owns_keyboard(cx) {
-                    let pickers = this.composer.read(cx).pickers().clone();
+                    let composer = this.shortcut_conversation(window, cx).2;
+                    let pickers = composer.read(cx).pickers().clone();
                     pickers.update(cx, |pickers, cx| pickers.open_model_menu(window, cx));
                 }
             }))
@@ -14765,9 +15104,6 @@ impl Render for Shell {
                     // A call started from Settings opens its stage here too.
                     let voice_stage = self.render_voice_stage(window, cx);
                     let overlays = self.render_overlays(window.viewport_size(), window, cx);
-                    let border_color = Theme::of(cx).border;
-                    let sidebar_tone =
-                        Self::sidebar_tone(self.settings.sidebar_width, border_color, window);
                     let drag = self.titlebar_drag_region(
                         "settings-titlebar",
                         div()
@@ -14785,9 +15121,7 @@ impl Render for Shell {
                         .children(voice_stage)
                         .child(drag)
                         .children(overlays);
-                    break 'ready root
-                        .child(sidebar_tone)
-                        .child(motion::fade_in("phase-app", page));
+                    break 'ready root.child(motion::fade_in("phase-app", page));
                 }
                 // The Pull requests route shares this layout with its own
                 // side pane: opened pull requests as tabs beside the board.
@@ -14942,15 +15276,15 @@ impl Render for Shell {
                     .opacity(under_stage)
                     .when(self.workspace_gutter() > 0., |view| {
                         view.rounded(px(zuse_viewport::workspace_style::RADIUS))
-                            .bg(Theme::of(cx).bg)
+                            .bg(Theme::of(cx).panel_bg())
                             .border_1()
                             .border_color(crate::theme::hairline(0.05))
                     })
                     // Flush, the conversation still reads as its own panel:
-                    // a solid content tone against the translucent sidebar,
+                    // the content tone against the translucent sidebar,
                     // parted by one hairline.
                     .when(self.workspace_gutter() <= 0., |view| {
-                        view.bg(Theme::of(cx).bg)
+                        view.bg(Theme::of(cx).panel_bg())
                             .when(self.sidebar_content_width() > 0., |view| {
                                 view.border_l_1().border_color(crate::theme::hairline(0.06))
                             })
@@ -15491,6 +15825,7 @@ mod tests {
             started_at: Some(updated_at),
             updated_at,
             running_subagents: 0,
+            awaiting_input: None,
             background_tasks: Vec::new(),
         }
     }
@@ -17391,7 +17726,7 @@ mod exit_regressions {
     }
 
     #[gpui::test]
-    fn settings_footer_keeps_the_pull_requests_entry(cx: &mut TestAppContext) {
+    fn sidebar_footer_leaves_pull_requests_to_the_nav(cx: &mut TestAppContext) {
         // Chat and Settings both render this row; host it alone so the full
         // shell's pages don't cover it.
         struct FooterRow(Entity<Shell>);
@@ -17436,21 +17771,12 @@ mod exit_regressions {
             shell.open_settings(SettingsSection::General, cx)
         });
         cx.update(|window, cx| window.draw(cx).clear());
-        let row = cx.debug_bounds("sidebar-footer-row").unwrap();
-        let entry = cx
-            .debug_bounds("open-pull-requests")
-            .expect("Settings keeps the Pull requests entry");
-        let gear = cx.debug_bounds("settings-trigger").unwrap();
-        // Just left of Settings, in the same action group.
-        assert!(entry.right() <= gear.left() && entry.left() >= row.left());
-        assert!((entry.center().y - gear.center().y).abs() < px(1.0));
-        cx.simulate_click(entry.center(), gpui::Modifiers::default());
-        shell.read_with(cx, |shell, _| {
-            assert!(
-                matches!(shell.route, Route::PullRequests),
-                "it opens the board straight from Settings"
-            )
-        });
+        assert!(cx.debug_bounds("sidebar-footer-row").is_some());
+        assert!(cx.debug_bounds("settings-trigger").is_some());
+        assert!(
+            cx.debug_bounds("open-pull-requests").is_none(),
+            "Pull requests moved to the sidebar nav"
+        );
     }
 
     /// A ready Shell with no engine, for the Pull requests route.
@@ -17837,7 +18163,7 @@ mod exit_regressions {
         click(cx, "expand-pull-request-pane");
         let covering = cx.debug_bounds("pull-request-pane").unwrap();
         assert!(covering.size.width > pane.size.width);
-        assert!(covering.left() <= board.left());
+        assert!(covering.left() <= board.left() + px(zuse_viewport::workspace_style::GUTTER));
         click(cx, "expand-pull-request-pane");
         assert_eq!(cx.debug_bounds("pull-request-pane").unwrap(), pane);
         // The toggle hides the pane and keeps its tabs.
@@ -17987,9 +18313,11 @@ mod exit_regressions {
                 window.dispatch_action(
                     Box::new(crate::pull_request_detail::StartPullRequestSession {
                         prompt: "Review pull request #7".into(),
+                        context: None,
                         project_id: "pr-project".into(),
                         device: "remote".into(),
                         repository: "a/b".into(),
+                        own_chat: None,
                     }),
                     cx,
                 )
@@ -18014,6 +18342,106 @@ mod exit_regressions {
                 assert_eq!(
                     composer.input.read(cx).text(),
                     "half-written reply\n\nReview pull request #7",
+                    "a draft already on the canvas stays above the prompt"
+                );
+                assert!(composer.focus_pending);
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn pull_request_context_appends_to_the_draft_without_sending(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        cx.update(|cx| {
+            gpui_base::init(cx);
+            cx.set_global(Theme::default());
+            crate::app_menus::init(cx);
+            crate::history::init(
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                cx,
+            );
+            settings::init(settings::UiSettings::default(), dir.path(), cx);
+        });
+        let window = cx.add_window(|_, cx| {
+            let state = cx.new(|_| AppState::new());
+            Shell::new(
+                state,
+                EngineBootConfig {
+                    target: None,
+                    data_dir: dir.path().into(),
+                    ipc_port: 0,
+                    edge_url: "http://127.0.0.1:1".into(),
+                    edge_token: None,
+                    org_id: None,
+                    workos_client_id: None,
+                    default_harness: zuse_protocol::HarnessId::Mock,
+                },
+                cx,
+            )
+        });
+        window
+            .update(cx, |shell, _, cx| {
+                let space = |id: &str, device: &str| zuse_protocol::Space {
+                    id: id.into(),
+                    device_id: device.into(),
+                    path: format!("/{id}"),
+                    name: None,
+                    git_detected: true,
+                    git_checked_at: None,
+                    checkout_id: None,
+                    repository_id: None,
+                    remote_repository: None,
+                    created_at: Utc::now(),
+                };
+                shell.state.update(cx, |state, cx| {
+                    state.local_device_id = Some("local".into());
+                    state.apply_spaces(vec![
+                        space("unrelated", "local"),
+                        space("pr-project", "remote"),
+                    ]);
+                    state.select_space(Some("unrelated".into()), cx);
+                });
+                shell.settings.space_filter = Some("unrelated".into());
+                shell.composer.update(cx, |composer, cx| {
+                    composer
+                        .input
+                        .update(cx, |input, cx| input.set_text("half-written reply", cx))
+                });
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |_, window, cx| {
+                window.dispatch_action(
+                    Box::new(crate::pull_request_detail::AddPullRequestContext(
+                        "Review feedback snapshot".into(),
+                    )),
+                    cx,
+                )
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |shell, _, cx| {
+                assert!(
+                    shell.state.read(cx).selected_chat.is_none(),
+                    "a new session opens"
+                );
+                assert_eq!(
+                    shell.state.read(cx).selected_space.as_deref(),
+                    Some("unrelated")
+                );
+                assert!(
+                    shell.state.read(cx).chats.is_empty(),
+                    "adding context never creates or sends a chat"
+                );
+                let composer = shell.composer.read(cx);
+                assert_eq!(
+                    composer.input.read(cx).text(),
+                    "half-written reply\n\nReview feedback snapshot",
                     "a draft already on the canvas stays above the prompt"
                 );
                 assert!(composer.focus_pending);
@@ -19135,6 +19563,36 @@ mod exit_regressions {
 /// Native browser regression fixture hooks are excluded from shipped builds.
 #[cfg(feature = "browser-fixture")]
 impl Shell {
+    pub fn fixture_shortcut_visual(
+        &mut self,
+        kind: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.shortcuts_panel_open = false;
+        self.transcript.update(cx, |t, cx| t.close_find(cx));
+        match kind {
+            "find" | "find-empty" => {
+                self.transcript.update(cx, |t, cx| {
+                    t.open_find(window, cx);
+                    t.set_find_query(
+                        if kind == "find" {
+                            "repo"
+                        } else {
+                            "unmatched-query"
+                        },
+                        cx,
+                    );
+                });
+            }
+            "shortcuts" => self.shortcuts_panel_open = true,
+            _ => self
+                .composer
+                .update(cx, |c, cx| c.fixture_editing_visual(kind, window, cx)),
+        }
+        cx.notify();
+    }
+
     pub fn fixture_focus_mounted(&self, window: &Window, cx: &App) -> bool {
         self.shortcut_focus.contains_focused(window, cx)
     }
@@ -19303,6 +19761,7 @@ impl Shell {
             {
                 let chat = chat.clone();
                 state.fixture_sidebar_change_request(zuse_protocol::CheckoutChangeRequestStatus {
+                    error: None,
                     checkout_id: "fixture-checkout".into(),
                     device_id: chat.device_id.clone(),
                     cwd: "/tmp/fieldnotes".into(),
@@ -19316,6 +19775,8 @@ impl Shell {
                         state: zuse_protocol::ChangeRequestState::Open,
                         base_ref: "main".into(),
                         head_ref: "fieldnotes/workspace".into(),
+                        is_draft: false,
+                        review_decision: Default::default(),
                     }),
                 });
             }
@@ -19345,6 +19806,30 @@ impl Shell {
         });
         match route {
             "panel/launcher" => self.set_surfaces_open(true, cx),
+            "panel/git" => {
+                self.open_review_tab(window, cx);
+                let frame = serde_json::json!({"refreshing": false, "snapshot": {
+                    "chatId": "fixture-git", "checkoutId": "fixture-checkout", "cwd": "/tmp/fieldnotes",
+                    "branch": "alex/connection-handoff", "headSha": "abc1234",
+                    "upstream": "origin/alex/connection-handoff", "ahead": 2, "behind": 0,
+                    "complete": true, "revision": "r1",
+                    "files": [
+                        {"path": "apps/desktop/src/handoff.rs", "oldPath": null, "index": "modified", "worktree": "unchanged"},
+                        {"path": "apps/desktop/src/session.rs", "oldPath": null, "index": "modified", "worktree": "modified"},
+                        {"path": "crates/engine/src/connection.rs", "oldPath": null, "index": "unchanged", "worktree": "modified"},
+                        {"path": "crates/engine/src/retry.rs", "oldPath": null, "index": "unchanged", "worktree": "untracked"},
+                        {"path": "README.md", "oldPath": null, "index": "unchanged", "worktree": "modified"},
+                    ],
+                }});
+                if let Some(id) = self.active_main_diff(cx)
+                    && let Some(changes) = self.diffs.get(&id).cloned()
+                {
+                    changes.update(cx, |changes, cx| {
+                        changes.fixture_seed_diff(FIXTURE_REVIEW_PATCH, cx);
+                        changes.fixture_seed_git(frame, cx);
+                    });
+                }
+            }
             "panel/files" => {
                 self.add_files_surface(window, cx);
                 if let Some(files) = self.files.get(&self.panel_key(cx)).cloned() {
@@ -19534,7 +20019,6 @@ impl Shell {
         if variant.starts_with("transcript") {
             self.fixture_seed_transcript(variant == "transcript-outline", cx);
             if variant.starts_with("transcript-card") {
-                self.settings.session_info_hidden = false;
                 self.session_info_overlay = true;
             }
             // `:transcript-card-git` runs the chat in a worktree of a Git
@@ -19563,6 +20047,7 @@ impl Shell {
                     state.apply_sessions(vec![zuse_protocol::Session {
                         last_completed_turn: None,
                         running_subagents: 1,
+                        awaiting_input: None,
                         background_tasks: Vec::new(),
                         chat_id: "browser-fixture".into(),
                         device_id: "local".into(),
@@ -19580,6 +20065,7 @@ impl Shell {
                 let now = Utc::now();
                 let task = |id: &str,
                             description: &str,
+                            command: &str,
                             started: i64,
                             ended: Option<(i64, zuse_protocol::BackgroundTaskOutcome)>,
                             stoppable| {
@@ -19587,6 +20073,7 @@ impl Shell {
                         id: id.into(),
                         kind: zuse_protocol::BackgroundTaskKind::Shell,
                         description: description.into(),
+                        command: Some(command.into()),
                         started_at: now - chrono::Duration::seconds(started),
                         ended_at: ended.map(|(at, _)| now - chrono::Duration::seconds(at)),
                         outcome: ended.map(|(_, outcome)| outcome),
@@ -19597,11 +20084,27 @@ impl Shell {
                     state.apply_sessions(vec![zuse_protocol::Session {
                         last_completed_turn: None,
                         running_subagents: 0,
+                        awaiting_input: None,
                         background_tasks: vec![
-                            task("bg-1", "pnpm dev --port 3000", 312, None, true),
-                            task("bg-2", "cargo watch -x test", 95, None, true),
+                            task(
+                                "bg-1",
+                                "Start the dev server",
+                                "pnpm dev --port 3000",
+                                312,
+                                None,
+                                true,
+                            ),
+                            task(
+                                "bg-2",
+                                "cargo watch -x test",
+                                "cargo watch -x test",
+                                95,
+                                None,
+                                true,
+                            ),
                             task(
                                 "bg-3",
+                                "npm run build",
                                 "npm run build",
                                 400,
                                 Some((340, zuse_protocol::BackgroundTaskOutcome::Completed)),
@@ -19609,6 +20112,7 @@ impl Shell {
                             ),
                             task(
                                 "bg-4",
+                                "tail -f logs/server.log",
                                 "tail -f logs/server.log",
                                 600,
                                 Some((420, zuse_protocol::BackgroundTaskOutcome::Stopped)),

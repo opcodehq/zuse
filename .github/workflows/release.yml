@@ -12,9 +12,18 @@ on:
       tag:
         description: Existing version tag to build and publish (for example v0.26.0)
         required: true
+      formats_only:
+        description: Add installers and missing architectures to an existing release
+        type: boolean
+        default: false
+      archive_run_id:
+        description: Optional previous installer run whose verified native inputs should be reused
+        type: string
+        default: ''
 
 permissions:
   contents: write
+  actions: read
 
 concurrency:
   group: release-${{ inputs.tag || github.ref_name }}
@@ -25,6 +34,7 @@ env:
 
 jobs:
   verify:
+    if: inputs.formats_only != true
     runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -33,20 +43,32 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.TAG }}
+      # Older release tags do not contain the current note selector. Keep the
+      # workflow's tooling separate, while reading the tagged changelog in cwd.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: release-tools
+          persist-credentials: false
+          sparse-checkout: |
+            scripts/release_notes.py
+            scripts/distribution.py
+          sparse-checkout-cone-mode: false
       - id: version
         name: Match the tag to the workspace version and changelog
         run: |
           version="${TAG#v}"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]; then
+            echo "::error::Expected a version tag such as v0.26.0-preview.1"
+            exit 1
+          fi
           workspace=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml","rb"))["workspace"]["package"]["version"])')
           base="${version%%-*}"
           if [ "$base" != "$workspace" ]; then
             echo "::error::Tag $TAG does not match workspace version $workspace"
             exit 1
           fi
-          if ! grep -q "^## $base\b" CHANGELOG.md; then
-            echo "::error::CHANGELOG.md has no '## $base' section"
-            exit 1
-          fi
+          python3 release-tools/scripts/release_notes.py "$TAG" > /dev/null
           echo "version=$version" >> "$GITHUB_OUTPUT"
           if [ "$version" != "$base" ]; then echo "prerelease=true" >> "$GITHUB_OUTPUT"; else echo "prerelease=false" >> "$GITHUB_OUTPUT"; fi
 
@@ -62,7 +84,15 @@ jobs:
           - os: macos-latest
             platform: macos
             arch: aarch64
+          # Unsigned portable zip; Windows code signing is not set up yet.
+          - os: windows-latest
+            platform: windows
+            arch: x86_64
     runs-on: ${{ matrix.os }}
+    # Git Bash on Windows, so build-web.sh and the steps below run unchanged.
+    defaults:
+      run:
+        shell: bash
     env:
       HUGEICONS_LICENSE_KEY: ${{ secrets.HUGEICONS_LICENSE_KEY }}
       HUGEICONS_SOLID_VERSION: ${{ vars.HUGEICONS_SOLID_VERSION }}
@@ -88,38 +118,132 @@ jobs:
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y build-essential cmake clang libclang-dev pkg-config libssl-dev libfontconfig-dev libfreetype-dev libxcb1-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libvulkan-dev libasound2-dev libwebkit2gtk-4.1-dev libjson-glib-dev
       - run: cargo fetch --locked
+      # Dependency build scripts run on this runner, so it never receives the
+      # signing certificate or Apple credentials.
+      - name: Build
+        run: python scripts/package.py --platform ${{ matrix.platform }} --arch ${{ matrix.arch }} --build-only
       - name: Package
-        run: python3 scripts/package.py --platform ${{ matrix.platform }} --arch ${{ matrix.arch }} --output dist/release
-      - uses: actions/upload-artifact@v4
+        if: runner.os != 'macOS'
+        run: python scripts/package.py --platform ${{ matrix.platform }} --arch ${{ matrix.arch }} --version "${{ needs.verify.outputs.version }}" --skip-build --output dist/release
+      - if: runner.os != 'macOS'
+        uses: actions/upload-artifact@v4
         with:
           name: zuse-${{ matrix.platform }}-${{ matrix.arch }}
+          path: dist/release/zuse-*
+          if-no-files-found: error
+      # The macOS build is signed on a fresh runner by the sign-macos job.
+      - if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            target/release/zuse
+            target/release/zuse-server
+            target/release/zuse-relay
+            dist/web
+          if-no-files-found: error
+          retention-days: 1
+
+  # Signs on a runner that has never run dependency build code, so nothing a
+  # build script left behind can use the identity or read the credentials.
+  sign-macos:
+    needs: [verify, build]
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          name: unsigned-macos-aarch64
+      # Downloads the pinned toolkit for its licence files; runs no dependency code.
+      - run: cargo fetch --locked
+      # Tagged releases must be signed; local packaging can still be unsigned.
+      - name: Load the macOS signing certificate
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+        run: |
+          if [ -z "$CSC_LINK" ]; then
+            echo "::error::CSC_LINK is required for macOS releases"
+            exit 1
+          fi
+          keychain="$RUNNER_TEMP/zuse-signing.keychain-db"
+          keychain_password=$(uuidgen)
+          echo "$CSC_LINK" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$keychain" -P "$CSC_KEY_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain" >/dev/null
+          keychains=()
+          while IFS= read -r line; do
+            line="${line#"${line%%[![:space:]]*}"}"; line="${line#\"}"; line="${line%\"}"
+            [ -n "$line" ] && keychains+=("$line")
+          done < <(security list-keychains -d user)
+          security list-keychains -d user -s "$keychain" "${keychains[@]}"
+          rm "$RUNNER_TEMP/certificate.p12"
+          identity=$(security find-identity -v -p codesigning "$keychain" | grep -o '"Developer ID Application: [^"]*"' | head -1 | tr -d '"')
+          if [ -z "$identity" ]; then
+            echo "::error::The certificate in CSC_LINK has no Developer ID Application identity"
+            exit 1
+          fi
+          echo "ZUSE_MACOS_SIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
+          echo "ZUSE_MACOS_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+      - name: Package, sign and notarize
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          : "${APPLE_ID:?Set the APPLE_ID repository secret for notarization}"
+          : "${APPLE_APP_SPECIFIC_PASSWORD:?Set the APPLE_APP_SPECIFIC_PASSWORD repository secret}"
+          : "${APPLE_TEAM_ID:?Set the APPLE_TEAM_ID repository secret}"
+          python scripts/package.py --platform macos --arch aarch64 --version "${{ needs.verify.outputs.version }}" --skip-build --output dist/release
+      # Runs even when setup failed part-way, before the keychain was exported.
+      - name: Remove the signing credentials
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/certificate.p12"
+          keychain="$RUNNER_TEMP/zuse-signing.keychain-db"
+          if [ -e "$keychain" ]; then security delete-keychain "$keychain"; fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zuse-macos-aarch64
           path: dist/release/*.tar.gz
           if-no-files-found: error
 
   publish:
-    needs: [verify, build]
+    needs: [verify, build, sign-macos]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.TAG }}
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: release-tools
+          persist-credentials: false
+          sparse-checkout: |
+            scripts/release_notes.py
+            scripts/distribution.py
+          sparse-checkout-cone-mode: false
       - uses: actions/download-artifact@v4
         with:
+          pattern: zuse-*
           path: dist/release
           merge-multiple: true
       - name: Checksums and notes
         run: |
           cd dist/release
-          sha256sum *.tar.gz > SHA256SUMS
+          sha256sum zuse-* > SHA256SUMS
           cat SHA256SUMS
           cd ../..
-          base="${{ needs.verify.outputs.version }}"
-          base="${base%%-*}"
-          awk -v heading="## $base" '
-            index($0, heading) == 1 { found = 1; next }
-            found && /^## / { exit }
-            found { print }
-          ' CHANGELOG.md > dist/notes.md
+          python3 release-tools/scripts/release_notes.py "$TAG" > dist/notes.md
           test -s dist/notes.md
       - name: Publish
         env:
@@ -135,3 +259,12 @@ jobs:
               --title "Zuse ${{ needs.verify.outputs.version }}" \
               --notes-file dist/notes.md "${flags[@]}"
           fi
+
+  distributions:
+    needs: publish
+    if: ${{ !cancelled() && (needs.publish.result == 'success' || inputs.formats_only == true) }}
+    uses: ./.github/workflows/distributions.yml
+    with:
+      tag: ${{ inputs.tag || github.ref_name }}
+      archive_run_id: ${{ inputs.archive_run_id || '' }}
+    secrets: inherit

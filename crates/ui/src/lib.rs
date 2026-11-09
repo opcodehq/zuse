@@ -17,6 +17,7 @@ pub mod app_menus;
 pub mod app_update;
 pub mod appearance;
 pub mod appshots;
+pub mod arcade;
 mod asset_http;
 pub mod attachments;
 pub mod badges;
@@ -24,11 +25,13 @@ pub mod browser;
 pub mod change_requests;
 pub mod changes;
 mod chat_configuration;
+pub(crate) mod chat_find;
 mod comment_ui;
 pub mod comments;
 pub mod composer;
 mod composer_dock;
 mod composer_markdown;
+pub mod context_items;
 mod context_usage;
 pub mod desktop_import;
 mod dictation;
@@ -44,6 +47,7 @@ pub(crate) mod image_media;
 pub(crate) mod image_viewer;
 pub mod links;
 pub mod loaders;
+pub mod localization;
 pub mod markdown;
 pub mod motion;
 mod new_thread_background_effects;
@@ -61,6 +65,7 @@ mod project_archive;
 pub mod pull_request_card;
 pub mod pull_request_detail;
 mod pull_request_media;
+mod pull_request_review_hunk;
 mod pull_request_skeleton;
 #[cfg(test)]
 mod pull_request_test_support;
@@ -265,11 +270,12 @@ pub fn run_app(config: UiConfig) {
         let quit_state = state.clone();
         cx.on_app_quit(move |cx| {
             settings::flush(cx);
+            let engine = quit_state.read(cx).engine().cloned();
+            // Quit means stop: agents come back only from a restart the user
+            // asked for, however long until Zuse is next opened.
             app_update::install_on_quit(cx);
-            let shutdown =
-                quit_state.read(cx).engine().cloned().map(|handle| {
-                    gpui_tokio::Tokio::spawn(cx, async move { handle.shutdown().await })
-                });
+            let shutdown = engine
+                .map(|handle| gpui_tokio::Tokio::spawn(cx, async move { handle.shutdown().await }));
             async move {
                 if let Some(task) = shutdown {
                     let _ = task.await;
@@ -292,7 +298,7 @@ pub fn run_app(config: UiConfig) {
         // `open_main_window` because `Shell::new` ran `apply_keymap`
         // synchronously, so `set_menus` reads the final bindings for the ⌘-key
         // equivalents (gpui snapshots the keymap at set time).
-        cx.set_menus(app_menus::app_menus());
+        cx.set_menus(app_menus::app_menus(cx));
         cx.activate(true);
     });
 }

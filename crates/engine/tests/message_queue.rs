@@ -616,21 +616,6 @@ async fn saturated_steering_mailbox_waits_without_restarting_or_losing_messages(
     wait_for(|| user_messages(&core).len() == 33, "mailbox to fill").await;
     assert!(!sending.is_finished(), "saturation must wait for capacity");
     assert_eq!(harness.requests.lock().unwrap().len(), 1);
-    let client = zuse_rpc::memory_client(core.rpc_service());
-    let archive = tokio::time::timeout(
-        Duration::from_secs(2),
-        client.call(
-            zuse_rpc::methods::MUTATE,
-            serde_json::json!({"op":"setChatArchived","chatId":CHAT,"archived":true}),
-        ),
-    )
-    .await
-    .expect("archive admission must not deadlock behind a full steering mailbox");
-    assert!(
-        archive.is_err(),
-        "a busy agent must retain its live checkout"
-    );
-    assert!(!core.workspace.chat(CHAT).unwrap().unwrap().archived);
     gate.notify_one();
     tokio::time::timeout(Duration::from_secs(5), sending)
         .await
@@ -647,6 +632,42 @@ async fn saturated_steering_mailbox_waits_without_restarting_or_losing_messages(
     assert_eq!(user_messages(&core), expected);
     assert_eq!(harness.requests.lock().unwrap().len(), 1);
     harness.finish.send(()).unwrap();
+    core.shutdown().await;
+}
+
+/// Archive ends the agent instead of refusing, even behind a full mailbox.
+#[tokio::test]
+async fn archive_ends_a_busy_agent_behind_a_saturated_mailbox() {
+    let (core, harness, prompts) = setup(SteeringMode::StepBoundary).await;
+    let gate = Arc::new(tokio::sync::Notify::new());
+    *harness.mailbox_gate.lock().unwrap() = Some(gate);
+    core.doc_host
+        .queue_message(CHAT, "opening", vec![])
+        .unwrap();
+    wait_for(|| prompts.lock().unwrap().len() == 1, "opening turn").await;
+    let sessions = core.sessions.clone();
+    let sending = tokio::spawn(async move {
+        for i in 0..40 {
+            let _ = sessions
+                .steer(CHAT, &format!("burst {i}"), Some(format!("burst-{i}")))
+                .await;
+        }
+    });
+    wait_for(|| user_messages(&core).len() == 33, "mailbox to fill").await;
+    let client = zuse_rpc::memory_client(core.rpc_service());
+    tokio::time::timeout(
+        Duration::from_secs(20),
+        client.call(
+            zuse_rpc::methods::MUTATE,
+            serde_json::json!({"op":"setChatArchived","chatId":CHAT,"archived":true}),
+        ),
+    )
+    .await
+    .expect("archive must not deadlock behind a full steering mailbox")
+    .expect("archive ends the agent and succeeds");
+    assert!(core.workspace.chat(CHAT).unwrap().unwrap().archived);
+    assert!(!core.sessions.has_run(CHAT));
+    sending.abort();
     core.shutdown().await;
 }
 
@@ -1720,6 +1741,7 @@ async fn queued_turn_uses_current_config_at_turn_end_and_send_now() {
     for send_now in [false, true] {
         let (core, harness, prompts) = setup(SteeringMode::TurnBoundary).await;
         let mut config = zuse_protocol::ChatConfig {
+            plan: false,
             harness: HarnessId::Mock,
             model: Some("old-model".into()),
             reasoning: Some(ReasoningLevel::Medium),

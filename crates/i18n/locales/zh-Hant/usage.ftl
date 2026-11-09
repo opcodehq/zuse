@@ -1,0 +1,180 @@
+# Imported from Zuse desktop catalogs. See migration.json for provenance.
+# Edit individual translations here; do not regenerate this file.
+
+usage-usage_limits_submenu_reset_unavailable = 重設不可用
+
+usage-usage_limits_submenu_loading_usage = 正在載入用量…
+
+usage-usage_limits_submenu_updated = 已更新{ " " }
+
+usage-usage_limits_submenu_session = 工作階段
+
+usage-usage_limits_submenu_live = 即時
+
+usage-usage_limits_submenu_cached = 快取
+
+usage-usage_limits_submenu_full_usage = 完整用量
+
+usage-usage_dashboard_usage = 用量
+
+usage-usage_dashboard_usage_scope = 使用範圍
+
+usage-usage_dashboard_all_projects = 所有專案
+
+usage-usage_dashboard_current = 目前
+
+usage-usage_dashboard_usage_period = 統計週期
+
+usage-usage_dashboard_refresh_usage = 重新整理用量
+
+usage-usage_dashboard_loading_usage = 正在載入用量
+
+usage-usage_dashboard_loading_usage_2 = 正在載入用量…
+
+usage-usage_dashboard_updating = 正在更新…
+
+usage-usage_dashboard_plan_limits = 方案限額
+
+usage-usage_dashboard_live_provider_allowance = 提供商即時額度
+
+usage-usage_dashboard_credits = 點數
+
+usage-usage_dashboard_daily_usage = 每日用量
+
+usage-usage_dashboard_estimated_api_cost = 預計 API 成本
+
+usage-usage_dashboard_processed_tokens = 已處理的 token
+
+usage-usage_dashboard_estimated_from_local_usage_at_published_provider_rates_actual_billing = 按提供商公佈的費率根據本機用量估算，實際賬單可能有所不同。
+
+usage-usage_dashboard_cost_by_source = 按來源劃分的成本
+
+usage-usage_dashboard_tokens_by_source = 按來源統計的 token
+
+usage-usage_dashboard_active = { " " }活躍
+
+usage-usage_dashboard_source = 來源
+
+usage-usage_dashboard_sources = 來源
+
+usage-usage_dashboard_no_usage_in_this_period = 該週期內暫無用量。
+
+usage-usage_dashboard_view_day = 檢視當天
+
+usage-usage_dashboard_hover_the_chart_for_a_daily_breakdown = 將滑鼠暫留在圖表上檢視每日明細
+
+usage-usage_dashboard_breakdown = 明細
+
+usage-usage_dashboard_provider = 提供商
+
+usage-usage_dashboard_model = 模型
+
+usage-usage_dashboard_project = 專案
+
+usage-usage_dashboard_share = 分享
+
+usage-usage_dashboard_tokens = token
+
+usage-usage_dashboard_cost = 成本
+
+usage-usage_dashboard_no_contributors_found = 未找到貢獻者。
+
+usage-usage_dashboard_show_less = 收起
+
+usage-usage_dashboard_search_sessions = 搜尋工作階段
+
+usage-usage_dashboard_filter_sessions_by_provider = 按提供商篩選工作階段
+
+usage-usage_dashboard_all_providers = 所有提供商
+
+usage-usage_dashboard_could_not_load_sessions_change_a_filter_or_try_again = 無法載入工作階段。請更換篩選條件或重試。
+
+usage-usage_dashboard_session = 工作階段
+
+usage-usage_dashboard_last_active = 最後活躍
+
+usage-usage_dashboard_loading_sessions = 正在載入工作階段…
+
+usage-usage_dashboard_previous_page = 上一頁
+
+usage-usage_dashboard_next_page = 下一頁
+
+usage-usage_limits_submenu_left_2 = { $left }% 剩餘
+
+usage-usage_limits_submenu_resets_in = { $reset }{ " " }後重設
+
+usage-usage_dashboard_input = 輸入
+
+usage-usage_dashboard_output = 輸出
+
+usage-usage_dashboard_cache = 快取
+
+usage-usage_dashboard_reasoning = 推理
+
+usage-usage_dashboard_cache_reads = 快取讀取
+
+usage-usage_dashboard_active_sessions = 活躍工作階段
+
+usage-usage_dashboard_updated = 已更新{ " " }{ $value1 }
+
+usage-usage_dashboard_left = { $left }% 剩餘
+
+usage-usage_dashboard_estimated_cost = 預計費用
+
+usage-usage_dashboard_locally_observed_usage_records_in_this_period = 該週期內本機記錄到{ " " }{ $value1 }{ " " }條用量記錄。
+
+usage-usage_pace_in_reserve = +{ $rounded }% 餘量
+
+usage-usage_pace_over_pace = 超出進度{ " " }{ $rounded }%
+
+usage-usage_dashboard_showing_saved_usage_refresh_failed_sentence = 顯示已儲存的使用情況。重新整理失敗：{ $error }
+
+usage-usage_dashboard_sources_detected_sentence = 檢測到{ " " }{ $value }{ " " }個來源
+
+usage-usage_dashboard_clear_sentence = { $value }{ " " }· 清除
+
+usage-usage_dashboard_sessions_in_this_period_sentence = <part0>工作階段</part0><part1>該週期{ " " }{ $value }{ " " }個</part1>
+
+usage-usage_limits_submenu_used_left_total_sentence = <part0>已用{ " " }{ $value }{ " " }· 剩餘{ " " }{ $value2 }</part0><part1>共{ " " }{ $value3 }</part1>
+
+usage-usage_limits_submenu_credits_remaining_sentence = <part0>剩餘點數</part0><part1>{ $value }</part1>
+
+usage-usage_limits_submenu_just_now = 剛剛
+
+usage-usage_dashboard_no_usage_has_been_recorded_yet = 尚未記錄任何使用情況。
+
+usage-usage_dashboard_usage_limits = 用量限額
+
+usage-usage_dashboard_view_all = 檢視全部{ " " }{ $value1 }
+
+usage-usage_dashboard_page_summary = { $range }{ " " }· 共{ " " }{ $total }
+
+usage-usage_limits_menu_credits = 剩餘{ " " }{ $value }{ " " }點數
+
+usage-usage_limits_menu_stale = 重新整理失敗。正在顯示之前的資料，可能已過時。
+
+usage-usage_limits_menu_failed = 無法載入用量限額，請重新整理重試。
+
+usage-usage_limits_unavailable_account = 此帳戶不支援用量限額
+
+usage-usage_limits_unavailable_scope = 該範圍的用量限額不可用
+
+usage-usage_limits_sign_in_kiro = 使用 kiro-cli login 登入以檢視限額
+
+usage-usage_limits_sign_in = 登入{ " " }{ $provider }{ " " }以檢視限額
+
+usage-usage_limits_expired_kiro = 工作階段已過期：請執行 kiro-cli login
+
+usage-usage_limits_expired = { $provider }{ " " }工作階段已過期：請重新登入
+
+usage-usage_limits_load_failed = 無法載入限額，請重試
+
+usage-usage_limits_no_data = 暫無用量資料
+
+usage-usage_limits_cli_unavailable = 請安裝{ " " }{ $provider }{ " " }或檢查其配置的 CLI 路徑。
+
+usage-usage_limits_upgrade_cli = 請更新{ " " }{ $provider }{ " " }以檢視使用限額。
+
+usage-usage_limits_timeout = { $provider }{ " " }未回應。請重試。
+
+usage-usage_limits_invalid_response = { $provider }{ " " }返回了無法讀取的使用資料。請嘗試更新其 CLI。

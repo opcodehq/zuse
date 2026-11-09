@@ -1,0 +1,2646 @@
+# Imported from Zuse desktop catalogs. See migration.json for provenance.
+# Edit individual translations here; do not regenerate this file.
+
+settings-cloud_image_starting = 正在启动构建…
+
+settings-cloud_image_queued = 正在等待构建工作进程…
+
+settings-cloud_image_sanitizing = 正在准备快照…
+
+settings-workspace_new_chat_access = 新建云端聊天
+
+settings-workspace_new_chat_access_description = 选择组织新聊天的访问权限。查看仅允许阅读；编辑还允许修改和与智能体交互。现有聊天不受影响。可在聊天的共享菜单中更改访问权限。
+
+settings-sharing_link_notice = 只有已拥有访问权限的人才能打开此链接。请先保存共享设置的更改。
+
+settings-sharing_link_copy_failed = 无法复制链接。请重试。
+
+settings-workspace_sharing_inherited = 默认：{ $permission }
+
+settings-workspace_sharing_defaults = 默认共享设置
+
+settings-workspace_sharing_defaults_description = 仅适用于新聊天。现有聊天保留其访问设置。
+
+settings-workspace_sharing_audience = 谁可以访问
+
+settings-workspace_sharing_permission = 组织权限
+
+settings-workspace_sharing_private = 私密
+
+settings-workspace_sharing_everyone = { $name }{ " " }的所有成员
+
+settings-workspace_sharing_view = 查看
+
+settings-workspace_sharing_edit = 编辑
+
+settings-workspace_sharing_admin_notice = 组织管理员可以访问私密聊天并管理共享。主机管理员可以独立访问自托管数据。
+
+settings-workspace_sharing_error = 无法加载或保存共享设置。请重试。
+
+settings-organizations_billing_only = 仅限账单
+
+settings-workspace_personal = 个人
+
+settings-workspace_billing_identity = 云端 ·{ " " }{ $workspace }
+
+settings-workspace_billing_managers_only = 只有工作区管理员和账单成员可以管理账单。
+
+settings-workspace_switcher = 切换工作区
+
+settings-workspace_repositories_scripts = 仓库和脚本
+
+settings-workspace_billing = 账单
+
+settings-organizations_member_limit = 最多{ " " }{ $limit }{ " " }名成员（含你）。待接受的邀请会占用名额；撤销邀请或移除成员即可释放名额。
+
+settings-settings_scope_personal = 个人设置
+
+settings-settings_scope_organization = 组织设置
+
+settings-settings_scope_label = 设置范围
+
+settings-sharing_title = 工作区访问
+
+settings-sharing_description = 选择谁可以访问此工作区。共享开启期间，组织所有者拥有访问权限。
+
+settings-sharing_organization = 组织
+
+settings-sharing_loading = 正在加载访问信息…
+
+settings-sharing_no_organizations = 在设置中创建一个组织，或请管理员管理工作区访问权限。
+
+settings-sharing_retry = 重试
+
+settings-sharing_shared = 与选定成员共享
+
+settings-sharing_private = 未与任何组织共享
+
+settings-sharing_owner = 所有者
+
+settings-sharing_access_for = { $name }{ " " }的权限
+
+settings-sharing_no_access = 无访问权限
+
+settings-sharing_viewer = 查看者
+
+settings-sharing_driver = 操作者
+
+settings-sharing_stop = 停止共享
+
+settings-sharing_stop_description = 移除所有工作区授权？你的文件和会话会保留。再次共享不会恢复这些授权。
+
+settings-sharing_enable = 开启共享
+
+settings-browser_settings_menu_browser_menu = 浏览器菜单
+
+settings-browser_settings_menu_import_browser_sessions = 导入浏览器会话…
+
+settings-browser_settings_menu_passwords_and_autofill = 密码和自动填充
+
+settings-browser_settings_menu_clear_browsing_data = 清除浏览数据…
+
+settings-browser_settings_menu_browser_settings = 浏览器设置
+
+settings-browser_settings_menu_import_from_your_browser = 从浏览器导入
+
+settings-browser_settings_menu_bring_signed_in_sessions_into_the_built_in_browser = 将登录会话引入内置浏览器。
+
+settings-browser_settings_menu_browser = 浏览器
+
+settings-browser_settings_menu_cookies_and_signed_in_sessions = Cookie 和登录会话
+
+settings-browser_settings_menu_passwords = 密码
+
+settings-browser_settings_menu_import_sessions = 导入会话
+
+settings-browser_settings_menu_clear_browsing_data_2 = 清除浏览数据？
+
+settings-browser_settings_menu_this_removes_cookies_site_storage_and_cache_from_the_built_in_browser = 这会从内置浏览器中移除 cookie、站点存储和缓存，不会影响你的其他浏览器。
+
+settings-browser_settings_menu_clear_data = 清除数据
+
+settings-browser_settings_menu_included = 包含
+
+settings-browser_settings_menu_per_site = 每个站点
+
+settings-cloud_account_access_agent_access = 智能体访问
+
+settings-cloud_account_access_authorize_agents_on_this_cloud_computer_nothing_is_copied_from_this_ma = 授权此云电脑上的智能体。不会从此 Mac 复制任何内容。
+
+settings-cloud_account_access_refresh_agent_authorization = 刷新智能体授权
+
+settings-cloud_account_access_agent_tools = 智能体工具
+
+settings-cloud_account_access_reauthorize = 重新授权
+
+settings-cloud_account_access_set_up = 设置
+
+settings-cloud_account_access_copy_code = { " " }复制代码
+
+settings-cloud_account_access_open_login_page = { " " }打开登录页面
+
+settings-cloud_account_access_agent = 智能体
+
+settings-cloud_account_access_the_credential_is_created_for_and_stored_on_this_cloud_computer_existi = 凭据专为此云电脑创建并存储在其上。绝不会读取 Mac 上的现有凭据。
+
+settings-cloud_account_access_configure_an_https_compatible_provider_endpoint_and_its_secret_directl = 直接在此电脑上配置与 HTTPS 兼容的提供商端点及其密钥。
+
+settings-cloud_account_access_claude_setup_token = claude setup-token
+
+settings-cloud_account_access_copy = { " " }复制
+
+settings-cloud_account_access_sk_ant_oat01 = sk-ant-oat01-…
+
+settings-cloud_account_access_paste_api_key = 粘贴 API 密钥
+
+settings-cloud_account_access_provider_identifier_optional = 提供商标识符（可选）
+
+settings-cloud_account_access_provider_secret = 提供商密钥
+
+settings-cloud_account_access_start_browser_login = 开始浏览器登录
+
+settings-cloud_account_access_save_on_computer = 保存在电脑上
+
+settings-cloud_image_build_history_clean_rebuild = 干净重建
+
+settings-cloud_image_build_history_image_update = 镜像更新
+
+settings-cloud_image_build_history_active = 活跃
+
+settings-cloud_image_build_history_copy_build_logs = 复制构建日志
+
+settings-cloud_image_build_history_build_settings = 构建设置
+
+settings-cloud_image_build_history_latest_build = 最新构建
+
+settings-cloud_image_build_history_previous_builds = 历史构建 ·{ " " }
+
+settings-cloud_image_build_history_previous = 上一条
+
+settings-cloud_image_build_history_next = 下一条
+
+settings-cloud_image_readiness_cloud_image_ready = 云镜像准备就绪
+
+settings-cloud_image_readiness_ready = 就绪
+
+settings-cloud_image_readiness_rebuild = 重建镜像
+
+settings-cloud_image_readiness_building_cloud_image = 正在构建云镜像
+
+settings-cloud_image_readiness_in_progress = 进行中
+
+settings-cloud_image_readiness_authentication = 身份验证
+
+settings-cloud_machines_pane_loading_cloud_machine = 正在加载云主机
+
+settings-cloud_machines_pane_persistent_cloud_machine = 常驻云主机
+
+settings-cloud_machines_pane_a_private_always_on_development_computer_managed_by_zuse = 由 Zuse 管理的私有、始终在线的开发电脑。
+
+settings-cloud_machines_pane_checkout = 结账
+
+settings-cloud_machines_pane_reopen = 重新打开
+
+settings-cloud_machines_pane_backups_and_network = 备份和网络
+
+settings-cloud_machines_pane_automatic_backups_included_public_inbound_traffic_is_blocked = 含自动备份。公共入站流量已被拦截。
+
+settings-cloud_machines_pane_included = 包含
+
+settings-cloud_machines_pane_waiting_for_payment = 等待付款
+
+settings-cloud_machines_pane_provisioning_begins_automatically_when_payment_is_confirmed_you_can_cl = 付款确认后自动开始开通。你可以关闭此窗口。
+
+settings-cloud_machines_pane_checking = 检查
+
+settings-cloud_machines_pane_cloud_machines = 云主机
+
+settings-cloud_machines_pane_persistent_cloud_machines_are_currently_invite_only = 常驻云主机目前采用邀请制。
+
+settings-cloud_machines_pane_no_offer_available = 暂无可购方案
+
+settings-cloud_machines_pane_this_account_does_not_currently_have_access_to_a_cloud_machine_offer = 此账户目前没有可用的云主机方案。
+
+settings-cloud_machines_pane_unavailable = 不可用
+
+settings-cloud_machines_pane_your_persistent_provider_managed_development_computer = 你的常驻、由提供商托管的开发电脑。
+
+settings-cloud_machines_pane_machine = 机器
+
+settings-cloud_machines_pane_managed_connection = 托管连接
+
+settings-cloud_machines_pane_open_machine = 开机
+
+settings-cloud_machines_pane_cloud_runtime = 云运行时
+
+settings-cloud_machines_pane_runtime_updates_require_upgrade = 此机器尚无法报告运行时更新。旧机器需要手动运行一次更新程序。
+
+settings-cloud_machines_pane_checks_automatically_against_this_version_of_zuse = 自动对照此版本的 Zuse 进行检查。
+
+settings-cloud_machines_pane_manual_update_needed = 需要手动更新
+
+settings-cloud_machines_pane_update_now = 立即更新
+
+settings-cloud_machines_pane_private_access = 私人访问
+
+settings-cloud_machines_pane_optional_private_networking_and_ssh_access_for_this_machine = 本机可选专用网络和 SSH 访问。
+
+settings-cloud_machines_pane_private_network = 专用网络
+
+settings-cloud_machines_pane_connect_once_with_a_reusable_or_ephemeral_network_auth_key = 使用可重复使用或临时网络身份验证密钥连接一次。
+
+settings-cloud_machines_pane_enabled = 启用
+
+settings-cloud_machines_pane_not_configured = 未配置
+
+settings-cloud_machines_pane_reconnect = 重新连接
+
+settings-cloud_machines_pane_set_up = 设置
+
+settings-cloud_machines_pane_ssh_mode = SSH 模式
+
+settings-cloud_machines_pane_network_identity_controls_ssh_access_explicit_acl_rules_are_required = 网络身份控制 SSH 访问，需要显式 ACL 规则。
+
+settings-cloud_machines_pane_standard_public_keys_authorize_ssh_access = 使用标准公钥授权 SSH 访问。
+
+settings-cloud_machines_pane_ssh_keys = SSH 密钥
+
+settings-cloud_machines_pane_network_identity = 网络身份
+
+settings-cloud_machines_pane_authorized_keys = 已授权密钥
+
+settings-cloud_machines_pane_no_ssh_public_keys_have_been_added = 未添加 SSH 公钥。
+
+settings-cloud_machines_pane_manage = 管理
+
+settings-cloud_machines_pane_plan_and_billing = 套餐与账单
+
+settings-cloud_machines_pane_subscription_dates_and_lifecycle_controls_for_this_machine = 该机器的订阅日期和生命周期控制。
+
+settings-cloud_machines_pane_monthly_plan = 月度套餐
+
+settings-cloud_machines_pane_paid_through = 已付款至
+
+settings-cloud_machines_pane_recovery_deadline = 恢复期限
+
+settings-cloud_machines_pane_billing = 计费
+
+settings-cloud_machines_pane_manage_payment_details_and_invoices_in_the_billing_portal = 在账单门户中管理付款信息与发票。
+
+settings-cloud_machines_pane_open_portal = 打开账单门户
+
+settings-cloud_machines_pane_recover_machine = 恢复此机器
+
+settings-cloud_machines_pane_restore_access_before_the_recovery_deadline = 在恢复截止日期之前恢复访问权限。
+
+settings-cloud_machines_pane_recover = 恢复
+
+settings-cloud_machines_pane_subscription = 订阅
+
+settings-cloud_machines_pane_keep_using_the_machine_until_the_end_of_the_paid_period = 继续使用机器直至付费期结束。
+
+settings-cloud_machines_pane_cancel_at_period_end = 在当前周期结束时取消
+
+settings-cloud_machines_pane_danger_zone = 危险区域
+
+settings-cloud_machines_pane_permanent_actions_for_this_cloud_machine = 此云电脑的永久操作。
+
+settings-cloud_machines_pane_destroy_machine = 销毁机器
+
+settings-cloud_machines_pane_immediately_revoke_access_sanitize_credentials_and_schedule_provider_c = 立即撤销访问、清除凭据，并安排提供商侧清理。
+
+settings-cloud_machines_pane_destroy = 销毁
+
+settings-cloud_machines_pane_connect_private_network = 连接专用网络
+
+settings-cloud_machines_pane_the_auth_key_goes_directly_to_this_machine_and_is_discarded_after_setu = 身份验证密钥会直接发送到此机器，并在设置完成后丢弃。
+
+settings-cloud_machines_pane_auth_key = 身份验证密钥
+
+settings-cloud_machines_pane_paste_an_auth_key = 粘贴身份验证密钥
+
+settings-cloud_machines_pane_standard_ssh_keys = 标准 SSH 密钥
+
+settings-cloud_machines_pane_network_identity_ssh = 网络身份 SSH
+
+settings-cloud_machines_pane_authorized_ssh_keys = 已授权 SSH 密钥
+
+settings-cloud_machines_pane_only_these_public_keys_can_access_the_machine_over_its_private_network = 只有这些公钥才能通过其专用网络访问电脑。
+
+settings-cloud_machines_pane_ssh_public_key = SSH 公钥
+
+settings-cloud_machines_pane_ssh_ed25519 = ssh-ed25519 …
+
+settings-cloud_machines_pane_no_keys_added_yet = 尚未添加密钥。
+
+settings-cloud_machines_pane_update_cloud_runtime = 更新云运行时？
+
+settings-cloud_machines_pane_update_runtime = 更新运行时
+
+settings-cloud_machines_pane_destroy_this_cloud_machine = 销毁这台云主机？
+
+settings-cloud_machines_pane_access_ends_immediately_credentials_are_removed_before_any_final_snaps = 访问立即终止。凭据会在最终快照之前移除，并安排提供商侧清理。
+
+settings-cloud_machines_pane_keep_machine = 保留机器
+
+settings-cloud_workspace_auth_allow_device_code_login = 允许设备代码登录
+
+settings-cloud_workspace_auth_open_chatgpt_security_settings = 打开 ChatGPT 安全设置
+
+settings-cloud_workspace_auth_start_the_login_below = 下面开始登录
+
+settings-cloud_workspace_auth_approve_the_one_time_code = 批准一次性代码
+
+settings-cloud_workspace_auth_open_the_authorization_page_sign_in_to_the_intended_chatgpt_workspace = 打开授权页面，登录所需的 ChatGPT 工作区，然后输入如下所示的代码。 15 分钟后过期。仅批准你在此处开始的登录。
+
+settings-cloud_workspace_auth_agent_authentication = Zuse 智能体账户
+
+settings-cloud_workspace_auth_authorize_each_provider_once_account_credentials_are_shared_by_new_clo = 每个智能体只需连接一次，即可用于所有云端对话。重建镜像会保留这些连接。
+
+settings-cloud_workspace_auth_checking = 正在检查…
+
+settings-cloud_workspace_auth_cloud_authentication_needs_attention = 云端身份验证需要处理
+
+settings-cloud_workspace_auth_try_again = 再试一次
+
+settings-cloud_workspace_auth_claude_code_subscription_anthropic_api_key_or_custom_endpoint = Claude Code 订阅、Anthropic API 密钥或自定义端点。
+
+settings-cloud_workspace_auth_one_account_level_chatgpt_subscription_login_openai_api_key_or_custom = 账户级 ChatGPT 订阅登录、OpenAI API 密钥或自定义端点。
+
+settings-cloud_workspace_auth_cursor_api_key_for_cloud_chat_sandboxes = 用于云聊天沙箱的 Cursor API 密钥。
+
+settings-cloud_workspace_auth_grok_device_login_xai_api_key_or_custom_endpoint = Grok 设备登录、xAI API 密钥或自定义端点。
+
+settings-cloud_workspace_auth_reauthorize = 重新授权
+
+settings-cloud_workspace_auth_reconnect = 重新连接
+
+settings-cloud_workspace_auth_choose_an_authentication_method = 选择一种身份验证方法。
+
+settings-cloud_workspace_auth_connect_codex_once_for_your_zuse_account_compatible_cloud_chats_receiv = 为你的 Zuse 账户连接一次 Codex。兼容的云聊天会获得短期访问权限，无需复制刷新令牌。
+
+settings-cloud_workspace_auth_authentication_method = 认证方式
+
+settings-cloud_workspace_auth_create_a_setup_token = 创建设置令牌
+
+settings-cloud_workspace_auth_run_this_official_command_on_a_trusted_computer_then_paste_the_new_mac = 在受信任的电脑上运行此官方命令，然后在下方粘贴新生成的机器用途令牌。
+
+settings-cloud_workspace_auth_claude_setup_token = claude setup-token
+
+settings-cloud_workspace_auth_copy_command = 复制命令
+
+settings-cloud_workspace_auth_setup_token = 设置令牌
+
+settings-cloud_workspace_auth_paste_setup_token = 粘贴设置令牌
+
+settings-cloud_workspace_auth_device_authorization = 设备授权
+
+settings-cloud_workspace_auth_start_the_official_grok_login_open_the_authorization_page_and_enter_th = 启动 Grok 官方登录，打开授权页面并输入此处显示的代码。
+
+settings-cloud_workspace_auth_copy_code = 复制代码
+
+settings-cloud_workspace_auth_requesting_a_one_time_code_from = 正在请求一次性代码：
+
+settings-cloud_workspace_auth_authorization_did_not_finish_start_a_new_login_and_try_again = 授权未完成。请重新发起登录并重试。
+
+settings-cloud_workspace_auth_login_cancelled_no_credentials_were_changed = 登录已取消。没有更改凭据。
+
+settings-cloud_workspace_auth_provider_api_key = 提供商 API 密钥
+
+settings-cloud_workspace_auth_the_key_is_encrypted_directly_to_your_private_cloud_image_and_never_re = 密钥会直接加密到你的私有云端身份验证服务，绝不会通过 API 返回。
+
+settings-cloud_workspace_auth_api_key = API 密钥
+
+settings-cloud_workspace_auth_paste_api_key = 粘贴 API 密钥
+
+settings-cloud_workspace_auth_compatible_endpoint = 兼容端点
+
+settings-cloud_workspace_auth_connect_an_https_endpoint_supported_by_this_agent = 连接此智能体支持的 HTTPS 端点。
+
+settings-cloud_workspace_auth_base_url = Base URL
+
+settings-cloud_workspace_auth_provider_identifier = 提供商标识符
+
+settings-cloud_workspace_auth_provider_secret = 提供商密钥
+
+settings-cloud_workspace_auth_stored_only_in_your_private_cloud_image = 仅存储在你的私有云端身份验证服务中。
+
+settings-cloud_workspace_auth_cancel_login = 取消登录
+
+settings-cloud_workspace_auth_open_authorization = 打开授权页面
+
+settings-cloud_workspace_auth_requesting_code = 正在请求验证码…
+
+settings-cloud_workspace_auth_start_device_login = 开始设备登录
+
+settings-cloud_workspace_auth_save_and_verify = 保存并验证
+
+settings-cloud_workspace_github_github = GitHub
+
+settings-cloud_workspace_github_configure_the_zuse_github_app_for_your_personal_account_or_organizatio = 连接 GitHub，选择仓库，让云端智能体以你的身份提交、推送代码并创建拉取请求。
+
+settings-cloud_workspace_github_configure_app = 管理连接
+
+settings-cloud_workspace_github_install_github_app = 连接 GitHub
+
+settings-cloud_workspace_github_github_app_is_not_configured = GitHub App 未配置
+
+settings-cloud_workspace_github_add_the_github_app_credentials_to_api_deploy_it_then_retry = 请将 GitHub App 凭据添加到 API 并部署，然后重试。
+
+settings-cloud_workspace_github_unavailable = 不可用
+
+settings-cloud_workspace_github_connect_repositories = 连接仓库
+
+settings-cloud_workspace_github_start_here_so_the_callback_is_signed_and_linked_to_this_zuse_account_o = 在同一次连接中选择 Zuse 可访问的仓库并授权你的 GitHub 账户。
+
+settings-cloud_workspace_github_check_connection = { " " }检查连接
+
+settings-cloud_workspace_github_suspended = 暂停
+
+settings-cloud_workspace_github_connected = { " " }已连接
+
+settings-cloud_workspace_github_repository_access = 仓库访问
+
+settings-cloud_workspace_github_connection_status = 连接状态
+
+settings-cloud_workspace_github_repository_changes_refresh_automatically_when_you_return_from_github_e = 从 GitHub 返回时，仓库变更会自动刷新。无需先移除现有安装。
+
+settings-cloud_workspace_github_refresh = { " " }刷新
+
+settings-cloud_workspace_pool_sign_in_to_set_up_cloud_workspaces = 登录以设置云工作区
+
+settings-cloud_workspace_pool_choose_a_plan_connect_repositories_and_authorize_your_coding_agents_fr = 选择套餐、连接仓库，并从一个账户授权你的编码智能体。
+
+settings-cloud_workspace_pool_local_chats_stay_on_this_computer_and_remain_available_without_an_acco = 本地聊天保留在此电脑上，无需账户即可使用。
+
+settings-cloud_workspace_pool_cloud_access = 云端接入
+
+settings-cloud_workspace_pool_cloud_workspaces_keep_agents_running_when_this_app_or_your_laptop_is_o = 当应用或你的笔记本离线时，云工作区让智能体继续运行。
+
+settings-cloud_workspace_pool_ready = 准备好
+
+settings-cloud_workspace_pool_update_required = 需要更新
+
+settings-cloud_workspace_pool_subscribe_40_month = 订阅 · $40/月
+
+settings-cloud_workspace_pool_cloud_workspace_is_ready = 云工作区已准备就绪
+
+settings-cloud_workspace_pool_enable_cloud_workspace = 启用云工作区
+
+settings-cloud_workspace_pool_each_chat_gets_an_isolated_workspace_compute_pauses_when_it_is_not_nee = 每个聊天都有独立的工作区，闲置时自动暂停计算。
+
+settings-cloud_workspace_pool_cloud_image = 云镜像
+
+settings-cloud_workspace_pool_build_the_reusable_environment_that_starts_every_new_cloud_chat = 用于新云端对话的仓库和工具。重建会保留现有对话和智能体连接。
+
+settings-cloud_workspace_pool_usage_and_billing = 用量与账单
+
+settings-cloud_workspace_pool_usage_details_are_temporarily_unavailable = 用量详情暂时不可用。
+
+settings-cloud_workspace_pool_could_not_load_billing = 无法加载账单
+
+settings-cloud_workspace_pool_refresh_cloud_settings_to_try_again_existing_workspaces_are_unaffected = 刷新云设置以重试。现有工作区不受影响。
+
+settings-cloud_workspace_pool_40_month_includes_35_of_sandbox_compute_additional_compute_is_billed_a = $40/月包含 $35 的沙箱计算与 Boat 镜像存储额度。额外用量加收 5%。
+
+settings-cloud_workspace_pool_paused = 已暂停
+
+settings-cloud_workspace_pool_active = 活跃
+
+settings-cloud_workspace_pool_billing_hold = 计费保留
+
+settings-cloud_workspace_pool_usage_warning = 用量警告
+
+settings-cloud_workspace_pool_monthly_overage_cap = 每月超额上限
+
+settings-cloud_workspace_pool_builds_and_running_workspaces_pause_when_this_pre_tax_limit_is_reached = 达到此税前上限后，构建和运行中的工作区都会暂停。
+
+settings-cloud_workspace_pool_monthly_overage_cap_in_dollars = 每月超额上限（美元）
+
+settings-cloud_workspace_pool_recent_usage = 近期用量
+
+settings-cloud_workspace_pool_no_completed_sandbox_runs_in_this_billing_period = 此账单周期内没有已完成的沙箱运行。
+
+settings-cloud_workspace_pool_invoices = 发票
+
+settings-cloud_workspace_pool_workspace_activity = 工作区活动
+
+settings-cloud_workspace_pool_current_and_recent_cloud_workspaces_for_this_account = 此账户当前与近期的云工作区。
+
+settings-cloud_workspace_pool_no_cloud_workspaces_yet = 尚无云工作区
+
+settings-cloud_workspace_pool_start_a_cloud_chat_and_its_workspace_will_appear_here = 启动云聊天，其工作区将出现在此处。
+
+settings-cloud_workspace_repositories_repositories = 仓库
+
+settings-cloud_workspace_repositories_choose_the_personal_organization_and_collaborator_repositories_include = 选择包含在私有云镜像中的个人、组织和协作者仓库。
+
+settings-cloud_workspace_repositories_repository = 仓库
+
+settings-cloud_workspace_repositories_search_personal_and_organization_repositories = 搜索个人和组织仓库
+
+settings-cloud_workspace_repositories_refresh_github_repositories = 刷新 GitHub 仓库
+
+settings-cloud_workspace_repositories_every_available_repository_is_already_included = 所有可用仓库均已包含。
+
+settings-cloud_workspace_repositories_no_repositories_match_this_search = 没有与该搜索匹配的仓库。
+
+settings-cloud_workspace_repositories_private = 私有
+
+settings-cloud_workspace_repositories_no_repositories_included = 未包含任何仓库
+
+settings-cloud_workspace_repositories_use_repository_to_choose_a_personal_or_organization_repo = 点击 + 仓库，选择个人或组织仓库。
+
+settings-developer_pane_accent_palette = 主题色板
+
+settings-developer_pane_toast_playground = Toast 试验场
+
+settings-developer_pane_pr_merged = PR 已合并
+
+settings-developer_pane_pr_closed = PR 已关闭
+
+settings-developer_pane_sidebar_error = 侧边栏错误
+
+settings-developer_pane_action_failed = 操作失败
+
+settings-developer_pane_loading = 正在加载
+
+settings-developer_pane_success = 成功
+
+settings-developer_pane_top_bar_workflow_states = 顶栏工作流状态
+
+settings-diagnostics_pane_live_samples_from_this_page_session = 此页面会话的实时样本
+
+settings-diagnostics_pane_search_messages_and_details = 搜索消息和详细信息
+
+settings-diagnostics_pane_filter_by_severity = 按严重级别筛选
+
+settings-diagnostics_pane_all_levels = 所有级别
+
+settings-diagnostics_pane_fatal = 严重
+
+settings-diagnostics_pane_errors = 错误
+
+settings-diagnostics_pane_warnings = 警告
+
+settings-diagnostics_pane_info = 信息
+
+settings-diagnostics_pane_debug = 调试
+
+settings-diagnostics_pane_filter_by_source = 按来源筛选
+
+settings-diagnostics_pane_all_sources = 所有来源
+
+settings-diagnostics_pane_diagnostics_time_range = 诊断时间范围
+
+settings-diagnostics_pane_select_an_issue = 选择一个问题
+
+settings-diagnostics_pane_its_sanitized_details_related_occurrences_and_correlation_ids_will_app = 其脱敏详情、相关事件和关联 ID 会显示在这里。
+
+settings-diagnostics_pane_diagnostic_id_copied = 已复制诊断 ID
+
+settings-diagnostics_pane_copy_diagnostic_id = 复制诊断 ID
+
+settings-diagnostics_pane_diagnostic_id = 诊断 ID
+
+settings-diagnostics_pane_run = 运行
+
+settings-diagnostics_pane_recovery = 恢复
+
+settings-diagnostics_pane_trace = 追踪
+
+settings-diagnostics_pane_session = 会话
+
+settings-diagnostics_pane_provider = 提供商
+
+settings-diagnostics_pane_sanitized_details = 脱敏详情
+
+settings-diagnostics_pane_no_additional_stack_or_cause_was_captured = 未捕获其他堆栈或原因。
+
+settings-diagnostics_pane_related_occurrences = 相关事件
+
+settings-diagnostics_pane_copy_details = 复制详细信息
+
+settings-diagnostics_pane_none_captured = 没有被捕获
+
+settings-diagnostics_pane_stall_cause_timeline = 卡顿原因时间线
+
+settings-diagnostics_pane_sanitized_script_layout_action_and_workload_attribution_react_commit_t = 脱敏后的脚本、布局、操作与负载归因。开发版会附加 React 提交计时。
+
+settings-diagnostics_pane_no_interface_stalls = 无界面卡顿
+
+settings-diagnostics_pane_stalls_of_at_least_100_ms_will_appear_with_the_strongest_locally_avail = 至少 100 毫秒的卡顿会显示在此，并附上本地可得的最可能原因。
+
+settings-diagnostics_pane_interface_stalls = 界面卡顿
+
+settings-diagnostics_pane_total_duration = 总持续时间
+
+settings-diagnostics_pane_main_thread_blocking = 主线程阻塞
+
+settings-diagnostics_pane_unavailable = 不可用
+
+settings-diagnostics_pane_style_and_layout = 样式与布局
+
+settings-diagnostics_pane_script = 脚本
+
+settings-diagnostics_pane_function = 功能
+
+settings-diagnostics_pane_recent_actions = 近期操作
+
+settings-diagnostics_pane_active_workloads = 活跃工作负载
+
+settings-diagnostics_pane_related_operations = 相关操作
+
+settings-diagnostics_pane_diagnostics_status = 诊断状态
+
+settings-diagnostics_pane_reading_local_diagnostics = 正在读取本地诊断…
+
+settings-diagnostics_pane_pause_live = 暂停实时刷新
+
+settings-diagnostics_pane_resume_live = 恢复实时刷新
+
+settings-diagnostics_pane_open_logs = 打开日志
+
+settings-diagnostics_pane_export_support_bundle = 导出支持包
+
+settings-diagnostics_pane_failures = 失败
+
+settings-diagnostics_pane_cpu = CPU
+
+settings-diagnostics_pane_memory = 内存
+
+settings-diagnostics_pane_stored_locally = 本地存储
+
+settings-diagnostics_pane_diagnostics_views = 诊断视图
+
+settings-diagnostics_pane_issue_triage_workspace = 问题分诊工作区
+
+settings-diagnostics_pane_issue_inbox = 问题收件箱
+
+settings-diagnostics_pane_repeated_failures_are_grouped_so_the_most_important_work_stays_visible = 重复的失败被分组，以便最重要的工作保持可见。
+
+settings-diagnostics_pane_once = 仅一次
+
+settings-diagnostics_pane_no_matching_issues = 没有匹配的问题
+
+settings-diagnostics_pane_change_the_filters_or_time_range_healthy_captures_will_appear_here_onl = 请调整筛选条件或时间范围。正常的捕获仅在需要关注时才会显示在这里。
+
+settings-diagnostics_pane_checking_the_system = 检查系统
+
+settings-diagnostics_pane_reading_recent_incidents_and_correlating_local_process_state = 正在读取近期事件并关联本地进程状态。
+
+settings-diagnostics_pane_load_more = 加载更多
+
+settings-diagnostics_pane_issue_details = 问题详情
+
+settings-diagnostics_pane_live_diagnostic_logs = 实时诊断日志
+
+settings-diagnostics_pane_live_logs = 实时日志
+
+settings-diagnostics_pane_following = 正在关注
+
+settings-diagnostics_pane_paused = 已暂停
+
+settings-diagnostics_pane_structured_local_events_the_newest_filtered_page_refreshes_every_five = 结构化的本地事件。实时模式下，最新的筛选页每五秒刷新一次。
+
+settings-diagnostics_pane_sanitized_detail = 脱敏详情
+
+settings-diagnostics_pane_no_additional_detail_was_captured_for_this_event = 没有捕获此事件的更多详细信息。
+
+settings-diagnostics_pane_event = 事件
+
+settings-diagnostics_pane_category = 类别
+
+settings-diagnostics_pane_span = 跨度
+
+settings-diagnostics_pane_copy_event = 复制事件
+
+settings-diagnostics_pane_no_matching_logs = 没有匹配的日志
+
+settings-diagnostics_pane_change_the_filters_or_time_range_new_structured_events_will_appear_her = 请调整筛选条件或时间范围。实时捕获期间，新事件会显示在这里。
+
+settings-diagnostics_pane_reading_live_logs = 正在读取实时日志
+
+settings-diagnostics_pane_loading_the_newest_structured_events_from_local_diagnostics = 从本地诊断加载最新的结构化事件。
+
+settings-diagnostics_pane_following_the_newest_events = 关注最新事件
+
+settings-diagnostics_pane_live_refresh_is_paused = 实时刷新已暂停
+
+settings-diagnostics_pane_load_older = 加载更早的
+
+settings-diagnostics_pane_performance_diagnostics = 性能诊断
+
+settings-diagnostics_pane_performance_and_energy = 性能和能量
+
+settings-diagnostics_pane_local_resource_responsiveness_battery_and_thermal_telemetry_with_confi = 本地资源、响应速度、电池与温度遥测，附带置信度标注的归因。
+
+settings-diagnostics_pane_loading_local_history = 正在加载本地历史
+
+settings-diagnostics_pane_responsiveness = 响应速度
+
+settings-diagnostics_pane_battery_impact = 电池影响
+
+settings-diagnostics_pane_thermal_pressure = 散热压力
+
+settings-diagnostics_pane_cpu_usage = CPU 使用率
+
+settings-diagnostics_pane_memory_usage = 内存使用率
+
+settings-diagnostics_pane_idle_wakeups = 空闲唤醒
+
+settings-diagnostics_pane_what_made_zuse_heavy = 是什么让 Zuse 这么重？
+
+settings-diagnostics_pane_no_single_workload_could_be_attributed = 无法归因于单一工作负载
+
+settings-diagnostics_pane_no_sustained_pressure = 无持续压力
+
+settings-diagnostics_pane_short_spikes_are_retained_in_charts_sustained_cpu_memory_battery_therm = 图表会保留短暂尖峰。持续的 CPU、内存、电池、温度和延迟事件都会显示在这里。
+
+settings-diagnostics_pane_process_hotspots = 进程热点
+
+settings-diagnostics_pane_average_cpu = 平均 CPU
+
+settings-diagnostics_pane_peak_memory = 峰值内存
+
+settings-diagnostics_pane_idle_wakeups_per_second = 每秒空闲唤醒次数
+
+settings-diagnostics_pane_no_process_history = 无进程历史记录
+
+settings-diagnostics_pane_process_cpu_memory_and_wakeups_appear_after_the_first_native_sample = 进程的 CPU、内存和唤醒数据会在首次原生采样后显示。
+
+settings-diagnostics_pane_slow_operations_and_trace_health = 缓慢操作与追踪健康度
+
+settings-diagnostics_pane_no_slow_operations = 没有缓慢的操作
+
+settings-diagnostics_pane_instrumented_operations_taking_at_least_one_second_will_appear_here = 耗时至少一秒的插桩操作会显示在这里。
+
+settings-diagnostics_pane_performance_recording = 性能录制
+
+settings-diagnostics_pane_captures_five_second_process_samples_locally_energy_readings_are_estim = 在本地按五秒间隔采样进程。能耗读数为估算值；仅当系统提供可靠传感器时才显示精确温度。在 macOS 上，开始录制可能会请求管理员授权以使用系统功耗分析器。
+
+settings-diagnostics_pane_recording_in_progress = 录制进行中
+
+settings-diagnostics_pane_samples_ends = { " " }个样本 · 结束
+
+settings-diagnostics_pane_stop_recording = 停止录制
+
+settings-diagnostics_pane_recording_duration = 录制时长
+
+settings-diagnostics_pane_5_minutes = 5分钟
+
+settings-diagnostics_pane_15_minutes = 15分钟
+
+settings-diagnostics_pane_30_minutes = 30分钟
+
+settings-diagnostics_pane_start_recording = 开始录制
+
+settings-diagnostics_pane_export_latest = 导出最新
+
+settings-diagnostics_pane_battery_source = 电池来源
+
+settings-diagnostics_pane_temperature_sensor = 温度传感器
+
+settings-diagnostics_pane_available = 可用
+
+settings-diagnostics_pane_local_resource_storage = 本地资源存储
+
+settings-diagnostics_pane_latest_combined_package_power = 最新封装总功耗
+
+settings-diagnostics_pane_live_processes = 实时进程
+
+settings-diagnostics_pane_server_owned_helpers_process_ancestry_is_validated_again_before_every = 服务器所有的辅助进程。每次发送信号前都会重新校验进程谱系。
+
+settings-diagnostics_pane_process = 进程
+
+settings-diagnostics_pane_command = 命令
+
+settings-diagnostics_pane_pid = PID
+
+settings-diagnostics_pane_actions = 操作
+
+settings-diagnostics_pane_interrupt = 中断
+
+settings-diagnostics_pane_kill = 终止
+
+settings-diagnostics_pane_no_helper_processes = 没有辅助进程
+
+settings-diagnostics_pane_diagnostics_storage_and_privacy = 诊断存储和隐私
+
+settings-diagnostics_pane_storage_and_privacy = 存储和隐私
+
+settings-diagnostics_pane_diagnostics_stay_on_this_device_unless_you_explicitly_export_them = 除非你明确导出诊断信息，否则诊断信息将保留在该设备上。
+
+settings-diagnostics_pane_retention = 保留时长
+
+settings-diagnostics_pane_7_days = 7天
+
+settings-diagnostics_pane_incidents_and_five_minute_operation_rollups_are_pruned_by_age = 事件和五分钟操作汇总会按保留时长清理。
+
+settings-diagnostics_pane_local_usage = 本地用量
+
+settings-diagnostics_pane_includes_events_and_performance_history_on_this_device = 包括该设备上的事件和性能历史记录。
+
+settings-diagnostics_pane_incident_capture = 事件捕捉
+
+settings-diagnostics_pane_full_trace_active = 完整追踪已开启
+
+settings-diagnostics_pane_on = 开
+
+settings-diagnostics_pane_full_trace_time_remaining = 完整追踪剩余时间
+
+settings-diagnostics_pane_full_trace_duration = 完整追踪时长
+
+settings-diagnostics_pane_5_min = 5分钟
+
+settings-diagnostics_pane_15_min = 15分钟
+
+settings-diagnostics_pane_30_min = 30分钟
+
+settings-diagnostics_pane_stop_full_trace = 停止完整追踪
+
+settings-diagnostics_pane_start_full_trace = 开始完整追踪
+
+settings-diagnostics_pane_support_bundle = 支持包
+
+settings-diagnostics_pane_creates_a_sanitized_local_bundle_for_the_selected_time_range_prompts_t = 为所选时间范围生成脱敏的本地支持包。提示词、对话记录、文件、终端输出、凭据、环境变量值和 URL 查询串仍会被排除。
+
+settings-diagnostics_pane_open_diagnostics_folder = 打开诊断文件夹
+
+settings-diagnostics_pane_clear_performance_history = 清除性能历史
+
+settings-diagnostics_pane_sanitized_diagnostic_context_and_related_occurrences = 脱敏的诊断上下文与相关事件。
+
+settings-keybindings_editor_press_shortcut = 请按下快捷键…
+
+settings-keybindings_editor_keyboard_shortcuts = 键盘快捷键
+
+settings-keybindings_editor_add_keybinding = 添加快捷键
+
+settings-keybindings_editor_command = 命令
+
+settings-keybindings_editor_keybinding = 快捷键
+
+settings-keybindings_editor_status = 状态
+
+settings-keybindings_editor_no_keybindings_match_your_search = 没有与你的搜索匹配的快捷键。
+
+settings-keybindings_editor_no_keybindings = 暂无快捷键。
+
+settings-keybindings_editor_record_new_chord = 录制新组合键
+
+settings-keybindings_editor_discard_pending_changes = 放弃挂起的更改
+
+settings-keybindings_editor_discard_changes = 放弃更改
+
+settings-keybindings_editor_reset_to_default = 重置为默认值
+
+settings-keybindings_editor_new_binding = { " " }新绑定
+
+settings-keybindings_editor_re_record_shortcut_for_new_binding = 为新绑定重新录制快捷键
+
+settings-keybindings_editor_record_again = 再次录制
+
+settings-keybindings_editor_record_shortcut_for_new_binding = 为新绑定录制快捷键
+
+settings-keybindings_editor_click_to_record = 点击录制
+
+settings-keybindings_editor_search_keybindings = 搜索快捷键
+
+settings-keybindings_editor_reset_all_to_defaults = 全部重置为默认值
+
+settings-pokedex_pane_pokedex = 图鉴
+
+settings-pokedex_pane_search_by_name_or_number = 按名称或编号搜索
+
+settings-pokedex_pane_all = 全部
+
+settings-pokedex_pane_unlocked_2 = 解锁
+
+settings-pokedex_pane_locked = 锁定
+
+settings-pokedex_pane_all_generations = 所有世代
+
+settings-pokedex_pane_all_rarity = 所有稀有度
+
+settings-pokedex_pane_sprite_zoom = 精灵缩放
+
+settings-pokedex_pane_evolution = 进化
+
+settings-pokedex_pane_variants = 形态
+
+settings-pokedex_pane_status = 状态
+
+settings-pokedex_pane_slug = Slug
+
+settings-access_confirm_dialogs_set_up_zuse_serve = 设置 Zuse Serve？
+
+settings-access_confirm_dialogs_turn_off_zuse_serve = 关闭 Zuse Serve？
+
+settings-access_confirm_dialogs_share_zuse_serve_through_tailscale = 通过 Tailscale 共享 Zuse Serve？
+
+settings-access_confirm_dialogs_turn_off_tailscale_access = 关闭 Tailscale 访问吗？
+
+settings-access_confirm_dialogs_zuse_serve_makes_this_computer_available_to_your_signed_in_devices_thr = Zuse Serve 通过加密的出站连接，让已登录的设备可以使用这台电脑。
+
+settings-access_confirm_dialogs_devices_that_rely_on_internet_access_will_disconnect_tailscale_and_loc = 依赖互联网访问的设备会断开连接。Tailscale 和本地网络访问（如已开启）不受影响。
+
+settings-access_confirm_dialogs_this_uses_tailscale_serve_to_make_zuse_available_only_to_devices_on_yo = 这会通过 Tailscale Serve 让 Zuse 仅供你 tailnet 内的设备访问。需要安装并登录 Tailscale。
+
+settings-access_confirm_dialogs_devices_using_the_private_tailnet_address_will_disconnect_other_enable = 使用私密 tailnet 地址的设备会断开连接。其他已开启的访问方式不受影响。
+
+settings-access_confirm_dialogs_no_router_ports_are_opened_the_connection_stays_available_after_restar = 不会打开路由器端口。重启后连接依然可用，直到你手动关闭。
+
+settings-access_confirm_dialogs_tailscale_may_open_your_browser_once_to_approve_serve_this_does_not_ex = Tailscale 可能会打开一次浏览器来授权 Serve。这不会把 Zuse 暴露到公共互联网。
+
+settings-access_confirm_dialogs_updating = 正在更新…
+
+settings-access_confirm_dialogs_set_up_zuse_serve_2 = 设置 Zuse Serve
+
+settings-access_confirm_dialogs_turn_off_zuse_serve_2 = 关闭 Zuse Serve
+
+settings-access_confirm_dialogs_install_tailscale = 安装 Tailscale
+
+settings-access_confirm_dialogs_enable_tailscale = 启用 Tailscale
+
+settings-access_confirm_dialogs_turn_off_tailscale = 关闭 Tailscale
+
+settings-access_confirm_dialogs_turn_on_local_access = 开启本地访问？
+
+settings-access_confirm_dialogs_turn_off_local_access = 关闭本地访问？
+
+settings-access_confirm_dialogs_the_app_will_restart_so_browsers_and_mobile_devices_can_connect_over_t = 应用将重启，以便浏览器和移动设备通过此网络连接。正在运行的智能体会暂停。
+
+settings-access_confirm_dialogs_the_app_will_restart_and_connected_browsers_and_mobile_devices_on_this = 应用将重启，该网络上已连接的浏览器和移动设备会断开连接。
+
+settings-access_confirm_dialogs_restarting = 正在重启…
+
+settings-access_confirm_dialogs_restart_and_turn_on = 重启并开启
+
+settings-access_confirm_dialogs_restart_and_turn_off = 重启并关闭
+
+settings-access_methods_card_details = 详情
+
+settings-access_methods_card_updating = 正在更新…
+
+settings-access_methods_card_turn_off = 关闭
+
+settings-access_methods_card_set_up = 设置
+
+settings-access_methods_card_connections = 连接
+
+settings-access_methods_card_choose_how_other_zuse_apps_and_browsers_can_reach_this_computer = 选择其他 Zuse 应用程序和浏览器如何访问此电脑。
+
+settings-access_methods_card_zuse_serve = Zuse Serve
+
+settings-access_methods_card_reconnecting_to_your_account = 正在重新连接你的账户…
+
+settings-access_methods_card_access_this_computer_from_your_signed_in_devices = 从已登录的设备访问这台电脑。
+
+settings-access_methods_card_tailscale = Tailscale
+
+settings-access_methods_card_local_network = 本地网络
+
+settings-access_methods_card_available_in_the_desktop_app = 仅在桌面应用中可用。
+
+settings-access_methods_card_connect_from_another_device_on_the_same_wi_fi = 从同一 Wi-Fi 上的另一台设备连接。
+
+settings-access_methods_card_turn_on = 开启
+
+settings-access_methods_card_managed_by_zuse_serve = 由 zuse serve 管理
+
+settings-connect_link_card_connect_another_device = 连接另一台设备
+
+settings-connect_link_card_create_a_temporary_link_that_authorizes_another_zuse_app_or_browser_to = 创建一个临时链接，授权另一个 Zuse 应用程序或浏览器使用此电脑。
+
+settings-connect_link_card_create_a_connect_link = 创建连接链接
+
+settings-connect_link_card_authorize_another_device_with_a_link_that_lasts_five_minutes = 使用持续五分钟的链接授权另一台设备。
+
+settings-connect_link_card_set_up_one_of_the_connections_above_first = 请先设置上方的一种连接方式。
+
+settings-connect_link_card_create_link = 创建链接
+
+settings-connect_link_card_open_this_link_in_a_browser_paste_it_into_add_computer_or_scan_the_qr = 在浏览器中打开此链接、将其粘贴到“添加电脑”中，或扫描二维码。选择要使用的连接方式。
+
+settings-connect_link_card_connect_through = 连接方式
+
+settings-connect_link_card_connect_link = 连接链接
+
+settings-connect_link_card_finding_browser_address = 查找浏览器地址…
+
+settings-connect_link_card_copy_link = 复制链接
+
+settings-connect_link_card_pairing_code = 配对码
+
+settings-connect_link_card_creating_code = 正在创建验证码…
+
+settings-connect_link_card_copy_code = 复制代码
+
+settings-connect_link_card_connect_qr_code = 连接二维码
+
+settings-connect_link_card_hide_qr = 隐藏二维码
+
+settings-connect_link_card_show_qr = 显示二维码
+
+settings-connect_link_card_new_link = 新链接
+
+settings-connected_devices_card_devices_authorized_to_open_this_computer_s_projects_and_chats = 有权打开该电脑的项目和聊天的设备。
+
+settings-connected_devices_card_not_connected_yet = 尚未连接
+
+settings-connected_devices_card_revoke = 撤销
+
+settings-connected_devices_card_older_device_access = 旧设备访问
+
+settings-connected_devices_card_revoke_all = 全部撤销
+
+settings-connected_devices_card_no_other_devices_are_connected_yet = 尚未连接其他设备。
+
+settings-connected_devices_card_revoke_older_device_access = 撤销旧设备的访问权限？
+
+settings-connected_devices_card_revoking = 撤销…
+
+settings-connected_devices_card_revoke_access = 撤销访问权限
+
+settings-using_computers_card_computers = 电脑
+
+settings-using_computers_card_projects_and_chats_from_connected_computers_stay_in_the_same_sidebar = 来自已连接电脑的项目和聊天会保留在同一个侧边栏中。
+
+settings-using_computers_card_add_computer = 添加电脑
+
+settings-using_computers_card_no_other_computers_yet = 还没有其他电脑
+
+settings-using_computers_card_add_computer_help = 已登录的电脑会自动出现，你也可以手动添加。
+
+settings-using_computers_card_removing_a_computer_does_not_delete_its_remote_data = 移除电脑不会删除其远程数据。
+
+settings-using_computers_card_manage = 管理
+
+settings-settings_page_back_to_app = 返回应用
+
+settings-settings_page_browser_sessions = 浏览器会话
+
+settings-settings_page_copy_valid_cookies_from_a_local_browser_profile_into_the_built_in_brow = 将本地浏览器配置文件中的有效 cookie 复制到内置浏览器。Cookie 值绝不会进入渲染器状态、日志或聊天。
+
+settings-settings_page_import_source = 导入来源
+
+settings-settings_page_import = 导入
+
+settings-settings_page_imported_data = 导入数据
+
+settings-settings_page_clear_imported = 清除已导入数据
+
+settings-settings_page_privacy = 隐私
+
+settings-settings_page_built_in_browser_data_stays_in_an_isolated_in_memory_partition_explici = 内置浏览器数据保存在隔离的内存分区中。显式导入的 cookie 会用应用密钥库加密，并在重启后恢复。
+
+settings-settings_page_browsing_data = 浏览数据
+
+settings-settings_page_remove_cookies_site_storage_and_cache_from_the_current_built_in_browse = 从当前内置浏览器会话中移除 cookie、站点存储和缓存，不影响其他浏览器。
+
+settings-settings_page_clear_all = 清除所有…
+
+settings-settings_page_clear_browsing_data = 清除浏览数据？
+
+settings-settings_page_this_removes_cookies_site_storage_and_cache_from_the_built_in_browser = 这将从内置浏览器中删除 cookie、站点存储和缓存。其他浏览器不变。
+
+settings-settings_page_clear_data = 清除数据
+
+settings-settings_page_saved_logins = 已保存的登录信息
+
+settings-settings_page_the_agent_calls_browser_login_with_a_site_s_origin_you_ll_always_be_as = 智能体会以站点源（origin）调用 browser_login；提交前总会请求你的批准。
+
+settings-settings_page_no_saved_logins_yet = 尚未保存登录信息。
+
+settings-settings_page_origin_https_app_example_com = 来源（https://app.example.com）
+
+settings-settings_page_username_email = 用户名 / 邮箱
+
+settings-settings_page_password_dummy = 密码（测试用）
+
+settings-settings_page_add_login = 添加登录信息
+
+settings-settings_page_notch_tray = 刘海托盘
+
+settings-settings_page_show_active_agents_near_the_macbook_notch_hover_the_notch_area_to_expa = 在 MacBook 刘海附近显示活跃的智能体。将鼠标悬停在刘海区域展开托盘，点击智能体即可跳转到其聊天。
+
+settings-settings_page_enable_notch_tray = 启用刘海托盘
+
+settings-settings_page_show_running_agents_pending_approvals_questions_plans_completions_and = 在刘海附近显示运行中的智能体、待处理的批准、提问、计划、完成与失败。
+
+settings-settings_page_keep_tray_expanded = 保持托盘展开
+
+settings-settings_page_keep_the_agent_list_open_instead_of_only_expanding_while_the_pointer_i = 保持智能体列表常开，而不是只在指针悬停刘海区域时展开。
+
+settings-settings_page_what_appears = 显示内容
+
+settings-settings_page_the_tray_is_intentionally_quiet_it_shows_actionable_agent_states_first = 托盘刻意保持安静：优先显示可操作的智能体状态，随后显示最近完成的轮次约 30 秒。
+
+settings-settings_page_permission_requests_questions_and_plan_approvals = 许可请求、问题和计划批准
+
+settings-settings_page_running_agents_as_compact_status_circles = 以紧凑的状态圆点显示运行中的智能体
+
+settings-settings_page_completed_turns_and_failures_from_background_chats = 后台聊天中完成的轮次与失败
+
+settings-settings_page_power = 电源
+
+settings-settings_page_keep_this_mac_available_for_local_agents_and_remote_control = 让这台 Mac 保持可用于本地智能体和远程控制。
+
+settings-settings_page_keep_mac_awake = 让 Mac 保持清醒
+
+settings-settings_page_the_display_may_turn_off_closed_lid_operation_is_best_effort_and_depen = 显示屏可能会关闭。合盖运行属尽力而为，取决于 macOS 硬件与电源策略。
+
+settings-settings_page_account = 账户
+
+settings-settings_page_sign_in_to_sync_your_account_across_devices_and_soon_drive_remote_agen = 登录后可跨设备同步账户，并（即将）通过手机操控远程智能体。
+
+settings-settings_page_your_name = 你的名称
+
+settings-settings_page_edit_display_name = 编辑显示名称
+
+settings-settings_page_account_unavailable = 账户不可用
+
+settings-settings_page_checking_account = 正在检查账户…
+
+settings-settings_page_reconnect_this_computer_to_load_the_existing_workos_session = 重新连接此电脑以加载现有的 WorkOS 会话。
+
+settings-settings_page_loading_the_saved_workos_session_from_this_computer = 从此电脑加载保存的 WorkOS 会话。
+
+settings-settings_page_not_signed_in = 未登录
+
+settings-settings_page_you_re_using_zuse_beta_locally_without_an_account_sign_in_to_sync_and = 你正在无账户状态下本地使用 Zuse（测试版）。登录以同步并解锁远程智能体。
+
+settings-settings_page_appearance = 外观
+
+settings-settings_page_choose_the_app_theme_or_follow_your_system_setting = 选择应用程序主题，或遵循你的系统设置。
+
+settings-settings_page_theme = 主题
+
+settings-settings_page_notifications = 通知
+
+settings-settings_page_agent_completion_sound = 智能体完成提示音
+
+settings-settings_page_play_a_short_sound_when_any_agent_turn_finishes_including_agents_worki = 任何智能体轮次结束时播放一声短提示，包括在后台聊天中工作的智能体。
+
+settings-settings_page_preview = 预览
+
+settings-settings_page_workspace_naming = 工作区命名
+
+settings-settings_page_controls_how_zuse_beta_names_new_worktree_backed_branches = 控制 Zuse（测试版）如何为基于工作树的新分支命名。
+
+settings-settings_page_branch_naming = 分支命名
+
+settings-settings_page_after_the_first_submitted_turn_completes_successfully_each_unnamed_ses = 首个提交的轮次成功完成后，每个未命名会话会获得一个标题，聊天沿用其初始会话的标题，而新的未发布工作树分支会按此格式获得独立的语义名称。
+
+settings-settings_page_custom_prefix = 自定义前缀
+
+settings-settings_page_e_g_swaraj_or_team_wip = 例如 swaraj 或 team/wip
+
+settings-settings_page_slash_joined_before_the_slug_letters_digits_slashes_and_dashes_leave_e = 以斜杠连接在 slug 之前。可用字母、数字、斜杠和短横线；留空则不带前缀。
+
+settings-settings_page_setup = 初始设置
+
+settings-settings_page_onboarding = 新手引导
+
+settings-settings_page_replay_the_first_launch_welcome_flow_your_existing_projects_and_creden = 重放首次启动的欢迎流程。你现有的项目和凭据保持不变。
+
+settings-settings_page_show_again = 再次显示
+
+settings-settings_page_chat_defaults = 聊天默认设置
+
+settings-settings_page_these_choices_apply_when_you_start_a_new_chat_you_can_still_change_eit = 这些选项会在你新建聊天时生效。之后仍可在输入框中更改。
+
+settings-settings_page_default_model = 默认模型
+
+settings-settings_page_default_permission_mode = 默认权限模式
+
+settings-settings_page_how_new_chats_handle_tool_calls_each_chat_can_override_this_from_the_c = 控制新聊天如何处理工具调用。每个聊天都可在输入框中覆盖此设置。
+
+settings-settings_page_agent_providers = 智能体提供商
+
+settings-settings_page_enable_the_coding_agents_you_use_verify_their_local_setup_and_control = 启用你常用的编码智能体，验证其本地安装，并控制哪些模型出现在 Zuse 中。
+
+settings-settings_page_refresh_provider_status = 刷新提供商状态
+
+settings-settings_page_auto_create_worktree_for_new_chats = 为新聊天自动创建工作树
+
+settings-settings_page_when_on_each_new_chat_runs_in_its_own_git_worktree_under_zuse_repo_nam = 开启后，每个新聊天都会在 ~/.zuse/<repo>/<name>/ 下自己的 git 工作树中运行，并从项目 HEAD 分支出来。每个仓库的设置可覆盖此默认值。
+
+settings-settings_page_inherit = 继承
+
+settings-settings_page_custom = 自定义
+
+settings-settings_repository_project_no_longer_exists_pick_another_from_the_sidebar = 项目不再存在。从侧边栏中选择另一个。
+
+settings-settings_repository_loading_settings = 正在加载设置…
+
+settings-settings_repository_defaults = 默认值
+
+settings-settings_repository_repository_specific_defaults_for_new_chats_leave_overrides_off_to_inhe = 针对新聊天的仓库级默认值。关闭覆盖即可继承全局设置。
+
+settings-settings_repository_project_permissions = 项目权限
+
+settings-settings_repository_review_and_revoke_saved_tool_permission_decisions_for_this_repository = 查看并撤销此仓库已保存的工具权限决定。
+
+settings-settings_repository_manage = 管理
+
+settings-settings_repository_default_agent = 默认智能体
+
+settings-settings_repository_override_the_global_default_provider_and_model_for_new_chats_in_this_r = 覆盖此仓库中新聊天的全局默认提供商和模型。
+
+settings-settings_repository_repository_default_provider = 仓库默认提供商
+
+settings-settings_repository_model = 模型
+
+settings-settings_repository_default_permission_mode = 默认权限模式
+
+settings-settings_repository_override_the_global_permission_posture_for_new_chats_in_this_repo = 覆盖此仓库中新聊天的全局权限策略。
+
+settings-settings_repository_repository_default_permission_mode = 仓库默认权限模式
+
+settings-settings_repository_worktrees = 工作树
+
+settings-settings_repository_controls_for_automatic_chat_worktrees_and_the_existing_checkouts_for_t = 自动聊天工作树与该仓库现有检出的相关控制。
+
+settings-settings_repository_worktree = 工作树
+
+settings-settings_repository_worktrees_2 = 工作树
+
+settings-settings_repository_auto_create_a_worktree_for_new_chats = 为新聊天自动创建工作树
+
+settings-settings_repository_when_on_the_composer_s_workspace_picker_pre_selects_a_fresh_worktree_y = 开启后，输入框的工作区选择器会预选一个新工作树。发送第一条消息前，你仍可改回“当前检出”。
+
+settings-settings_repository_no_worktrees_yet_zuse_beta_creates_one_for_you_when_you_start_a_new_ch = 还没有工作树。开始新聊天时，Zuse（测试版）会为你创建一个。
+
+settings-settings_repository_remove_the_checkout_uncommitted_changes_are_saved_to_its_branch = 移除此检出；未提交的变更会保存到其分支
+
+settings-settings_repository_git_worktrees_for_this_repo_each_lives_under_zuse_lt_repo_gt_lt_name_g = 此仓库的 Git 工作树。每个都位于磁盘上的 ~/.zuse/<repo>/<name>/ 下。
+
+settings-settings_repository_scripts = 脚本
+
+settings-settings_repository_commands_that_run_when_worktrees_are_set_up_run_or_archived = 设置、运行或存档工作树时运行的命令。
+
+settings-settings_repository_setup_script = 设置脚本
+
+settings-settings_repository_runs_when_a_new_worktree_is_created = 创建新工作树时运行
+
+settings-settings_repository_bun_i = bun i
+
+settings-settings_repository_run_script = 运行脚本
+
+settings-settings_repository_runs_when_you_click_run = 点击“运行”时执行
+
+settings-settings_repository_bun_run_dev = bun run dev
+
+settings-settings_repository_auto_run_after_setup = 设置后自动运行
+
+settings-settings_repository_start_this_repository_s_run_script_automatically_after_setup = 设置完成后自动启动此仓库的运行脚本。
+
+settings-settings_repository_archive_script = 存档脚本
+
+settings-settings_repository_optional_hook_that_runs_before_the_archive_checkpoint = 在存档检查点前运行的可选钩子
+
+settings-settings_repository_rm_rf_node_modules_next_pkill_f_next_dev_true = rm -rf node_modules .next{ "\u000A" }pkill -f "next dev" || true
+
+settings-settings_repository_environment_variables = 环境变量
+
+settings-settings_repository_key_value_pairs_passed_to_setup_run_and_archive_scripts = 传递给设置、运行和存档脚本的 KEY=value 键值对。
+
+settings-settings_repository_zuse_port_5733 = ZUSE_PORT=5733
+
+settings-settings_repository_worktree_file_includes = 工作树包含的文件
+
+settings-settings_repository_one_pattern_per_line_linked_from_the_main_checkout_into_each_new_workt = 每行一个模式，从主检出到每个新工作树建立链接。
+
+settings-settings_repository_env_env_local_env_local = .env{ "\u000A" }.env.local{ "\u000A" }.env.*.local
+
+settings-settings_repository_shell = shell
+
+settings-browser_settings_menu_close_completely_before_importing = 导入前完全关闭{ " " }{ $source }。
+
+settings-cloud_account_access_checking = 正在检查
+
+settings-cloud_account_access_authorized = 已授权
+
+settings-cloud_account_access_reconnect = 重新连接
+
+settings-cloud_account_access_tool_missing = 工具缺失
+
+settings-cloud_account_access_needs_attention = 需要注意
+
+settings-cloud_account_access_signed_out = 已退出
+
+settings-cloud_account_access_cloud_computer_required = 需要云电脑
+
+settings-cloud_account_access_checking_installed_agent_tools = 正在检查已安装的智能体工具。
+
+settings-cloud_account_access_not_installed = { $value1 }{ " " }未安装。
+
+settings-cloud_account_access_needs_update = 需要更新
+
+settings-cloud_account_access_claude_code_codex_cursor_and_grok_are_available_on_this_computer = 此电脑上可用：Claude Code、Codex、Cursor 和 Grok。
+
+settings-cloud_account_access_ready = 就绪
+
+settings-cloud_auth_method_tabs_subscription = 订阅
+
+settings-cloud_auth_method_tabs_api_key = API 密钥
+
+settings-cloud_auth_method_tabs_custom = 自定义
+
+settings-cloud_image_build_history_succeeded = 已成功
+
+settings-cloud_image_build_history_failed = 失败
+
+settings-cloud_image_build_history_in_progress = 进行中
+
+settings-cloud_image_readiness_repositories_runtime = 可用于新云端对话的仓库：{ $length }。
+
+settings-cloud_machines_pane_cloud_machine = 云主机
+
+settings-cloud_workspace_auth_ready = 已连接
+
+settings-cloud_workspace_auth_authorizing = 授权
+
+settings-cloud_workspace_auth_tool_unavailable = 工具不可用
+
+settings-cloud_workspace_auth_needs_attention = 需要注意
+
+settings-cloud_workspace_auth_unavailable = 不可用
+
+settings-cloud_workspace_auth_not_connected = 未连接
+
+settings-cloud_workspace_auth_of_connected = 已连接{ " " }{ $value1 }/{ $length }
+
+settings-cloud_workspace_auth_set_up = 设置{ " " }{ $value1 }
+
+settings-cloud_workspace_auth_choose_how_new_cloud_sandboxes_authenticate_with = 选择 Cloud 与{ " " }{ $value1 }{ " " }的身份验证方式。
+
+settings-cloud_workspace_repositories_avatar = { $owner }头像
+
+settings-cloud_workspace_repositories_available = 可用{ " " }{ $length }{ " " }个
+
+settings-cloud_workspace_repositories_selected = 已选{ " " }{ $length }{ " " }个
+
+settings-developer_pane_dirty = 有改动
+
+settings-developer_pane_commit_push = 提交并推送
+
+settings-developer_pane_ahead = 领先
+
+settings-developer_pane_create_pr = 创建 PR
+
+settings-developer_pane_open_pr = open-pr
+
+settings-developer_pane_merge = 合并
+
+settings-developer_pane_open_pr_draft = open-pr · 草稿
+
+settings-developer_pane_mark_ready = 标记就绪
+
+settings-developer_pane_open_pr_checks_failing = open-pr · 检查失败
+
+settings-developer_pane_fix_actions = 修复 Actions
+
+settings-developer_pane_open_pr_conflicts = open-pr · 有冲突
+
+settings-developer_pane_resolve_conflicts = 解决冲突
+
+settings-developer_pane_pull_request_142_merged = 拉取请求 #142 已合并
+
+settings-developer_pane_toast_system_into_main = toast-system 合入 main
+
+settings-developer_pane_pull_request_142_closed = 拉取请求 #142 已关闭
+
+settings-developer_pane_project_error = 项目错误
+
+settings-developer_pane_could_not_load_projects_from_the_local_workspace = 无法从本地工作区加载项目。
+
+settings-developer_pane_merge_failed = 合并失败
+
+settings-developer_pane_github_rejected_the_merge_because_required_checks_are_still_runni = GitHub 拒绝了合并，因为所需的检查仍在运行。
+
+settings-developer_pane_removing_dirty_worktree = 正在移除有改动的工作树…
+
+settings-developer_pane_discarding_local_changes_and_deleting_the_checkout = 正在放弃本地变更并删除检出目录。
+
+settings-developer_pane_worktree_removed = 工作树已移除
+
+settings-developer_pane_the_dirty_checkout_was_discarded_and_archived = 有改动的检出已放弃并归档。
+
+settings-diagnostics_pane_issues = 问题
+
+settings-diagnostics_pane_logs = 日志
+
+settings-diagnostics_pane_performance = 性能
+
+settings-diagnostics_pane_processes = 进程
+
+settings-diagnostics_pane_storage = 存储
+
+settings-diagnostics_pane_peak_2 = { $label }：{ $value2 }，峰值{ " " }{ $value3 }
+
+settings-diagnostics_pane_unseen = { $unseenCount }{ " " }条未读 ·{ " " }{ $value2 }{ " " }·{ " " }{ $value3 }
+
+settings-access_methods_card_available_anywhere = 随处可用 ·{ " " }{ $accountAddress }
+
+settings-access_methods_card_private_access = 私人访问·{ $dnsName }
+
+settings-access_methods_card_available_on_this_network = 在此网络上可用 ·{ " " }{ $networkAddress }
+
+settings-connect_link_card_connect_link_copied = 连接链接已复制
+
+settings-connect_link_card_open_it_in_a_browser_or_paste_it_into_add_computer = 在浏览器中打开它或将其粘贴到“添加电脑”中。
+
+settings-connect_link_card_pairing_code_copied = 配对码已复制
+
+settings-connect_link_card_enter_it_in_the_browser_within_five_minutes = 五分钟内将其输入到浏览器中。
+
+settings-section_header_about = 关于{ " " }{ $title }
+
+settings-settings_page_general = 通用
+
+settings-settings_page_providers = 提供商
+
+settings-settings_page_default_models = 默认模型
+
+settings-settings_page_mcp_servers = MCP 服务器
+
+settings-settings_page_remote_access = 远程访问
+
+settings-settings_page_cloud_workspaces_beta = 云工作区 · 公测版
+
+settings-settings_page_browser = 浏览器
+
+settings-settings_page_pokedex = 图鉴
+
+settings-settings_page_diagnostics = 诊断
+
+settings-settings_page_keyboard_shortcuts = 键盘快捷键
+
+settings-settings_page_developer = 开发者
+
+settings-settings_page_close_before_importing_macos_may_request_safe_storage_access = 导入前请完全关闭{ " " }{ $source }。macOS 可能会请求访问安全储存。
+
+settings-settings_page_username_branch = username/branch
+
+settings-settings_page_branch_only = 仅分支
+
+settings-settings_page_feat_branch = feat/branch
+
+settings-settings_page_custom_prefix_2 = 自定义前缀
+
+settings-settings_page_system = 系统
+
+settings-settings_page_light = 浅色
+
+settings-settings_page_dark = 深色
+
+settings-settings_page_off = 关闭
+
+settings-settings_page_auto = 自动
+
+settings-settings_page_always = 始终
+
+settings-settings_page_model_for_new_chats = 新聊天的模型 ·{ " " }{ $value1 }
+
+settings-settings_navigation_general = 通用
+
+settings-settings_navigation_providers = 提供商
+
+settings-settings_navigation_default_models = 默认模型
+
+settings-settings_navigation_mcp_servers = MCP 服务器
+
+settings-settings_navigation_remote_access = 远程访问
+
+settings-settings_navigation_cloud_workspaces_beta = 云工作区 · 公测版
+
+settings-settings_navigation_browser = 浏览器
+
+settings-settings_navigation_pokedex = 图鉴
+
+settings-settings_navigation_keyboard_shortcuts = 键盘快捷键
+
+settings-settings_navigation_diagnostics = 诊断
+
+settings-settings_navigation_developer = 开发者
+
+settings-cloud_image_build_history_runtimerepositoriesagents_sentence = <part0>运行时</part0><part1>{ $value }</part1><part2>仓库</part2><part3>{ $value2 }</part3><part4>智能体</part4><part5>{ $value3 }</part5>
+
+settings-cloud_image_build_history_page_of_sentence = 第{ " " }{ $value }{ " " }页，共{ " " }{ $pageCount }{ " " }页
+
+settings-cloud_workspace_auth_in_chatgpt_open_settings_security_and_enable_device_code_aut_sentence = 在 ChatGPT 中打开 <part0>设置 → Security</part0> 并启用设备代码授权。托管工作区可能需要管理员开启。
+
+settings-cloud_workspace_auth_zuse_runs_the_official_codex_login_device_auth_flow_inside_y_sentence = Zuse 在你的私有云环境中运行官方 <part0>{ $code0 }</part0> 流程。
+
+settings-cloud_workspace_auth_is_authorized_and_ready_for_new_cloud_chats_sentence = { $value }{ " " }已授权，可以发起新的云聊天。
+
+settings-cloud_workspace_auth_provider_nameoptional_sentence = 提供商名称 <part0>可选</part0>
+
+settings-cloud_workspace_github_repositories_available_across_connected_installations_sentence = { $value }{ " " }个仓库可在所有已连接的安装中使用。
+
+settings-cloud_workspace_repositories_add_sentence = 添加{ " " }{ $value }
+
+settings-cloud_workspace_repositories_selected_for_cloud_image_sentence = { $value }{ " " }· 已选入云镜像
+
+settings-access_methods_card_the_zuse_serve_daemon_on_this_computer_owns_the_tailscale_se_sentence = 此电脑上的 <part0>{ $code0 }</part0> 守护进程拥有 Tailscale Serve 路由。要在此处更改或关闭 Tailscale 访问，请先在此电脑上运行 <part1>{ $code1 }</part1>。
+
+settings-diagnostics_pane_peak_sentence = 峰值<part0>{ $value }</part0>
+
+settings-diagnostics_pane_loaded_sentence = 已加载{ " " }{ $value }
+
+settings-diagnostics_pane_retained_sentence = 已保留{ " " }{ $value }
+
+settings-diagnostics_pane_confidence_sentence = <part0><part1>{ $value }</part1><part2>{ $value2 }{ " " }·{ " " }{ $value3 }{ " " }置信度</part2></part0><part3><part4>{ $value4 }</part4><part5>{ $value5 }</part5></part3>
+
+settings-diagnostics_pane_confidence_sentence_2 = { $value }{ " " }置信度 ·{ " " }{ $value2 }
+
+settings-diagnostics_pane_groups_events_sentence = { $value }{ " " }组 ·{ " " }{ $value2 }{ " " }个事件
+
+settings-diagnostics_pane_of_events_loaded_sentence = 已加载{ " " }{ $value }/{ $value2 }{ " " }个事件
+
+settings-diagnostics_pane_loaded_matching_sentence = 已加载{ " " }{ $value }{ " " }· 匹配{ " " }{ $value2 }
+
+settings-diagnostics_pane_timelevelsourcemessagetracedetails_sentence = <part0>时间</part0><part1>级别</part1><part2>来源</part2><part3>消息</part3><part4>追踪</part4><part5>详情</part5>
+
+settings-diagnostics_pane_confidence_sentence_3 = { $value }{ " " }置信度
+
+settings-diagnostics_pane_running_sentence = { $value }{ " " }运行中
+
+settings-diagnostics_pane_dropped_secrets_and_conversation_content_excluded_sentence = 已丢弃{ " " }{ $value }{ " " }条 · 不含密钥与对话内容。
+
+settings-keybindings_editor_failed_to_load_keybindings_sentence = 无法加载快捷键：{ $error }
+
+settings-keybindings_editor_click_the_pencil_on_any_row_to_record_a_new_chord_bindings_p_sentence = 点击任意行的铅笔图标即可录制新组合键。绑定保存在应用数据文件夹的 <part0>{ $code0 }</part0> 中，可在那里手动编辑以进行高级配置。
+
+settings-keybindings_editor_the_most_recent_matching_binding_wins_when_both_fire_on_the_sentence = { $description }{ " " }当两条绑定命中同一组合键时，较新的一条生效。
+
+settings-pokedex_pane_unlocked_points_sentence = 已解锁{ " " }{ $value }/{ $value2 }{ " " }·{ " " }{ $value3 }{ " " }分
+
+settings-pokedex_pane_gen_sentence = 第{ " " }{ $gen }{ " " }世代
+
+settings-pokedex_pane_gen_pts_sentence = 第{ " " }{ $value }{ " " }世代 ·{ " " }{ $value2 }{ " " }分
+
+settings-pokedex_pane_gen_pts_sentence_2 = #{ $value }{ " " }· 第{ " " }{ $value2 }{ " " }世代 ·{ " " }{ $value3 }{ " " }分
+
+settings-pokedex_pane_zoom_sentence = <part0>缩放</part0><part1>{ $value }%</part1>
+
+settings-settings_repository_inheriting_sentence = 继承 <part0>{ $value }{ " " }·{ " " }{ $globalModelLabel }</part0>
+
+settings-settings_repository_inheriting_sentence_2 = 继承<part0>{ $value }</part0>
+
+settings-settings_repository_off_sentence = <part0>{ $value }</part0><part1>{ $value2 }<part2> · 已关闭{ " " }{ $value3 }</part2></part1>
+
+settings-settings_repository_want_to_hand_edit_or_share_repository_settings_use_zuse_sett_sentence = 想手动编辑或共享仓库设置？使用 <part0>.zuse/settings.toml</part0>。
+
+settings-settings_page_repositories_sentence = <part0>仓库</part0><part1>{ $value }</part1>
+
+settings-settings_page_dummy_test_logins_only_never_store_a_real_or_production_pass_sentence = <part0>仅用于虚拟/测试登录。</part0>切勿在此存储真实或生产密码。它们仅用于你让智能体验证的开发和预发布站点上的预置账户。智能体永远看不到密码——密码会直接注入页面。
+
+settings-browser_settings_menu_macos_may_ask_zuse_or_electron_in_development_to_access_safe_sentence = macOS 可能会请求 Zuse（或开发中的 Electron）访问{ " " }{ $value }{ " " }的安全储存。这仅用于解锁 cookie 解密，绝不会导入密码。
+
+settings-cloud_machines_pane_month_sentence = <part0>${ $value }</part0> / 月
+
+settings-cloud_machines_pane_month_sentence_2 = ${ $value }/月
+
+settings-cloud_machines_pane_the_signed_runtime_and_developer_tools_will_be_updated_to_ma_sentence = 已签名的运行时和开发工具将更新到与 Zuse{ " " }{ $value }{ " " }一致。服务重启期间，活跃的终端和智能体可能会短暂重连。
+
+settings-cloud_account_access_not_installed_one = { $value1 }{ " " }未安装。
+
+settings-cloud_account_access_not_installed_other = { $value1 }{ " " }未安装。
+
+settings-connected_devices_card_access_credential_plural0_from_an_earlier_version_sentence = { $value }{ " " }个早期版本的访问凭据
+
+settings-connected_devices_card_access_credential_plural0_from_an_earlier_version_sentence_one = { $value }{ " " }个早期版本的访问凭据
+
+settings-connected_devices_card_access_credential_plural0_from_an_earlier_version_sentence_other = { $value }{ " " }个早期版本的访问凭据
+
+settings-connected_devices_card_this_removes_older_access_credential_plural0_any_browser_or_sentence = 这会移除{ " " }{ $value }{ " " }个旧版访问凭据。仍在使用它们的浏览器或设备需要重新连接。
+
+settings-connected_devices_card_this_removes_older_access_credential_plural0_any_browser_or_sentence_one = 这会移除{ " " }{ $value }{ " " }个旧版访问凭据。仍在使用它们的浏览器或设备需要重新连接。
+
+settings-connected_devices_card_this_removes_older_access_credential_plural0_any_browser_or_sentence_other = 这会移除{ " " }{ $value }{ " " }个旧版访问凭据。仍在使用它们的浏览器或设备需要重新连接。
+
+settings-keybindings_editor_custom_rule_plural0_active_sentence = { $userRulesCount }{ " " }条自定义规则生效中。
+
+settings-keybindings_editor_custom_rule_plural0_active_sentence_one = { $userRulesCount }{ " " }条自定义规则生效中。
+
+settings-keybindings_editor_custom_rule_plural0_active_sentence_other = { $userRulesCount }{ " " }条自定义规则生效中。
+
+settings-cloud_image_readiness_preparing_repositories_and_agents = 准备仓库和智能体
+
+settings-cloud_machines_pane_vcpu_gb_memory_gb_disk = { $value1 }{ " " }vCPU ·{ " " }{ $value2 }{ " " }GB 内存 ·{ " " }{ $value3 }{ " " }GB 磁盘 ·{ " " }{ $value4 }
+
+settings-cloud_machines_pane_vcpu_gb_memory_gb_disk_2 = { $value1 }{ " " }vCPU ·{ " " }{ $value2 }{ " " }GB 内存 ·{ " " }{ $value3 }{ " " }GB 磁盘
+
+settings-cloud_machines_pane_provisioning_step_of = 开通进度 第{ " " }{ $value1 }/{ $value2 }{ " " }步：{ $value3 }
+
+settings-cloud_machines_pane_authorized = 已授权{ " " }{ $value1 }{ " " }{ $value2 }
+
+settings-cloud_machines_pane_ssh_key = SSH 密钥
+
+settings-cloud_workspace_auth_shared_account_wide_with_new_cloud_chats_via = 通过{ " " }{ $value2 }{ " " }与新的{ " " }{ $value1 }{ " " }云聊天共享账户范围。
+
+settings-cloud_workspace_github_disconnect = 断开{ " " }{ $value1 }
+
+settings-cloud_workspace_pool_of_35_00_included_used = 已用{ " " }{ $value1 }{ " " }/ $35.00 额度
+
+settings-cloud_workspace_pool_remaining_overage_invoice_estimate_before_tax = 剩余{ " " }{ $value1 }{ " " }· 超额{ " " }{ $value2 }{ " " }· 税前账单预估{ " " }{ $value3 }
+
+settings-cloud_workspace_repositories_remove = 删除{ $value1 }
+
+settings-diagnostics_pane_live_trend = { $label }{ " " }实时趋势
+
+settings-diagnostics_pane_not_correlated = 不相关
+
+settings-diagnostics_pane_cause_unavailable = 原因不可用
+
+settings-diagnostics_pane_session_2 = { " " }· 会话{ " " }{ $value1 }
+
+settings-diagnostics_pane_samples = { $value1 }{ " " }个样本
+
+settings-diagnostics_pane_likely_contributor = 可能的原因：{ $value1 }
+
+settings-diagnostics_pane_energy = { " " }· 能耗{ " " }{ $value1 }
+
+settings-diagnostics_pane_unknown = 未知
+
+settings-diagnostics_pane_mw = { $value1 }{ " " }mW
+
+settings-diagnostics_pane_process_sampling_is_not_supported_on_this_platform = 此平台不支持进程采样。
+
+settings-diagnostics_pane_no_live_descendants_are_owned_by_the_diagnostics_root = 诊断根进程没有任何存活子进程。
+
+settings-keybindings_editor_edit_shortcut_for = 编辑{ " " }{ $value1 }{ " " }的快捷键
+
+settings-keybindings_editor_actions_for = { $value1 }{ " " }的操作
+
+settings-connect_link_card_connected_can_now_use_this_computer = 已连接 —{ " " }{ $connectedLabel }{ " " }现在可以使用这台电脑。
+
+settings-connected_devices_card_last_connected = 最后连接于{ " " }{ $value1 }
+
+settings-settings_page_no_username = （无用户名）
+
+settings-settings_page_remove_login_for = 移除{ " " }{ $value1 }{ " " }的登录信息
+
+settings-settings_repository_model_for = { $value1 }{ " " }的模型
+
+settings-cloud_api_keys_revoke = 撤销
+
+settings-cloud_api_keys_loading_api_keys = 正在加载 API 密钥…
+
+settings-cloud_api_keys_checking_this_account_s_active_integration_keys = 正在检查此账户的活跃集成密钥。
+
+settings-cloud_api_keys_create_a_key_to_call_the_public_api_keys_inherit_this_account_s_cloud_access = 创建密钥以调用公共 API。密钥会继承此账户的云访问权限。
+
+settings-cloud_api_keys_api_keys_let_slack_bots_scripts_and_other_integrations_start_cloud_workspaces_and_exchange_messages_over_the_public_api = API 密钥允许 Slack 机器人、脚本和其他集成启动云工作区并通过公共 API 交换消息。
+
+settings-cloud_api_keys_key_name = 密钥名称
+
+settings-cloud_api_keys_retry = 重试
+
+settings-cloud_api_keys_create_key = 创建密钥
+
+settings-cloud_api_keys_done = 完成
+
+settings-cloud_api_keys_api_keys = API 密钥
+
+settings-cloud_api_keys_copy_your_new_key_now = 立即复制你的新密钥
+
+settings-cloud_api_keys_no_api_keys_yet = 还没有 API 密钥
+
+settings-cloud_api_keys_cancel = 取消
+
+settings-cloud_api_keys_copied = 已复制
+
+settings-cloud_api_keys_copy = 复制
+
+settings-cloud_api_keys_will_immediately_lose_public_api_access_this_cannot_be_undone = 将立即失去公共 API 访问权限。此操作无法撤销。
+
+settings-cloud_api_keys_this_secret_is_shown_only_once_store_it_where_your_integration_can_read_it = 该密钥仅显示一次，请将其保存在集成可读取的位置。
+
+settings-cloud_api_keys_new_api_key_name = 新 API 密钥名称
+
+settings-cloud_api_keys_new_api_key_secret = 新 API 密钥
+
+settings-cloud_api_keys_revoke_api_key = 撤销 API 密钥？
+
+settings-cloud_api_keys_this_integration = 此集成
+
+settings-cloud_api_keys_revoke_key = 撤销密钥
+
+settings-cloud_api_keys_will_immediately_lose_public_api_access_this_cannot_be_undon_sentence = { $value }{ " " }将立即失去公共 API 访问权限。此操作无法撤销。
+
+settings-update_channel_updates = 更新
+
+settings-update_channel_label = 更新通道
+
+settings-update_channel_stable = 稳定版
+
+settings-update_channel_preview = 预览版
+
+settings-update_channel_preview_description = 抢先体验新版本。切换到稳定版后，重启时会安装当前的稳定版，并保留你的会话。
+
+settings-update_channel_stable_description = 获取经过测试的版本。选择预览版可抢先体验即将推出的变化。
+
+settings-update_channel_load_error = 无法加载更新通道。请重新打开设置后重试。
+
+settings-update_channel_save_error = 无法更改更新通道。请重试。
+
+settings-update_channel_changing = 正在更改更新通道…
+
+settings-cloud_workspace_pool_setup_unavailable = 云端设置暂时不可用。你的现有对话和智能体连接会保留。
+
+settings-cloud_auth_not_active = 此账户未开通云工作区。
+
+settings-cloud_auth_setup_failed = 云端无法启动安全的智能体设置。请稍后重试。
+
+settings-cloud_auth_not_allowed = 你的 Zuse 会话无法授权此操作。请刷新会话后重试。
+
+settings-cloud_auth_login_failed = 无法启动智能体登录。
+
+settings-cloud_auth_temporarily_unavailable = 云端身份验证暂时不可用。重试不会影响现有聊天。
+
+settings-cloud_machine_provider = 机器提供商
+
+settings-wallpaper_title = 壁纸
+
+settings-wallpaper_description = 新聊天的淡雅背景。保存在此设备上。
+
+settings-wallpaper_saving = 正在保存…
+
+settings-wallpaper_replace = 替换图片
+
+settings-wallpaper_upload = 上传图片
+
+settings-wallpaper_remove = 移除
+
+settings-wallpaper_upload_label = 上传壁纸
+
+settings-wallpaper_opacity = 不透明度
+
+settings-wallpaper_opacity_label = 壁纸不透明度
+
+settings-wallpaper_hint = PNG、JPEG、WebP、AVIF 或 GIF · 最大 20 MB。纹理制作工具：
+
+settings-wallpaper_studio = Dither studio
+
+settings-hosted_remote_description = 将个人电脑连接到此账户，并在网页上打开其聊天。
+
+settings-hosted_remote_setup = 在要连接的电脑上安装 Zuse，并登录同一账户。在设置 → 远程访问中启用 Zuse Serve，然后刷新此列表。
+
+settings-hosted_remote_download = 下载 Zuse
+
+settings-hosted_remote_show_chats = 显示聊天
+
+settings-hosted_remote_refresh = 刷新电脑列表
+
+settings-hosted_remote_private = 此处仅显示关联到你账户的电脑。在电脑上关闭 Zuse Serve 即可禁用远程访问。
+
+settings-hosted_remote_online = 在线
+
+settings-hosted_remote_offline = 离线 · 已保存
+
+settings-hosted_remote_unknown = 状态不可用
+
+settings-hosted_remote_localhost = Localhost
+
+settings-hosted_remote_lan = 本地网络
+
+settings-hosted_remote_address = Zuse Serve 地址
+
+settings-hosted_remote_last_seen = 最后在线{ " " }{ $date }
+
+settings-hosted_remote_routes_help = 这些是同一台 Zuse Serve 电脑的地址，并非不同电脑。Localhost 仅适用于该电脑；本地网络和 Tailscale 地址需要接入相应网络。可用状态依据最近的心跳，并非连接测试。
+
+settings-hosted_remote_remove = 移除电脑
+
+settings-hosted_remote_remove_help = 从账户中移除此电脑及其重复注册？这将撤销远程访问，但不会删除电脑上的聊天和文件。重新连接时，请再次启用 Zuse Serve。
+
+settings-hosted_remote_remove_failed = 部分注册未能移除。请重试以移除剩余注册。
+
+settings-cloud_setup_title = 设置你的云工作区
+
+settings-cloud_setup_description = 你的订阅已生效。以下步骤只需完成一次，之后即可从任何设备发起云聊天。
+
+settings-cloud_setup_github = 1. 连接 GitHub
+
+settings-cloud_setup_github_description = 安装 Zuse GitHub App 并选择至少一个仓库。
+
+settings-cloud_setup_agent = 2. 连接智能体
+
+settings-cloud_setup_agent_description = 使用订阅或 API 密钥授权 Claude Code 或其他智能体。
+
+settings-cloud_setup_image = 3. 构建镜像
+
+settings-cloud_setup_image_description = 选择云聊天的运行位置，然后构建可复用的环境。每个提供商有独立的镜像。
+
+settings-cloud_setup_review = 已完成 · 检查
+
+settings-cloud_setup_continue = 继续
+
+settings-cloud_image_status_unavailable = 云镜像状态不可用
+
+settings-cloud_image_checking = 正在检查云镜像…
+
+settings-cloud_image_checking_description = 正在检查此提供商是否需要构建。
+
+settings-cloud_image_auth_live = 重新身份验证后无需重建。更新后的凭据会自动下发；连接恢复后请重试失败的提示。
+
+settings-cloud_image_auth_legacy = 已可发起新的云聊天。身份验证变更需要重建此镜像并开启新云聊天。
+
+settings-cloud_auth_poll_retry = 无法刷新授权状态。正在重试…
+
+settings-cloud_auth_disconnect_failed = 无法断开智能体，请重试。
+
+settings-cloud_setup_later = 稍后完成
+
+settings-cloud_setup_finish = 开始使用 Cloud
+
+settings-cloud_images_all_description = 一步重建所有云提供商的镜像。现有聊天保持当前环境。
+
+settings-cloud_images_start_failed = 无法为{ " " }{ $providers }{ " " }启动构建，请重试。
+
+settings-cloud_images_state_checking = 正在检查
+
+settings-cloud_images_state_building = 正在构建
+
+settings-cloud_images_state_auth-broken = 重新连接智能体
+
+settings-cloud_images_state_failed = 构建失败
+
+settings-cloud_images_state_not-built = 需要重建
+
+settings-cloud_images_state_outdated = 需要重建
+
+settings-cloud_images_state_ready = 就绪
+
+settings-cloud_setup_open_guide = 打开设置指南
+
+settings-cloud_setup_guide_description = 连接 GitHub、登录智能体并构建云镜像。
+
+settings-cloud_images_details_description = 构建进度、日志、配置以及历史构建。
+
+settings-cloud_images_no_builds = 还没有构建。选择此提供商并构建其镜像即可开始。
+
+settings-organizations_organizations = 组织
+
+settings-organizations_manage_team = 管理你的团队和邀请。
+
+settings-organizations_sign_in_to_manage_your_team = 登录以管理你的团队
+
+settings-organizations_use_your_zuse_account_to_create_an_organization_or_accept_an_invitation = 使用你的 Zuse 账户创建组织，或接受邀请。
+
+settings-organizations_sign_in = 登录
+
+settings-organizations_your_organizations = 你的组织
+
+settings-organizations_loading_organization = 正在加载组织…
+
+settings-organizations_no_organizations_yet_create_one_below_or_accept_an_invitation_from_your_team = 还没有组织。在下方创建一个，或接受团队的邀请。
+
+settings-organizations_organization = 组织
+
+settings-organizations_refresh = 刷新
+
+settings-organizations_members = 成员
+
+settings-organizations_role_for = { $email }{ " " }的角色
+
+settings-organizations_current_member = { $name }（你）
+
+settings-organizations_member = 成员
+
+settings-organizations_admin = 管理员
+
+settings-organizations_remove = 移除
+
+settings-organizations_directory_managed = 由目录管理
+
+settings-organizations_invite_people = 邀请成员
+
+settings-organizations_invitations_are_sent_by_email_and_expire_after_seven_days = 邀请通过电子邮件发送，七天后失效。
+
+settings-organizations_invitation_email = 邀请邮箱
+
+settings-organizations_name_company_com = name@company.com
+
+settings-organizations_invitation_role = 邀请角色
+
+settings-organizations_send_invitation = 发送邀请
+
+settings-organizations_invitation_pending = 邀请待接受
+
+settings-organizations_revoke = 撤销
+
+settings-organizations_create_an_organization = 创建组织
+
+settings-organizations_organization_name = 组织名称
+
+settings-organizations_create = 创建
+
+settings-organizations_remove_member = 移除成员
+
+settings-organizations_remove_description = { $email }{ " " }将失去此组织的访问权限。
+
+settings-organizations_cancel = 取消
+
+settings-organizations_invitation_sent = 邀请已发送。
+
+settings-organizations_access_changed = 你的访问权限已变化。请重新登录，或联系组织管理员。
+
+settings-organizations_conflict = 此更改未能应用。请刷新组织后重试。
+
+settings-organizations_invalid = 请检查姓名或邮箱地址后重试。
+
+settings-organizations_not_found = 此组织或邀请已不可用。
+
+settings-organizations_unavailable = 无法加载组织。服务可能不可用或需要更新，请刷新重试。
+
+settings-organizations_creation_limit = 你可以创建一个组织，并可通过邀请加入其他团队。
+
+settings-cloud_images_selected_description = 为所选提供商构建镜像。现有聊天保持当前环境。
+
+settings-cloud_images_recommended = 推荐
+
+settings-cloud_images_view_logs = { $provider }{ " " }构建日志
+
+settings-settings_page_provider_update_notifications = 提供商更新通知
+
+settings-settings_page_provider_update_notifications_description = 当智能体提供商有新版本可用时显示通知。默认关闭。
+
+settings-chatgpt_experimental = Zuse（实验性）
+
+settings-chatgpt_description = 连接 ChatGPT 账户，即可使用你的套餐处理 Zuse 中符合条件的请求。建立此连接无需 API 密钥或智能体 CLI。
+
+settings-chatgpt_continue = 使用 ChatGPT 继续
+
+settings-model_connections_manage_usage = 管理用量
+
+settings-model_connections_refresh = 刷新账户
+
+settings-chatgpt_switching = 当某个账户达到用量上限时，实验性智能体可以切换到其他已授权的连接。项目上下文可能会通过不同的已连接 ChatGPT 工作区发送。
+
+settings-chatgpt_local_only = 请在 macOS 或 Linux 桌面应用中，通过此电脑的本地环境连接 ChatGPT。
+
+settings-model_connections_waiting = 请在浏览器中完成登录…
+
+settings-model_connections_working = 处理中…
+
+settings-model_connections_open_browser = 重新打开浏览器
+
+settings-model_connections_account_name = 账户名称
+
+settings-chatgpt_permission_required = 需要套餐使用权限
+
+settings-model_connections_disconnected = 已断开连接
+
+settings-model_connections_rename = 重命名
+
+settings-model_connections_preferred = 首选
+
+settings-model_connections_make_preferred = 设为首选
+
+settings-model_connections_reconnect = 重新连接
+
+settings-model_connections_error_denied = 登录已被拒绝。现有连接未发生更改。准备好后可重试。
+
+settings-model_connections_error_timeout = 登录超时。请重新开始以打开新的授权页面。
+
+settings-model_connections_error_busy = 另一个登录正在进行中。请先完成或取消，再重试。
+
+settings-chatgpt_error_identity = 此连接属于其他 ChatGPT 账户。请使用原账户重新连接，或添加另一个连接。
+
+settings-model_connections_error_generic = 无法完成此操作。请检查连接后重试。
+
+settings-chatgpt_plan_title = 你的 ChatGPT 套餐已连接
+
+settings-chatgpt_plan_description = Zuse 中符合条件的 AI 请求将使用你的 ChatGPT 套餐或积分余额。这与 Zuse 订阅无关。你可以在 ChatGPT 设置中管理访问权限和用量。
+
+settings-model_connections_got_it = 知道了
+
+settings-model_connections_pending = 完成登录
+
+settings-model_connections_title = 你的连接
+
+settings-model_connections_empty = 暂无连接。添加订阅即可开始。
+
+settings-model_connections_actions = 连接操作
+
+settings-model_connections_connect_supergrok = 连接 SuperGrok
+
+settings-model_connections_supergrok_description = 通过 xAI 设备登录使用 SuperGrok 订阅。模型访问权限取决于你的账户，无需 API 密钥。
+
+settings-model_connections_copy_code = 复制此代码
+
+settings-model_connections_verify = 登录并在验证页面输入代码
+
+settings-model_connections_verification_page = 验证页面
+
+settings-model_connections_copy_link = 复制链接
+
+settings-model_connections_login_notice = 仅批准你在 Zuse 中发起的登录。
+
+settings-model_connections_waiting_supergrok = 正在等待 SuperGrok…
+
+settings-model_connections_revocation_warning = 已在此电脑上断开连接。无法确认远程撤销，请在提供商设置中检查已连接的应用。
+
+settings-model_connections_local_scope = 此电脑
+
+settings-model_connections_account_scope = Zuse 账户
+
+settings-model_connections_save_to = 连接保存位置
+
+settings-model_connections_account_hint = 与你的 Zuse 账户共享。SuperGrok 可在本地和云端复用。原生 ChatGPT 执行仍仅限本地。
+
+settings-model_connections_account_error = 无法加载共享连接。请登录 Zuse，并确认账户 API 已更新。
+
+settings-zuse_harness_description = 使用你的订阅运行 ChatGPT 和 SuperGrok 模型，无需 CLI。
+
+settings-zuse_harness_enable = 使用 Zuse 智能体
+
+settings-acp_agents_title = ACP 智能体
+
+settings-acp_agents_empty = 尚无 ACP 智能体
+
+settings-acp_agents_sign_in_browser = 请在浏览器中完成登录。
+
+settings-acp_agents_sign_in_terminal = 请在下方完成登录。
+
+settings-acp_agents_sign_in_waiting = 正在等待登录…
+
+settings-acp_agents_open_sign_in = 打开登录页面
+
+settings-acp_agents_sign_in_terminal_title = 智能体登录
+
+settings-acp_agents_sign_in = 登录
+
+settings-acp_agents_signed_in = 已登录{ " " }{ $name }
+
+settings-acp_agents_close_browser_tab = 你可以关闭浏览器标签页。
+
+settings-acp_agents_sign_in_failed = 登录失败
+
+settings-acp_agents_enable = 启用{ " " }{ $name }
+
+settings-acp_agents_actions = { $name }{ " " }操作
+
+settings-acp_agents_test_connection = 测试连接
+
+settings-acp_agents_duplicate = 复制
+
+settings-acp_agents_update = 更新
+
+settings-acp_agents_add_title = 添加 ACP 智能体
+
+settings-acp_agents_search_placeholder = 搜索智能体…
+
+settings-acp_agents_search_label = 搜索 ACP 智能体
+
+settings-acp_agents_registry_unavailable = 注册表不可用
+
+settings-acp_agents_no_matches = 没有匹配的智能体
+
+settings-acp_agents_community = 社区
+
+settings-acp_agents_source = { $name }{ " " }源代码
+
+settings-acp_agents_unavailable = 不可用
+
+settings-acp_agents_unavailable_hint = 此主机上不可用
+
+settings-acp_agents_custom_command = 使用自定义命令…
+
+settings-acp_agents_custom_title = 自定义 ACP 命令
+
+settings-acp_agents_edit_title = 编辑{ " " }{ $name }
+
+settings-acp_agents_name = 名称
+
+settings-acp_agents_name_placeholder = 我的智能体
+
+settings-acp_agents_executable = 可执行文件
+
+settings-acp_agents_arguments = 参数
+
+settings-acp_agents_environment = 环境变量
+
+settings-acp_agents_saved_variables = 已保存：{ $keys }。
+
+settings-acp_agents_clear_variables = 清除
+
+settings-acp_agents_variables_cleared = 已保存的变量将被移除。
+
+settings-acp_agents_unclosed_quote = 请闭合未闭合的引号。
+
+settings-acp_agents_invalid_variable = “{ $name }”不是 KEY=value 键值对。
+
+settings-acp_agents_status_disabled = 已停用
+
+settings-acp_agents_status_not_tested = 尚未测试连接
+
+settings-acp_agents_status_setting_up = 正在设置…
+
+settings-acp_agents_status_testing = 正在测试连接…
+
+settings-acp_agents_busy_saving = 正在保存…
+
+settings-acp_agents_busy_duplicating = 正在复制…
+
+settings-acp_agents_busy_updating = 正在更新智能体…
+
+settings-acp_agents_busy_removing = 正在移除智能体…
+
+settings-acp_agents_busy_installing = 正在安装{ " " }{ $name }…
+
+settings-cloud_workspace_github_user_connected = 已连接为{ " " }{ $login }
+
+settings-organizations_github_allow = GitHub 组织
+
+settings-organizations_github_allow_help = 已关联的 GitHub 组织会与 Cloud 共享其仓库。开启自动加入后，将 GitHub 连接到 Zuse 的成员会自动加入；离开 GitHub 组织将失去访问权限。
+
+settings-organizations_github_connect_help = 关联后即可共享其仓库，并让其成员加入。
+
+settings-organizations_github_blocked = 已被管理员移除。在你允许之前，无法自动重新加入。
+
+settings-organizations_github_restore = 重新允许
+
+settings-organizations_github_managed = 通过 GitHub 加入
+
+settings-organizations_github_disconnect_help = 断开 GitHub 连接会阻止通过此连接加入的成员访问。
+
+settings-organizations_github_suspended = 已在 GitHub 上暂停，加入已暂停。
+
+settings-organizations_github_allow_installation = 自动加入{ " " }{ $login }{ " " }的成员
+
+settings-organizations_github_blocked_title = 已禁止自动加入
+
+settings-organizations_github_not_connected = 未关联 GitHub 组织
+
+settings-organizations_github_link = 关联 GitHub 组织
+
+settings-organizations_github_auto_join_on = 自动加入已开启
+
+settings-organizations_github_auto_join_off = 自动加入已关闭
+
+settings-account_github = GitHub
+
+settings-account_github_help = 连接你工作用的 GitHub 账户，团队的组织即可添加你。它不需要使用此账户的邮箱。
+
+settings-account_github_connected_help = 已为你的 GitHub 组织开启自动加入的组织会自动添加你。
+
+settings-account_github_connect = 连接 GitHub
+
+settings-account_github_connected_as = GitHub · @{ $login }
+
+settings-account_github_change = 更改
+
+settings-account_github_waiting = 请在浏览器中完成 GitHub 连接。
+
+settings-organizations_domains = 邮箱域名
+
+settings-organizations_domains_help = 使用这些域名的已验证邮箱登录的人会自动加入。
+
+settings-organizations_domains_none = 可在此为公司邮箱域名开启自动加入。只有已验证邮箱使用该域名的管理员才能操作，gmail.com 等个人邮箱域名不可用。
+
+settings-organizations_domain_add_help = 已关闭。开启后，拥有已验证 @{ $domain }{ " " }邮箱的人即可加入。
+
+settings-organizations_domain_auto_join = @{ $domain }{ " " }自动加入
+
+settings-organizations_domain_on_help = 拥有已验证 @{ $domain }{ " " }邮箱的人会自动加入。
+
+settings-cloud_snapshot_storage = 镜像存储
+
+settings-cloud_snapshot_storage_rate = Boat 镜像每 30 天计费 1.70 美元，按保留时间比例计算。
+
+settings-cloud_snapshot_retained_images = 保留的 Boat 镜像
+
+settings-cloud_snapshot_storage_allowance = 存储费用计入你的 35 美元云用量额度。超出部分适用现有的 5% 加价和超额费用上限。
+
+settings-cloud_snapshot_deletion_pending = 正在等待删除。存储计费已停止。
+
+settings-cloud_snapshot_grace = 请在{ " " }{ $date }{ " " }前恢复计费以保留此镜像，否则将在七天宽限期后删除。
+
+settings-cloud_snapshot_delete_explanation = 删除后，未来的工作区需要重新构建镜像。现有工作区磁盘和身份验证将保留。
+
+settings-cloud_snapshot_billing_not_started = 存储计费尚未开始。删除后，未来的工作区需要重新构建镜像。
+
+settings-cloud_snapshot_delete_image = 删除已保存的镜像
+
+settings-cloud_snapshot_usage = 本期存储用量费用
+
+settings-cloud_snapshot_usage_recent = 已计入你的云用量费用总额。
+
+settings-cloud_provider_keys_footer = 密钥由 Zuse 云服务加密，绝不会发送到工作区运行时。
+
+settings-cloud_provider_keys_daytona_network_requirement = 使用自己的 Daytona 密钥需要 Tier 3 或更高等级才能访问网络，除非 Daytona 支持团队已为你的组织启用网络例外。
+
+settings-cloud_provider_keys_loading = 正在加载提供商密钥…
+
+settings-cloud_provider_keys_load_failed = 无法加载提供商密钥。
+
+settings-cloud_provider_keys_empty_title = 未连接提供商密钥
+
+settings-cloud_provider_keys_empty_description = 连接密钥即可在没有 Zuse 订阅的情况下运行工作区。
+
+settings-cloud_provider_keys_connected = 已连接
+
+settings-cloud_provider_keys_connected_on = 连接于{ " " }{ $date }
+
+settings-cloud_provider_keys_template_detail = 模板{ " " }{ $template }
+
+settings-cloud_provider_keys_organization_detail = 组织{ " " }{ $organization }
+
+settings-cloud_provider_keys_disconnect = 断开连接
+
+settings-cloud_provider_keys_disconnect_label = 断开{ " " }{ $provider }{ " " }密钥
+
+settings-cloud_provider_keys_disconnect_title = 要断开{ " " }{ $provider }{ " " }密钥吗？
+
+settings-cloud_provider_keys_disconnect_description = 新工作区将不再使用此密钥。现有工作区会保留它用于管理和清理，因此在它们被删除之前，请在{ " " }{ $provider }{ " " }保持该密钥有效。
+
+settings-cloud_provider_keys_disconnect_failed = 无法断开密钥。请重试。
+
+settings-cloud_provider_keys_replace_description = 新密钥适用于新工作区。现有工作区将继续使用当前密钥。
+
+settings-cloud_provider_keys_provider = 沙箱提供商
+
+settings-cloud_provider_keys_api_key = { $provider }{ " " }API 密钥
+
+settings-cloud_provider_keys_connect = 连接
+
+settings-cloud_provider_keys_replace = 替换
+
+settings-cloud_provider_keys_save_failed = { $provider }{ " " }未接受此密钥。请检查密钥和高级选项，然后重试。
+
+settings-cloud_provider_keys_advanced = 高级选项
+
+settings-cloud_provider_keys_template = Zuse 运行时模板 ID（可选）
+
+settings-cloud_provider_keys_organization = boxd 组织（可选）
+
+settings-cloud_provider_keys_template_hint = 仅当密钥无法访问{ " " }{ $provider }{ " " }上的 Zuse 运行时模板时需要。必须使用兼容 Zuse 的模板。连接 boxd 密钥后，单独配置自定义快照。
+
+settings-cloud_workspace_pool_provider_billing = 提供商计费
+
+settings-cloud_workspace_pool_provider_billing_description = 使用你自己的提供商密钥时，Zuse 免费。
+
+settings-cloud_workspace_pool_billed_by_your_provider = 由你的提供商直接计费
+
+settings-cloud_workspace_pool_billed_by_your_provider_description = 在你的 E2B、boxd 或 Boat 账户中查看计算和存储费用。现有 Zuse 订阅另行管理。
+
+settings-cloud_workspace_pool_tab_setup = 设置
+
+settings-cloud_workspace_pool_tab_usage = 用量
+
+settings-cloud_advanced_title = 高级
+
+settings-cloud_advanced_hint = API 密钥、设置指南
+
+settings-snapshot_repository_path = 仓库路径{ " " }{ $number }
+
+settings-snapshot_path_example = /home/boxd/my-repository
+
+settings-snapshot_refresh_error = 无法刷新快照状态。请重新打开设置以重试。
+
+settings-snapshot_inspect_error = 无法检查快照。请检查其 ID、Linux 用户和 Boxd 密钥权限。
+
+settings-snapshot_id_label = 快照
+
+settings-snapshot_id_placeholder = 快照名称或 ID
+
+settings-snapshot_user_label = Linux 用户
+
+settings-snapshot_remove = 移除
+
+settings-snapshot_add_path = 添加仓库路径
+
+settings-snapshot_inspecting = 正在检查快照…
+
+settings-snapshot_git_login = 需要登录 Git — 请在云设置中连接 GitHub
+
+settings-snapshot_git_unavailable = 无法验证 Git 访问权限；请检查连接
+
+settings-snapshot_native_agents = 这是已保存的快照检查结果，并非工作区的实时访问状态。复制的登录信息可能过期或失效。
+
+settings-snapshot_installer_required = 在源机器上安装 Zuse，创建新快照，然后使用其 ID 重试。
+
+settings-snapshot_user_mismatch = 请输入安装程序显示的 Linux 用户。
+
+settings-snapshot_no_repositories = 未找到 GitHub 仓库。请添加仓库的绝对路径并重新检查。
+
+settings-snapshot_ambiguous = 多个工作副本具有相同的 GitHub 来源。请添加明确的路径来选择其中一个。
+
+settings-snapshot_update_required = 重新运行最新安装程序并创建新快照。
+
+settings-snapshot_invalid_repository = 仓库路径必须指向 Git 工作副本的可写根目录。
+
+settings-snapshot_timeout = 快照检查超时。请检查快照并重试。
+
+settings-snapshot_unknown_error = 无法使用快照（{ $code }）。请检查安装程序、路径和 Boxd 权限，然后重试。
+
+settings-snapshot_checking = 正在检查自定义快照
+
+settings-snapshot_ready = 自定义快照已就绪
+
+settings-snapshot_attention = 自定义快照需要处理
+
+settings-snapshot_discovering = 正在查找你 Boxd 账户中的仓库位置。
+
+settings-snapshot_manage_hint = 在上方的托管中编辑。
+
+settings-cloud_hosting_title = 托管
+
+settings-cloud_hosting_zuse = Zuse Cloud
+
+settings-cloud_hosting_zuse_description = 无需设置。Zuse 负责运行机器并计费。
+
+settings-cloud_hosting_subscribed = 已订阅
+
+settings-cloud_hosting_not_subscribed = 未订阅
+
+settings-cloud_hosting_manage_subscription = 管理订阅
+
+settings-cloud_hosting_own_snapshot = 你的自定义快照
+
+settings-cloud_hosting_accounts_description = 托管费用用于机器。智能体和 GitHub 使用你自己的账户，可通过 Zuse 连接，或使用快照中已登录的账户。
+
+settings-cloud_hosting_provider_billed = 由你的提供商计费
+
+settings-cloud_hosting_zuse_billed = 由 Zuse 计费
+
+settings-cloud_hosting_zuse_image = Zuse 镜像
+
+settings-cloud_hosting_agent_auth = 智能体认证
+
+settings-cloud_hosting_github_auth = GitHub 认证
+
+settings-snapshot_native_git_login = 需要登录 Git：在源机器上使用 gh 登录并创建新快照，或在上方选择 Zuse GitHub 连接。
+
+settings-snapshot_repositories_title = 快照中的仓库
+
+settings-snapshot_native_credentials_title = 快照中的凭据
+
+settings-cloud_hosting_zuse_subscribed_description = 已订阅。Zuse 负责运行机器并计费。
+
+settings-cloud_hosting_in_use = 使用中
+
+settings-cloud_hosting_own_key = 你的云账户
+
+settings-cloud_hosting_own_key_description = 使用你的 boxd、E2B 或 Boat API 密钥。无需订阅。
+
+settings-cloud_hosting_own_key_connected = 已连接{ " " }{ $providers }。由你的服务商收取机器费用。
+
+settings-cloud_hosting_manage = 管理
+
+settings-cloud_hosting_own_snapshot_description = 从包含你的工具、仓库和登录信息的 boxd 快照启动工作区。
+
+settings-cloud_hosting_own_snapshot_configured = 快照{ " " }{ $snapshot }
+
+settings-cloud_hosting_edit = 编辑
+
+settings-cloud_hosting_set_up = 设置
+
+settings-cloud_hosting_snapshot_needs_boxd = 自定义快照在你的 boxd 账户上运行。请先连接 boxd 密钥。
+
+settings-snapshot_install_step = 1. 在 boxd 机器上安装 Zuse，然后保存快照
+
+settings-snapshot_connect_step = 2. 在 Zuse 中指定快照
+
+settings-snapshot_copy_command = 复制命令
+
+settings-snapshot_agent_logins = 智能体登录来源
+
+settings-snapshot_github_login = GitHub
+
+settings-snapshot_source_snapshot = 来自快照
+
+settings-snapshot_github_via_zuse = Zuse GitHub
+
+settings-snapshot_paths_automatic = 仓库路径：自动查找
+
+settings-snapshot_paths_count = 仓库路径（{ $value }）
+
+settings-snapshot_ready_summary = 已就绪。仓库列在下方。
+
+settings-snapshot_no_repositories_title = 未找到仓库
+
+settings-snapshot_git_ok = 就绪
+
+settings-snapshot_git_attention = 需要处理
+
+settings-cloud_hosting_portal_description = 在账单门户中管理或取消 Zuse 订阅，并管理付款信息和发票。
+
+settings-snapshot_agent_logins_help = 选择新工作区的 Claude Code 和 Codex 登录来源。
+
+settings-snapshot_github_login_help = 选择新工作区的 Git 和 gh 凭据来源。
+
+settings-snapshot_agent_logins_switch = 使用快照中的登录信息
+
+settings-snapshot_github_login_switch = 使用快照中的凭据
+
+settings-snapshot_login_unchecked = 尚未检查。保存快照设置即可检查。
+
+settings-snapshot_github_signed_in = 检查快照时已验证 GitHub 登录
+
+settings-snapshot_github_missing_tool = 快照中未安装 GitHub CLI
+
+settings-snapshot_github_signed_out = 未登录。请在源机器上运行 gh auth login，然后保存新快照。
+
+settings-snapshot_login_unavailable = 无法检查此登录
+
+settings-snapshot_agent_missing_tool = 快照中未安装
+
+settings-snapshot_agent_signed_in = 检查快照时已验证登录
+
+settings-snapshot_agent_signed_out = 请在受影响的工作区内登录，或为新工作区使用 Zuse 智能体账户。
+
+settings-snapshot_login_signed_in = 已在快照中验证
+
+settings-snapshot_login_signed_out = 未登录
+
+settings-snapshot_login_not_installed = 未安装
+
+settings-snapshot_login_unknown = 未知
+
+settings-cloud_hosting_zuse_overridden = 已订阅，但当前使用的是你的{ " " }{ $provider }{ " " }密钥。
+
+settings-cloud_hosting_switch_to_zuse = 使用 Zuse Cloud
+
+settings-cloud_hosting_switch_to_zuse_title = 切换到 Zuse Cloud？
+
+settings-cloud_hosting_switch_to_zuse_description = 这会断开你的{ " " }{ $provider }{ " " }密钥，新工作区将使用你的订阅在 Zuse Cloud 上运行。现有工作区会保留该密钥用于清理。如需再次使用你自己的账户或快照，请重新连接密钥并保存快照。
+
+settings-snapshot_check_title = 快照检查
+
+settings-snapshot_use_zuse_accounts = 使用 Zuse 智能体账户
+
+settings-snapshot_managed_auth_help = 在下方连接 Claude Code 或 Codex，然后保存。新工作区将使用你的 Zuse 智能体账户，无需重建快照。现有工作区保留当前认证方式。
+
+settings-snapshot_login_detected = 检测到登录信息
+
+settings-snapshot_inspected_user = 已检查的 Linux 用户：{ $user }。
+
+settings-acp_agents_add_account = 添加账户
+
+settings-acp_agents_busy_adding_account = 正在添加账户…
+
+settings-settings_navigation_experimental = 实验性
+
+settings-settings_page_experimental = 实验性
+
+settings-settings_page_experimental_description = 仍在打磨的早期功能，可能会更改或移除。
+
+settings-settings_page_thread_list_sidebar = 线程列表侧边栏
+
+settings-settings_page_thread_list_sidebar_description = 将项目树替换为一个列表，按最新排序显示所有项目中的线程，并显示仓库、实时智能体状态、拉取请求状态和差异。你仍可从侧边栏顶部添加项目。
+
+settings-settings_page_experimental_sidebar = 侧边栏
+
+settings-prepaid_title = Zuse 预付积分
+
+settings-prepaid_description = 自动抵扣未来的 Zuse 账单（含订阅费）。未使用的余额会滚动保留。你的用量额度与支出上限不变。
+
+settings-prepaid_loading = 余额暂不可用
+
+settings-prepaid_balance = 可用{ " " }{ $amount }
+
+settings-prepaid_debit = 未来账单待付{ " " }{ $amount }
+
+settings-prepaid_buy = 购买积分
+
+settings-prepaid_amount = 积分金额
+
+settings-prepaid_disabled = 此工作区尚未开通积分购买。
+
+settings-prepaid_refresh = 刷新余额
+
+settings-snapshot_source_zuse = 通过 Zuse 连接
+
+settings-snapshot_source_zuse_help = 新工作区使用通过 Zuse 连接的账户。快照中的登录信息将被忽略。现有工作区保留当前登录信息。
+
+settings-snapshot_native_source_help = 新工作区使用从快照复制的登录信息，即使这些信息是在 Zuse 之外设置的。要更新它们，请在源机器上登录并保存新快照，或切换到通过 Zuse 连接的账户。
+
+settings-snapshot_apply_auth = 切换
+
+settings-snapshot_auth_saved = 已为新工作区保存。现有工作区保留当前登录信息。
+
+settings-snapshot_sign_in_title = 智能体登录
+
+settings-snapshot_zuse_option = Zuse 账户
+
+settings-snapshot_native_option = 快照登录
+
+settings-snapshot_zuse_option_help = 新工作区使用你在 Zuse 中连接的智能体账户登录。
+
+settings-snapshot_primary_help = 新工作区使用快照中保存的智能体登录。
+
+settings-snapshot_native_footer = 如需更改这些登录，请在源机器上登录并保存新快照。
+
+settings-snapshot_zuse_footer = Zuse 会在工作区启动时添加这些登录，无需重新构建快照。
+
+settings-snapshot_switch_to_zuse = 将新工作区切换为 Zuse 账户？
+
+settings-snapshot_switch_to_native = 将新工作区切换回快照登录？
+
+settings-snapshot_switch_scope = 现有工作区保留当前登录。
+
+settings-snapshot_connect_to_switch = 请先在上方连接至少一个智能体再切换。
+
+settings-snapshot_auth_applying = 正在保存登录设置…
+
+settings-snapshot_sign_in_with = 登录方式
+
+settings-cloud_device_label = 电脑访问（可选）
+
+settings-cloud_device_choose = 选择电脑
+
+settings-cloud_device_revoked = 已撤销
+
+settings-cloud_device_ready = 就绪
+
+settings-cloud_device_not_connected = 未连接
+
+settings-cloud_device_access_title = 云端设备访问
+
+settings-cloud_device_access_help = 允许云端智能体请求在此电脑上执行命令。命令需要批准。
+
+settings-cloud_device_updating = 更新中…
+
+settings-cloud_device_turn_off = 关闭
+
+settings-cloud_device_enable = 启用
+
+settings-cloud_device_independent = 独立于远程访问。Zuse 运行时，你的电脑会自动出现在云端聊天中。
+
+settings-cloud_device_reconnect = 重新连接云端设备访问
+
+settings-cloud_device_connected = 已连接到你的账户
+
+settings-cloud_device_waiting = 正在等待云端设备连接…
+
+settings-cloud_device_off = 已关闭
+
+settings-remote_check_failed = 无法检查部分连接方式。
+
+settings-remote_check_again = 重新检查
+
+settings-remote_access_title = 远程访问此电脑
+
+settings-remote_serve_check_failed = 无法检查 Zuse Serve
+
+settings-remote_tailscale_check_failed = 无法检查 Tailscale
+
+settings-remote_lan_check_failed = 无法检查本地网络访问
+
+settings-remote_other_computers = 其他电脑
+
+settings-remote_connection_details = 连接详情
+
+settings-remote_account_source = 通过你的 Zuse 账户发现。请在该电脑上启用远程访问以建立连接。
+
+settings-remote_paired_source = 已在此设备上配对。可在主机电脑上撤销访问权限。
+
+settings-remote_in_use = 正在使用：{ $address }
+
+settings-remote_route_count = { " " }· 路由：{ $count }
+
+settings-remote_connect = 连接
+
+settings-settings_page_review_guides_auto = 自动刷新导览
+
+settings-settings_page_review_guides = 引导式审阅
+
+settings-settings_page_review_guides_description = 在“更改”中于差异旁显示由智能体撰写的变更导览。
+
+settings-settings_page_review_guides_auto_description = 在每次完成轮次、提交或推送后更新导览。使用该对话自己的模型。
+
+# Complete plural message. $count is numeric; remaining variables retain their source names.
+settings-cloud_account_access_not_installed-plural =
+    { $count ->
+       [one] { $value1 }{ " " }未安装。
+       *[other] { $value1 }{ " " }未安装。
+    }
+
+# Complete plural message. $count is numeric; remaining variables retain their source names.
+settings-connected_devices_card_access_credential_plural0_from_an_earlier_version_sentence-plural =
+    { $count ->
+       [one] { $value }{ " " }个早期版本的访问凭据
+       *[other] { $value }{ " " }个早期版本的访问凭据
+    }
+
+# Complete plural message. $count is numeric; remaining variables retain their source names.
+settings-connected_devices_card_this_removes_older_access_credential_plural0_any_browser_or_sentence-plural =
+    { $count ->
+       [one] 这会移除{ " " }{ $value }{ " " }个旧版访问凭据。仍在使用它们的浏览器或设备需要重新连接。
+       *[other] 这会移除{ " " }{ $value }{ " " }个旧版访问凭据。仍在使用它们的浏览器或设备需要重新连接。
+    }
+
+# Complete plural message. $count is numeric; remaining variables retain their source names.
+settings-keybindings_editor_custom_rule_plural0_active_sentence-plural =
+    { $count ->
+       [one] { $userRulesCount }{ " " }条自定义规则生效中。
+       *[other] { $userRulesCount }{ " " }条自定义规则生效中。
+    }

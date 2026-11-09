@@ -1,9 +1,11 @@
 //! Bounded RPC image reads and normalized thumbnails for the shared workspace.
 use super::*;
+use crate::localization::message as tr;
 use crate::shell::{column, control, label};
 use base64::Engine as _;
 use image::ImageDecoder as _;
 use std::{io::Cursor, sync::Arc};
+use zuse_i18n::messages as msg;
 
 use zuse_protocol::message_attachments::AttachmentBytes;
 const MAX_PREVIEWS: usize = 8;
@@ -323,7 +325,7 @@ impl WorkspaceView {
                     div()
                         .id(SharedString::from(format!("preview-{path}")))
                         .role(Role::Button)
-                        .aria_label("Enlarge image")
+                        .aria_label(tr(cx, msg::native::enlarge_image))
                         .cursor_pointer()
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.preview_open = Some(open_path.clone());
@@ -333,10 +335,18 @@ impl WorkspaceView {
                             img(image.clone())
                                 .id(SharedString::from(format!("image-texture-{path}")))
                                 .with_loading(|| {
-                                    label("Preparing preview…").p_4().into_any_element()
+                                    label("")
+                                        .child(crate::localization::element(
+                                            msg::native::preparing_preview,
+                                        ))
+                                        .p_4()
+                                        .into_any_element()
                                 })
                                 .with_fallback(|| {
-                                    label("Could not render this preview.")
+                                    label("")
+                                        .child(crate::localization::element(
+                                            msg::native::could_not_render_this_preview,
+                                        ))
                                         .p_4()
                                         .into_any_element()
                                 })
@@ -347,7 +357,7 @@ impl WorkspaceView {
                 );
             }
             Some(Preview::Loading { .. } | Preview::Decoding) => {
-                card = card.child(label("Loading image…").p_4());
+                card = card.child(label(tr(cx, msg::chat::image_gallery_loading)).p_4());
             }
             state => {
                 let path = path.to_owned();
@@ -365,7 +375,7 @@ impl WorkspaceView {
                         .child(
                             control(
                                 SharedString::from(format!("load-image-{path}")),
-                                "Load preview",
+                                tr(cx, msg::native::load_preview),
                             )
                             .on_click(cx.listener(
                                 move |this, _, _, cx| this.load_preview(path.clone(), cx),
@@ -399,7 +409,7 @@ impl WorkspaceView {
         div()
             .id("image-preview-dialog")
             .role(Role::Dialog)
-            .aria_label("Image preview")
+            .aria_label(tr(cx, msg::native::image_preview))
             .absolute()
             .inset_0()
             .bg(rgba(0x000000cc))
@@ -430,12 +440,11 @@ impl WorkspaceView {
                                 .text_ellipsis(),
                             )
                             .child(
-                                control("close-image-preview", "Close").on_click(cx.listener(
-                                    |this, _, _, cx| {
+                                control("close-image-preview", tr(cx, msg::common::close))
+                                    .on_click(cx.listener(|this, _, _, cx| {
                                         this.preview_open = None;
                                         cx.notify();
-                                    },
-                                )),
+                                    })),
                             ),
                     )
                     .child(

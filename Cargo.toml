@@ -2,6 +2,7 @@
 resolver = "2"
 exclude = ["vendor/zkit"]
 members = [
+    "crates/i18n",
     "crates/simulator",
     "crates/mobile-bridge",
     "apps/cloud",
@@ -34,6 +35,7 @@ members = [
     "crates/text",
     "crates/visual",
     "crates/visual-gpu",
+    "crates/ui-block",
     "apps/desktop",
     "apps/cli",
     "apps/relay",
@@ -55,6 +57,7 @@ license = "AGPL-3.0-only"
 publish = false
 
 [workspace.dependencies]
+zuse-i18n = { path = "crates/i18n" }
 zuse-simulator = { path = "crates/simulator" }
 zuse-usage = { path = "crates/usage" }
 zuse-cloud-projection = { path = "crates/cloud-projection" }
@@ -84,6 +87,7 @@ zuse-mcp = { path = "crates/mcp" }
 zuse-text = { path = "crates/text" }
 zuse-visual = { path = "crates/visual" }
 zuse-visual-gpu = { path = "crates/visual-gpu" }
+zuse-ui-block = { path = "crates/ui-block" }
 zuse-serve = { path = "crates/serve" }
 zuse-viewport = { path = "crates/viewport" }
 zuse-model = { path = "crates/model" }
@@ -100,15 +104,15 @@ loro = "1.13"
 loro-protocol = "0.3"
 
 # Pinned native and browser rendering platform; provenance is in THIRD_PARTY_NOTICES.md.
-gpui = { git = "https://github.com/opcodehq/zkit", rev = "cc738a94fcfe6d6c0df63062b933e45e1dbb4df5" }
-gpui_platform = { git = "https://github.com/opcodehq/zkit", rev = "cc738a94fcfe6d6c0df63062b933e45e1dbb4df5", features = [
+gpui = { git = "https://github.com/opcodehq/zkit", rev = "14d9b82fb65d86f63b6332cb3d616f1ab0ada103" }
+gpui_platform = { git = "https://github.com/opcodehq/zkit", rev = "14d9b82fb65d86f63b6332cb3d616f1ab0ada103", features = [
     "wayland",
     "x11",
     "font-kit",
     "runtime_shaders",
 ] }
-gpui_tokio = { git = "https://github.com/opcodehq/zkit", rev = "cc738a94fcfe6d6c0df63062b933e45e1dbb4df5" }
-gpui-base = { git = "https://github.com/opcodehq/zkit", rev = "cc738a94fcfe6d6c0df63062b933e45e1dbb4df5" }
+gpui_tokio = { git = "https://github.com/opcodehq/zkit", rev = "14d9b82fb65d86f63b6332cb3d616f1ab0ada103" }
+gpui-base = { git = "https://github.com/opcodehq/zkit", rev = "14d9b82fb65d86f63b6332cb3d616f1ab0ada103" }
 
 # diffs
 similar = "2"
@@ -178,6 +182,8 @@ strip = "symbols"
 [profile.dev]
 # gpui is slow unoptimized; match zed's approach for deps
 opt-level = 0
+# Full debug info is most of target/'s size; file:line backtraces are enough.
+debug = "line-tables-only"
 
 [profile.dev.package."*"]
 opt-level = 2

@@ -1,6 +1,8 @@
 //! Project entry point. Filesystem navigation stays in the existing folder palette.
 use super::*;
+use crate::localization::message as tr;
 use gpui::{Div, Stateful};
+use zuse_i18n::messages as msg;
 use zuse_protocol::{Device, Space, project_creation::*};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -682,12 +684,6 @@ impl Shell {
             window.focus(&input.focus_handle(cx), cx);
         }
         let mode = setup.mode;
-        let step = match mode {
-            Mode::Choose => "choose",
-            Mode::Create => "create",
-            Mode::Clone if setup.clone_confirm => "clone-confirm",
-            Mode::Clone => "clone",
-        };
         let focus = setup.focus.clone();
         let card = command_palette::cmd::card("project-setup", &focus, viewport, &theme)
             .on_mouse_down_out(cx.listener(|this, _, _, cx| this.close_add_space(cx)))
@@ -699,23 +695,9 @@ impl Shell {
         } else {
             self.render_project_form(viewport, cx)
         };
-        // The panel's content slides in from the side the step was reached
-        // from; the header and footer stay put.
-        let travel = if mode == Mode::Choose { -8.0 } else { 8.0 };
-        let panel_body = if crate::motion::reduced_motion(cx) {
-            panel.into_any_element()
-        } else {
-            panel
-                .with_animation(
-                    SharedString::from(format!("project-step-{step}")),
-                    crate::motion::DIALOG_IN.animation(),
-                    move |el, t| el.relative().opacity(t).left(px(travel * (1.0 - t))),
-                )
-                .into_any_element()
-        };
         let card = card
             .child(header)
-            .child(command_palette::cmd::panel(&theme).child(panel_body))
+            .child(command_palette::cmd::panel(&theme).child(panel))
             .child(footer);
         Some(command_palette::palette_overlay(viewport, card))
     }
@@ -1016,7 +998,7 @@ impl Shell {
                                 } else {
                                     theme.text_muted
                                 })
-                                .child("Create private GitHub repository"),
+                                .child(tr(cx, msg::native::create_private_github_repository)),
                         )
                         .child(command_palette::cmd::detail(&theme, detail))
                         .child(
@@ -1030,9 +1012,10 @@ impl Shell {
                     row.child(command_palette::cmd::glyph(&theme, icons::FOLDER))
                         .child(div().flex_1().min_w_0().truncate().child(
                             if parent_text.is_empty() {
-                                "Choose a folder".to_owned()
+                                crate::localization::text("onboarding-project_choose_a_folder", cx)
+                                    .to_owned()
                             } else {
-                                parent_text.clone()
+                                (parent_text.clone()).to_string()
                             },
                         ))
                         .child(command_palette::cmd::trailing(&theme, "Change"))
@@ -1066,7 +1049,7 @@ impl Shell {
                 }
                 FormRow::Url(url) => row
                     .child(command_palette::cmd::glyph(&theme, icons::GLOBAL))
-                    .child(div().flex_none().child("Clone from URL"))
+                    .child(div().flex_none().child(tr(cx, msg::native::clone_from_url)))
                     .child(command_palette::cmd::detail(&theme, url.clone())),
                 FormRow::More(_) => row
                     .child(command_palette::cmd::glyph(&theme, icons::REFRESH))
@@ -1074,7 +1057,7 @@ impl Shell {
                         div()
                             .flex_1()
                             .text_color(theme.text_muted)
-                            .child("Load more repositories"),
+                            .child(tr(cx, msg::native::load_more_repositories)),
                     ),
             };
             items.push(
@@ -1118,7 +1101,7 @@ impl Shell {
             .rounded(px(6.0))
             .cursor_pointer()
             .role(gpui::Role::Button)
-            .aria_label("Back")
+            .aria_label(tr(cx, msg::projects::masters_back))
             .hover(|s| s.bg(crate::theme::ink(0.06)))
             .on_click(cx.listener(|this, _, _, cx| this.project_back(cx)))
             .child(

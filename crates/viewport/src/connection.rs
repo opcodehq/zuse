@@ -1,6 +1,8 @@
 //! Rebuild read subscriptions without replaying actions with uncertain outcomes.
 use super::*;
+use crate::localization::message as tr;
 use crate::shell::{column, control, label, row};
+use zuse_i18n::messages as msg;
 use zuse_protocol::browser_link::InterruptedRequest;
 
 impl WorkspaceView {
@@ -68,18 +70,18 @@ impl WorkspaceView {
         self.workspace_synced = false;
         self.status = if frame["connection"] == "pairingRequired" {
             self.error = frame["message"].as_str().map(str::to_owned);
-            "Pairing invitation required · Open a new invitation"
+            "Pairing invitation required · Open a new invitation".to_owned()
         } else if frame["connection"] == "authRequired" {
-            "Authentication required · Open the engine access link"
+            "Authentication required · Open the engine access link".to_owned()
         } else if frame["connection"] == "accountRequired" {
             self.error = frame["message"].as_str().map(str::to_owned);
-            "Account access required · Return to the controller"
+            "Account access required · Return to the controller".to_owned()
         } else if self.account_remote {
-            "Reconnecting to account computer…"
+            "Reconnecting to account computer…".to_owned()
         } else if self.paired {
-            "Reconnecting to paired engine…"
+            "Reconnecting to paired engine…".to_owned()
         } else {
-            "Reconnecting to your engine…"
+            crate::localization::message(cx, zuse_i18n::messages::native::reconnecting)
         }
         .into();
         if (self.paired || self.account_remote)
@@ -115,6 +117,7 @@ impl WorkspaceView {
             self.queue_unconfirmed.insert(action.chat);
         }
         self.interrupt_cloud_archive();
+        self.interrupt_ui_block_replies(cx);
         self.pending.clear();
         self.stop_transcript();
         // This card is read-only: keep it usable while retrying the same host.
@@ -381,25 +384,28 @@ impl WorkspaceView {
         if let Some(error) = &self.draft_journal_error {
             view = view.child(row().gap_2()
                 .child(label(format!("Browser draft storage: {error}. Keep this tab open or copy your text before closing.")).flex_1())
-                .child(control("retry-draft-storage", "Retry").on_click(cx.listener(|this, _, _, cx| this.retry_draft_storage(cx)))));
+                .child(control("retry-draft-storage", tr(cx, msg::chat::attempts_retry)).on_click(cx.listener(|this, _, _, cx| this.retry_draft_storage(cx)))));
         }
         if let Some(notice) = &self.connection_notice {
-            view =
-                view.child(
-                    row()
-                        .gap_2()
-                        .px_3()
-                        .py_2()
-                        .border_b_1()
-                        .border_color(rgb(0x2b2d26))
-                        .child(label(notice.clone()).flex_1().min_w_0().text_size(px(11.)))
-                        .child(control("dismiss-connection-notice", "Dismiss").on_click(
-                            cx.listener(|this, _, _, cx| {
-                                this.connection_notice = None;
-                                cx.notify();
-                            }),
-                        )),
-                );
+            view = view.child(
+                row()
+                    .gap_2()
+                    .px_3()
+                    .py_2()
+                    .border_b_1()
+                    .border_color(rgb(0x2b2d26))
+                    .child(label(notice.clone()).flex_1().min_w_0().text_size(px(11.)))
+                    .child(
+                        control(
+                            "dismiss-connection-notice",
+                            tr(cx, msg::chat::message_row_dismiss),
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.connection_notice = None;
+                            cx.notify();
+                        })),
+                    ),
+            );
         }
         if !self.uncertain_drafts.is_empty() {
             let rows = self
@@ -420,18 +426,28 @@ impl WorkspaceView {
                             .text_ellipsis(),
                         )
                         .child(
-                            control(("restore-delivery", index), "Restore draft").on_click(
+                            control(
+                                ("restore-delivery", index),
+                                tr(cx, msg::native::restore_draft),
+                            )
+                            .on_click(
                                 cx.listener(move |this, _, _, cx| this.recover_draft(index, cx)),
                             ),
                         )
-                        .child(control(("dismiss-delivery", index), "Dismiss").on_click(
-                            cx.listener(move |this, _, _, cx| {
-                                if index < this.uncertain_drafts.len() {
-                                    this.uncertain_drafts.remove(index);
-                                }
-                                cx.notify();
-                            }),
-                        ))
+                        .child(
+                            control(
+                                ("dismiss-delivery", index),
+                                tr(cx, msg::chat::message_row_dismiss),
+                            )
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| {
+                                    if index < this.uncertain_drafts.len() {
+                                        this.uncertain_drafts.remove(index);
+                                    }
+                                    cx.notify();
+                                },
+                            )),
+                        )
                 });
             view = view.child(
                 column()
@@ -443,9 +459,10 @@ impl WorkspaceView {
                     .rounded_lg()
                     .border_b_1()
                     .border_color(rgb(0x2b2d26))
-                    .child(label(
-                        "Recovered drafts · Review chat and queue before restoring",
-                    ))
+                    .child(label(tr(
+                        cx,
+                        msg::native::recovered_drafts_review_chat_and_queue_before_restoring,
+                    )))
                     .children(rows),
             );
         }

@@ -20,9 +20,17 @@ pub(crate) fn site_links_in_text(text: &str) -> Vec<Range<usize>> {
         let start = at + found;
         at = start + 1;
         let rest = &text[start..];
-        let scheme = if rest.len() >= 8 && rest[..8].eq_ignore_ascii_case("https://") {
+        let scheme = if rest
+            .as_bytes()
+            .get(..8)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"https://"))
+        {
             8
-        } else if rest.len() >= 7 && rest[..7].eq_ignore_ascii_case("http://") {
+        } else if rest
+            .as_bytes()
+            .get(..7)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"http://"))
+        {
             7
         } else {
             continue;
@@ -360,6 +368,29 @@ mod tests {
         assert!(found("https:// nothing").is_empty());
         assert_eq!(found("<https://a.dev>"), ["https://a.dev"]);
         assert_eq!(found("ünïcode https://a.dev/é"), ["https://a.dev/é"]);
+    }
+
+    #[test]
+    fn site_links_handle_unicode_near_possible_schemes() {
+        for text in [
+            "here’s the update",
+            "hello世界",
+            "h12345é",
+            "h1234’é",
+            "H🙂🙂",
+        ] {
+            assert!(found(text).is_empty(), "{text}");
+        }
+        assert_eq!(
+            found("here’s https://example.com/é and hello世界 HTTP://example.org"),
+            ["https://example.com/é", "HTTP://example.org"]
+        );
+        for character in ['’', 'é', '世', '🙂'] {
+            for offset in 0..10 {
+                let text = format!("h{}{character} https://example.com/é", "a".repeat(offset));
+                assert_eq!(found(&text), ["https://example.com/é"], "{text}");
+            }
+        }
     }
 
     #[test]

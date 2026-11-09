@@ -1,8 +1,10 @@
 //! Inline single-line rename and permanent-delete confirmation.
 use super::*;
+use crate::localization::message as tr;
 use crate::{popover, theme::Theme};
 use gpui::{AnyElement, Focusable, KeyDownEvent, MouseButton};
 use gpui_base::input::{Input, InputEvent, InputState};
+use zuse_i18n::messages as msg;
 
 pub(super) struct TreeRename {
     pub path: String,
@@ -348,27 +350,29 @@ impl FilesSurface {
             .child(popover::dialog_title(&theme, "Delete permanently?"))
             .child(popover::dialog_body(&theme, copy))
             .child(
-                div()
-                    .flex()
-                    .justify_end()
-                    .gap(px(8.))
+                popover::dialog_footer(&theme)
+                    .mt(px(8.))
                     .child(
-                        popover::btn_ghost(&theme, "Cancel", "tree-delete-cancel")
-                            .id("tree-delete-cancel")
-                            .role(gpui::Role::Button)
-                            .aria_label("Cancel")
-                            .when(!dialog.confirm_focused, |el| {
-                                el.bg(crate::theme::wash(0.12))
-                            })
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.dismiss_tree_delete(false, window, cx)
-                            })),
+                        popover::btn_ghost(
+                            &theme,
+                            &tr(cx, msg::common::cancel),
+                            "tree-delete-cancel",
+                        )
+                        .id("tree-delete-cancel")
+                        .role(gpui::Role::Button)
+                        .aria_label(tr(cx, msg::common::cancel))
+                        .when(!dialog.confirm_focused, |el| {
+                            el.bg(crate::theme::wash(0.12))
+                        })
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.dismiss_tree_delete(false, window, cx)
+                        })),
                     )
                     .child(
                         popover::btn_danger(&theme, "Delete")
                             .id("tree-delete-confirm")
                             .role(gpui::Role::Button)
-                            .aria_label("Delete")
+                            .aria_label(tr(cx, msg::common::delete))
                             .when(dialog.confirm_focused, |el| {
                                 el.border_1().border_color(theme.text)
                             })

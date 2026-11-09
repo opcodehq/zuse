@@ -1,4 +1,7 @@
 //! Lazy profile-owned MCP pool. Scheduling, permission and recovery stay in the kernel.
+//!
+//! Unix only, like the native harness that is its only user.
+#![cfg(unix)]
 mod http;
 use async_trait::async_trait;
 use rmcp::{

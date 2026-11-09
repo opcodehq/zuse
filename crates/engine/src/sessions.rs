@@ -261,6 +261,13 @@ struct Inner {
     /// what the injected `zuse mcp` server dials back into.
     ipc_port: std::sync::atomic::AtomicU16,
     journal: Arc<RunJournal>,
+    /// Chats whose next run picks up a turn a restart interrupted. The harness
+    /// alone gets the continuation prompt; transcript, preview and title keep
+    /// what the user wrote.
+    continuing_turns: Mutex<std::collections::HashSet<String>>,
+    /// Journal seq each chat's current turn started at, so a `Done` from the
+    /// previous turn can't be mistaken for this one's.
+    turn_starts: Mutex<HashMap<String, u64>>,
     registry: Arc<HarnessRegistry>,
     /// Set-once (first wins), cleared on runtime retirement: sessions and
     /// doc-host reference each other through Arcs, so this back-edge must be
@@ -346,7 +353,7 @@ impl SessionsEngine {
         &self,
         chat: &str,
         run: Option<&str>,
-    ) -> Option<(String, String, zuse_protocol::SandboxLevel)> {
+    ) -> Option<(String, String, crate::permission_rules::RunPosture)> {
         let live = lock(&self.inner.runs).get(chat).and_then(|h| {
             if run.is_some_and(|id| id != h.run_id)
                 || h.retiring.load(std::sync::atomic::Ordering::Acquire)
@@ -376,11 +383,17 @@ impl SessionsEngine {
             .and_then(|c| c.space_id.as_ref())
             .map(|id| format!("space:{id}"))
             .unwrap_or_else(|| format!("path:{cwd}"));
-        let sandbox = live
-            .map(|r| r.sandbox)
-            .or_else(|| row.and_then(|c| c.config.map(|c| c.sandbox)))
-            .unwrap_or(zuse_protocol::SandboxLevel::WorkspaceWrite);
-        Some((project, cwd, sandbox))
+        let posture = live
+            .map(|r| crate::permission_rules::RunPosture::of(&r))
+            .or_else(|| {
+                row.and_then(|c| c.config)
+                    .map(|c| crate::permission_rules::RunPosture {
+                        sandbox: c.sandbox,
+                        plan: c.plan,
+                    })
+            })
+            .unwrap_or_else(|| zuse_protocol::SandboxLevel::WorkspaceWrite.into());
+        Some((project, cwd, posture))
     }
 
     pub fn new(
@@ -400,6 +413,8 @@ impl SessionsEngine {
                 cancelled_sends: Mutex::new(HashMap::new()),
                 ipc_port: std::sync::atomic::AtomicU16::new(0),
                 journal,
+                continuing_turns: Mutex::new(Default::default()),
+                turn_starts: Mutex::new(HashMap::new()),
                 registry,
                 doc_host: Mutex::new(None),
                 runs: Mutex::new(HashMap::new()),
@@ -506,14 +521,27 @@ impl SessionsEngine {
         }
     }
 
-    pub(crate) fn archive_busy(&self, chat_id: &str) -> bool {
-        lock(&self.inner.filesystem_admissions)
-            .get(chat_id)
-            .copied()
-            .unwrap_or(0)
-            != 0
-            || self.turn_in_flight(chat_id)
-            || self.holds_background_work(chat_id)
+    /// Archive always wins: end the chat's runtime and everything it holds,
+    /// then wait out any dispatch admitted before archive took the gate. That
+    /// dispatch can register a run after the first terminate, so terminate
+    /// repeats until the claim and the run are both gone.
+    pub(crate) async fn end_for_archive(&self, chat_id: &str) -> Result<(), EngineError> {
+        const SETTLE: std::time::Duration = std::time::Duration::from_secs(10);
+        let deadline = tokio::time::Instant::now() + SETTLE;
+        loop {
+            self.terminate(chat_id).await?;
+            let admitted = lock(&self.inner.filesystem_admissions).contains_key(chat_id);
+            if !admitted && !self.has_run(chat_id) {
+                return Ok(());
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(EngineError::Other(
+                    "The agent did not stop in time. Its worktree was kept; try archiving again."
+                        .into(),
+                ));
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
     }
 
     fn require_unarchived(&self, chat_id: &str) -> Result<(), EngineError> {
@@ -590,12 +618,37 @@ impl SessionsEngine {
     }
 
     /// Any run currently working or blocked on input — the auto-updater's
-    /// "don't restart from under a session" gate.
+    /// "don't restart from under a session" gate. Background work doesn't
+    /// count: a dev server left running must not hold updates off forever.
+    /// An archived chat's status
+    /// never counts: its runs are fenced, and a status left behind by one
+    /// must not block updates forever.
     pub fn any_active(&self) -> bool {
-        lock(&self.inner.statuses).values().any(is_active)
+        self.active_turn_count() > 0
             || lock(&self.inner.runs)
                 .values()
                 .any(|r| r.voice_active.live())
+    }
+
+    /// Unarchived chats with a turn working or waiting on the user, whether or
+    /// not any sidebar shows them.
+    pub fn active_turn_count(&self) -> usize {
+        let active: Vec<String> = lock(&self.inner.statuses)
+            .iter()
+            .filter(|(_, session)| is_active(session))
+            .map(|(chat_id, _)| chat_id.clone())
+            .collect();
+        let workspace = self.inner.workspace();
+        let archived = |chat_id: &str| {
+            workspace.as_ref().is_some_and(|workspace| {
+                workspace
+                    .chat(chat_id)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|chat| chat.archived)
+            })
+        };
+        active.iter().filter(|chat_id| !archived(chat_id)).count()
     }
 
     /// A text prompt for `chat_id` would land in the mailbox of a live
@@ -1116,7 +1169,13 @@ impl SessionsEngine {
         // the Done-time call below stays as the retry for a failed
         // generation).
         if !idle && let Some(titles) = self.inner.titles.get() {
-            titles.maybe_generate(chat_id, harness_id, &request.prompt, &request.cwd);
+            titles.maybe_generate(
+                chat_id,
+                harness_id,
+                &request.prompt,
+                &request.cwd,
+                crate::titles::TitleTrigger::TurnStarted,
+            );
         }
 
         tokio::spawn(drive_run(
@@ -1412,6 +1471,15 @@ impl SessionsEngine {
     /// streaming entry stamped `aborted`; this waits (bounded) for that
     /// settlement. Background work the runtime held dies with it.
     pub async fn terminate(&self, chat_id: &str) -> Result<bool, EngineError> {
+        // Only the update's own shutdown keeps a turn resumable; anything
+        // else ending it, like the user pressing Stop, is final.
+        if !self
+            .inner
+            .shutting_down
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            self.inner.journal.clear_update_restart(chat_id);
+        }
         let target = lock(&self.inner.runs).get(chat_id).map(|h| {
             (
                 h.run_id.clone(),
@@ -1514,12 +1582,12 @@ impl SessionsEngine {
                 h.engine_tx.clone(),
                 h.interrupt_token.clone(),
                 h.run_id.clone(),
-                h.runtime_config.request.sandbox == zuse_protocol::SandboxLevel::ReadOnly,
+                h.runtime_config.request.plan,
             )
         };
         if read_only {
             return Err(Error::Tool(
-                "Private operations are unavailable in read-only mode".into(),
+                "Private operations are unavailable in plan mode".into(),
             ));
         }
         let request_id = new_id();
@@ -1597,12 +1665,27 @@ impl SessionsEngine {
         const MAX_AUTO_RESUME: u32 = 3;
         const RESUME_FRESH_MS: i64 = 12 * 60 * 60 * 1000;
 
-        let stale = self.inner.journal.stale_sessions()?;
+        const UPDATE_RESTART_FRESH_MS: i64 = 30 * 60 * 1000;
+        let mut checkpoints = self.inner.journal.update_restarts()?;
+        // A restart relaunches in seconds. An old checkpoint means the relaunch
+        // never happened, and work from long ago must not start up unasked.
+        checkpoints.retain(|chat_id, checkpoint| {
+            let fresh = now_ms() - checkpoint.saved_at < UPDATE_RESTART_FRESH_MS;
+            if !fresh {
+                self.inner.journal.clear_update_restart(chat_id);
+            }
+            fresh
+        });
+        let mut stale = self.inner.journal.stale_sessions()?;
+        stale.extend(checkpoints.keys().cloned());
+        stale.sort();
+        stale.dedup();
         let mut recovered = 0usize;
         for chat_id in stale {
             if lock(&self.inner.runs).contains_key(&chat_id) {
                 continue; // a live run owns this journal
             }
+            let checkpoint = checkpoints.remove(&chat_id);
             let handle = self.doc_handle(&chat_id)?;
             // Harness continuity first: the crashed run's session id may only
             // exist in the journal (the debounced workspace-row write may
@@ -1615,18 +1698,30 @@ impl SessionsEngine {
             // The revival prompt: the last user message (idempotent re-dispatch
             // under the SAME id — `write_user_message` dedupes by id, so the
             // transcript never shows a duplicate).
-            let prompt = handle.doc().read_entries().ok().and_then(|entries| {
-                entries
-                    .iter()
-                    .rev()
-                    .find(|e| e.role == MessageRole::User)
-                    .and_then(|e| {
-                        e.parts.iter().find_map(|p| match p {
-                            MessagePart::Text { text, .. } => Some((e.id.clone(), text.clone())),
-                            _ => None,
-                        })
+            let prompt = checkpoint
+                .as_ref()
+                .map(|checkpoint| {
+                    (
+                        checkpoint.message_id.clone(),
+                        checkpoint.request.prompt.clone(),
+                    )
+                })
+                .or_else(|| {
+                    handle.doc().read_entries().ok().and_then(|entries| {
+                        entries
+                            .iter()
+                            .rev()
+                            .find(|e| e.role == MessageRole::User)
+                            .and_then(|e| {
+                                e.parts.iter().find_map(|p| match p {
+                                    MessagePart::Text { text, .. } => {
+                                        Some((e.id.clone(), text.clone()))
+                                    }
+                                    _ => None,
+                                })
+                            })
                     })
-            });
+                });
             let attempts = self.inner.journal.resume_attempts(&chat_id);
             // Fresh: the crashed reply's streaming entry is recent — or no
             // reply entry reached disk at all (the doc saves on a debounce,
@@ -1645,7 +1740,8 @@ impl SessionsEngine {
                         .map(|e| now_ms() - e.created_at < RESUME_FRESH_MS)
                 })
                 .unwrap_or(false);
-            let will_resume = fresh && prompt.is_some() && attempts < MAX_AUTO_RESUME;
+            let will_resume =
+                (checkpoint.is_some() || fresh) && prompt.is_some() && attempts < MAX_AUTO_RESUME;
 
             let note = if will_resume {
                 "Run interrupted by engine restart — resuming"
@@ -1665,6 +1761,7 @@ impl SessionsEngine {
             recovered += 1;
 
             if !will_resume {
+                self.inner.journal.clear_update_restart(&chat_id);
                 continue;
             }
             let attempt = self.inner.journal.note_resume_attempt(&chat_id);
@@ -1674,14 +1771,16 @@ impl SessionsEngine {
                 let Some(host) = sessions.inner.doc_host() else {
                     return;
                 };
-                let request = sessions
-                    .last_request(&chat_id)
+                let request = checkpoint
+                    .map(|checkpoint| checkpoint.request)
+                    .or_else(|| sessions.last_request(&chat_id))
                     .or_else(|| host.request_from_chat_row(&chat_id, &prompt_text))
                     // Last resort: the journal's own cwd (zuse's draft config)
                     // — a crash can predate the debounced workspace-row write.
                     .or_else(|| {
                         let (_, cwd) = sessions.inner.journal_harness_session(&chat_id)?;
                         Some(RunRequest {
+                            plan: false,
                             mcp: None,
                             prompt: String::new(),
                             harness: None,
@@ -1702,8 +1801,8 @@ impl SessionsEngine {
                 };
                 request.prompt = prompt_text;
                 request.resume = None; // dispatch re-injects the remembered session
-                request.attachments = Vec::new();
                 let harness_id = host.harness_for_request(&chat_id, &request);
+                lock(&sessions.inner.continuing_turns).insert(chat_id.clone());
                 match host
                     .dispatch_with_source_context(
                         &sessions,
@@ -1715,15 +1814,97 @@ impl SessionsEngine {
                     .await
                 {
                     Ok(_) => {
-                        tracing::info!(chat = %chat_id, attempt, "auto-resumed crashed run")
+                        sessions.inner.journal.clear_update_restart(&chat_id);
+                        tracing::info!(chat = %chat_id, attempt, "auto-resumed interrupted run")
                     }
                     Err(err) => {
+                        lock(&sessions.inner.continuing_turns).remove(&chat_id);
                         tracing::warn!(chat = %chat_id, error = %err, "auto-resume dispatch failed")
                     }
                 }
             });
         }
         Ok(recovered)
+    }
+
+    /// Persist unfinished turns before an app update stops their runtimes.
+    /// Completed and idle sessions are never restarted. Normal quit/Stop do not
+    /// create checkpoints and retain their existing semantics.
+    pub fn checkpoint_for_update(&self) -> Result<(), EngineError> {
+        // Storage can be slow, so the run table is only held to list chats.
+        // Repeat until a pass finds no run admitted during the last one.
+        let mut visited = std::collections::HashSet::new();
+        loop {
+            let chats: Vec<String> = lock(&self.inner.runs)
+                .keys()
+                .filter(|chat_id| !visited.contains(*chat_id))
+                .cloned()
+                .collect();
+            if chats.is_empty() {
+                return Ok(());
+            }
+            for chat_id in chats {
+                self.checkpoint_turn(&chat_id)?;
+                visited.insert(chat_id);
+            }
+        }
+    }
+
+    fn checkpoint_turn(&self, chat_id: &str) -> Result<(), EngineError> {
+        // A turn already being stopped must not come back after the restart.
+        let stopping = lock(&self.inner.runs)
+            .get(chat_id)
+            .is_some_and(|run| *run.cancel.borrow());
+        if stopping || !self.turn_in_flight(chat_id) {
+            return Ok(());
+        }
+        let mut request = self.last_request(chat_id).ok_or_else(|| {
+            EngineError::Other(format!(
+                "running agent {chat_id} has no saved run configuration"
+            ))
+        })?;
+        let handle = self.doc_handle(chat_id)?;
+        let entries = handle.doc().read_entries()?;
+        let entry = entries
+            .iter()
+            .rev()
+            .find(|entry| entry.role == MessageRole::User)
+            .ok_or_else(|| {
+                EngineError::Other(format!("running agent {chat_id} has no saved user message"))
+            })?;
+        if let Some(text) = entry.parts.iter().find_map(|part| match part {
+            MessagePart::Text { text, .. } => Some(text.clone()),
+            _ => None,
+        }) {
+            request.prompt = text;
+        }
+        self.inner.journal.save_update_restart(
+            chat_id,
+            &crate::run_journal::UpdateRestart {
+                message_id: entry.id.clone(),
+                request,
+                saved_at: now_ms(),
+            },
+        )?;
+        self.inner.journal.clear_resume_attempts(chat_id);
+        // Completion can race the checkpoint write while the run is still
+        // present. A finished turn must never be replayed on relaunch.
+        let turn_start = lock(&self.inner.turn_starts)
+            .get(chat_id)
+            .copied()
+            .unwrap_or(u64::MAX);
+        if done_ends_turn(self.inner.journal.last_event(chat_id)?.as_ref(), turn_start) {
+            self.inner.journal.clear_update_restart(chat_id);
+        }
+        Ok(())
+    }
+
+    pub fn cancel_update_restart(&self) {
+        if let Ok(checkpoints) = self.inner.journal.update_restarts() {
+            for chat in checkpoints.keys() {
+                self.inner.journal.clear_update_restart(chat);
+            }
+        }
     }
 
     /// Graceful shutdown: interrupt every live run so streaming entries settle.
@@ -1733,11 +1914,14 @@ impl SessionsEngine {
             .store(true, std::sync::atomic::Ordering::Release);
         self.inner.voice.retire();
         let chats: Vec<String> = lock(&self.inner.runs).keys().cloned().collect();
-        for chat_id in chats {
+        // Drain independently: several slow children must share the settle
+        // window rather than adding one timeout per agent to an app restart.
+        futures::future::join_all(chats.into_iter().map(|chat_id| async move {
             if let Err(err) = self.terminate(&chat_id).await {
                 tracing::warn!(chat = %chat_id, error = %err, "shutdown interrupt failed");
             }
-        }
+        }))
+        .await;
     }
 
     fn is_live(&self, chat_id: &str, run_id: &str) -> bool {
@@ -1843,6 +2027,15 @@ impl Inner {
                 0
             }
         };
+        if matches!(
+            event,
+            AgentEvent::Done {
+                status: DoneStatus::Completed | DoneStatus::Errored,
+                ..
+            }
+        ) {
+            self.journal.clear_update_restart(chat_id);
+        }
         if let Some(hub) = lock(&self.hubs).get(chat_id) {
             let _ = hub.send(JournaledEvent {
                 seq,
@@ -1885,6 +2078,13 @@ impl Inner {
 
     fn set_status(&self, chat_id: &str, status: SessionStatus, fresh_start: bool) {
         self.set_status_with_completion(chat_id, status, fresh_start, None);
+    }
+
+    /// Record why `chat_id` is about to wait, for the status publish that follows.
+    fn note_awaiting_input(&self, chat_id: &str, kind: zuse_protocol::AwaitingInputKind) {
+        if let Some(entry) = lock(&self.statuses).get_mut(chat_id) {
+            entry.awaiting_input = Some(kind);
+        }
     }
 
     /// Publish how many subagents of `chat_id` are streaming. A change is
@@ -1955,6 +2155,14 @@ impl Inner {
         fresh_start: bool,
         completed_turn: Option<String>,
     ) {
+        let starting_turn = status == SessionStatus::Working
+            && (fresh_start
+                || lock(&self.statuses)
+                    .get(chat_id)
+                    .is_none_or(|s| !is_active(s)));
+        if starting_turn && let Ok(seq) = self.journal.next_seq(chat_id) {
+            lock(&self.turn_starts).insert(chat_id.to_owned(), seq);
+        }
         let now = Utc::now();
         let session = {
             let mut statuses = lock(&self.statuses);
@@ -1968,8 +2176,12 @@ impl Inner {
                     started_at: None,
                     updated_at: now,
                     running_subagents: 0,
+                    awaiting_input: None,
                     background_tasks: Vec::new(),
                 });
+            if status != SessionStatus::AwaitingInput {
+                entry.awaiting_input = None;
+            }
             // `started_at` is the elapsed-timer base and must only ever mean
             // "this turn". Entering Working from a settled state always
             // restamps (a steer into a parked session is a NEW turn — reusing
@@ -2838,6 +3050,10 @@ async fn drive_run(
         resume: None,
         ..request.clone()
     });
+    let continuing = lock(&inner.continuing_turns).remove(&chat_id);
+    if continuing {
+        request.prompt = continuation_prompt(&request.prompt);
+    }
     // Fresh provider sessions inherit prior transcript context. A side chat
     // uses its frozen conversation, retaining its parent's independent session.
     let mut carried_history = false;
@@ -3859,6 +4075,9 @@ async fn drive_run(
                 "run died before session start; retrying once (resume kept)"
             );
             inner.remove_run(&chat_id, &run_id);
+            if continuing {
+                lock(&inner.continuing_turns).insert(chat_id.clone());
+            }
             let engine = SessionsEngine {
                 inner: inner.clone(),
             };
@@ -3964,9 +4183,11 @@ async fn drive_run(
                 inner.remember_owned_harness_session(&chat_id, session_id, &run_cwd, harness_id);
                 note_fork_history_session(&doc, carried_history, session_id);
             }
-            AgentEvent::InputRequested { .. } => {
+            AgentEvent::InputRequested { questions, .. } => {
                 // Known-id guaranteed: the unknown-id twin was dropped above,
                 // before the parked gate.
+                inner
+                    .note_awaiting_input(&chat_id, zuse_protocol::AwaitingInputKind::of(questions));
                 inner.set_status(&chat_id, SessionStatus::AwaitingInput, false);
             }
             AgentEvent::InputResolved { .. } => {
@@ -4042,7 +4263,13 @@ async fn drive_run(
             if *status == DoneStatus::Completed
                 && let Some(titles) = inner.titles.get()
             {
-                titles.maybe_generate(&chat_id, harness_id, &user_prompt, &run_cwd);
+                titles.maybe_generate(
+                    &chat_id,
+                    harness_id,
+                    &user_prompt,
+                    &run_cwd,
+                    crate::titles::TitleTrigger::TurnCompleted,
+                );
             }
             // A turn stopped in place: the runtime lives on, parked like a
             // completed turn. Steers it had accepted but not yet delivered
@@ -4227,10 +4454,61 @@ fn background_task(record: &zuse_providers::BackgroundTaskRecord) -> zuse_protoc
         id: record.task.id.clone(),
         kind: record.task.kind,
         description: record.task.description.clone(),
+        command: record.task.command.clone(),
         started_at: record.started.into(),
         ended_at: record.ended.map(Into::into),
         outcome: record.outcome,
         stoppable: record.task.stoppable && record.ended.is_none(),
+    }
+}
+
+/// Whether the journal's last event finished the turn that started at
+/// `turn_start`. A turn can be working before it journals anything, leaving
+/// the previous turn's `Done` last.
+fn done_ends_turn(last: Option<&(u64, AgentEvent)>, turn_start: u64) -> bool {
+    matches!(
+        last,
+        Some((
+            seq,
+            AgentEvent::Done {
+                status: DoneStatus::Completed | DoneStatus::Errored,
+                ..
+            },
+        )) if *seq >= turn_start
+    )
+}
+
+/// What the harness receives when a restart cut its turn short. Tools may have
+/// finished without their results being recorded, so re-running the request
+/// could repeat commits or pushes. The request stays in the text for a harness
+/// whose saved session could not be reattached.
+fn continuation_prompt(request: &str) -> String {
+    format!(
+        "Zuse restarted while you were working, which interrupted your last turn. Check the current state of the work before doing anything else, then finish only what is still undone. Some steps may have completed without their results reaching you, so verify before repeating anything with side effects, such as commits, pushes, or migrations. If the work is already done, say so briefly.\n\nThe request you were working on:\n\n{request}"
+    )
+}
+
+#[cfg(test)]
+mod update_checkpoint_tests {
+    use super::*;
+
+    fn done(seq: u64, status: DoneStatus) -> (u64, AgentEvent) {
+        let event = serde_json::from_value(serde_json::json!({
+            "type": "done",
+            "status": status,
+        }));
+        (seq, event.expect("a done event"))
+    }
+
+    #[test]
+    fn only_a_done_from_this_turn_counts_as_finishing_it() {
+        let finished = done(5, DoneStatus::Completed);
+        assert!(done_ends_turn(Some(&finished), 5));
+        assert!(!done_ends_turn(Some(&finished), 6), "the previous turn's");
+        assert!(!done_ends_turn(Some(&finished), u64::MAX), "no known start");
+        assert!(done_ends_turn(Some(&done(7, DoneStatus::Errored)), 6));
+        assert!(!done_ends_turn(Some(&done(7, DoneStatus::Interrupted)), 6));
+        assert!(!done_ends_turn(None, 0));
     }
 }
 
@@ -4635,6 +4913,7 @@ mod tests {
 
     fn request() -> RunRequest {
         RunRequest {
+            plan: false,
             mcp: None,
             prompt: "first".into(),
             harness: None,
@@ -4994,6 +5273,31 @@ mod tests {
     // A tagged subagent event that folds to NO parts used to leave its sink
     // dirty forever: the commit branch's guard stayed true on a deadline in
     // the past and the run loop burned a core until real content arrived.
+    #[tokio::test]
+    async fn archived_chats_never_hold_the_update_gate() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = crate::EngineCore::assemble(
+            dir.path(),
+            Arc::new(HarnessRegistry::new()),
+            HarnessId::Mock,
+            None,
+        )
+        .unwrap();
+        core.workspace
+            .create_chat("chat-archived", None, Some(&core.device_id), None, None)
+            .unwrap();
+        core.sessions
+            .set_status("chat-archived", SessionStatus::Working, true);
+        assert!(core.sessions.any_active());
+        assert_eq!(core.sessions.active_turn_count(), 1);
+        core.workspace
+            .set_chat_archived("chat-archived", true)
+            .unwrap();
+        assert!(!core.sessions.any_active());
+        assert_eq!(core.sessions.active_turn_count(), 0);
+        core.shutdown().await;
+    }
+
     #[tokio::test]
     async fn empty_subagent_events_commit_once_per_window_not_per_tick() {
         use super::*;

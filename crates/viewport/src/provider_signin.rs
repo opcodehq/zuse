@@ -1,6 +1,8 @@
 //! The inline provider sign-in states shared by desktop and browser settings.
+use crate::localization::message as tr;
 use crate::{acp_catalog::spinner, assets::icon, palette::rgb, settings_style as s, shell::MUTED};
 use gpui::{prelude::*, *};
+use zuse_i18n::messages as msg;
 use zuse_protocol::HarnessId;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -52,8 +54,42 @@ pub fn login_command(harness: HarnessId) -> Option<&'static str> {
         HarnessId::Pi => "pi",
         HarnessId::Hermes => "hermes auth add",
         HarnessId::Kiro => "kiro-cli login",
+        HarnessId::Muse => "muse login",
         _ => return None,
     })
+}
+/// Setup guidance for agents whose CLI owns sign-in entirely.
+pub fn login_hint(harness: HarnessId, cx: &App) -> Option<String> {
+    match harness {
+        HarnessId::Muse => Some(inline_code(&tr(cx, msg::providers::muse_sign_in_hint))),
+        _ => None,
+    }
+}
+/// Plain-text form of a catalog message's `<partN>` code spans, quoted in backticks.
+pub fn inline_code(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find('<') {
+        out.push_str(&rest[..start]);
+        let tag = &rest[start + 1..];
+        let part = tag.find('>').filter(|&end| {
+            let name = tag[..end].strip_prefix('/').unwrap_or(&tag[..end]);
+            name.strip_prefix("part")
+                .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+        });
+        match part {
+            Some(end) => {
+                out.push('`');
+                rest = &tag[end + 1..];
+            }
+            None => {
+                out.push('<');
+                rest = tag;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 #[derive(Clone)]
 pub enum Phase {
@@ -174,7 +210,7 @@ pub fn render<C: 'static>(
                     .text_size(px(11.))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(rgb(MUTED))
-                    .child("Sign in"),
+                    .child(tr(cx, msg::common::signIn)),
             );
             let mut choices = div().flex().flex_wrap().items_center().gap(px(8.));
             for (i, option) in login_options(data.harness).into_iter().enumerate() {
@@ -196,9 +232,17 @@ pub fn render<C: 'static>(
                 );
             }
             if command.is_some() {
-                choices = choices.child(command_row("or run").text_size(px(10.)));
+                let label = if login_options(data.harness).is_empty() {
+                    "Run"
+                } else {
+                    "or run"
+                };
+                choices = choices.child(command_row(label).text_size(px(10.)));
             }
             body = body.child(choices);
+            if let Some(hint) = login_hint(data.harness, cx) {
+                body = body.child(div().text_size(px(11.)).text_color(rgb(MUTED)).child(hint));
+            }
         }
         Phase::Waiting { message } => {
             let text = message.clone().unwrap_or_else(|| {
@@ -328,7 +372,7 @@ pub fn render<C: 'static>(
                         hsla(160. / 360., 0.5, 0.12, 1.),
                         hsla(160. / 360., 0.5, 0.95, 1.),
                     ))
-                    .child("Signed in. Refreshing…"),
+                    .child(tr(cx, msg::providers::provider_card_signed_in_refreshing)),
             );
         }
     }
@@ -356,5 +400,26 @@ pub fn is_openable_login_url(url: &str) -> bool {
             matches!(host, "localhost" | "127.0.0.1" | "::1")
         }
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{HarnessId, inline_code, login_command, login_options};
+
+    #[test]
+    fn catalog_code_spans_render_as_backticks() {
+        assert_eq!(
+            inline_code("Run <part0>muse login</part0>, or <part1>muse auth set</part1>."),
+            "Run `muse login`, or `muse auth set`."
+        );
+        assert_eq!(inline_code("a < b <em>x</em>"), "a < b <em>x</em>");
+        assert_eq!(inline_code("tail <part"), "tail <part");
+    }
+
+    #[test]
+    fn muse_signs_in_through_its_own_cli() {
+        assert_eq!(login_command(HarnessId::Muse), Some("muse login"));
+        assert!(login_options(HarnessId::Muse).is_empty());
     }
 }

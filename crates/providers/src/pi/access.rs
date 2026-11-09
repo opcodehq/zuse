@@ -1,6 +1,6 @@
 //! Install the access guard only in the owned provider process.
 use crate::{HarnessError, process::Command, scratch::ScratchDir};
-use zuse_protocol::{RunRequest, SandboxLevel};
+use zuse_protocol::RunRequest;
 
 pub(super) struct Guard {
     pub ready: String,
@@ -11,7 +11,7 @@ pub(super) fn configure(cmd: &mut Command, request: &RunRequest) -> Result<Guard
     let scratch = ScratchDir::new("pi-access")?;
     let extension = scratch.path().join("zuse-access.mjs");
     std::fs::write(&extension, include_str!("access.mjs"))?;
-    let mode = if request.sandbox == SandboxLevel::ReadOnly {
+    let mode = if request.plan {
         "read-only"
     } else if request.auto_approves_tools() {
         "full"

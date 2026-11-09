@@ -29,6 +29,9 @@ pub enum HarnessId {
     /// google's antigravity agent over acp (`agy_acp_server`, installed from
     /// its pinned release archive).
     Antigravity,
+    /// Meta's Muse Code agent, driven over its native stdio session protocol
+    /// (`muse serve`).
+    Muse,
     /// Test harness; never shown in production pickers.
     Mock,
 }
@@ -188,8 +191,10 @@ pub enum ReasoningLevel {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SandboxLevel {
-    ReadOnly,
+    /// Ask before restricted actions. Chats stored with the retired
+    /// `read-only` level load here; plan mode is now [`RunRequest::plan`].
     #[default]
+    #[serde(alias = "read-only")]
     WorkspaceWrite,
     /// "Approve for me": workspace writes, with the agent's own automatic
     /// approver deciding escalations (Claude Code's `auto` permission mode,
@@ -275,6 +280,11 @@ pub struct RunRequest {
     pub model_options: serde_json::Map<String, serde_json::Value>,
     pub cwd: String,
     pub sandbox: SandboxLevel,
+    /// Plan mode: the agent inspects and proposes without changing files.
+    /// Independent of the access level. Engine-internal runs that must not
+    /// write (titles, coordinators) set it too. Additive + serde-defaulted.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub plan: bool,
     #[serde(default)]
     pub auto_approve: bool,
     /// Harness-native session id to resume, if any.
@@ -305,9 +315,10 @@ pub struct RunRequest {
 
 impl RunRequest {
     /// Bypassing approvals requires both explicit full access and the opt-in.
-    /// A stale auto-approval flag must never weaken a restricted sandbox.
+    /// A stale auto-approval flag must never weaken a restricted sandbox,
+    /// and plan mode never approves tools on the agent's behalf.
     pub fn auto_approves_tools(&self) -> bool {
-        self.auto_approve && self.sandbox == SandboxLevel::DangerFullAccess
+        self.auto_approve && !self.plan && self.sandbox == SandboxLevel::DangerFullAccess
     }
 }
 
@@ -317,7 +328,6 @@ mod access_posture_tests {
     #[test]
     fn approval_bypass_requires_both_full_access_and_explicit_opt_in() {
         for sandbox in [
-            SandboxLevel::ReadOnly,
             SandboxLevel::WorkspaceWrite,
             SandboxLevel::Auto,
             SandboxLevel::DangerFullAccess,
@@ -330,12 +340,13 @@ mod access_posture_tests {
                 );
             }
         }
+        let planned: RunRequest = serde_json::from_value(serde_json::json!({"prompt":"test","cwd":"/tmp","sandbox":"danger-full-access","autoApprove":true,"plan":true})).unwrap();
+        assert!(!planned.auto_approves_tools());
     }
 
     #[test]
     fn sandbox_levels_round_trip_and_keep_legacy_words() {
         for (level, word) in [
-            (SandboxLevel::ReadOnly, "read-only"),
             (SandboxLevel::WorkspaceWrite, "workspace-write"),
             (SandboxLevel::Auto, "auto"),
             (SandboxLevel::DangerFullAccess, "danger-full-access"),
@@ -353,6 +364,15 @@ mod access_posture_tests {
             serde_json::from_value::<SandboxLevel>(serde_json::json!("auto-review")).unwrap(),
             SandboxLevel::Auto
         );
+        assert_eq!(
+            serde_json::from_value::<SandboxLevel>(serde_json::json!("read-only")).unwrap(),
+            SandboxLevel::WorkspaceWrite
+        );
+        let legacy: crate::ChatConfig =
+            serde_json::from_value(serde_json::json!({"harness":"codex","sandbox":"read-only"}))
+                .unwrap();
+        assert_eq!(legacy.sandbox, SandboxLevel::WorkspaceWrite);
+        assert!(!legacy.plan);
         let config: crate::ChatConfig =
             serde_json::from_value(serde_json::json!({"harness":"codex","sandbox":"auto"}))
                 .unwrap();
@@ -394,6 +414,21 @@ pub struct WorktreeSpec {
     /// wire compatibility with clients that only request worktree creation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub space_id: Option<String>,
+}
+
+/// Where a host is while materializing a [`WorktreeSpec`], reported through
+/// the non-durable setup handoff so the sender can show it above the
+/// composer. `branch` names the base the worktree is created from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "phase", rename_all = "camelCase")]
+pub enum WorktreeProgress {
+    /// Fetching `branch` from its remote.
+    #[serde(rename_all = "camelCase")]
+    Fetching { branch: String },
+    /// Checking out the worktree. `offline` when the fetch failed and the
+    /// local ref stands in.
+    #[serde(rename_all = "camelCase")]
+    Creating { branch: String, offline: bool },
 }
 
 /// The session-scoped singleton id for the live plan/todo chip. ACP plan
@@ -524,6 +559,10 @@ pub const SUBAGENT_INPUT_KEEP: [&str; 5] = [
     "subagent_model",
     "subagent_type",
 ];
+
+/// Largest UI block spec ([`AgentEvent::UiBlock`]) in bytes: the spec
+/// crate caps the source at 32,768 UTF-16 units, at most 3 bytes each.
+pub const UI_BLOCK_MAX_BYTES: usize = 3 * 32_768;
 
 /// Bounds on an agent's inline visual ([`AgentEvent::Visual`]): a Luau
 /// script Zuse runs in a sandbox and renders natively.
@@ -722,6 +761,13 @@ pub enum AgentEvent {
         id: String,
         path: String,
         title: String,
+    },
+    /// An agent-authored UI block shown in the reply: a declarative
+    /// component spec (`zuse-ui-block`), stored inline. The engine emits it
+    /// when the agent calls Zuse's `show_ui` MCP tool.
+    UiBlock {
+        id: String,
+        spec: String,
     },
     ReasoningDelta {
         text: String,

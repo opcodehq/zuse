@@ -12,10 +12,13 @@
 //! `shell::apply_keymap`, which clears every binding first), and
 //! [`app_menus`] builds the menu bar handed to `cx.set_menus` in `run_app`.
 
-use gpui::{App, KeyBinding, Menu, MenuItem, OsAction, SystemMenuType, Window, actions};
+use std::time::{Duration, Instant};
+
+use gpui::{App, Global, KeyBinding, Menu, MenuItem, OsAction, SystemMenuType, Window, actions};
 
 use crate::appearance::{self, AppearanceMode};
 use crate::composer;
+use crate::settings::QuitGesture;
 use crate::shell;
 
 actions!(
@@ -24,6 +27,7 @@ actions!(
         About,
         CheckForUpdates,
         Quit,
+        QuitShortcut,
         Hide,
         HideOthers,
         ShowAll,
@@ -42,6 +46,7 @@ pub fn init(cx: &mut App) {
     #[cfg(all(target_os = "macos", not(test)))]
     native_quit::init(cx);
     cx.on_action(quit);
+    cx.on_action(quit_shortcut);
     #[cfg(target_os = "macos")]
     cx.on_action(|_: &About, _| about_panel::show());
     // Global, not per-window: it must work with every window closed, and the
@@ -75,6 +80,78 @@ fn with_active_window(cx: &mut App, f: impl FnOnce(&mut Window)) {
 /// All app-owned quit paths must flush file buffers before GPUI destroys windows.
 fn quit(_: &Quit, cx: &mut App) {
     request_quit(cx);
+}
+
+/// How long after the first ⌘Q a second one still quits.
+const DOUBLE_PRESS_WINDOW: Duration = Duration::from_millis(1200);
+const HOLD_TO_QUIT: Duration = Duration::from_millis(800);
+/// Longer than the usual delay before a held key starts repeating; a gap
+/// beyond it means the key was let go.
+const HOLD_RELEASE_GAP: Duration = Duration::from_millis(600);
+
+#[derive(Debug, PartialEq, Eq)]
+enum QuitPress {
+    Quit,
+    Hint,
+    Wait,
+}
+
+/// ⌘Q presses so far. A held key arrives as repeated presses.
+#[derive(Default)]
+struct QuitPresses {
+    started: Option<Instant>,
+    last: Option<Instant>,
+}
+
+impl Global for QuitPresses {}
+
+impl QuitPresses {
+    fn press(&mut self, gesture: QuitGesture, now: Instant) -> QuitPress {
+        let since_last = self.last.map(|last| now.saturating_duration_since(last));
+        self.last = Some(now);
+        match gesture {
+            QuitGesture::Press => QuitPress::Quit,
+            QuitGesture::DoublePress => {
+                if since_last.is_some_and(|gap| gap <= DOUBLE_PRESS_WINDOW) {
+                    self.last = None;
+                    QuitPress::Quit
+                } else {
+                    QuitPress::Hint
+                }
+            }
+            QuitGesture::Hold => {
+                if !since_last.is_some_and(|gap| gap <= HOLD_RELEASE_GAP) {
+                    self.started = Some(now);
+                    return QuitPress::Hint;
+                }
+                if self
+                    .started
+                    .is_some_and(|started| now.saturating_duration_since(started) >= HOLD_TO_QUIT)
+                {
+                    self.started = None;
+                    self.last = None;
+                    QuitPress::Quit
+                } else {
+                    QuitPress::Wait
+                }
+            }
+        }
+    }
+}
+
+fn quit_shortcut(_: &QuitShortcut, cx: &mut App) {
+    let gesture = crate::settings::quit_gesture(cx);
+    match cx
+        .default_global::<QuitPresses>()
+        .press(gesture, Instant::now())
+    {
+        QuitPress::Quit => request_quit(cx),
+        QuitPress::Hint if gesture == QuitGesture::Hold => {
+            crate::toast::info(cx, "Keep holding ⌘Q to quit")
+        }
+        QuitPress::Hint => crate::toast::info(cx, "Press ⌘Q again to quit"),
+        QuitPress::Wait => {}
+    }
 }
 
 pub(crate) fn request_quit(cx: &mut App) {
@@ -137,6 +214,7 @@ fn close_active_window(cx: &mut App) {
 /// the platform convention everywhere (Cmd+, on macOS, Ctrl+, elsewhere);
 /// window/application lifecycle shortcuts remain macOS-only.
 pub fn bind_keys(cx: &mut App) {
+    let guarded_quit = crate::settings::quit_gesture(cx) != QuitGesture::Press;
     // Settings and Close tab are rebindable desktop commands.
     cx.bind_keys(
         app_key_bindings(cfg!(target_os = "macos"))
@@ -144,8 +222,13 @@ pub fn bind_keys(cx: &mut App) {
             .filter(|binding| {
                 !binding.action().as_any().is::<shell::OpenSettings>()
                     && !binding.action().as_any().is::<CloseWindow>()
+                    && !(guarded_quit && binding.action().as_any().is::<Quit>())
             }),
     );
+    // A separate action, so clicking Quit in the menu still quits at once.
+    if guarded_quit && cfg!(target_os = "macos") {
+        cx.bind_keys([KeyBinding::new("cmd-q", QuitShortcut, None)]);
+    }
 }
 
 /// The binding table behind [`bind_keys`] — `KeyBinding` construction is pure
@@ -170,68 +253,87 @@ fn app_key_bindings(macos: bool) -> Vec<KeyBinding> {
 
 /// The zuse menu bar. macOS renders this natively; mac-only entries are gated
 /// at runtime (`cfg!`) so the whole module compiles and tests on Linux.
-pub fn app_menus() -> Vec<Menu> {
+pub fn app_menus(cx: &App) -> Vec<Menu> {
+    let localizer = cx
+        .try_global::<crate::localization::Localization>()
+        .map(|s| s.localizer.clone())
+        .unwrap_or_default();
+    localized_menus(&localizer)
+}
+
+fn localized_menus(l10n: &zuse_i18n::Localizer) -> Vec<Menu> {
     let macos = cfg!(target_os = "macos");
 
     // macOS titles the first menu with the bundle/process name regardless of
     // what we pass, but gpui still wants a name.
     let mut app_items = vec![
         // The native AppKit about panel; no equivalent elsewhere yet.
-        MenuItem::action("About Zuse", About).disabled(!macos),
+        MenuItem::action(l10n.text("native-about_zuse"), About).disabled(!macos),
         // Sparkle's placement: directly under About. Other platforms reach
         // the same check from the account menu.
-        MenuItem::action("Check for Updates…", CheckForUpdates),
+        MenuItem::action(l10n.text("desktop-check_for_updates"), CheckForUpdates),
         MenuItem::separator(),
-        MenuItem::action("Settings", shell::OpenSettings),
+        MenuItem::action(
+            l10n.text("commands-default_keybindings_settings"),
+            shell::OpenSettings,
+        ),
         MenuItem::separator(),
     ];
     if macos {
         app_items.extend([
-            MenuItem::os_submenu("Services", SystemMenuType::Services),
+            MenuItem::os_submenu(l10n.text("native-services"), SystemMenuType::Services),
             MenuItem::separator(),
-            MenuItem::action("Hide Zuse", Hide),
-            MenuItem::action("Hide Others", HideOthers),
-            MenuItem::action("Show All", ShowAll),
+            MenuItem::action(l10n.text("native-hide_zuse"), Hide),
+            MenuItem::action(l10n.text("native-hide_others"), HideOthers),
+            MenuItem::action(l10n.text("native-show_all"), ShowAll),
             MenuItem::separator(),
         ]);
     }
-    app_items.push(MenuItem::action("Quit Zuse", Quit));
+    app_items.push(MenuItem::action(l10n.text("native-quit_zuse"), Quit));
 
     let mut menus = vec![
-        Menu::new("Zuse").items(app_items),
+        Menu::new(l10n.text("common-startup_surface_zuse")).items(app_items),
         // Standard clipboard verbs tied to the composer's existing actions via
         // their native selectors (`OsAction` → cut:/copy:/paste:/selectAll:),
         // so the OS Edit menu routes through the responder chain to the focused
         // input — zed wires its editor actions identically
         // (crates/zed/src/zed/app_menus.rs, Edit/Selection menus).
-        Menu::new("Edit").items([
+        Menu::new(l10n.text("common-edit")).items([
             // Undo/Redo have no `OsAction` counterpart — they dispatch as plain
             // actions to the focused input, same as the composer keymap.
-            MenuItem::action("Undo", composer::Undo),
-            MenuItem::action("Redo", composer::Redo),
+            MenuItem::action(l10n.text("native-undo"), composer::Undo),
+            MenuItem::action(l10n.text("native-redo"), composer::Redo),
             MenuItem::separator(),
-            MenuItem::os_action("Cut", composer::Cut, OsAction::Cut),
-            MenuItem::os_action("Copy", composer::Copy, OsAction::Copy),
-            MenuItem::os_action("Paste", composer::Paste, OsAction::Paste),
+            MenuItem::os_action(l10n.text("native-cut"), composer::Cut, OsAction::Cut),
+            MenuItem::os_action(
+                l10n.text("chat-selection_menu_copy"),
+                composer::Copy,
+                OsAction::Copy,
+            ),
+            MenuItem::os_action(l10n.text("native-paste"), composer::Paste, OsAction::Paste),
             MenuItem::separator(),
-            MenuItem::os_action("Select All", composer::SelectAll, OsAction::SelectAll),
+            MenuItem::os_action(
+                l10n.text("native-select_all"),
+                composer::SelectAll,
+                OsAction::SelectAll,
+            ),
         ]),
     ];
     // Appearance lives under View on every platform — it is the only View verb
-    // today, but "Appearance" as a top-level menu would read oddly next to Edit.
-    menus.push(Menu::new("View").items([
-        MenuItem::action("Appearance: System", AppearanceSystem),
-        MenuItem::action("Appearance: Light", AppearanceLight),
-        MenuItem::action("Appearance: Dark", AppearanceDark),
+    // today, but l10n.text("settings-settings_page_appearance") as a top-level menu would read oddly next to Edit.
+    menus.push(Menu::new(l10n.text("desktop-view")).items([
+        MenuItem::action(l10n.text("native-appearance_system"), AppearanceSystem),
+        MenuItem::action(l10n.text("native-appearance_light"), AppearanceLight),
+        MenuItem::action(l10n.text("native-appearance_dark"), AppearanceDark),
     ]));
     if macos {
         // Standard Window menu; macOS appends the open-window list itself.
-        menus.push(Menu::new("Window").items([
-            MenuItem::action("Minimize", Minimize),
-            MenuItem::action("Zoom", Zoom),
+        menus.push(Menu::new(l10n.text("desktop-window")).items([
+            MenuItem::action(l10n.text("native-minimize"), Minimize),
+            MenuItem::action(l10n.text("native-zoom"), Zoom),
             MenuItem::separator(),
             MenuItem::action(
-                "Close Tab",
+                l10n.text("desktop-close_tab"),
                 shell::DesktopCommand(crate::settings::keybindings::Command::CloseTab),
             ),
         ]));
@@ -255,8 +357,63 @@ mod tests {
     }
 
     #[test]
+    fn a_single_press_quits_at_once_by_default() {
+        let mut presses = QuitPresses::default();
+        assert_eq!(
+            presses.press(QuitGesture::Press, Instant::now()),
+            QuitPress::Quit
+        );
+    }
+
+    #[test]
+    fn double_press_needs_two_presses_close_together() {
+        let now = Instant::now();
+        let mut presses = QuitPresses::default();
+        assert_eq!(
+            presses.press(QuitGesture::DoublePress, now),
+            QuitPress::Hint
+        );
+        let too_late = now + DOUBLE_PRESS_WINDOW + Duration::from_millis(1);
+        assert_eq!(
+            presses.press(QuitGesture::DoublePress, too_late),
+            QuitPress::Hint
+        );
+        assert_eq!(
+            presses.press(
+                QuitGesture::DoublePress,
+                too_late + Duration::from_millis(300)
+            ),
+            QuitPress::Quit
+        );
+    }
+
+    #[test]
+    fn hold_quits_only_after_an_unbroken_hold() {
+        let now = Instant::now();
+        let at = |ms| now + Duration::from_millis(ms);
+        let mut presses = QuitPresses::default();
+        assert_eq!(presses.press(QuitGesture::Hold, at(0)), QuitPress::Hint);
+        // The key starts repeating after the usual delay.
+        assert_eq!(presses.press(QuitGesture::Hold, at(500)), QuitPress::Wait);
+        assert_eq!(presses.press(QuitGesture::Hold, at(590)), QuitPress::Wait);
+        assert_eq!(presses.press(QuitGesture::Hold, at(680)), QuitPress::Wait);
+        assert_eq!(presses.press(QuitGesture::Hold, at(770)), QuitPress::Wait);
+        assert_eq!(presses.press(QuitGesture::Hold, at(860)), QuitPress::Quit);
+    }
+
+    #[test]
+    fn letting_go_restarts_the_hold() {
+        let now = Instant::now();
+        let at = |ms| now + Duration::from_millis(ms);
+        let mut presses = QuitPresses::default();
+        assert_eq!(presses.press(QuitGesture::Hold, at(0)), QuitPress::Hint);
+        assert_eq!(presses.press(QuitGesture::Hold, at(2000)), QuitPress::Hint);
+        assert_eq!(presses.press(QuitGesture::Hold, at(2100)), QuitPress::Wait);
+    }
+
+    #[test]
     fn app_menu_ends_with_quit() {
-        let menus = app_menus();
+        let menus = localized_menus(&zuse_i18n::Localizer::default());
         assert_eq!(menus[0].name.as_ref(), "Zuse");
         let Some(MenuItem::Action { name, action, .. }) = menus[0].items.last() else {
             panic!("last app-menu item must be an action");
@@ -267,7 +424,7 @@ mod tests {
 
     #[test]
     fn app_menu_offers_settings() {
-        let menus = app_menus();
+        let menus = localized_menus(&zuse_i18n::Localizer::default());
         assert!(
             menus[0].items.iter().any(|item| matches!(
                 item,
@@ -280,7 +437,7 @@ mod tests {
 
     #[test]
     fn about_enabled_only_on_macos() {
-        let menus = app_menus();
+        let menus = localized_menus(&zuse_i18n::Localizer::default());
         let Some(first @ MenuItem::Action { action, .. }) = menus[0].items.first() else {
             panic!("first app-menu item must be an action");
         };
@@ -290,7 +447,7 @@ mod tests {
 
     #[test]
     fn check_for_updates_follows_about() {
-        let menus = app_menus();
+        let menus = localized_menus(&zuse_i18n::Localizer::default());
         let Some(MenuItem::Action {
             name,
             action,
@@ -307,7 +464,7 @@ mod tests {
 
     #[test]
     fn edit_menu_uses_composer_clipboard_os_actions() {
-        let menus = app_menus();
+        let menus = localized_menus(&zuse_i18n::Localizer::default());
         let edit = menus
             .iter()
             .find(|m| m.name.as_ref() == "Edit")
@@ -341,7 +498,7 @@ mod tests {
 
     #[test]
     fn view_menu_offers_all_three_appearance_modes() {
-        let menus = app_menus();
+        let menus = localized_menus(&zuse_i18n::Localizer::default());
         let view = menus
             .iter()
             .find(|m| m.name.as_ref() == "View")

@@ -124,17 +124,51 @@ pub(crate) enum ChangeRequestBadgeSurface {
     Composer,
 }
 
-/// A session's branch glyph tone: its pull request's state when it has one
-/// (open, merged, closed), else the quiet muted tone.
-pub(crate) fn branch_state_color(
+/// A session's sidebar glyph and tone. Each pull request stage has its own
+/// shape as well as its own color, so state doesn't rest on hue alone.
+pub(crate) fn branch_state_glyph(
     summary: Option<&ChangeRequestSummary>,
     theme: &Theme,
-) -> gpui::Hsla {
-    match summary.map(|summary| summary.state) {
-        Some(ChangeRequestState::Open) => ChangeRequestBadgeTone::Open.color(theme),
-        Some(ChangeRequestState::Merged) => ChangeRequestBadgeTone::Merged.color(theme),
-        Some(ChangeRequestState::Closed) | None => theme.text_muted,
+) -> (&'static str, gpui::Hsla) {
+    use zuse_protocol::ChangeRequestReviewDecision as Review;
+    let Some(summary) = summary else {
+        return (crate::icons::GIT_STATE_BRANCH, theme.text_muted);
+    };
+    match summary.state {
+        ChangeRequestState::Merged => (
+            crate::icons::GIT_STATE_MERGED,
+            ChangeRequestBadgeTone::Merged.color(theme),
+        ),
+        ChangeRequestState::Closed => (
+            crate::icons::GIT_STATE_CLOSED,
+            ChangeRequestBadgeTone::Closed.color(theme),
+        ),
+        ChangeRequestState::Open if summary.is_draft => {
+            (crate::icons::GIT_STATE_DRAFT, theme.text_muted)
+        }
+        ChangeRequestState::Open => match summary.review_decision {
+            Review::ReviewRequired | Review::ChangesRequested => {
+                (crate::icons::GIT_STATE_REVIEW, theme.warning)
+            }
+            Review::Approved | Review::Unknown => (
+                crate::icons::GIT_STATE_OPEN,
+                ChangeRequestBadgeTone::Open.color(theme),
+            ),
+        },
     }
+}
+
+pub(crate) fn unavailable_badge(id: SharedString, error: String, theme: &Theme) -> AnyElement {
+    div()
+        .id(id)
+        .flex_none()
+        .text_color(theme.warning)
+        .aria_label(format!("PR status unavailable: {error}"))
+        .tooltip(crate::settings::widgets::text_tooltip(format!(
+            "Could not refresh PR status. {error}"
+        )))
+        .child(crate::icons::icon(crate::icons::ALERT_CIRCLE).size(px(12.0)))
+        .into_any_element()
 }
 
 pub(crate) fn pull_request_badge(
@@ -284,7 +318,10 @@ fn render_badge_model(
     let tooltip_model = model.clone();
     let composer = surface == ChangeRequestBadgeSurface::Composer;
     let inline = surface == ChangeRequestBadgeSurface::SidebarInline;
-    let accessible_label = format!("Open pull request {}: {}", model.number, model.title);
+    let accessible_label = format!(
+        "{} pull request #{}: {}",
+        model.state_label, model.number, model.title
+    );
 
     div()
         .id(id)
@@ -326,7 +363,7 @@ fn render_badge_model(
                 .tooltip_show_delay(std::time::Duration::from_millis(350))
         })
         .child(
-            crate::icons::icon(crate::icons::PULL_REQUEST)
+            crate::icons::icon(model.tone.glyph())
                 .size(px(if composer { 11.0 } else { 10.0 }))
                 .flex_none()
                 .text_color(color.opacity(0.85)),
@@ -335,7 +372,11 @@ fn render_badge_model(
         .child(
             div()
                 .font_family(theme.font_mono.clone())
-                .child(crate::popover::search_highlight(model.number, query, theme)),
+                .child(crate::popover::search_highlight(
+                    format!("#{}", model.number).into(),
+                    query,
+                    theme,
+                )),
         )
         .into_any_element()
 }
@@ -409,11 +450,17 @@ impl ChangeRequestClientState {
                 )
             })
         }
-        let changed = self.snapshots.get(&key).and_then(visible) != visible(&snapshot);
+        let changed = self.snapshots.get(&key).and_then(visible) != visible(&snapshot)
+            || self.snapshots.get(&key).and_then(|s| s.error.as_ref()) != snapshot.error.as_ref();
         // A new frame replaces the old branch/checkout context for this path.
         // Rendering validates the complete identity again before exposing it.
         self.snapshots.insert(key, snapshot);
         changed
+    }
+
+    pub(crate) fn error_for_chat(&self, chat: &Chat, spaces: &[Space]) -> Option<&str> {
+        snapshot_for_chat(chat, spaces, self.snapshots.values())
+            .and_then(|snapshot| snapshot.error.as_deref())
     }
 
     pub fn retain_targets(&mut self, targets: &HashSet<ChangeRequestWatchKey>) {
@@ -439,24 +486,23 @@ pub(crate) fn desired_watch_targets(
         .iter()
         .filter(|chat| !chat.archived)
         .filter(|chat| !is_unsupported(&chat.device_id))
-        .filter_map(|chat| {
-            let source = chat.source_context.as_ref()?;
-            let (cwd, branch, checkout_id) = (
-                source.repo_root.as_str(),
-                source.branch.as_str(),
-                Some(source.checkout_id.clone()),
-            );
-            if branch.trim().is_empty() {
-                return None;
-            }
-            Some(ChangeRequestWatchKey {
-                device_id: chat.device_id.clone(),
-                cwd: cwd.to_owned(),
-                branch: branch.to_owned(),
-                checkout_id,
-            })
-        })
+        .filter_map(watch_target)
         .collect()
+}
+
+/// The checkout a chat's pull request resolves from: its conversation-owned
+/// source context, when that names a branch.
+pub(crate) fn watch_target(chat: &Chat) -> Option<ChangeRequestWatchKey> {
+    let source = chat.source_context.as_ref()?;
+    if source.branch.trim().is_empty() {
+        return None;
+    }
+    Some(ChangeRequestWatchKey {
+        device_id: chat.device_id.clone(),
+        cwd: source.repo_root.clone(),
+        branch: source.branch.clone(),
+        checkout_id: Some(source.checkout_id.clone()),
+    })
 }
 
 pub(crate) fn watch_params(
@@ -487,6 +533,14 @@ pub fn change_request_for_chat<'a>(
     spaces: &[Space],
     snapshots: impl IntoIterator<Item = &'a CheckoutChangeRequestStatus>,
 ) -> Option<&'a ChangeRequestSummary> {
+    snapshot_for_chat(chat, spaces, snapshots).and_then(|snapshot| snapshot.change_request.as_ref())
+}
+
+fn snapshot_for_chat<'a>(
+    chat: &Chat,
+    spaces: &[Space],
+    snapshots: impl IntoIterator<Item = &'a CheckoutChangeRequestStatus>,
+) -> Option<&'a CheckoutChangeRequestStatus> {
     let branch = conversation_branch(chat, spaces)?.trim();
     if branch.is_empty() {
         return None;
@@ -499,17 +553,14 @@ pub fn change_request_for_chat<'a>(
         .map(|source| source.checkout_id.as_str())
         .or(chat.checkout_id.as_deref());
 
-    snapshots
-        .into_iter()
-        .find(|snapshot| {
-            snapshot.device_id == chat.device_id
-                && snapshot.cwd == cwd
-                && snapshot.branch == branch
-                && checkout_id.is_none_or(|checkout_id| {
-                    !snapshot.checkout_id.is_empty() && snapshot.checkout_id == checkout_id
-                })
-        })
-        .and_then(|snapshot| snapshot.change_request.as_ref())
+    snapshots.into_iter().find(|snapshot| {
+        snapshot.device_id == chat.device_id
+            && snapshot.cwd == cwd
+            && snapshot.branch == branch
+            && checkout_id.is_none_or(|checkout_id| {
+                !snapshot.checkout_id.is_empty() && snapshot.checkout_id == checkout_id
+            })
+    })
 }
 
 /// Branch metadata safe to render for this conversation. Pre-source-context
@@ -570,6 +621,7 @@ mod tests {
 
     fn snapshot(device: &str, cwd: &str, checkout: &str) -> CheckoutChangeRequestStatus {
         CheckoutChangeRequestStatus {
+            error: None,
             checkout_id: checkout.into(),
             device_id: device.into(),
             cwd: cwd.into(),
@@ -582,6 +634,8 @@ mod tests {
                 state: ChangeRequestState::Open,
                 base_ref: "main".into(),
                 head_ref: "feature/pr".into(),
+                is_draft: false,
+                review_decision: Default::default(),
             }),
             updated_at: Utc.timestamp_opt(1, 0).unwrap(),
         }

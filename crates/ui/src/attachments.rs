@@ -11,10 +11,12 @@
 //! `(deviceId, path)`, seeded locally after a send so own bubbles never
 //! round-trip).
 
+use crate::localization::message as tr;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
+use zuse_i18n::messages as msg;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -1206,7 +1208,7 @@ pub(crate) fn lightbox_with_size(
         ),
         None => div()
             .text_color(ink(0.6))
-            .child("Loading image…")
+            .child(tr(cx, msg::chat::image_gallery_loading))
             .into_any_element(),
     };
     let on_close = std::rc::Rc::new(on_close);

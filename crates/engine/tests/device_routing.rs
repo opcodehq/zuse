@@ -300,6 +300,8 @@ fn change_request_lookup(root: &std::path::Path) -> Arc<StaticChangeRequestLooku
             state: ChangeRequestState::Open,
             base_ref: "main".into(),
             head_ref: "feature/status".into(),
+            is_draft: false,
+            review_decision: Default::default(),
         },
         resolves: AtomicUsize::new(0),
     })
@@ -871,6 +873,7 @@ async fn target_device_id_routes_over_the_relay() {
     // Unary forward with side effects: QueueCommand lands (and executes) on B.
     let command = serde_json::to_value(SessionCommandPayload::Run {
         request: RunRequest {
+            plan: false,
             mcp: None,
             prompt: "run remotely".into(),
             harness: None,

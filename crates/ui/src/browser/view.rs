@@ -1,9 +1,11 @@
 use super::{BrowserEvent, BrowserSurface};
+use crate::localization::message as tr;
 use crate::{icons, surface_chrome, theme::Theme};
 use gpui::{
     AnyElement, Context, Focusable, IntoElement, KeyDownEvent, MouseButton, Render, Window, div,
     prelude::*, px,
 };
+use zuse_i18n::messages as msg;
 
 fn button(
     id: &'static str,
@@ -223,7 +225,7 @@ impl BrowserSurface {
                                     }))
                             })
                             .when(!available, |el| el.opacity(0.4))
-                            .child("Open"),
+                            .child(tr(cx, msg::common::open)),
                     ),
             );
         }
@@ -264,9 +266,9 @@ impl BrowserSurface {
                 .text_color(theme.text_muted)
                 .cursor_pointer()
                 .role(gpui::Role::Button)
-                .aria_label("Enter a website address")
+                .aria_label(tr(cx, msg::native::enter_a_website_address))
                 .on_click(cx.listener(|this, _, window, cx| this.focus_address(window, cx)))
-                .child("Or enter a website address"),
+                .child(tr(cx, msg::native::or_enter_a_website_address)),
         );
         div()
             .id("browser-previews")
@@ -385,9 +387,9 @@ impl BrowserSurface {
                                 }
                             }))
                             .child(if has_error {
-                                "Try again"
+                                crate::localization::text("chat-review_guide_try_again", cx)
                             } else {
-                                "Enter an address"
+                                ("Enter an address").to_string()
                             })
                             .when(!has_error, |el| {
                                 el.child(
@@ -621,7 +623,7 @@ impl Render for BrowserSurface {
                         .justify_center()
                         .cursor_pointer()
                         .role(gpui::Role::Button)
-                        .aria_label("Go to address")
+                        .aria_label(tr(cx, msg::native::go_to_address))
                         .hover(|s| s.bg(crate::theme::wash(0.10)))
                         .on_mouse_down(MouseButton::Left, |_, w, _| w.prevent_default())
                         .on_click(cx.listener(|this, _, w, cx| this.submit(w, cx)))
@@ -806,10 +808,10 @@ impl Render for BrowserSurface {
             .when_some(self.validation.clone(), |el, message| el.child(div().px(px(12.0)).py(px(8.0)).text_size(crate::typography::text_xs()).text_color(theme.danger).child(message)))
             .when(remote_loopback, |el| el.child(div().px(px(12.0)).py(px(8.0)).border_b_1().border_color(theme.border)
                 .text_size(crate::typography::text_xs()).text_color(theme.text_muted)
-                .child("Localhost opens on this device. Open a detected preview from a new tab to reach your other device.")))
+                .child(tr(cx, msg::native::localhost_opens_on_this_device_open_a_detected_preview_from_a_new_tab_to_reach_y_6c40a9dc))))
             .child(body)
             .when(external, |el| el.child(div().h(px(26.0)).px(px(10.0)).flex().items_center().gap(px(5.0)).border_t_1().border_color(theme.border)
                 .text_size(crate::typography::text_xs()).text_color(theme.text_faint)
-                .child(icons::icon(icons::ARROW_UP_RIGHT).size(px(11.0))).child("Opens in your default browser")))
+                .child(icons::icon(icons::ARROW_UP_RIGHT).size(px(11.0))).child(tr(cx, msg::native::opens_in_your_default_browser))))
     }
 }

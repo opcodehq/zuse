@@ -1,4 +1,6 @@
 use super::*;
+use crate::localization::message as tr;
+use zuse_i18n::messages as msg;
 impl RepositoryPanel {
     pub(super) fn with_image_delete(
         &mut self,
@@ -8,12 +10,12 @@ impl RepositoryPanel {
     ) -> Div {
         if let Some(id) = self.image.confirm_delete.clone() {
             if let Some(focus) = self.image.confirm_focus.clone() {
-                let card=s::card().id("image-delete-dialog").w(px(420.)).p_5().role(Role::Dialog).aria_label("Delete saved image?")
-                    .child(div().text_size(px(18.)).child("Delete saved image?"))
-                    .child(s::description_text("This removes the saved cloud image and stops its storage charges. Existing workspaces, conversations and files are preserved. Build another image before starting new workspaces.").mt_3())
+                let card=s::card().id("image-delete-dialog").w(px(420.)).p_5().role(Role::Dialog).aria_label(tr(cx, msg::native::delete_saved_image))
+                    .child(div().text_size(px(18.)).child(tr(cx, msg::native::delete_saved_image)))
+                    .child(s::description_text(tr(cx, msg::native::this_removes_the_saved_cloud_image_and_stops_its_storage_charges_existing_worksp_8658360a)).mt_3())
                     .child(row().mt_4().gap_3().justify_end()
-                        .child(s::button("cancel-image-delete","Cancel").track_focus(&focus[1]).tab_index(0).on_click(cx.listener(|this,_,window,cx|this.dismiss_image_delete(window,cx))))
-                        .child(s::button("confirm-image-delete","Delete image").track_focus(&focus[2]).tab_index(0).text_color(crate::palette::rgb(0xe5a0a0)).on_click(cx.listener(move|this,_,window,cx|{this.dismiss_image_delete(window,cx);this.delete_image(&id,cx);}))))
+                        .child(s::button("cancel-image-delete",tr(cx, msg::common::cancel)).track_focus(&focus[1]).tab_index(0).on_click(cx.listener(|this,_,window,cx|this.dismiss_image_delete(window,cx))))
+                        .child(s::button("confirm-image-delete",tr(cx, msg::native::delete_image)).track_focus(&focus[2]).tab_index(0).text_color(crate::palette::rgb(0xe5a0a0)).on_click(cx.listener(move|this,_,window,cx|{this.dismiss_image_delete(window,cx);this.delete_image(&id,cx);}))))
                     ;
                 let overlay = div()
                     .w(window.viewport_size().width)

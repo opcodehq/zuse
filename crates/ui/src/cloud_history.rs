@@ -1,4 +1,6 @@
 //! Frozen cloud transcript: no engine or execution transport is installed in the child state.
+use crate::localization::message as tr;
+use zuse_i18n::messages as msg;
 pub(crate) mod saved;
 use crate::{
     icons,
@@ -223,7 +225,7 @@ impl Render for CloudHistory {
                             .justify_center()
                             .cursor_pointer()
                             .role(gpui::Role::Button)
-                            .aria_label("Back")
+                            .aria_label(tr(cx, msg::chat::checkpoints_back))
                             .tab_index(0)
                             .text_color(theme.text_muted)
                             .hover(|view| view.bg(theme.element_hover))
@@ -239,7 +241,7 @@ impl Render for CloudHistory {
                         div()
                             .text_size(px(11.))
                             .text_color(theme.text_muted)
-                            .child("Cloud"),
+                            .child(tr(cx, msg::chat::computer_picker_cloud_sandbox)),
                     ),
             )
             .child(zuse_viewport::cloud_archive_cards::sessions(
@@ -256,7 +258,7 @@ impl Render for CloudHistory {
                     .items_center()
                     .justify_center()
                     .text_color(theme.text_muted)
-                    .child("Loading saved conversation…")
+                    .child(tr(cx, msg::native::loading_saved_conversation))
                     .into_any_element()
             } else {
                 self.view.clone().into_any_element()
@@ -350,13 +352,13 @@ impl Render for CloudHistory {
                                         |v| v.cursor_pointer(),
                                     )
                                     .child(if self.busy {
-                                        "Restoring…"
+                                        ("Restoring…").to_string()
                                     } else if self.workspace.archived() {
-                                        "Restore chat"
+                                        ("Restore chat").to_string()
                                     } else if self.workspace.state == "paused" {
-                                        "Resume"
+                                        crate::localization::text("chat-queue_tray_resume", cx)
                                     } else {
-                                        "Reconnect"
+                                        crate::localization::text("simulators-reconnect", cx)
                                     })
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         if this.workspace.archived() {

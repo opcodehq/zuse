@@ -367,6 +367,7 @@ impl WorkspaceView {
                 self.account_action_error
                     .as_deref()
                     .or_else(|| self.cloud_account["error"].as_str()),
+                cx,
             )
             .into_any_element();
         }

@@ -1,0 +1,192 @@
+# Imported from Zuse desktop catalogs. See migration.json for provenance.
+# Edit individual translations here; do not regenerate this file.
+
+connections-cloud_connection_notice_signing_in = 正在登录…
+
+connections-cloud_workspace_info_open_workspace_via_ssh = 通过 SSH 打开工作区
+
+connections-cloud_workspace_info_open_via_ssh = 通过 SSH 打开
+
+connections-cloud_workspace_info_open_this_workspace_in_an_editor_or_terminal_over_ssh = 通过 SSH 在编辑器或终端中打开此工作区
+
+connections-cloud_workspace_info_the_workspace_must_be_running_for_ssh_access = 工作区必须正在运行才能进行 SSH 访问
+
+connections-cloud_workspace_info_copy_ssh_command = 复制SSH命令
+
+connections-cloud_workspace_info_sync_to_a_local_directory = 同步到本地目录
+
+connections-cloud_workspace_info_status = 状态
+
+connections-cloud_workspace_info_live_usage_needs_the_updated_workspace_runtime = 实时使用需要更新的工作区运行时。
+
+connections-cloud_workspace_info_restart_workspace = 重新启动工作区
+
+connections-cloud_workspace_info_restart_this_workspace = 重新启动此工作区？
+
+connections-cloud_workspace_info_the_runtime_restarts_in_place_any_agent_turn_in_progress_is_interrupte = 运行时会就地重启：正在进行的智能体轮次会被中断，已打开的终端会重新连接。工作区中的文件会保留。
+
+connections-cloud_workspace_info_restart = 重新启动
+
+connections-no_connection_tray_no_connection = 无连接
+
+connections-cloud_connection_notice_cloud_workspace_paused = 云工作区已暂停
+
+connections-cloud_connection_notice_resuming_cloud_workspace = 正在恢复云工作区
+
+connections-cloud_connection_notice_updating_cloud_runtime = 更新云运行时
+
+connections-cloud_connection_notice_update_required = 需要更新
+
+connections-cloud_connection_notice_reconnect_needed = 需要重新连接
+
+connections-cloud_connection_notice_connection_failed = 连接失败
+
+connections-cloud_connection_notice_cloud_access_unavailable = 无法访问 Cloud
+
+connections-cloud_connection_notice_update_zuse_and_try_again_to_use_the_cloud_public_beta = 请更新 Zuse 后重试，以使用 Cloud 公测版。
+
+connections-cloud_connection_notice_cloud_access_could_not_be_verified = 无法验证云访问
+
+connections-cloud_connection_notice_sign_in_required = 需要登录
+
+connections-cloud_workspace_info_could_not_open_via_ssh = 无法通过 SSH 打开
+
+connections-cloud_workspace_info_ssh_command_copied = SSH 命令已复制
+
+connections-cloud_workspace_info_could_not_prepare_ssh_access = 无法准备 SSH 访问
+
+connections-cloud_workspace_info_cursor = Cursor
+
+connections-cloud_workspace_info_zed = Zed
+
+connections-cloud_workspace_info_terminal = 终端
+
+connections-cloud_workspace_info_could_not_sync_this_workspace = 无法同步此工作区
+
+connections-cloud_workspace_info_could_not_restart_the_workspace = 无法重新启动工作区
+
+connections-cloud_machine_connection_securely_connected_projects_and_terminals_are_available = 安全连接。项目和终端均可用。
+
+connections-cloud_machine_connection_connected = 已连接
+
+connections-cloud_machine_connection_connection_failed = 连接失败
+
+connections-cloud_machine_connection_offline = 离线
+
+connections-cloud_machine_connection_establishing_the_secure_desktop_connection = 建立安全桌面连接。
+
+connections-cloud_machine_connection_connecting = 正在连接
+
+connections-cloud_machine_connection_the_machine_is_ready_but_it_has_not_been_connected_to_this_deskto = 机器已就绪，但尚未连接到此桌面。
+
+connections-cloud_machine_connection_not_connected = 未连接
+
+connections-cloud_machine_progress_provisioning = 正在开通
+
+connections-cloud_machine_progress_retrying_automatically = 正在自动重试
+
+connections-cloud_machine_progress_installing_tools = 正在安装工具
+
+connections-cloud_machine_progress_starting = 正在启动
+
+connections-cloud_machine_progress_installing = 安装中
+
+connections-cloud_machine_progress_connecting = 正在连接
+
+connections-cloud_machine_progress_ready = 就绪
+
+connections-cloud_machine_progress_setup_interrupted = 设置已中断
+
+connections-cloud_machine_progress_cancellation_scheduled = 已安排取消
+
+connections-cloud_machine_progress_suspended = 已暂停
+
+connections-cloud_machine_progress_restoring = 正在恢复
+
+connections-cloud_machine_progress_removing = 正在移除
+
+connections-cloud_machine_progress_removed = 已移除
+
+connections-cloud_ssh_client_bus_zuse_desktop = zuse-desktop
+
+connections-remote_access_on_managed_by_zuse_serve = 已开启 · 由 zuse serve 管理。
+
+connections-remote_access_private_access = 私密访问{ $value1 }。
+
+connections-remote_access_a_previous_serve_route_is_no_longer_responding = 先前的 serve 路由{ $port }{ " " }已不再响应。
+
+connections-remote_access_tailscale_serve_is_used_by_another_app = Tailscale Serve 正被其他应用占用{ $port }。
+
+connections-remote_access_tailscale_serve_has_an_existing_configuration_zuse_doesn_t_recogn = Tailscale Serve 已有一份 Zuse 无法识别的配置。
+
+connections-remote_access_tailscale_is_off_turn_it_on_in_the_tailscale_app = Tailscale 已关闭，请在 Tailscale 应用中开启。
+
+connections-remote_access_open_tailscale_and_sign_in_to_use_private_access = 打开 Tailscale 并登录即可使用私密访问。
+
+connections-remote_access_connect_privately_from_devices_on_the_same_tailnet = 从同一 tailnet 内的设备私密连接。
+
+connections-auth_opening_browser_sign_in = 打开浏览器登录
+
+connections-auth_complete_workos_sign_in_in_your_browser = 在浏览器中完成 WorkOS 登录。
+
+connections-auth_sign_in_failed = 登录失败
+
+connections-cloud_workspace_info_inactive = 未激活
+
+connections-cloud_memory_low = 云主机可用内存不足。
+
+connections-cloud_memory_waiting = 正在等待内存释放后重新连接…
+
+connections-cloud_memory_recovering = 云主机内存耗尽，智能体被中断。正在重新连接…
+
+connections-cloud_memory_failed = 由于内存不足，自动恢复已停止。
+
+connections-cloud_memory_advice = 请让智能体减少同时运行的测试或构建，或使用内存更大的机器。
+
+connections-cloud_workspace_menu_details = 工作区详情
+
+connections-cloud_workspace_menu_copy_branch = 复制分支名称
+
+connections-cloud_workspace_menu_repository = 仓库
+
+connections-cloud_workspace_menu_created = 创建时间
+
+connections-cloud_workspace_menu_environment = 环境
+
+connections-cloud_workspace_menu_preview_urls = 预览链接
+
+connections-cloud_workspace_menu_copy_url = 复制预览链接
+
+connections-cloud_workspace_menu_no_previews = 启动开发服务器以获取预览链接。
+
+connections-cloud_workspace_menu_public_urls = 任何拥有链接的人都可以访问这些服务器。
+
+connections-cloud_workspace_menu_preview_pending = 正在创建链接…
+
+connections-cloud_workspace_menu_preview_failed = 链接创建失败 · 正在重试
+
+connections-preview_ports_title = 端口与预览
+
+connections-preview_ports_auto_urls = 自动创建预览链接
+
+connections-preview_ports_local = 转发到 localhost
+
+connections-preview_ports_auto_help = 自动使用此工作区中已验证的 Web 服务器。
+
+connections-preview_ports_failed = 无法配置端口转发。
+
+connections-preview_ports_forward_failed = 转发失败 · 正在重试
+
+connections-preview_ports_forward_pending = 正在连接 localhost…
+
+connections-preview_ports_empty = 未检测到 Web 服务器。
+
+connections-preview_ports_number = 端口号
+
+connections-preview_ports_add = 添加端口
+
+connections-preview_ports_manual_help = 找不到服务器？添加端口，然后启用预览链接或本地转发。
+
+connections-preview_ports_public_help = 预览链接是公开的。关闭此选项会撤销已创建的链接。
+
+connections-preview_ports_revoke_pending = 正在撤销预览链接… 删除成功前，已分享的链接可能仍可公开访问。再次关闭以重试。

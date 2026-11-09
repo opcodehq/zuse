@@ -18,7 +18,15 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use serde::{Deserialize, Serialize};
 
-use zuse_protocol::AgentEvent;
+use zuse_protocol::{AgentEvent, RunRequest};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct UpdateRestart {
+    pub message_id: String,
+    pub request: RunRequest,
+    /// Epoch ms; bounds how late a relaunch may still resume this turn.
+    pub saved_at: i64,
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum JournalError {
@@ -76,6 +84,56 @@ impl RunJournal {
 
     fn attempts_path(&self, chat_id: &str) -> PathBuf {
         self.dir.join(format!("{}.resume", sanitize_id(chat_id)))
+    }
+
+    fn update_restart_path(&self, chat_id: &str) -> PathBuf {
+        self.dir
+            .join(format!("{}.update-restart", sanitize_id(chat_id)))
+    }
+
+    pub(crate) fn save_update_restart(
+        &self,
+        chat_id: &str,
+        checkpoint: &UpdateRestart,
+    ) -> Result<(), JournalError> {
+        let path = self.update_restart_path(chat_id);
+        let temporary = path.with_extension("update-restart.tmp");
+        let mut file = File::create(&temporary)?;
+        file.write_all(&serde_json::to_vec(checkpoint)?)?;
+        file.sync_all()?;
+        std::fs::rename(temporary, path)?;
+        Ok(())
+    }
+
+    pub(crate) fn update_restarts(&self) -> Result<HashMap<String, UpdateRestart>, JournalError> {
+        let mut checkpoints = HashMap::new();
+        for entry in std::fs::read_dir(&self.dir)? {
+            let path = entry?.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("update-restart") {
+                continue;
+            }
+            if let Some(chat) = path.file_stem().and_then(|s| s.to_str()) {
+                match serde_json::from_slice(&std::fs::read(&path)?) {
+                    Ok(checkpoint) => {
+                        checkpoints.insert(chat.to_owned(), checkpoint);
+                    }
+                    Err(error) => tracing::warn!(chat, %error, "invalid update restart checkpoint"),
+                }
+            }
+        }
+        Ok(checkpoints)
+    }
+
+    /// The seq the chat's next event will get.
+    pub(crate) fn next_seq(&self, chat_id: &str) -> Result<u64, JournalError> {
+        if let Some(journal) = self.lock().get(chat_id) {
+            return Ok(journal.next_seq);
+        }
+        Ok(scan_tail(&self.path_for(chat_id))?.0)
+    }
+
+    pub(crate) fn clear_update_restart(&self, chat_id: &str) {
+        let _ = std::fs::remove_file(self.update_restart_path(chat_id));
     }
 
     /// Auto-resume revival budget (zuse `resumeAttempt`/`MAX_AUTO_RESUME`):
@@ -208,6 +266,7 @@ impl RunJournal {
 
     /// Remove a chat's journal file entirely (tests / future compaction).
     pub fn discard(&self, chat_id: &str) -> Result<(), JournalError> {
+        self.clear_update_restart(chat_id);
         self.lock().remove(chat_id);
         let path = self.path_for(chat_id);
         if path.exists() {

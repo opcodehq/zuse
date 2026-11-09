@@ -244,12 +244,16 @@ pub fn field() -> Div {
         .bg(card_bg())
 }
 
-pub fn toggle(id: impl Into<ElementId>, checked: bool, label: &str) -> Stateful<Div> {
+pub fn toggle(
+    id: impl Into<ElementId>,
+    checked: bool,
+    label: impl Into<SharedString>,
+) -> Stateful<Div> {
     div()
         .id(id)
         .role(Role::Switch)
         .on_key_down(contain_activation)
-        .aria_label(label.to_owned())
+        .aria_label(label.into())
         .aria_toggled(if checked {
             Toggled::True
         } else {
@@ -267,11 +271,10 @@ pub fn toggle(id: impl Into<ElementId>, checked: bool, label: &str) -> Stateful<
                 .rounded_full()
                 .border_1()
                 .border_color(rgb(if checked { 0x89ca21 } else { BORDER }))
-                .bg(rgb(if checked {
-                    0x89ca21
-                } else {
-                    crate::shell::RAISED
-                })),
+                .when(!checked, |track| track.bg(rgb(crate::shell::RAISED)))
+                .when(checked, |track| {
+                    track.child(crate::dither::fill([0x89, 0xca, 0x21], 10.))
+                }),
         )
         .child(
             div()
@@ -295,11 +298,16 @@ pub fn toggle(id: impl Into<ElementId>, checked: bool, label: &str) -> Stateful<
 }
 
 /// Compact choice used by appearance and motion settings.
-pub fn choice(id: impl Into<ElementId>, label: &'static str, selected: bool) -> Stateful<Div> {
+pub fn choice(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    selected: bool,
+) -> Stateful<Div> {
+    let label = label.into();
     div()
         .id(id)
         .role(Role::RadioButton)
-        .aria_label(label)
+        .aria_label(label.clone())
         .aria_selected(selected)
         .aria_toggled(if selected {
             Toggled::True

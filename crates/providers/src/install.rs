@@ -47,6 +47,7 @@ enum Method {
 // https://docs.x.ai/developers/release-notes and https://docs.x.ai/build/enterprise
 // https://hermes-agent.nousresearch.com/docs/getting-started/installation
 // https://cli.devin.ai/
+// https://dev.meta.ai/install.sh
 fn methods(id: HarnessId, platform: Platform) -> Vec<Method> {
     use HarnessId::*;
     use Method::*;
@@ -103,6 +104,11 @@ fn methods(id: HarnessId, platform: Platform) -> Vec<Method> {
         ],
         Devin => vec![Shell(
             "curl -fsSL https://cli.devin.ai/install.sh | bash",
+            "bash",
+        )],
+        Muse if windows => vec![PowerShell("irm https://dev.meta.ai/install.ps1 | iex")],
+        Muse => vec![Shell(
+            "curl -fsSL https://dev.meta.ai/install.sh | bash",
             "bash",
         )],
     }
@@ -164,6 +170,7 @@ fn cli_and_dir(id: HarnessId) -> (&'static str, &'static str) {
         Antigravity => ("agy_acp_server", "~/.zuse/adapters"),
         Gemini => ("gemini", "the npm global bin"),
         Kiro => ("kiro-cli", "~/.local/bin"),
+        Muse => ("muse", "~/.local/bin"),
         Zuse => ("zuse", "built in"),
         Mock => ("mock", "PATH"),
         CustomAcp(_) => ("ACP executable", "its configured location"),
@@ -184,6 +191,7 @@ pub fn installed(id: HarnessId) -> bool {
         Antigravity => crate::AcpHarness::antigravity().installed(),
         Gemini => crate::AcpHarness::gemini().installed(),
         Kiro => crate::AcpHarness::kiro().installed(),
+        Muse => crate::MuseHarness::new().installed(),
         Zuse => cfg!(unix),
         Mock | CustomAcp(_) => false,
     }
@@ -386,7 +394,7 @@ async fn run(
 mod tests {
     use super::*;
 
-    const IDS: [HarnessId; 10] = [
+    const IDS: [HarnessId; 11] = [
         HarnessId::ClaudeCode,
         HarnessId::Codex,
         HarnessId::Cursor,
@@ -396,6 +404,7 @@ mod tests {
         HarnessId::Hermes,
         HarnessId::Devin,
         HarnessId::Antigravity,
+        HarnessId::Muse,
         HarnessId::Mock,
     ];
 

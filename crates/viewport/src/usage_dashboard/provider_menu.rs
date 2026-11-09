@@ -1,7 +1,9 @@
 //! Provider filter focus and dismissal stay inside the dashboard's shared menu.
 use super::view::{PROVIDERS, column};
 use super::*;
+use crate::localization::message as tr;
 use crate::{assets::icon, palette::rgb, settings_style as style, shell::BORDER};
+use zuse_i18n::messages as msg;
 
 impl UsageDashboard {
     pub(super) fn provider_filter(
@@ -51,7 +53,10 @@ impl UsageDashboard {
             let mut menu = column()
                 .id("usage-provider-options")
                 .role(Role::ListBox)
-                .aria_label("Filter sessions by provider")
+                .aria_label(tr(
+                    cx,
+                    msg::usage::usage_dashboard_filter_sessions_by_provider,
+                ))
                 .w(px(160.))
                 .p(px(4.))
                 .rounded(px(6.))

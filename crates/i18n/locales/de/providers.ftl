@@ -1,0 +1,330 @@
+# Imported from Zuse desktop catalogs. See migration.json for provenance.
+# Edit individual translations here; do not regenerate this file.
+
+providers-add_computer_dialog_your_computers = Ihre Computer
+
+providers-add_computer_dialog_connect_a_computer = Schließen Sie einen Computer an
+
+providers-add_computer_dialog_rename_reconnect_or_remove_computers_saved_on_this_device = Auf diesem Gerät gespeicherte Computer umbenennen, erneut verbinden oder entfernen.
+
+providers-add_computer_dialog_review_this_link_then_press_connect_to_pair_with_the_other_computer = Sehen Sie sich diesen Link an und drücken Sie dann auf „Verbinden“, um die Verbindung mit dem anderen Computer herzustellen.
+
+providers-add_computer_dialog_use_a_connect_link_or_your_existing_ssh_setup = Verwenden Sie einen Verbindungslink oder Ihr vorhandenes SSH-Setup.
+
+providers-add_computer_dialog_add_computer = Computer hinzufügen
+
+providers-add_computer_dialog_manage = Verwalten
+
+providers-add_computer_dialog_saved_computers = Gespeicherte Computer
+
+providers-add_computer_dialog_on_your_account = Auf Ihrem Konto
+
+providers-add_computer_dialog_hide = Verstecken
+
+providers-add_computer_dialog_removing_a_computer_only_forgets_it_here_its_projects_and_data_remain = Das Entfernen eines Computers vergisst ihn hier nur; seine Projekte und Daten bleiben unberührt.
+
+providers-add_computer_dialog_on_the_other_computer_open_settings_remote_access_connect_a_device_the = Öffnen Sie auf dem anderen Computer Einstellungen → Fernzugriff → Gerät verbinden und kopieren Sie dann den Link. Hier funktioniert jeder Zuse-Verbindungslink.
+
+providers-add_computer_dialog_connect_link = Link verbinden
+
+providers-add_computer_dialog_zuse_connect_pair = zuse:///connect/pair?...
+
+providers-add_computer_dialog_linux_computer = Linux-Computer
+
+providers-add_computer_dialog_sign_in_to_see_the_computers_on_your_zuse_account = Melden Sie sich an, um die Computer in Ihrem Zuse-Konto anzuzeigen.
+
+providers-add_computer_dialog_computers_signed_in_to_your_zuse_account_appear_here_automatically = Computer, die bei Ihrem Zuse-Konto angemeldet sind, werden hier automatisch angezeigt.
+
+providers-add_computer_dialog_suggestions = Vorschläge
+
+providers-add_computer_dialog_tailnet = Hecknetz
+
+providers-add_computer_dialog_ssh_config = SSH-Konfiguration
+
+providers-add_computer_dialog_host = Gastgeber
+
+providers-add_computer_dialog_server_example_com = server.example.com
+
+providers-add_computer_dialog_build_computer = Computer bauen
+
+providers-model_picker_change_model = Modell wechseln
+
+providers-model_picker_change_default_model_for_new_chats = Ändern Sie das Standardmodell für neue Chats
+
+providers-model_picker_change_model_applies_to_next_message = Modell ändern – gilt für die nächste Nachricht
+
+providers-model_picker_model_provider = Modellanbieter
+
+providers-model_picker_all_models = Alle Modelle
+
+providers-model_picker_checking_available_agents = Verfügbare Agenten prüfen…
+
+providers-model_picker_no_models_match = Es stimmen keine Modelle überein.
+
+providers-model_picker_no_authenticated_agents = Keine authentifizierten Agenten.
+
+providers-model_picker_models = Modelle
+
+providers-model_picker_all = Alle
+
+providers-model_picker_live_from_local_daemon = Live vom lokalen Daemon
+
+providers-model_picker_current = Aktuell
+
+providers-model_picker_open_in_new_tab = In neuem Tab öffnen
+
+providers-model_picker_default_model = Standardmodell
+
+providers-model_picker_make_default_model = Als Standardmodell festlegen
+
+providers-model_picker_make_default = Als Standard festlegen
+
+providers-model_picker_selected = Ausgewählt
+
+providers-opencode_provider_manager_providers = Anbieter
+
+providers-opencode_provider_manager_refresh_providers = Anbieter aktualisieren
+
+providers-opencode_provider_manager_loading_providers = Anbieter werden geladen…
+
+providers-opencode_provider_manager_add_your_first_provider = Fügen Sie Ihren ersten Anbieter hinzu
+
+providers-opencode_provider_manager_add_provider = Anbieter hinzufügen
+
+providers-opencode_provider_manager_custom_endpoint = Benutzerdefinierter Endpunkt
+
+providers-opencode_provider_manager_custom = Benutzerdefiniert ·{ " " }
+
+providers-opencode_provider_manager_model = { " " }Modell
+
+providers-opencode_provider_manager_remove_credential = Anmeldeinformationen entfernen
+
+providers-opencode_provider_manager_search_providers = Suchanbieter
+
+providers-opencode_provider_manager_connected = Verbunden
+
+providers-opencode_provider_manager_get_an_api_key = Holen Sie sich einen API-Schlüssel
+
+providers-opencode_provider_manager_api_key = API-Schlüssel
+
+providers-opencode_provider_manager_hide_key = Schlüssel verstecken
+
+providers-opencode_provider_manager_reveal_key = Schlüssel aufdecken
+
+providers-opencode_provider_manager_bring_any_endpoint_that_speaks_a_known_api_shape_vllm_lm_studio_groq_l = Bringen Sie jeden Endpunkt mit, der eine bekannte API-Form spricht – vLLM, LM Studio, Groq, LiteLLM, ein Gateway oder Proxy.
+
+providers-opencode_provider_manager_name = Name
+
+providers-opencode_provider_manager_my_gateway = Mein Gateway
+
+providers-opencode_provider_manager_type = Typ
+
+providers-opencode_provider_manager_base_url = Basis URL
+
+providers-opencode_provider_manager_sk = sk-…
+
+providers-opencode_provider_manager_models = Modelle
+
+providers-opencode_provider_manager_model_id = Modell-ID
+
+providers-opencode_provider_manager_display_name_optional = Anzeigename (optional)
+
+providers-opencode_provider_manager_remove_model = Modell entfernen
+
+providers-opencode_provider_manager_add_model = Modell hinzufügen
+
+providers-opencode_provider_manager_add_endpoint = Endpunkt hinzufügen
+
+providers-opencode_provider_manager_saving = Sparen…
+
+providers-opencode_provider_manager_configure = Konfigurieren
+
+providers-opencode_provider_manager_filter_models = Modelle filtern
+
+providers-opencode_provider_manager_advanced = Fortgeschritten
+
+providers-opencode_provider_manager_show_in_picker = Im Picker anzeigen
+
+providers-provider_card_update_cli = Aktualisieren Sie CLI
+
+providers-provider_card_install = Installieren
+
+providers-provider_card_sandboxed_with_auto_review = Sandboxed mit automatischer Überprüfung
+
+providers-provider_card_local_edits_and_commands_run_through_the_bundled_sdk_sandbox_calls_rej = Lokale Bearbeitungen und Befehle werden über die gebündelte SDK-Sandbox ausgeführt. Durch die automatische Überprüfung abgelehnte Anrufe werden blockiert, anstatt dazu aufgefordert zu werden.
+
+providers-provider_card_api_key_optional = API-Schlüssel (optional)
+
+providers-provider_card_at_least_one_model_must_stay_visible = Mindestens ein Modell muss sichtbar bleiben
+
+providers-provider_card_custom = Brauch
+
+providers-provider_card_enter_a_model_id = Geben Sie eine Modell-ID ein
+
+providers-provider_card_subscribe = Abonnieren
+
+providers-provider_card_signed_in_refreshing = Angemeldet. Erfrischend…
+
+providers-provider_card_waiting_for_browser_sign_in = Warten auf Browser-Anmeldung…
+
+providers-provider_card_open_browser_again = Öffnen Sie den Browser erneut
+
+providers-provider_card_try_again = Versuchen Sie es erneut
+
+providers-provider_card_or_run_manually = Oder manuell ausführen
+
+providers-add_computer_dialog_connected_to = Verbunden mit{ " " }{ $connectedLabel }
+
+providers-opencode_provider_manager_remove = Entfernen Sie{ " " }{ $name }
+
+providers-opencode_provider_manager_openai_compatible = OpenAI-kompatibel
+
+providers-opencode_provider_manager_openrouter_compatible = OpenRouter-kompatibel
+
+providers-opencode_provider_manager_anthropic_compatible = Anthropic-kompatibel
+
+providers-opencode_provider_manager_google_compatible = Google-kompatibel
+
+providers-opencode_provider_manager_other_npm_package = Anderes NPM-Paket…
+
+providers-provider_card_requires_a_subscription = Für{ " " }{ $value1 }{ " " }ist ein{ " " }{ $plan }-Abonnement erforderlich
+
+providers-provider_card_enable = Aktivieren Sie{ " " }{ $value1 }
+
+providers-provider_card_requires_subscription = Erfordert ein{ " " }{ $plan }-Abonnement
+
+providers-provider_card_custom_model_id = Benutzerdefinierte{ " " }{ $value1 }-Modell-ID
+
+providers-provider_card_starting_sign_in = { $label }-Anmeldung wird gestartet…
+
+providers-add_computer_dialog_show_hidden_computers_sentence = Versteckte Computer anzeigen ({ $value })
+
+providers-add_computer_dialog_computer_name_optional_sentence = Computername <part0>Optional</part0>
+
+providers-add_computer_dialog_username_optional_sentence = Benutzername <part0>Optional</part0>
+
+providers-add_computer_dialog_port_optional_sentence = Port <part0>Optional</part0>
+
+providers-add_computer_dialog_label_optional_sentence = Beschriftung <part0>Optional</part0>
+
+providers-add_computer_dialog_zuse_will_forget_this_computer_on_this_device_projects_and_d_sentence = Zuse wird diesen Computer auf diesem Gerät vergessen. Projekte und Daten auf{ " " }{ $value }{ " " }werden nicht gelöscht.
+
+providers-opencode_provider_manager_configured_sentence = { $value }{ " " }konfiguriert
+
+providers-opencode_provider_manager_no_providers_match_sentence = Kein Anbieter passt zu „{ $query }“.
+
+providers-opencode_provider_manager_view_all_providers_sentence = Alle{ " " }{ $value }-Anbieter anzeigen
+
+providers-opencode_provider_manager_id_sentence = ID: <part0>{ $value }</part0>
+
+providers-opencode_provider_manager_models_of_shown_sentence = <part0>Modelle</part0><part1>{ $selected }{ " " }von{ " " }{ $total }{ " " }gezeigt</part1>
+
+providers-opencode_provider_manager_no_models_match_sentence = Kein Modell entspricht „{ $query }“.
+
+providers-provider_card_models_shown_sentence = <part0>Modelle</part0><part1>{ $value }{ " " }abgebildet</part1>
+
+providers-provider_card_custom_ids_are_passed_directly_to_sentence = Benutzerdefinierte IDs werden direkt an{ " " }{ $value }{ " " }übergeben.
+
+providers-provider_card_requires_subscription_sentence = Erfordert ein{ " " }{ $value }-Abonnement
+
+providers-provider_card_sessions_will_fail_if_your_plan_doesn_apos_t_include_subscri_sentence = Sitzungen schlagen fehl, wenn Ihr Plan{ " " }{ $value }{ " " }nicht enthält. Abonnieren Sie (oder bestätigen Sie Ihren bestehenden Plan), bevor Sie{ " " }{ $value2 }{ " " }verwenden.
+
+providers-provider_card_sign_in_to_sentence = Melden Sie sich bei{ " " }{ $label }{ " " }an
+
+providers-provider_card_or_run_sentence = oder führen Sie <part0>${ " " }{ $manualCommand }</part0> aus
+
+providers-add_computer_dialog_label_for = Etikett für{ " " }{ $value1 }
+
+providers-add_computer_dialog_edit_label_for = Bearbeiten Sie die Bezeichnung für{ " " }{ $value1 }
+
+providers-add_computer_dialog_retry = Versuchen Sie es erneut mit{ " " }{ $value1 }
+
+providers-add_computer_dialog_disconnect = Trennen Sie{ " " }{ $value1 }
+
+providers-add_computer_dialog_remove = Entfernen Sie{ " " }{ $value1 }
+
+providers-add_computer_dialog_could_not_load_account_computers = Kontocomputer konnten nicht geladen werden:{ " " }{ $accountDiscoveryError }
+
+providers-model_picker_match = { $value1 }{ " " }match{ $value2 }
+
+providers-model_picker_model = { $value1 }{ " " }Modell{ $value2 }
+
+providers-model_picker_context_window = Kontextfenster{ " " }{ $value1 }
+
+providers-model_picker_credit_multiplier = { $value1 }{ " " }Kreditmultiplikator
+
+providers-provider_card_remove_custom_model = Entfernen Sie das benutzerdefinierte Modell{ " " }{ $modelId }
+
+providers-muse_sign_in_hint = Muse Code verwaltet die Anmeldung. Führen Sie <part0>muse login</part0> in einem Terminal aus oder speichern Sie einen Meta-API-Schlüssel mit <part1>muse auth set</part1>. Zuse gibt META_API_KEY nicht weiter.
+
+providers-pi_setup_hint = Pi verwaltet die Authentifizierung und Werkzeugberechtigungen. Starten Sie <part0>pi</part0> in einem Terminal und melden Sie sich mit <part1>/login</part1> an.
+
+providers-pi_binary_path = Pfad zur Pi-Programmdatei
+
+providers-pi_binary_placeholder = pi in PATH suchen
+
+providers-pi_binary_help = Geben Sie einen absoluten Pfad zur Programmdatei an oder lassen Sie das Feld leer, um PATH zu durchsuchen.
+
+providers-provider_row_configure = { $label }{ " " }konfigurieren
+
+providers-updating = Wird aktualisiert…
+
+providers-updated = Aktualisiert
+
+providers-update_failed = Fehlgeschlagen
+
+providers-cancel_update = Update abbrechen
+
+providers-update_to_version = { $name }{ " " }auf v{ $version }{ " " }aktualisieren
+
+providers-update_to_latest = { $name }{ " " }auf die neueste Version aktualisieren
+
+providers-sign_in_failed = Anmeldung fehlgeschlagen.
+
+providers-sign_in_incomplete = Die Anmeldung wurde vorzeitig beendet.
+
+providers-update_incomplete = Das Update wurde vorzeitig beendet.
+
+providers-remove_computer_account_description = Entfernen Sie{ " " }{ $value }{ " " }aus Ihrem Konto, um einen Computerplatz freizugeben. Der Fernzugriff über Zuse wird beendet. Projekte und Daten auf dem Computer bleiben erhalten.
+
+providers-accounts_title = Konten
+
+providers-accounts_name = Kontoname
+
+providers-accounts_hint = Neue Chats starten mit dem Standardkonto. Erreicht ein Chat ein Limit, können Sie ihn im Eingabefeld zu einem anderen Konto wechseln.
+
+providers-accounts_default = Standard-Anmeldung
+
+providers-accounts_waiting = Schließen Sie die Anmeldung im Browser ab.
+
+providers-accounts_open_browser = Browser öffnen
+
+providers-accounts_signed_in = Angemeldet
+
+providers-accounts_remove_description = Entfernt dieses Konto aus den Einstellungen. Chats mit diesem Konto können nicht fortgesetzt werden. Anmeldedateien und Chatverläufe bleiben erhalten.
+
+providers-model_picker_switch_pending = Wechselt, sobald die laufende Arbeit abgeschlossen ist
+
+providers-accounts_default_detail = CLI-Anmeldung oder API-Schlüssel
+
+providers-accounts_suggested_name = Konto{ " " }{ $index }
+
+providers-accounts_actions = Aktionen für{ " " }{ $name }
+
+providers-accounts_sign_in_again = Erneut anmelden
+
+providers-accounts_rename = Umbenennen
+
+providers-accounts_connect = Weiteres Konto verbinden
+
+providers-accounts_use_for_new_chats = Für neue Chats verwenden
+
+providers-accounts_default_badge = Standard
+
+providers-accounts_add = Konto hinzufügen
+
+providers-accounts_use = Für neue Chats verwenden
+
+providers-accounts_selected = Ausgewählt
+
+providers-model_picker_unavailable_selection = { $model }{ " " }(nicht verfügbar)

@@ -980,9 +980,9 @@ pub struct FlatText {
     pub runs: Vec<TextRun>,
     pub links: Vec<(Range<usize>, String)>,
     pub code_ranges: Vec<Range<usize>>,
-    /// Reserved slots after resolved file links — displayed-text
-    /// coordinates. Each slot paints the trailing open glyph.
-    pub file_glyphs: Vec<Range<usize>>,
+    /// Reserved slots before resolved file links, with each link's path —
+    /// displayed-text coordinates. Each slot paints the file-type icon.
+    pub file_glyphs: Vec<(Range<usize>, String)>,
     /// Reserved slots before web links, with each link's URL — displayed-
     /// text coordinates. Each slot paints the site's favicon.
     pub favicons: Vec<(Range<usize>, String)>,
@@ -996,7 +996,7 @@ pub(crate) fn is_web_link(url: &str) -> bool {
         && crate::site_links::host(url).is_some()
 }
 
-/// Inline-code tint: a text-safe use of the selected accent identity.
+/// Inline-code ink: neutral strong text over a faint plate.
 pub fn inline_code_text(theme: &Theme) -> Hsla {
     theme.code_text
 }
@@ -1088,7 +1088,7 @@ fn flatten_runs_weighted(runs: &[InlineRun], theme: &Theme, base_weight: FontWei
         if web && !run.style.code && f.weight.0 < FontWeight::MEDIUM.0 {
             f.weight = FontWeight::MEDIUM;
         }
-        // Inline code uses the spectrum's code tone; everything else
+        // Inline code uses the neutral code ink; everything else
         // stays the monochrome foreground.
         let color = if run.style.code {
             inline_code_text(theme)
@@ -1278,6 +1278,14 @@ pub(super) fn flat_text_presented_element(
                     ));
                 }
             }
+            paint_find_matches(
+                window,
+                surface,
+                &sel_key,
+                &flat_text,
+                &layout,
+                offsets.as_ref(),
+            );
             if let Some(range) = super::selection::wash_range(surface, &sel_key) {
                 let range = offsets
                     .as_ref()
@@ -1325,18 +1333,11 @@ pub(super) fn flat_text_presented_element(
     if flat.links.is_empty() {
         return child;
     }
-    // A resolved file link's hit range covers its reserved glyph slot,
-    // so the trailing open glyph activates the link too.
-    let glyph_end = |range: &std::ops::Range<usize>| {
-        flat.file_glyphs
-            .iter()
-            .find(|slot| slot.start == range.end)
-            .map_or(range.end, |slot| slot.end)
-    };
-    // A web link's favicon slot activates the link too.
+    // A link's leading favicon or file icon slot activates the link too.
     let favicon_start = |range: &std::ops::Range<usize>| {
         flat.favicons
             .iter()
+            .chain(&flat.file_glyphs)
             .find(|(slot, _)| slot.end == range.start)
             .map_or(range.start, |(slot, _)| slot.start)
     };
@@ -1357,7 +1358,7 @@ pub(super) fn flat_text_presented_element(
             .iter()
             .map(|(range, url)| {
                 (
-                    favicon_start(range)..glyph_end(range),
+                    favicon_start(range)..range.end,
                     LinkTarget::new(
                         flat.original
                             .as_ref()
@@ -1373,8 +1374,8 @@ pub(super) fn flat_text_presented_element(
         ui: opts.link.clone(),
     }
     .into_any_element();
-    // Trailing open glyphs of resolved file links and leading favicons of
-    // web links paint over the shaped text.
+    // Leading file icons of resolved file links and favicons of web links
+    // paint over the shaped text.
     if flat.file_glyphs.is_empty() && flat.favicons.is_empty() {
         return child;
     }
@@ -1419,6 +1420,7 @@ fn paint_text_selection_with_wash(
     wash: Hsla,
 ) {
     let surface = PAINTING_SURFACE.with(Cell::get);
+    paint_find_matches(window, surface, key, text, layout, None);
     if let Some(range) = super::selection::wash_range(surface, key) {
         for rect in range_rects(layout, &range, 0.0, 0.0) {
             window.paint_quad(quad(
@@ -1441,6 +1443,60 @@ fn paint_text_selection_with_wash(
         })
     });
     register_selection_listeners(window, hitbox, key, surface, text, layout, None);
+}
+
+/// Find-in-chat washes for one painted text element, beneath the selection
+/// wash. The active match is the row's Nth occurrence, so the elements of
+/// the same row painted earlier this frame tell which one is local here.
+fn paint_find_matches(
+    window: &mut Window,
+    surface: u64,
+    key: &str,
+    text: &str,
+    layout: &gpui::TextLayout,
+    offsets: Option<&super::link_presentation::OffsetMap>,
+) {
+    use crate::chat_find::{Highlight, current_highlight, match_ranges};
+    let Some(find) = current_highlight(surface) else {
+        return;
+    };
+    let ranges = match_ranges(text, &find.needle);
+    if ranges.is_empty() {
+        return;
+    }
+    let active = find
+        .active
+        .as_ref()
+        .filter(|(row, _)| Highlight::key_in_row(key, row))
+        .and_then(|(row, ordinal)| {
+            let before: usize = REGISTRY.with(|registry| {
+                registry
+                    .borrow()
+                    .iter()
+                    .filter(|e| e.surface == surface && Highlight::key_in_row(&e.key, row))
+                    .map(|e| match_ranges(&e.text, &find.needle).len())
+                    .sum()
+            });
+            ordinal.checked_sub(before)
+        });
+    for (ix, range) in ranges.into_iter().enumerate() {
+        let range = offsets.map_or_else(|| range.clone(), |map| map.displayed_range(range.clone()));
+        let wash = if Some(ix) == active {
+            find.active_wash
+        } else {
+            find.wash
+        };
+        for rect in range_rects(layout, &range, 0.0, 0.0) {
+            window.paint_quad(quad(
+                rect,
+                px(2.0),
+                wash,
+                px(0.0),
+                gpui::transparent_black(),
+                BorderStyle::default(),
+            ));
+        }
+    }
 }
 
 /// The wrapping div shared by every selectable text region: markdown

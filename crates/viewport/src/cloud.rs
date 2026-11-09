@@ -192,12 +192,6 @@ impl WorkspaceView {
                 zuse_protocol::SandboxLevel::WorkspaceWrite => "approval-required",
                 zuse_protocol::SandboxLevel::Auto => "auto",
                 zuse_protocol::SandboxLevel::DangerFullAccess => "full-access",
-                zuse_protocol::SandboxLevel::ReadOnly => {
-                    self.error =
-                        Some("Choose a supported permission mode before starting Cloud.".into());
-                    cx.notify();
-                    return;
-                }
             };
             self.cloud.launch = Some(json!({
                 "projectId":project["projectId"],"providerId":project["providerId"],
@@ -657,11 +651,11 @@ impl WorkspaceView {
                         control(
                             "connect-cloud",
                             if busy {
-                                "Resuming…"
+                                ("Resuming…").to_string()
                             } else if paused {
-                                "Resume"
+                                crate::localization::text("chat-queue_tray_resume", cx)
                             } else {
-                                "Reconnect"
+                                crate::localization::text("simulators-reconnect", cx)
                             },
                         )
                         .opacity(if busy { 0.5 } else { 1. })

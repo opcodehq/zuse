@@ -1,0 +1,36 @@
+{
+  "ZuseCJK-sc.otf": {
+    "source": "https://github.com/notofonts/noto-cjk/blob/Sans2.004/Sans/OTF/SimplifiedChinese/NotoSansCJKsc-Regular.otf",
+    "sourceSha256": "2c76254f6fc379fddfce0a7e84fb5385bb135d3e399294f6eeb6680d0365b74b",
+    "sha256": "8ccf068b49ec3466f7feb0a759ca71214b16401487f971ae747bde60566ef330"
+  },
+  "ZuseCJK-tc.otf": {
+    "source": "https://github.com/notofonts/noto-cjk/blob/Sans2.004/Sans/OTF/TraditionalChinese/NotoSansCJKtc-Regular.otf",
+    "sourceSha256": "dce08bd4fd91aa8aa76ed8fea4b694c2dfb8550f67871e326843212ddbeb88b4",
+    "sha256": "ce2e7aa955b3c36a16ee61806f356a0cf3f610d3950830d3bd125acf90d3e3d4"
+  },
+  "ZuseCJK-jp.otf": {
+    "source": "https://github.com/notofonts/noto-cjk/blob/Sans2.004/Sans/OTF/Japanese/NotoSansCJKjp-Regular.otf",
+    "sourceSha256": "68a3fc98800b2a27b371f2fb79991daf3633bd89309d4ffaa6946fd587f375b5",
+    "sha256": "3abeea830d3a027566a725299eab5580554c4fe3d2b8c8d2d363c3fec16fc8f1"
+  },
+  "ZuseCJK-kr.otf": {
+    "source": "https://github.com/notofonts/noto-cjk/blob/Sans2.004/Sans/OTF/Korean/NotoSansCJKkr-Regular.otf",
+    "sourceSha256": "6bcb2a0703aa137e874fc2dffa85f6c21ba9a67fa329e81b8c801663af7e992a",
+    "sha256": "23d2638a6eff92975bd5be5bf593fd49c78bbbf304ee6d4d60f43cd8b2b22efa"
+  },
+  "ZuseCJK-Fallback.ttf": {
+    "source": "google-droid-sans-fonts-20200215-9.amzn2023.0.2 (Android Open Source Project; Apache-2.0)",
+    "upstream": "https://android.googlesource.com/platform/frameworks/base/+/android-4.4_r1/data/fonts/",
+    "inputs": {
+      "DroidSans.ttf": "f51b88945f4c1b236f44b8d55a2d304316869127e95248c435c23f1e4142a7db",
+      "DroidSansFallbackFull.ttf": "2392015530438bafc48edfc4aee6d9de2387f627a6134d8ab3dfcc99d21c8240"
+    },
+    "sha256": "7aa9e0842a5db818149ea28d31eb5405f1dea9f594f21667395ff6efe898e599"
+  },
+  "ZuseKorean-Fallback.otf": {
+    "source": "https://github.com/notofonts/noto-cjk/blob/Sans2.004/Sans/OTF/Korean/NotoSansCJKkr-Regular.otf",
+    "sourceSha256": "6bcb2a0703aa137e874fc2dffa85f6c21ba9a67fa329e81b8c801663af7e992a",
+    "sha256": "869d9088982ce3e7325ee2ae8fc995d23ba1a01fe05005bd31b64371a1fc1015"
+  }
+}

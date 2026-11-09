@@ -10,6 +10,8 @@ fn harnesses(binary: &Path) -> Vec<Arc<dyn Harness>> {
         Arc::new(zuse_providers::PiHarness::new().with_executable(binary)),
         Arc::new(AcpHarness::antigravity().with_executable(binary)),
         Arc::new(AcpHarness::devin().with_executable(binary)),
+        // Last: it has no auth file for `auth_context_child`'s pairing.
+        Arc::new(zuse_providers::MuseHarness::new().with_executable(binary)),
     ]
 }
 fn binary(root: &Path) -> std::path::PathBuf {
@@ -45,6 +47,8 @@ for line in sys.stdin:
     else:
         result = {}
         if method == 'model/list': result = {'data':[] if state.get('empty') else [{'model':state['id'],'hidden':False,'isDefault':True}], 'nextCursor':None}
+        if 'serve' in sys.argv and method == 'initialize': result = {'schema':{'version':1},'grantedCapabilities':[]}
+        if 'serve' in sys.argv and method == 'model/list': result = {'providerId':'meta','models':[] if state.get('empty') else [{'modelId':state['id'],'displayLabel':state['id'],'providerId':'meta','isDefault':True}]}
         if method == 'session/new': result = {'sessionId':'fixture','models':{'availableModels':[{'modelId':state['id'],'name':state['id']}]}}
         response = {'result':result}
     response.update({'jsonrpc':'2.0','id':request['id']})

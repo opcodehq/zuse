@@ -619,3 +619,30 @@ fn pull_requests_from_a_chat_open_as_tabs_beside_the_focused_session(cx: &mut Te
         });
     });
 }
+
+#[gpui::test]
+fn find_shortcut_searches_the_focused_side_chat(cx: &mut TestAppContext) {
+    use settings::keybindings::Command;
+    let (shell, cx) = setup(cx);
+    cx.update(|window, cx| {
+        shell.update(cx, |shell, cx| {
+            let chat = serde_json::from_value(serde_json::json!({
+                "id": "side", "parentChatId": "parent", "deviceId": "local",
+                "archived": false, "createdAt": Utc::now(),
+            }))
+            .unwrap();
+            shell.open_side_chat(chat, shell.panel_key(cx), cx);
+            shell.activate_right_surface(RightSurface::SideChat(1), window, cx);
+        });
+    });
+    cx.update(|window, cx| window.draw(cx).clear());
+    cx.update(|window, cx| {
+        shell.update(cx, |shell, cx| {
+            let (_, transcript, composer) = shell.shortcut_conversation(window, cx);
+            assert_ne!(composer, shell.composer);
+            shell.desktop_command(Command::FindInChat, window, cx);
+            assert!(transcript.read(cx).find_open());
+            assert!(!shell.transcript.read(cx).find_open());
+        });
+    });
+}

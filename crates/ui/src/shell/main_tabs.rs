@@ -161,7 +161,6 @@ impl Shell {
         tabs.tabs.push(MainTab::Diff(id));
         tabs.active = Some(MainTab::Diff(id));
         changes.update(cx, |changes, cx| {
-            changes.review_mode = true;
             changes.ensure_content(cx);
         });
         cx.notify();

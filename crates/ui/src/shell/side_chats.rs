@@ -8,6 +8,70 @@ pub(super) struct SideChatTab {
 }
 
 impl Shell {
+    /// Conversation shortcuts follow the pane that owns keyboard focus.
+    pub(super) fn shortcut_conversation(
+        &self,
+        window: &Window,
+        cx: &App,
+    ) -> (Entity<AppState>, Entity<Transcript>, Entity<Composer>) {
+        if matches!(self.route, Route::Chat)
+            && self.right_pane_open(cx)
+            && self.navigation_focus.in_right(window, cx)
+            && let RightSurface::SideChat(id) = self.resolved_right_active(cx)
+            && let Some(side) = self.side_chats.get(&id)
+        {
+            return (
+                side.state.clone(),
+                side.transcript.clone(),
+                side.composer.clone(),
+            );
+        }
+        (
+            self.state.clone(),
+            self.transcript.clone(),
+            self.composer.clone(),
+        )
+    }
+
+    pub(super) fn focus_transcript_composer(
+        &mut self,
+        transcript: &Entity<Transcript>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(side) = self
+            .side_chats
+            .values()
+            .find(|side| side.transcript == *transcript)
+        {
+            side.composer.update(cx, |composer, cx| {
+                composer.focus_pending = true;
+                cx.notify();
+            });
+        } else {
+            self.focus_composer(cx);
+        }
+    }
+
+    /// Send `text` through the composer that belongs to `transcript`, leaving
+    /// its draft alone. False when that composer can't send it.
+    pub(super) fn send_transcript_reply(
+        &mut self,
+        transcript: &Entity<Transcript>,
+        text: String,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let composer = match self
+            .side_chats
+            .values()
+            .find(|side| side.transcript == *transcript)
+        {
+            Some(side) => side.composer.clone(),
+            None if *transcript == self.transcript => self.composer.clone(),
+            None => return false,
+        };
+        composer.update(cx, |composer, cx| composer.send_reply(text, cx))
+    }
+
     pub(super) fn close_empty_right_pane(&mut self, key: &str, cx: &mut Context<Self>) {
         let empty = if key == self.panel_key(cx) {
             self.right_surface_rows(cx).is_empty()
@@ -195,6 +259,34 @@ impl Shell {
         chat.harness_session_cwd = None;
         chat.room_gen = Some(2);
         self.open_side_chat_tab(chat, key, true, cx);
+    }
+
+    /// Whether a pull request hand-off targets the selected chat's own pull
+    /// request: the hand-off resolved that chat's checkout to it, and the
+    /// chat is still selected, so a side chat sharing its checkout is
+    /// already on the pull request's branch.
+    pub(super) fn pull_request_is_selected_chats(
+        &self,
+        action: &crate::pull_request_detail::StartPullRequestSession,
+        cx: &App,
+    ) -> bool {
+        matches!(self.route, Route::Chat)
+            && action.own_chat.is_some()
+            && self.state.read(cx).selected_chat.as_deref() == action.own_chat.as_deref()
+    }
+
+    /// Open a new side chat tab off the selected chat and return its
+    /// composer, or `None` when none could be created.
+    pub(super) fn open_side_chat_for_prompt(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<Composer>> {
+        let before = self.side_chat_seq;
+        self.create_child_chat(None, cx);
+        (self.side_chat_seq != before)
+            .then(|| self.side_chats.get(&self.side_chat_seq))
+            .flatten()
+            .map(|tab| tab.composer.clone())
     }
 
     /// Open an existing side chat (a footer row) in the right pane.

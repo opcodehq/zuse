@@ -1,5 +1,8 @@
 //! Browser-compatible GPUI views. Native process/filesystem access stays behind RPC.
 
+use crate::localization::message as tr;
+use zuse_i18n::messages as msg;
+
 mod access;
 pub mod account_settings;
 pub mod acp_catalog;
@@ -38,6 +41,8 @@ mod history;
 pub mod import_chat;
 mod import_chat_adapter;
 pub mod input;
+pub mod language_fonts;
+pub mod localization;
 mod managed_access;
 mod model_catalog;
 mod model_config;
@@ -80,6 +85,8 @@ mod thread_actions;
 mod title_settings;
 mod tool_results;
 mod transcript;
+pub mod ui_block;
+mod ui_block_parts;
 pub mod usage_dashboard;
 mod usage_host;
 mod visuals;
@@ -133,6 +140,7 @@ pub struct WorkspaceView {
     environment: environment::Environment,
     browser: browser::Browser,
     visuals: visuals::Visuals,
+    ui_blocks: ui_block_parts::UiBlocks,
     git_controls: Entity<git_controls::GitControls>,
     pull_requests: pull_requests::PullRequests,
     git_requests: HashMap<u64, u64>,
@@ -376,15 +384,12 @@ pub struct WorkspaceView {
 
 impl WorkspaceView {
     pub fn new(transport: Transport, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        localization::initialize(cx);
         cx.observe_self(|this, cx| this.persist_drafts(cx)).detach();
         let workspace_focus = cx.focus_handle();
         window.focus(&workspace_focus, cx);
         let input = cx.new(|cx| {
-            input::TextInput::multiline(
-                "Ask to make changes at the @ mentioned files or run slash commands…",
-                window,
-                cx,
-            )
+            input::TextInput::multiline(&tr(cx, msg::native::composer_placeholder), window, cx)
         });
         cx.observe(&input, |_, _, cx| cx.notify()).detach();
         let project_input =
@@ -505,6 +510,25 @@ impl WorkspaceView {
                         )
                     });
                     return;
+                }
+                if event.method == methods::WATCH_GIT_WORKSPACE {
+                    let watches: Vec<_> = this
+                        .git_requests
+                        .keys()
+                        .copied()
+                        .filter(|id| {
+                            this.pending
+                                .get(id)
+                                .is_some_and(|m| m == methods::WATCH_GIT_WORKSPACE)
+                        })
+                        .collect();
+                    for id in watches {
+                        this.git_requests.remove(&id);
+                        this.cancel(id);
+                    }
+                    if event.params["chatId"].is_null() {
+                        return;
+                    }
                 }
                 let id = this.call(event.method, event.params.clone());
                 this.git_requests.insert(id, event.id);
@@ -884,6 +908,7 @@ impl WorkspaceView {
             composer_generation: 0,
             voice: voice::Voice::default(),
             visuals: visuals::Visuals::default(),
+            ui_blocks: ui_block_parts::UiBlocks::default(),
             git_controls,
             pull_requests,
             git_requests: HashMap::new(),
@@ -946,6 +971,7 @@ impl WorkspaceView {
     }
 
     fn receive(&mut self, frame: Value, cx: &mut Context<Self>) {
+        self.receive_ui_block_reply(&frame, cx);
         if self.receive_creation_source(&frame, cx) {
             return;
         }
@@ -1006,6 +1032,9 @@ impl WorkspaceView {
             return;
         }
         if self.receive_draft_journal(&frame, cx) {
+            return;
+        }
+        if self.receive_localization(&frame, cx) {
             return;
         }
         if let Some(value) = frame.get("preferences") {
@@ -1103,6 +1132,25 @@ impl WorkspaceView {
             return;
         }
         if let Some(panel_id) = self.git_requests.get(&id).copied() {
+            if method == methods::WATCH_GIT_WORKSPACE {
+                if let Some(value) = frame.get("item").or_else(|| frame.get("ok")) {
+                    if let Ok(status) = serde_json::from_value(value.clone()) {
+                        self.git_controls
+                            .update(cx, |panel, cx| panel.observe(status, cx));
+                    }
+                }
+                if frame.get("err").is_some() || frame["done"] == true {
+                    self.git_requests.remove(&id);
+                    self.pending.remove(&id);
+                    self.git_controls.update(cx, |panel, cx| {
+                        panel.observation_error(
+                            "Git status disconnected. Reconnect or refresh.".into(),
+                            cx,
+                        )
+                    });
+                }
+                return;
+            }
             if frame.get("ok").is_some() || frame.get("err").is_some() || frame["done"] == true {
                 self.git_requests.remove(&id);
                 self.pending.remove(&id);
@@ -1855,7 +1903,7 @@ impl WorkspaceView {
             draft.chat_id = Some(uuid::Uuid::new_v4().to_string());
         }
         self.persist_outgoing_draft(draft.clone(), cx);
-        let command = json!({"kind":"run","messageId":message_id,"request":{"prompt":prompt,"harness":provider["id"],"model":self.model,"reasoning":self.reasoning,"modelOptions":self.model_options,"cwd":self.cwd(),"sandbox":self.sandbox,"autoApprove":self.sandbox==zuse_protocol::SandboxLevel::DangerFullAccess,"resume":null,"attachments":self.attachment_paths(),"worktree":self.creation_worktree()}});
+        let command = json!({"kind":"run","messageId":message_id,"request":{"prompt":prompt,"harness":provider["id"],"model":self.model,"reasoning":self.reasoning,"modelOptions":self.model_options,"cwd":self.cwd(),"sandbox":self.sandbox,"plan":self.selected.as_ref().is_some_and(|chat| chat["config"]["plan"] == true),"autoApprove":self.sandbox==zuse_protocol::SandboxLevel::DangerFullAccess,"resume":null,"attachments":self.attachment_paths(),"worktree":self.creation_worktree()}});
         let send = if let Some(chat) = &self.selected {
             self.call(
                 methods::QUEUE_COMMAND,
@@ -1886,6 +1934,8 @@ pub fn initialize(cx: &mut App) {
         return;
     }
     cx.set_global(WorkspaceInitialized);
+    localization::initialize(cx);
+    language_fonts::register(cx);
     input::bind_keys(cx);
     cx.bind_keys([
         KeyBinding::new("cmd-k", SearchSessions, Some("Workspace")),

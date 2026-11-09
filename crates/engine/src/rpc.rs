@@ -337,6 +337,13 @@ struct ListFoldersParams {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct CreateFolderParams {
+    parent: String,
+    name: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct FileSearchParams {
     query: String,
     #[serde(default)]
@@ -528,6 +535,20 @@ struct PublishVisualParams {
     /// Files the script uses, base64 by name.
     #[serde(default)]
     assets: std::collections::BTreeMap<String, String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PublishUiBlockParams {
+    chat_id: String,
+    spec: String,
+}
+
+fn no_turn_for_ui_block() -> RpcError {
+    RpcError::Failed(
+        "This chat has no running turn on this device; show_ui only works from inside a turn."
+            .into(),
+    )
 }
 
 fn no_turn_for_visual() -> RpcError {
@@ -735,6 +756,7 @@ pub struct EngineRpc {
     previews: Option<zuse_preview::PreviewService>,
     change_requests: CheckoutChangeRequests,
     github: GitHubCli,
+    source_control_refresh: crate::source_control_refresh::RefreshHub,
     pr_watches: Option<crate::pr_watch::PrWatches>,
     diff_sync: CheckoutDiffSync,
     uploads: Uploads,
@@ -799,6 +821,7 @@ impl EngineRpc {
             previews: None,
             change_requests,
             github,
+            source_control_refresh: Default::default(),
             pr_watches: None,
             diff_sync,
             uploads,
@@ -920,6 +943,9 @@ impl EngineRpc {
     }
 
     pub fn with_pr_watches(mut self, watches: crate::pr_watch::PrWatches) -> Self {
+        if let Some(github) = watches.github() {
+            self.github = github.with_store(self.repos.data_dir());
+        }
         self.pr_watches = Some(watches);
         self
     }
@@ -1250,6 +1276,8 @@ impl EngineRpc {
                     | methods::SIMULATOR_FRAMES
                     | methods::WATCH_CHECKOUT_CHANGE_REQUEST
                     | methods::WATCH_WORKSPACE_GIT_STATUS
+                    | methods::WATCH_GIT_WORKSPACE
+                    | methods::WATCH_CHANGE_REQUEST
                     | methods::WATCH_HARNESS_UPDATES
                     | methods::WATCH_CHAT_CONFIG
             ) {
@@ -1617,6 +1645,19 @@ where
     Ok(registry.descriptors())
 }
 
+fn strip_diff_patches(mut frame: serde_json::Value) -> serde_json::Value {
+    match &mut frame {
+        serde_json::Value::Array(diffs) => {
+            for diff in diffs {
+                diff["patch"] = "".into();
+            }
+        }
+        diff @ serde_json::Value::Object(_) => diff["patch"] = "".into(),
+        _ => {}
+    }
+    frame
+}
+
 fn forward_deadline(method: &str) -> std::time::Duration {
     // Hub cold boots and the first agent XCTest preparation need room for
     // discovery, native readiness checks and an already admitted operation.
@@ -1742,6 +1783,7 @@ fn forwardable(method: &str) -> bool {
             | methods::GET_WORKTREE_SETTINGS
             | methods::SET_WORKTREE_SETTINGS
             | methods::LIST_DRIVES
+            | methods::CREATE_FOLDER
             | methods::SEARCH_HOME_FOLDERS
             | methods::RELEASE_HOME_FOLDER_SEARCH
             | methods::SEARCH_FILES
@@ -1766,6 +1808,8 @@ fn forwardable(method: &str) -> bool {
             // Checkout diffs are produced on the device holding the checkout.
             | methods::WATCH_CHECKOUT_DIFFS
             | methods::WATCH_WORKSPACE_GIT_STATUS
+                    | methods::WATCH_GIT_WORKSPACE
+                    | methods::WATCH_CHANGE_REQUEST
             | methods::WATCH_CHECKOUT_CHANGE_REQUEST
             | methods::LIST_CHANGE_REQUEST_PAGE
             | methods::GET_CHANGE_REQUEST_REPOSITORY
@@ -1776,6 +1820,7 @@ fn forwardable(method: &str) -> bool {
             | methods::GET_CHANGE_REQUEST_DIFF
             | methods::POST_CHANGE_REQUEST_COMMENT
             | methods::UPDATE_CHANGE_REQUEST
+            | methods::UPDATE_CHANGE_REQUEST_AT_HEAD
             | methods::GET_CHECKOUT_DIFF
             | methods::DISCARD_WORKING_TREE
             | methods::GET_CHECKOUT_FILE_DIFF_TEXT
@@ -1828,6 +1873,8 @@ fn is_stream_method(method: &str) -> bool {
             | methods::WORKSPACE_SYNC_SNAPSHOT
             | methods::WATCH_CHECKOUT_DIFFS
             | methods::WATCH_WORKSPACE_GIT_STATUS
+            | methods::WATCH_GIT_WORKSPACE
+            | methods::WATCH_CHANGE_REQUEST
             | methods::WATCH_CHECKOUT_CHANGE_REQUEST
             | methods::WATCH_WORKSPACE_FILES
             | methods::UPDATE_STATUS
@@ -2449,9 +2496,13 @@ impl RpcService for EngineRpc {
                 | methods::FORGET_AGENT_ACCOUNT
         ) {
             self.voice.retire();
+            self.agent_accounts.forget_dictation_auth();
         }
         if method == "TranscribeDictation" {
             return self.transcribe_dictation(params).await;
+        }
+        if method == "PrepareDictation" {
+            return self.prepare_dictation().await;
         }
         if voice_remote::handles(method) {
             return self.voice_remote(method, params).await;
@@ -2465,7 +2516,9 @@ impl RpcService for EngineRpc {
         }
         if matches!(
             method,
-            methods::GET_GIT_WORKSPACE | methods::GIT_WORKSPACE_ACTION
+            methods::GET_GIT_WORKSPACE
+                | methods::GIT_WORKSPACE_ACTION
+                | methods::WATCH_GIT_WORKSPACE
         ) {
             return self.git_workspace(method, params).await;
         }
@@ -2973,10 +3026,14 @@ impl RpcService for EngineRpc {
                     .account
                     .as_ref()
                     .ok_or_else(|| RpcError::Failed("Account service is unavailable.".into()))?;
-                let progress = account
-                    .sign_in()
-                    .await
-                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                // Only a client on this machine can follow a loopback redirect;
+                // remote browsers confirm a device code instead.
+                let progress = if params["browser"] == true {
+                    account.sign_in_in_browser().await
+                } else {
+                    account.sign_in().await
+                }
+                .map_err(|e| RpcError::Failed(e.to_string()))?;
                 RpcReply::value(&progress)
             }
             methods::CLOUD_ACCOUNT_SIGN_OUT => {
@@ -3255,7 +3312,12 @@ impl RpcService for EngineRpc {
                         "setupAction": outcome.setup_action,
                         "setupError": outcome.setup_error,
                     })),
-                    None => RpcReply::value(&serde_json::json!({ "ready": false })),
+                    None => RpcReply::value(&serde_json::json!({
+                        "ready": false,
+                        "progress": self
+                            .project_actions
+                            .worktree_progress(&p.command_id, &p.chat_id),
+                    })),
                 }
             }
             methods::RETRY_DELIVERY => {
@@ -3952,7 +4014,12 @@ impl RpcService for EngineRpc {
                 if let Some(id) = params["chatId"].as_str() {
                     return Ok(self.watch_archive_review(id.to_owned()));
                 }
-                Ok(RpcReply::Stream(watch_stream(self.diff_sync.watch_diffs())))
+                let stream = watch_stream(self.diff_sync.watch_diffs());
+                if params["summaryOnly"].as_bool().unwrap_or(false) {
+                    // Sidebars need sizes, never megabytes of patch per frame.
+                    return Ok(RpcReply::Stream(stream.map(strip_diff_patches).boxed()));
+                }
+                Ok(RpcReply::Stream(stream))
             }
             methods::WATCH_WORKSPACE_GIT_STATUS => {
                 let request: zuse_protocol::WatchWorkspaceFilesRequest = parse_params(params)?;
@@ -4077,16 +4144,23 @@ impl RpcService for EngineRpc {
                     .map_err(change_request_rpc_error)?;
                 RpcReply::value(&comment)
             }
-            methods::UPDATE_CHANGE_REQUEST => {
+            methods::UPDATE_CHANGE_REQUEST | methods::UPDATE_CHANGE_REQUEST_AT_HEAD => {
                 #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
                 struct P {
                     url: String,
                     update: zuse_protocol::ChangeRequestUpdate,
+                    head_ref_oid: Option<String>,
                 }
                 let p: P = parse_params(params)?;
+                if method == methods::UPDATE_CHANGE_REQUEST_AT_HEAD && p.head_ref_oid.is_none() {
+                    return Err(RpcError::Failed(
+                        "Refresh the pull request before merging.".into(),
+                    ));
+                }
                 let refusal = self
                     .github
-                    .update_pull_request(&p.url, p.update)
+                    .update_pull_request_at_head(&p.url, p.update, p.head_ref_oid.as_deref())
                     .await
                     .map_err(change_request_rpc_error)?;
                 RpcReply::value(&serde_json::json!({ "refusal": refusal }))
@@ -4122,11 +4196,27 @@ impl RpcService for EngineRpc {
                     .ok_or_else(|| RpcError::Failed("CI watcher unavailable".into()))?;
                 Ok(RpcReply::Stream(watch_stream(watches.subscribe())))
             }
+            methods::WATCH_CHANGE_REQUEST => {
+                #[derive(Deserialize)]
+                struct P {
+                    url: String,
+                }
+                let p: P = parse_params(params)?;
+                self.change_requests.invalidate();
+                let rx = self
+                    .github
+                    .watch_detail(&p.url)
+                    .await
+                    .map_err(change_request_rpc_error)?;
+                Ok(RpcReply::Stream(watch_stream(rx)))
+            }
             methods::GET_CHANGE_REQUEST | methods::GET_CHANGE_REQUEST_DIFF => {
                 #[derive(Deserialize)]
                 #[serde(rename_all = "camelCase")]
                 struct P {
                     url: String,
+                    #[serde(default)]
+                    summary: bool,
                     #[serde(default)]
                     refresh: bool,
                     #[serde(default)]
@@ -4135,17 +4225,26 @@ impl RpcService for EngineRpc {
                     base_ref_oid: Option<String>,
                 }
                 let p: P = parse_params(params)?;
-                let value = self
-                    .github
-                    .detail_request(
-                        &p.url,
-                        method == methods::GET_CHANGE_REQUEST_DIFF,
-                        p.refresh,
-                        p.head_ref_oid.as_deref(),
-                        p.base_ref_oid.as_deref(),
-                    )
-                    .await
-                    .map_err(change_request_rpc_error)?;
+                if p.refresh {
+                    self.github.invalidate_watches();
+                }
+                let value = if p.summary && method == methods::GET_CHANGE_REQUEST {
+                    self.github
+                        .summary_request(&p.url, p.refresh)
+                        .await
+                        .map_err(change_request_rpc_error)?
+                } else {
+                    self.github
+                        .detail_request(
+                            &p.url,
+                            method == methods::GET_CHANGE_REQUEST_DIFF,
+                            p.refresh,
+                            p.head_ref_oid.as_deref(),
+                            p.base_ref_oid.as_deref(),
+                        )
+                        .await
+                        .map_err(change_request_rpc_error)?
+                };
                 RpcReply::value(&value)
             }
             // One-shot scoped capture for the Changes pane: `branch` diffs the
@@ -4606,7 +4705,23 @@ impl RpcService for EngineRpc {
                 RpcReply::value(&history)
             }
             methods::GET_BRANCH_GRAPH => {
-                let p: zuse_protocol::branch_graph::BranchGraphRequest = parse_params(params)?;
+                let mut p: zuse_protocol::branch_graph::BranchGraphRequest = parse_params(params)?;
+                if p.fetch {
+                    // Compatibility for explicit older callers; cards use local
+                    // graphs and repository subscription owns automatic fetches.
+                    // Best effort: the local graph is correct without it.
+                    let fetched = tokio::time::timeout(
+                        std::time::Duration::from_secs(20),
+                        self.repos.fetch_all(std::path::Path::new(&p.cwd)),
+                    )
+                    .await;
+                    if !matches!(fetched, Ok(Ok(()))) {
+                        tracing::debug!("branch graph continues without a fresh fetch");
+                    }
+                    self.source_control_refresh.invalidate("worktree:");
+                    self.diff_sync.sync_all();
+                    p.fetch = false;
+                }
                 let graph = crate::branch_graph::branch_graph(std::path::Path::new(&p.cwd), &p)
                     .await
                     .map_err(|e| RpcError::Failed(e.to_string()))?;
@@ -4702,6 +4817,8 @@ impl RpcService for EngineRpc {
                 // Remote refs are repository state too. Force the checkout
                 // watchers to publish a fresh snapshot instead of waiting for
                 // the repair tick (some platforms do not report packed-refs).
+                self.source_control_refresh.invalidate("worktree:");
+                self.change_requests.invalidate();
                 self.diff_sync.sync_all();
                 RpcReply::value(&serde_json::json!({ "ok": true }))
             }
@@ -4712,6 +4829,9 @@ impl RpcService for EngineRpc {
                     .switch_ref(std::path::Path::new(&p.repo_path), &p.ref_name)
                     .await
                     .map_err(|e| RpcError::Failed(e.to_string()))?;
+                self.source_control_refresh.invalidate("worktree:");
+                self.change_requests.invalidate();
+                self.diff_sync.sync_all();
                 RpcReply::value(&serde_json::json!({ "branch": branch }))
             }
             methods::GET_WORKTREE_SETTINGS => RpcReply::value(&self.repos.worktree_settings()),
@@ -4824,6 +4944,15 @@ impl RpcService for EngineRpc {
             methods::RELEASE_HOME_FOLDER_SEARCH => {
                 self.repos.release_home_folder_search();
                 RpcReply::value(&serde_json::json!({}))
+            }
+            methods::CREATE_FOLDER => {
+                let p: CreateFolderParams = parse_params(params)?;
+                let path = self
+                    .repos
+                    .create_folder(p.parent, p.name)
+                    .await
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(&serde_json::json!({ "path": path }))
             }
             methods::LIST_DRIVES => {
                 let drives = self
@@ -5468,6 +5597,24 @@ impl RpcService for EngineRpc {
                     "printed": report.logs,
                 }))
             }
+            methods::PUBLISH_UI_BLOCK => {
+                let p: PublishUiBlockParams = parse_params(params)?;
+                if p.spec.len() > zuse_protocol::UI_BLOCK_MAX_BYTES {
+                    return Err(RpcError::BadParams("spec is too long".into()));
+                }
+                // Validated before anyone sees it; readers validate again.
+                let spec = zuse_ui_block::parse(&p.spec)
+                    .map_err(|e| RpcError::BadParams(format!("invalid UI block: {e}")))?;
+                let id = format!("ui:{}", crate::new_id());
+                let event = AgentEvent::UiBlock {
+                    id: id.clone(),
+                    spec: spec.source,
+                };
+                if !self.sessions.inject_event(&p.chat_id, event) {
+                    return Err(no_turn_for_ui_block());
+                }
+                RpcReply::value(&serde_json::json!({ "id": id }))
+            }
             methods::FETCH_TOOL_BLOB => {
                 let p: FetchToolBlobParams = parse_params(params)?;
                 if let Some(offset) = p.offset {
@@ -6023,17 +6170,17 @@ mod tests {
         );
         let expected =
             serde_json::to_value(core.workspace.chat("selected").unwrap().unwrap().config).unwrap();
-        let readonly = serde_json::json!({"harness":"codex","model":"first","sandbox":"read-only"});
+        let planned =
+            serde_json::json!({"harness":"codex","model":"first","sandbox":"auto","plan":true});
         rpc.handle(
             methods::MUTATE,
-            serde_json::json!({"op":"setChatConfig","chatId":"selected","config":readonly}),
+            serde_json::json!({"op":"setChatConfig","chatId":"selected","config":planned}),
         )
         .await
         .unwrap();
-        assert_eq!(
-            stream.next().await.unwrap()["config"]["sandbox"],
-            "read-only"
-        );
+        let published = stream.next().await.unwrap();
+        assert_eq!(published["config"]["sandbox"], "auto");
+        assert_eq!(published["config"]["plan"], true);
         let desired =
             serde_json::json!({"harness":"codex","model":"second","sandbox":"workspace-write"});
         let stale = rpc.handle(methods::MUTATE, serde_json::json!({"op":"setChatConfig","chatId":"selected","expectedConfig":{"deviceId":core.device_id,"config":expected},"config":desired})).await;
@@ -6046,11 +6193,12 @@ mod tests {
                 .config
                 .unwrap()
                 .sandbox,
-            zuse_protocol::SandboxLevel::ReadOnly
+            zuse_protocol::SandboxLevel::Auto
         );
         let current =
             serde_json::to_value(core.workspace.chat("selected").unwrap().unwrap().config).unwrap();
-        let saved = serde_json::json!({"harness":"codex","model":"second","sandbox":"read-only"});
+        let saved =
+            serde_json::json!({"harness":"codex","model":"second","sandbox":"auto","plan":true});
         rpc.handle(methods::MUTATE, serde_json::json!({"op":"setChatConfig","chatId":"selected","expectedConfig":{"deviceId":core.device_id,"config":current},"config":saved})).await.unwrap();
         assert_eq!(stream.next().await.unwrap()["config"]["model"], "second");
         let wrong_host = rpc.handle(methods::MUTATE, serde_json::json!({"op":"setChatConfig","chatId":"selected","expectedConfig":{"deviceId":"another-computer","config":saved},"config":desired})).await;
@@ -6130,6 +6278,10 @@ mod tests {
         assert!(forwardable(methods::SEARCH_FILES));
         assert!(forwardable(methods::SEARCH_GIT_HISTORY));
         assert!(forwardable(methods::GET_BRANCH_GRAPH));
+        assert!(forwardable(methods::WATCH_GIT_WORKSPACE));
+        assert!(forwardable(methods::WATCH_CHANGE_REQUEST));
+        assert!(is_stream_method(methods::WATCH_GIT_WORKSPACE));
+        assert!(is_stream_method(methods::WATCH_CHANGE_REQUEST));
         assert!(forwardable(methods::FETCH_ALL));
         assert!(forwardable(methods::RESOLVE_GIT_AVATARS));
         assert!(forwardable(methods::WATCH_CHECKOUT_CHANGE_REQUEST));
@@ -6174,6 +6326,8 @@ mod tests {
         assert!(forwardable(methods::POST_CHANGE_REQUEST_COMMENT));
         assert!(forwardable(methods::UPDATE_CHANGE_REQUEST));
         assert!(!is_stream_method(methods::UPDATE_CHANGE_REQUEST));
+        assert!(forwardable(methods::UPDATE_CHANGE_REQUEST_AT_HEAD));
+        assert!(!is_stream_method(methods::UPDATE_CHANGE_REQUEST_AT_HEAD));
         assert!(!is_stream_method(methods::POST_CHANGE_REQUEST_COMMENT));
         assert!(!is_stream_method(methods::GET_CHANGE_REQUEST));
         assert!(!is_stream_method(methods::GET_CHANGE_REQUEST_DIFF));
@@ -6905,14 +7059,7 @@ impl EngineRpc {
             }
         }
         for id in &family {
-            if self.sessions.archive_busy(id) {
-                return Err(RpcError::Failed(
-                    "Stop the thread and its active agents before archiving their worktree.".into(),
-                ));
-            }
-        }
-        for id in &family {
-            self.sessions.terminate(id).await.map_err(failed)?;
+            self.sessions.end_for_archive(id).await.map_err(failed)?;
         }
         let mark_archived = || -> Result<(), RpcError> {
             for id in &family {
@@ -6995,18 +7142,14 @@ impl EngineRpc {
                 "Another active thread uses this checkout, so its files were kept.",
             ));
         }
-        for row in &sharing {
-            if self.sessions.archive_busy(&row.id) {
-                return Err(RpcError::Failed(
-                    "Another agent is still using this worktree. Stop it before archiving.".into(),
-                ));
-            }
-        }
         if self.terminals.has_live_checkout(&checkout) {
             return Err(RpcError::Failed("Close the worktree’s terminals before archiving it. Running processes have not been stopped.".into()));
         }
         for row in &sharing {
-            self.sessions.terminate(&row.id).await.map_err(failed)?;
+            self.sessions
+                .end_for_archive(&row.id)
+                .await
+                .map_err(failed)?;
         }
         for row in &sharing {
             if let Some(path) = row.cwd.as_deref() {

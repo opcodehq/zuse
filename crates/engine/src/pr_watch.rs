@@ -13,7 +13,7 @@ use std::{
 use tokio::{sync::watch, time::Instant};
 use tokio_util::sync::CancellationToken;
 use zuse_protocol::{
-    ChangeRequestDetail, Chat, SandboxLevel,
+    ChangeRequestDetail, Chat,
     change_request_assessment::{CiState, check_failed, check_status, valid_head_oid},
     pr_watch::{MAX_REPAIR_ATTEMPTS, PrWatchRequest, PrWatchStatus, SetPrWatchRequest},
 };
@@ -171,6 +171,9 @@ impl Store {
 #[async_trait::async_trait]
 trait CiProvider: Send + Sync {
     async fn snapshot(&self, url: &str) -> Result<ChangeRequestDetail, EngineError>;
+    async fn fresh_snapshot(&self, url: &str) -> Result<ChangeRequestDetail, EngineError> {
+        self.snapshot(url).await
+    }
     async fn checkout_matches(&self, cwd: &Path, branch: &str, sha: &str, repository: &str)
     -> bool;
     async fn failure_logs(&self, detail: &ChangeRequestDetail) -> Result<String, EngineError>;
@@ -178,7 +181,22 @@ trait CiProvider: Send + Sync {
 #[async_trait::async_trait]
 impl CiProvider for GitHubCli {
     async fn snapshot(&self, url: &str) -> Result<ChangeRequestDetail, EngineError> {
-        self.ci_snapshot(url).await.map_err(other)
+        let mut rx = self.watch_detail(url).await.map_err(other)?;
+        loop {
+            let frame = rx.borrow_and_update().clone();
+            if let Some(error) = frame.error {
+                return Err(other(error));
+            }
+            if let Some(snapshot) = frame.snapshot {
+                return serde_json::from_value(snapshot).map_err(other);
+            }
+            rx.changed().await.map_err(other)?;
+        }
+    }
+    async fn fresh_snapshot(&self, url: &str) -> Result<ChangeRequestDetail, EngineError> {
+        // Failure keys compare against the summary, so this must be the same
+        // read shape; only the cache is skipped.
+        serde_json::from_value(self.uncached_summary(url).await.map_err(other)?).map_err(other)
     }
     async fn checkout_matches(
         &self,
@@ -200,6 +218,7 @@ struct Inner {
     workspace: WorkspaceHost,
     host: DocHost,
     github: Arc<dyn CiProvider>,
+    github_client: Option<GitHubCli>,
     shutdown: CancellationToken,
 }
 
@@ -210,6 +229,7 @@ pub struct PrWatches {
 
 impl PrWatches {
     pub fn open(root: &Path, workspace: WorkspaceHost, host: DocHost) -> Result<Self, EngineError> {
+        let github = GitHubCli::new();
         let store = Store::open(&root.join("pr-watches.sqlite"))?;
         let statuses = store.records.iter().map(|r| r.status.clone()).collect();
         Ok(Self {
@@ -218,10 +238,15 @@ impl PrWatches {
                 updates: watch::channel(statuses).0,
                 workspace,
                 host,
-                github: Arc::new(GitHubCli::new()),
+                github: Arc::new(github.clone()),
+                github_client: Some(github),
                 shutdown: CancellationToken::new(),
             }),
         })
+    }
+
+    pub(crate) fn github(&self) -> Option<GitHubCli> {
+        self.inner.github_client.clone()
     }
 
     pub fn start(&self) {
@@ -229,10 +254,31 @@ impl PrWatches {
         let cancel = self.inner.shutdown.clone();
         tokio::spawn(async move {
             let mut due: HashMap<String, (Instant, u32, String)> = HashMap::new();
+            let mut summaries: HashMap<
+                String,
+                watch::Receiver<zuse_protocol::git_workspace::SourceControlFrame>,
+            > = HashMap::new();
             loop {
                 let Some(inner) = weak.upgrade() else { return };
                 let service = Self { inner };
                 let records = service.store().records.clone();
+                // Durable observation retains the same provider resource as a
+                // visible PR. This loop processes policy, not provider polling.
+                summaries.retain(|url, rx| {
+                    records
+                        .iter()
+                        .any(|r| r.status.enabled && r.status.url == *url)
+                        && rx.has_changed().is_ok()
+                });
+                if let Some(github) = &service.inner.github_client {
+                    for record in records.iter().filter(|r| r.status.enabled) {
+                        if !summaries.contains_key(&record.status.url) {
+                            if let Ok(rx) = github.watch_detail(&record.status.url).await {
+                                summaries.insert(record.status.url.clone(), rx);
+                            }
+                        }
+                    }
+                }
                 due.retain(|id, _| {
                     records
                         .iter()
@@ -454,11 +500,7 @@ impl PrWatches {
 
     fn require_writable(&self, id: &str) -> Result<Chat, EngineError> {
         let chat = self.chat(id)?;
-        if !chat
-            .config
-            .as_ref()
-            .is_some_and(|c| c.sandbox != SandboxLevel::ReadOnly)
-        {
+        if !chat.config.as_ref().is_some_and(|c| !c.plan) {
             return Err(other("Auto-fix requires a writable chat"));
         }
         Ok(chat)
@@ -541,7 +583,7 @@ impl PrWatches {
             return Ok(detail.ci.state);
         }
         let logs = self.inner.github.failure_logs(&detail).await?;
-        let fresh = self.inner.github.snapshot(&record.status.url).await?;
+        let fresh = self.inner.github.fresh_snapshot(&record.status.url).await?;
         if failure_key(&fresh).as_ref() != Some(&key) {
             return Ok(fresh.ci.state);
         }
@@ -672,6 +714,7 @@ fn repair_prompt(detail: &ChangeRequestDetail, logs: &str, attempt: usize) -> St
 #[cfg(test)]
 mod tests {
     use super::*;
+    use zuse_protocol::SandboxLevel;
     fn failing() -> ChangeRequestDetail {
         serde_json::from_str(include_str!("fixtures/pr-watch/failing.json")).unwrap()
     }
@@ -888,7 +931,7 @@ mod tests {
         }
     }
     fn service(
-        sandbox: SandboxLevel,
+        plan: bool,
         checkout: bool,
     ) -> (
         tempfile::TempDir,
@@ -929,11 +972,12 @@ mod tests {
         sessions.set_doc_host(host.clone());
         host.set_sessions(sessions.clone());
         let config = zuse_protocol::ChatConfig {
+            plan,
             harness: zuse_protocol::HarnessId::Mock,
             model: None,
             reasoning: None,
             model_options: Default::default(),
-            sandbox,
+            sandbox: SandboxLevel::WorkspaceWrite,
         };
         workspace
             .create_chat(
@@ -954,6 +998,7 @@ mod tests {
             checkout,
         });
         Arc::get_mut(&mut watches.inner).unwrap().github = fixture.clone();
+        Arc::get_mut(&mut watches.inner).unwrap().github_client = None;
         (temp, watches, fixture, sessions)
     }
     fn request() -> PrWatchRequest {
@@ -976,7 +1021,7 @@ mod tests {
     }
     #[tokio::test]
     async fn writable_fixture_dispatches_once_with_logs_and_current_permissions() {
-        let (_temp, watches, fixture, sessions) = service(SandboxLevel::WorkspaceWrite, true);
+        let (_temp, watches, fixture, sessions) = service(false, true);
         watches.observe(request()).unwrap();
         poll(&watches).await;
         enable(&watches).unwrap();
@@ -997,8 +1042,8 @@ mod tests {
         watches.inner.workspace.shutdown();
     }
     #[tokio::test]
-    async fn readonly_chats_observe_but_never_enable_or_dispatch() {
-        let (_temp, watches, fixture, sessions) = service(SandboxLevel::ReadOnly, true);
+    async fn plan_mode_chats_observe_but_never_enable_or_dispatch() {
+        let (_temp, watches, fixture, sessions) = service(true, true);
         watches.observe(request()).unwrap();
         poll(&watches).await;
         assert!(
@@ -1019,14 +1064,13 @@ mod tests {
     #[tokio::test]
     async fn permission_changes_and_dirty_checkout_pause_before_logs_or_dispatch() {
         for change_permissions in [true, false] {
-            let (_temp, watches, fixture, sessions) =
-                service(SandboxLevel::WorkspaceWrite, change_permissions);
+            let (_temp, watches, fixture, sessions) = service(false, change_permissions);
             watches.observe(request()).unwrap();
             poll(&watches).await;
             enable(&watches).unwrap();
             if change_permissions {
                 let mut config = watches.inner.workspace.chat_config("chat").unwrap();
-                config.sandbox = SandboxLevel::ReadOnly;
+                config.plan = true;
                 watches
                     .inner
                     .workspace
@@ -1047,7 +1091,7 @@ mod tests {
     }
     #[tokio::test]
     async fn pause_fences_a_stale_poll_and_preserves_budget() {
-        let (_temp, watches, _, _) = service(SandboxLevel::WorkspaceWrite, true);
+        let (_temp, watches, _, _) = service(false, true);
         watches.observe(request()).unwrap();
         poll(&watches).await;
         enable(&watches).unwrap();
@@ -1076,7 +1120,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn scheduler_backs_off_errors_and_stops_on_shutdown() {
         use std::sync::atomic::Ordering::SeqCst;
-        let (_temp, watches, fixture, _) = service(SandboxLevel::ReadOnly, true);
+        let (_temp, watches, fixture, _) = service(true, true);
         watches.observe(request()).unwrap();
         fixture.fail_reads.store(true, SeqCst);
         watches.start();
@@ -1099,7 +1143,7 @@ mod tests {
     #[tokio::test]
     async fn archived_or_moved_chat_stops_watching_without_dispatch() {
         for archive in [false, true] {
-            let (_temp, watches, fixture, _) = service(SandboxLevel::WorkspaceWrite, true);
+            let (_temp, watches, fixture, _) = service(false, true);
             watches.observe(request()).unwrap();
             poll(&watches).await;
             enable(&watches).unwrap();
@@ -1129,7 +1173,7 @@ mod tests {
     }
     #[tokio::test]
     async fn exhausted_budget_requires_an_explicit_restart_and_observe_preserves_permission() {
-        let (_temp, watches, _, _) = service(SandboxLevel::WorkspaceWrite, true);
+        let (_temp, watches, _, _) = service(false, true);
         watches.observe(request()).unwrap();
         poll(&watches).await;
         enable(&watches).unwrap();
@@ -1160,7 +1204,7 @@ mod tests {
     }
     #[tokio::test]
     async fn another_watch_cannot_automatically_repair_the_same_checkout() {
-        let (_temp, watches, _, _) = service(SandboxLevel::WorkspaceWrite, true);
+        let (_temp, watches, _, _) = service(false, true);
         watches.observe(request()).unwrap();
         poll(&watches).await;
         enable(&watches).unwrap();
@@ -1195,7 +1239,7 @@ mod tests {
     }
     #[tokio::test]
     async fn changed_pr_identity_retires_the_old_watch_and_repair_permission() {
-        let (_temp, watches, fixture, sessions) = service(SandboxLevel::WorkspaceWrite, true);
+        let (_temp, watches, fixture, sessions) = service(false, true);
         watches.observe(request()).unwrap();
         poll(&watches).await;
         enable(&watches).unwrap();

@@ -434,9 +434,71 @@ pub(crate) fn stop_task_request_line(request_id: &str, task_id: &str) -> String 
     .to_string()
 }
 
+/// The shell command behind each Bash task. `background_tasks_changed`
+/// lists only a description, so the command comes from the Bash tool call
+/// that `task_started` names. Entries go once the call or task settles.
+#[derive(Debug, Default)]
+pub(crate) struct BackgroundCommands {
+    by_tool: std::collections::HashMap<String, String>,
+    by_task: std::collections::HashMap<String, String>,
+}
+
+impl BackgroundCommands {
+    pub fn observe(&mut self, frame: &Frame) {
+        match frame {
+            Frame::Assistant(message) => {
+                for block in message.message.blocks() {
+                    if block.kind == "tool_use"
+                        && block.name == "Bash"
+                        && let Some(command) = block.input.get("command").and_then(Value::as_str)
+                        && !command.trim().is_empty()
+                    {
+                        self.by_tool.insert(block.id, command.trim().to_owned());
+                    }
+                }
+            }
+            Frame::User(message) => {
+                for block in message.message.blocks() {
+                    if block.kind == "tool_result" {
+                        self.by_tool.remove(&block.tool_use_id);
+                    }
+                }
+            }
+            Frame::System(system) => {
+                let Some(task) = system.task_id.as_deref() else {
+                    return;
+                };
+                match system.subtype.as_str() {
+                    "task_started" => {
+                        if let Some(command) = system
+                            .tool_use_id
+                            .as_deref()
+                            .and_then(|tool| self.by_tool.remove(tool))
+                        {
+                            self.by_task.insert(task.to_owned(), command);
+                        }
+                    }
+                    "task_notification" => {
+                        self.by_task.remove(task);
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn command(&self, task: &str) -> Option<String> {
+        self.by_task.get(task).cloned()
+    }
+}
+
 /// The live background tasks a `background_tasks_changed` frame lists,
 /// minus ambient ones (watchers the CLI says are not activity).
-pub(crate) fn live_background_tasks(tasks: &[Value]) -> Vec<crate::LiveBackgroundTask> {
+pub(crate) fn live_background_tasks(
+    tasks: &[Value],
+    commands: &BackgroundCommands,
+) -> Vec<crate::LiveBackgroundTask> {
     use zuse_protocol::BackgroundTaskKind;
     tasks
         .iter()
@@ -450,12 +512,15 @@ pub(crate) fn live_background_tasks(tasks: &[Value]) -> Vec<crate::LiveBackgroun
             };
             Some(crate::LiveBackgroundTask {
                 id: id.to_owned(),
-                kind,
                 description: task
                     .get("description")
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .to_owned(),
+                command: (kind == BackgroundTaskKind::Shell)
+                    .then(|| commands.command(id))
+                    .flatten(),
+                kind,
                 stoppable: true,
             })
         })
@@ -566,5 +631,38 @@ mod tests {
             user_message_line_with_images("hi", &[]),
             user_message_line("hi")
         );
+    }
+
+    #[test]
+    fn background_shells_carry_the_command_of_the_bash_call_that_started_them() {
+        let mut commands = BackgroundCommands::default();
+        for line in [
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_dev","name":"Bash","input":{"command":"pnpm dev --port 3000","description":"Start the dev server","run_in_background":true}},{"type":"tool_use","id":"toolu_read","name":"Read","input":{"file_path":"/a"}}]}}"#,
+            r#"{"type":"system","subtype":"task_started","task_id":"bg-1","tool_use_id":"toolu_dev","task_type":"local_bash"}"#,
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_dev","content":"Command running in background"}]}}"#,
+        ] {
+            commands.observe(&parse_frame(line).unwrap());
+        }
+        let tasks = [
+            json!({"task_id":"bg-1","task_type":"local_bash","description":"Start the dev server"}),
+            json!({"task_id":"bg-2","task_type":"local_bash","description":"unknown"}),
+            json!({"task_id":"ag-1","task_type":"local_agent","description":"scout"}),
+        ];
+        let live = live_background_tasks(&tasks, &commands);
+        assert_eq!(live[0].command.as_deref(), Some("pnpm dev --port 3000"));
+        assert_eq!(live[0].description, "Start the dev server");
+        assert_eq!(live[1].command, None);
+        assert_eq!(live[2].command, None);
+
+        // A settled task forgets its command.
+        commands.observe(
+            &parse_frame(r#"{"type":"system","subtype":"task_notification","task_id":"bg-1","status":"completed"}"#)
+                .unwrap(),
+        );
+        assert_eq!(
+            live_background_tasks(&tasks[..1], &commands)[0].command,
+            None
+        );
+        assert!(commands.by_tool.is_empty() && commands.by_task.is_empty());
     }
 }

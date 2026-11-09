@@ -1,6 +1,8 @@
 use super::*;
 use crate::composer::ComposerInputEvent;
+use crate::localization::message as tr;
 use gpui::Focusable;
+use zuse_i18n::messages as msg;
 
 impl PullRequestDetailPage {
     pub(super) fn comment_event(&mut self, event: &ComposerInputEvent, cx: &mut Context<Self>) {
@@ -208,6 +210,7 @@ impl PullRequestDetailPage {
                             page.target.clone(),
                             page.url.clone(),
                             DetailSnapshot {
+                                discussion_loaded: page.discussion_loaded,
                                 detail: detail.clone(),
                                 body: parsed.clone(),
                                 activity: page.activity_bodies.clone(),
@@ -273,7 +276,11 @@ impl PullRequestDetailPage {
                         cx.entity_id(),
                         cx,
                     ))
-                    .child(div().flex_none().child("Posting comment"))
+                    .child(
+                        div()
+                            .flex_none()
+                            .child(tr(cx, msg::native::posting_comment)),
+                    )
                     .child(
                         div()
                             .min_w_0()
@@ -303,7 +310,10 @@ impl PullRequestDetailPage {
                         .p(px(12.0))
                         .text_size(px(12.0))
                         .text_color(theme.text_muted)
-                        .child("No matching participants. You can type any @username."),
+                        .child(tr(
+                            cx,
+                            msg::native::no_matching_participants_you_can_type_any_username,
+                        )),
                 );
             }
             for (index, login) in self.mention_choices.iter().enumerate() {
@@ -455,9 +465,10 @@ impl PullRequestDetailPage {
             // The content column's gutter, so the dock lines up with the thread.
             .child(
                 widgets::page_column()
+                    .max_w(px(DETAIL_COLUMN_MAX))
                     .pt_0()
                     .pb_0()
-                    .when(narrow, |el| el.px(px(NARROW_PAD_X)))
+                    .px(px(if narrow { NARROW_PAD_X } else { DETAIL_PAD_X }))
                     .child(stack),
             )
             .into_any_element()
@@ -731,6 +742,7 @@ mod tests {
                 None,
                 url.into(),
                 DetailSnapshot {
+                    discussion_loaded: true,
                     detail: ChangeRequestDetail::default(),
                     body: crate::markdown::parse_full(""),
                     activity: Vec::new(),
@@ -820,6 +832,7 @@ mod tests {
                 target.clone(),
                 url.into(),
                 DetailSnapshot {
+                    discussion_loaded: true,
                     detail: ChangeRequestDetail::default(),
                     body: crate::markdown::parse_full(""),
                     activity: Vec::new(),

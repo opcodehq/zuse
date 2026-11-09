@@ -492,6 +492,15 @@ impl WorkspaceDoc {
         set_opt_ms(&row, "startedAt", session.started_at)?;
         row.insert("updatedAt", session.updated_at.timestamp_millis())?;
         row.insert("runningSubagents", i64::from(session.running_subagents))?;
+        set_opt_str(
+            &row,
+            "awaitingInput",
+            session.awaiting_input.map(|kind| match kind {
+                zuse_protocol::AwaitingInputKind::Question => "question",
+                zuse_protocol::AwaitingInputKind::Permission => "permission",
+                zuse_protocol::AwaitingInputKind::Plan => "plan",
+            }),
+        )?;
         // One JSON string: the list is replaced whole on every change, so a
         // nested container would only add merge state nobody reads.
         let background = (!session.background_tasks.is_empty())
@@ -798,6 +807,8 @@ pub(crate) struct RawSession {
     updated_at: i64,
     #[serde(default)]
     running_subagents: u32,
+    #[serde(default)]
+    awaiting_input: Option<zuse_protocol::AwaitingInputKind>,
     /// JSON list written by [`WorkspaceDoc::upsert_session`]; unreadable
     /// content (a newer writer's shape) reads as no tasks.
     #[serde(default)]
@@ -814,6 +825,7 @@ impl From<RawSession> for Session {
             started_at: raw.started_at.map(dt),
             updated_at: dt(raw.updated_at),
             running_subagents: raw.running_subagents,
+            awaiting_input: raw.awaiting_input,
             background_tasks: raw
                 .background_tasks
                 .and_then(|json| serde_json::from_str(&json).ok())
@@ -885,6 +897,7 @@ mod tests {
             checkout_id: None,
             source_context: None,
             config: Some(ChatConfig {
+                plan: false,
                 harness: HarnessId::Mock,
                 model: Some("mock-1".into()),
                 reasoning: None,
@@ -928,6 +941,7 @@ mod tests {
             started_at: Some(ts(3_000)),
             updated_at: ts(3_500),
             running_subagents: 0,
+            awaiting_input: None,
             background_tasks: Vec::new(),
         }
     }
@@ -955,6 +969,7 @@ mod tests {
             serde_json::Value::String("1m".into()),
         );
         let config = ChatConfig {
+            plan: false,
             harness: HarnessId::ClaudeCode,
             model: Some("claude-fable-5".into()),
             reasoning: Some(zuse_protocol::ReasoningLevel::XHigh),
@@ -1033,6 +1048,7 @@ mod tests {
             id: "bg-1".into(),
             kind: zuse_protocol::BackgroundTaskKind::Shell,
             description: "pnpm dev".into(),
+            command: Some("pnpm --filter web dev".into()),
             started_at: ts(3_100),
             ended_at: Some(ts(3_400)),
             outcome: Some(zuse_protocol::BackgroundTaskOutcome::Stopped),

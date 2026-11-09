@@ -3,10 +3,12 @@
 //! per-row Reset and Restore defaults. Changes emit [`ShortcutsEvent`]; the
 //! shell persists them and re-applies the app keymap.
 
+use crate::localization::message as tr;
 use gpui::{
     Context, Entity, EventEmitter, FocusHandle, Keystroke, PathPromptOptions, SharedString, Window,
     div, prelude::*, px,
 };
+use zuse_i18n::messages as msg;
 
 use crate::appshots::{AppshotCapabilities, AppshotDestination};
 use crate::popover::{self, ScrollRailHost};
@@ -52,6 +54,7 @@ pub enum ShortcutsEvent {
     EscapeStopsActiveAgentChanged(bool),
     /// The composer send behavior changed — persist + re-apply.
     ComposerSendBehaviorChanged(ComposerSendBehavior),
+    QuitGestureChanged,
     AppshotsChanged {
         enabled: bool,
         sound_enabled: bool,
@@ -83,6 +86,7 @@ pub struct ShortcutsPage {
     appshot_destination: AppshotDestination,
     appshot_capabilities: AppshotCapabilities,
     send_select: widgets::SelectState,
+    quit_select: widgets::SelectState,
     pull_request_destination_select: widgets::SelectState,
     destination_select: widgets::SelectState,
     capture_access_prompted: bool,
@@ -128,6 +132,7 @@ impl ShortcutsPage {
             appshot_destination,
             appshot_capabilities: crate::appshots::capabilities(),
             send_select: widgets::SelectState::default(),
+            quit_select: widgets::SelectState::default(),
             pull_request_destination_select: widgets::SelectState::default(),
             destination_select: widgets::SelectState::default(),
             capture_access_prompted: false,
@@ -205,6 +210,14 @@ impl ShortcutsPage {
         }
     }
 
+    fn set_quit_gesture(&mut self, gesture: crate::settings::QuitGesture, cx: &mut Context<Self>) {
+        crate::settings::update(SavePolicy::Debounced, cx, |settings| {
+            settings.quit_gesture = gesture;
+        });
+        cx.emit(ShortcutsEvent::QuitGestureChanged);
+        cx.notify();
+    }
+
     fn set_composer_send_behavior(
         &mut self,
         behavior: ComposerSendBehavior,
@@ -278,7 +291,7 @@ impl ShortcutsPage {
                     .min_w(px(160.0))
                     .flex()
                     .flex_col()
-                    .child(widgets::row_title(theme, id.label()))
+                    .child(widgets::row_title(theme, id.localized_label(cx)))
                     .when(
                         matches!(id, ShortcutId::NextSession | ShortcutId::PrevSession),
                         |row| {
@@ -755,9 +768,11 @@ impl Render for ShortcutsPage {
         let escape_stops_active_agent = self.escape_stops_active_agent;
         let send_behavior = self.composer_send_behavior;
         let compact_mode = crate::settings::transcript_compact_mode(cx);
+        let quit_gesture = crate::settings::quit_gesture(cx);
         let customized = self.keymap != KeymapConfig::default()
             || escape_stops_active_agent
-            || send_behavior != ComposerSendBehavior::default();
+            || send_behavior != ComposerSendBehavior::default()
+            || quit_gesture != crate::settings::QuitGesture::default();
         let modifier_label = modifier_send_label(cfg!(target_os = "macos"));
 
         let send_behaviors = [
@@ -785,19 +800,59 @@ impl Render for ShortcutsPage {
         .render(&self.send_select, cx);
 
         let send_behavior_row = widgets::card_row(&theme, true)
+            .child(div().flex_1().min_w(px(160.0)).child(widgets::row_title(
+                &theme,
+                tr(cx, msg::native::send_messages_with),
+            )))
+            .child(send_behavior_control);
+        let quit_gestures = [
+            (crate::settings::QuitGesture::Press, "⌘Q"),
+            (crate::settings::QuitGesture::DoublePress, "Press ⌘Q twice"),
+            (crate::settings::QuitGesture::Hold, "Hold ⌘Q"),
+        ];
+        let quit_gesture_control = widgets::select(
+            "quit-gesture",
+            "Quit Zuse with",
+            &theme,
+            |page: &mut Self| &mut page.quit_select,
+        )
+        .options(
+            quit_gestures
+                .iter()
+                .map(|(_, label)| widgets::SelectOption::new(*label)),
+            quit_gestures
+                .iter()
+                .position(|(gesture, _)| *gesture == quit_gesture)
+                .unwrap_or_default(),
+        )
+        .width(148.0)
+        .on_select(move |page, ix, _, cx| page.set_quit_gesture(quit_gestures[ix].0, cx))
+        .render(&self.quit_select, cx);
+        let quit_gesture_row = widgets::card_row(&theme, true)
             .child(
                 div()
                     .flex_1()
                     .min_w(px(160.0))
-                    .child(widgets::row_title(&theme, "Send messages with")),
+                    .child(widgets::row_title(&theme, "Quit Zuse with"))
+                    .child(widgets::meta_line(
+                        &theme,
+                        vec![
+                            div()
+                                .child("The Quit menu item always quits right away.")
+                                .into_any_element(),
+                        ],
+                    )),
             )
-            .child(send_behavior_control);
+            .child(quit_gesture_control);
         let compact_mode_row = widgets::card_row(&theme, false)
             .child(
                 div()
                     .flex_1()
                     .min_w_0()
-                    .child(widgets::row_title(&theme, "Compact mode"))
+                    .child(widgets::row_title(
+                        &theme,
+                        tr(cx, msg::native::compact_mode),
+                    ))
                     .child(widgets::meta_line(
                         &theme,
                         vec![
@@ -812,7 +867,7 @@ impl Render for ShortcutsPage {
                     .id("transcript-compact-mode-toggle")
                     .tab_index(0)
                     .role(gpui::Role::Switch)
-                    .aria_label("Compact mode")
+                    .aria_label(tr(cx, msg::native::compact_mode))
                     .aria_toggled(if compact_mode {
                         gpui::Toggled::True
                     } else {
@@ -831,7 +886,7 @@ impl Render for ShortcutsPage {
                 div()
                     .flex_1()
                     .min_w_0()
-                    .child(widgets::row_title(&theme, "Compact model picker"))
+                    .child(widgets::row_title(&theme, tr(cx, msg::native::compact_model_picker)))
                     .child(widgets::meta_line(
                         &theme,
                         vec![
@@ -846,7 +901,7 @@ impl Render for ShortcutsPage {
                     .id("compact-model-picker-toggle")
                     .tab_index(0)
                     .role(gpui::Role::Switch)
-                    .aria_label("Compact model picker")
+                    .aria_label(tr(cx, msg::native::compact_model_picker))
                     .aria_toggled(if compact_model_picker {
                         gpui::Toggled::True
                     } else {
@@ -869,7 +924,10 @@ impl Render for ShortcutsPage {
                 div()
                     .flex_1()
                     .min_w(px(160.0))
-                    .child(widgets::row_title(&theme, "Stop agent with Escape"))
+                    .child(widgets::row_title(
+                        &theme,
+                        tr(cx, msg::native::stop_agent_with_escape),
+                    ))
                     .child(widgets::meta_line(
                         &theme,
                         vec![
@@ -889,7 +947,7 @@ impl Render for ShortcutsPage {
                 .debug_selector(|| "escape-stops-active-agent-toggle".into())
                 .tab_index(0)
                 .role(gpui::Role::Switch)
-                .aria_label("Stop active agent with Escape")
+                .aria_label(tr(cx, msg::native::stop_active_agent_with_escape))
                 .aria_toggled(if escape_stops_active_agent {
                     gpui::Toggled::True
                 } else {
@@ -900,6 +958,47 @@ impl Render for ShortcutsPage {
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.set_escape_stops_active_agent(!escape_stops_active_agent, cx);
                 })),
+            );
+        let direct_steer = crate::settings::direct_steer_enabled(cx);
+        let direct_steer_row = widgets::card_row(&theme, false)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(160.0))
+                    .child(widgets::row_title(
+                        &theme,
+                        tr(cx, msg::native::direct_steer),
+                    ))
+                    .child(widgets::meta_line(
+                        &theme,
+                        vec![
+                            div()
+                                .child(tr(cx, msg::native::direct_steer_description))
+                                .into_any_element(),
+                        ],
+                    )),
+            )
+            .child(
+                widgets::toggle_switch(&theme, direct_steer, "direct-steer")
+                    .id("direct-steer-toggle")
+                    .debug_selector(|| "direct-steer-toggle".into())
+                    .tab_index(0)
+                    .role(gpui::Role::Switch)
+                    .aria_label(tr(cx, msg::native::direct_steer))
+                    .aria_toggled(if direct_steer {
+                        gpui::Toggled::True
+                    } else {
+                        gpui::Toggled::False
+                    })
+                    .focus_visible(|s| s.border_2().border_color(theme.accent))
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        crate::settings::update(SavePolicy::Immediate, cx, |settings| {
+                            settings.direct_steer_enabled = !direct_steer
+                        });
+                        cx.refresh_windows();
+                        cx.notify();
+                    })),
             );
         if self.general_page {
             let pull_request_destination = crate::settings::current(cx).pull_request_destination;
@@ -931,7 +1030,10 @@ impl Render for ShortcutsPage {
                     div()
                         .flex_1()
                         .min_w(px(160.0))
-                        .child(widgets::row_title(&theme, "Open pull requests in"))
+                        .child(widgets::row_title(
+                            &theme,
+                            tr(cx, msg::native::open_pull_requests_in),
+                        ))
                         .child(widgets::meta_line(
                             &theme,
                             vec![
@@ -960,25 +1062,29 @@ impl Render for ShortcutsPage {
                             .track_scroll(&self.scroll.scroll)
                             .child(
                                 widgets::settings_page_column(window)
-                                    .child(self.general_header(&theme))
+                                    .child(self.general_header(&theme, cx))
                                     .child(
                                         widgets::section_stack()
                                             .child(self.general_account.clone())
                                             .child(div().mt_3().mb_3().flex().items_center().justify_between()
-                                                .child(div().text_color(theme.text_muted).child("Move chats and settings from Electron"))
-                                                .child(crate::popover::btn_ghost(&theme,"Import from Electron","settings-desktop-import")
+                                                .child(div().text_color(theme.text_muted).child(tr(cx, msg::native::move_chats_and_settings_from_electron)))
+                                                .child(crate::popover::btn_ghost(&theme,&tr(cx, msg::native::import_from_electron),"settings-desktop-import")
                                                     .id("settings-desktop-import")
                                                     .on_click(|_,window,cx|window.dispatch_action(Box::new(crate::desktop_import::OpenDesktopImport),cx))))
                                             .child(self.general_preferences(&theme, cx))
+                                            .when(cfg!(target_os = "macos"), |el| {
+                                                el.child(widgets::section_card(&theme).mt_0().child(quit_gesture_row))
+                                            })
                                             .child(div().flex().flex_col().gap(px(16.))
                                                 .child(
-                                                widgets::group(&theme, "Composer", "").child(
+                                                widgets::group(&theme, tr(cx, msg::commands::command_group_composer), "").child(
                                                     widgets::section_card(&theme)
                                                         .mt_0()
                                                         .child(send_behavior_row)
                                                         .child(compact_mode_row)
                                                         .child(compact_model_picker_row)
-                                                        .child(escape_behavior_row),
+                                                        .child(escape_behavior_row)
+                                                        .child(direct_steer_row),
                                                 ),
                                             )
                                             .child(widgets::section(
@@ -1065,6 +1171,14 @@ impl Render for ShortcutsPage {
                                             .when(!disabled, |el| {
                                                 el.on_click(cx.listener(|this, _, _, cx| {
                                                     this.keymap = KeymapConfig::default();
+                                                    crate::settings::update(
+                                                        SavePolicy::Debounced,
+                                                        cx,
+                                                        |settings| {
+                                                            settings.quit_gesture =
+                                                                Default::default();
+                                                        },
+                                                    );
                                                     this.stop_recording();
                                                     this.conflict_notice = None;
                                                     this.commit(cx);
@@ -1088,7 +1202,10 @@ impl Render for ShortcutsPage {
                                     div().mb_3().flex().justify_end().child(
                                         widgets::ghost_action(&theme)
                                             .id("shortcuts-import-electron")
-                                            .child("Import from Electron…")
+                                            .child(tr(
+                                                cx,
+                                                msg::native::import_from_electron_f24edf6b,
+                                            ))
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 this.import_shortcuts(cx)
                                             })),

@@ -1,4 +1,5 @@
 //! Compact remote access cards and focused connection dialogs shared by both hosts.
+use crate::localization::message as tr;
 use crate::{
     assets::icon,
     palette::rgb,
@@ -6,6 +7,7 @@ use crate::{
     shell::{MUTED, TEXT},
 };
 use gpui::{prelude::*, *};
+use zuse_i18n::messages as msg;
 
 pub fn glyph(name: &str) -> Svg {
     icon(name)
@@ -152,7 +154,11 @@ pub fn button(id: impl Into<ElementId>, title: impl Into<SharedString>) -> State
 pub fn small_button(id: impl Into<ElementId>, title: impl Into<SharedString>) -> Stateful<Div> {
     button(id, title).h(px(24.)).px(px(11.)).text_size(px(10.))
 }
-pub fn method_button(id: impl Into<ElementId>, title: impl Into<SharedString>) -> Stateful<Div> {
+pub fn method_button(
+    id: impl Into<ElementId>,
+    title: impl Into<SharedString>,
+    _cx: &gpui::App,
+) -> Stateful<Div> {
     small_button(id, title).h(px(28.))
 }
 pub fn add_computer_button(id: impl Into<ElementId>) -> Stateful<Div> {
@@ -160,10 +166,12 @@ pub fn add_computer_button(id: impl Into<ElementId>) -> Stateful<Div> {
         .px(px(13.))
         .text_size(px(11.))
         .child(icon("plus").size(px(14.)))
-        .child("Add computer")
+        .child(crate::localization::element(
+            msg::chat::computer_switcher_add_computer,
+        ))
 }
 
-pub fn connect_row(ready: bool) -> Div {
+pub fn connect_row(ready: bool, cx: &gpui::App) -> Div {
     div()
         .w_full()
         .min_w_0()
@@ -196,7 +204,10 @@ pub fn connect_row(ready: bool) -> Div {
                         .text_size(px(12.))
                         .line_height(px(16.))
                         .font_weight(FontWeight::MEDIUM)
-                        .child("Create a connect link"),
+                        .child(tr(
+                            cx,
+                            msg::settings::connect_link_card_create_a_connect_link,
+                        )),
                 )
                 .child(
                     div()
@@ -204,15 +215,15 @@ pub fn connect_row(ready: bool) -> Div {
                         .line_height(px(16.))
                         .text_color(rgb(MUTED))
                         .child(if ready {
-                            "Authorize another device with a link that lasts ten minutes."
+                            ("Authorize another device with a link that lasts ten minutes.").to_string()
                         } else {
-                            "Set up one of the connections above first."
+                            crate::localization::text("settings-connect_link_card_set_up_one_of_the_connections_above_first", cx)
                         }),
                 ),
         )
 }
 
-pub fn empty_computers() -> Div {
+pub fn empty_computers(cx: &gpui::App) -> Div {
     div()
         .flex()
         .items_center()
@@ -232,8 +243,8 @@ pub fn empty_computers() -> Div {
                 .child(icon("monitor").size(px(16.))),
         )
         .child(details(
-            "No other computers yet",
-            "Signed-in computers appear automatically, or you can add one.",
+            tr(cx, msg::native::no_other_computers_yet),
+            tr(cx, msg::settings::using_computers_card_add_computer_help),
         ))
 }
 

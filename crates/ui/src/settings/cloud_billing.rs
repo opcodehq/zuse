@@ -165,10 +165,11 @@ impl CloudBillingPage {
             return;
         };
         self.account_error = None;
+        let params = engine.account_sign_in_params();
         self.account_task = Some(cx.spawn(async move |this, cx| {
             let result = engine
                 .client()
-                .call_scoped(methods::CLOUD_ACCOUNT_SIGN_IN, json!({}))
+                .call_scoped(methods::CLOUD_ACCOUNT_SIGN_IN, params)
                 .await;
             let _ = this.update(cx, |this, cx| {
                 this.account_task = None;
@@ -670,6 +671,7 @@ impl Render for CloudBillingPage {
                         .when(pending, |view| view.opacity(0.6))
                         .on_click(cx.listener(|this, _, _, cx| this.sign_in(cx))),
                         error,
+                        cx,
                     )
                     .mt(px(20.)),
                 );

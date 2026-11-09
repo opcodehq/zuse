@@ -34,6 +34,15 @@ Zuse bundles the SVG icon set and filename/folder associations from
 Symbols is MIT licensed. The complete upstream license and copyright notice is
 retained at `crates/ui/assets/file-icons/LICENSE.symbols`.
 
+## gemoji
+
+The composer's `:shortcode:` emoji table (`crates/ui/src/composer/emoji.tsv`)
+is derived from `db/emoji.json` in
+[gemoji](https://github.com/github/gemoji/tree/fadaeaf1f1a9be82b321316a6c5502e43138b2f6),
+reduced to each emoji and its aliases. gemoji is MIT licensed, Copyright (c)
+2019 GitHub, Inc. The complete upstream license is retained at
+`crates/ui/src/composer/LICENSE.gemoji`.
+
 ## Bundled theme palette adaptations
 
 Zeron includes manually curated palette adaptations derived from the projects
@@ -454,3 +463,26 @@ Source: https://registry.npmjs.org/@boxd-sh/sdk/0.2.14.
 ## Archive icons
 
 Archive, archive and restore action artwork comes from `@hugeicons/core-free-icons` 4.2.1, under the [MIT license](https://hugeicons.com/license-agreement). The copyright and permission notice is retained in [crates/icons/LICENSE-HUGEICONS](crates/icons/LICENSE-HUGEICONS).
+
+## Interface translations and CJK fonts
+
+The Fluent catalogs adapt Zuse desktop translations from `swarajbachu/zuse` at
+`a0155d2dd11f07495a99d3737c9bd40a5c8b4508` under AGPL-3.0-only. Simplified and
+Traditional Chinese include liuweifeng's native-speaker corrections and follow-up
+fixes from [PR #952](https://github.com/swarajbachu/zuse/pull/952), pinned to
+`liuweifeng/zuse` at `0526c0854b75501b5d7dc7d917a06fd2c7be4231`. Original Zuse
+translation contributors retain their attribution. `crates/i18n/migration.json`
+records imported keys, source revisions, and original translation fingerprints.
+
+Regional interface font subsets derive from [Noto Sans CJK 2.004](https://github.com/notofonts/noto-cjk/releases/tag/Sans2.004),
+Copyright 2014–2021 Adobe, under the SIL Open Font License 1.1. The modified fonts
+are named Zuse CJK SC, TC, JP, KR, and Zuse Korean Fallback.
+The latter retains all modern Hangul syllables and Korean Jamo for user text. Their license and source fingerprints are in
+`crates/viewport/assets/fonts/LICENSE.NotoCJK` and `sources.json`.
+
+The full Zuse CJK Fallback face combines Droid Sans and Droid Sans Fallback Full
+from `google-droid-sans-fonts-20200215-9.amzn2023.0.2`, Copyright 2005–2008 The
+Android Open Source Project, under Apache-2.0. CJK outlines are scaled to common
+font units and unencoded glyphs and hints are removed. The full license and notice
+are retained in `crates/viewport/assets/fonts/NOTICE.Droid`; source and derivative
+fingerprints are in `sources.json`.

@@ -288,6 +288,7 @@ impl Harness for PiHarness {
         let model = |r: &RunRequest| r.model.as_deref().filter(|m| *m != "default").is_some();
         live.cwd == next.cwd
             && live.sandbox == next.sandbox
+            && live.plan == next.plan
             && live.auto_approve == next.auto_approve
             && (model(next) || !model(live))
             && (thinking_selected(next) || !thinking_selected(live))

@@ -7,11 +7,13 @@ import os
 from pathlib import Path
 import platform
 import plistlib
+import re
 import shutil
 import struct
 import subprocess
 import tarfile
 import tempfile
+import zipfile
 try:
     import tomllib
 except ModuleNotFoundError:
@@ -19,6 +21,8 @@ except ModuleNotFoundError:
 
 ROOT = Path(__file__).resolve().parent.parent
 BINS = ("zuse", "zuse-server", "zuse-relay")
+HOST_SYSTEMS = {"Linux": "linux", "Darwin": "macos", "Windows": "windows"}
+HOST_ARCHES = {"x86_64": "x86_64", "AMD64": "x86_64", "aarch64": "aarch64", "arm64": "aarch64", "ARM64": "aarch64"}
 
 
 def toolkit_source():
@@ -36,6 +40,21 @@ def toolkit_source():
     raise ValueError("Pinned toolkit legal source is missing; run cargo fetch --locked first")
 
 
+def bash():
+    """Git Bash on Windows, never the System32 WSL launcher that Windows
+    process creation would otherwise pick for a bare "bash"."""
+    if platform.system() != "Windows":
+        return "bash"
+    for directory in os.environ.get("PATH", "").split(os.pathsep):
+        candidate = Path(directory) / "bash.exe"
+        if candidate.is_file() and "system32" not in str(candidate).lower():
+            return str(candidate)
+    git = Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Git/bin/bash.exe"
+    if git.is_file():
+        return str(git)
+    raise ValueError("Git Bash is required to build the browser assets on Windows")
+
+
 def binary_target(path):
     with path.open("rb") as stream:
         header = stream.read(32)
@@ -45,6 +64,14 @@ def binary_target(path):
         return "linux", {62: "x86_64", 183: "aarch64"}.get(struct.unpack_from("<H", header, 18)[0])
     if header[:4] == b"\xcf\xfa\xed\xfe":
         return "macos", {0x1000007: "x86_64", 0x100000C: "aarch64"}.get(struct.unpack_from("<I", header, 4)[0])
+    if header[:2] == b"MZ":
+        with path.open("rb") as stream:
+            stream.seek(0x3C)
+            offset = struct.unpack("<I", stream.read(4))[0]
+            stream.seek(offset)
+            signature = stream.read(6)
+        if len(signature) == 6 and signature[:4] == b"PE\0\0":
+            return "windows", {0x8664: "x86_64", 0xAA64: "aarch64"}.get(struct.unpack_from("<H", signature, 4)[0])
     raise ValueError(f"Unsupported executable format: {path}")
 
 
@@ -81,12 +108,71 @@ if [ "$supplied" = false ]; then set -- --assets "${ZUSE_WEB_ASSETS:-$assets}" "
     return script
 
 
+def windows_launcher(binary):
+    # bin\<name>.cmd supplies the packaged web assets unless the caller passes
+    # --assets, mirroring the POSIX launchers.
+    return (
+        "@echo off\r\n"
+        "setlocal\r\n"
+        'set "root=%~dp0.."\r\n'
+        'set "assets=%ZUSE_WEB_ASSETS%"\r\n'
+        'if not defined assets set "assets=%root%\\web"\r\n'
+        "for %%A in (%*) do (\r\n"
+        '  if "%%~A"=="--assets" goto supplied\r\n'
+        '  echo %%~A| findstr /b /c:"--assets=" >nul && goto supplied\r\n'
+        ")\r\n"
+        f'"%root%\\libexec\\{binary}.exe" --assets "%assets%" %*\r\n'
+        "exit /b %ERRORLEVEL%\r\n"
+        ":supplied\r\n"
+        f'"%root%\\libexec\\{binary}.exe" %*\r\n'
+        "exit /b %ERRORLEVEL%\r\n"
+    )
+
+
 def copy_tree(source, destination):
     # Never follow a build asset symlink into a private profile or host path.
     for path in source.rglob("*"):
         if path.is_symlink():
             raise ValueError(f"Package inputs must not contain symlinks: {path}")
     shutil.copytree(source, destination)
+
+
+def sign_macos(app, run=subprocess.run):
+    """Sign the app with a Developer ID and, when Apple credentials are
+    present, notarize it and staple the ticket. Does nothing without
+    ZUSE_MACOS_SIGN_IDENTITY, so local and preview builds stay unsigned."""
+    identity = os.environ.get("ZUSE_MACOS_SIGN_IDENTITY")
+    if not identity:
+        return False
+    keychain = os.environ.get("ZUSE_MACOS_KEYCHAIN")
+    base = ["codesign", "--force", "--timestamp", "--options", "runtime", "--sign", identity]
+    if keychain:
+        base += ["--keychain", keychain]
+    # Helpers first, then the bundle, whose seal covers the main executable.
+    for name in BINS:
+        if name != "zuse":
+            run(base + [str(app / "Contents/MacOS" / name)], check=True)
+    run(base + ["--entitlements", str(ROOT / "dist/macos/Zuse.entitlements"), str(app)], check=True)
+    run(["codesign", "--verify", "--strict", "--verbose=2", str(app)], check=True)
+    apple_id, password, team = (os.environ.get(key) for key in (
+        "APPLE_ID", "APPLE_APP_SPECIFIC_PASSWORD", "APPLE_TEAM_ID"))
+    if not (apple_id and password and team):
+        return True
+    with tempfile.TemporaryDirectory(prefix="zuse-notarize-") as temporary:
+        upload = Path(temporary) / "Zuse.zip"
+        run(["ditto", "-c", "-k", "--keepParent", str(app), str(upload)], check=True)
+        submitted = run(["xcrun", "notarytool", "submit", str(upload), "--apple-id", apple_id,
+                         "--password", password, "--team-id", team, "--wait",
+                         "--output-format", "json"], check=True, capture_output=True, text=True)
+        result = json.loads(submitted.stdout)
+        if result.get("status") != "Accepted":
+            run(["xcrun", "notarytool", "log", result.get("id", ""), "--apple-id", apple_id,
+                 "--password", password, "--team-id", team], check=False)
+            raise ValueError(f"Notarization was not accepted: {result.get('status')}")
+    run(["xcrun", "stapler", "staple", str(app)], check=True)
+    run(["xcrun", "stapler", "validate", str(app)], check=True)
+    run(["spctl", "--assess", "--type", "execute", "--verbose=2", str(app)], check=True)
+    return True
 
 
 def assemble(destination, binaries, assets, system, arch, version, provenance):
@@ -101,16 +187,30 @@ def assemble(destination, binaries, assets, system, arch, version, provenance):
     executable_dir = destination / "Zuse.app/Contents/MacOS" if macos else destination / "libexec"
     executable_dir.mkdir(parents=True)
     resources.mkdir(parents=True)
+    windows = system == "windows"
     for name, source in zip(BINS, binaries):
+        if windows:
+            # The desktop app sits at the top for double-clicking; helpers take
+            # --assets through their bin\*.cmd launchers.
+            target = destination / "zuse.exe" if name == "zuse" else executable_dir / f"{name}.exe"
+            shutil.copyfile(source, target)
+            if name != "zuse":
+                (destination / "bin").mkdir(exist_ok=True)
+                (destination / "bin" / f"{name}.cmd").write_bytes(windows_launcher(name).encode())
+            continue
         target = executable_dir / name
         shutil.copyfile(source, target)
         target.chmod(0o755)
         write_executable(destination / "bin" / name, launcher(name, macos))
-    copy_tree(assets, resources / "web" if macos else executable_dir / "web")
+    # Each layout keeps web/ where the desktop app's asset discovery looks:
+    # beside the executable, or ../Resources/web inside the macOS bundle.
+    copy_tree(assets, resources / "web" if macos else destination / "web" if windows else executable_dir / "web")
     if macos:
         info = plistlib.loads((ROOT / "dist/macos/Info.plist").read_bytes())
-        info["CFBundleShortVersionString"] = version
-        info["CFBundleVersion"] = version
+        # Apple bundle versions remain numeric; the archive and manifest retain
+        # the full preview version.
+        info["CFBundleShortVersionString"] = version.split("-", 1)[0]
+        info["CFBundleVersion"] = version.split("-", 1)[0]
         (destination / "Zuse.app/Contents/Info.plist").write_bytes(plistlib.dumps(info))
         png = (ROOT / "dist/app-icon.png").read_bytes()
         if png[:8] != b"\x89PNG\r\n\x1a\n" or struct.unpack_from(">II", png, 16) != (1024, 1024):
@@ -118,7 +218,7 @@ def assemble(destination, binaries, assets, system, arch, version, provenance):
         # The standard ic10 element contains a full 1024px PNG representation.
         icon = b"ic10" + struct.pack(">I", len(png) + 8) + png
         (resources / "zuse.icns").write_bytes(b"icns" + struct.pack(">I", len(icon) + 8) + icon)
-    else:
+    elif not windows:
         icons = destination / "share/icons/hicolor/1024x1024/apps"
         icons.mkdir(parents=True)
         shutil.copyfile(ROOT / "dist/app-icon.png", icons / "sh.zuse.app.png")
@@ -139,6 +239,9 @@ def assemble(destination, binaries, assets, system, arch, version, provenance):
         target = legal / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, target)
+    if macos:
+        # Everything inside the app must be in place before it is sealed.
+        sign_macos(destination / "Zuse.app")
     (destination / "docs").mkdir()
     shutil.copyfile(ROOT / "internal-docs/development.md", destination / "docs/development.md")
     readme = (ROOT / "internal-docs/packaging.md").read_text().replace("(development.md)", "(docs/development.md)")
@@ -155,27 +258,39 @@ def assemble(destination, binaries, assets, system, arch, version, provenance):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--platform", choices=("linux", "macos"))
+    parser.add_argument("--platform", choices=("linux", "macos", "windows"))
     parser.add_argument("--arch", choices=("x86_64", "aarch64"))
     parser.add_argument("--profile", choices=("release", "dev"), default="release")
+    parser.add_argument("--version", help="Release version, optionally with a prerelease suffix")
     parser.add_argument("--binaries", type=Path, help="Assemble prebuilt executables from this directory; skips all builds")
     parser.add_argument("--assets", type=Path, default=ROOT / "dist/web")
     parser.add_argument("--output", type=Path, default=ROOT / "dist/build")
+    # Release jobs build without signing credentials, then sign in a separate
+    # step that runs no dependency build code.
+    stage = parser.add_mutually_exclusive_group()
+    stage.add_argument("--build-only", action="store_true", help="Build the web assets and executables, then stop")
+    stage.add_argument("--skip-build", action="store_true", help="Assemble what --build-only produced in this checkout")
     args = parser.parse_args()
-    system = args.platform or {"Linux": "linux", "Darwin": "macos"}.get(platform.system())
-    arch = args.arch or {"x86_64": "x86_64", "aarch64": "aarch64", "arm64": "aarch64"}.get(platform.machine())
+    workspace_version = tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"]["package"]["version"]
+    version = args.version or workspace_version
+    if not re.fullmatch(re.escape(workspace_version) + r"(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?", version):
+        parser.error("Release version must match the workspace version, with an optional prerelease suffix")
+    system = args.platform or HOST_SYSTEMS.get(platform.system())
+    arch = args.arch or HOST_ARCHES.get(platform.machine())
     if not system or not arch:
         parser.error("Unsupported host; specify --platform and --arch for prebuilt inputs")
     if args.binaries is None:
-        host = ({"Linux": "linux", "Darwin": "macos"}.get(platform.system()),
-                {"x86_64": "x86_64", "aarch64": "aarch64", "arm64": "aarch64"}.get(platform.machine()))
+        host = (HOST_SYSTEMS.get(platform.system()), HOST_ARCHES.get(platform.machine()))
         if (system, arch) != host:
             parser.error("Build on the target host, or supply --binaries for an existing target build")
         if args.assets.resolve() != (ROOT / "dist/web").resolve():
             parser.error("Default builds produce dist/web; use --binaries to assemble other assets")
-        subprocess.run(["bash", "scripts/build-web.sh", "--release"], cwd=ROOT, check=True)
-        subprocess.run(["cargo", "+stable", "build", "--locked", "--profile", args.profile,
-                        "-p", "zuse", "-p", "zuse-cli", "-p", "zuse-relay", "--bins"], cwd=ROOT, check=True)
+        if not args.skip_build:
+            subprocess.run([bash(), "scripts/build-web.sh", "--release"], cwd=ROOT, check=True)
+            subprocess.run(["cargo", "+stable", "build", "--locked", "--profile", args.profile,
+                            "-p", "zuse", "-p", "zuse-cli", "-p", "zuse-relay", "--bins"], cwd=ROOT, check=True)
+        if args.build_only:
+            return
         target = Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target"))
         if not target.is_absolute():
             target = ROOT / target
@@ -190,20 +305,26 @@ def main():
         provenance.update(source_revision=revision.stdout.strip(), working_tree_dirty=bool(dirty.stdout))
     else:
         provenance = {"inputs": "prebuilt", "profile": "unspecified"}
-    version = tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"]["package"]["version"]
     name = f"zuse-{version}-{system}-{arch}"
     args.output.mkdir(parents=True, exist_ok=True)
-    archive = args.output / f"{name}.tar.gz"
+    # Windows users expect a zip; Explorer opens it without extra tools.
+    archive = args.output / f"{name}.zip" if system == "windows" else args.output / f"{name}.tar.gz"
     if archive.exists():
         parser.error(f"Refusing to replace {archive}; choose a new --output directory")
     # A failure never publishes a half-assembled archive.
     with tempfile.TemporaryDirectory(prefix=".zuse-package-", dir=args.output) as temporary:
         stage = Path(temporary) / name
-        assemble(stage, [args.binaries / name for name in BINS], args.assets,
+        suffix = ".exe" if system == "windows" else ""
+        assemble(stage, [args.binaries / f"{binary}{suffix}" for binary in BINS], args.assets,
                  system, arch, version, provenance)
         pending = Path(temporary) / archive.name
-        with tarfile.open(pending, "w:gz", compresslevel=6) as bundle:
-            bundle.add(stage, arcname=name)
+        if system == "windows":
+            with zipfile.ZipFile(pending, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as bundle:
+                for path in sorted(stage.rglob("*")):
+                    bundle.write(path, Path(name) / path.relative_to(stage))
+        else:
+            with tarfile.open(pending, "w:gz", compresslevel=6) as bundle:
+                bundle.add(stage, arcname=name)
         os.replace(pending, archive)
     print(archive.resolve())
 

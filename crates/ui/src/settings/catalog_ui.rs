@@ -122,7 +122,13 @@ pub fn segmented_tabs(
                 .role(gpui::Role::Tab)
                 .aria_selected(active)
                 .tab_index(0)
-                .when(active, |tab| tab.bg(theme.bg).text_color(theme.text))
+                .when(active, |tab| {
+                    tab.relative()
+                        .bg(theme.emboss_fill())
+                        .shadow(theme.emboss_shadow())
+                        .text_color(theme.text)
+                        .child(crate::surface_chrome::emboss_rim(5.0, theme))
+                })
                 .when(!active, |tab| {
                     let text = theme.text;
                     tab.text_color(theme.text_muted)

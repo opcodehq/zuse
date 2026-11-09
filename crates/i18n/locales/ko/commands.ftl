@@ -1,0 +1,173 @@
+# Imported from Zuse desktop catalogs. See migration.json for provenance.
+# Edit individual translations here; do not regenerate this file.
+
+commands-commands_no_authenticated_agent = 인증된 에이전트 없음
+
+commands-commands_connect_an_agent_in_cloud_authentication_before_opening_a_new_tab = 새 탭을 열기 전에 클라우드 인증에서 에이전트를 연결하세요.
+
+commands-default_keybindings_new_chat = 새 채팅
+
+commands-default_keybindings_start_a_new_session_in_the_selected_project = 선택한 프로젝트에서 새 세션을 시작합니다.
+
+commands-default_keybindings_open_project = 프로젝트 열기…
+
+commands-default_keybindings_pick_a_folder_to_add_to_the_workspace = 작업공간에 추가할 폴더를 선택하세요.
+
+commands-default_keybindings_settings = 설정
+
+commands-default_keybindings_open_or_close_the_settings_page = 설정 페이지 열기 또는 닫기
+
+commands-default_keybindings_search_files = 파일 검색
+
+commands-default_keybindings_find_and_open_a_file_in_the_current_project_or_worktree = 현재 프로젝트 또는 작업 트리에서 파일 찾기 및 열기
+
+commands-default_keybindings_close_tab = 탭 닫기
+
+commands-default_keybindings_close_the_active_chat_tab = 활성 채팅 탭 닫기
+
+commands-default_keybindings_toggle_projects_panel = 프로젝트 패널 전환
+
+commands-default_keybindings_show_or_hide_the_left_projects_sidebar = 왼쪽 프로젝트 사이드바 표시 또는 숨기기
+
+commands-default_keybindings_toggle_files_panel = 파일 패널 전환
+
+commands-default_keybindings_show_or_hide_the_right_files_sidebar = 올바른 파일 사이드바 표시 또는 숨기기
+
+commands-default_keybindings_toggle_terminal = 터미널 전환
+
+commands-default_keybindings_open_the_right_pane_and_switch_to_the_terminal_tab = 오른쪽 창을 열고 터미널 탭으로 전환하십시오.
+
+commands-default_keybindings_focus_composer = 포커스 작곡가
+
+commands-default_keybindings_move_the_cursor_into_the_chat_input = 커서를 채팅 입력으로 이동하세요.
+
+commands-default_keybindings_next_tab = 다음 탭
+
+commands-default_keybindings_switch_to_the_next_tab_in_the_active_chat = 활성 채팅의 다음 탭으로 전환
+
+commands-default_keybindings_previous_tab = 이전 탭
+
+commands-default_keybindings_switch_to_the_previous_tab_in_the_active_chat = 활성 채팅에서 이전 탭으로 전환
+
+commands-default_keybindings_go_to_tab_1 = 탭 1로 이동
+
+commands-default_keybindings_jump_to_the_first_tab = 첫 번째 탭으로 이동
+
+commands-default_keybindings_go_to_tab_2 = 탭 2로 이동
+
+commands-default_keybindings_jump_to_the_second_tab = 두 번째 탭으로 이동
+
+commands-default_keybindings_go_to_tab_3 = 탭 3으로 이동
+
+commands-default_keybindings_jump_to_the_third_tab = 세 번째 탭으로 이동
+
+commands-default_keybindings_go_to_tab_4 = 탭 4로 이동
+
+commands-default_keybindings_jump_to_the_fourth_tab = 네 번째 탭으로 이동
+
+commands-default_keybindings_go_to_tab_5 = 탭 5로 이동
+
+commands-default_keybindings_jump_to_the_fifth_tab = 다섯 번째 탭으로 이동
+
+commands-default_keybindings_go_to_tab_6 = 탭 6으로 이동
+
+commands-default_keybindings_jump_to_the_sixth_tab = 여섯 번째 탭으로 이동
+
+commands-default_keybindings_go_to_tab_7 = 탭 7로 이동
+
+commands-default_keybindings_jump_to_the_seventh_tab = 일곱 번째 탭으로 이동
+
+commands-default_keybindings_go_to_tab_8 = 탭 8로 이동
+
+commands-default_keybindings_jump_to_the_eighth_tab = 여덟 번째 탭으로 이동
+
+commands-default_keybindings_go_to_last_tab = 마지막 탭으로 이동
+
+commands-default_keybindings_jump_to_the_last_tab_in_the_active_chat = 활성 채팅의 마지막 탭으로 이동
+
+commands-default_keybindings_new_tab = 새 탭
+
+commands-default_keybindings_open_a_new_session_in_the_active_chat = 활성 채팅에서 새 세션 열기
+
+commands-default_keybindings_next_chat = 다음 채팅
+
+commands-default_keybindings_switch_to_the_next_chat_in_the_sidebar = 사이드바에서 다음 채팅으로 전환
+
+commands-default_keybindings_previous_chat = 이전 채팅
+
+commands-default_keybindings_switch_to_the_previous_chat_in_the_sidebar = 사이드바에서 이전 채팅으로 전환
+
+commands-default_keybindings_next_panel = 다음 패널
+
+commands-default_keybindings_switch_to_the_next_panel_in_the_right_pane = 오른쪽 창의 다음 패널로 전환
+
+commands-default_keybindings_previous_panel = 이전 패널
+
+commands-default_keybindings_switch_to_the_previous_panel_in_the_right_pane = 오른쪽 창에서 이전 패널로 전환
+
+commands-default_keybindings_focus_next_pane = 다음 창에 초점 맞추기
+
+commands-default_keybindings_move_keyboard_focus_to_the_next_region_sidebar_chat_composer_righ = 키보드 포커스를 다음 영역으로 이동(사이드바 → 채팅 → 작성기 → 오른쪽 창)
+
+commands-default_keybindings_focus_previous_pane = 이전 창에 초점 맞추기
+
+commands-default_keybindings_move_keyboard_focus_to_the_previous_region = 키보드 포커스를 이전 영역으로 이동
+
+commands-default_keybindings_switch_chat = 채팅 전환…
+
+commands-default_keybindings_open_the_quick_switcher_to_jump_to_any_chat_in_any_project = 퀵 스위처를 열어 모든 프로젝트의 채팅으로 이동하세요.
+
+commands-default_keybindings_submit_message = 메시지 제출
+
+commands-default_keybindings_send_the_current_composer_contents = 현재 작곡가 콘텐츠 보내기
+
+commands-default_keybindings_insert_newline = 개행 삽입
+
+commands-default_keybindings_add_a_line_break_instead_of_submitting = 제출하는 대신 줄 바꿈을 추가하세요.
+
+commands-default_keybindings_force_submit = 강제 제출
+
+commands-default_keybindings_submit_regardless_of_mention_skill_popover_state = 멘션/스킬 팝오버 상태에 관계없이 제출
+
+commands-default_keybindings_toggle_plan_mode = 계획 모드 전환
+
+commands-default_keybindings_switch_between_normal_and_plan_mode_composer = 일반 모드와 계획 모드 작성기 간 전환
+
+commands-default_keybindings_save_file = 파일 저장
+
+commands-default_keybindings_write_the_open_file_to_disk = 열린 파일을 디스크에 쓰기
+
+commands-default_keybindings_annotate_selection = 선택 항목에 주석 달기
+
+commands-default_keybindings_pin_a_comment_on_the_selected_code_and_add_it_to_the_composer = 선택한 코드에 댓글을 고정하고 작곡가에 추가하세요.
+
+commands-command_group_navigation = 네비게이션
+
+commands-command_group_editor = 편집자
+
+commands-command_group_composer = 작곡가
+
+commands-command_group_application = 신청
+
+commands-new_chat_without_project = 프로젝트 없이 새 채팅
+
+commands-new_chat_without_project_description = 전용 작업 폴더에서 새 채팅 시작
+
+commands-commands_no_background_tasks = 중지할 백그라운드 작업이 없습니다
+commands-commands_stop_background_tasks_confirm =
+    { $count ->
+       *[other] { $shortcut }을(를) 한 번 더 누르면 백그라운드 작업 { $count }개를 중지합니다
+    }
+commands-commands_stopping_background_tasks =
+    { $count ->
+       *[other] 백그라운드 작업 { $count }개를 중지하는 중
+    }
+commands-shortcuts_panel_title = 키보드 단축키
+commands-shortcuts_panel_description = 빈 작성기에 ?를 입력하면 언제든지 이 패널을 열 수 있습니다.
+commands-shortcuts_panel_chat = 채팅
+commands-shortcuts_panel_triggers = 작성기에 입력
+commands-shortcuts_panel_trigger_command = 명령 실행
+commands-shortcuts_panel_trigger_file = 파일 언급
+commands-shortcuts_panel_trigger_skill = 스킬 사용
+commands-shortcuts_panel_customize = 설정에서 단축키 변경
+commands-shortcuts_panel_close = 닫기

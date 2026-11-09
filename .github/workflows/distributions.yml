@@ -1,0 +1,253 @@
+name: Native installers
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published release to add installers and architectures to
+        required: true
+      archive_run_id:
+        description: Previous installer run with verified native input artifacts
+        type: string
+        default: ''
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
+      archive_run_id:
+        type: string
+        default: ''
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: distributions-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  archives:
+    permissions:
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            platform: linux
+            arch: x86_64
+          - os: ubuntu-24.04-arm
+            platform: linux
+            arch: aarch64
+          - os: macos-latest
+            platform: macos
+            arch: aarch64
+          - os: macos-15-intel
+            platform: macos
+            arch: x86_64
+          - os: windows-latest
+            platform: windows
+            arch: x86_64
+    runs-on: ${{ inputs.archive_run_id != '' && 'ubuntu-24.04-arm' || matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - if: inputs.archive_run_id != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: distribution-input-${{ matrix.platform }}-${{ matrix.arch }}
+          path: incoming
+          run-id: ${{ inputs.archive_run_id }}
+          github-token: ${{ github.token }}
+      - id: existing
+        name: Download or reuse and verify existing archive
+        env:
+          CACHED_RUN_ID: ${{ inputs.archive_run_id }}
+        run: |
+          args=()
+          if [ -n "$CACHED_RUN_ID" ]; then args+=(--cached); fi
+          python scripts/prepare-distribution.py --tag "$RELEASE_TAG" --platform ${{ matrix.platform }} --arch ${{ matrix.arch }} "${args[@]}"
+      # Missing architectures build from the immutable release tag. No signing
+      # credentials are available to dependency builds on these runners.
+      - if: steps.existing.outputs.found != 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+          path: source
+      - if: steps.existing.outputs.found != 'true'
+        uses: dtolnay/rust-toolchain@stable
+      - if: steps.existing.outputs.found != 'true'
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: source
+          key: distribution-${{ matrix.platform }}-${{ matrix.arch }}
+      - if: steps.existing.outputs.found != 'true' && runner.os == 'Linux'
+        name: Install native build dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake clang libclang-dev pkg-config libssl-dev libfontconfig-dev libfreetype-dev libxcb1-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libvulkan-dev libasound2-dev libwebkit2gtk-4.1-dev libjson-glib-dev
+      - if: steps.existing.outputs.found != 'true'
+        name: Reuse the matching release browser assets
+        run: python scripts/reuse-release-web.py "$RELEASE_TAG"
+      - if: steps.existing.outputs.found != 'true'
+        name: Build and smoke-test the missing native architecture
+        working-directory: source
+        run: |
+          cargo build --locked --release -p zuse -p zuse-cli -p zuse-relay --bins
+          python -c 'import subprocess; subprocess.run(["target/release/zuse", "--noop-browser"], check=True, timeout=30)'
+          python scripts/package.py --platform ${{ matrix.platform }} --arch ${{ matrix.arch }} --version "${{ steps.existing.outputs.version }}" --skip-build --output ../built
+      - if: inputs.archive_run_id == '' && steps.existing.outputs.found == 'true' && runner.os == 'Linux'
+        name: Install native runtime libraries for the archive smoke check
+        run: sudo apt-get update && sudo apt-get install -y libasound2t64 libxkbcommon-x11-0 libvulkan1 libwebkit2gtk-4.1-0 libjson-glib-1.0-0
+      - name: Prepare verified input artifact
+        env:
+          FOUND: ${{ steps.existing.outputs.found }}
+          FILENAME: ${{ steps.existing.outputs.filename }}
+        run: |
+          python - <<'PY'
+          import hashlib, os, shutil
+          from pathlib import Path
+          root = Path('input')
+          root.mkdir()
+          source = Path('incoming' if os.environ['FOUND'] == 'true' else 'built') / os.environ['FILENAME']
+          target = root / source.name
+          shutil.copyfile(source, target)
+          with target.open('rb') as stream:
+              digest = hashlib.file_digest(stream, 'sha256').hexdigest()
+          (root / 'SHA256SUMS').write_text(digest + '  ' + target.name + '\n')
+          if os.environ['FOUND'] != 'true' or Path('incoming/new-architecture').is_file():
+              (root / 'new-architecture').write_text('1\n')
+          PY
+      # Execute app code here, before any runner receives signing credentials.
+      - name: Smoke-test the verified native archive without signing secrets
+        if: inputs.archive_run_id == ''
+        run: python scripts/verify-native-archive.py input/zuse-* input/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: distribution-input-${{ matrix.platform }}-${{ matrix.arch }}
+          path: input/*
+          if-no-files-found: error
+          retention-days: 2
+
+  formats:
+    permissions:
+      contents: read
+    needs: archives
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            platform: linux
+            arch: x86_64
+          - os: ubuntu-24.04-arm
+            platform: linux
+            arch: aarch64
+          - os: macos-latest
+            platform: macos
+            arch: aarch64
+          - os: macos-15-intel
+            platform: macos
+            arch: x86_64
+          - os: windows-latest
+            platform: windows
+            arch: x86_64
+    # Image creation and Apple signature tools do not execute the app. Both
+    # DMG architectures can use the available Intel signing runner pool.
+    runs-on: ${{ matrix.platform == 'macos' && 'macos-15-intel' || matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: distribution-input-${{ matrix.platform }}-${{ matrix.arch }}
+          path: input
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y rpm rpm2cpio cpio libwebkit2gtk-4.1-0 libjson-glib-1.0-0 libasound2t64 libxkbcommon-x11-0 libvulkan1
+      - if: runner.os == 'Windows'
+        name: Ensure the Windows installer compiler is available
+        run: |
+          if [ ! -f '/c/Program Files (x86)/Inno Setup 6/ISCC.exe' ]; then
+            choco install innosetup --no-progress -y
+          fi
+      # This fresh runner only packages verified artifacts. It never executes
+      # dependency build code while the Apple identity is loaded.
+      - if: runner.os == 'macOS'
+        name: Load the macOS signing identity
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+        run: bash .github/scripts/macos-signing.sh
+      - name: Build installers
+        env:
+          APPLE_ID: ${{ runner.os == 'macOS' && secrets.APPLE_ID || '' }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ runner.os == 'macOS' && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ runner.os == 'macOS' && secrets.APPLE_TEAM_ID || '' }}
+        run: |
+          args=()
+          if [ '${{ matrix.platform }}' = macos ] && [ -f input/new-architecture ]; then args+=(--sign-app); fi
+          python scripts/distribution.py --archive input/zuse-* --checksums input/SHA256SUMS --output output "${args[@]}"
+      - if: runner.os == 'Linux'
+        name: Verify Debian and RPM package metadata and payloads
+        run: |
+          dpkg-deb --info output/*.deb
+          dpkg-deb --contents output/*.deb
+          rpm -qpi output/*.rpm
+          rpm -qpl output/*.rpm
+          dpkg-deb --extract output/*.deb installed-deb
+          installed-deb/opt/zuse/bin/zuse --noop-browser
+          sudo apt-get install -y ./output/*.deb
+          zuse --noop-browser
+          sudo apt-get remove -y zuse
+          mkdir installed-rpm
+          rpm2cpio output/*.rpm | (cd installed-rpm && cpio -idm --no-absolute-filenames)
+          installed-rpm/opt/zuse/bin/zuse --noop-browser
+      - if: runner.os == 'Windows'
+        name: Verify setup, startup and uninstall preserve profiles
+        run: python scripts/test-windows-installer.py output/*-setup.exe
+      - name: Remove the signing identity
+        if: always() && runner.os == 'macOS'
+        run: |
+          rm -f "$RUNNER_TEMP/certificate.p12"
+          keychain="$RUNNER_TEMP/zuse-signing.keychain-db"
+          if [ -e "$keychain" ]; then security delete-keychain "$keychain"; fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: distribution-output-${{ matrix.platform }}-${{ matrix.arch }}
+          path: output/*
+          if-no-files-found: error
+
+  publish:
+    needs: formats
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: distribution-output-*
+          path: output
+          merge-multiple: true
+      - name: Publish verified installers and updated checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          cp scripts/install.sh output/install.sh
+          python scripts/publish_distributions.py "$RELEASE_TAG" output
+          gh release view "$RELEASE_TAG" -R opcodehq/zuse --json body --jq .body > current-notes.md
+          python scripts/distribution-notes.py "$RELEASE_TAG" current-notes.md > installer-notes.md
+          gh release edit "$RELEASE_TAG" -R opcodehq/zuse --notes-file installer-notes.md

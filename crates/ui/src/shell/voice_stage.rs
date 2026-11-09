@@ -2,6 +2,8 @@
 //! move between threads while the orchestrator keeps listening.
 
 use super::*;
+use crate::localization::message as tr;
+use zuse_i18n::messages as msg;
 use zuse_protocol::voice::VoiceWork;
 
 /// The stage paints the hero preset magnified to fill the canvas.
@@ -111,7 +113,7 @@ impl Shell {
             .id("voice-composer-orb")
             .debug_selector(|| "voice-composer-orb".into())
             .role(gpui::Role::Button)
-            .aria_label("Open voice")
+            .aria_label(tr(cx, msg::native::open_voice))
             .tab_index(0)
             .rounded_full()
             .cursor_pointer()
@@ -477,7 +479,7 @@ impl Shell {
         let end = div()
             .id("voice-bar-end")
             .role(gpui::Role::Button)
-            .aria_label("End voice")
+            .aria_label(tr(cx, msg::native::end_voice))
             .tab_index(0)
             .h(px(BAR_CONTROL))
             .px(px(20.0))
@@ -509,7 +511,7 @@ impl Shell {
             );
 
         let back = round_control("voice-bar-back", &popup, false)
-            .aria_label("Back to chats")
+            .aria_label(tr(cx, msg::shell::hosted_back_to_chats))
             .tooltip(stage_tooltip("Back to chats · Esc"))
             .on_click(cx.listener(|this, _, _, cx| this.set_voice_stage_open(false, cx)))
             .child(

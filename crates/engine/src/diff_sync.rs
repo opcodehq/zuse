@@ -73,6 +73,9 @@ pub const MAX_PATCH_BYTES: usize = 3 * 1024 * 1024;
 pub const MAX_DIFF_SOURCE_BYTES: usize = 2 * 1024 * 1024;
 /// Trailing debounce after a filesystem event burst.
 const WATCH_DEBOUNCE: Duration = Duration::from_millis(500);
+/// Quiet time after an edit when captures are cheap; large checkouts earn
+/// more, up to [`WATCH_DEBOUNCE`], so a capture cannot run back to back.
+const WATCH_DEBOUNCE_MIN: Duration = Duration::from_millis(150);
 /// Slow repair pass: re-reconcile + re-sync every checkout.
 const REPAIR_INTERVAL: Duration = Duration::from_secs(120);
 /// How long an archived chat stays tracked after its last viewer leaves —
@@ -785,7 +788,7 @@ fn exceeds_watch_budget(root: &Path) -> bool {
 /// dev checkout's target/ alone blows the budget). Linked worktrees keep
 /// their git dir outside the root, so it rides along whenever the root's
 /// watch doesn't already cover it.
-fn watch_targets(identity: &CheckoutIdentity) -> Vec<PathBuf> {
+pub(crate) fn watch_targets(identity: &CheckoutIdentity) -> Vec<PathBuf> {
     let mut targets = Vec::new();
     let root_fits = !exceeds_watch_budget(&identity.root);
     if root_fits {
@@ -879,10 +882,18 @@ async fn entry_task(
     mut kick_rx: mpsc::UnboundedReceiver<()>,
     cancel: CancellationToken,
 ) {
+    let mut last_capture = Duration::ZERO;
     while kick_rx.recv().await.is_some() {
+        let debounce = (last_capture * 2).clamp(WATCH_DEBOUNCE_MIN, WATCH_DEBOUNCE);
+        let burst_deadline = tokio::time::Instant::now() + Duration::from_secs(2);
         // Trailing debounce: wait for the burst to settle.
         loop {
-            match tokio::time::timeout(WATCH_DEBOUNCE, kick_rx.recv()).await {
+            if tokio::time::Instant::now() >= burst_deadline {
+                break;
+            }
+            let wait =
+                debounce.min(burst_deadline.saturating_duration_since(tokio::time::Instant::now()));
+            match tokio::time::timeout(wait, kick_rx.recv()).await {
                 Ok(Some(())) => continue,
                 Ok(None) => return, // entry closed mid-burst
                 Err(_) => break,
@@ -900,10 +911,12 @@ async fn entry_task(
         }
         // The upgraded Arc would let a sync outlive shutdown — race the token
         // so an in-flight sidecar POST is dropped, not completed.
+        let started = Instant::now();
         tokio::select! {
             _ = cancel.cancelled() => return,
             _ = sync_entry(&inner, &entry) => {}
         }
+        last_capture = started.elapsed();
     }
 }
 
@@ -912,15 +925,37 @@ async fn entry_task(
 // ---------------------------------------------------------------------------
 
 async fn sync_entry(inner: &Arc<DiffSyncInner>, entry: &Arc<CheckoutEntry>) {
-    let snapshot = match capture_diff(&inner.repos, &entry.identity.root).await {
-        Ok(snapshot) => snapshot,
-        Err(err) => {
-            tracing::debug!(checkout = %entry.identity.root.display(), error = %err,
+    // File badges must not wait for patch generation or untracked file reads.
+    let status = capture_git(
+        &entry.identity.root,
+        &[
+            "--no-optional-locks",
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+        ],
+        2 * 1024 * 1024,
+    )
+    .await;
+    let status_available = status.is_ok();
+    if let Ok(status) = &status {
+        let (files, complete) = git_status::parse(&status.stdout, status.truncated);
+        git_status::publish(inner, entry, files, complete);
+    }
+    let snapshot =
+        match capture_diff_with_status(&inner.repos, &entry.identity.root, None, status.ok()).await
+        {
+            Ok(snapshot) => snapshot,
+            Err(err) => {
+                tracing::debug!(checkout = %entry.identity.root.display(), error = %err,
                 "diff-sync: capture failed");
-            git_status::publish(inner, entry, Vec::new(), false);
-            return;
-        }
-    };
+                if !status_available {
+                    git_status::publish(inner, entry, Vec::new(), false);
+                }
+                return;
+            }
+        };
 
     if let Some((files, complete)) = &snapshot.git_status {
         git_status::publish(inner, entry, files.clone(), *complete);
@@ -1492,7 +1527,7 @@ pub async fn capture_diff_against(
     root: &Path,
     base_override: Option<&str>,
 ) -> Result<DiffSnapshot, EngineError> {
-    capture_scoped_diff(repos, root, base_override, "working").await
+    capture_diff_with_status(repos, root, base_override, None).await
 }
 
 /// Explicit index/worktree scopes used by native mobile review tabs.
@@ -1501,6 +1536,26 @@ pub async fn capture_scoped_diff(
     root: &Path,
     base_override: Option<&str>,
     scope: &str,
+) -> Result<DiffSnapshot, EngineError> {
+    capture_scoped_diff_with_status(repos, root, base_override, scope, None).await
+}
+
+/// The working-tree capture, reusing a status the caller already read.
+async fn capture_diff_with_status(
+    repos: &Repos,
+    root: &Path,
+    base_override: Option<&str>,
+    status: Option<Capture>,
+) -> Result<DiffSnapshot, EngineError> {
+    capture_scoped_diff_with_status(repos, root, base_override, "working", status).await
+}
+
+async fn capture_scoped_diff_with_status(
+    repos: &Repos,
+    root: &Path,
+    base_override: Option<&str>,
+    scope: &str,
+    status: Option<Capture>,
 ) -> Result<DiffSnapshot, EngineError> {
     let head = capture_git(root, &["rev-parse", "--verify", "HEAD"], 256)
         .await
@@ -1550,18 +1605,23 @@ pub async fn capture_scoped_diff(
     let tracked = capture_git(root, &patch_args, MAX_PATCH_BYTES).await?;
     // Untracked listing via porcelain status; `--no-optional-locks` keeps this
     // read-only (a status-triggered index refresh would re-kick our own watcher).
-    let status = capture_git(
-        root,
-        &[
-            "--no-optional-locks",
-            "status",
-            "--porcelain=v1",
-            "-z",
-            "--untracked-files=all",
-        ],
-        2 * 1024 * 1024,
-    )
-    .await?;
+    let status = match status {
+        Some(status) => status,
+        None => {
+            capture_git(
+                root,
+                &[
+                    "--no-optional-locks",
+                    "status",
+                    "--porcelain=v1",
+                    "-z",
+                    "--untracked-files=all",
+                ],
+                2 * 1024 * 1024,
+            )
+            .await?
+        }
+    };
 
     let mut files = parse_name_status(&names.stdout);
     apply_numstat(&mut files, &nums.stdout);

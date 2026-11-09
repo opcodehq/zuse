@@ -62,6 +62,7 @@ icon_assets![
     // A thread's earlier conversations (the tab strip's history menu) and
     // the counter-clockwise arrow that reopens one.
     (HISTORY, "history"),
+    (BOOKMARK, "bookmark"),
     (RESTORE, "restore"),
     (CALENDAR, "calendar"),
     (LIST, "list"),
@@ -92,6 +93,38 @@ icon_assets![
     (GIT_MERGE, "git-merge"),
     (CLOUD, "cloud"),
     (DITHER_CLOUD, "cloud-dither"),
+    (STATUS_QUESTION, "status-question"),
+    (STATUS_PERMISSION, "status-permission"),
+    (STATUS_PLAN, "status-plan"),
+    (STATUS_QUEUED, "status-queued"),
+    (STATUS_FAILED, "status-failed"),
+    (GIT_STATE_BRANCH, "git-state-branch"),
+    (GIT_STATE_OPEN, "git-state-open"),
+    (GIT_STATE_DRAFT, "git-state-draft"),
+    (GIT_STATE_REVIEW, "git-state-review"),
+    (GIT_STATE_MERGED, "git-state-merged"),
+    (GIT_STATE_CLOSED, "git-state-closed"),
+    (DITHER_PLUS, "dither-plus"),
+    (DITHER_SEND, "dither-send"),
+    (DITHER_MIC, "dither-mic"),
+    (DITHER_FOLDER, "dither-folder"),
+    (DITHER_BRANCH, "dither-branch"),
+    (DITHER_TERMINAL, "dither-term"),
+    (DITHER_NOTE, "dither-note"),
+    (DITHER_SEARCH, "dither-search"),
+    (DITHER_GEAR, "dither-gear"),
+    (DITHER_CLOUD_FILLED, "dither-cloud"),
+    (DITHER_CHAT, "dither-chat"),
+    (DITHER_PLUG, "dither-plug"),
+    (DITHER_LOCK, "dither-lock"),
+    (DITHER_BELL, "dither-bell"),
+    (DITHER_KEY, "dither-key"),
+    (DITHER_KEYBOARD, "dither-keyboard"),
+    (DITHER_MONITOR, "dither-monitor"),
+    (DITHER_SLIDERS, "dither-sliders"),
+    (DITHER_ARCHIVE, "dither-archive"),
+    (DITHER_PEN, "dither-pen"),
+    (DITHER_DOCUMENT, "dither-doc"),
     (TAG, "tag"),
     (KEY_MINIMALISTIC, "key-minimalistic"),
     (KEYBOARD, "keyboard"),
@@ -189,6 +222,7 @@ icon_assets![
     (KIRO_MARK, "kiro-mark"),
     (HERMES_MARK, "hermes-mark"),
     (PI_MARK, "pi-mark"),
+    (MUSE_MARK, "muse-mark"),
     (OPENCODE_MARK, "opencode-mark"),
     (ANTIGRAVITY_MARK, "antigravity-mark"),
     // Site marks for compact links (`site_links`), drawn in one tint.
@@ -210,7 +244,6 @@ pub const SETTINGS_PLUGINS: &str = "icons/settings-plugins.svg";
 pub const SETTINGS_REMOTE: &str = "icons/settings-remote.svg";
 /// The session card's activity sections and a stopped task's mark.
 pub const SUMMARY_BACKGROUND: &str = "icons/summary-background.svg";
-pub const SUMMARY_AGENTS: &str = "icons/summary-agents.svg";
 pub const TASK_STOPPED: &str = "icons/task-stopped.svg";
 /// The session card's pull request menu.
 pub const PR_VIEW: &str = "icons/pr-view.svg";

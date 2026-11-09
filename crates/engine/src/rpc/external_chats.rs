@@ -214,6 +214,7 @@ impl EngineRpc {
                 Some(&project_id),
                 Some(device),
                 Some(ChatConfig {
+                    plan: false,
                     harness: conversation.row.provider,
                     model: None,
                     reasoning: None,

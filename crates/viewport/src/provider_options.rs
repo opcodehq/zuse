@@ -13,6 +13,7 @@ pub fn header(
     expanded: bool,
     phase: Option<Phase>,
     completion: bool,
+    cx: &gpui::App,
 ) -> Stateful<Div> {
     let (caption, attention) = match phase {
         Some(Phase::Available) => ("An update is available", true),
@@ -34,7 +35,10 @@ pub fn header(
         rgb(MUTED).into()
     };
     s::button(id, "")
-        .aria_label("Agent options")
+        .aria_label(crate::localization::message(
+            cx,
+            zuse_i18n::messages::native::agent_options,
+        ))
         .tab_index(0)
         .w_full()
         .h(px(40.))

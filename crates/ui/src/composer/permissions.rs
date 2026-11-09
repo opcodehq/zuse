@@ -1,6 +1,8 @@
 //! Per-chat permissions follow the same configuration used by Run and queues.
 use super::*;
+use crate::localization::message as tr;
 use crate::{icons, popover};
+use zuse_i18n::messages as msg;
 
 use zuse_protocol::presentation::{ACCESS_LEVELS as LEVELS, access_details};
 fn label(level: SandboxLevel) -> &'static str {
@@ -195,11 +197,11 @@ impl Composer {
                     )
                     .when(!icon_only, |el| {
                         el.child(if pending {
-                            "Saving…"
+                            crate::localization::text("settings-wallpaper_saving", cx)
                         } else if unconfirmed {
-                            "Check access"
+                            ("Check access").to_string()
                         } else {
-                            label(selected)
+                            (label(selected)).to_string()
                         })
                     })
                     .when(icon_only, |el| {
@@ -292,61 +294,58 @@ impl Composer {
                         }))
                     })
                 };
-                // The three postures, then read only below a hairline: it
-                // restricts rather than grants, so it sits apart.
-                let mut rows: Vec<gpui::AnyElement> = Vec::with_capacity(LEVELS.len() + 1);
-                for (index, level) in LEVELS.into_iter().enumerate() {
-                    if level == SandboxLevel::ReadOnly {
-                        rows.push(popover::menu_separator().into_any_element());
-                    }
-                    rows.push(row(index, level).into_any_element());
-                }
-                let menu =
-                    popover::popover_card(&popup_theme)
-                        .id("composer-permission-menu")
-                        .role(Role::ListBox)
-                        .w(px(260.))
-                        .flex()
-                        .flex_col()
-                        .gap(px(2.))
-                        .child(popover::menu_heading(&popup_theme, "Agent access"))
-                        .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                            this.permission_open = false;
-                            cx.notify();
-                        }))
-                        .children(rows)
-                        .when(self.state.read(cx).selected_chat.is_some(), |menu| {
-                            menu.child(popover::menu_separator()).child(
-                                div()
-                                    .id("open-permission-rules")
-                                    .role(Role::Button)
-                                    .aria_label("Saved permission rules")
-                                    .px(px(10.))
-                                    .py(px(8.))
-                                    .text_size(crate::typography::text_xs())
-                                    .text_color(popup_theme.text)
-                                    .cursor_pointer()
-                                    .child("Saved permission rules…")
-                                    .on_click(cx.listener(|this, _, _, cx| {
+                // Plan mode is not an access level; it lives in the `+` menu.
+                let rows = LEVELS
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, level)| row(index, level).into_any_element());
+                let menu = popover::popover_card(&popup_theme)
+                    .id("composer-permission-menu")
+                    .role(Role::ListBox)
+                    .w(px(260.))
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .child(popover::menu_heading(&popup_theme, "Agent access"))
+                    .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                        this.permission_open = false;
+                        cx.notify();
+                    }))
+                    .children(rows)
+                    .when(self.state.read(cx).selected_chat.is_some(), |menu| {
+                        menu.child(popover::menu_separator()).child(
+                            div()
+                                .id("open-permission-rules")
+                                .role(Role::Button)
+                                .aria_label(tr(cx, msg::native::saved_permission_rules_c6bd67ad))
+                                .px(px(10.))
+                                .py(px(8.))
+                                .text_size(crate::typography::text_xs())
+                                .text_color(popup_theme.text)
+                                .cursor_pointer()
+                                .child(tr(cx, msg::native::saved_permission_rules))
+                                .on_click(
+                                    cx.listener(|this, _, _, cx| {
                                         this.open_permission_inspector(cx)
-                                    })),
-                            )
-                        });
+                                    }),
+                                ),
+                        )
+                    });
                 let menu = menu.when(unconfirmed, |view| {
                     view.child(
                         div()
                             .id("refresh-saved-permissions")
                             .role(Role::Button)
-                            .aria_label("Refresh saved chat choices")
+                            .aria_label(tr(cx, msg::native::refresh_saved_chat_choices))
                             .cursor_pointer()
                             .px(px(8.))
                             .py(px(8.))
                             .text_size(crate::typography::text_xs())
                             .text_color(popup_theme.accent)
                             .child(if pending {
-                                "Reading saved chat choices…"
+                                ("Reading saved chat choices…").to_string()
                             } else {
-                                "Refresh saved chat choices"
+                                crate::localization::text("native-refresh_saved_chat_choices", cx)
                             })
                             .on_click(cx.listener(|this, _, _, cx| this.refresh_permission(cx))),
                     )
@@ -401,12 +400,7 @@ mod tests {
     fn approve_for_me_needs_an_automatic_approver() {
         assert_eq!(
             LEVELS.map(label),
-            [
-                "Ask for approval",
-                "Approve for me",
-                "Full access",
-                "Read only"
-            ]
+            ["Ask for approval", "Approve for me", "Full access"]
         );
         for harness in [HarnessId::Codex, HarnessId::ClaudeCode] {
             assert_eq!(unavailable(SandboxLevel::Auto, Some(&harness)), None);
@@ -445,13 +439,13 @@ mod tests {
                 composer.state.update(cx, |state, cx| {
                     state.chats = vec![
                         serde_json::from_value(serde_json::json!({
-                            "id":"readonly", "deviceId":"local", "archived":false,
+                            "id":"saved", "deviceId":"local", "archived":false,
                             "createdAt":"2026-01-01T00:00:00Z",
-                            "config":{"harness":"codex","sandbox":"read-only"}
+                            "config":{"harness":"codex","sandbox":"auto"}
                         }))
                         .unwrap(),
                     ];
-                    state.selected_chat = Some("readonly".into());
+                    state.selected_chat = Some("saved".into());
                     cx.notify();
                 });
             })
@@ -461,12 +455,12 @@ mod tests {
             .update(cx, |composer, window, cx| {
                 assert_eq!(
                     composer.pickers.read(cx).resolved(cx).sandbox,
-                    SandboxLevel::ReadOnly
+                    SandboxLevel::Auto
                 );
                 composer.choose_permission(SandboxLevel::DangerFullAccess, window, cx);
                 assert_eq!(
                     composer.pickers.read(cx).resolved(cx).sandbox,
-                    SandboxLevel::ReadOnly
+                    SandboxLevel::Auto
                 );
                 assert!(
                     composer
@@ -475,7 +469,7 @@ mod tests {
                         .unwrap()
                         .contains("Connect to the execution host")
                 );
-                assert_eq!(composer.failure_key.as_deref(), Some("readonly"));
+                assert_eq!(composer.failure_key.as_deref(), Some("saved"));
                 composer.state.update(cx, |state, cx| {
                     state.selected_chat = None;
                     cx.notify();

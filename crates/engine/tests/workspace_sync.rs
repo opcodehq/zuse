@@ -145,6 +145,7 @@ where
 
 fn run_request(prompt: &str) -> RunRequest {
     RunRequest {
+        plan: false,
         mcp: None,
         prompt: prompt.into(),
         harness: None,
@@ -563,6 +564,7 @@ async fn chat_config_selects_the_run_harness() {
             Some("space-cfg"),
             None,
             Some(ChatConfig {
+                plan: false,
                 harness: HarnessId::Cursor,
                 model: None,
                 reasoning: None,
@@ -728,6 +730,7 @@ async fn legacy_workspace_doc_migrates_instantly_on_first_boot() {
             .upsert_session(&Session {
                 last_completed_turn: None,
                 running_subagents: 0,
+                awaiting_input: None,
                 background_tasks: Vec::new(),
                 chat_id: "chat-legacy".into(),
                 device_id: "dev-a".into(),

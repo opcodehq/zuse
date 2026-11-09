@@ -1,8 +1,10 @@
+use crate::localization::message as tr;
 use std::{
     collections::{HashMap, HashSet},
     rc::Rc,
     time::Instant,
 };
+use zuse_i18n::messages as msg;
 
 use chrono::{DateTime, Utc};
 use gpui::{
@@ -277,16 +279,26 @@ pub(crate) fn star_button(url: &str, theme: &Theme, cx: &gpui::App) -> gpui::Sta
         )
         .on_click(move |_, _, cx| {
             cx.stop_propagation();
-            if crate::settings::update(crate::settings::SavePolicy::Debounced, cx, |settings| {
-                if settings.pull_request_stars.contains(&key) {
-                    settings.pull_request_stars.retain(|value| value != &key);
-                } else {
-                    settings.pull_request_stars.push(key.clone());
-                }
-            }) {
-                cx.refresh_windows();
-            }
+            toggle_star(&key, cx);
         })
+}
+
+pub(crate) fn is_starred(url: &str, cx: &gpui::App) -> bool {
+    crate::settings::current(cx)
+        .pull_request_stars
+        .contains(&star_key(url))
+}
+
+pub(crate) fn toggle_star(key: &str, cx: &mut gpui::App) {
+    if crate::settings::update(crate::settings::SavePolicy::Debounced, cx, |settings| {
+        if settings.pull_request_stars.iter().any(|value| value == key) {
+            settings.pull_request_stars.retain(|value| value != key);
+        } else {
+            settings.pull_request_stars.push(key.to_owned());
+        }
+    }) {
+        cx.refresh_windows();
+    }
 }
 
 /// Repository-scoped dashboard with lazy, cached relationship filters.
@@ -1432,8 +1444,8 @@ impl PullRequestsPage {
                                 .px(px(10.0))
                                 .flex_none()
                                 .text_size(crate::typography::text_xs())
-                                .aria_label("Open repository")
-                                .child("Open")
+                                .aria_label(tr(cx, msg::native::open_repository))
+                                .child(tr(cx, msg::common::open))
                                 .on_click(cx.listener(|page, _, _, cx| {
                                     cx.stop_propagation();
                                     page.return_focus = Some(page.repository_focus.clone());
@@ -1655,7 +1667,8 @@ impl PullRequestsPage {
         self.more_task = None;
         self.more_error = None;
         self.request_task = Some(cx.spawn(async move |this, cx| {
-            let mut result = fetch_page(&engine, params.clone()).await;
+            let mut result =
+                fetch_page(&engine, params.clone(), cx.background_executor().clone()).await;
             if result.as_ref().is_ok_and(|page| page.items.is_empty()) && !refresh {
                 let fallback = this
                     .update(cx, |page, cx| {
@@ -1672,7 +1685,7 @@ impl PullRequestsPage {
                     .unwrap_or(false);
                 if fallback {
                     params["filter"] = serde_json::to_value(ChangeRequestFilter::All).unwrap();
-                    result = fetch_page(&engine, params).await;
+                    result = fetch_page(&engine, params, cx.background_executor().clone()).await;
                 }
             }
             this.update(cx, |page, cx| {
@@ -1782,7 +1795,7 @@ impl PullRequestsPage {
         params["refresh"] = self.refreshed.into();
         self.more_error = None;
         self.more_task = Some(cx.spawn(async move |this, cx| {
-            let result = fetch_page(&engine, params).await;
+            let result = fetch_page(&engine, params, cx.background_executor().clone()).await;
             this.update(cx, |page, cx| {
                 if page.generation != generation {
                     return;
@@ -2005,7 +2018,7 @@ impl PullRequestsPage {
                                 div()
                                     .text_size(crate::typography::text_xs())
                                     .text_color(theme.text_muted)
-                                    .child("This device"),
+                                    .child(tr(cx, msg::native::this_device)),
                             )
                         })
                         .when(!online, |element| {
@@ -2013,7 +2026,7 @@ impl PullRequestsPage {
                                 div()
                                     .text_size(crate::typography::text_xs())
                                     .text_color(theme.text_muted)
-                                    .child("Offline"),
+                                    .child(tr(cx, msg::projects::masters_offline)),
                             )
                         })
                         .child(div().size(px(6.0)).rounded_full().bg(if online {
@@ -2362,7 +2375,7 @@ impl Render for PullRequestsPage {
                                     .id("pull-requests-refresh")
                                     .debug_selector(|| "pull-requests-refresh".to_string())
                                     .role(gpui::Role::Button)
-                                    .aria_label("Refresh pull requests")
+                                    .aria_label(tr(cx, msg::native::refresh_pull_requests))
                                     .aria_description(if loading {
                                         "Loading pull requests"
                                     } else {
@@ -2415,7 +2428,7 @@ impl Render for PullRequestsPage {
                         div()
                             .id("pr-filter-tray")
                             .role(gpui::Role::TabList)
-                            .aria_label("Pull requests to show")
+                            .aria_label(tr(cx, msg::native::pull_requests_to_show))
                             .h(px(HEADER_CONTROL_HEIGHT))
                             .flex_none()
                             .p(px(2.0))
@@ -2504,7 +2517,7 @@ impl Render for PullRequestsPage {
                                             div()
                                                 .id("pull-requests-clear-search")
                                                 .role(gpui::Role::Button)
-                                                .aria_label("Clear search")
+                                                .aria_label(tr(cx, msg::native::clear_search))
                                                 .tab_index(0)
                                                 .size(px(24.0))
                                                 .flex()
@@ -3593,11 +3606,15 @@ fn single_line(value: &str) -> String {
 async fn fetch_page(
     engine: &crate::state::EngineHandle,
     params: serde_json::Value,
+    executor: gpui::BackgroundExecutor,
 ) -> Result<ChangeRequestPage, RpcError> {
-    let value = engine
-        .client()
-        .call(methods::LIST_CHANGE_REQUEST_PAGE, params)
-        .await?;
+    let value = crate::pull_request_detail::read_request(
+        engine,
+        methods::LIST_CHANGE_REQUEST_PAGE,
+        params,
+        executor,
+    )
+    .await?;
     serde_json::from_value(value).map_err(|error| RpcError::Failed(error.to_string()))
 }
 

@@ -1,5 +1,7 @@
 //! Alternate presentation of the same model and option mutations.
 use super::*;
+use crate::localization::message as tr;
+use zuse_i18n::messages as msg;
 
 pub(super) const COMPACT_ROW_HEIGHT: f32 = 32.0;
 const COMPACT_LIST_ROWS: usize = 7;
@@ -618,6 +620,30 @@ impl Pickers {
         self.pick_compact_effort(effort, index, cx);
     }
 
+    /// Step to the next reasoning level the selected model offers, wrapping
+    /// back to the lowest. Returns whether anything changed.
+    pub fn cycle_reasoning_effort(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(effort) = self.compact_effort(cx) else {
+            return false;
+        };
+        let count = effort.labels.len();
+        if count < 2 {
+            return false;
+        }
+        let next = (effort.selected + 1) % count;
+        self.pick_compact_effort(effort, next, cx);
+        true
+    }
+
+    /// Flip fast mode for a model that offers it. Returns whether it did.
+    pub fn toggle_fast_mode(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some((option, next, default, _)) = self.compact_fast_choice(cx) else {
+            return false;
+        };
+        self.pick_option(option, next, default, cx);
+        true
+    }
+
     /// Effort and fast mode have their own controls in the compact card.
     pub(super) fn compact_option_visible(id: &ModelSetting, hidden: &[String]) -> bool {
         !matches!(id, ModelSetting::Reasoning)
@@ -688,7 +714,7 @@ impl Pickers {
                     .justify_between()
                     .text_size(crate::typography::text_xs())
                     .text_color(theme.text_muted)
-                    .child("Advanced")
+                    .child(tr(cx, msg::chat::chat_composer_advanced))
                     .children(fast.map(|(option, choice, default, on)| {
                         fast_toggle(&theme, on).on_click(cx.listener(move |this, _, _, cx| {
                             this.pick_option(option.clone(), choice.clone(), default, cx);

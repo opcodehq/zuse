@@ -3,18 +3,17 @@
 //! The composer's usage indicator: one ring button in the toolbar (between
 //! the model pill and the send key) whose glass card stacks the context
 //! window section above the plan-usage section ([`crate::account_usage`]).
+use crate::localization::message as tr;
 use crate::theme::Theme;
 use gpui::{SharedString, div, prelude::*, px};
+use zuse_i18n::messages as msg;
 use zuse_protocol::ContextUsage;
 
 /// Usage card geometry: `w-[300px]`, `p-3.5` sections with `gap-3` rows.
 pub(crate) const CARD_WIDTH: f32 = 300.0;
 const SECTION_PAD: f32 = 14.0;
 const SECTION_GAP: f32 = 12.0;
-/// The segmented meter: thin rounded sticks with a 2px gutter.
-const METER_SEGMENTS: usize = 36;
-const METER_HEIGHT: f32 = 16.0;
-const METER_GAP: f32 = 2.0;
+const METER_HEIGHT: f32 = 8.0;
 /// The ring button matches the toolbar's other 28px icon buttons.
 const RING_BUTTON_SIZE: f32 = 28.0;
 const RING_DIAMETER: f32 = 14.0;
@@ -160,43 +159,29 @@ pub(crate) fn title_row(
         )
 }
 
-/// How many of the meter's sticks a fraction lights. Any usage at all lights
-/// at least one, so a fresh window never reads as unreported. Pure.
-pub(crate) fn lit_segments(fraction: f64) -> usize {
-    (fraction.clamp(0.0, 1.0) * METER_SEGMENTS as f64).ceil() as usize
-}
-
-/// The segmented meter: thin rounded sticks, accent-lit up to `fraction`,
-/// amber when `high`.
-pub(crate) fn stick_meter(fraction: f64, high: bool, theme: &Theme) -> gpui::Div {
-    let lit = lit_segments(fraction);
-    let on = if high {
-        theme.warning.opacity(0.65)
-    } else {
-        theme.accent.opacity(0.7)
-    };
-    let off = theme.text_muted.opacity(0.16);
+/// The usage meter: ordered-dither density, accent up to `fraction`, amber
+/// when `high`.
+pub(crate) fn dither_meter(fraction: f64, high: bool, theme: &Theme) -> gpui::Div {
+    let on = if high { theme.warning } else { theme.accent };
+    let off = theme.text_muted.opacity(0.3);
     div()
+        .relative()
+        .w_full()
         .h(px(METER_HEIGHT))
-        .flex()
-        .gap(px(METER_GAP))
-        .children((0..METER_SEGMENTS).map(|ix| {
-            div()
-                .flex_1()
-                .min_w_0()
-                .h_full()
-                .rounded(px(2.0))
-                .bg(if ix < lit { on } else { off })
-        }))
+        .child(zuse_viewport::dither::meter(fraction as f32, on, off))
 }
 
 /// The card's context section, when the harness reports a window.
-pub(crate) fn context_section(usage: Option<ContextUsage>, theme: &Theme) -> Option<gpui::Div> {
+pub(crate) fn context_section(
+    usage: Option<ContextUsage>,
+    theme: &Theme,
+    cx: &gpui::App,
+) -> Option<gpui::Div> {
     let reading = reading(usage)?;
     let section = section(theme).child(title_row("Context", reading.header, theme));
     Some(match reading.fraction {
         Some(fraction) => section
-            .child(stick_meter(fraction, fraction >= HIGH_FRACTION, theme))
+            .child(dither_meter(fraction, fraction >= HIGH_FRACTION, theme))
             .child(value_row(
                 "Window used",
                 format!("{:.1}%", fraction * 100.0),
@@ -207,11 +192,10 @@ pub(crate) fn context_section(usage: Option<ContextUsage>, theme: &Theme) -> Opt
                 reading.available.unwrap_or_default(),
                 theme.text_muted.opacity(0.7),
             )),
-        None => section.child(
-            div()
-                .text_color(theme.text_muted.opacity(0.7))
-                .child("Usage appears after the first response"),
-        ),
+        None => section.child(div().text_color(theme.text_muted.opacity(0.7)).child(tr(
+            cx,
+            msg::chat::chat_composer_usage_appears_after_the_first_response,
+        ))),
     })
 }
 
@@ -300,13 +284,5 @@ mod tests {
         .unwrap();
         assert_eq!(over.fraction, Some(1.0));
         assert_eq!(over.available.as_deref(), Some("0"));
-    }
-
-    #[test]
-    fn meter_lights_any_usage() {
-        assert_eq!(lit_segments(0.0), 0);
-        assert_eq!(lit_segments(0.001), 1);
-        assert_eq!(lit_segments(0.241), 9);
-        assert_eq!(lit_segments(1.4), METER_SEGMENTS);
     }
 }

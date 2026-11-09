@@ -1,4 +1,6 @@
 use super::*;
+use crate::localization::message as tr;
+use zuse_i18n::messages as msg;
 
 use zuse_protocol::{
     ProjectAction, ProjectActionDraft, ProjectActionIcon, ProjectActionRun, ProjectActionsSnapshot,
@@ -529,20 +531,20 @@ impl Shell {
                     format!("“{name}” will be permanently deleted."),
                 )))
                 .child(
-                    div()
-                        .mt(px(16.0))
-                        .flex()
-                        .justify_end()
-                        .gap(px(8.0))
+                    popover::dialog_footer(&theme)
                         .child(
-                            popover::btn_ghost(&theme, "Cancel", "action-delete-cancel")
-                                .id("action-delete-cancel")
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    if let Some(editor) = this.project_actions.editor.as_mut() {
-                                        editor.confirm_delete = false;
-                                    }
-                                    cx.notify();
-                                })),
+                            popover::btn_ghost(
+                                &theme,
+                                &tr(cx, msg::common::cancel),
+                                "action-delete-cancel",
+                            )
+                            .id("action-delete-cancel")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                if let Some(editor) = this.project_actions.editor.as_mut() {
+                                    editor.confirm_delete = false;
+                                }
+                                cx.notify();
+                            })),
                         )
                         .child(
                             popover::btn_danger(&theme, "Delete")
@@ -667,22 +669,23 @@ impl Shell {
                 )
             })
             .child(
-                div()
-                    .mt(px(18.0))
-                    .flex()
-                    .items_center()
+                popover::dialog_footer(&theme)
                     .justify_between()
                     .child(div().when(editing, |el| {
                         el.child(
-                            popover::btn_ghost(&theme, "Delete action", "action-delete")
-                                .id("action-delete")
-                                .text_color(theme.danger)
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    if let Some(editor) = this.project_actions.editor.as_mut() {
-                                        editor.confirm_delete = true;
-                                    }
-                                    cx.notify();
-                                })),
+                            popover::btn_ghost(
+                                &theme,
+                                &tr(cx, msg::native::delete_action),
+                                "action-delete",
+                            )
+                            .id("action-delete")
+                            .text_color(theme.danger)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                if let Some(editor) = this.project_actions.editor.as_mut() {
+                                    editor.confirm_delete = true;
+                                }
+                                cx.notify();
+                            })),
                         )
                     }))
                     .child(
@@ -690,12 +693,18 @@ impl Shell {
                             .flex()
                             .gap(px(8.0))
                             .child(
-                                popover::btn_ghost(&theme, "Cancel", "action-cancel")
-                                    .id("action-cancel")
-                                    .on_click(cx.listener(|this, _, _, cx| {
+                                popover::btn_ghost(
+                                    &theme,
+                                    &tr(cx, msg::common::cancel),
+                                    "action-cancel",
+                                )
+                                .id("action-cancel")
+                                .on_click(cx.listener(
+                                    |this, _, _, cx| {
                                         this.project_actions.editor = None;
                                         cx.notify();
-                                    })),
+                                    },
+                                )),
                             )
                             .child(
                                 popover::btn_primary(

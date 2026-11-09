@@ -1,7 +1,9 @@
 //! Browser call ownership and host signaling. Media stays in the platform adapter.
 use super::*;
+use crate::localization::message as tr;
 use std::{collections::HashSet, time::Duration};
 use web_time::Instant;
+use zuse_i18n::messages as msg;
 use zuse_protocol::voice::{VoiceEvent, VoicePhase, remote as wire};
 use zuse_voice_session::VoiceView;
 #[derive(Clone, Copy, PartialEq)]
@@ -563,7 +565,7 @@ impl WorkspaceView {
                         .on_click(cx.listener(|this, _, _, cx| this.mute_browser_voice(cx))),
                     )
                     .child(
-                        control("voice-end", "End call").on_click(
+                        control("voice-end", tr(cx, msg::native::end_call)).on_click(
                             cx.listener(|this, _, _, cx| this.end_browser_voice(None, cx)),
                         ),
                     ),

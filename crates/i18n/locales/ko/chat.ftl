@@ -1,0 +1,1871 @@
+# Imported from Zuse desktop catalogs. See migration.json for provenance.
+# Edit individual translations here; do not regenerate this file.
+
+chat-question_card_multiple_choice_hint = 하나 이상의 옵션을 선택하세요.
+
+chat-question_card_continue = 계속
+
+chat-secret_request_placeholder = 비공개 값 입력…
+
+chat-background_tasks_title = 백그라운드 작업
+
+chat-background_process = 백그라운드 프로세스
+
+chat-background_stop_task = { $task }{ " " }중지
+
+chat-background_group_running = 실행 중
+
+chat-background_group_stopped = 중지됨
+
+chat-background_stop_all = 모두 중지
+
+chat-terminal_bottom = 하단 터미널
+
+chat-terminal_resize_bottom = 하단 터미널 크기 조절
+
+chat-terminal_close = { $title }{ " " }닫기
+
+chat-terminal_new_bottom = 새 하단 터미널
+
+chat-terminal_limit = 한도{ " " }{ $limit }
+
+chat-terminal_hide_bottom = 하단 터미널 숨기기
+
+chat-terminal_catalog_unavailable = 터미널 목록을 사용할 수 없습니다.
+
+chat-terminal_retry_bottom_catalog = 하단 터미널 목록 다시 불러오기
+
+chat-terminal_directory_unavailable = 이 디렉터리를 사용할 수 없습니다.
+
+chat-terminal_restoring = 터미널 복원 중…
+
+chat-terminal_input_limit = 대기 중인 터미널 입력이 안전 한도에 도달했습니다.
+
+chat-terminal_actions = 터미널 작업:{ " " }{ $title }
+
+chat-terminal_controls = 터미널 제어:{ " " }{ $title }
+
+chat-terminal_name = 터미널 이름
+
+chat-terminal_clear_screen_label = 터미널 화면 지우기
+
+chat-terminal_clear_screen = 화면 지우기
+
+chat-terminal_restart_process_label = 터미널 프로세스 다시 시작
+
+chat-terminal_restart_process = 프로세스 다시 시작
+
+chat-terminal_restoring_local = 로컬 터미널 복원 중…
+
+chat-terminal_restoring_cloud = 클라우드 터미널 복원 중…
+
+chat-terminal_restoring_project = 프로젝트 터미널 복원 중…
+
+chat-plan_submit_failed = 계획 결정을 제출하지 못했습니다:{ " " }{ $error }
+
+chat-plan_submitting = 계획 결정 제출 중…
+
+chat-plan_feedback_or_approve = 아래에 피드백을 입력하거나 계획을 승인하세요
+
+chat-decision_submitting = 결정 제출 중…
+
+chat-decision_submit_failed = 결정을 제출하지 못했습니다:{ " " }{ $error }
+
+chat-question_expired = 이 질문은 만료되었습니다.
+
+chat-question_reconnecting = 이 질문에 다시 연결 중…
+
+chat-answer_submitting = 답변 제출 중…
+
+chat-answer_submit_failed = 답변을 제출하지 못했습니다
+
+chat-workspace_panels = 작업 공간 패널
+
+chat-api_key_row_replace_key = 키 교체
+
+chat-api_key_row_get_an_api_key = API 키 받기
+
+chat-api_key_row_remove_api_key = API 키를 제거하시겠습니까?
+
+chat-api_key_row_new_sessions_will_stop_working_until_another_key_is_added_existing_ses = 다른 키가 추가될 때까지 새 세션의 작동이 중지됩니다. 기존 세션은 종료될 때까지 계속됩니다.
+
+chat-api_key_row_removing = 삭제 중…
+
+chat-api_key_row_remove_key = 키 제거
+
+chat-api_key_row_api_key = API 키
+
+chat-api_key_row_paste_api_key = API 키 붙여넣기
+
+chat-api_key_row_hide_api_key = API 키 숨기기
+
+chat-api_key_row_reveal_api_key = API 키 공개
+
+chat-api_key_row_verifying = 확인 중…
+
+chat-api_key_row_verify_and_save = 확인 및 저장
+
+chat-archived_chat_timeline_archived_chat_transcript = 보관된 채팅 내용
+
+chat-archived_chats_page_archived_chats = 보관된 채팅
+
+chat-archived_chats_page_filter_archived_chats = 보관된 채팅 필터링
+
+chat-archived_chats_page_filter_archived_chats_2 = 보관된 채팅 필터링…
+
+chat-archived_chats_page_back_to_archived_chats = 보관된 채팅으로 돌아가기
+
+chat-archived_chats_page_archived_chat_sessions = 보관된 채팅 세션
+
+chat-archived_chats_page_this_chat_is_archived = 이 채팅은 보관되었습니다.
+
+chat-archived_chats_page_force_archive = 강제 아카이브
+
+chat-archived_chats_page_unarchiving = 보관 취소 중…
+
+chat-archived_chats_page_unarchive = 보관 취소
+
+chat-assistant_message_actions_copy_message = 메시지 복사
+
+chat-blurred_email_click_to_hide = 숨기려면 클릭하세요
+
+chat-blurred_email_click_to_reveal = 공개하려면 클릭하세요.
+
+chat-blurred_email_hide_email = 이메일 숨기기
+
+chat-blurred_email_reveal_email = 이메일 공개
+
+chat-browser_pane_search_or_enter_url = URL를 검색하거나 입력하세요.
+
+chat-browser_pane_browser_viewport = 브라우저 뷰포트
+
+chat-browser_pane_fill = 채우기
+
+chat-browser_pane_phone = 전화
+
+chat-browser_pane_tablet = 태블릿
+
+chat-browser_pane_laptop = 노트북
+
+chat-browser_pane_desktop = 데스크탑
+
+chat-browser_pane_custom = 맞춤
+
+chat-browser_pane_viewport_width = 뷰포트 너비
+
+chat-browser_pane_viewport_height = 뷰포트 높이
+
+chat-browser_pane_lock_viewport_aspect_ratio = 뷰포트 종횡비 잠금
+
+chat-browser_pane_ratio = 비율
+
+chat-browser_pane_rotate_browser_viewport = 브라우저 뷰포트 회전
+
+chat-browser_pane_recording = 녹음
+
+chat-browser_pane_saved = 저장됨
+
+chat-browser_pane_password_autofill = 비밀번호 자동완성
+
+chat-browser_pane_password_field_detected = 비밀번호 필드가 감지되었습니다.
+
+chat-browser_pane_filling = 채우는 중…
+
+chat-browser_pane_fill_saved_login = 저장된 로그인 채우기
+
+chat-browser_pane_browser_session_access = 브라우저 세션 액세스
+
+chat-browser_pane_the_grant_stays_in_memory_and_applies_only_to_this_task_and_domain = 부여는 메모리에 유지되며 이 작업과 도메인에만 적용됩니다.
+
+chat-browser_pane_deny = 거부
+
+chat-browser_pane_allow_for_task = 작업 허용
+
+chat-browser_pane_resize_browser_viewport = 브라우저 뷰포트 크기 조정
+
+chat-browser_pane_dev_servers_on_this_environment = 이 환경의 개발 서버
+
+chat-browser_pane_local_servers = 로컬 서버
+
+chat-browser_pane_no_dev_servers_detected_on_this_environment = 이 환경에서는 개발 서버가 감지되지 않습니다.
+
+chat-browser_pane_connecting = 연결 중…
+
+chat-browser_pane_this_server_only_listens_on_127_0_0_1_restart_it_with_host_0_0_0_0_to = 이 서버는 127.0.0.1에서만 수신 대기합니다. 공개 링크를 공유하려면 --host 0.0.0.0으로 다시 시작하세요.
+
+chat-browser_pane_copy_public_link_anyone_with_the_link_can_access_it = 공개 링크 복사 - 링크가 있는 사람은 누구나 액세스할 수 있습니다.
+
+chat-browser_pane_cancel_annotation = 주석 취소
+
+chat-browser_pane_region = 지역
+
+chat-browser_pane_annotation_details = 주석 세부정보
+
+chat-browser_pane_describe_the_change = 변경사항을 설명하세요..
+
+chat-browser_pane_attaching = 부착
+
+chat-browser_pane_attach = 부착
+
+chat-changes_review_select_a_ready_workspace_to_review_changes = 변경 사항을 검토하려면 준비된 작업 영역을 선택하세요.
+
+chat-changes_review_expand_diff = 차이점 펼치기
+
+chat-changes_review_collapse_diff = 차이점 축소
+
+chat-changes_review_mark_unviewed = 보지 않은 것으로 표시
+
+chat-changes_review_mark_viewed_and_collapse = 본 것으로 표시하고 접습니다.
+
+chat-changes_review_save_edit_s = 편집 내용 저장(⌘S)
+
+chat-changes_review_save = { " " }저장
+
+chat-changes_review_preparing_review = 리뷰 준비 중
+
+chat-changes_review_review_changes = 변경사항 검토
+
+chat-changes_review_working_tree = 작업 트리
+
+chat-changes_review_use_unified_view = 통합 보기 사용
+
+chat-changes_review_use_split_view = 분할 보기 사용
+
+chat-changes_review_expand_all_files = 모든 파일 확장
+
+chat-changes_review_collapse_all_files = 모든 파일 축소
+
+chat-changes_review_copy_all_patches = 모든 패치 복사
+
+chat-changes_review_no_branch_changes_to_review = 검토할 분기 변경 사항이 없습니다.
+
+chat-changes_review_back_to_review = 리뷰로 돌아가기
+
+chat-changes_review_saving_resolution = 해상도 저장 중…
+
+chat-changes_review_loading_conflict = 로딩 충돌
+
+chat-changes_review_keep_current = 최신 상태 유지
+
+chat-changes_review_keep_incoming = 계속 수신
+
+chat-changes_review_keep_both = 둘 다 유지
+
+chat-changes_review_file_actions = 파일 작업
+
+chat-changes_review_return_to_diff = 차이점으로 돌아가기
+
+chat-changes_review_edit_file = 파일 편집
+
+chat-changes_review_discard_uncommitted_changes = 커밋되지 않은 변경 사항 삭제
+
+chat-changes_review_restore_to_comparison_base = 비교 기준으로 복원
+
+chat-changes_review_display_settings = 디스플레이 설정
+
+chat-changes_review_line_numbers = 줄 번호
+
+chat-changes_review_word_wrap = 줄 바꿈
+
+chat-changes_review_indicators = 지표
+
+chat-chat_composer_editing_queued_message = 대기 중인 메시지 편집 중
+
+chat-chat_composer_drop_files_to_attach = 첨부할 파일 삭제
+
+chat-chat_composer_attach_files = 파일 첨부
+
+chat-chat_composer_add_menu = 추가
+
+chat-chat_composer_plan_mode = 계획 모드
+
+chat-chat_composer_attach_files_paste_drop_also_work = 파일 첨부(붙여넣기/드롭도 가능)
+
+chat-chat_composer_request_changes_to_plan = 계획 변경 요청
+
+chat-chat_composer_request_changes = 변경 요청
+
+chat-chat_composer_add_message_to_queue = 대기열에 메시지 추가
+
+chat-chat_composer_queue = 대기열
+
+chat-chat_composer_stopping_current_turn = 현재 턴 중지
+
+chat-chat_composer_stop_current_turn = 현재 턴 중지
+
+chat-chat_composer_stopping = 중지 중…
+
+chat-chat_composer_uploading_image = 이미지 업로드 중
+
+chat-chat_composer_send = 보내기
+
+chat-chat_composer_uploading_image_2 = 이미지 업로드 중…
+
+chat-chat_composer_send_enter = 보내기(엔터)
+
+chat-chat_composer_cursor_uses_fixed_sandbox_access = Cursor는 고정된 샌드박스 액세스를 사용합니다.
+
+chat-chat_composer_agent_access = 에이전트 액세스
+
+chat-chat_composer_sandboxed = 샌드박스 처리됨
+
+chat-chat_composer_checking_access = 액세스 확인 중…
+
+chat-chat_composer_updating = 업데이트 중…
+
+chat-chat_composer_disable_fast_mode = 빠른 모드 비활성화
+
+chat-chat_composer_enable_fast_mode = 빠른 모드 활성화
+
+chat-chat_composer_fast = 빠르게
+
+chat-chat_composer_disable_claude_fast_mode = Claude 고속 모드 비활성화
+
+chat-chat_composer_enable_claude_fast_mode = Claude 고속 모드 활성화
+
+chat-chat_composer_1_5_speed = 1.5배속
+
+chat-chat_composer_more_usage = 더 많은 사용량
+
+chat-chat_composer_exit_plan_mode = 계획 모드 종료
+
+chat-chat_composer_enter_plan_mode = 계획 모드 시작
+
+chat-chat_composer_plan = 계획
+
+chat-chat_composer_tab = ⇧탭
+
+chat-chat_composer_send_next_message_as_goal = 다음 메시지를 목표로 보내기
+
+chat-chat_composer_set_goal = 목표 설정
+
+chat-chat_composer_goal = 목표
+
+chat-goal_status_active = 목표 진행 중
+
+chat-goal_status_paused = 목표 일시 중지됨
+
+chat-goal_status_budget_limited = 목표 예산 도달
+
+chat-goal_status_usage_limited = 목표 사용량 제한됨
+
+chat-goal_status_blocked = 목표 차단됨
+
+chat-goal_status_complete = 목표 완료
+
+chat-chat_composer_next_send_sets_a_goal = 다음 보내기는 목표를 설정합니다
+
+chat-chat_composer_pause_goal = 목표 일시중지
+
+chat-chat_composer_resume_goal = 목표 재개
+
+chat-chat_composer_edit_goal = 목표 수정
+
+chat-chat_composer_delete_goal = 목표 삭제
+
+chat-chat_composer_plan_mode_active = 계획 모드 활성화
+
+chat-chat_composer_edit_goal_2 = 목표 편집
+
+chat-chat_composer_changing_the_objective_replaces_the_codex_goal_and_resets_goal_usage = 목표를 변경하면 Codex 목표가 대체되고 목표 사용이 재설정됩니다.
+
+chat-chat_composer_goal_objective = 목표 목표
+
+chat-chat_composer_token_budget = 토큰예산
+
+chat-chat_composer_save_goal = 목표 저장
+
+chat-chat_composer_advanced = 고급
+
+chat-chat_composer_context_and_usage_status = 컨텍스트 및 사용 상태
+
+chat-chat_composer_available = 가능
+
+chat-chat_composer_usage_appears_after_the_first_response = 첫 번째 응답 후에 사용법이 나타납니다.
+
+chat-chat_composer_reset = 재설정
+
+chat-chat_composer_unknown = 알 수 없음
+
+chat-chat_landing_is_unavailable = 사용할 수 없습니다.
+
+chat-chat_landing_are_unavailable = 사용할 수 없습니다.
+
+chat-chat_landing_zuse_will_keep_trying = Zuse는 계속 노력할 것입니다.
+
+chat-chat_landing_retrying = 재시도 중…
+
+chat-chat_landing_cloud_auth_check_failed = 클라우드 에이전트 로그인을 확인할 수 없습니다.
+
+chat-chat_landing_cloud_auth_check_failed_hint = Zuse가 확인할 때까지 전송이 일시 중지됩니다.
+
+chat-chat_landing_cloud_auth_no_agents = 클라우드 워크스페이스에 연결된 에이전트가 없습니다.
+
+chat-chat_landing_cloud_auth_no_agents_hint = 이 채팅을 보내려면 에이전트를 연결하세요.
+
+chat-chat_landing_cloud_auth_connect_agent = 에이전트 연결
+
+chat-chat_landing_clone_it_there_before_starting_this_chat = 이 채팅을 시작하기 전에 거기에 복제하세요.
+
+chat-chat_landing_clone_project = 프로젝트 복제
+
+chat-chat_landing_dismiss_error = 오류 무시
+
+chat-chat_landing_clear_create_from_source = 생성 소스 지우기
+
+chat-chat_landing_import_an_existing_chat = 기존 채팅 가져오기
+
+chat-chat_landing_import_chat = 채팅 가져오기
+
+chat-chat_landing_recent_provider_chats = 최근 제공업체 채팅
+
+chat-chat_landing_search_chats = 채팅 검색…
+
+chat-chat_landing_search_imported_chats = 가져온 채팅 검색
+
+chat-chat_landing_finding_chats = 채팅 찾는 중…
+
+chat-chat_landing_couldn_t_load_chats_close_and_reopen_this_menu_to_retry = 채팅을 로드할 수 없습니다. 다시 시도하려면 이 메뉴를 닫았다가 다시 열어보세요.
+
+chat-chat_landing_no_recent_chats_found = 최근 채팅을 찾을 수 없습니다.
+
+chat-chat_landing_waiting_for_sandbox = 샌드박스를 기다리는 중
+
+chat-chat_landing_queued = 대기 중
+
+chat-chat_landing_pick_a_project = 프로젝트 선택
+
+chat-chat_landing_search_projects = 프로젝트 검색…
+
+chat-chat_landing_search_projects_2 = 프로젝트 검색
+
+chat-chat_landing_no_projects_yet = 아직 프로젝트가 없습니다.
+
+chat-chat_landing_add_new_project = 새 프로젝트 추가
+
+chat-chat_switcher_current = 현재
+
+chat-chat_switcher_quick_open = 빠른 오픈
+
+chat-chat_switcher_search_chats_or_run_a_command = 채팅을 검색하거나 명령을 실행하세요…
+
+chat-chat_switcher_no_results_found_try_another_chat_project_or_command_name = 검색된 결과가 없습니다. 다른 채팅, 프로젝트 또는 명령 이름을 사용해 보세요.
+
+chat-chat_turn_navigator_navigate_conversation = 대화 탐색
+
+chat-chat_turn_navigator_conversation_turns = 대화 차례
+
+chat-chat_view_type_a_message_below_to_get_started = 시작하려면 아래에 메시지를 입력하세요.
+
+chat-chat_view_response_is_streaming_out_of_view = 응답이 시야 밖으로 스트리밍되고 있습니다.
+
+chat-cli_upgrade_banner_you_have = 당신은
+
+chat-cli_upgrade_banner_sending_in_this_session_will_fail_until_you_upgrade_start_a_new_sessio = { " " }업그레이드할 때까지 이 세션에서 보내는 작업은 실패합니다. 그 동안 계속 작업하려면 다른 제공업체와 새 세션을 시작하세요.
+
+chat-cli_upgrade_banner_dismiss_upgrade_banner = 업그레이드 배너 닫기
+
+chat-cli_upgrade_banner_hide = 숨기기
+
+chat-cli_upgrade_banner_copied = { " " }복사됨
+
+chat-cli_upgrade_banner_copy = { " " }복사
+
+chat-cli_upgrade_banner_upgrade_guide = 업그레이드 가이드
+
+chat-cli_upgrade_banner_recheck = 재확인
+
+chat-annotation_tray_annotations = 주석
+
+chat-annotation_tray_clear_all_annotations = 모든 주석 지우기
+
+chat-annotation_tray_open_annotation = 주석 열기
+
+chat-annotation_tray_save_annotation = 주석 저장
+
+chat-annotation_tray_edit_annotation = 주석 수정
+
+chat-annotation_tray_remove_annotation = 주석 제거
+
+chat-computer_picker_run_on_computer = 컴퓨터에서 실행
+
+chat-computer_picker_cloud_sandbox = 클라우드
+
+chat-computer_picker_beta = 베타
+
+chat-computer_picker_add_computer = 컴퓨터 추가…
+
+chat-context_tray_add_context = 컨텍스트 추가
+
+chat-context_tray_transcript = 성적 증명서
+
+chat-context_tray_plan = 계획
+
+chat-create_from_menu_create_from_an_existing_pr_branch_or_issue_tracker_ticket = 기존 PR, 지점 또는 이슈 트래커 티켓에서 생성
+
+chat-create_from_menu_create_from = 다음에서 생성…
+
+chat-create_from_menu_search_by_name = 이름으로 검색
+
+chat-create_from_menu_search_by_title_number_or_author = 제목, 번호 또는 저자로 검색
+
+chat-create_from_menu_no_other_branches = 다른 지점은 없습니다.
+
+chat-create_from_menu_in_use = 사용 중
+
+chat-create_from_menu_select = ↵ 선택
+
+chat-plan_approval_tray_review_plan = 계획 검토
+
+chat-plan_approval_tray_open_a_new_session_in_build_mode_with_this_plan_attached = 이 계획이 첨부된 빌드 모드에서 새 세션을 엽니다.
+
+chat-plan_approval_tray_hand_off = 손 떼기 →
+
+chat-plan_approval_tray_abandon = 포기하다
+
+chat-plan_approval_tray_approve = 승인하다
+
+chat-queue_chip_drag_queued_message = 대기 중인 메시지 드래그
+
+chat-queue_chip_steer_to_queued_message = 대기 중인 메시지로 이동
+
+chat-queue_chip_send_queued_message_now = 지금 대기 중인 메시지 보내기
+
+chat-queue_chip_starting = 시작 중…
+
+chat-queue_chip_steer = 조종하다
+
+chat-queue_chip_send_now = 지금 보내기
+
+chat-queue_chip_steer_the_agent_to_this_message_next = 다음 메시지로 상담원을 안내하세요.
+
+chat-queue_chip_send_this_message_now = 지금 이 메시지를 보내세요
+
+chat-queue_chip_edit_queued_message = 대기 중인 메시지 편집
+
+chat-queue_chip_remove_queued_message = 대기 중인 메시지 제거
+
+chat-queue_chip_more_queue_actions = 추가 대기열 작업
+
+chat-queue_chip_move_up = 위로 이동
+
+chat-queue_chip_move_down = 아래로 이동
+
+chat-queue_tray_waiting_for_sandbox = 샌드박스를 기다리는 중
+
+chat-queue_tray_queued = 대기 중
+
+chat-queue_tray_waiting_for_connection = 연결을 기다리는 중
+
+chat-queue_tray_queue_paused = 대기열이 일시 중지되었습니다
+
+chat-queue_tray_queue_held_because_the_last_turn_failed = 마지막 차례가 실패했기 때문에 대기열이 보류되었습니다.
+
+chat-queue_tray_resume_queued_messages = 대기 중인 메시지 재개
+
+chat-queue_tray_resume = 이력서
+
+chat-workspace_picker_choose_workspace = 작업공간 선택
+
+chat-workspace_picker_workspace = 작업공간
+
+chat-computer_switcher_add_computer = 컴퓨터 추가
+
+chat-computer_switcher_switch_computer = 컴퓨터 전환
+
+chat-computer_switcher_local_workspace = 로컬 작업공간
+
+chat-computer_switcher_online = 온라인
+
+chat-computer_switcher_computers = 컴퓨터
+
+chat-computer_switcher_current = 현재
+
+chat-computer_switcher_no_served_computers_are_linked_to_this_account_yet = 아직 이 계정에 연결된 컴퓨터가 없습니다.
+
+chat-directory_unavailable_banner_this_directory_is_unavailable = 이 디렉터리는 사용할 수 없습니다.
+
+chat-directory_unavailable_banner_this_directory_has_been_deleted_and_it_s_inaccessible = 이 디렉터리는 삭제되어 액세스할 수 없습니다.
+
+chat-environment_path_browser_parent_folder = 상위 폴더
+
+chat-environment_path_browser_developer = ~/개발자
+
+chat-environment_path_browser_go = 이동
+
+chat-environment_path_browser_choose = 선택하세요…
+
+chat-environment_path_browser_go_to_parent_folder = 상위 폴더로 이동
+
+chat-environment_path_browser_folder_contents = 폴더 내용
+
+chat-environment_path_browser_this_folder_is_empty = 이 폴더는 비어 있습니다.
+
+chat-environment_path_browser_loading_folder = 폴더 로드 중…
+
+chat-environment_path_browser_enter_a_folder_path = 폴더 경로를 입력하세요.
+
+chat-environment_summary_environment_summary = 환경 요약
+
+chat-environment_summary_running_on = 실행 중
+
+chat-environment_summary_connected_devices = 연결된 장치
+
+chat-environment_summary_create_pr = PR 작성
+
+chat-environment_summary_github_actions = GitHub 작업
+
+chat-environment_summary_merge_conflicts = 병합 충돌
+
+chat-environment_summary_branch_changes = 브랜치 변경 사항
+
+chat-environment_summary_plan = 계획
+
+chat-environment_summary_stack = 스택
+
+chat-environment_summary_manage_stack = 스택 관리
+
+chat-environment_summary_stack_count = PR{ " " }{ $count }개
+
+chat-environment_summary_stack_count_one = PR{ " " }{ $count }개
+
+chat-environment_summary_stack_count_other = PR{ " " }{ $count }개
+
+chat-environment_summary_loading_checks = 수표 로드 중…
+
+chat-environment_summary_check_details_unavailable = 세부정보를 확인할 수 없습니다.
+
+chat-environment_summary_no_check_details_available = 수표 세부정보가 없습니다.
+
+chat-fork_menu_fork_in_this_chat = 이 채팅에서 포크하세요
+
+chat-fork_menu_open_a_new_session_tab_that_shares_this_chat_and_its_current_worktree = 이 채팅과 현재 작업 트리를 공유하는 새 세션 탭을 엽니다.
+
+chat-fork_menu_fork_into_a_new_worktree = 새 작업 트리로 포크
+
+chat-fork_menu_create_a_separate_chat_in_an_isolated_git_worktree_for_parallel_work = 병렬 작업을 위해 격리된 Git 작업 트리에 별도의 채팅을 만듭니다.
+
+chat-claude_icon_claude = Claude
+
+chat-codex_icon_codex = Codex
+
+chat-gemini_icon_gemini = Gemini
+
+chat-grok_icon_grok = Grok
+
+chat-kiro_icon_kiro = Kiro
+
+chat-inline_diff_no_textual_change = (텍스트 변경 없음)
+
+chat-inline_diff_add = 추가하다
+
+chat-inline_diff_update = 업데이트
+
+chat-jump_to_latest_pill_jump_to_latest = 최신으로 이동
+
+chat-markdown_body_copy_link = 링크 복사
+
+chat-markdown_body_open_link = 링크 열기
+
+chat-markdown_body_zoom_out = 축소
+
+chat-markdown_body_zoom_in = 확대
+
+chat-markdown_body_reset_view = 보기 재설정
+
+chat-markdown_body_mermaid_diagram = 인어 다이어그램
+
+chat-markdown_body_expanded_mermaid_diagram_viewer = 확장된 인어 다이어그램 뷰어.
+
+chat-markdown_body_rendering_diagram = 렌더링 다이어그램...
+
+chat-markdown_body_open_diagram_viewer = 다이어그램 뷰어 열기
+
+chat-message_row_interrupted_by_user = 사용자에 의해 중단됨
+
+chat-message_row_compacting = 압축 중...
+
+chat-message_row_chat_compacted = 채팅이 압축됨
+
+chat-message_row_open_the_sender_s_chat = 보낸 사람의 채팅을 엽니다.
+
+chat-message_row_sender_chat_not_loaded = 발신자 채팅이 로드되지 않았습니다.
+
+chat-message_row_browser_annotation = 브라우저 주석
+
+chat-message_row_open_annotation = 주석 열기
+
+chat-message_row_sent_as_goal = 목표로 보냄
+
+chat-message_row_error = 오류
+
+chat-message_row_dismiss = 닫기
+
+chat-message_row_waiting_for_browser_sign_in = 브라우저 로그인을 기다리는 중…
+
+chat-message_row_open_browser_again = 브라우저를 다시 엽니다
+
+chat-message_row_signed_in_finishing = 로그인했습니다. 완료 중…
+
+chat-message_row_create_replacement_chat = 대체 채팅 만들기
+
+chat-message_row_open_cloud_authentication = 개방형 클라우드 인증
+
+chat-message_row_gemini_cli_needs_an_upgrade = Gemini CLI 업그레이드가 필요합니다
+
+chat-message_row_your_installed_gemini_cli_does_not_support_acp_mode_yet_so_zuse_zuse_b = 설치된 Gemini CLI는 아직 ACP 모드를 지원하지 않으므로 Zuse Zuse(베타)는 CLI가 업데이트될 때까지 Gemini 세션을 시작할 수 없습니다.
+
+chat-message_row_copy_upgrade_command = 업그레이드 명령 복사
+
+chat-message_row_update_provider_to_use_model = { $model }을(를) 사용하려면{ " " }{ $label }을(를) 업데이트하세요
+
+chat-message_row_installed_provider_does_not_support_model = 설치된{ " " }{ $label }{ " " }버전은 아직 이 모델을 지원하지 않습니다.
+
+chat-message_row_update_provider = { $label }{ " " }업데이트
+
+chat-message_row_retry_provider_update = 업데이트 다시 시도
+
+chat-message_row_limit_reached = 한도 도달
+
+chat-message_row_limit_resets = { $time }에 재설정
+
+chat-message_row_weekly_limit = 주간 한도
+
+chat-message_row_monthly_limit = 월간 한도
+
+chat-message_row_daily_limit = 일일 한도
+
+chat-message_row_try_again_later = 나중에 다시 시도하세요
+
+chat-message_row_sign_in_to_provider = { $label }에 로그인
+
+chat-message_row_sign_in_required = 로그인이 필요합니다
+
+chat-message_row_connection_lost = 연결이 끊어졌습니다
+
+chat-message_row_dismiss_error = 오류 닫기
+
+chat-message_row_reconnecting = 다시 연결하는 중
+
+chat-message_row_provider_error = 공급자 오류
+
+chat-message_row_open_provider_settings = 공급자 설정 열기
+
+chat-nearby_pairing_approval_is_this_you_trying_to_connect = 연결하려고 하는 건가요?
+
+chat-nearby_pairing_approval_confirm_these_words_match_the_ones_shown_on_your_phone = 이 단어가 휴대전화에 표시된 단어와 일치하는지 확인하세요.
+
+chat-nearby_pairing_approval_block_device = 블록 장치
+
+chat-nearby_pairing_approval_not_now = 지금은 아님
+
+chat-nearby_pairing_approval_allowing = 허용하는…
+
+chat-nearby_pairing_approval_allow = 허용
+
+chat-next_unread_button_jump_to_the_next_chat_with_unread_activity = 읽지 않은 활동이 있는 다음 채팅으로 이동
+
+chat-next_unread_button_next = 다음
+
+chat-permission_card_approval_expired_after_agent_restart = 에이전트를 다시 시작한 후 승인이 만료되었습니다.
+
+chat-permission_card_the_agent_restarted_while_waiting_for_this_approval_it_cannot_consume = 승인을 기다리는 동안 에이전트가 다시 시작되었습니다. 이전 응답을 사용할 수 없습니다. 계속하려면 이 요청을 무시하고 메시지를 보내세요.
+
+chat-permission_card_esc = Esc
+
+chat-permission_card_dismiss = 닫기
+
+chat-permission_card_deny = 거부
+
+chat-permission_card_allow_for_session = 세션 허용
+
+chat-permission_card_always_allow = 항상 허용
+
+chat-permission_card_enter = ⌘+Enter
+
+chat-permission_card_allow_once = 한 번만 허용
+
+chat-permissions_inspector_no_saved_permission_decisions_for_this_project_yet_they_appear_here_wh = 이 프로젝트에 대해 저장된 권한 결정이 아직 없습니다. 권한 프롬프트에서 "세션에 대해 허용" 또는 "프로젝트에서 항상 허용"을 클릭하면 여기에 나타납니다.
+
+chat-permissions_inspector_always_allowed_in_this_project = 이 프로젝트에서는 항상 허용됩니다.
+
+chat-permissions_inspector_allowed_for_past_sessions = { " " }지난 세션에 허용됨(
+
+chat-permissions_inspector_recent_activity = { " " }최근 활동(
+
+chat-permissions_inspector_revoke = 취소
+
+chat-permissions_inspector_revoke_this_decision = 이 결정을 취소
+
+chat-provider_updates_toast_dismiss_provider_update_toast = 제공업체 업데이트 알림 닫기
+
+chat-provider_updates_toast_title = 에이전트 업데이트 사용 가능
+
+chat-provider_updates_toast_update_all = 모두 업데이트
+
+chat-provider_updates_toast_update = 업데이트
+
+chat-provider_updates_toast_hint = 새 모델은 최신 버전이 필요한 경우가 많습니다.
+
+chat-question_card_dismiss = 닫기
+
+chat-question_card_previous_question = 이전 질문
+
+chat-question_card_next_question = 다음 질문
+
+chat-question_card_submit_answer = 답변 제출
+
+chat-rename_dialog_rename = 이름 바꾸기
+
+chat-review_annotation_chat_session_required = 채팅 세션이 필요합니다
+
+chat-review_annotation_post_a_review_comment = 리뷰 댓글 게시…
+
+chat-review_annotation_add_an_annotation_for_ai = AI에 대한 주석 추가…
+
+chat-review_annotation_annotation_destination = 주석 대상
+
+chat-review_annotation_ai = AI
+
+chat-review_annotation_github = GitHub
+
+chat-review_annotation_cancel_annotation = 주석 취소
+
+chat-review_annotation_cancel_annotation_esc = 주석 취소(Esc)
+
+chat-review_annotation_save_annotation = 주석 저장
+
+chat-review_annotation_save_annotation_enter = 주석 저장(Enter)
+
+chat-review_annotation_for_ai = { " " }AI의 경우
+
+chat-review_annotation_edit_annotation = 주석 수정
+
+chat-review_annotation_delete_annotation = 주석 삭제
+
+chat-right_pane_terminal_disconnected_close_it_and_open_a_new_terminal = 터미널 연결 끊김 - 터미널을 닫고 새 터미널을 엽니다.
+
+chat-right_pane_no_project_selected = 선택한 프로젝트가 없습니다.
+
+chat-right_pane_preparing_workspace = 작업공간 준비 중…
+
+chat-right_pane_integrated_browser_is_desktop_only = 통합 브라우저는 데스크톱 전용입니다.
+
+chat-right_pane_browser_automation_requires_electron_s_isolated_chromium_controls_link = 브라우저 자동화에는 Electron의 격리된 Chromium 컨트롤이 필요합니다. 링크는 일반 브라우저 탭에서 계속 열 수 있습니다.
+
+chat-right_pane_this_cloud_workspace_is_disconnected_select_this_tab_to_reconnect = 이 클라우드 작업공간은 연결이 끊어졌습니다. 다시 연결하려면 이 탭을 선택하세요.
+
+chat-right_pane_this_directory_is_unavailable = 이 디렉터리는 사용할 수 없습니다.
+
+chat-right_pane_add_panel = 패널 추가
+
+chat-subagent_row_agent_running = 에이전트 실행 중
+
+chat-subagent_row_prompt = 프롬프트
+
+chat-subagent_row_copy_prompt = 프롬프트 복사
+
+chat-subagents_pane_back_to_subagents = 하위 에이전트로 돌아가기
+
+chat-subagents_pane_active = 활성
+
+chat-subagents_pane_detached_subagents_will_appear_here = 분리된 하위 에이전트가 여기에 나타납니다.
+
+chat-subagents_pane_no_active_subagents = 활성 하위 에이전트 없음
+
+chat-terminal_pane_reconnecting_cloud_terminal = 클라우드 터미널을 다시 연결하는 중…
+
+chat-terminal_pane_resuming_cloud_workspace = 클라우드 작업공간 재개 중…
+
+chat-terminal_pane_cloud_terminal_type_to_resume_the_workspace = 클라우드 터미널. 작업 공간을 다시 시작하려면 입력하세요.
+
+chat-terminal_pane_cloud_terminal_could_not_connect_type_here_to_try_again = 클라우드 터미널을 연결할 수 없습니다. 다시 시도하려면 여기에 입력하세요.
+
+chat-terminal_pane_workspace_paused_type_here_to_resume_the_terminal = 작업 공간이 일시 중지되었습니다. 터미널을 다시 시작하려면 여기에 입력하세요.
+
+chat-terminal_pane_cloud_terminal_is_unavailable = 클라우드 터미널을 사용할 수 없습니다.
+
+chat-terminal_pane_file_changes_synced_to_local = 파일 변경 사항이 로컬에 동기화됨
+
+chat-terminal_pane_local_file_sync_failed = 로컬 파일 동기화 실패
+
+chat-terminal_pane_syncing_files_to_local = 파일을 로컬에 동기화하는 중…
+
+chat-top_bar_zuse_beta = Zuse(베타)
+
+chat-top_bar_hide_projects_panel = 프로젝트 패널 숨기기
+
+chat-top_bar_show_projects_panel = 프로젝트 패널 표시
+
+chat-top_bar_repository_location = 저장소 위치
+
+chat-top_bar_toggle_environment_summary = 환경 요약 전환
+
+chat-top_bar_hide_files_panel = 파일 패널 숨기기
+
+chat-top_bar_show_files_panel = 파일 패널 표시
+
+chat-top_bar_switch_branch = 지점 전환
+
+chat-top_bar_rename_current_branch = 현재 지점 이름 바꾸기…
+
+chat-top_bar_search_branches = 지점 검색
+
+chat-top_bar_local_branches = 현지 지점
+
+chat-top_bar_no_local_branches = 현지 지점 없음
+
+chat-top_bar_remote_branches = 원격 지점
+
+chat-top_bar_no_matching_branches = 일치하는 분기가 없습니다.
+
+chat-top_bar_rename_branch = 지점 이름 바꾸기
+
+chat-top_bar_rename_the_unpublished_branch_for_this_chat_workspace = 이 채팅 작업 영역에 대해 게시되지 않은 분기의 이름을 바꿉니다.
+
+chat-top_bar_branch_name = 지점명
+
+chat-top_bar_open_workspace_in_app = 앱에서 작업공간 열기
+
+chat-top_bar_open_in = 다음에서 열다…
+
+chat-top_bar_copy_path = 경로 복사
+
+chat-top_bar_run = 실행
+
+chat-top_bar_actions_unavailable = 사용할 수 없는 작업
+
+chat-top_bar_no_pr = 홍보 없음
+
+chat-top_bar_merged = 병합됨
+
+chat-top_bar_fix = 수정
+
+chat-top_bar_resolve_conflicts = 갈등 해결
+
+chat-top_bar_commit_push = 커밋 및 푸시
+
+chat-top_bar_push = 푸시
+
+chat-top_bar_push_commits = 푸시 커밋
+
+chat-top_bar_create_pr = PR 작성
+
+chat-top_bar_archive = 아카이브
+
+chat-top_bar_archive_chat = 채팅 보관
+
+chat-top_bar_mark_ready = 준비됨으로 표시
+
+chat-top_bar_check = { " " }확인
+
+chat-top_bar_failing = { " " }실패
+
+chat-top_bar_merge = 병합
+
+chat-top_bar_choose_merge_method = 병합 방법 선택
+
+chat-top_bar_merge_method = 병합 방법
+
+chat-top_bar_auto_merge_on = 자동 병합 켜기
+
+chat-top_bar_auto_merge = 자동 병합
+
+chat-top_bar_capturing = 캡처 중…
+
+chat-top_bar_fix_ci_errors = CI 오류 수정
+
+chat-turn_summary_tool = 도구{ " " }
+
+chat-turn_summary_call = 전화
+
+chat-turn_summary_calls = 전화
+
+chat-turn_summary_message = 메시지
+
+chat-turn_summary_messages = 메시지
+
+chat-turn_summary_show_less = 간략히 보기
+
+chat-command_palette_up_arrow = 위쪽 화살표
+
+chat-command_palette_down_arrow = 아래쪽 화살표
+
+chat-command_palette_navigate = 탐색
+
+chat-command_palette_enter = 입력
+
+chat-command_palette_esc = Esc
+
+chat-spinner_loading = 로드 중
+
+chat-update_banner_update_failed = 업데이트 실패
+
+chat-update_banner_agents_are_running = 에이전트가 실행 중입니다.
+
+chat-update_banner_update_available = 업데이트 가능
+
+chat-update_banner_dismiss_update_toast = 업데이트 토스트 닫기
+
+chat-update_banner_restart_later = 나중에 다시 시작
+
+chat-update_banner_restart_when_idle = 유휴 상태일 때 다시 시작
+
+chat-update_banner_restart_now = 지금 다시 시작
+
+chat-update_banner_restart_anyway = 어쨌든 다시 시작
+
+chat-update_banner_dismiss = 닫기
+
+chat-update_banner_try_again = 다시 시도하세요
+
+chat-browser_pane_select = 선택
+
+chat-browser_pane_region_2 = 지역
+
+chat-browser_pane_draw = 무승부
+
+chat-browser_pane_erase = 지우기
+
+chat-browser_pane_point = 포인트 ({ $x },{ " " }{ $y })
+
+chat-changes_review_additions_and_deletions = { $additions }{ " " }추가 및{ " " }{ $deletions }{ " " }삭제
+
+chat-changes_review_conflict_remaining = { $remaining }{ " " }충돌이 남아 있습니다.
+
+chat-changes_review_actions_for = { $path }에 대한 조치
+
+chat-chat_composer_composer_already_has_a_draft = 이미 초안이 있습니다
+
+chat-chat_composer_send_or_clear_the_current_draft_before_editing_a_queued_message = 대기 중인 메시지를 편집하기 전에 현재 초안을 보내거나 지웁니다.
+
+chat-chat_composer_composer_draft_changed = 초안이 변경되었습니다
+
+chat-chat_composer_the_queued_message_was_restored_so_your_current_draft_stays_untou = 대기 중인 메시지가 복원되었으므로 현재 초안은 그대로 유지됩니다.
+
+chat-chat_composer_sandboxed_with_auto_review = 자동 검토 기능을 갖춘 샌드박스
+
+chat-chat_composer_this_provider_uses_a_fixed_local_sandbox_and_does_not_support_int = 이 공급자는 고정된 로컬 샌드박스를 사용하며 대화형 권한 모드를 지원하지 않습니다.
+
+chat-chat_composer_image_upload_failed = 이미지 업로드 실패
+
+chat-chat_composer_the_image_was_removed_try_attaching_it_again = 이미지가 제거되었습니다. 다시 부착해 보세요.
+
+chat-chat_landing_could_not_reconnect = 다시 연결할 수 없습니다.
+
+chat-chat_landing_cloud_workspace_needs_attention = 클라우드 작업공간에 주의가 필요함
+
+chat-chat_working_row_is_working = { $providerLabel }가 작동 중입니다.
+
+chat-composer_chip_overlay_view = { $relPath }{ " " }보기
+
+chat-composer_chip_overlay_open = { $relPath }{ " " }열기
+
+chat-context_tray_nothing_to_attach = 첨부할 내용 없음
+
+chat-context_tray_attach_failed = 첨부 실패
+
+chat-context_tray_added_to_the_composer = 작곡가에{ " " }{ $relPath }를 추가했습니다.
+
+chat-context_tray_attach = { $label }{ " " }부착
+
+chat-create_from_menu_prs = PR
+
+chat-create_from_menu_branches = 지점
+
+chat-create_from_menu_issues = 문제
+
+chat-plan_approval_tray_nothing_to_hand_off = 넘겨줄 게 하나도 없어
+
+chat-plan_approval_tray_could_not_find_the_proposed_plan_for_this_session = 이 세션에 대해 제안된 계획을 찾을 수 없습니다.
+
+chat-plan_approval_tray_handoff_failed = 핸드오프 실패
+
+chat-plan_approval_tray_could_not_create_the_build_session = 빌드 세션을 생성할 수 없습니다.
+
+chat-plan_approval_tray_plan_handed_off = 계획이 전달되었습니다.
+
+chat-workspace_picker_worktree = 작업 트리
+
+chat-workspace_picker_fresh_isolated_branch = 신선한 고립된 지점
+
+chat-workspace_picker_local = 지역
+
+chat-workspace_picker_use_the_main_checkout = 기본 결제 사용
+
+chat-computer_switcher_offline = 오프라인 ·{ " " }{ $value1 }
+
+chat-environment_summary_loading_pull_request = 풀 요청 로드 중
+
+chat-environment_summary_pull_request_merged = 풀 요청이 병합되었습니다.
+
+chat-environment_summary_pull_request_closed = 풀 요청이 종료되었습니다.
+
+chat-environment_summary_pull_request_open = 풀 리퀘스트 열림
+
+chat-environment_summary_no_pull_request = 풀 요청 없음
+
+chat-fork_menu_fork_failed = 포크 실패
+
+chat-fork_menu_the_source_session_is_no_longer_available = 소스 세션을 더 이상 사용할 수 없습니다.
+
+chat-fork_menu_worktree_creation_failed = 작업 트리 생성 실패
+
+chat-fork_menu_could_not_branch_this_conversation = 이 대화를 분기할 수 없습니다.
+
+chat-fork_menu_fork_from_this_2 = 이{ " " }{ $label }의 포크
+
+chat-message_row_this_cloud_chat_uses_legacy_authentication = 이 클라우드 채팅은 레거시{ " " }{ $providerLabel }{ " " }인증을 사용합니다.
+
+chat-message_row_account_needs_reconnecting = { $providerLabel }{ " " }계정을 다시 연결해야 합니다.
+
+chat-message_row_authentication_is_unavailable = { $providerLabel }{ " " }인증을 사용할 수 없습니다.
+
+chat-message_row_its_image_owned_credential_cannot_be_migrated_safely_reconnect_on = 이미지 소유{ " " }{ $providerLabel }{ " " }자격 증명을 안전하게 마이그레이션할 수 없습니다. 한 번 다시 연결한 다음 계정 수준 인증을 사용하는 대체 클라우드 채팅을 생성하세요.
+
+chat-message_row_reconnect_once_in_cloud_workspace_settings_the_account_credential = Cloud Workspace 설정에서{ " " }{ $providerLabel }를 한 번 다시 연결하세요. 계정 자격 증명은 새로운 클라우드 채팅에서 공유되며 이 샌드박스에 구워지지 않습니다.
+
+chat-message_row_open_cloud_workspace_settings_to_restore_account_level_authentica = Cloud Workspace 설정을 열어 계정 수준{ " " }{ $providerLabel }{ " " }인증을 복원하세요. Zuse는 클라우드 메타데이터 동기화가 완료된 후 레거시 채팅을 식별합니다.
+
+chat-nearby_pairing_approval_could_not_update_phone_access = 전화 액세스를 업데이트할 수 없습니다.
+
+chat-review_annotation_send_annotation_to = { $label }로 주석 보내기
+
+chat-review_annotation_send_to = { $label }로 보내기
+
+chat-review_annotation_line = 라인{ " " }{ $startLine }
+
+chat-review_annotation_lines = 라인{ " " }{ $startLine }–{ $endLine }
+
+chat-right_pane_files = 파일
+
+chat-right_pane_terminal = 터미널
+
+chat-right_pane_changes = 변경 사항
+
+chat-right_pane_pr = 홍보
+
+chat-right_pane_plan = 계획
+
+chat-right_pane_browser = 브라우저
+
+chat-right_pane_subagents = 하위 에이전트
+
+chat-right_pane_cloud_terminal = 클라우드 터미널
+
+chat-right_pane_local_terminal = 로컬 터미널
+
+chat-right_pane_close = { $label }{ " " }닫기
+
+chat-runtime_mode_meta_supervised = 감독됨
+
+chat-runtime_mode_meta_asks_before_every_bash_file_edit_web_request_or_mcp_call_read_onl = 모든 Bash, 파일 편집, 웹 요청 또는 MCP 호출 전에 묻습니다. 읽기 전용 도구(Read, Glob, Grep, LS)는 항상 무료입니다.
+
+chat-runtime_mode_meta_auto_accept_edits = 수정사항 자동 수락
+
+chat-runtime_mode_meta_auto_allows_edit_write_multiedit_notebookedit_still_asks_for_bash = 편집, 쓰기, MultiEdit, NotebookEdit을 자동으로 허용합니다. 여전히 Bash, WebFetch/WebSearch 및 기타 도구가 필요합니다.
+
+chat-runtime_mode_meta_auto_accept_edits_bash = 편집 내용 자동 수락 + Bash
+
+chat-runtime_mode_meta_auto_allows_edits_and_bash_commands_still_asks_for_webfetch_webse = 편집 및 Bash 명령을 자동으로 허용합니다. 여전히 WebFetch/WebSearch 및 기타 도구가 필요합니다.
+
+chat-runtime_mode_meta_full_access = 전체 액세스
+
+chat-runtime_mode_meta_auto_allows_everything_plan_mode_and_sensitive_paths_env_ssh_cred = 모든 것을 자동으로 허용합니다. 계획 모드 및 중요한 경로(.env, .ssh, 자격 증명, 키)는 여전히 프롬프트됩니다.
+
+chat-subagents_pane_done = 완료 ·{ " " }{ $length }
+
+chat-top_bar_open_pull_request_on_github = GitHub에서 풀 요청 #{ $value1 }{ " " }열기
+
+chat-top_bar_failed = { $label }{ " " }실패
+
+chat-top_bar_auto_merge_failed = 자동 병합 실패
+
+chat-cartesian_root_chart = 차트
+
+chat-right_pane_merge_conflicts = 병합 충돌
+
+chat-changes_review_of_reviewed_sentence = { $value }의{ " " }{ $viewedCount }가 리뷰되었습니다.
+
+chat-changes_review_some_changes_could_not_be_loaded_sentence = 일부 변경 사항을 로드할 수 없습니다:{ " " }{ $error }
+
+chat-changes_review_resolve_sentence = { $value }{ " " }해결
+
+chat-permission_card_more_sentence = +{ $value }{ " " }더보기
+
+chat-chat_composer_4000_tokens_sentence = <part0>{ $value }/4000</part0><part1>{ $value2 }{ " " }토큰 ·{ " " }{ $elapsed }</part1>
+
+chat-chat_composer_context_sentence = <part0>Context</part0><part1>{ $headerValue }</part1>
+
+chat-chat_composer_window_used_sentence = <part0>사용된 창</part0><part1>{ $value }%</part1>
+
+chat-chat_landing_this_project_isn_t_on_sentence = 이 프로젝트는{ " " }{ $value }에 없습니다
+
+chat-chat_landing_issue_attached_sentence = 이슈{ " " }{ $value }{ " " }첨부
+
+chat-chat_landing_no_chats_match_sentence = “{ $value }”와 일치하는 채팅이 없습니다.
+
+chat-chat_landing_no_projects_match_sentence = “{ $value }”와 일치하는 프로젝트가 없습니다.
+
+chat-top_bar_ahead_sentence = { $value }{ " " }앞서
+
+chat-top_bar_open_pull_request_on_github_sentence = GitHub에서 풀 요청 #{ $value }{ " " }열기
+
+chat-cli_upgrade_banner_update_to_keep_using_it_sentence = 계속 사용하려면{ " " }{ $value }를 업데이트하세요.
+
+chat-nearby_pairing_approval_device_sentence = { $value }{ " " }· 장치{ " " }{ $value2 }
+
+chat-fork_menu_fork_from_this_sentence = 이{ " " }{ $label }의 포크
+
+chat-markdown_body_could_not_render_mermaid_diagram_sentence = 인어 다이어그램을 렌더링할 수 없습니다:{ " " }{ $value }
+
+chat-turn_summary_more_sentence = +{ $value }{ " " }더보기
+
+chat-archived_chats_page_archived_sentence = 보관된{ " " }{ $value }
+
+chat-permissions_inspector_permissions_sentence = 권한 —{ " " }{ $projectName }
+
+chat-browser_pane_allow_this_task_to_use_the_signed_in_session_for_sentence = 이 작업이{ " " }{ $value }에 로그인된 세션을 사용하도록 허용하시겠습니까?
+
+chat-changes_review_conflict_remaining_one = { $remaining }{ " " }충돌이 남아 있습니다.
+
+chat-changes_review_conflict_remaining_other = { $remaining }{ " " }충돌이 남아 있음
+
+chat-top_bar_change_plural0_sentence = { $value }{ " " }변경 사항
+
+chat-top_bar_change_plural0_sentence_one = { $value }{ " " }변경
+
+chat-top_bar_change_plural0_sentence_other = { $value }{ " " }변경 사항
+
+chat-archived_chats_page_worktree_cleanup_failed = 작업 트리 정리에 실패했습니다.
+
+chat-browser_pane_use_the_saved_test_login_for = { $passwordFieldOrigin }에 대해 저장된 테스트 로그인을 사용하십시오.
+
+chat-browser_pane_port = 포트{ " " }{ $value1 }
+
+chat-changes_review_no_review_is_available = 리뷰가 없습니다.
+
+chat-changes_review_indicators_2 = { $label }{ " " }표시기
+
+chat-chat_landing_computers = { $value1 }{ " " }컴퓨터
+
+chat-chat_view_new_chat = 새 채팅
+
+chat-cli_upgrade_banner_an_unknown_version = 알 수 없는 버전
+
+chat-context_tray_transcript_2 = { $value1 }{ " " }· 성적표
+
+chat-context_tray_plan_2 = { $value1 }{ " " }· 계획
+
+chat-create_from_menu_no_found = { $value1 }를 찾을 수 없습니다.
+
+chat-computer_switcher_this_computer = 이 컴퓨터
+
+chat-computer_switcher_unnamed_computer = 이름이 없는 컴퓨터
+
+chat-avatar_avatar = { $name }{ " " }아바타
+
+chat-message_row_empty = (비어 있음)
+
+chat-message_row_starting_sign_in = { $label }{ " " }로그인을 시작하는 중…
+
+chat-subagent_row_empty = (비어 있음)
+
+chat-chat_landing_issue = 문제
+
+chat-chat_landing_attached = 첨부된
+
+chat-device_bridge_panel_revoke = 취소
+
+chat-device_permission_card_run_command_on = { $device }에서 명령을 실행할까요?
+
+chat-chat_composer_goal_time_used = 사용된 골 시간
+
+chat-tool_row_local_computer = 로컬 컴퓨터
+
+chat-chat_landing_couldn_t_send_your_first_cloud_message = 첫 번째 클라우드 메시지를 보낼 수 없습니다.
+
+chat-device_permission_card_shell_access_can_read_and_change_local_files_saved_approvals_apply_to_this_computer = 쉘 액세스는 로컬 파일을 읽고 변경할 수 있습니다. 저장된 승인이 이 컴퓨터에 적용됩니다.
+
+chat-chat_landing_cloud_workspace_started_without_your_attachments = 첨부 파일 없이 시작된 클라우드 작업 공간
+
+chat-chat_landing_this_cloud_api_version_delivers_the_first_message_itself_send_the = 이 클라우드 API 버전은 첫 번째 메시지 자체를 전달합니다. 작업공간이 준비되면 파일을 다시 보내세요.
+
+chat-message_row_could_not_load_image_click_to_retry = 이미지를 로드할 수 없습니다. 다시 시도하려면 클릭하세요.
+
+chat-message_row_preparing_image = 이미지 준비 중
+
+chat-message_row_retry_preview = 미리보기 재시도
+
+chat-device_bridge_panel_chat = 채팅{ " " }{ $value1 }
+
+chat-device_bridge_panel_always_allow_your_cloud_chats = 항상 허용 · 클라우드 채팅
+
+chat-chat_landing_issueattached_sentence = 이슈{ $value }첨부됨
+
+chat-terminal_pane_waiting_for_changes_to_settle = 변경이 완료되기를 기다리는 중…
+
+chat-pi_permissions = Pi 권한
+
+chat-question_timed_out = 질문 응답 시간이 초과되었습니다.
+
+chat-question_cancelled = 질문이 취소되었습니다.
+
+chat-computer_picker_machine_size = 머신 크기
+
+chat-cloud_setup_unavailable = 사용할 수 없음
+
+chat-cloud_setup_subscription_required = 구독 필요
+
+chat-cloud_setup_connect_repository = 저장소 연결
+
+chat-cloud_setup_building_image = 클라우드 이미지 빌드 중
+
+chat-cloud_setup_rebuild_authentication = 인증 다시 설정
+
+chat-cloud_setup_update_image = 클라우드 이미지 업데이트
+
+chat-cloud_connect_repository_first = 먼저 클라우드 설정에서 이 저장소를 연결하세요.
+
+chat-cloud_supported_agents = 클라우드는 현재 Claude와 Codex를 지원합니다.
+
+chat-cloud_size_small = 소형 ({ $cpu }{ " " }vCPU /{ " " }{ $memory }{ " " }GB)
+
+chat-cloud_size_default = 표준 ({ $cpu }{ " " }vCPU /{ " " }{ $memory }{ " " }GB)
+
+chat-cloud_size_large = 대형 ({ $cpu }{ " " }vCPU /{ " " }{ $memory }{ " " }GB)
+
+chat-device_command_permissions_title = 저장된 명령 권한
+
+chat-cloud_queue_waiting_for_agent = 에이전트를 기다리는 중
+
+chat-cloud_queue_cancel_failed = 대기 중인 메시지를 취소하지 못했습니다. 다시 시도하세요.
+
+chat-cloud_queue_waiting_for_cloud = 클라우드 시작 대기 중
+
+chat-cloud_history_loading = 이전 메시지 불러오는 중…
+
+chat-cloud_history_retry = 이전 메시지를 불러올 수 없습니다 · 다시 시도
+
+chat-fork_menu_fork_in_new_tab = 새 탭으로 포크
+
+chat-fork_menu_new_tab_on_this_machine = 이 머신에서 이 메시지까지의 대화를 포함하는 새 탭을 엽니다.
+
+chat-fork_menu_fork_in_new_machine = 새 머신으로 포크
+
+chat-fork_menu_new_machine_description = 이 머신을 복제하고 별도의 채팅에서 대화를 계속합니다.
+
+chat-fork_menu_forking_in_new_machine = 새 머신으로 포크 중
+
+chat-workspace_sharing_button = Share
+
+chat-message_row_compaction_failed = 컨텍스트 압축 중지됨
+
+chat-runtime_mode_ask_for_approval = 승인 요청
+
+chat-runtime_mode_approve_for_me = 대신 승인
+
+chat-runtime_mode_auto_description = 에이전트가 작업을 검토하고 필요한 경우 승인을 요청합니다.
+
+chat-runtime_mode_change_stops_turn = 접근 권한을 변경하면 현재 턴이 중지됩니다. 다음 메시지부터 새 모드가 적용됩니다.
+
+chat-runtime_mode_approval_description = 파일 편집, 명령 실행, 네트워크 접근 전에 승인을 요청합니다.
+
+chat-runtime_mode_full_description = 승인 없이 작업을 허용합니다. 계획 모드는 계속 적용됩니다.
+
+chat-message_row_signed_out_of = { $label }에서 로그아웃되었습니다.
+
+chat-provider_sign_in_tray_signed_out = { $label }에서 로그아웃됨
+
+chat-provider_sign_in_tray_sign_in_to_continue = 이 채팅을 계속하려면 로그인하세요.
+
+chat-chat_landing_choose_a_project_in_the_sidebar = 사이드바에서 프로젝트를 선택해 새 채팅을 시작하세요.
+
+chat-chat_landing_add_a_project_to_start = 프로젝트를 추가해 첫 채팅을 시작하세요.
+
+chat-chat_landing_add_project = 프로젝트 추가
+
+chat-chat_working_row_waiting_for_task = { $task }{ " " }실행 중
+
+chat-changes_review_viewed = 확인함
+
+chat-delegation_group_count = 하위 에이전트{ " " }{ $count }개
+
+chat-delegation_group_count_one = 하위 에이전트{ " " }{ $count }개
+
+chat-delegation_group_count_other = 하위 에이전트{ " " }{ $count }개
+
+chat-delegation_group_working = { $count }개 실행 중
+
+chat-delegation_group_done = { $count }개 완료
+
+chat-delegation_group_failed = { $count }개 실패
+
+chat-delegation_group_stopped = { $count }개 중지됨
+
+chat-delegation_status_running = 실행 중
+
+chat-delegation_status_done = 완료
+
+chat-delegation_status_failed = 실패
+
+chat-delegation_status_stopped = 중지됨
+
+chat-delegation_row_starting = 시작 중…
+
+chat-delegation_row_open = { $title }{ " " }열기
+
+chat-delegation_group_running = { $total }개 중{ " " }{ $working }개 실행 중
+
+chat-message_row_ui_spec_generated = 생성된 UI
+
+chat-message_row_ui_spec_could_not_render = 이 UI 블록을 렌더링할 수 없습니다 — 원시 스펙을 표시합니다
+
+chat-message_row_ui_spec_submit = 제출
+
+chat-message_row_ui_spec_sent = 전송됨
+
+chat-message_row_ui_spec_yes = 예
+
+chat-message_row_ui_spec_no = 아니요
+
+chat-message_row_ui_spec_send_failed = 응답을 보낼 수 없습니다
+
+chat-message_row_ui_spec_send_open_chat = 이 채팅을 열어 보내세요.
+
+chat-selection_menu_label = 선택 작업
+
+chat-selection_menu_annotate = 주석
+
+chat-selection_menu_copy = 복사
+
+chat-selection_menu_copied = 복사됨
+
+chat-plan_expired = 이 계획 승인 요청이 만료되었습니다. 계속하려면 새 메시지를 보내세요.
+
+chat-plan_delivery_uncertain = 계획 응답이 전달되었는지 확인할 수 없습니다. 다음 턴을 시작하기 전에 대화를 확인하세요.
+
+chat-provider_quiet = 최근 공급자 활동이 없습니다. 기다리거나 이 턴을 중지할 수 있습니다.
+
+chat-execution_unavailable = Zuse가 이 응답의 상태를 추적할 수 없게 되었습니다. 상태를 확인하는 중…
+
+chat-checkpoints_title = 체크포인트
+
+chat-checkpoints_description = 파일과 대화를 저장된 턴으로 복원합니다. 에이전트는 검증된 기록에서 계속하거나 보존된 대화 기록으로 새 대화를 시작합니다. 도구 및 네이티브 하위 에이전트 단계는 개별적으로 되돌릴 수 없습니다.
+
+chat-checkpoints_empty = 아직 체크포인트가 없습니다. 에이전트가 턴을 시작하면 생성됩니다.
+
+chat-checkpoints_before = 턴 시작 전
+
+chat-checkpoints_after = 턴 종료 후
+
+chat-checkpoints_review = 되돌릴 내용 검토
+
+chat-checkpoints_restore = 체크포인트 복원
+
+chat-checkpoints_retry = 다시 시도
+
+chat-checkpoints_back = 뒤로
+
+chat-checkpoints_refresh = 새로 고침
+
+chat-checkpoints_confirm = 이 파일들이 복원되고 이후 대화 메시지가 제거됩니다. 엔진의 모든 작업이 완료되어야 합니다. 미리 보기 이후 외부에서 변경된 내용이 있으면 복원이 중단됩니다.
+
+chat-checkpoints_no_files = 파일 변경 사항이 없습니다. 대화만 되돌립니다.
+
+chat-checkpoints_resume = 중단된 복원 재개
+
+chat-checkpoints_status_capturing = 저장 중
+
+chat-checkpoints_status_ready = 준비됨
+
+chat-checkpoints_status_error = 조치 필요
+
+chat-checkpoints_status_stale = 대체됨
+
+chat-checkpoints_status_unsupported = Git 저장소 필요
+
+chat-merge_back_action = 상위 대화에 컨텍스트 병합
+
+chat-merge_back_complete = 컨텍스트 병합됨
+
+chat-merge_back_next_turn = 상위 대화는 다음 턴에서 새 컨텍스트를 받습니다. 파일은 변경되지 않습니다.
+
+chat-merge_back_failed = 컨텍스트를 병합할 수 없습니다
+
+chat-checkpoints_saving = 체크포인트 저장 중
+
+chat-fork_recovery_failed = 분기 확인이 필요합니다
+
+chat-fork_recovery_pending = 분기 준비 중…
+
+chat-fork_recovery_retry = 다시 시도
+
+chat-fork_recovery_cancel = 분기 취소
+
+chat-native_background_running = 백그라운드 작업 실행 중
+
+chat-attempts_title = 시도 기록
+
+chat-attempts_description = 각 턴의 재시도와 복구를 확인하세요. 시도는 새 턴을 추가하지 않습니다.
+
+chat-attempts_empty = 아직 시도 기록이 없습니다.
+
+chat-attempts_turn = 턴
+
+chat-attempts_attempt = 시도
+
+chat-attempts_initial = 최초 실행
+
+chat-attempts_retry = 재시도
+
+chat-attempts_recovery = 복구
+
+chat-attempts_running = 실행 중
+
+chat-attempts_completed = 완료
+
+chat-attempts_interrupted = 중단됨
+
+chat-attempts_failed = 실패
+
+chat-attempts_superseded = 대체됨
+
+chat-attempts_rolled_back = 롤백됨
+
+chat-attempts_more = 이전 시도 불러오기
+
+chat-attempts_refresh = 새로 고침
+
+chat-attempts_loading = 시도 기록 불러오는 중…
+
+chat-attempts_unavailable = 이 연결을 사용할 수 없습니다. 다시 연결하여 시도 기록을 불러오세요.
+
+chat-send_blocked = 다른 메시지를 보내기 전에 대기 중인 요청에 답하거나 닫으세요.
+
+chat-attention_quiet = 응답 없음
+
+chat-attention_unavailable = 실행 확인 불가
+
+chat-attention_disconnected = 연결 끊김
+
+chat-attention_checking = 실행 확인 중
+
+chat-message_row_send_again = 다시 보내기
+
+chat-message_row_model_switched = 모델이 <from>{ $from }</from>에서 <to>{ $to }</to>(으)로 변경되었습니다.
+
+chat-message_row_context_handed_off = 컨텍스트가 전달되었습니다.
+
+chat-message_row_context_preserved = 컨텍스트가 유지되었습니다.
+
+chat-secret_request_availability = { $name }(으)로 비공개 저장됩니다. 이 세션의 제공자를 다시 시작하면 사용할 수 있습니다. 값은 채팅에 추가되지 않습니다.
+
+chat-secret_request_save_failed = 이 응답을 저장하지 못했습니다. 다시 시도하세요.
+
+chat-agents_summary_title = 에이전트
+
+chat-agents_summary_running = { $count }개 실행 중
+
+chat-agents_summary_parent = 상위
+
+chat-agents_summary_parent_chat = 상위 채팅
+
+chat-agents_summary_unavailable = 이 에이전트는 사용할 수 없거나 보관되었습니다.
+
+chat-message_row_sent_by_sender = { $value }에서 보냄
+
+chat-message_row_slack_author_in_channel = #{ $channel }의{ " " }{ $author }
+
+chat-message_row_slack_author = Slack을 통한{ " " }{ $value }
+
+chat-message_row_slack_channel = #{ $value }에서
+
+chat-message_row_from_slack = Slack에서
+
+chat-switch_account_cache_warning = { $name }에는 이 채팅의 프롬프트 캐시가 없어 다음 응답에서 전체 대화를 다시 읽습니다. 응답이 느려지고{ " " }{ $name }의 한도를 더 많이 사용합니다.
+
+chat-switch_account_compact = 압축 후 전환
+
+chat-switch_account_confirm = 전환 후 재시도
+
+chat-switch_account_to = { $name }(으)로 전환
+
+chat-switch_account_more = 다른 전환 옵션
+
+chat-switch_account_confirm_title = { $name }(으)로 전환할까요?
+
+chat-switch_account_compact_warning = { $name }이(가) 요약을 위해 대화를 한 번 읽습니다. 이후 응답은 빠르고 가볍게 유지됩니다.
+
+chat-switch_account_retry_detail = 전체 기록 유지
+
+chat-switch_account_compact_detail = 먼저 요약해 응답을 빠르게 유지
+
+chat-switch_account_compact_first = 먼저 압축
+
+chat-switch_account_compact_first_detail = 계속하기 전에 채팅을 요약합니다. 이전의 일부 세부 정보가 사라질 수 있습니다.
+
+chat-switch_account_choose = 계정 선택
+
+chat-no_project = 프로젝트 없음
+
+chat-start_without_project = 프로젝트 없이 시작
+
+chat-voice_dictate = 받아쓰기
+
+chat-voice_stop = 완료
+
+chat-voice_starting = 마이크를 시작하는 중…
+
+chat-voice_transcribing = 텍스트로 변환 중…
+
+chat-voice_listening = 듣는 중
+
+chat-voice_cancel = 녹음 삭제
+
+chat-voice_error_unsupported = 이 기기에서는 음성 받아쓰기를 지원하지 않습니다.
+
+chat-voice_error_account_required = 받아쓰기를 사용하려면 설정에서 ChatGPT 계정을 연결하세요.
+
+chat-voice_error_permission_denied = 마이크 접근이 차단되었습니다. 시스템 설정에서 허용한 후 다시 시도하세요.
+
+chat-voice_error_no_microphone = 사용 가능한 마이크가 없습니다. 마이크가 연결되어 있고 사용 중이 아닌지 확인하세요.
+
+chat-voice_error_too_large = 녹음이 너무 깁니다. 더 짧은 메시지로 시도하세요.
+
+chat-voice_error_recorder_failed = 녹음이 예기치 않게 중지되었습니다. 다시 시도하세요.
+
+chat-voice_error_no_speech = 음성이 감지되지 않았습니다. 다시 시도하세요.
+
+chat-voice_error_no_audio = 마이크에서 Zuse로 오디오가 전달되지 않았습니다. 설정에서 입력 장치를 확인한 후 다시 시도하세요.
+
+chat-voice_error_transcription_failed = 녹음을 텍스트로 변환하지 못했습니다. 연결을 확인하고 다시 시도하세요.
+
+chat-voice_error_service_unavailable = 이 워크스페이스에서는 텍스트 변환을 사용할 수 없습니다.
+
+chat-voice_error_start_failed = 받아쓰기를 시작하지 못했습니다. 다시 시도하세요.
+
+chat-startup_queue_preparing = 파일 첨부 중…
+
+chat-startup_queue_failed = 파일을 첨부하지 못했습니다
+
+chat-startup_queue_reattach = 이 메시지를 삭제하고 파일을 다시 첨부하세요. 프롬프트는 전송되지 않았습니다.
+
+chat-question_composer_placeholder = 직접 답변을 입력하세요…
+
+chat-workflow_run_phases = 단계
+
+chat-workflow_run_more = { $count }개 더 보기
+
+chat-workflow_run_agents_done = 에이전트{ " " }{ $total }개 중{ " " }{ $done }개 완료
+
+chat-workflow_run_script_collapse = 스크립트 숨기기
+
+chat-workflow_run_workflow = 워크플로
+
+chat-workflow_run_unphased = 에이전트
+
+chat-workflow_run_prompt = 프롬프트
+
+chat-workflow_run_phase_empty = 이 단계에서 실행된 에이전트가 없습니다
+
+chat-workflow_run_phase_waiting = 이전 단계가 끝나면 시작됩니다
+
+chat-workflow_run_label = 워크플로:{ " " }{ $name }
+
+chat-workflow_run_result = 결과
+
+chat-workflow_run_queued = 대기 중
+
+chat-workflow_run_script_expand = 스크립트 보기
+
+chat-review_guide_title = 가이드
+
+chat-review_guide_new_summary = 이 가이드를 작성한 뒤의 변경 사항입니다. 가이드는 자동으로 업데이트됩니다.
+
+chat-review_guide_changed = 변경됨
+
+chat-review_guide_unavailable_too_large = 이 변경 사항은 너무 커서 자동 가이드를 만들 수 없습니다.
+
+chat-review_guide_updating_for = { $sha }{ " " }기준으로 업데이트 중
+
+chat-review_guide_in_this_guide = 이 가이드의 내용
+
+chat-review_guide_progress = { $total }개 중{ " " }{ $assigned }개 헝크 배치됨
+
+chat-review_guide_before_after = 이전 / 이후
+
+chat-review_guide_cancel = 작성 중지
+
+chat-review_guide_reviewed = 검토 완료
+
+chat-review_guide_writing = 가이드 작성 중
+
+chat-review_guide_ask_prefix = “{ $title }”({ $files })에 대해:{ " " }
+
+chat-review_guide_also_changed = 함께 변경됨
+
+chat-review_guide_file_count = 파일{ " " }{ $count }개
+
+chat-review_guide_new_title = 가이드 이후 새 변경
+
+chat-review_guide_unavailable_no_changes = 아직 가이드로 만들 변경 사항이 없습니다.
+
+chat-review_guide_diff_tab = 변경 사항
+
+chat-changes_review_moved_to = { $location }(으)로 이동됨
+
+chat-review_guide_empty_body = 에이전트가 변경 사항을 읽기 순서대로 짧은 장으로 묶고, 테스트와 생성 파일은 따로 둡니다.
+
+chat-review_guide_view = 리뷰 보기
+
+chat-review_guide_overview = 개요
+
+chat-review_guide_next_chapter = 다음 장
+
+chat-changes_review_moved_from = { $location }에서 이동됨
+
+chat-review_guide_file_count_one = 파일{ " " }{ $count }개
+
+chat-review_guide_empty_title = 이 변경 사항을 순서대로 읽기
+
+chat-review_guide_unavailable_no_session = 이 작업 공간에서 채팅을 시작하면 가이드를 작성할 수 있습니다.
+
+chat-review_guide_file_count_other = 파일{ " " }{ $count }개
+
+chat-review_guide_unavailable_disabled = 가이드 리뷰가 설정에서 꺼져 있습니다.
+
+chat-review_guide_ask_author = 작성자에게 묻기
+
+chat-review_guide_generate = 가이드 작성
+
+chat-review_guide_write_anyway = 그래도 작성
+
+chat-review_guide_unavailable_unsupported = 가이드는 Claude 또는 Codex 채팅에서 작성됩니다.
+
+chat-image_gallery_zoom = 이미지 확대
+
+chat-image_gallery_image = 이미지
+
+chat-image_gallery_next = 다음 이미지
+
+chat-image_gallery_previous = 이전 이미지
+
+chat-image_gallery_fit = 이미지 맞춤
+
+chat-image_gallery_unavailable = 이미지를 사용할 수 없습니다
+
+chat-image_gallery_thumbnail = 이미지{ " " }{ $index }{ " " }보기:{ " " }{ $name }
+
+chat-image_gallery_view = 이미지 보기:{ " " }{ $name }
+
+chat-image_gallery_loading = 이미지 로딩 중…
+
+chat-image_gallery_title = 채팅 이미지
+
+chat-review_guide_chapters_appear = 챕터가 작성되는 대로 여기에 표시됩니다.
+
+chat-review_guide_try_again = 다시 시도
+
+chat-review_guide_reading_changes = 변경 사항을 읽는 중…
+
+# Complete plural message. $count is numeric; remaining variables retain their source names.
+chat-environment_summary_stack_count-plural =
+    { $count ->
+       [one] PR{ " " }{ $count }개
+       *[other] PR{ " " }{ $count }개
+    }
+
+# Complete plural message. $count is numeric; remaining variables retain their source names.
+chat-changes_review_conflict_remaining-plural =
+    { $count ->
+       [one] { $remaining }{ " " }충돌이 남아 있습니다.
+       *[other] { $remaining }{ " " }충돌이 남아 있음
+    }
+
+# Complete plural message. $count is numeric; remaining variables retain their source names.
+chat-top_bar_change_plural0_sentence-plural =
+    { $count ->
+       [one] { $value }{ " " }변경
+       *[other] { $value }{ " " }변경 사항
+    }
+
+# Complete plural message. $count is numeric; remaining variables retain their source names.
+chat-delegation_group_count-plural =
+    { $count ->
+       [one] 하위 에이전트{ " " }{ $count }개
+       *[other] 하위 에이전트{ " " }{ $count }개
+    }
+
+# Complete plural message. $count is numeric; remaining variables retain their source names.
+chat-review_guide_file_count-plural =
+    { $count ->
+       [one] 파일{ " " }{ $count }개
+       *[other] 파일{ " " }{ $count }개
+    }
+
+# Tool group headers: the running call's label, then a per-kind summary.
+chat-tool_activity_running_command = 명령 실행 중…
+chat-tool_activity_reading = 파일 읽는 중…
+chat-tool_activity_searching_files = 파일 검색 중…
+chat-tool_activity_editing = 파일 편집 중…
+chat-tool_activity_writing = 파일 쓰는 중…
+chat-tool_activity_searching_web = 웹 검색 중…
+chat-tool_activity_fetching = 페이지 가져오는 중…
+# Variables: tool
+chat-tool_activity_using = { $tool } 사용 중…
+chat-tool_group_thinking = 생각 중
+# Variables: running, total
+chat-tool_group_agents_running = { $total }개 중 { $running }개 실행 중
+chat-tool_activity_summary_separator = { ", " }
+chat-tool_group_status_separator = { " · " }
+# Variables: count
+chat-tool_activity_summary_commands = 명령 { $count }개 실행
+# Variables: count
+chat-tool_activity_summary_reads = 파일 { $count }개 읽음
+# Variables: count
+chat-tool_activity_summary_searches = 검색 { $count }회
+# Variables: count
+chat-tool_activity_summary_edits = 편집 { $count }회
+# Variables: count
+chat-tool_activity_summary_writes = 파일 { $count }개 작성
+# Variables: count
+chat-tool_activity_summary_web_searches = 웹 검색 { $count }회
+# Variables: count
+chat-tool_activity_summary_fetches = 페이지 { $count }개 가져옴
+# Variables: count
+chat-tool_activity_summary_tools = 도구 { $count }개 사용
+# Variables: count
+chat-tool_group_failed = { $count }개 실패
+# Variables: count
+chat-tool_group_agents_done = { $count }개 완료
+# Variables: count
+chat-tool_group_notes = 메모 { $count }개 작성
+# Variables: count
+chat-tool_group_tool_calls = 도구 호출 { $count }회
+# Variables: count
+chat-tool_group_messages = 메시지 { $count }개
+
+chat-find_in_chat_placeholder = 채팅에서 찾기
+chat-find_in_chat_count = { $current } / { $total }
+chat-find_in_chat_no_results = 결과 없음
+chat-find_in_chat_previous = 이전 결과
+chat-find_in_chat_next = 다음 결과
+chat-find_in_chat_close = 찾기 닫기
+
+chat-history_search_results = 보낸 메시지
+chat-history_search_no_results = 일치 항목 없음
+chat-stash_title = 보관함
+chat-stash_open = 보관한 프롬프트: { $count }개. 보관함 열기.
+chat-stash_list = 보관한 프롬프트
+chat-stash_empty = 아직 보관한 항목이 없습니다. 초안이 있을 때 { $shortcut } 키를 누르면 보관됩니다.
+chat-stash_delete = 보관한 프롬프트 삭제
+chat-history_search_empty = 이 채팅에서 아직 보낸 메시지가 없습니다.
+chat-history_search_title = 보낸 메시지 검색 중
+chat-history_search_use = 사용
+chat-history_search_cancel = 취소
+chat-stash_saved_notice = 초안을 보관했습니다 · <part0>{ $shortcut }</part0> 키로 보기
+chat-chat_composer_press_esc_again_to_clear = 지우려면 <part0>Esc</part0> 키를 한 번 더 누르세요
+chat-worktree_fetching = 최신 { $branch } 가져오는 중…
+chat-worktree_creating = { $branch }에서 워크트리 만드는 중…
+chat-worktree_offline = 원격에 연결할 수 없음 · 로컬 { $branch } 사용

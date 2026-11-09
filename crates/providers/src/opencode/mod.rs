@@ -67,8 +67,8 @@ use tokio::sync::mpsc;
 
 use zuse_protocol::{
     AgentEvent, DoneStatus, HarnessId, Model, ModelOption, ModelOptionChoice, ReasoningLevel,
-    RunRequest, SandboxLevel, SlashCommand, SteeringMode, TodoItem, TodoStatus, ToolCall,
-    UserInputAnswer, UserInputQuestion,
+    RunRequest, SlashCommand, SteeringMode, TodoItem, TodoStatus, ToolCall, UserInputAnswer,
+    UserInputQuestion,
 };
 
 use crate::process::{Child, Command, Stdio};
@@ -389,6 +389,7 @@ impl Harness for OpencodeHarness {
     fn reconfigures_in_place(&self, live: &RunRequest, next: &RunRequest) -> bool {
         live.cwd == next.cwd
             && live.sandbox == next.sandbox
+            && live.plan == next.plan
             && live.auto_approve == next.auto_approve
             && live.model_options == next.model_options
             && (next.model.is_some() || live.model.is_none())
@@ -2381,8 +2382,7 @@ async fn run_session(session: Session) {
 }
 
 fn read_only_access(request: &RunRequest) -> bool {
-    request.sandbox == SandboxLevel::ReadOnly
-        || request.model_options.get("agent").and_then(Value::as_str) == Some("plan")
+    request.plan || request.model_options.get("agent").and_then(Value::as_str) == Some("plan")
 }
 fn session_access_rules(request: &RunRequest, protocol: Protocol) -> Value {
     let default = if read_only_access(request) {

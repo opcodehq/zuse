@@ -20,7 +20,7 @@ use zuse_harness::{
     processes::{ProcessNotice, ProcessNotifier},
     *,
 };
-use zuse_protocol::{RunRequest, SandboxLevel, UserInputAnswer, UserInputQuestion};
+use zuse_protocol::{RunRequest, UserInputAnswer, UserInputQuestion};
 use zuse_providers::{HarnessError, RunControls};
 pub(super) fn lock<T>(value: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     value.lock().unwrap_or_else(|e| e.into_inner())
@@ -148,7 +148,7 @@ pub(super) fn mode(request: &RunRequest) -> RuntimeMode {
     }
 }
 pub(super) fn permission_mode(request: &RunRequest) -> PermissionMode {
-    if request.sandbox == SandboxLevel::ReadOnly {
+    if request.plan {
         PermissionMode::Plan
     } else {
         PermissionMode::Default

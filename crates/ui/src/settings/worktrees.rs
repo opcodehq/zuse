@@ -1,6 +1,8 @@
 //! Settings → General: device-addressed worktree destination settings.
 
+use crate::localization::message as tr;
 use gpui::{AnyElement, Context, Entity, Render, Task, Window, div, prelude::*, px};
+use zuse_i18n::messages as msg;
 use zuse_protocol::{FolderListing, WorktreeSettings, WorktreeSettingsStatus};
 use zuse_rpc::methods;
 
@@ -280,7 +282,7 @@ impl WorktreeSettingsCard {
                                     .size(px(14.0))
                                     .text_color(theme.text_muted),
                             )
-                            .child("Home")
+                            .child(tr(cx, msg::simulators::home))
                             .on_click(cx.listener(|card, _, _, cx| card.browse(None, cx))),
                     )
                     .child(
@@ -291,7 +293,9 @@ impl WorktreeSettingsCard {
                                     .size(px(14.0))
                                     .text_color(theme.text_muted),
                             )
-                            .child("Up")
+                            .child(crate::localization::element(
+                                zuse_i18n::messages::native::up,
+                            ))
                             .when(has_parent, |el| {
                                 el.on_click(cx.listener(move |card, _, _, cx| {
                                     card.browse(parent.clone(), cx)
@@ -376,7 +380,7 @@ impl WorktreeSettingsCard {
                         .child(
                             widgets::ghost_action(theme)
                                 .id("worktrees-use-folder")
-                                .child("Use this folder")
+                                .child(tr(cx, msg::native::use_this_folder))
                                 .on_click(cx.listener(|card, _, _, cx| {
                                     if let Loadable::Ready(listing) = &card.folders {
                                         let path = listing.path.clone();
@@ -448,7 +452,7 @@ impl Render for WorktreeSettingsCard {
                         .justify_center()
                         .tab_index(0)
                         .role(gpui::Role::Button)
-                        .aria_label("Use the default worktree location")
+                        .aria_label(tr(cx, msg::native::use_the_default_worktree_location))
                         .tooltip(widgets::text_tooltip("Reset to default"))
                         .focus_visible(|s| s.border_2().border_color(theme.accent))
                         .child(
@@ -464,12 +468,16 @@ impl Render for WorktreeSettingsCard {
             })
             .when(matches!(self.settings, Loadable::Error(_)), |row| {
                 row.child(
-                    widgets::text_action(&theme, widgets::ActionTone::Quiet, "Retry")
-                        .id("worktrees-retry")
-                        .tab_index(0)
-                        .role(gpui::Role::Button)
-                        .focus_visible(|s| s.border_2().border_color(theme.accent))
-                        .on_click(cx.listener(|card, _, _, cx| card.load(card.target.clone(), cx))),
+                    widgets::text_action(
+                        &theme,
+                        widgets::ActionTone::Quiet,
+                        tr(cx, msg::settings::sharing_retry),
+                    )
+                    .id("worktrees-retry")
+                    .tab_index(0)
+                    .role(gpui::Role::Button)
+                    .focus_visible(|s| s.border_2().border_color(theme.accent))
+                    .on_click(cx.listener(|card, _, _, cx| card.load(card.target.clone(), cx))),
                 )
             })
             .when(enabled && !overridden, |row| {
@@ -477,14 +485,14 @@ impl Render for WorktreeSettingsCard {
                     widgets::action_button(&theme, widgets::ActionTone::Filled)
                         .id("worktrees-browse")
                         .gap(px(6.0))
-                        .aria_label("Choose worktree folder")
+                        .aria_label(tr(cx, msg::native::choose_worktree_folder))
                         .child(
                             icons::icon(icons::FOLDER)
                                 .size(px(14.0))
                                 .flex_none()
                                 .text_color(theme.text_muted),
                         )
-                        .child("Browse")
+                        .child(tr(cx, msg::tools::tool_row_browse))
                         .when(interactive, |el| {
                             el.tab_index(0)
                                 .role(gpui::Role::Button)
@@ -499,7 +507,7 @@ impl Render for WorktreeSettingsCard {
                     .id("worktrees-custom-toggle")
                     .flex_none()
                     .role(gpui::Role::Switch)
-                    .aria_label("Custom worktree location")
+                    .aria_label(tr(cx, msg::native::custom_worktree_location))
                     .aria_toggled(if enabled {
                         gpui::Toggled::True
                     } else {
@@ -536,13 +544,21 @@ impl Render for WorktreeSettingsCard {
                         div()
                             .flex_1()
                             .min_w(px(160.0))
-                            .child(widgets::row_title(&theme, "Custom worktree location"))
+                            .child(widgets::row_title(
+                                &theme,
+                                tr(cx, msg::native::custom_worktree_location),
+                            ))
                             .child(widgets::meta_line(&theme, meta)),
                     )
                     .child(controls),
             )
             .when(self.browsing || error.is_some(), |card| card.child(detail));
-        widgets::section(&theme, "Worktrees", card).into_any_element()
+        widgets::section(
+            &theme,
+            crate::localization::text("settings-settings_repository_worktrees", cx),
+            card,
+        )
+        .into_any_element()
     }
 }
 

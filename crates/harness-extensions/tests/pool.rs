@@ -1,3 +1,5 @@
+#![cfg(unix)]
+
 use serde_json::{Value, json};
 use std::{path::Path, sync::Arc};
 use tokio_util::sync::CancellationToken;

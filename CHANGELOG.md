@@ -1,11 +1,38 @@
 # Changelog
 
-## 0.26.0 - 2026-10-30
+## 0.26.0-preview.2 - 2026-11-05
+
+### Added
+
+- Composer keyboard editing, a kill ring, saved drafts, sent-message history search, and emoji completion.
+- Chat keyboard shortcuts, a shortcut reference dialog, and find in chat, including focused side-chat navigation.
+- Streaming dictation that transcribes phrase by phrase while retaining draft text and cancellation controls.
+- Browser-based Zuse sign-in with a fallback when the native loopback redirect is unavailable.
+- A Muse Code sign-in action and translated setup guidance.
+- Signed, notarized macOS DMGs and archives for Apple silicon and Intel, Windows Setup and portable ZIP, Linux DEB/RPM/archives for x64 and ARM64, and a checksum-verifying Linux terminal installer.
+
+### Changed
+
+- Plan mode is a separate composer control in the add menu, independent of agent access settings. The read-only access option is removed.
+- Tool groups summarize their activity and show the running call. Empty projects are hidden and running background commands appear once.
+- Interface translations and shared CJK font coverage include the new composer, shortcut, sign-in, and dictation controls.
+
+### Fixed
+
+- Preserve custom keyboard shortcuts, saved drafts, and the current draft when composer lists or dialogs are dismissed.
+- Pass unmatched file globs through Claude's zsh commands without shell expansion errors.
+- Keep saved runtime credentials in sync, retain plugin error codes, resolve pull requests through branch merge refs, and limit background-stop confirmation to the relevant chat and tasks.
+- Use parsed naming replies for chat titles and exclude archived chats from update gating.
+
+## 0.26.0 - 2026-11-03
 
 The first stable release of the native Zuse app since 0.25.0. It also includes every change from the 0.25.1 previews.
 
 ### Added
 
+- Downloads for Windows (x86_64, portable zip), macOS (Apple silicon, signed and notarized) and Linux (x86_64). The Windows zip is not code-signed yet, so SmartScreen asks for confirmation on first launch.
+- Muse Code as a built-in agent provider: live model list, approvals, resume, interrupt, `/compact`, image attachments, and install and update through Meta's script.
+- Interface languages: English, French, German, Simplified Chinese, Traditional Chinese, Japanese and Korean across the desktop app, browser and CLI, following the system language by default and switchable without losing drafts.
 - Native Rust model harness: direct Responses, Messages, GenerateContent and Chat Completions transport, durable transition storage with recovery review, bounded child agents, concurrent independent reads, local skills and lazily pooled MCP connections. The production JavaScript model bridge is removed.
 - New project palette: open a folder, clone a repository (search your GitHub repositories or paste a Git URL) or create an Empty, Next.js or Turborepo project, optionally published as a private GitHub repository. Cloning and scaffolding run in the background with progress, cancel and retry above the composer.
 - Local stdio MCP servers in Plugins: add one by pasting its configuration; its tools reach every agent through the plugin gateway.

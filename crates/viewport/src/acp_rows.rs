@@ -1,4 +1,5 @@
 //! Shared ACP rows and their keyboard-accessible action menu.
+use crate::localization::message as tr;
 use crate::{
     acp_catalog::{popup_bg, spinner},
     assets::icon,
@@ -9,6 +10,7 @@ use crate::{
 use gpui::{prelude::*, *};
 use serde_json::Value;
 use std::{cell::Cell, collections::HashMap, rc::Rc};
+use zuse_i18n::messages as msg;
 use zuse_protocol::{HarnessId, custom_acp::CustomAcpAgent};
 
 #[derive(Clone, PartialEq)]
@@ -256,7 +258,7 @@ impl AgentRows {
         let card = div()
             .id("acp-agent-actions-menu")
             .role(Role::Menu)
-            .aria_label("Agent actions")
+            .aria_label(tr(cx, msg::native::agent_actions))
             .key_context("AcpAgentMenu")
             .track_focus(&self.menu_focus)
             .w(px(width))
@@ -366,9 +368,9 @@ impl Render for AgentRows {
                     .when(self.data.blocked || !self.data.loaded, |v| {
                         v.opacity(0.64).cursor_default()
                     })
-                    .aria_label("Add")
+                    .aria_label(tr(cx, msg::chat::chat_composer_add_menu))
                     .child(icon("plus").size(px(14.)))
-                    .child("Add")
+                    .child(tr(cx, msg::chat::chat_composer_add_menu))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if !this.data.blocked && this.data.loaded {
                             cx.emit(Event {
@@ -504,7 +506,7 @@ impl Render for AgentRows {
             .collect::<Vec<_>>();
         s::frame()
             .child(s::header_with_action(
-                "ACP agents",
+                crate::localization::text("settings-acp_agents_title", cx),
                 "",
                 Some(actions.into_any_element()),
             ))
@@ -520,7 +522,7 @@ impl Render for AgentRows {
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(rgb(TEXT).opacity(0.85))
                                 .text_center()
-                                .child("No ACP agents yet"),
+                                .child(tr(cx, msg::settings::acp_agents_empty)),
                         )
                     })
                     .children(rows)

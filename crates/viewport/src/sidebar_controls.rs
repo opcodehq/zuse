@@ -1,8 +1,10 @@
 //! Sidebar account and provider limits, shared by both hosts.
+use crate::localization::message as tr;
 use crate::{assets::icon, creation_style as ui, palette, settings_style as s};
 use gpui::{prelude::*, *};
 use serde_json::{Value, json};
 use std::{cell::Cell, collections::BTreeMap, rc::Rc};
+use zuse_i18n::messages as msg;
 use zuse_protocol::{AgentAccount, AgentAccountsSnapshot, HarnessId, methods};
 
 #[derive(Clone, PartialEq)]
@@ -431,7 +433,7 @@ impl SidebarControls {
                                         .line_height(px(16.)),
                                 ),
                         )
-                        .child(stick_meter(left as f32, used >= 0.8))
+                        .child(dither_meter(left as f32, used >= 0.8))
                         .child(ui::meta(reset).text_size(px(11.)).line_height(px(14.85))),
                 );
             }
@@ -494,7 +496,7 @@ impl SidebarControls {
                     .text_size(px(12.))
                     .line_height(px(16.))
                     .font_weight(FontWeight::MEDIUM)
-                    .child("Usage limits"),
+                    .child(tr(cx, msg::usage::usage_dashboard_usage_limits)),
             );
         if let Some(error) = &self.usage_error {
             menu = menu.child(
@@ -622,13 +624,13 @@ impl Render for SidebarControls {
             || self.pending("checkout")
             || (signed_in && self.subscribed.is_none() && self.plan_error.is_none());
         let label = if loading {
-            "Loading account"
+            tr(cx, msg::native::loading_account)
         } else if !self.properties.available {
-            "Account unavailable"
+            tr(cx, msg::native::account_unavailable)
         } else if signing_in {
-            "Signing in"
+            "Signing in".to_owned()
         } else {
-            account_plan_label(signed_in, self.subscribed, self.plan_error.is_some())
+            account_plan_label(signed_in, self.subscribed, self.plan_error.is_some()).to_owned()
         };
         let upgrade = signed_in && self.subscribed == Some(false) && self.plan_error.is_none();
         let tip = self
@@ -637,7 +639,7 @@ impl Render for SidebarControls {
             .or(self.plan_error.as_ref())
             .cloned()
             .unwrap_or_else(|| label.to_owned());
-        let account = footer_button("sidebar-account", label)
+        let account = footer_button("sidebar-account", label.clone())
             .debug_selector(|| "sidebar-account".into())
             .aria_description(tip.clone())
             .tooltip(move |_, cx| cx.new(|_| ControlTip(tip.clone().into())).into())
@@ -748,6 +750,8 @@ impl Render for SidebarControls {
                 |v| v.child(account),
             )
             .child(div().flex_1())
+            .child(usage)
+            // Last, so the host's update pill lands right beside the count.
             .child(
                 div()
                     .id("sidebar-working-agents")
@@ -769,7 +773,6 @@ impl Render for SidebarControls {
                         "—".into()
                     }),
             )
-            .child(usage)
     }
 }
 fn providers() -> [(HarnessId, &'static str, &'static str); 5] {
@@ -799,24 +802,16 @@ pub fn footer_button(id: impl Into<ElementId>, label: impl Into<SharedString>) -
         .hover(|v| v.bg(s::frame_bg().opacity(0.6)))
         .focus_visible(|v| v.border_1().border_color(palette::rgb(0x89ca21)))
 }
-fn stick_meter(left: f32, warning: bool) -> Div {
-    let lit = (left / 100. * 38.).ceil() as usize;
+fn dither_meter(left: f32, warning: bool) -> Div {
     div()
+        .relative()
         .w_full()
-        .h(px(16.))
-        .flex()
-        .gap(px(2.))
-        .children((0..38).map(|i| {
-            div().flex_1().h_full().rounded(px(2.)).bg(if i < lit {
-                palette::rgb(if warning { 0xfcd34d } else { 0x89ca21 }).opacity(if warning {
-                    0.65
-                } else {
-                    0.7
-                })
-            } else {
-                palette::rgb(crate::shell::MUTED).opacity(0.16)
-            })
-        }))
+        .h(px(8.))
+        .child(crate::dither::meter(
+            left / 100.,
+            palette::rgb(if warning { 0xfcd34d } else { 0x89ca21 }).into(),
+            gpui::Hsla::from(palette::rgb(crate::shell::MUTED)).opacity(0.3),
+        ))
 }
 struct ControlTip(SharedString);
 impl Render for ControlTip {

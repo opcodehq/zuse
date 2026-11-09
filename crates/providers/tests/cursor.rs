@@ -31,6 +31,7 @@ fn harness() -> CursorHarness {
 
 fn request(prompt: &str) -> RunRequest {
     RunRequest {
+        plan: false,
         mcp: None,
         prompt: prompt.into(),
         harness: None,

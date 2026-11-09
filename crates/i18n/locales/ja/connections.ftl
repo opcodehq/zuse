@@ -1,0 +1,192 @@
+# Imported from Zuse desktop catalogs. See migration.json for provenance.
+# Edit individual translations here; do not regenerate this file.
+
+connections-cloud_connection_notice_signing_in = サインイン中…
+
+connections-cloud_workspace_info_open_workspace_via_ssh = SSH 経由でワークスペースを開く
+
+connections-cloud_workspace_info_open_via_ssh = SSH経由で開く
+
+connections-cloud_workspace_info_open_this_workspace_in_an_editor_or_terminal_over_ssh = SSH 上のエディタまたはターミナルでこのワークスペースを開きます
+
+connections-cloud_workspace_info_the_workspace_must_be_running_for_ssh_access = SSH アクセスするにはワークスペースが実行されている必要があります
+
+connections-cloud_workspace_info_copy_ssh_command = SSHコマンドのコピー
+
+connections-cloud_workspace_info_sync_to_a_local_directory = ローカルディレクトリに同期する
+
+connections-cloud_workspace_info_status = ステータス
+
+connections-cloud_workspace_info_live_usage_needs_the_updated_workspace_runtime = ライブで使用するには、更新されたワークスペース ランタイムが必要です。
+
+connections-cloud_workspace_info_restart_workspace = ワークスペースを再起動する
+
+connections-cloud_workspace_info_restart_this_workspace = このワークスペースを再起動しますか?
+
+connections-cloud_workspace_info_the_runtime_restarts_in_place_any_agent_turn_in_progress_is_interrupte = ランタイムはその場で再起動され、進行中のエージェントのターンは中断され、開いている端末が再接続されます。ワークスペース内のファイルは保存されます。
+
+connections-cloud_workspace_info_restart = 再起動
+
+connections-no_connection_tray_no_connection = 接続がありません
+
+connections-cloud_connection_notice_cloud_workspace_paused = クラウド ワークスペースが一時停止されました
+
+connections-cloud_connection_notice_resuming_cloud_workspace = クラウドワークスペースの再開
+
+connections-cloud_connection_notice_updating_cloud_runtime = クラウド ランタイムの更新
+
+connections-cloud_connection_notice_update_required = アップデートが必要です
+
+connections-cloud_connection_notice_reconnect_needed = 再接続が必要です
+
+connections-cloud_connection_notice_connection_failed = 接続に失敗しました
+
+connections-cloud_connection_notice_cloud_access_unavailable = Cloud にアクセスできません
+
+connections-cloud_connection_notice_update_zuse_and_try_again_to_use_the_cloud_public_beta = Zuse を更新し、Cloud パブリックベータをもう一度お試しください。
+
+connections-cloud_connection_notice_cloud_access_could_not_be_verified = クラウドアクセスを確認できませんでした
+
+connections-cloud_connection_notice_sign_in_required = サインインが必要です
+
+connections-cloud_workspace_info_could_not_open_via_ssh = SSH経由で開けませんでした
+
+connections-cloud_workspace_info_ssh_command_copied = SSH コマンドがコピーされました
+
+connections-cloud_workspace_info_could_not_prepare_ssh_access = SSH アクセスを準備できませんでした
+
+connections-cloud_workspace_info_cursor = Cursor
+
+connections-cloud_workspace_info_zed = ゼッド
+
+connections-cloud_workspace_info_terminal = ターミナル
+
+connections-cloud_workspace_info_could_not_sync_this_workspace = このワークスペースを同期できませんでした
+
+connections-cloud_workspace_info_could_not_restart_the_workspace = ワークスペースを再起動できませんでした
+
+connections-cloud_machine_connection_securely_connected_projects_and_terminals_are_available = 安全に接続されています。プロジェクトとターミナルが利用可能です。
+
+connections-cloud_machine_connection_connected = 接続済み
+
+connections-cloud_machine_connection_connection_failed = 接続に失敗しました
+
+connections-cloud_machine_connection_offline = オフライン
+
+connections-cloud_machine_connection_establishing_the_secure_desktop_connection = 安全なデスクトップ接続を確立します。
+
+connections-cloud_machine_connection_connecting = 接続中
+
+connections-cloud_machine_connection_the_machine_is_ready_but_it_has_not_been_connected_to_this_deskto = マシンの準備はできていますが、まだこのデスクトップに接続されていません。
+
+connections-cloud_machine_connection_not_connected = 接続されていません
+
+connections-cloud_machine_progress_provisioning = プロビジョニング
+
+connections-cloud_machine_progress_retrying_automatically = 自動的に再試行します
+
+connections-cloud_machine_progress_installing_tools = ツールのインストール
+
+connections-cloud_machine_progress_starting = 開始
+
+connections-cloud_machine_progress_installing = インストール中
+
+connections-cloud_machine_progress_connecting = 接続中
+
+connections-cloud_machine_progress_ready = 準備完了
+
+connections-cloud_machine_progress_setup_interrupted = セットアップが中断されました
+
+connections-cloud_machine_progress_cancellation_scheduled = キャンセル予定
+
+connections-cloud_machine_progress_suspended = 一時停止中
+
+connections-cloud_machine_progress_restoring = 復元中
+
+connections-cloud_machine_progress_removing = 削除中
+
+connections-cloud_machine_progress_removed = 削除されました
+
+connections-cloud_ssh_client_bus_zuse_desktop = ずせデスクトップ
+
+connections-remote_access_on_managed_by_zuse_serve = オン・ズゼサーブが運営。
+
+connections-remote_access_private_access = プライベートアクセス{ $value1 }。
+
+connections-remote_access_a_previous_serve_route_is_no_longer_responding = 以前のサービスルート{ $port }は応答しなくなりました。
+
+connections-remote_access_tailscale_serve_is_used_by_another_app = Tailscale Serve は別のアプリ{ $port }{ " " }によって使用されています。
+
+connections-remote_access_tailscale_serve_has_an_existing_configuration_zuse_doesn_t_recogn = Tailscale Serve には、Zuse が認識しない既存の構成があります。
+
+connections-remote_access_tailscale_is_off_turn_it_on_in_the_tailscale_app = Tailscale はオフです。 Tailscale アプリでオンにします。
+
+connections-remote_access_open_tailscale_and_sign_in_to_use_private_access = Tailscale を開いてサインインし、プライベート アクセスを使用します。
+
+connections-remote_access_connect_privately_from_devices_on_the_same_tailnet = 同じテールネット上のデバイスからプライベートに接続します。
+
+connections-auth_opening_browser_sign_in = ブラウザーのサインインを開く
+
+connections-auth_complete_workos_sign_in_in_your_browser = ブラウザで WorkOS サインインを完了します。
+
+connections-auth_sign_in_failed = サインインに失敗しました
+
+connections-cloud_workspace_info_inactive = 非アクティブ
+
+connections-cloud_memory_low = クラウドマシンのメモリが不足しています。
+
+connections-cloud_memory_waiting = メモリが解放されるのを待ってから再接続します…
+
+connections-cloud_memory_recovering = クラウドマシンのメモリが不足しました。再接続中…
+
+connections-cloud_memory_failed = メモリ不足のため、自動復旧を停止しました。
+
+connections-cloud_memory_advice = 同時に実行するテストやビルドを減らすようエージェントに依頼するか、メモリ容量の大きいマシンを使用してください。
+
+connections-cloud_workspace_menu_details = ワークスペースの詳細
+
+connections-cloud_workspace_menu_copy_branch = ブランチ名をコピー
+
+connections-cloud_workspace_menu_repository = リポジトリ
+
+connections-cloud_workspace_menu_created = 作成日時
+
+connections-cloud_workspace_menu_environment = 環境
+
+connections-cloud_workspace_menu_preview_urls = プレビューURL
+
+connections-cloud_workspace_menu_copy_url = プレビューURLをコピー
+
+connections-cloud_workspace_menu_no_previews = 開発サーバーを起動するとプレビューURLが表示されます。
+
+connections-cloud_workspace_menu_public_urls = リンクを知っている人は誰でもこれらのサーバーにアクセスできます。
+
+connections-cloud_workspace_menu_preview_pending = URLを作成中…
+
+connections-cloud_workspace_menu_preview_failed = URLの作成に失敗 · 再試行中
+
+connections-preview_ports_title = ポートとプレビュー
+
+connections-preview_ports_auto_urls = プレビューURLを自動作成
+
+connections-preview_ports_local = localhostに転送
+
+connections-preview_ports_auto_help = このワークスペースの確認済みWebサーバーを使用します。
+
+connections-preview_ports_failed = ポート転送を設定できませんでした。
+
+connections-preview_ports_forward_failed = 転送失敗 · 再試行中
+
+connections-preview_ports_forward_pending = localhostに接続中…
+
+connections-preview_ports_empty = Webサーバーが見つかりません。
+
+connections-preview_ports_number = ポート番号
+
+connections-preview_ports_add = 追加
+
+connections-preview_ports_manual_help = サーバーが見つからない場合はポートを追加し、URLまたはローカル転送を有効にしてください。
+
+connections-preview_ports_public_help = プレビューリンクは公開されます。オフにすると発行済みリンクを無効化します。
+
+connections-preview_ports_revoke_pending = プレビューリンクを無効化中… 削除が完了するまで共有済みリンクは公開されたままの場合があります。再度オフにすると再試行します。

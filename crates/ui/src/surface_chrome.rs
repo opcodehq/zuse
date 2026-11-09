@@ -1,6 +1,8 @@
 //! Shared metrics for sidebar surface toolbars and their controls.
 
+use crate::localization::message as tr;
 use gpui::{Div, div, prelude::*, px};
+use zuse_i18n::messages as msg;
 
 use crate::theme::Theme;
 
@@ -45,6 +47,16 @@ pub(crate) fn toolbar(theme: &Theme) -> Div {
         })
 }
 
+/// A toolbar's height without its rules, for content that flows from the tabs.
+pub(crate) fn flowing_header() -> Div {
+    div()
+        .h(px(HEADER_HEIGHT))
+        .w_full()
+        .flex_none()
+        .flex()
+        .items_center()
+}
+
 /// Neutral navigation chip shared by the right-panel strip and PR navigation.
 pub(crate) fn tab_frame(
     id: impl Into<gpui::ElementId>,
@@ -70,8 +82,23 @@ pub(crate) fn tab_frame(
             theme.text_muted
         })
         .focus_visible(|style| style.border_2().border_color(theme.accent))
-        // Reference workspace-panel-tab: active `bg-muted`.
-        .when(selected, |el| el.bg(theme.muted_fill()))
+        // The active tab is one of the few raised, embossed surfaces.
+        .when(selected, |el| {
+            el.relative()
+                .bg(theme.emboss_fill())
+                .shadow(theme.emboss_shadow())
+                .child(emboss_rim(CONTROL_RADIUS, theme))
+        })
+}
+
+/// A lit top edge over a raised control, matching its corner radius.
+pub(crate) fn emboss_rim(radius: f32, theme: &Theme) -> Div {
+    div()
+        .absolute()
+        .inset_0()
+        .rounded(px(radius))
+        .border_t_1()
+        .border_color(theme.emboss_rim())
 }
 
 pub(crate) fn tab(
@@ -118,6 +145,7 @@ pub(crate) fn tab_chip(
     chip: TabChip,
     theme: &Theme,
     on_close: impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
+    cx: &gpui::App,
 ) -> gpui::Stateful<Div> {
     let TabChip {
         id,
@@ -182,7 +210,7 @@ pub(crate) fn tab_chip(
                 .rounded(px(4.0))
                 .relative()
                 .role(gpui::Role::Button)
-                .aria_label("Close tab")
+                .aria_label(tr(cx, msg::commands::default_keybindings_close_tab))
                 .tooltip(crate::settings::widgets::text_tooltip("Close tab"))
                 .hover(|s| s.bg(theme.surface))
                 // The tab owns a drag payload. Claim the close press before

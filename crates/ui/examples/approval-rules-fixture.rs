@@ -259,7 +259,7 @@ fn main() -> anyhow::Result<()> {
                 let chat_rule = rules.snapshot(&project,CHAT)?.rules.into_iter().find(|rule|rule.chat_id.is_some()).unwrap();
                 rules.edit(&project,CHAT,&chat_rule.id,RuleEffect::Deny,true)?;
                 anyhow::ensure!(rules.decide(&project,CHAT,SandboxLevel::WorkspaceWrite,&approval)?==Some(false),"chat denial must override the project grant");
-                anyhow::ensure!(rules.decide(&project,CHAT,SandboxLevel::ReadOnly,&approval)?==Some(false),"read-only ceiling must deny");
+                anyhow::ensure!(rules.decide(&project,CHAT,zuse_engine::permission_rules::RunPosture::PLAN,&approval)?==Some(false),"plan mode ceiling must deny");
                 state.update(cx,|state,cx| {state.receive_transcript_frame(zuse_doc::TranscriptFrame::Reset{reset:serde_json::from_value(serde_json::json!([
                     {"id":"request","role":"user","parts":[{"kind":"text","id":"request-text","text":"Please update the permission checks in src/permissions.rs."}],"createdAt":at,"deviceId":device},
                     {"id":"response","role":"assistant","parts":[{"kind":"text","id":"response-text","text":"The project permission is saved. You can review or revoke it from the permissions inspector."}],"createdAt":at+1,"deviceId":device,"status":"complete"}

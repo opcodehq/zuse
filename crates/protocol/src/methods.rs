@@ -152,6 +152,8 @@ pub const GET_WORKTREE_SETTINGS: &str = "GetWorktreeSettings";
 pub const SET_WORKTREE_SETTINGS: &str = "SetWorktreeSettings";
 /// The device's browse roots: home plus mounted drives/volumes.
 pub const LIST_DRIVES: &str = "ListDrives";
+/// Make one empty folder inside an existing one (new-project picker).
+pub const CREATE_FOLDER: &str = "CreateFolder";
 /// Folders under the host's home by name (new-project picker).
 pub const SEARCH_HOME_FOLDERS: &str = "SearchHomeFolders";
 /// The new-project picker closed: drop the host's home index if unpinned.
@@ -204,6 +206,8 @@ pub const POST_CHANGE_REQUEST_COMMENT: &str = "PostChangeRequestComment";
 /// device whose `gh` acts for the user. `{url, update}` →
 /// `{refusal?: string}`: GitHub's reason when it declined.
 pub const UPDATE_CHANGE_REQUEST: &str = "UpdateChangeRequest";
+/// A merge tied to the commit the user inspected. Older hosts reject this method.
+pub const UPDATE_CHANGE_REQUEST_AT_HEAD: &str = "UpdateChangeRequestAtHead";
 pub const GET_CHANGE_REQUEST_DIFF: &str = "GetChangeRequestDiff";
 pub const GET_CHECKOUT_DIFF: &str = "GetCheckoutDiff";
 /// Permanently restore one chat-owned checkout to its current HEAD and
@@ -229,6 +233,8 @@ pub const DRAW_VISUAL: &str = "DrawVisual";
 /// Store an agent's sandboxed visual in its live turn (`show_visual`).
 /// Local only: the calling agent runs on this device.
 pub const PUBLISH_VISUAL: &str = "PublishVisual";
+/// Store an agent's UI block in its live turn (`show_ui`). Local only.
+pub const PUBLISH_UI_BLOCK: &str = "PublishUiBlock";
 /// Lazy full-tool-output fetch from the R2 sidecar by doc-resident ref
 /// (chat2-sync A3). Edge-direct from any device — never relay-forwarded.
 pub const FETCH_TOOL_BLOB: &str = "FetchToolBlob";
@@ -302,6 +308,8 @@ pub const RESOLVE_RECOVERY: &str = "ResolveRecovery";
 pub fn retryable_read(method: &str, params: &serde_json::Value) -> bool {
     match method {
         GET_GIT_WORKSPACE
+        | WATCH_GIT_WORKSPACE
+        | WATCH_CHANGE_REQUEST
         | GET_BRANCH_GRAPH
         | RELAY_ACCESS_STATUS
         | BROWSER_ACCESS_STATUS
@@ -449,6 +457,8 @@ pub const SELECT_PLUGIN_WORKSPACE: &str = "SelectPluginWorkspace";
 
 /// User-owned Git workflow; only the workspace read may reconnect automatically.
 pub const GET_GIT_WORKSPACE: &str = "GetGitWorkspace";
+pub const WATCH_GIT_WORKSPACE: &str = "WatchGitWorkspace";
+pub const WATCH_CHANGE_REQUEST: &str = "WatchChangeRequest";
 pub const GIT_WORKSPACE_ACTION: &str = "GitWorkspaceAction";
 
 /// Account-scoped cloud administration; handled by the host authority.

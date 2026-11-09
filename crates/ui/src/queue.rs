@@ -427,9 +427,9 @@ impl Composer {
             .font_weight(gpui::FontWeight::MEDIUM)
             .text_color(theme.text_muted)
             .child(if waiting {
-                "Waiting for connection"
+                crate::localization::text("chat-queue_tray_waiting_for_connection", cx)
             } else {
-                "Queued"
+                crate::localization::text("chat-queue_tray_queued", cx)
             });
         // The rows section is the drop target, including its padding.
         let panel = div()
@@ -714,9 +714,9 @@ impl Composer {
                         .text_size(px(QUEUE_TEXT_SIZE))
                         .text_color(theme.text_muted)
                         .child(if self.queue_edit_finishing {
-                            "Saving…"
+                            crate::localization::text("settings-wallpaper_saving", cx)
                         } else {
-                            "Editing in composer"
+                            ("Editing in composer").to_string()
                         }),
                 )
             })
@@ -1376,6 +1376,36 @@ impl Composer {
                 cx,
             ),
             QueuePrimaryAction::SendNow => self.send_queued_now(id, cx),
+        }
+    }
+
+    /// Deliver a just-queued message into the live turn without interrupting
+    /// it (direct steer, or the force-submit chord while the agent runs).
+    /// Rows that could only be sent by interrupting stay queued.
+    pub(crate) fn steer_queued_message(
+        &mut self,
+        chat_id: &str,
+        id: String,
+        cx: &mut Context<Self>,
+    ) {
+        let host_supports_actions = {
+            let state = self.state.read(cx);
+            if state.selected_chat.as_deref() != Some(chat_id) {
+                return;
+            }
+            state.chat_host_supports(
+                chat_id,
+                zuse_protocol::capabilities::MESSAGE_QUEUE_ACTIONS_V1,
+            )
+        };
+        let action = available_queue_primary_action(
+            false,
+            host_supports_actions && self.pickers().read(cx).steering_capability(cx).is_some(),
+            false,
+            self.pickers().read(cx).steers_mid_turn(cx),
+        );
+        if let Some(action @ (QueuePrimaryAction::Steer | QueuePrimaryAction::SendNext)) = action {
+            self.activate_queued_primary(id, action, cx);
         }
     }
 

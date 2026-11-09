@@ -603,7 +603,7 @@ mod settings_workflow_tests {
             view.device_id = Some("local".into());
             view.providers = vec![json!({"id":"claude-code"}), json!({"id":"codex"})];
             let root = json!({"id":"thread","deviceId":"local","config":{"harness":"claude-code","model":"root-model"}});
-            let fresh = json!({"id":"conversation","threadId":"thread","deviceId":"local","lastMessageAt":"2026-10-18T00:00:00Z","harnessSessionId":"previous-provider-session","config":{"harness":"claude-code","model":"root-model","sandbox":"read-only"}});
+            let fresh = json!({"id":"conversation","threadId":"thread","deviceId":"local","lastMessageAt":"2026-10-18T00:00:00Z","harnessSessionId":"previous-provider-session","config":{"harness":"claude-code","model":"root-model","sandbox":"auto","plan":true}});
             view.chats = vec![root.clone(), fresh.clone()];
             view.selected = Some(fresh);
             view.model = Some("root-model".into());
@@ -615,7 +615,8 @@ mod settings_workflow_tests {
             assert_eq!(write["params"]["chatId"], "conversation");
             assert_eq!(write["params"]["config"]["harness"], "codex");
             assert_eq!(write["params"]["config"]["model"], "own-model");
-            assert_eq!(write["params"]["config"]["sandbox"], "read-only");
+            assert_eq!(write["params"]["config"]["sandbox"], "auto");
+            assert_eq!(write["params"]["config"]["plan"], true);
             view.receive(json!({"id":write["id"],"ok":{"ok":true}}), cx);
             assert_eq!(view.chats[0], root);
             assert_eq!(view.selected.as_ref().unwrap()["config"]["harness"], "codex");

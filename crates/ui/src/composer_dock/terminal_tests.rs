@@ -16,7 +16,6 @@ struct Fixture {
     terminal_height: f32,
     terminal_content_height: f32,
     right_width: f32,
-    shift: f32,
     composers: [Measurement; 2],
     terminal: Measurement,
     underlay: Measurement,
@@ -66,8 +65,7 @@ impl Render for Fixture {
                 self.viewport,
                 self.reduced,
                 self.now,
-            )
-            .shift_x(self.shift);
+            );
             let composer = if ix == 0 {
                 composer.reserve_terminal(geometry.clone())
             } else {
@@ -124,7 +122,6 @@ fn terminal_clearance_preserves_composer_motion_and_same_frame_layout(
         terminal_height: 495.0,
         terminal_content_height: 495.0,
         right_width: 0.0,
-        shift: 0.0,
         composers: composers.clone(),
         terminal: terminal.clone(),
         underlay: underlay.clone(),
@@ -255,36 +252,4 @@ fn terminal_clearance_preserves_composer_motion_and_same_frame_layout(
         draw(cx);
         assert!(geometry.get().height <= viewport * 0.55);
     }
-}
-
-/// A shifted composer (centered on a transcript that keeps the session
-/// card's room free) lands at the same x with the terminal open: the
-/// reservation re-roots the child's layout, which used to drop the shift.
-#[gpui::test]
-fn terminal_reservation_keeps_the_composer_shift(cx: &mut gpui::TestAppContext) {
-    let composers: [Measurement; 2] = Default::default();
-    let handle = cx.open_window(size(px(800.0), px(900.0)), |_, _| Fixture {
-        states: Default::default(),
-        now: Instant::now(),
-        docked: true,
-        reduced: true,
-        viewport: 900.0,
-        composer_height: 120.0,
-        terminal_height: 300.0,
-        terminal_content_height: 300.0,
-        right_width: 0.0,
-        shift: -30.0,
-        composers: composers.clone(),
-        terminal: Default::default(),
-        underlay: Default::default(),
-        geometry: Default::default(),
-    });
-    cx.update_window(handle.into(), |_, window, cx| {
-        window.draw(cx).clear();
-    })
-    .unwrap();
-    let [reserved, plain] = composers.each_ref().map(|m| m.get().unwrap());
-    // Each 400 px column centers a 350 px composer at x = 25, then shifts.
-    assert_eq!(f32::from(reserved.left()), 25.0 - 30.0, "{reserved:?}");
-    assert_eq!(f32::from(plain.left()) - 400.0, 25.0 - 30.0, "{plain:?}");
 }

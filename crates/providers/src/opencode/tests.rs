@@ -2703,18 +2703,15 @@ async fn access_choices_apply_session_rules_and_route_permission_replies() {
             ("workspace-write", false, Some(false), "reject", 1),
             ("danger-full-access", true, None, "once", 0),
             ("danger-full-access", false, Some(false), "reject", 1),
-            ("read-only", true, None, "reject", 0),
+            ("plan", true, None, "reject", 0),
         ] {
-            let mut wire = TurnWire::start_config(
-                false,
-                v2,
-                auto,
-                answer,
-                version,
-                json!({"sandbox":sandbox}),
-                false,
-            )
-            .await;
+            let config = if sandbox == "plan" {
+                json!({"sandbox":"danger-full-access","plan":true})
+            } else {
+                json!({"sandbox":sandbox})
+            };
+            let mut wire =
+                TurnWire::start_config(false, v2, auto, answer, version, config, false).await;
             if v2 {
                 wire.request("/api/model").await;
             }
@@ -2732,12 +2729,7 @@ async fn access_choices_apply_session_rules_and_route_permission_replies() {
             let rules = create[field].as_array().expect("session-scoped rule array");
             assert!(rules.iter().any(|rule| rule[action] == "*"
                 && rule[resource] == "*"
-                && rule[effect]
-                    == if sandbox == "read-only" {
-                        "deny"
-                    } else {
-                        "ask"
-                    }));
+                && rule[effect] == if sandbox == "plan" { "deny" } else { "ask" }));
             assert!(
                 rules
                     .iter()
@@ -2801,7 +2793,7 @@ async fn access_denies_a_dropped_resolver_and_a_failed_resume_policy_update() {
             false,
             None,
             "2.0.11",
-            json!({"resume":"fixture","sandbox":"read-only","fixtureRejectPermissions":true}),
+            json!({"resume":"fixture","sandbox":"workspace-write","plan":true,"fixtureRejectPermissions":true}),
             false,
         )
         .await;

@@ -1,7 +1,9 @@
 //! Paged tool results with bounded retention and virtualized output/diff rows.
 use super::*;
+use crate::localization::message as tr;
 use crate::shell::{column, control, label, row};
 use std::sync::Arc;
+use zuse_i18n::messages as msg;
 
 #[derive(Default)]
 pub(super) struct ToolResultView {
@@ -213,7 +215,7 @@ impl WorkspaceView {
                         .child(
                             control(
                                 SharedString::from(format!("copy-result-{reference}")),
-                                "Copy page",
+                                tr(cx, msg::native::copy_page),
                             )
                             .text_size(px(10.))
                             .on_click(move |_, _, cx| {
@@ -225,7 +227,7 @@ impl WorkspaceView {
                         toolbar = toolbar.child(
                             control(
                                 SharedString::from(format!("previous-result-{reference}")),
-                                "Previous",
+                                tr(cx, msg::projects::masters_memory_previous),
                             )
                             .on_click(cx.listener(
                                 move |this, _, _, cx| {
@@ -240,7 +242,7 @@ impl WorkspaceView {
                         toolbar = toolbar.child(
                             control(
                                 SharedString::from(format!("next-result-{reference}")),
-                                "Next",
+                                tr(cx, msg::projects::masters_guide_next),
                             )
                             .on_click(cx.listener(
                                 move |this, _, _, cx| {
@@ -322,7 +324,7 @@ impl WorkspaceView {
                     );
                 }
                 if view.busy {
-                    result = result.child(label("Loading tool details…"));
+                    result = result.child(label(tr(cx, msg::native::loading_tool_details)));
                 }
                 if let Some(error) = &view.error {
                     let reference = reference.clone();
@@ -330,7 +332,7 @@ impl WorkspaceView {
                     result = result.child(label(error.clone())).child(
                         control(
                             SharedString::from(format!("retry-result-{reference}")),
-                            "Retry read",
+                            tr(cx, msg::native::retry_read),
                         )
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.read_tool_result(reference.clone(), offset, cx)

@@ -1,8 +1,10 @@
 //! Loading placeholders shaped like the content they stand in for, so the
 //! board and detail keep their layout while GitHub answers. Bars pulse on the
 //! shared loader clock (static under reduced motion).
+use crate::localization::message as tr;
 use crate::{settings::widgets, theme::Theme};
 use gpui::{AnyElement, App, EntityId, div, prelude::*, px, relative};
+use zuse_i18n::messages as msg;
 
 /// One pulsing placeholder bar; `index` staggers its phase down a column.
 pub(crate) fn bar(
@@ -132,7 +134,7 @@ pub(crate) fn board(
         .id("pull-requests-skeleton")
         .debug_selector(|| "pull-requests-skeleton".into())
         .role(gpui::Role::ProgressIndicator)
-        .aria_label("Loading pull requests")
+        .aria_label(tr(cx, msg::native::loading_pull_requests))
         .w_full()
         .flex()
         .flex_col()
@@ -190,7 +192,7 @@ pub(crate) fn summary(view: EntityId, theme: &Theme, cx: &mut App) -> AnyElement
         .id("pr-detail-skeleton")
         .debug_selector(|| "pr-detail-skeleton".into())
         .role(gpui::Role::ProgressIndicator)
-        .aria_label("Loading pull request")
+        .aria_label(tr(cx, msg::chat::environment_summary_loading_pull_request))
         .mt(px(12.0))
         .px(px(8.0))
         .flex()
@@ -205,7 +207,7 @@ pub(crate) fn summary(view: EntityId, theme: &Theme, cx: &mut App) -> AnyElement
                 .text_size(crate::typography::text_sm())
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(theme.text_muted)
-                .child("Description"),
+                .child(tr(cx, msg::projects::pr_pane_description)),
         )
         .child(
             div()
@@ -310,7 +312,7 @@ pub(crate) fn diff(split: bool, view: EntityId, theme: &Theme, cx: &mut App) -> 
         .id("pr-code-skeleton")
         .debug_selector(|| "pr-code-skeleton".into())
         .role(gpui::Role::ProgressIndicator)
-        .aria_label("Loading diff")
+        .aria_label(tr(cx, msg::native::loading_diff))
         .size_full()
         .flex()
         .flex_col()

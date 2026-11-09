@@ -85,6 +85,7 @@ async fn real_pi_mock_lifecycle() {
             turn: Default::default(),
         };
         let request = RunRequest {
+            plan: false,
             prompt: prompt.into(),
             harness: None,
             model: Some("zuse-probe/mock".into()),
@@ -186,6 +187,7 @@ async fn real_pi_mock_lifecycle() {
         turn: Default::default(),
     };
     let request = RunRequest {
+        plan: false,
         prompt: "after loss".into(),
         harness: None,
         model: Some("zuse-probe/mock".into()),
@@ -259,6 +261,7 @@ async fn real_pi_steering_bursts_share_the_next_model_call() {
         turn: Default::default(),
     };
     let request = RunRequest {
+        plan: false,
         prompt: "burst hold".into(),
         harness: None,
         model: Some("zuse-probe/mock".into()),
@@ -347,14 +350,49 @@ async fn real_pi_steering_bursts_share_the_next_model_call() {
 #[tokio::test]
 #[ignore = "requires Pi >= 0.85.1 installed; exercises actual tools with a local mock provider"]
 async fn real_pi_access_gates_actual_write_tool() {
-    for (sandbox, auto_approve, answer, expected_write, expected_questions) in [
-        (SandboxLevel::WorkspaceWrite, false, Some("Yes"), true, 1),
-        (SandboxLevel::WorkspaceWrite, true, Some("No"), false, 1),
-        (SandboxLevel::DangerFullAccess, false, Some("Yes"), true, 1),
-        (SandboxLevel::DangerFullAccess, true, None, true, 0),
-        (SandboxLevel::ReadOnly, false, Some("Yes"), false, 0),
-        (SandboxLevel::ReadOnly, true, Some("Yes"), false, 0),
-        (SandboxLevel::WorkspaceWrite, false, None, false, 1),
+    for (sandbox, plan, auto_approve, answer, expected_write, expected_questions) in [
+        (
+            SandboxLevel::WorkspaceWrite,
+            false,
+            false,
+            Some("Yes"),
+            true,
+            1,
+        ),
+        (
+            SandboxLevel::WorkspaceWrite,
+            false,
+            true,
+            Some("No"),
+            false,
+            1,
+        ),
+        (
+            SandboxLevel::DangerFullAccess,
+            false,
+            false,
+            Some("Yes"),
+            true,
+            1,
+        ),
+        (SandboxLevel::DangerFullAccess, false, true, None, true, 0),
+        (
+            SandboxLevel::DangerFullAccess,
+            true,
+            false,
+            Some("Yes"),
+            false,
+            0,
+        ),
+        (
+            SandboxLevel::DangerFullAccess,
+            true,
+            true,
+            Some("Yes"),
+            false,
+            0,
+        ),
+        (SandboxLevel::WorkspaceWrite, false, false, None, false, 1),
     ] {
         let (dir, harness) = isolated_pi();
         let (sender, steering) = mpsc::channel(8);
@@ -381,6 +419,7 @@ async fn real_pi_access_gates_actual_write_tool() {
             }),
         };
         let request = RunRequest {
+            plan,
             prompt: "access-probe".into(),
             harness: None,
             model: Some("zuse-probe/mock".into()),

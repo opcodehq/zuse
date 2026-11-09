@@ -1,10 +1,12 @@
 //! Worktree storage is configured on the connected engine, including paired hosts.
 use super::*;
+use crate::localization::message as tr;
 use crate::{
     assets::icon,
     settings_style as s,
     shell::{BORDER, MUTED, TEXT, column, row},
 };
+use zuse_i18n::messages as msg;
 use zuse_protocol::{FolderListing, WorktreeSettings, WorktreeSettingsStatus};
 
 struct Saving {
@@ -217,11 +219,11 @@ impl WorkspaceView {
         let editable = self.connected && state.editable();
         let saving = state.save.is_some();
         let title = if self.account_remote {
-            "Worktrees on account computer"
+            "Worktrees on account computer".to_owned()
         } else if self.paired {
-            "Worktrees on paired computer"
+            "Worktrees on paired computer".to_owned()
         } else {
-            "Worktrees"
+            tr(cx, msg::settings::settings_repository_worktrees)
         };
         let location = state
             .status
@@ -233,8 +235,8 @@ impl WorkspaceView {
             .and_then(|status| status.environment_override.clone());
         let body = s::card()
             .child(s::setting_row(true)
-                .child(s::details("Custom worktree location", "Choose where new worktrees are created on this computer. Existing threads keep their current folders."))
-                .child(s::toggle("custom-worktree-location", state.enabled(), "Custom worktree location")
+                .child(s::details(tr(cx, msg::native::custom_worktree_location), tr(cx, msg::native::choose_where_new_worktrees_are_created_on_this_computer_existing_threads_keep_th_3906f74d)))
+                .child(s::toggle("custom-worktree-location", state.enabled(), tr(cx, msg::native::custom_worktree_location))
                     .opacity(if editable { 1. } else { 0.45 })
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if editable { this.worktree_settings.enabled = Some(!this.worktree_settings.enabled()); cx.notify(); }
@@ -243,36 +245,40 @@ impl WorkspaceView {
                 .child(s::title_text(if state.confirmed { "Current location" } else { "Last known location" }))
                 .child(s::description_text(path).overflow_hidden().text_ellipsis())))
             .when_some(override_path.clone(), |card, path| card.child(s::setting_row(false)
-                .child(s::details("Managed by this computer", format!("ZUSE_WORKTREES_DIR sets the location to {path}. Change that setting on the engine to choose another folder.")))))
+                .child(s::details(tr(cx, msg::native::managed_by_this_computer), format!("ZUSE_WORKTREES_DIR sets the location to {path}. Change that setting on the engine to choose another folder.")))))
             .when(state.enabled() && override_path.is_none(), |card| card.child(s::setting_row(false).flex_col().items_stretch()
                 .child(s::field().w_full().child(state.path.clone()))
                 .when_some(state.status.as_ref().and_then(|status| status.settings.custom_directory.clone()), |view, path| view.child(s::description_text(format!("Saved folder: {path}"))))
                 .child(row().gap_2().flex_wrap()
-                    .child(s::button("browse-worktree-folder", "Browse folders").opacity(if editable { 1. } else { 0.45 })
+                    .child(s::button("browse-worktree-folder", tr(cx, msg::native::browse_folders)).opacity(if editable { 1. } else { 0.45 })
                         .on_click(cx.listener(move |this, _, _, cx| {
                             if !editable { return; }
                             let entered = this.worktree_settings.path.read(cx).value(cx);
                             let path = if entered.trim().is_empty() { this.worktree_settings.status.as_ref().and_then(|status| status.settings.custom_directory.clone()) } else { Some(entered.trim().to_owned()) };
                             this.browse_worktree_folder(path, cx);
                         })))
-                    .child(s::button("browse-worktree-home", "Home").opacity(if editable { 1. } else { 0.45 })
+                    .child(s::button("browse-worktree-home", tr(cx, msg::simulators::home)).opacity(if editable { 1. } else { 0.45 })
                         .on_click(cx.listener(move |this, _, _, cx| { if editable { this.browse_worktree_folder(None, cx); } }))))))
             .when(state.browsing, |card| card.child(s::setting_row(false).flex_col().items_stretch().child(self.worktree_folder_browser(cx))))
             .child(s::setting_row(false).items_center().justify_end()
-                .child(s::button("refresh-worktree-settings", if state.read.is_some() { "Refreshing…" } else { "Refresh" })
+                .child(s::button("refresh-worktree-settings", if state.read.is_some() { ("Refreshing…").to_string() } else { crate::localization::text("settings-organizations_refresh", cx) })
                     .on_click(cx.listener(|this, _, _, cx| { this.refresh_worktree_settings(); cx.notify(); })))
-                .child(s::button("reset-worktree-location", "Use default").opacity(if editable { 1. } else { 0.45 })
+                .child(s::button("reset-worktree-location", tr(cx, msg::native::use_default)).opacity(if editable { 1. } else { 0.45 })
                     .on_click(cx.listener(move |this, _, _, cx| { if editable { this.save_worktree_location(true, cx); } })))
-                .child(s::button("save-worktree-location", if saving { "Saving…" } else { "Save location" }).opacity(if editable { 1. } else { 0.45 })
+                .child(s::button("save-worktree-location", if saving { crate::localization::text("settings-wallpaper_saving", cx) } else { ("Save location").to_string() }).opacity(if editable { 1. } else { 0.45 })
                     .on_click(cx.listener(move |this, _, _, cx| { if editable { this.save_worktree_location(false, cx); } }))));
         s::frame()
-            .child(s::header(title, "Local storage for new agent worktrees."))
+            .child(s::header(
+                title,
+                tr(cx, msg::native::local_storage_for_new_agent_worktrees),
+            ))
             .child(body)
             .when(!self.connected, |view| {
                 view.child(
-                    s::description_text(
-                        "Reconnect to read or change this computer’s worktree location.",
-                    )
+                    s::description_text(tr(
+                        cx,
+                        msg::native::reconnect_to_read_or_change_this_computer_s_worktree_location,
+                    ))
                     .px_3()
                     .py_2(),
                 )
@@ -296,21 +302,21 @@ impl WorkspaceView {
             .child(
                 row()
                     .gap_2()
-                    .child(s::title_text("Choose a folder").flex_1())
+                    .child(s::title_text(tr(cx, msg::onboarding::project_choose_a_folder)).flex_1())
                     .child(
-                        s::button("close-worktree-browser", "Close").on_click(cx.listener(
-                            |this, _, _, cx| {
+                        s::button("close-worktree-browser", tr(cx, msg::common::close)).on_click(
+                            cx.listener(|this, _, _, cx| {
                                 this.worktree_settings.browsing = false;
                                 if let Some(id) = this.worktree_settings.folder_request.take() {
                                     this.cancel(id);
                                 }
                                 cx.notify();
-                            },
-                        )),
+                            }),
+                        ),
                     ),
             )
             .when(state.folder_request.is_some(), |view| {
-                view.child(s::description_text("Loading folders…"))
+                view.child(s::description_text(tr(cx, msg::native::loading_folders)))
             })
             .when_some(current, |view, path| {
                 let select_path = path.clone();
@@ -332,9 +338,13 @@ impl WorkspaceView {
                             )))
                         })
                         .child(
-                            s::button("select-worktree-folder", "Use this folder")
-                                .opacity(if editable { 1. } else { 0.45 })
-                                .on_click(cx.listener(move |this, _, _, cx| {
+                            s::button(
+                                "select-worktree-folder",
+                                tr(cx, msg::native::use_this_folder),
+                            )
+                            .opacity(if editable { 1. } else { 0.45 })
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| {
                                     if !editable {
                                         return;
                                     }
@@ -344,7 +354,8 @@ impl WorkspaceView {
                                     this.worktree_settings.enabled = Some(true);
                                     this.worktree_settings.browsing = false;
                                     cx.notify();
-                                })),
+                                },
+                            )),
                         ),
                 )
                 .child(
@@ -398,7 +409,11 @@ impl WorkspaceView {
                             state.folders.as_ref().is_some_and(|listing| {
                                 !listing.entries.iter().any(|entry| entry.is_dir)
                             }),
-                            |view| view.child(s::description_text("No subfolders").p_3()),
+                            |view| {
+                                view.child(
+                                    s::description_text(tr(cx, msg::native::no_subfolders)).p_3(),
+                                )
+                            },
                         ),
                 )
             })
@@ -408,9 +423,10 @@ impl WorkspaceView {
                     .as_ref()
                     .is_some_and(|listing| listing.truncated),
                 |view| {
-                    view.child(s::description_text(
-                        "This folder has more entries. Enter a specific path to open it.",
-                    ))
+                    view.child(s::description_text(tr(
+                        cx,
+                        msg::native::this_folder_has_more_entries_enter_a_specific_path_to_open_it,
+                    )))
                 },
             )
             .into_any_element()

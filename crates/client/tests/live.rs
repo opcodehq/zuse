@@ -79,6 +79,7 @@ fn host_rows(now: chrono::DateTime<Utc>) -> (Device, Space, Chat) {
             observed_at: now,
         }),
         config: Some(ChatConfig {
+            plan: false,
             harness: HarnessId::ClaudeCode,
             model: Some("claude-opus-5".into()),
             reasoning: None,
@@ -973,6 +974,7 @@ async fn immediate_exit_after_first_send_recovers_new_chat_on_each_host_platform
                     space_id: SPACE.into(),
                 },
                 config: Some(ChatConfig {
+                    plan: false,
                     harness,
                     model: None,
                     reasoning: None,

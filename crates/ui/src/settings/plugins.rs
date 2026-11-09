@@ -4,6 +4,7 @@
 //! stream, the plugin snapshot and every plugin request. Settings → Plugins
 //! renders it as the installed list; [`PluginsPage`] renders the same entity
 //! as the browse catalog in the main area.
+use crate::localization::message as tr;
 use crate::{composer::ComposerInput, popover, settings::widgets, state::AppState, theme::Theme};
 use gpui::{
     AnyElement, App, Context, Entity, Global, SharedString, Subscription, Task, Window, div,
@@ -11,6 +12,7 @@ use gpui::{
 };
 use serde_json::{Value, json};
 use zuse_engine::account::AccountStatus;
+use zuse_i18n::messages as msg;
 use zuse_rpc::methods;
 use zuse_viewport::plugin_setup::{PluginSetup, SetupColors, SetupEvent, SetupTarget};
 
@@ -310,7 +312,9 @@ impl PluginsCard {
         let Some(engine) = self.state.read(cx).engine().cloned() else {
             return;
         };
-        let params = if matches!(method, methods::PLUGINS | methods::SELECT_PLUGIN_WORKSPACE) {
+        let params = if method == methods::CLOUD_ACCOUNT_SIGN_IN {
+            engine.account_sign_in_params()
+        } else if matches!(method, methods::PLUGINS | methods::SELECT_PLUGIN_WORKSPACE) {
             let prepared = if method == methods::SELECT_PLUGIN_WORKSPACE {
                 self.plugins.begin_workspace_selection(params)
             } else {
@@ -558,7 +562,12 @@ impl PluginsCard {
                             .child(catalog_ui::title_block(
                                 theme,
                                 "Finish signing in",
-                                format!("Confirm the code {} in your browser.", login.user_code),
+                                if login.user_code.is_empty() {
+                                    // Browser sign-in: nothing to confirm.
+                                    tr(cx, msg::providers::accounts_waiting)
+                                } else {
+                                    format!("Confirm the code {} in your browser.", login.user_code)
+                                },
                                 crate::typography::TEXT_SM,
                                 crate::typography::TEXT_XS,
                             ))
@@ -599,7 +608,10 @@ impl PluginsCard {
                     .px(px(8.))
                     .text_size(crate::typography::text_xs())
                     .text_color(theme.text_muted)
-                    .child("Only workspace administrators can manage these connections.")
+                    .child(tr(
+                        cx,
+                        msg::native::only_workspace_administrators_can_manage_these_connections,
+                    ))
                     .into_any_element(),
             );
         }
@@ -917,9 +929,9 @@ impl PluginsCard {
                     .py(px(32.))
                     .text_color(theme.text_muted)
                     .child(if self.busy {
-                        "Loading plugins…"
+                        crate::localization::text("plugins-plugins_loading", cx)
                     } else {
-                        "Plugins are unavailable. Refresh to try again."
+                        ("Plugins are unavailable. Refresh to try again.").to_string()
                     })
                     .into_any_element(),
             );
@@ -952,7 +964,7 @@ impl PluginsCard {
                 sections.push(
                     catalog_ui::secondary_button(&theme, "plugins-show-more")
                         .self_start()
-                        .child("Show more")
+                        .child(tr(cx, msg::plugins::plugins_show_more))
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.browse_page += 1;
                             cx.notify();
@@ -989,7 +1001,7 @@ impl PluginsCard {
             .when(self.signed_in(), |view| {
                 view.child(
                     catalog_ui::secondary_button(&theme, "add-hosted-server")
-                        .child("Add MCP server")
+                        .child(tr(cx, msg::plugins::plugins_add_server))
                         .when(
                             self.plugins.snapshot["canManage"] == false || self.busy,
                             |v| v.opacity(0.5),
@@ -1025,25 +1037,34 @@ impl PluginsCard {
                     .flex()
                     .flex_col()
                     .gap(px(20.))
-                    .text_size(crate::typography::text_xs()).line_height(px(16.))
+                    .text_size(crate::typography::text_xs())
+                    .line_height(px(16.))
                     .child(
                         div()
                             .flex()
-                            .flex_col().items_start().gap(px(16.))
-                            .child(div().min_w_0().flex().flex_col().gap(px(4.))
+                            .flex_col()
+                            .items_start()
+                            .gap(px(16.))
                             .child(
                                 div()
-                                    .text_size(crate::typography::ui_rems(20.))
-                                    .line_height(crate::typography::ui_rems(28.))
-                                    .font_weight(gpui::FontWeight::MEDIUM)
-                                    .child("Plugins"),
+                                    .min_w_0()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(4.))
+                                    .child(
+                                        div()
+                                            .text_size(crate::typography::ui_rems(20.))
+                                            .line_height(crate::typography::ui_rems(28.))
+                                            .font_weight(gpui::FontWeight::MEDIUM)
+                                            .child(tr(cx, msg::plugins::plugins_back)),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(12.))
+                                            .text_color(theme.text_muted)
+                                            .child(tr(cx, msg::plugins::plugins_subtitle)),
+                                    ),
                             )
-                            .child(
-                                div()
-                                    .text_size(px(12.))
-                                    .text_color(theme.text_muted)
-                                    .child("Connect your tools so agents can work across them in any chat."),
-                            ))
                             .child(toolbar),
                     )
                     .child(div().flex().child(tabs))
@@ -1134,7 +1155,7 @@ impl PluginsCard {
                     .child(
                         catalog_ui::secondary_button(theme, "plugins-add")
                             .aria_expanded(self.add_menu_open)
-                            .child("Add")
+                            .child(tr(cx, msg::common::add))
                             .child(
                                 crate::icons::icon(crate::icons::ALT_ARROW_DOWN)
                                     .size(px(12.))
@@ -1172,12 +1193,12 @@ impl PluginsCard {
                         div()
                             .text_size(crate::typography::text_xs())
                             .text_color(theme.text_muted)
-                            .child("Connect tools from the catalog so agents can use them in any chat."),
+                            .child(tr(cx, msg::native::connect_tools_from_the_catalog_so_agents_can_use_them_in_any_chat)),
                     )
                     .child(
                         catalog_ui::secondary_button(theme, "plugins-browse")
                             .mt(px(10.))
-                            .child("Browse plugins")
+                            .child(tr(cx, msg::plugins::plugins_settings_browse))
                             .on_click(|_, window, cx| {
                                 window.dispatch_action(Box::new(OpenPluginsPage), cx)
                             }),
@@ -1225,7 +1246,7 @@ impl PluginsCard {
                                 .group_hover(group, |s| s.opacity(1.))
                                 .tab_index(0)
                                 .role(gpui::Role::Button)
-                                .child("Disconnect")
+                                .child(tr(cx, msg::settings::cloud_provider_keys_disconnect))
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.request(methods::PLUGINS,json!({"action":"disconnect","tenantId":this.plugins.snapshot["tenantId"],"connectionId":remove_id}),cx)
                                 })),
@@ -1264,8 +1285,8 @@ impl PluginsCard {
             let current = self.plugins.snapshot["tenantId"].clone();
             widgets::group(
                 theme,
-                "Workspace",
-                "Applies when a chat first uses plugins. Existing plugin sessions keep their workspace.",
+                tr(cx, msg::chat::workspace_picker_workspace),
+                tr(cx, msg::native::applies_when_a_chat_first_uses_plugins_existing_plugin_sessions_keep_their_workspace),
             )
             .child(widgets::section_card(theme).mt_0().children(tenants.into_iter().enumerate().map(
                 |(index, tenant)| {
@@ -1304,7 +1325,7 @@ impl PluginsCard {
             .child(header)
             .children(status)
             .child(
-                widgets::group(theme, "Connected", "")
+                widgets::group(theme, tr(cx, msg::settings::cloud_workspace_auth_ready), "")
                     .child(widgets::section_card(theme).mt_0().child(body)),
             )
             .children(workspaces)
@@ -1385,8 +1406,8 @@ impl Render for PluginsCard {
                 .child(
                     widgets::group(
                         &theme,
-                        "Hosted plugins",
-                        "Plugins give agents access to the tools you already use, in any chat.",
+                        tr(cx, msg::native::hosted_plugins),
+                        tr(cx, msg::native::plugins_give_agents_access_to_the_tools_you_already_use_in_any_chat),
                     )
                     .child(self.render_sign_in_card(&theme, cx)),
                 )

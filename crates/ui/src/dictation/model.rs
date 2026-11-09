@@ -1,3 +1,4 @@
+use crate::localization::message as tr;
 use crate::{
     popover,
     settings::{self, widgets},
@@ -8,6 +9,7 @@ use std::{
     path::PathBuf,
     time::{Duration, Instant},
 };
+use zuse_i18n::messages as msg;
 struct VoiceGlobal {
     card: Entity<VoiceCard>,
 }
@@ -149,7 +151,7 @@ impl Render for VoiceCard {
             .cursor_pointer()
             .tab_index(0)
             .role(gpui::Role::Switch)
-            .aria_label("Dictation")
+            .aria_label(tr(cx, msg::native::dictation))
             .aria_toggled(if on {
                 gpui::Toggled::True
             } else {
@@ -173,7 +175,7 @@ impl Render for VoiceCard {
                     .min_w(px(160.0))
                     .flex()
                     .flex_col()
-                    .child(widgets::row_title(&theme, "Dictation"))
+                    .child(widgets::row_title(&theme, tr(cx, msg::native::dictation)))
                     .child(widgets::meta_line(
                         &theme,
                         vec!["Uses your Codex sign-in".into_any_element()],
@@ -209,7 +211,7 @@ impl Render for VoiceCard {
                     div()
                         .flex_1()
                         .min_w(px(160.0))
-                        .child(widgets::row_title(&theme, "Microphone")),
+                        .child(widgets::row_title(&theme, tr(cx, msg::native::microphone))),
                 )
                 .child(control)
         });
@@ -233,7 +235,7 @@ impl Render for VoiceCard {
                         .min_w(px(160.0))
                         .flex()
                         .flex_col()
-                        .child(widgets::row_title(&theme, "Shortcut"))
+                        .child(widgets::row_title(&theme, tr(cx, msg::native::shortcut)))
                         .child(widgets::meta_line(
                             &theme,
                             vec!["Hold to talk, release to transcribe".into_any_element()],
@@ -265,14 +267,14 @@ impl Render for VoiceCard {
                             widgets::settings_page_column(window)
                                 .child(widgets::section_title(
                                     &theme,
-                                    "Voice",
-                                    "Dictate prompts using your Codex account.",
+                                    &tr(cx, msg::native::voice),
+                                    &tr(cx, msg::native::dictate_prompts_using_your_codex_account),
                                 ))
                                 .child(
                                     widgets::section_stack()
 
                                         .child(
-                                            widgets::group(&theme, "Dictation", "Hold the microphone beside the model to record. Release to transcribe into your draft. Audio is sent to ChatGPT using your Codex sign-in; no API key or model download is needed.").child(
+                                            widgets::group(&theme, tr(cx, msg::native::dictation), tr(cx, msg::native::hold_the_microphone_beside_the_model_to_record_release_to_transcribe_into_your_d_b5fd35ed)).child(
                                                 widgets::section_card(&theme)
                                                     .mt_0()
                                                     .child(dictation_row)

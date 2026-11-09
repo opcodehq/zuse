@@ -33,6 +33,7 @@ zuse-providers.workspace = true
 zuse-rpc.workspace = true
 zuse-update.workspace = true
 zuse-visual.workspace = true
+zuse-ui-block.workspace = true
 loro.workspace = true
 tokio.workspace = true
 futures.workspace = true

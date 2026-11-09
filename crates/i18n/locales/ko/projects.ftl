@@ -1,0 +1,1088 @@
+# Imported from Zuse desktop catalogs. See migration.json for provenance.
+# Edit individual translations here; do not regenerate this file.
+
+projects-browser_profile_select_browser_profile = 브라우저 프로필
+
+projects-browser_profile_select_no_supported_profile_found = 지원되는 프로필이 없습니다.
+
+projects-browser_profile_select_default = { " " }(기본값)
+
+projects-file_tag_popover_files = 파일
+
+projects-project_plan_tray_completed = 완료됨
+
+projects-project_plan_tray_pending = 보류 중
+
+projects-diff_pane_no_project_selected = 선택한 프로젝트가 없습니다.
+
+projects-diff_pane_open_review = 리뷰 열기
+
+projects-diff_pane_next_unviewed = 다음 미공개
+
+projects-diff_pane_compared_with_head = HEAD와 비교
+
+projects-diff_pane_loading_changes = 변경사항 로드 중
+
+projects-diff_pane_no_changes = 변경사항 없음
+
+projects-diff_pane_merge_changes = 변경사항 병합
+
+projects-diff_pane_changes = 변경 사항
+
+projects-diff_pane_deselect_all = 모두 선택 취소
+
+projects-diff_pane_select_all = 모두 선택
+
+projects-diff_pane_discard_all = 모두 폐기
+
+projects-diff_pane_no_active_chat = 활성 채팅 없음
+
+projects-diff_pane_no_comments_yet = 아직 댓글이 없습니다
+
+projects-diff_pane_annotations_for_ai = AI용 주석
+
+projects-diff_pane_edit_comment = 댓글 수정
+
+projects-diff_pane_delete_comment = 댓글 삭제
+
+projects-diff_pane_pull_request_feedback = 풀 요청 피드백
+
+projects-diff_pane_reverting = 되돌리는 중...
+
+projects-diff_pane_files_with_merge_conflicts = 병합 충돌이 있는 파일
+
+projects-diff_pane_changed_files = 변경된 파일
+
+projects-diff_pane_push_commits_to_origin = 푸시는 오리진에 커밋합니다.
+
+projects-diff_pane_no_commits_ahead_of_upstream = 업스트림보다 먼저 커밋하지 않음
+
+projects-diff_pane_push = 푸시
+
+projects-diff_pane_commit_message = 커밋 메시지
+
+projects-diff_pane_nothing_to_commit = 커밋할 내용이 없습니다.
+
+projects-diff_pane_commit = 커밋
+
+projects-file_editor_no_file_open = 열린 파일이 없습니다.
+
+projects-file_editor_loading_image = 이미지 로드 중…
+
+projects-file_editor_add_a_comment = 댓글 추가…
+
+projects-file_editor_loading_diff = 차이점 로드 중…
+
+projects-file_editor_no_changes_vs_head = HEAD에 비해 변경 사항이 없습니다.
+
+projects-file_editor_binary_file_diff_preview_not_supported = 바이너리 파일 - 차이점 미리보기가 지원되지 않습니다.
+
+projects-file_editor_no_diff_content = 차이점 내용이 없습니다.
+
+projects-file_editor_loading_preview = 미리보기 로드 중…
+
+projects-file_editor_s_to_save = ⌘S 저장
+
+projects-file_editor_diff = 차이점
+
+projects-file_editor_preview = 미리보기
+
+projects-file_editor_saving = 저장 중…
+
+projects-file_editor_dismiss = 닫기
+
+projects-file_search_search_project_files = 프로젝트 파일 검색
+
+projects-file_search_search_files = 파일 검색…
+
+projects-file_tree_project_files_are_unavailable = 프로젝트 파일을 사용할 수 없습니다.
+
+projects-file_tree_loading_project_files = 프로젝트 파일 로드 중
+
+projects-file_tree_open_in_editor = 편집기에서 열기
+
+projects-file_tree_rename = 이름 바꾸기
+
+projects-file_tree_attach_to_chat = 채팅에 첨부
+
+projects-file_tree_copy_path = 경로 복사
+
+projects-file_tree_new_file = 새 파일
+
+projects-file_tree_new_folder = 새 폴더
+
+projects-file_tree_files = 파일
+
+projects-file_tree_partial = { " " }(일부)
+
+projects-file_tree_search_files = 파일 검색
+
+projects-file_tree_open_in = 다음에서 열기
+
+projects-file_tree_delete_2 = 삭제{ " " }
+
+projects-file_tree_folder = 폴더
+
+projects-file_tree_file = 파일
+
+projects-git_init_cta_this_folder_isn_t_a_git_repository = 이 폴더는 Git 저장소가 아닙니다.
+
+projects-git_init_cta_initialize_git_to_track_changes_commit_and_open_pull_requests = Git를 초기화하여 변경 사항을 추적하고 커밋하고 풀 요청을 엽니다.
+
+projects-git_init_cta_initialize_git_repository = Git 저장소 초기화
+
+projects-pr_pane_select_a_project_to_see_its_pr_here = 여기서 PR을 보려면 프로젝트를 선택하세요.
+
+projects-pr_pane_reading_branch_state = 분기 상태를 읽는 중…
+
+projects-pr_pane_branch = 지점
+
+projects-pr_pane_name = 이름
+
+projects-pr_pane_local_changes = 지역적 변화
+
+projects-pr_pane_clean = 깨끗한
+
+projects-pr_pane_ahead_of_upstream = 상류보다 앞서
+
+projects-pr_pane_in_sync = 동기화 중
+
+projects-pr_pane_no_pull_request_open_for_this_branch = 이 브랜치에 대해 진행 중인 끌어오기 요청이 없습니다.
+
+projects-pr_pane_no_title = (제목 없음)
+
+projects-pr_pane_open_in_browser = 브라우저에서 열기
+
+projects-pr_pane_loading_pr_details = 홍보 세부정보 로드 중…
+
+projects-pr_pane_description = 설명
+
+projects-pr_pane_add_all_feedback_to_chat = 채팅에 모든 피드백 추가
+
+projects-pr_pane_add_all = 모두 추가
+
+projects-pr_pane_checks = 검사
+
+projects-pr_pane_draft = 초안
+
+projects-pr_pane_no_checks_configured = 구성된 검사가 없습니다.
+
+projects-pr_pane_resolve_review_feedback = 리뷰 피드백 해결
+
+projects-pr_pane_resolve = 해결
+
+projects-pr_pane_add_review_to_chat = 채팅에 리뷰 추가
+
+projects-pr_pane_added = 추가됨
+
+projects-pr_pane_add_to_chat = 채팅에 추가
+
+projects-pr_pane_approved = 승인됨
+
+projects-pr_pane_changes_requested = 변경 요청됨
+
+projects-pr_pane_dismissed = 해고됨
+
+projects-pr_pane_commented = 댓글이 달림
+
+projects-pr_pane_resolve_comment_feedback = 댓글 피드백 해결
+
+projects-pr_pane_add_comment_to_chat = 채팅에 댓글 추가
+
+projects-pr_pane_claude = Claude
+
+projects-pr_pane_open_workflow_run = 워크플로 실행 열기
+
+projects-pr_pane_open_check_details = 수표 세부정보 열기
+
+projects-pr_pane_merged = 병합됨
+
+projects-pr_pane_closed = 닫힘
+
+projects-pr_pane_open_conflicts = 개방 · 갈등
+
+projects-pr_pane_open_checks_failed = 미결 · 확인 실패
+
+projects-pr_pane_open_checks_running = 공개 · 점검 실행 중
+
+projects-project_add_menu_add_project = 프로젝트 추가
+
+projects-project_setup_dialog_add_project = 프로젝트 추가
+
+projects-project_setup_dialog_quick_start = 빠른 시작
+
+projects-project_setup_dialog_add_existing_folder = 기존 폴더 추가
+
+projects-project_setup_dialog_choose_a_computer_and_prepare_a_project_on_it = 컴퓨터를 선택하고 그 컴퓨터에서 프로젝트를 준비하세요.
+
+projects-project_setup_dialog_create_on = 생성 날짜
+
+projects-project_setup_dialog_this_computer = 이 컴퓨터
+
+projects-project_setup_dialog_this_computer_is_unavailable = 이 컴퓨터를 사용할 수 없습니다.
+
+projects-project_setup_dialog_retrying = 재시도 중…
+
+projects-project_setup_dialog_retry_connection = 연결 재시도
+
+projects-project_setup_dialog_create_from_a_template = 템플릿에서 만들기
+
+projects-project_setup_dialog_clone_repository = 복제 저장소
+
+projects-project_setup_dialog_clone_with_git_or_github = Git 또는 GitHub를 사용하여 복제
+
+projects-project_setup_dialog_existing_folder = 기존 폴더
+
+projects-project_setup_dialog_open_a_project_on_disk = 디스크에서 프로젝트 열기
+
+projects-project_setup_dialog_repository_url = 저장소 URL
+
+projects-project_setup_dialog_git_github_com_owner_project_git = git@github.com:소유자/project.git
+
+projects-project_setup_dialog_loading_repositories = 저장소 로드 중…
+
+projects-project_setup_dialog_github_is_unavailable_you_can_still_paste_a_repository_url = GitHub를 사용할 수 없습니다. 여전히 URL 저장소를 붙여넣을 수 있습니다.
+
+projects-project_setup_dialog_enter_a_repository_url_sign_in_with_the_github_cli_on_this_computer_to = 저장소 URL를 입력하십시오. 최근 저장소를 보려면 이 컴퓨터에서 GitHub CLI로 로그인하세요.
+
+projects-project_setup_dialog_project_name = 프로젝트 이름
+
+projects-project_setup_dialog_my_project = 내 프로젝트
+
+projects-project_setup_dialog_use_lowercase_letters_numbers_dashes_or_underscores = 소문자, 숫자, 대시 또는 밑줄을 사용하세요.
+
+projects-project_setup_dialog_project_template = 프로젝트 템플릿
+
+projects-project_setup_dialog_also_create_a_private_github_repository = 또한 비공개 GitHub 저장소를 생성하세요
+
+projects-project_setup_dialog_project_folder = 프로젝트 폴더
+
+projects-project_setup_dialog_parent_folder = 상위 폴더
+
+projects-project_setup_dialog_working = 일하는 중…
+
+projects-project_setup_dialog_clone_project = 프로젝트 복제
+
+projects-project_setup_dialog_create_project = 프로젝트 생성
+
+projects-projects_sidebar_computers = 컴퓨터
+
+projects-projects_sidebar_projects = 프로젝트
+
+projects-projects_sidebar_loading_projects = 프로젝트 로드 중…
+
+projects-projects_sidebar_this_computer_couldn_t_load_its_projects = 이 컴퓨터에서 프로젝트를 로드할 수 없습니다.
+
+projects-projects_sidebar_no_projects_yet = 아직 프로젝트가 없습니다.
+
+projects-projects_sidebar_use_to_add_a_repository = +를 사용하여 저장소를 추가하세요.
+
+projects-projects_sidebar_new_project_group = 새로운 프로젝트 그룹
+
+projects-projects_sidebar_rename_group = 그룹 이름 바꾸기
+
+projects-projects_sidebar_name_a_group_to_collect_projects_in_the_sidebar = 사이드바에서 프로젝트를 수집할 그룹 이름을 지정하세요.
+
+projects-projects_sidebar_this_name_is_only_shown_in_the_sidebar = 이 이름은 사이드바에만 표시됩니다.
+
+projects-projects_sidebar_group_name = 그룹 이름
+
+projects-projects_sidebar_new_group = 새 그룹
+
+projects-projects_sidebar_icon_color = 아이콘 색상
+
+projects-projects_sidebar_default_icon_color = 기본 아이콘 색상
+
+projects-projects_sidebar_rename = 이름 바꾸기
+
+projects-projects_sidebar_ungroup = 그룹 해제
+
+projects-projects_sidebar_drag_projects_here = 프로젝트를 여기로 드래그하세요.
+
+projects-projects_sidebar_new_chat = 새 채팅
+
+projects-projects_sidebar_new_project = 새 프로젝트
+
+projects-projects_sidebar_plugins = 플러그인
+
+projects-projects_sidebar_usage = 사용법
+
+projects-projects_sidebar_zuse_account = Zuse 계정
+
+projects-projects_sidebar_sign_out_of_this_browser = 이 브라우저에서 로그아웃
+
+projects-projects_sidebar_project_settings = 프로젝트 설정
+
+projects-projects_sidebar_no_chats_yet = 아직 채팅이 없습니다.
+
+projects-projects_sidebar_agent_running = 에이전트 실행 중
+
+projects-projects_sidebar_repository_settings = 저장소 설정
+
+projects-projects_sidebar_retry_archive = 아카이브 재시도
+
+projects-projects_sidebar_archive = 아카이브
+
+projects-projects_sidebar_add_to_group = 그룹에 추가
+
+projects-projects_sidebar_archived_chats = 보관된 채팅
+
+projects-projects_sidebar_remove_from_group = 그룹에서 제거
+
+projects-projects_sidebar_remove_project = 프로젝트 제거
+
+projects-projects_sidebar_rename_chat = 채팅 이름 바꾸기
+
+projects-projects_sidebar_change_the_name_shown_in_the_projects_sidebar = 프로젝트 사이드바에 표시되는 이름을 변경하세요.
+
+projects-projects_sidebar_chat_name = 채팅 이름
+
+projects-projects_sidebar_unarchive = 보관 취소
+
+projects-worktree_setup_card_delete_workspace = 작업공간 삭제
+
+projects-worktree_setup_card_preparing_cloud_workspace = 클라우드 작업공간 준비
+
+projects-worktree_setup_card_starting_secure_cloud_runtime = 보안 클라우드 런타임 시작
+
+projects-worktree_setup_card_preparing_repository = 저장소 준비 중
+
+projects-worktree_setup_card_branching_a_fresh_worktree = 새로운 작업 트리를 분기하는 중…
+
+projects-worktree_setup_card_environment_setup_failed = 환경 설정 실패
+
+projects-worktree_setup_card_environment_setup_complete = 환경설정 완료
+
+projects-worktree_setup_card_running_environment_setup = 실행환경 설정
+
+projects-worktree_setup_card_detecting_setup_script = 설정 스크립트 감지 중…
+
+projects-worktree_setup_card_setup_output = 설정 출력
+
+projects-worktree_setup_card_rerun_setup = 설정 다시 실행
+
+projects-diff_pane_commit_2 = { $selectedCount }{ " " }커밋
+
+projects-file_editor_preview_2 = { $name }{ " " }미리보기
+
+projects-file_search_project_files = 프로젝트 파일
+
+projects-file_tree_finder = 파인더
+
+projects-file_tree_open_in_2 = { $value1 }를 엽니다.
+
+projects-pr_pane_no_active_chat = 활성 채팅 없음
+
+projects-pr_pane_open_a_chat_before_attaching_pr_feedback = PR 피드백을 첨부하기 전에 채팅을 시작하세요.
+
+projects-pr_pane_couldn_t_attach_feedback = 의견을 첨부할 수 없습니다.
+
+projects-pr_pane_the_pr_feedback_file_could_not_be_created = PR 피드백 파일을 생성할 수 없습니다.
+
+projects-pr_pane_attached = { $label }{ " " }부착
+
+projects-pr_pane_added_to_the_composer = 작곡가에{ " " }{ $relPath }를 추가했습니다.
+
+projects-pr_pane_feedback_attached = 피드백 첨부
+
+projects-pr_pane_added_file_to_the_composer = 작곡가에{ " " }{ $count }{ " " }파일을 추가했습니다.
+
+projects-project_setup_dialog_clone = 클론{ " " }{ $value1 }
+
+projects-projects_sidebar_chats_2 = { $displayName }{ " " }채팅
+
+projects-projects_sidebar_settings_for = { $displayName }에 대한 설정
+
+projects-projects_sidebar_cloud_chat_could_not_refresh = 클라우드 채팅을 새로고침할 수 없습니다.
+
+projects-projects_sidebar_cloud_chat_could_not_be_archived = 클라우드 채팅을 보관할 수 없습니다.
+
+projects-projects_sidebar_chat_could_not_be_restored = 채팅을 복원할 수 없습니다.
+
+projects-projects_sidebar_runs_on = { $title }{ "\u000A" }{ $environmentLabel }에서 실행됩니다.
+
+projects-tool_file_block_copy = { $name }{ " " }복사
+
+projects-worktree_setup_card_couldn_t_retry_cloud_workspace = 클라우드 작업공간을 다시 시도할 수 없습니다.
+
+projects-branch_workflow_check_failing = { $checksFailing }{ " " }검사 실패
+
+projects-branch_workflow_check_running = { $checksRunning }{ " " }검사 실행 중
+
+projects-branch_workflow_checks_passed = 검사 통과
+
+projects-git_workspace_client_bus_merged = { $value1 }{ " " }병합
+
+projects-git_workspace_client_bus_closed = { $value1 }{ " " }폐쇄
+
+projects-project_setup_dialog_creates_sentence = <part0>{ $value }</part0>를 생성합니다.
+
+projects-file_editor_binary_file_bytes_preview_not_supported_sentence = 바이너리 파일({ $value }{ " " }바이트) - 미리보기가 지원되지 않습니다.
+
+projects-file_editor_modified_sentence = <part0>●</part0> 수정됨
+
+projects-diff_pane_of_selected_to_commit_sentence = { $value }{ " " }중{ " " }{ $selectedCount }가 커밋하도록 선택됨
+
+projects-file_tree_will_be_permanently_deleted_this_cannot_be_undone_sentence = <part0>{ $name }</part0>가 영구적으로 삭제됩니다.{ " " }{ $detail }{ " " }이 작업은 취소할 수 없습니다.
+
+projects-pr_pane_gh_couldn_t_read_pr_details_sentence = <part0>{ $code0 }</part0>가 PR 세부정보를 읽을 수 없습니다.
+
+projects-pr_pane_total_sentence = { $value }{ " " }합계
+
+projects-pr_pane_failing_sentence = { $value }{ " " }실패
+
+projects-pr_pane_running_sentence = { $value }{ " " }실행 중
+
+projects-pr_pane_passed_sentence = { $value }{ " " }합격
+
+projects-pr_pane_skipped_sentence = { $value }를 건너뛰었습니다.
+
+projects-pr_pane_added_file_to_the_composer_one = 작곡가에{ " " }{ $count }{ " " }파일을 추가했습니다.
+
+projects-pr_pane_added_file_to_the_composer_other = 작곡가에{ " " }{ $count }{ " " }파일을 추가했습니다.
+
+projects-branch_workflow_check_failing_one = { $checksFailing }{ " " }확인 실패
+
+projects-branch_workflow_check_failing_other = { $checksFailing }{ " " }검사 실패
+
+projects-branch_workflow_check_running_one = { $checksRunning }{ " " }점검 실행 중
+
+projects-branch_workflow_check_running_other = { $checksRunning }{ " " }검사 실행 중
+
+projects-pr_pane_file_plural0_sentence = { $dirtyFiles }{ " " }파일
+
+projects-pr_pane_file_plural0_sentence_one = { $dirtyFiles }{ " " }파일
+
+projects-pr_pane_file_plural0_sentence_other = { $dirtyFiles }{ " " }파일
+
+projects-pr_pane_commit_plural0_sentence = { $ahead }{ " " }커밋
+
+projects-pr_pane_commit_plural0_sentence_one = { $ahead }{ " " }커밋
+
+projects-pr_pane_commit_plural0_sentence_other = { $ahead }{ " " }커밋
+
+projects-project_plan_tray_project_plan = 프로젝트 계획
+
+projects-diff_pane_base = 베이스{ " " }{ $value1 }
+
+projects-diff_pane_viewed = { " " }·{ " " }{ $value1 }/{ $value2 }{ " " }조회됨
+
+projects-diff_pane_unknown_author = 알 수 없는 저자
+
+projects-diff_pane_resolve_merge_conflict_in = { $value1 }의 병합 충돌 해결
+
+projects-diff_pane_open_changes_for = { $value1 }에 대한 변경 사항 열기
+
+projects-diff_pane_detached = (분리됨)
+
+projects-pr_pane_detached = (분리됨)
+
+projects-pr_pane_feedback = 피드백({ $feedbackCount })
+
+projects-pr_pane_checks_2 = 검사({ $value1 })
+
+projects-projects_sidebar_icon_color_2 = { $id }{ " " }아이콘 색상
+
+projects-projects_sidebar_new_chat_in = { $value1 }의 새 채팅
+
+projects-worktree_setup_card_creating_a_new_copy_of = { $repoName }의 새 복사본을 만드는 중…
+
+projects-worktree_setup_card_created_a_new_copy_of_called = { $name }라는{ " " }{ $repoName }의 새 복사본을 만들었습니다.
+
+projects-worktree_setup_card_branched_from = { $value2 }에서 분기된{ " " }{ $branch }
+
+projects-worktree_setup_card_created_and_copying_files = { $name }를 생성하고 파일을 복사하는 중…
+
+projects-diff_pane_selection_summary = { $total }개 중{ " " }{ $selected }개 선택 · ⌘↵
+
+projects-projects_sidebar_chat_count = 채팅{ " " }{ $count }개
+
+projects-projects_sidebar_chat_count_one = 채팅{ " " }{ $count }개
+
+projects-projects_sidebar_chat_count_other = 채팅{ " " }{ $count }개
+
+projects-github_create_branch = 브랜치 만들기
+
+projects-github_continue_branch = 현재 브랜치에서 계속합니다.
+
+projects-github_origin_branch_help = origin/main을 가져와 새 브랜치를 만듭니다. 먼저 로컬 변경 사항을 커밋하거나 스태시하세요.
+
+projects-github_creating = 만드는 중…
+
+projects-github_create_checkout = 만들고 체크아웃
+
+projects-github_open_github = GitHub에서 열기
+
+projects-github_stack = GitHub 스택
+
+projects-github_updating_stack = 스택 업데이트 중…
+
+projects-github_base = 기준:
+
+projects-github_needs_rebase = 리베이스 필요
+
+projects-github_new_stack_branch = 새 스택 브랜치
+
+projects-github_submit_stack = 스택 게시
+
+projects-github_start_stack = 이 브랜치에서 스택 시작
+
+projects-github_stack_help = GitHub 스택 설정 및 도움말 ↗
+
+projects-github_pr_number = PR #{ $number }
+
+projects-github_view_pr = PR 보기
+
+projects-github_code_changes = 코드 변경 사항
+
+projects-github_repair = 수정
+
+projects-github_comments = 댓글
+
+projects-github_failing_checks = 실패한 검사
+
+projects-github_everything = 전체
+
+projects-github_disable_auto_merge = 자동 병합 끄기
+
+projects-github_enable_auto_merge = 자동 병합 켜기
+
+projects-github_status = 상태
+
+projects-github_ready_review = 검토 준비 완료
+
+projects-github_reopen = 다시 열기
+
+projects-github_refresh_failed = 이 PR을 새로 고칠 수 없습니다.
+
+projects-github_watch_ci = CI 감시
+
+projects-github_auto_fix_on = 자동 수정 켜짐
+
+projects-github_off = 꺼짐
+
+projects-github_watch_help = Zuse가 열려 있는 동안 감시합니다. 에이전트가 유휴 상태일 때 새 CI 오류를 수정, 검증하고 푸시합니다. 3회 수정 후 일시 중지합니다.
+
+projects-github_stop_watching = 감시 중지
+
+projects-github_resume_auto_fix = 자동 수정 재개
+
+projects-github_watch_auto_fix = 감시 및 자동 수정
+
+projects-github_new_branch = 새 브랜치를 만들고 체크아웃…
+
+projects-github_new_origin_branch = origin/main에서 새 브랜치…
+
+projects-github_continue_tooltip = origin/main에서 새 브랜치를 만들고 체크아웃
+
+projects-github_auto_fix = 자동 수정
+
+projects-projects_sidebar_cloud = 클라우드
+
+projects-projects_sidebar_started_from_slack = Slack에서 시작됨
+
+projects-github_action_failed = GitHub 작업 실패
+
+projects-github_repair_state_changed = 채팅, 브랜치 또는 에이전트 상태가 변경되었습니다. 현재 PR에서 복구를 다시 실행하세요.
+
+projects-github_attach_failed = PR 컨텍스트를 첨부하지 못했습니다.
+
+projects-github_repair_send_failed = 복구를 보내지 못했습니다. 채팅을 확인하고 다시 시도하세요.
+
+projects-github_watch_update_failed = CI 감시를 업데이트하지 못했습니다
+
+projects-worktree_setup_card_worktree_creation_failed = 워크트리 생성 실패
+
+projects-worktree_setup_card_workspace_ready = 작업 공간 준비 완료
+
+projects-worktree_setup_card_creating_worktree = { $repoName }의 워크트리 생성 중…
+
+projects-worktree_setup_card_preparing_directory = 이 채팅을 위한 별도의 작업 디렉터리를 준비하고 있습니다.
+
+projects-worktree_setup_card_no_setup_script = 설정 스크립트가 필요하지 않습니다.
+
+projects-worktree_setup_card_workspace_ready_description = 작업 공간이 준비되었습니다.
+
+projects-worktree_setup_card_preparing_environment = 작업 공간 환경을 준비하고 있습니다.
+
+projects-github_submit_stack_help = 모든 브랜치를 푸시하고 GitHub의 풀 리퀘스트를 업데이트합니다. 풀 리퀘스트가 없는 브랜치에는 아직 리뷰할 준비가 되지 않은 초안을 만듭니다. 기존의 열린 풀 리퀘스트는 열린 상태로 유지됩니다.
+
+projects-projects_sidebar_upgrade = 업그레이드
+
+projects-projects_sidebar_plan_cloud = Cloud
+
+projects-projects_sidebar_plan_cloud_tooltip = Zuse Cloud 요금제 · 결제 관리
+
+projects-project_setup_dialog_in_other_workspace = 이 폴더는 이미 다른 워크스페이스의 프로젝트입니다. 여기로 옮길까요? 채팅도 함께 옮겨집니다.
+
+projects-project_setup_dialog_move_here = 여기로 이동
+
+projects-github_observation_monitoring_paused = GitHub 모니터링 일시 중지 · 재시도
+
+projects-github_observation_authentication = GitHub 다시 연결
+
+projects-github_observation_access = GitHub에 접근할 수 없음
+
+projects-github_observation_rate_limited = GitHub 요청 한도 초과 · 새로 고침 일시 중지
+
+projects-github_observation_offline = GitHub 오프라인 · 캐시된 상태
+
+projects-github_observation_timeout = GitHub 시간 초과 · 캐시된 상태
+
+projects-github_observation_unavailable = GitHub 상태를 확인할 수 없음
+
+projects-github_observation_loading = GitHub 상태 불러오는 중…
+
+projects-github_observation_cached = 캐시된 GitHub 상태
+
+projects-github_observation_incomplete_checks = 검사가 불완전함
+
+projects-github_observation_refreshing = GitHub 새로 고침 중…
+
+projects-projects_sidebar_threads = 스레드
+
+projects-projects_sidebar_no_threads_yet = 아직 스레드가 없습니다
+
+projects-projects_sidebar_start_a_chat_to_see_it_here = 프로젝트에서 채팅을 시작하면 여기에 표시됩니다.
+
+projects-projects_sidebar_show_all_threads = 스레드{ " " }{ $count }개 모두 보기
+
+projects-pr_pane_no_pull_request = 풀 리퀘스트 없음
+
+projects-pr_pane_conflicts_with_base = 기본 브랜치와 충돌
+
+projects-pr_pane_reviews = 리뷰
+
+projects-pr_pane_draft_checks_hint = PR이 리뷰 준비 상태가 되면 검사가 시작됩니다
+
+projects-pr_pane_no_description = 설명이 없습니다.
+
+projects-pr_pane_show_fewer = 간단히 보기
+
+projects-pr_pane_show_all = 모두 보기 ({ $total })
+
+projects-pr_pane_feedback_title = 피드백
+
+projects-pr_pane_all_checks_passed = 모든 검사 통과
+
+projects-pr_pane_more_actions = 추가 작업
+
+projects-pr_pane_merge_blocked_conflicts = 병합하기 전에 충돌을 해결하세요.
+
+projects-pr_pane_merge_blocked_checks_failing = 병합하기 전에 실패한 검사를 수정하세요.
+
+projects-pr_pane_merge_blocked_checks_running = 검사가 아직 실행 중입니다. 통과 시 병합하려면 작업 메뉴에서 자동 병합을 켜세요.
+
+projects-pr_pane_merge_blocked_not_mergeable = GitHub에서 아직 이 PR을 병합 가능으로 표시하지 않았습니다.
+
+projects-pr_pane_merging = 병합 중…
+
+projects-diff_pane_files = 파일
+
+projects-diff_pane_filter_files = 파일 필터
+
+projects-diff_pane_no_matching_files = 일치하는 파일 없음
+
+projects-diff_pane_tree_view = 트리로 보기
+
+projects-diff_pane_list_view = 목록으로 보기
+
+projects-pr_pane_show_more = 더 보기
+
+projects-pr_pane_show_less = 간단히 보기
+
+projects-pr_pane_merge_blocked_stale = GitHub 상태가 오래되었을 수 있습니다. 병합하기 전에 새로 고치세요.
+
+projects-projects_sidebar_star_on_github = GitHub에서 스타 남기기
+
+projects-projects_sidebar_dismiss_star_prompt = GitHub 스타 안내 닫기
+
+projects-projects_sidebar_github_open_failed = GitHub를 열 수 없습니다
+
+projects-projects_sidebar_github_starring = 스타 추가 중…
+
+projects-new_chat_without_project = 프로젝트 없이 새 채팅
+
+projects-no_project = 프로젝트 없음
+
+projects-masters_create_master = 새 Zot
+
+projects-masters_master_name = Zot 이름
+
+projects-masters_this_environment = 이 환경
+
+projects-masters_repositories = 저장소
+
+projects-masters_open_a_repository_in_zuse_to_add_it_here = Zuse에서 저장소를 열면 여기에 추가할 수 있습니다.
+
+projects-masters_instructions = 지침
+
+projects-masters_generated_screen = 생성된 화면
+
+projects-masters_generated_screen_unavailable = 이 Preview에서는 생성된 화면이 실행되지 않습니다. 대신 소스를 표시합니다.
+
+projects-masters_show_screen = 화면 표시
+
+projects-masters_hide_screen = 화면 숨기기
+
+projects-masters_this_screen_requests_an_action = 이 화면에서 작업을 요청합니다
+
+projects-masters_run_action = 작업 실행
+
+projects-masters_decline = 거절
+
+projects-masters_master_generated_screen = Zot이 생성한 화면
+
+projects-masters_masters = Zots
+
+projects-masters_one_conversation_to_coordinate_your_work = 하나의 대화로 작업을 조율하세요.
+
+projects-masters_retry = 다시 시도
+
+projects-masters_pause = 일시 중지
+
+projects-masters_resume = 재개
+
+projects-masters_stop_all = 모두 중지
+
+projects-masters_some_environments_are_offline_their_workers_remain_attached_reconnect_to_refresh_their_status = 일부 환경이 오프라인입니다. 에이전트 연결 정보는 유지됩니다. 다시 연결하면 상태가 갱신됩니다.
+
+projects-masters_slaves = Slaves
+
+projects-masters_fresh_chat = 새 채팅
+
+projects-masters_ask_the_master_to_start_work_it_will_decide_which_tasks_need_separate_agents = Zot에게 작업을 요청하세요. 별도 에이전트가 필요한 작업을 판단합니다.
+
+projects-masters_open_chat = 채팅 열기
+
+projects-masters_stop_agent = 에이전트 중지
+
+projects-masters_mark_done = 완료로 표시
+
+projects-masters_earlier_conversations_remain_readable_only_the_current_conversation_coordinates_work = 이전 대화는 계속 읽을 수 있습니다. 현재 대화만 작업을 조율합니다.
+
+projects-masters_current = 현재
+
+projects-masters_artifacts = 산출물
+
+projects-masters_working = 작업 중
+
+projects-masters_needs_attention = 확인 필요
+
+projects-masters_loading = Zot 불러오는 중…
+
+projects-masters_offline = 오프라인
+
+projects-masters_idle = 유휴
+
+projects-masters_conversation_number = 대화{ " " }{ $number }
+
+projects-masters_pending_action = { $kind }{ " " }·{ " " }{ $state }
+
+projects-masters_move_home = 실행 환경 이동
+
+projects-masters_move_help = 두 환경이 모두 온라인이어야 합니다. 먼저 조율자의 턴을 마치거나 중단하세요. 에이전트는 현재 환경에 유지됩니다.
+
+projects-masters_status_active = 활성
+
+projects-masters_status_paused = 일시 중지됨
+
+projects-masters_status_stopped = 중지됨
+
+projects-masters_status_moving = 이동 중
+
+projects-masters_worker_paused = 일시 중지됨
+
+projects-masters_worker_done = 완료
+
+projects-masters_pin = 고정
+
+projects-masters_unpin = 고정 해제
+
+projects-masters_regenerate = 다시 생성
+
+projects-masters_renew_suggestion = 대화가 길어지고 있습니다. 새 채팅을 시작해 체크포인트에서 이어가세요.
+
+projects-masters_screen_failed = 이 화면이 응답하지 않습니다. 기본 컨트롤은 계속 사용할 수 있습니다.
+
+projects-masters_close = 닫기
+
+projects-masters_empty_prompt = { $name }에게 무엇을 맡길까요?
+
+projects-masters_more_actions = 추가 작업
+
+projects-masters_pinned = 고정됨
+
+projects-masters_previous_conversations = 이전 대화
+
+projects-masters_add_work_model = 모델 추가
+
+projects-masters_auto_follow_ups = 자동 후속 메시지
+
+projects-masters_auto_follow_ups_help = Zot이 사용자에게 묻기 전에 스스로 Slave에게 메시지를 보낼 수 있는 횟수입니다.
+
+projects-masters_limits = 한도
+
+projects-masters_no_skills_installed = 설치된 스킬 없음
+
+projects-masters_parallel_slaves = 동시에 작업하는 Slaves
+
+projects-masters_parallel_slaves_help = 추가 작업은 Slave가 끝날 때까지 대기합니다.
+
+projects-masters_remove_work_model = 모델 제거
+
+projects-masters_runs_on = 실행 위치
+
+projects-masters_skills = 스킬
+
+projects-masters_work_kind = 작업 종류
+
+projects-masters_work_kind_placeholder = 예: 코드 리뷰
+
+projects-masters_work_models = 작업별 모델
+
+projects-masters_add_repository = 저장소 추가
+
+projects-masters_color = 색상
+
+projects-masters_create_failed = Zot을 만들 수 없습니다
+
+projects-masters_details = 세부 정보
+
+projects-masters_hero_no_repositories = 세부 정보에서 저장소를 추가하면{ " " }{ $name }이(가) Slaves를 시작할 수 있어요. 그냥 물어봐도 됩니다.
+
+projects-masters_hide_details = 세부 정보 숨기기
+
+projects-masters_mascot = 마스코트
+
+projects-masters_needs_setup = 이 Zot을 시작하려면 세부 정보에서 설정을 저장하세요.
+
+projects-masters_remove_repository = { $name }{ " " }제거
+
+projects-masters_save = 저장
+
+projects-masters_save_restarts_chat = 저장하면 이 설정으로 새 채팅을 시작합니다.
+
+projects-masters_show_details = 세부 정보 표시
+
+projects-masters_memory = 메모리
+
+projects-masters_memory_supported = 텍스트 전용 통합에는 Claude 또는 Zuse를 선택하세요.
+
+projects-masters_memory_automatic = 새로운 결과 자동 통합
+
+projects-masters_memory_consolidate = 통합
+
+projects-masters_memory_cancel = 취소
+
+projects-masters_memory_run_queued = 대기 중
+
+projects-masters_memory_run_running = 통합 중
+
+projects-masters_memory_run_done = 통합됨
+
+projects-masters_memory_run_failed = 통합 실패
+
+projects-masters_memory_run_cancelled = 취소됨
+
+projects-masters_memory_search = 메모리 검색
+
+projects-masters_memory_archived = 보관됨
+
+projects-masters_memory_empty = 아직 학습된 주제가 없습니다.
+
+projects-masters_memory_previous = 이전
+
+projects-masters_memory_next = 다음
+
+projects-masters_memory_content = 메모리 내용
+
+projects-masters_memory_restore = 복원
+
+projects-masters_memory_archive = 보관
+
+projects-masters_memory_sources = 출처
+
+projects-masters_back = 뒤로
+
+projects-masters_cancel = 취소
+
+projects-masters_composer_placeholder = { $name }에게 메시지
+
+projects-masters_conversation_lost = { $name }의 대화가 사라졌습니다
+
+projects-masters_conversation_lost_help = 설정, 저장소, Slaves는 그대로입니다. 새 채팅을 시작하면 이어서 진행합니다.
+
+projects-masters_edit_identity = 이름과 모습 편집
+
+projects-masters_start_fresh_chat = 새 채팅 시작
+
+projects-masters_instructions_placeholder = # 지침{ "\u000A" }- 병합 전에 확인하기.{ "\u000A" }- 작고 집중된 풀 리퀘스트 선호.
+
+projects-masters_memory_tidy = 정리
+
+projects-masters_memory_tidy_model = 모델
+
+projects-masters_no_matching_skills = 일치하는 스킬이 없습니다
+
+projects-masters_preferences = 환경설정
+
+projects-masters_resize_details = 세부 정보 크기 조절
+
+projects-masters_search_skills = 스킬 검색
+
+projects-masters_skills_selected = { $count }개 켜짐
+
+projects-masters_mascot_daemon = Daemon
+
+projects-masters_mascot_nib = Nib
+
+projects-masters_mascot_ping = Ping
+
+projects-masters_mascot_fuzz = Fuzz
+
+projects-masters_mascot_cache = Cache
+
+projects-masters_color_coral = 코랄
+
+projects-masters_color_yellow = 노랑
+
+projects-masters_color_green = 초록
+
+projects-masters_color_lime = 라임
+
+projects-masters_color_violet = 보라
+
+projects-masters_color_teal = 청록
+
+projects-masters_color_blue = 파랑
+
+projects-masters_color_pink = 분홍
+
+projects-masters_no_signed_in_agent = Zot을 만들기 전에 에이전트에 로그인하세요.
+
+projects-masters_skills_failed = 스킬을 불러올 수 없습니다.
+
+projects-masters_home_only_note = 이 Preview에서는 Slaves가 이 Zot과 같은 컴퓨터에서 실행됩니다.
+
+projects-masters_guide_open = Zot 가이드
+
+projects-masters_guide_how = Zots 작동 방식
+
+projects-masters_guide_step_count = { $current }{ " " }/{ " " }{ $total }
+
+projects-masters_guide_skip = 가이드 건너뛰기
+
+projects-masters_guide_not_now = 나중에
+
+projects-masters_guide_start = 둘러보기
+
+projects-masters_guide_back = 뒤로
+
+projects-masters_guide_next = 다음
+
+projects-masters_guide_done = 완료
+
+projects-masters_guide_target_hidden = 지금은 이 항목이 보이지 않습니다. 열린 페이지를 닫거나 세부 정보를 표시하세요.
+
+projects-masters_guide_welcome_title = Zot 소개
+
+projects-masters_guide_welcome_body = Zot은 하나의 브리프를 조율된 작업으로 바꿉니다. 계획을 세우고, Slaves라고 부르는 별도 채팅에 작업을 맡기고, 진행 상황을 확인합니다.
+
+projects-masters_guide_welcome_preview = Preview: Zot과 Slaves는 Zot을 만든 컴퓨터에서 실행됩니다. 컴퓨터를 켜 두고 연결된 상태로 유지하세요.
+
+projects-masters_guide_repositories_title = 저장소 선택
+
+projects-masters_guide_repositories_summary = Zot이 작업할 수 있는 곳을 정합니다.
+
+projects-masters_guide_repositories_body = Zot은 여기에서 추가한 저장소에서만 작업합니다. 저장소를 추가해도 기존 채팅에는 아무것도 보내지 않습니다.
+
+projects-masters_guide_repositories_empty = 아직 없나요? 먼저 Zuse에서 저장소를 연 다음 여기에서 추가하세요.
+
+projects-masters_guide_repositories_optional = 언제든지 변경할 수 있습니다.
+
+projects-masters_guide_brief_title = 브리프 작성
+
+projects-masters_guide_brief_summary = 원하는 결과를 설명합니다.
+
+projects-masters_guide_brief_body = 완료된 모습을 설명하세요. 결과, 범위, 제약 조건을 알려 주면 Zot이 계획하고 작업을 맡깁니다.
+
+projects-masters_guide_brief_model = 모델 선택기에서 Zot이 계획에 사용할 모델을 정합니다. 항상 적용할 지침은 환경설정에 있습니다.
+
+projects-masters_guide_brief_example = 예시 사용
+
+projects-masters_guide_brief_example_hint = 편집 가능한 텍스트를 추가합니다. 전송되지 않습니다.
+
+projects-masters_guide_example_delegate = 계획하고 맡기기
+
+projects-masters_guide_example_delegate_text = 이 저장소를 검토하고 계획을 제안한 다음, 독립적인 수정 사항은 별도 채팅에 맡겨 주세요. 범위를 바꾸거나 병합하기 전에는 먼저 물어봐 주세요.
+
+projects-masters_guide_example_tests = 실패한 테스트 수정
+
+projects-masters_guide_example_tests_text = 실패한 테스트를 찾아 원인별로 묶고, 각 묶음을 별도 채팅에서 수정해 주세요. 끝나면 변경 사항을 요약해 주세요.
+
+projects-masters_guide_example_reviews = 풀 리퀘스트 막힘 해결
+
+projects-masters_guide_example_reviews_text = 열린 풀 리퀘스트를 살펴보고 각각을 막는 문제를 정리한 다음, 간단한 문제는 별도 채팅에서 해결해 주세요. 병합하기 전에는 먼저 물어봐 주세요.
+
+projects-masters_guide_slaves_title = Slaves 확인하기
+
+projects-masters_guide_slaves_summary = 각 작업을 확인하고 조정합니다.
+
+projects-masters_guide_slaves_body = 각 Slave는 하나의 작업을 맡은 별도 채팅입니다. 열어서 진행 상황을 보고, 방향을 조정하거나 권한 요청에 답하세요.
+
+projects-masters_guide_slaves_controls = 일시 중지하면 새 작업을 맡기지 않습니다. 중지하면 실행 중인 작업도 중단됩니다.
+
+projects-masters_guide_continuity_title = 맥락을 유지하며 새로 시작
+
+projects-masters_guide_continuity_summary = 흐름을 잃지 않고 새 채팅을 시작합니다.
+
+projects-masters_guide_continuity_body = 대화가 길어지면 여기에서 새 채팅을 선택하세요. 저장소, 실행 중인 Slaves, 결정 사항, 메모리는 그대로 유지됩니다.
+
+projects-masters_guide_continuity_memory = 이 메뉴에서 언제든지 가이드를 다시 볼 수 있습니다.
+
+projects-masters_paused_notice = 일시 중지됨. Zot은 답할 수 있지만, 다시 시작할 때까지 Slaves를 시작하거나 메시지를 보내지 않습니다.
+
+projects-masters_stopped_notice = 중지됨. Zot은 답할 수 있지만, 다시 시작할 때까지 Slaves를 시작하거나 메시지를 보내지 않습니다.
+
+# Complete plural message. $count is numeric; remaining variables retain their source names.
+projects-pr_pane_added_file_to_the_composer-plural =
+    { $count ->
+       [one] 작곡가에{ " " }{ $count }{ " " }파일을 추가했습니다.
+       *[other] 작곡가에{ " " }{ $count }{ " " }파일을 추가했습니다.
+    }
+
+# Complete plural message. $count is numeric; remaining variables retain their source names.
+projects-branch_workflow_check_failing-plural =
+    { $count ->
+       [one] { $checksFailing }{ " " }확인 실패
+       *[other] { $checksFailing }{ " " }검사 실패
+    }
+
+# Complete plural message. $count is numeric; remaining variables retain their source names.
+projects-branch_workflow_check_running-plural =
+    { $count ->
+       [one] { $checksRunning }{ " " }점검 실행 중
+       *[other] { $checksRunning }{ " " }검사 실행 중
+    }
+
+# Complete plural message. $count is numeric; remaining variables retain their source names.
+projects-pr_pane_file_plural0_sentence-plural =
+    { $count ->
+       [one] { $dirtyFiles }{ " " }파일
+       *[other] { $dirtyFiles }{ " " }파일
+    }
+
+# Complete plural message. $count is numeric; remaining variables retain their source names.
+projects-pr_pane_commit_plural0_sentence-plural =
+    { $count ->
+       [one] { $ahead }{ " " }커밋
+       *[other] { $ahead }{ " " }커밋
+    }
+
+# Complete plural message. $count is numeric; remaining variables retain their source names.
+projects-projects_sidebar_chat_count-plural =
+    { $count ->
+       [one] 채팅{ " " }{ $count }개
+       *[other] 채팅{ " " }{ $count }개
+    }

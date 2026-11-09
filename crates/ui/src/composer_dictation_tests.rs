@@ -767,6 +767,93 @@ fn dictation_silence_explains_empty_result_and_never_sends_existing_draft(cx: &m
     }
 }
 
+#[gpui::test]
+fn dictation_phrases_insert_at_the_caret_in_spoken_order(cx: &mut TestAppContext) {
+    cx.update(|cx| cx.set_global(Theme::dark()));
+    let window = cx.add_window(|_, cx| ComposerInput::new("Draft", cx));
+    window
+        .update(cx, |input, window, cx| {
+            input.set_text("before  after", cx);
+            input.selected_range = 7..7;
+            let fake = start(input, cx);
+            deliver(input, &fake, [Event::Listening], cx);
+            // Each phrase extends the transcript while the speaker goes on.
+            deliver(input, &fake, [Event::Partial("first thought".into())], cx);
+            assert_eq!(input.content, "before first thought after");
+            assert_eq!(input.selected_range, 20..20);
+            assert_eq!(input.dictation.phase, Phase::Listening);
+            deliver(
+                input,
+                &fake,
+                [Event::Partial("first thought second thought".into())],
+                cx,
+            );
+            assert_eq!(input.content, "before first thought second thought after");
+            input.finish_dictation(false, cx);
+            deliver(
+                input,
+                &fake,
+                [Event::Final("first thought second thought".into())],
+                cx,
+            );
+            assert_eq!(input.content, "before first thought second thought after");
+            assert_eq!(input.dictation.phase, Phase::Idle);
+            // The whole dictation undoes as one edit.
+            input.undo(&Undo, window, cx);
+            assert_eq!(input.content, "before  after");
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn dictation_cancel_keeps_transcribed_phrases_and_drops_the_rest(cx: &mut TestAppContext) {
+    let input = cx.new(|cx| ComposerInput::new("Draft", cx));
+    let mut events = cx.events::<DictationInputEvent, _>(&input);
+    input.update(cx, |input, cx| {
+        let fake = start(input, cx);
+        let generation = input.dictation.generation;
+        deliver(
+            input,
+            &fake,
+            [Event::Listening, Event::Partial("already said".into())],
+            cx,
+        );
+        input.finish_dictation(true, cx);
+        input.cancel_dictation();
+        assert_eq!(fake.borrow().drops, 1, "capture and uploads are released");
+        fake.borrow_mut()
+            .events
+            .push_back(Event::Partial("already said and more".into()));
+        assert!(!input.poll_dictation(generation, cx));
+        assert_eq!(input.text(), "already said");
+        assert_eq!(input.dictation.phase, Phase::Idle);
+    });
+    while let Ok(event) = events.try_recv() {
+        assert!(!matches!(event, DictationInputEvent::Submit(_)));
+    }
+}
+
+#[gpui::test]
+fn dictation_without_audio_explains_the_microphone_and_never_sends(cx: &mut TestAppContext) {
+    let input = cx.new(|cx| ComposerInput::new("Draft", cx));
+    let mut events = cx.events::<DictationInputEvent, _>(&input);
+    input.update(cx, |input, cx| {
+        input.set_text("keep my draft", cx);
+        let fake = start(input, cx);
+        deliver(input, &fake, [Event::Listening], cx);
+        input.finish_dictation(true, cx);
+        deliver(input, &fake, [Event::NoAudio], cx);
+        assert_eq!(input.text(), "keep my draft");
+        let Phase::Failed(message) = &input.dictation.phase else {
+            panic!("expected a failure, got {:?}", input.dictation.phase);
+        };
+        assert!(message.contains("microphone"), "{message}");
+    });
+    while let Ok(event) = events.try_recv() {
+        assert!(!matches!(event, DictationInputEvent::Submit(_)));
+    }
+}
+
 fn enable_dictation(dir: &std::path::Path, cx: &mut TestAppContext) {
     cx.update(|cx| {
         crate::dictation::init(dir.into(), cx);
