@@ -1869,3 +1869,6 @@ chat-chat_composer_press_esc_again_to_clear = 지우려면 <part0>Esc</part0> �
 chat-worktree_fetching = 최신 { $branch } 가져오는 중…
 chat-worktree_creating = { $branch }에서 워크트리 만드는 중…
 chat-worktree_offline = 원격에 연결할 수 없음 · 로컬 { $branch } 사용
+
+# Native and browser history pagination; translations remain draft.
+chat-cloud_history_load_earlier = 이전 메시지 불러오기

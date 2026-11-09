@@ -1869,3 +1869,6 @@ chat-chat_composer_press_esc_again_to_clear = 再按一次 <part0>Esc</part0> �
 chat-worktree_fetching = 正在获取最新的 { $branch }…
 chat-worktree_creating = 正在从 { $branch } 创建工作树…
 chat-worktree_offline = 无法连接远程仓库 · 使用本地 { $branch }
+
+# Native and browser history pagination; translations remain draft.
+chat-cloud_history_load_earlier = 加载更早的消息

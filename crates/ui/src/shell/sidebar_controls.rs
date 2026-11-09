@@ -29,7 +29,13 @@ impl Shell {
                 };
                 let id = *id;
                 let method = *method;
-                let params = params.clone();
+                // Sign-in is browser-only; the engine needs to know this client
+                // can follow its loopback redirect.
+                let params = if method == zuse_rpc::methods::CLOUD_ACCOUNT_SIGN_IN {
+                    engine.account_sign_in_params()
+                } else {
+                    params.clone()
+                };
                 let controls = controls.clone();
                 let job = gpui_tokio::Tokio::spawn(cx, async move {
                     engine

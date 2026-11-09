@@ -1,12 +1,17 @@
 name: Validate
 
+# Branches are validated through their pull request; running on both events
+# doubled every build.
 on:
   push:
+    branches: [main]
   pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: validate-${{ github.ref }}
-  cancel-in-progress: true
+  # Main always finishes, so its caches get saved for every branch.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
   CARGO_PROFILE_DEV_DEBUG: 0
@@ -14,12 +19,41 @@ env:
   CARGO_INCREMENTAL: 0
 
 jobs:
+  # macOS is the slowest job, so a pull request runs it only when it touches
+  # desktop code or a file with macOS-specific paths; main always runs it.
+  platforms:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      native: ${{ steps.select.outputs.native }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: select
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          native='["ubuntu-24.04","macos-latest"]'
+          # A diff GitHub refuses to list, or a deleted file, keeps macOS on.
+          if [ -n "$PR" ] && changed=$(gh pr diff "$PR" --name-only); then
+            desktop='^(apps/desktop/|crates/(ui|text|viewport|preview|simulator|update)/|dist/macos/|Cargo\.(toml|lock)$|rust-toolchain\.toml$|\.github/workflows/ci\.yml$)'
+            missing=$(printf '%s\n' "$changed" | while IFS= read -r file; do if [ ! -f "$file" ]; then printf '%s\n' "$file"; fi; done)
+            if [ -z "$missing" ] && ! grep -qE "$desktop" <<<"$changed" && ! xargs -d '\n' grep -qE 'target_os *= *"macos"' <<<"$changed"; then
+              native='["ubuntu-24.04"]'
+            fi
+          fi
+          echo "native=$native" >> "$GITHUB_OUTPUT"
+
   localization:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: python3 scripts/check-localization.py
       - run: python3 -m unittest discover -s scripts -p test_localization.py
       - run: cargo test -p zuse-i18n
@@ -38,6 +72,19 @@ jobs:
       - run: python3 -m unittest discover -s scripts -p test_release_notes.py -v
       - run: python3 -m unittest discover -s scripts -p test_cargo_dev.py -v
 
+  control-sdk:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo run --locked -p zuse-protocol --example control_types -- --check
+      - run: cargo test --locked -p zuse-control
+      - run: npm ci && npm test
+        working-directory: packages/sdk
   engine:
     runs-on: ubuntu-24.04
     env:
@@ -55,6 +102,7 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
       - run: sudo apt-get update && sudo apt-get install -y cmake libclang-dev libasound2-dev ripgrep
       - run: cargo fmt --all --check
@@ -64,61 +112,33 @@ jobs:
       - run: cargo test -p zuse-relay --test startup
       - run: cargo test -p zuse-remote
       - run: cargo test -p zuse-plugins
-      - run: cargo test -p zuse-engine --lib plugins::tests
-      - run: cargo test -p zuse-engine --lib managed_access
-      - run: cargo test -p zuse-engine --test pairing
-      - run: cargo test -p zuse-engine --test browser_access
-      - run: cargo test -p zuse-engine --lib source_control::tests::pr_
-      - run: cargo test -p zuse-engine --test git_workspace
+      - run: "cargo test --no-fail-fast -p zuse-engine --lib -- plugins::tests managed_access source_control::tests::pr_ visuals diff_sync::turn_snapshot registry::custom_acp::tests doc_host::tool_result_tests account::tests harness_models harness_local model_connections::tests native_harness::tests native_recovery::tests sessions::tests"
+      - run: cargo test --no-fail-fast -p zuse-engine --test pairing --test browser_access --test git_workspace --test voice_runtime --test relay_access --test durable_turn_review --test thread_sessions --test custom_acp --test auth
       - run: cargo test -p zuse-doc --lib session_owner_tests
-      - run: cargo test -p zuse-engine --lib visuals
-      - run: cargo test -p zuse-engine --test voice_runtime
-      - run: cargo test -p zuse-engine --test relay_access
-      - run: cargo test -p zuse-engine --test durable_turn_review
-      - run: cargo test -p zuse-engine --lib diff_sync::turn_snapshot
-      - run: cargo test -p zuse-engine --test thread_sessions
-      - run: cargo test -p zuse-engine --test custom_acp
-      - run: cargo test -p zuse-engine --lib registry::custom_acp::tests
-      - run: cargo test -p zuse-protocol --lib custom_acp::tests
       - run: cargo test -p zuse-client --test live
-      - run: cargo test -p zuse-protocol --lib methods::retry_tests
-      - run: cargo test -p zuse-protocol --lib browser_link
-      - run: cargo test -p zuse-protocol --lib notifications
-      - run: cargo test -p zuse-protocol --lib completion_sound
-      - run: cargo test -p zuse-protocol --lib presentation
-      - run: cargo test -p zuse-protocol --lib access_posture_tests
-      - run: cargo test -p zuse-protocol --lib input_answers
-      - run: cargo test -p zuse-protocol --lib message_attachments
+      - run: "cargo test --no-fail-fast -p zuse-protocol --lib -- custom_acp::tests methods::retry_tests rpc_probe browser_link notifications completion_sound presentation access_posture_tests input_answers message_attachments"
       - run: cargo test -p zuse-harness -p zuse-model-accounts
       - run: cargo test -p zuse-model -p zuse-serve
-      - run: cargo test -p zuse-providers --lib tool_output
-      - run: cargo test -p zuse-providers --lib command_execution_maps_exit_code_to_error
-      - run: cargo test -p zuse-providers --test claude --test codex access_
-      - run: cargo test -p zuse-providers --test acp access_
-      - run: "cargo test -p zuse-providers --lib acp::"
-      - run: "cargo test -p zuse-providers --lib opencode::"
+      - run: "cargo test --no-fail-fast -p zuse-providers --lib -- tool_output command_execution_maps_exit_code_to_error acp:: opencode:: skills::tests"
+      - run: cargo test --no-fail-fast -p zuse-providers --test claude --test codex --test acp access_
       - run: cargo test -p zuse-providers --test opencode
       - run: cargo test -p zuse-providers --features native-fixture --test pi_access --test pi_mcp --test pi_rpc
-      - run: cargo test -p zuse-providers --lib skills::tests
       - run: cargo test -p zuse-sync --lib tool_blobs
-      - run: cargo test -p zuse-engine --lib doc_host::tool_result_tests
       - run: cargo test -p zuse-voice-session -p zuse-orb
       - run: cargo test -p zuse-rpc --lib
-      - run: cargo test -p zuse-engine --test auth
-      - run: cargo test -p zuse-engine --lib account::tests
-      - run: cargo test -p zuse-engine --lib harness_models
-      - run: cargo test -p zuse-engine --lib harness_local
-      - run: cargo test -p zuse-engine --lib model_connections::tests
-      - run: cargo test -p zuse-engine --lib native_harness::tests
-      - run: cargo test -p zuse-engine --lib native_recovery::tests
-      - run: cargo test -p zuse-engine --lib sessions::tests
       - run: cargo test -p zuse-engine -p zuse-mcp --lib plugin
+      - run: cargo test -p zuse-engine --lib zots
+      - run: cargo test -p zuse-update --lib control::tests
+      - run: cargo build -p zuse-cli -p zuse-control
+      - run: npm ci && npm run test:engine
+        working-directory: packages/sdk
 
   native:
+    needs: platforms
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-latest]
+        os: ${{ fromJSON(needs.platforms.outputs.native) }}
     runs-on: ${{ matrix.os }}
     env:
       HUGEICONS_LICENSE_KEY: ${{ secrets.HUGEICONS_LICENSE_KEY }}
@@ -141,6 +161,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
           env-vars: "CARGO CC CFLAGS CXX CMAKE RUST HUGEICONS_BUILD_KEY"
       - if: runner.os == 'Linux'
@@ -152,11 +173,17 @@ jobs:
           libvulkan-dev libasound2-dev libwebkit2gtk-4.1-dev libjson-glib-dev
       - run: cargo check -p zuse -p zuse-cli -p zuse-relay -p zuse-remote
       - if: runner.os == 'Linux'
-        run: cargo test -p zuse-viewport --lib history::tests
+        run: |
+          cargo test -p zuse-viewport --lib history::tests
+          cargo test -p zuse-viewport --lib transcript::tests
       - name: Native remote connection recovery
         run: |
           cargo test -p zuse-ui --lib state::account_connection::tests
           cargo test -p zuse-ui --lib native_paired_reconnect_uses_fresh_encryption
+      - name: Native bounded history, paging and resume
+        run: |
+          cargo test -p zuse-ui --lib state::history_window::tests
+          cargo test -p zuse-ui --lib native_model_discovery_defers_other_agents_until_picker_open
       - name: Instant session archive and rollback
         run: cargo test -p zuse-ui --lib archive_
       - name: Language persistence, drafts and offline font coverage
@@ -206,6 +233,7 @@ jobs:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
         with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           key: browser
           workspaces: ". -> target/browser"
           cache-on-failure: true
@@ -213,8 +241,8 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: trunk@0.21.14
-      - run: node --test apps/web/tests/voice_media.mjs apps/web/tests/browser_frame.mjs apps/web/tests/environment.mjs
-      - run: bash scripts/build-web.sh
+      - run: node --test apps/web/tests/voice_media.mjs apps/web/tests/browser_frame.mjs apps/web/tests/environment.mjs apps/web/tests/initializer.mjs apps/web/tests/rpc-compression.mjs
+      - run: bash scripts/build-web.sh --release
       - run: bash scripts/build-web.sh --features browser-input-fixture --dist ../../.context/browser-input-fixture-dist
       - run: cargo +nightly check -p zuse-remote --target wasm32-unknown-unknown
         env:
@@ -236,6 +264,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           key: native-model-transport
           cache-on-failure: true
       - run: sudo apt-get update && sudo apt-get install -y ripgrep

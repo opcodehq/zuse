@@ -33,7 +33,7 @@ impl WorkspaceView {
     pub(super) fn update_sidebar_controls(&self, cx: &mut Context<Self>) {
         let properties = Properties {
             account: (!self.cloud_account.is_null()).then(|| self.cloud_account.clone()),
-            available: self.connected,
+            available: self.connected || self.cloud_account_api_available(),
             target: None,
             working: self
                 .sessions

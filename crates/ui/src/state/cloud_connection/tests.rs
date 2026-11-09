@@ -66,6 +66,7 @@ async fn native_cloud_tools_share_workspace_authority_and_end_on_account_change(
     let target = CloudTarget {
         controller: EngineHandle::from_test_client(zuse_rpc::memory_client(root.clone())),
         subject: "owner".into(),
+        organization: None,
         workspace: "workspace-one".into(),
         initial_session: "session-one".into(),
     };

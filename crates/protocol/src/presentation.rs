@@ -1,8 +1,12 @@
 //! Client presentation state shared without filesystem or rendering dependencies.
+mod cloud_projects;
 mod effort;
+pub use cloud_projects::{CloudProjectGroup, cloud_project_group};
 pub mod git_history;
 mod model_config;
 pub mod motion;
+pub mod zot_mascots;
+pub mod zot_panel;
 pub use model_config::RememberedModelConfig;
 mod queue;
 pub use effort::{EffortSetting, EffortStop, ModelEffort, model_effort, model_effort_option};
@@ -158,6 +162,8 @@ pub struct WorkspacePreferences {
     pub collapsed_projects: Vec<String>,
     pub workspace_by_project: BTreeMap<String, WorkspaceMode>,
     pub default_provider: Option<String>,
+    pub cloud_provider: Option<String>,
+    pub cloud_sizes: BTreeMap<String, String>,
     pub default_models: BTreeMap<String, String>,
     pub recent_models: Vec<ModelSelection>,
     pub model_config_history: Vec<RememberedModelConfig>,
@@ -204,6 +210,26 @@ impl WorkspacePreferences {
     }
     pub fn normalize(&mut self) {
         self.sidebar_width = self.sidebar_width.map(|width| width.clamp(200, 300));
+        let provider = |id: &str| {
+            crate::cloud_computers::ProviderId::ALL
+                .iter()
+                .any(|p| p.as_str() == id)
+        };
+        if self
+            .cloud_provider
+            .as_deref()
+            .is_some_and(|id| !provider(id))
+        {
+            self.cloud_provider = None;
+        }
+        self.cloud_sizes.retain(|id, size| {
+            provider(id)
+                && !size.is_empty()
+                && size.len() <= 64
+                && size
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
+        });
         self.recent_models.truncate(8);
         model_config::normalize_history(&mut self.model_config_history);
         self.collapsed_projects.truncate(512);

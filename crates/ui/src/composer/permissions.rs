@@ -193,7 +193,9 @@ impl Composer {
                     .font_weight(gpui::FontWeight::MEDIUM)
                     .text_color(tint)
                     .cursor_pointer()
-                    .when(pending, |view| view.opacity(0.5))
+                    // An unconfirmed mode keeps its name, dimmed, so the
+                    // control doesn't change width while the chat connects.
+                    .when(pending || unconfirmed, |view| view.opacity(0.5))
                     .bg(if self.permission_open {
                         theme.muted_fill().opacity(0.7)
                     } else {
@@ -212,8 +214,6 @@ impl Composer {
                     .when(!icon_only, |el| {
                         el.child(if pending {
                             crate::localization::text("settings-wallpaper_saving", cx)
-                        } else if unconfirmed {
-                            ("Check access").to_string()
                         } else {
                             (label(selected)).to_string()
                         })

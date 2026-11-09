@@ -39,6 +39,7 @@ members = [
     "apps/desktop",
     "apps/cli",
     "apps/relay",
+    "apps/control",
     "apps/web",
     "crates/viewport",
     "crates/model",
@@ -168,7 +169,8 @@ fontdb = "0.23"
 ttf-parser = "0.25.1"
 # Packaged GUI apps do not inherit shell proxy variables; honor the macOS and
 # Windows system proxy for provider usage probes and other HTTP clients.
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream", "system-proxy"] }
+# Negotiate incremental gzip responses for provider/catalog traffic on slow links.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream", "system-proxy", "gzip"] }
 ignore = "0.4"
 # Workspace file/content search index (@ mentions, file tree, cmd+K).
 # Pinned exactly: crates.io also carries `0.11.1-nightly.*` prereleases.
@@ -179,6 +181,14 @@ fff-search = "=0.11.0"
 # LTO's size/speed win at a fraction of the link time; strip debug symbols.
 lto = "thin"
 strip = "symbols"
+
+# Browser downloads pay for every byte on mobile connections. Keep the native
+# release profile independent from the size-oriented browser distribution.
+[profile.web-release]
+inherits = "release"
+opt-level = "s"
+codegen-units = 1
+panic = "abort"
 
 [profile.dev]
 # gpui is slow unoptimized; match zed's approach for deps

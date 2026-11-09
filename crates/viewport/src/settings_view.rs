@@ -384,14 +384,18 @@ impl WorkspaceView {
                             .text_size(px(11.))
                             .text_color(rgb(MUTED))
                             .child(
-                                icon(if self.paired || self.account_remote {
-                                    "globe"
-                                } else {
-                                    "monitor"
-                                })
+                                icon(
+                                    if self.cloud_controller || self.paired || self.account_remote {
+                                        "globe"
+                                    } else {
+                                        "monitor"
+                                    },
+                                )
                                 .size(px(14.)),
                             )
-                            .child(if self.account_remote {
+                            .child(if self.cloud_controller {
+                                ("Cloud").to_string()
+                            } else if self.account_remote {
                                 ("Account computer").to_string()
                             } else if self.paired {
                                 ("Paired computer").to_string()

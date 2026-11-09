@@ -93,8 +93,11 @@ async fn permanent_delete_purges_archives_and_ciphertext_then_keeps_a_content_fr
         .unwrap()
         .unwrap();
     f.upload().await;
-    f.tick().await.unwrap();
-    f.tick().await.unwrap();
+    f.tick().await.unwrap(); // verify the backup
+    f.tick().await.unwrap(); // submit source retirement
+    assert_eq!(f.phase().await, "retiring");
+    f.tick().await.unwrap(); // observe retirement completion
+    assert_eq!(f.phase().await, "retired");
     assert_eq!(f.phase().await, "retired");
     let (status, _) = runtime_post_for_url(
         &format!("{}/v1/cloud/workspaces/ws-bob/delete", f.api.origin),
@@ -287,8 +290,11 @@ async fn delete_retires_a_partial_restore_target_without_launching_an_empty_gues
         .unwrap()
         .unwrap();
     f.upload().await;
-    f.tick().await.unwrap();
-    f.tick().await.unwrap();
+    f.tick().await.unwrap(); // verify the backup
+    f.tick().await.unwrap(); // submit source retirement
+    assert_eq!(f.phase().await, "retiring");
+    f.tick().await.unwrap(); // observe retirement completion
+    assert_eq!(f.phase().await, "retired");
     f.unarchive("unarchive-partial-target").await;
     assert_eq!(
         runtime_post_for_url(
@@ -312,6 +318,9 @@ async fn delete_retires_a_partial_restore_target_without_launching_an_empty_gues
         .restore_once(&f.machine, chrono::Utc::now().timestamp_millis())
         .await
         .unwrap();
+    assert_eq!(f.machine.creates.load(Ordering::SeqCst), 1);
+    assert!(f.machine.replacement.lock().unwrap().is_some());
+    assert!(f.machine.runtime.lock().await.is_none());
     f.delete("delete-partial-restore").await;
     f.finish_delete().await;
     assert!(f.machine.runtime.lock().await.is_none());

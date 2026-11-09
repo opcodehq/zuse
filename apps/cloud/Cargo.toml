@@ -9,10 +9,14 @@ publish.workspace = true
 name = "zuse-cloud-api"
 path = "src/main.rs"
 
+[features]
+hosted-browser = ["zuse-cloud/hosted-browser"]
+
 [dependencies]
 zuse-cloud = { path = "../../crates/cloud" }
 anyhow.workspace = true
 tokio.workspace = true
+tokio-util = { workspace = true, features = ["rt"] }
 clap = { workspace = true, features = ["env"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true

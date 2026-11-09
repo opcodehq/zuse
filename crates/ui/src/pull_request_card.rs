@@ -1950,6 +1950,10 @@ impl gpui::Render for PullRequestCard {
 /// chat with changes and no PR offers Create PR instead. `None` when the
 /// chat has neither.
 pub fn composer_chips(state: &AppState, theme: &Theme, cx: &App) -> Option<AnyElement> {
+    // A Zot's coordinator spans repositories; pull requests belong to its threads.
+    if state.selected_chat_is_zot_coordinator() {
+        return None;
+    }
     let chat = state.selected_chat_row()?;
     let summary = state.change_request_for_chat(chat).cloned();
     let diff = state.diff_stat_for_chat(chat);

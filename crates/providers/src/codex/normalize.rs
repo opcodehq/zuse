@@ -508,6 +508,8 @@ pub(crate) fn user_message_text(item: &Value) -> Option<String> {
 /// user items must not reopen a finished document or duplicate a steering entry.
 #[derive(Default)]
 pub(super) struct ChildStream {
+    raw: super::raw_tools::RawTools,
+    raw_turn: Option<String>,
     reasoning: ReasoningStream,
     streamed_text: std::collections::HashSet<String>,
     completed_items: std::collections::VecDeque<String>,
@@ -536,6 +538,7 @@ impl ChildStream {
             if !id.is_empty() && self.completed_turns.contains(&id) {
                 return Vec::new();
             }
+            self.raw_turn = (!id.is_empty()).then_some(id.clone());
             if self.settled {
                 self.settled = false;
                 // v2 followup_task starts a new child turn without echoing a
@@ -547,6 +550,9 @@ impl ChildStream {
                 }];
             }
             return Vec::new();
+        }
+        if method == "rawResponseItem/completed" {
+            return self.raw.map(params, self.raw_turn.as_deref());
         }
         if matches!(method, "item/started" | "item/completed") {
             let item = params.get("item").unwrap_or(&Value::Null);
@@ -619,6 +625,7 @@ impl ChildStream {
                     return Vec::new();
                 }
                 self.settled = true;
+                self.raw_turn = None;
                 self.streamed_text.clear();
                 let error = turn_error_message(params);
                 let status = if method == "turn/failed"
@@ -701,7 +708,8 @@ pub(crate) fn route_child_notification(method: &str) -> ChildRoute {
         // subagent's terminal signal: `thread/closed` fires only via the
         // collab close_agent tool, which real fan-outs never call
         // (live-verified — chips stayed "running" forever without this).
-        "item/started"
+        "rawResponseItem/completed"
+        | "item/started"
         | "item/completed"
         | "item/agentMessage/delta"
         | "item/reasoning/textDelta"
@@ -727,7 +735,6 @@ pub(crate) fn route_child_notification(method: &str) -> ChildRoute {
         | "turn/diff/updated"
         | "thread/name/updated"
         | "thread/settings/updated"
-        | "rawResponseItem/completed"
         // Child-owned thread lifecycle that maps onto PARENT state in a
         // naive passthrough (archived/compacted), plus repeat thread/started.
         | "thread/archived"
@@ -743,6 +750,35 @@ pub(crate) fn route_child_notification(method: &str) -> ChildRoute {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn code_mode_raw_response_items_emit_exec_call_and_spawn_failure_once() {
+        // Exact native0.166 schema: RawResponseItemCompletedNotification.item
+        // is ResponseItem, not ThreadItem; wire method proven by tagged source.
+        let mut stream = ChildStream::default();
+        stream.map("child", "turn/started", &json!({"turn":{"id":"turn"}}));
+        let call = json!({"threadId":"child","turnId":"turn","item":{"type":"custom_tool_call","id":"raw-call-item","call_id":"exec-call","name":"exec","input":"const result = await tools.exec_command({cmd: 'printf test'});","status":"completed","internal_chat_message_metadata_passthrough":{"turn_id":"turn"}}});
+        let output = json!({"threadId":"child","turnId":"turn","item":{"type":"custom_tool_call_output","id":"raw-output-item","call_id":"exec-call","output":"Error: failed to spawn code-mode host: No such file or directory (os error 2)"}});
+        let first = stream.map("child", "rawResponseItem/completed", &call);
+        assert!(
+            matches!(first.as_slice(),[AgentEvent::ToolCall {id,call:ToolCall::Unknown{name,..}}] if id=="exec-call" && name=="exec"),
+            "actual code-mode wrapper must render as a tool"
+        );
+        let result = stream.map("child", "rawResponseItem/completed", &output);
+        assert!(
+            matches!(result.as_slice(),[AgentEvent::ToolResult{id,is_error:true,output:Some(text),..}] if id=="exec-call" && text.contains("failed to spawn code-mode host"))
+        );
+        assert!(
+            stream
+                .map("child", "rawResponseItem/completed", &call)
+                .is_empty()
+        );
+        assert!(
+            stream
+                .map("child", "rawResponseItem/completed", &output)
+                .is_empty()
+        );
+    }
 
     #[test]
     fn reasoning_parts_preserve_chunking_and_existing_paragraph_breaks() {

@@ -3,24 +3,28 @@
 use axum::{
     Json, Router,
     body::Body,
-    extract::{Query, State, WebSocketUpgrade, ws::Message},
+    extract::{Query, State, WebSocketUpgrade},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{get, post},
     serve::ListenerExt,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use futures::{SinkExt, StreamExt};
+use futures::StreamExt;
 use serde::Deserialize;
 use std::{path::PathBuf, sync::Arc};
 use subtle::ConstantTimeEq;
 use tokio::{net::TcpListener, sync::mpsc};
-use tower_http::{
-    services::{ServeDir, ServeFile},
-    set_header::SetResponseHeaderLayer,
-};
+use tower_http::set_header::SetResponseHeaderLayer;
 use zuse_rpc::RpcService;
 mod access_token;
+mod assets;
+mod browser_io;
+pub mod hosted;
+
+// Let slow receivers apply backpressure before stale transcript frames pile up.
+const SOCKET_OUTPUT_CAPACITY: usize = 8;
+const SOCKET_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
 pub mod managed;
 mod paired;
 mod paired_session;
@@ -155,10 +159,9 @@ impl BrowserServer {
             .route("/api/rpc", get(socket))
             .route("/api/paired-rpc/{pair_id}", get(paired::upgrade))
             .route("/api/account-rpc", get(managed::upgrade))
+            .route("/api/control", get(control_socket))
             .route("/api/attachments", post(upload))
-            .fallback_service(
-                ServeDir::new(&assets).not_found_service(ServeFile::new(assets.join("index.html"))),
-            )
+            .fallback_service(assets::router(assets))
             .with_state(self)
             .layer(SetResponseHeaderLayer::overriding(
                 header::X_CONTENT_TYPE_OPTIONS,
@@ -378,6 +381,7 @@ async fn session_status(State(server): State<BrowserServer>, headers: HeaderMap)
 
 async fn socket(
     State(server): State<BrowserServer>,
+    Query(options): Query<BrowserRpcOptions>,
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Response {
@@ -386,39 +390,115 @@ async fn socket(
     }
     let connections = server.connections.clone();
     ws.max_message_size(2 * 1024 * 1024)
-        .on_upgrade(move |socket| connections.track_future(browser_socket(server, socket)))
+        .on_upgrade(move |socket| {
+            connections.track_future(browser_socket(
+                server,
+                socket,
+                match options.rpc_compression.as_deref() {
+                    Some("deflate-stream-v1") => browser_io::Compression::DeflateStream,
+                    Some("gzip-v1") => browser_io::Compression::Gzip,
+                    _ => browser_io::Compression::None,
+                },
+                options.rpc_progress,
+            ))
+        })
 }
 
-async fn browser_socket(server: BrowserServer, socket: axum::extract::ws::WebSocket) {
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BrowserRpcOptions {
+    rpc_compression: Option<String>,
+    #[serde(default)]
+    rpc_progress: bool,
+}
+
+async fn browser_socket(
+    server: BrowserServer,
+    socket: axum::extract::ws::WebSocket,
+    compression: browser_io::Compression,
+    transfer_notices: bool,
+) {
     // An upgrade completing after listener shutdown must not start RPC work.
     if server.shutdown.is_cancelled() {
         return;
     }
-    let (mut writer, mut reader) = socket.split();
-    let (out_tx, mut out_rx) = mpsc::channel::<String>(128);
-    let (in_tx, in_rx) = mpsc::channel::<String>(128);
-    let dispatch = tokio::spawn(zuse_rpc::serve_connection(server.service, out_tx, in_rx));
-    let shutdown = server.shutdown;
-    {
-        let exchange = async {
-            loop {
-                tokio::select! {
-                    payload = out_rx.recv() => match payload {
-                        Some(payload) => if writer.send(Message::Text(payload.into())).await.is_err() { break; },
-                        None => break,
-                    },
-                    message = reader.next() => match message {
-                        Some(Ok(Message::Text(payload))) => if in_tx.send(payload.to_string()).await.is_err() { break; },
-                        Some(Ok(Message::Ping(data))) => if writer.send(Message::Pong(data)).await.is_err() { break; },
-                        Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
-                        _ => {},
-                    }
-                }
-            }
-        };
-        tokio::select! { biased; _ = shutdown.cancelled() => {}, _ = exchange => {} }
+    rpc_socket(
+        server.service,
+        socket,
+        server.shutdown.cancelled_owned(),
+        compression,
+        transfer_notices,
+    )
+    .await;
+}
+
+pub(crate) async fn rpc_socket(
+    service: Arc<dyn RpcService>,
+    socket: axum::extract::ws::WebSocket,
+    closed: impl std::future::Future<Output = ()>,
+    compression: browser_io::Compression,
+    transfer_notices: bool,
+) {
+    let (writer, reader) = socket.split();
+    let (out_tx, out_rx) = mpsc::channel::<zuse_rpc::OutputFrame>(SOCKET_OUTPUT_CAPACITY);
+    let (in_tx, in_rx) = mpsc::channel::<String>(16);
+    let dispatch = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(
+        zuse_rpc::serve_connection_bounded(service, out_tx, in_rx, SOCKET_OUTPUT_BYTES),
+    ));
+    tokio::select! { biased;
+        _ = closed => {},
+        _ = browser_io::exchange(writer, reader, out_rx, in_tx, compression, transfer_notices) => {},
     }
-    drop(in_tx);
+    dispatch.abort();
+    let _ = dispatch.await;
+}
+
+/// Control clients authenticate every operation inside its envelope. Browser
+/// cookies never grant access to this endpoint and raw engine methods are denied.
+struct ControlOnly(Arc<dyn RpcService>);
+#[async_trait::async_trait]
+impl RpcService for ControlOnly {
+    async fn handle(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<zuse_rpc::RpcReply, zuse_rpc::RpcError> {
+        if method != "ControlCall" {
+            return Err(zuse_rpc::RpcError::Capability(
+                "control.unauthorized".into(),
+            ));
+        }
+        self.0.handle(method, params).await
+    }
+}
+async fn control_socket(State(server): State<BrowserServer>, ws: WebSocketUpgrade) -> Response {
+    let connections = server.connections.clone();
+    ws.max_message_size(2 * 1024 * 1024)
+        .on_upgrade(move |socket| connections.track_future(control_connection(server, socket)))
+        .into_response()
+}
+
+async fn control_connection(server: BrowserServer, socket: axum::extract::ws::WebSocket) {
+    if server.shutdown.is_cancelled() {
+        return;
+    }
+    let (writer, reader) = socket.split();
+    let (out, outgoing) = mpsc::channel::<zuse_rpc::OutputFrame>(SOCKET_OUTPUT_CAPACITY);
+    let (incoming, inbound) = mpsc::channel::<String>(16);
+    let dispatch =
+        tokio_util::task::AbortOnDropHandle::new(tokio::spawn(zuse_rpc::serve_connection_bounded(
+            Arc::new(ControlOnly(server.service)),
+            out,
+            inbound,
+            SOCKET_OUTPUT_BYTES,
+        )));
+    // SDK callers keep the per-operation authorization wrapper. Sharing the
+    // byte budget and duplex pump also keeps Stop readable during large replies.
+    tokio::select! { biased;
+        _ = server.shutdown.cancelled() => {},
+        _ = browser_io::exchange(writer, reader, outgoing, incoming, browser_io::Compression::None, false) => {},
+    }
+    dispatch.abort();
     let _ = dispatch.await;
 }
 
@@ -437,8 +517,23 @@ mod tests {
         }
     }
 
-    fn server() -> BrowserServer {
+    pub(super) fn server() -> BrowserServer {
         BrowserServer::new(Arc::new(FixtureService), "a".repeat(64), None).unwrap()
+    }
+
+    #[tokio::test]
+    async fn control_transport_never_forwards_raw_engine_operations() {
+        let service = ControlOnly(Arc::new(FixtureService));
+        assert!(matches!(
+            service.handle("Mutate", serde_json::json!({})).await,
+            Err(RpcError::Capability(_))
+        ));
+        assert!(
+            service
+                .handle("ControlCall", serde_json::json!({"method":"ControlInfo"}))
+                .await
+                .is_ok()
+        );
     }
 
     #[tokio::test]

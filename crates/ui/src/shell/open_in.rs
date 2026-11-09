@@ -421,7 +421,7 @@ fn open_command(target: &OpenTarget, path: &str) -> Option<std::process::Command
 }
 
 /// The fallback glyph for an app without its own icon.
-fn fallback_glyph(id: &str) -> &'static str {
+pub(super) fn fallback_glyph(id: &str) -> &'static str {
     match id {
         "finder" => icons::FOLDER_OPEN,
         "ghostty" | "terminal" => icons::TERMINAL,
@@ -433,6 +433,13 @@ impl Shell {
     /// The selected chat's workspace path, and whether it is on this
     /// computer (only then can a local app open it).
     pub(super) fn open_in_path(&self, cx: &App) -> Option<(String, bool)> {
+        // A cloud chat opens where its repository syncs on this computer.
+        if let Some(conversation) = &self.cloud_conversation {
+            return conversation
+                .read(cx)
+                .synced_folder()
+                .map(|path| (path, true));
+        }
         let state = self.state.read(cx);
         let chat = state.selected_chat_row()?;
         let path = chat_copy_path(chat)?.to_owned();
@@ -495,6 +502,16 @@ impl Shell {
         let Some((path, true)) = self.open_in_path(cx) else {
             return;
         };
+        self.open_path_in(target, path, cx);
+    }
+
+    /// Open a folder on this computer in `target`, off the UI thread.
+    pub(super) fn open_path_in(
+        &mut self,
+        target: OpenTarget,
+        path: String,
+        cx: &mut Context<Self>,
+    ) {
         let Some(mut command) = open_command(&target, &path) else {
             cx.reveal_path(Path::new(&path));
             return;

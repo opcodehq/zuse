@@ -130,7 +130,7 @@ impl Shell {
             self.activate_main_tab(Some(MainTab::Diff(id)), cx);
             return;
         }
-        let changes = cx.new(|cx| Changes::new(self.state.clone(), cx));
+        let changes = cx.new(|cx| Changes::new(self.conversation_state(cx), cx));
         let id = self.push_main_tab(changes, window, cx);
         self.main_tabs.entry(key).or_default().review = Some(id);
     }

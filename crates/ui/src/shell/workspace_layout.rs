@@ -8,12 +8,18 @@ impl Shell {
     pub(super) fn workspace_gutter(&self) -> f32 {
         if matches!(
             self.route,
-            Route::Chat | Route::Plugins | Route::Archives | Route::Usage
+            Route::Chat | Route::Plugins | Route::Archives | Route::Usage | Route::Zot
         ) {
             layout::GUTTER
         } else {
             0.
         }
+    }
+
+    pub(super) fn main_chrome_visible(&self, cx: &App) -> bool {
+        self.workspace_gutter() == 0.
+            || self.has_conversation(cx)
+            || self.settings.sidebar_collapsed
     }
 
     /// The sidebar's surface. It paints no fill of its own: the sidebar is
@@ -58,6 +64,14 @@ impl Shell {
                 .pr(px(4.))
                 .flex()
                 .items_center()
+                .gap(px(6.))
+                .child(
+                    div()
+                        .debug_selector(|| "workspace-app-logo".into())
+                        .size(px(16.))
+                        .flex_none()
+                        .child(icon(icons::ZUSE_LOGO).size_full().text_color(theme.text)),
+                )
                 .child(
                     div()
                         .flex_1()
@@ -97,7 +111,7 @@ impl Shell {
     pub(super) fn workspace_native_actions(&mut self, cx: &mut Context<Self>) -> AnyElement {
         if self.workspace_gutter() == 0.
             || matches!(self.route, Route::Archives | Route::Usage)
-            || (matches!(self.route, Route::Chat) && self.state.read(cx).selected_chat.is_some())
+            || (matches!(self.route, Route::Chat) && self.has_conversation(cx))
         {
             return Empty.into_any_element();
         }

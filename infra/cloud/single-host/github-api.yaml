@@ -1,0 +1,23 @@
+# Selected only by deploy.py when the API-only native GitHub rollout is explicit.
+# Root's original import files are never mounted into a container.
+services:
+  api:
+    volumes:
+      - type: bind
+        source: ${ZUSE_CONFIG_DIR:?}/github-api/app.pem
+        target: /run/zuse/github/app.pem
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${ZUSE_CONFIG_DIR:?}/github-api/oauth-client-secret
+        target: /run/zuse/github/oauth-client-secret
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${ZUSE_CONFIG_DIR:?}/github-api/webhook-secret
+        target: /run/zuse/github/webhook-secret
+        read_only: true
+        bind:
+          create_host_path: false

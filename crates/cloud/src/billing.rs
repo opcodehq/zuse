@@ -42,6 +42,28 @@ pub(crate) async fn require_capacity(
     }
     Ok(())
 }
+/// Apply the same cumulative policy to facts read by the locked admission batch.
+pub(crate) fn validate_capacity_snapshot(
+    period: Option<Value>,
+    totals: &Value,
+) -> Result<(), ApiError> {
+    let period = period.ok_or_else(|| ApiError::forbidden("cloud_billing_period_missing"))?;
+    if period["currency"] != "USD" {
+        return Err(invalid());
+    }
+    period["period_id"].as_str().ok_or_else(invalid)?;
+    let totals: (i64, i64, i64) = serde_json::from_value(totals.clone()).map_err(|_| invalid())?;
+    if held(
+        period["status"].as_str().ok_or_else(invalid)?,
+        number(&period, "included_provider_cost_micros")?,
+        number(&period, "markup_basis_points")?,
+        number(&period, "overage_cap_micros")?,
+        totals,
+    )? {
+        return Err(ApiError::forbidden("cloud_billing_hold"));
+    }
+    Ok(())
+}
 fn invalid() -> ApiError {
     ApiError::unavailable("cloud_billing_policy_invalid")
 }

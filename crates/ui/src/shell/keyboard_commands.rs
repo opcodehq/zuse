@@ -107,7 +107,7 @@ impl Shell {
         if let Some(slot) = model_slot {
             let pickers = self
                 .open_side_chat_pickers(cx)
-                .unwrap_or_else(|| self.composer.read(cx).pickers().clone());
+                .unwrap_or_else(|| self.conversation_composer(cx).read(cx).pickers().clone());
             if pickers.update(cx, |pickers, cx| pickers.jump_model_slot(slot, cx)) {
                 return;
             }
@@ -235,7 +235,11 @@ impl Shell {
                     0
                 } else if self.navigation_focus.in_right(window, cx) {
                     3
-                } else if self.composer.focus_handle(cx).contains_focused(window, cx) {
+                } else if self
+                    .conversation_composer(cx)
+                    .focus_handle(cx)
+                    .contains_focused(window, cx)
+                {
                     2
                 } else if self.navigation_focus.main.contains_focused(window, cx) {
                     1
@@ -250,7 +254,7 @@ impl Shell {
                     (None, true) => 0,
                     (None, false) => panes.len() - 1,
                 };
-                self.composer
+                self.conversation_composer(cx)
                     .update(cx, |composer, _| composer.focus_pending = false);
                 match panes[next] {
                     0 => window.focus(&self.workspace_sidebar_focus, cx),
@@ -269,7 +273,7 @@ impl Shell {
                 self.select_palette_tab(tab, cx);
             }
             Command::ComposerTogglePlanMode => {
-                self.composer
+                self.conversation_composer(cx)
                     .update(cx, |composer, cx| composer.toggle_plan_mode(cx));
             }
             Command::ShowShortcuts => self.toggle_shortcuts_panel(cx),

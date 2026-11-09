@@ -2948,6 +2948,21 @@ pub(crate) struct PreparedTranscript {
 }
 
 impl TranscriptPreparation {
+    pub(crate) fn from_retained(
+        entries: Vec<SessionMessageEntry>,
+        prepared: Option<Arc<PreparedTranscript>>,
+    ) -> Self {
+        Self {
+            entries,
+            cache: prepared
+                .as_ref()
+                .map(|p| p.rows.clone())
+                .unwrap_or_default(),
+            baseline: prepared.map(|p| (*p.navigation_baseline).clone()),
+            ..Self::default()
+        }
+    }
+
     pub(crate) fn prepare(
         &mut self,
         update: &zuse_doc::TranscriptUpdate,
@@ -3554,6 +3569,10 @@ pub struct Transcript {
     /// only then may the working trailer render — a frozen snapshot must
     /// never spin, whatever its entries claim.
     doc_live: bool,
+    /// Work the chat's own session rows can't report yet, such as a cloud
+    /// computer starting or a first message on its way to the agent. While
+    /// set, the working line under the last message shows it.
+    external_activity: Option<SharedString>,
     /// Memory-only viewport state for primary chats visited in this window.
     /// A transcript instance is shared across tabs, so the active ListState is
     /// reset on every attach and cannot retain these positions by itself.
@@ -3657,6 +3676,10 @@ pub struct Transcript {
     /// identity, so the virtual list must explicitly discard cached heights.
     typography_generation: u32,
     content_width: f32,
+    /// Reading column width, captured in `render` before the list lays out.
+    /// Row rendering runs while the list holds its RefCell mutably, so rows
+    /// must use this instead of reading the `ListState` back.
+    reading_column_width: f32,
     /// Review fixture: every work group renders open.
     #[cfg(feature = "browser-fixture")]
     fixture_open_groups: bool,
@@ -4040,6 +4063,7 @@ impl Transcript {
             retain_on_deselect: false,
             land_end_pending: doc_override.is_some() && !follow,
             doc_live: doc_override.is_some() && follow,
+            external_activity: None,
             doc_override,
             saved_viewports: SavedViewportCache::default(),
             pending_viewport: None,
@@ -4074,6 +4098,7 @@ impl Transcript {
             rendered_rows: HashSet::new(),
             typography_generation: crate::typography::generation(cx),
             content_width: crate::settings::transcript_width(cx),
+            reading_column_width: crate::settings::transcript_width(cx),
             #[cfg(feature = "browser-fixture")]
             fixture_open_groups: false,
             code_fences_generation: crate::settings::code_fences_generation(cx),
@@ -4161,6 +4186,21 @@ impl Transcript {
             active: Some(0),
         });
         cx.notify();
+    }
+
+    /// Show `label` in the working line until cleared. The chat's own live
+    /// turn, when there is one, still takes precedence.
+    pub(crate) fn set_external_activity(
+        &mut self,
+        label: Option<SharedString>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.external_activity != label {
+            self.external_activity = label;
+            // The working line grows the last row; the list caches its height.
+            self.remeasure_last_row();
+            cx.notify();
+        }
     }
 
     pub fn set_rail_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
@@ -7261,12 +7301,7 @@ impl Transcript {
             .and_then(|id| self.state.read(cx).chats.iter().find(|chat| chat.id == id))
             .and_then(|chat| chat.config.as_ref())
             .map(|config| crate::pickers::harness_brand_icon(config.harness).0);
-        let list_width = f32::from(self.list.viewport_bounds().size.width);
-        let column = if list_width > 0.0 {
-            self.content_width.min(list_width.max(1.0))
-        } else {
-            self.content_width
-        };
+        let column = self.reading_column_width;
         let working = run == RunStatus::Working;
         let reduce_motion = cx.reduce_motion();
         if working {
@@ -8040,6 +8075,11 @@ impl Transcript {
                 }
                 let state = self.state.read(cx);
                 let turn_started = state.session_for(&chat_id).and_then(|s| s.started_at);
+                if state.indicator_for(&chat_id, now) != crate::state::Indicator::Working
+                    && let Some(label) = self.external_activity.clone()
+                {
+                    return Some(self.render_activity_line(label, None, None, false, cx));
+                }
                 if state.indicator_for(&chat_id, now) != crate::state::Indicator::Working {
                     // The turn settled but subagents it spawned still stream:
                     // the agent resumes when they report, so the trailer holds
@@ -8114,51 +8154,70 @@ impl Transcript {
         } else {
             format!("{agent} is working")
         };
+        Some(self.render_activity_line(
+            SharedString::from(word),
+            Some(turn),
+            (!sending && waiting == 0).then(|| format_elapsed(elapsed_secs)),
+            queued,
+            cx,
+        ))
+    }
+
+    /// The working line: the animated glyph, a rolling word and, during a
+    /// turn, its elapsed time. `turn` keys the rolling text so a new turn's
+    /// labels appear fresh.
+    fn render_activity_line(
+        &self,
+        word: SharedString,
+        turn: Option<i64>,
+        timer: Option<String>,
+        warn: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let turn = turn.unwrap_or_default();
         let theme = Theme::of(cx).clone();
-        Some(
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(px(Theme::SPACE_SM))
-                .pt(px(Theme::SPACE_LG))
-                .text_size(crate::typography::text_xs())
-                .child(crate::loaders::dither_ring(
-                    format!("working-mark-{}", cx.entity_id()),
-                    14.0,
-                    theme.text_muted,
-                ))
-                .child(
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(Theme::SPACE_SM))
+            .pt(px(Theme::SPACE_LG))
+            .text_size(crate::typography::text_xs())
+            .child(crate::loaders::dither_ring(
+                format!("working-mark-{}", cx.entity_id()),
+                14.0,
+                theme.text_muted,
+            ))
+            .child(
+                div()
+                    .text_size(crate::typography::text_xs())
+                    .text_color(if warn {
+                        theme.warning
+                    } else {
+                        theme.text_muted
+                    })
+                    .child(crate::roll_text::roll_text(
+                        format!("working-word-{}-{turn}", cx.entity_id()),
+                        word,
+                        cx.reduce_motion(),
+                    )),
+            )
+            .when_some(timer, |el, timer| {
+                // The timer ticks every second; its digits roll in place
+                // (the unit suffix holds).
+                el.child(
                     div()
-                        .text_size(crate::typography::text_xs())
-                        .text_color(if queued {
-                            theme.warning
-                        } else {
-                            theme.text_muted
-                        })
+                        .relative()
+                        .top(px(1.0))
+                        .text_color(theme.text_faint)
                         .child(crate::roll_text::roll_text(
-                            format!("working-word-{}-{turn}", cx.entity_id()),
-                            SharedString::from(word),
+                            format!("working-timer-{}-{turn}", cx.entity_id()),
+                            SharedString::from(timer),
                             cx.reduce_motion(),
                         )),
                 )
-                .when(!sending && waiting == 0, |el| {
-                    // The timer ticks every second; its digits roll in place
-                    // (the unit suffix holds).
-                    el.child(
-                        div()
-                            .relative()
-                            .top(px(1.0))
-                            .text_color(theme.text_faint)
-                            .child(crate::roll_text::roll_text(
-                                format!("working-timer-{}-{turn}", cx.entity_id()),
-                                SharedString::from(format_elapsed(elapsed_secs)),
-                                cx.reduce_motion(),
-                            )),
-                    )
-                })
-                .into_any_element(),
-        )
+            })
+            .into_any_element()
     }
 
     fn render_row(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -11534,6 +11593,7 @@ impl Render for Transcript {
             } else {
                 self.content_width
             };
+            self.reading_column_width = column;
             released.extend(diagrams.set_view((column.max(1.0), 480.0), window.scale_factor()));
             released
         };
@@ -11691,6 +11751,41 @@ impl Render for Transcript {
                 cx.entity_id().as_u64(),
             ))
             .child(content);
+        let history = self
+            .state
+            .read(cx)
+            .native_history_status(self.doc_override.as_deref());
+        let root = root.children(history.map(|loading| {
+            let state = self.state.clone();
+            let doc = self.doc_override.clone();
+            let theme = Theme::of(cx).clone();
+            div()
+                .absolute()
+                .top(if self.doc_override.is_some() {
+                    px(8.)
+                } else {
+                    px(Theme::TITLEBAR_HEIGHT + 8.)
+                })
+                .left(px(16.))
+                .id("load-earlier-messages")
+                .px_3()
+                .py_1()
+                .rounded_md()
+                .bg(theme.element_hover)
+                .text_sm()
+                .text_color(theme.text_muted)
+                .cursor_pointer()
+                .child(if loading {
+                    tr(cx, msg::chat::cloud_history_loading)
+                } else {
+                    tr(cx, msg::chat::cloud_history_load_earlier)
+                })
+                .on_click(move |_, _, cx| {
+                    state.update(cx, |state, cx| {
+                        state.load_earlier_native(doc.as_deref(), cx)
+                    })
+                })
+        }));
         let root = root.children(self.render_find_bar(cx));
         let root = root.children(self.render_image_menu(cx));
         // Full-size viewer for a clicked user-bubble thumbnail
@@ -14750,6 +14845,31 @@ mod tests {
                 let _ = window.draw(cx);
             })
             .unwrap();
+        }
+
+        #[test]
+        fn workflow_board_row_renders_inside_list_layout() {
+            with_window(|transcript, window, cx| {
+                let entry = assistant(
+                    "workflow",
+                    MessageStatus::Complete,
+                    vec![workflow_part(None, Some(SubagentStatus::Running))],
+                );
+                transcript.update(cx, |this, cx| {
+                    this.rows = rows_for_entry(&entry, false, false, &mut parse);
+                    assert!(
+                        this.rows
+                            .iter()
+                            .any(|row| matches!(row.kind, RowKind::WorkflowRun { .. }))
+                    );
+                    this.list.reset(this.rows.len());
+                    this.rail_enabled = false;
+                    cx.notify();
+                });
+                // The second frame has measured bounds, like any settled chat.
+                draw(window, cx);
+                draw(window, cx);
+            });
         }
 
         #[test]

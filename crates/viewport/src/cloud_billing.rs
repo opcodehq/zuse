@@ -412,6 +412,7 @@ impl WorkspaceView {
                 view::Action::ToggleUsageHistory => {
                     this.billing.history_open = !this.billing.history_open
                 }
+                view::Action::OpenBilling | view::Action::OpenUsage | view::Action::OpenAgents => {}
             }
             cx.notify();
         };
@@ -447,9 +448,9 @@ impl WorkspaceView {
             )
         });
         if self.billing.tab == crate::cloud_settings::Tab::Setup {
-            if self.billing.subscribed == Some(true) {
-                body = body.child(self.repository_panel.clone());
-            }
+            // Account/repository/environment setup is available before compute
+            // entitlement. Allocation keeps its independent server-side gate.
+            body = body.child(self.repository_panel.clone());
         } else {
             if storage {
                 body = body.child(self.repository_panel.clone());

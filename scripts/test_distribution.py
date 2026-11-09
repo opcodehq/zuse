@@ -184,6 +184,59 @@ class DistributionTests(unittest.TestCase):
                     self.assertRaisesRegex(ValueError, 'clean immutable release tag'):
                 prepare.main()
 
+    def test_staged_archive_from_this_run_is_verified_like_a_cached_one(self):
+        prepare = fixtures.load('prepare_distribution', 'prepare-distribution.py')
+        revision = 'a' * 40
+        manifest_path = self.package / 'manifest.json'
+        manifest = json.loads(manifest_path.read_text())
+        manifest['provenance'] = {'source_revision': revision, 'working_tree_dirty': False}
+        manifest_path.write_text(json.dumps(manifest))
+        self.write_archive()
+        incoming = self.fixture.root / 'incoming'
+        incoming.mkdir()
+        (incoming / self.archive.name).write_bytes(self.archive.read_bytes())
+        output = self.fixture.root / 'outputs'
+        argv = ['prepare-distribution.py', '--tag', 'v0.25.0', '--platform', 'linux', '--arch', 'x86_64', '--staged']
+        with chdir(self.fixture.root), patch.dict(os.environ, GITHUB_OUTPUT=str(output)), patch.object(sys, 'argv', argv), \
+                patch.object(prepare.subprocess, 'check_output', return_value=revision + '\n'):
+            prepare.main()
+        self.assertIn('found=true', output.read_text())
+        self.assertIn(self.archive.name, (incoming / 'SHA256SUMS').read_text())
+        with chdir(self.fixture.root), patch.dict(os.environ, GITHUB_OUTPUT=str(output)), patch.object(sys, 'argv', argv), \
+                patch.object(prepare.subprocess, 'check_output', return_value='b' * 40 + '\n'), \
+                self.assertRaisesRegex(ValueError, 'clean immutable release tag'):
+            prepare.main()
+
+    def test_apple_service_drops_are_retried_then_surface(self):
+        calls, naps = [], []
+        def flaky(command, **options):
+            calls.append(command)
+            if len(calls) < 3:
+                raise subprocess.CalledProcessError(68, command)
+            return 'stapled'
+        self.assertEqual(distribution.retrying(flaky, sleep=naps.append)(['xcrun', 'stapler', 'validate', 'Zuse.app'], check=True), 'stapled')
+        self.assertEqual((len(calls), naps), (3, [30, 60]))
+        def broken(command, **options):
+            raise subprocess.CalledProcessError(65, command)
+        with self.assertRaises(subprocess.CalledProcessError):
+            distribution.retrying(broken, attempts=2, sleep=naps.append)(['xcrun', 'stapler', 'staple', 'Zuse.app'])
+
+    def test_every_format_is_required_before_anything_is_published(self):
+        version = '0.26.0-preview.3'
+        complete = ['install.sh'] + [f'zuse-{version}-{name}' for name in (
+            'linux-x86_64.tar.gz', 'linux-x86_64.deb', 'linux-x86_64.rpm',
+            'linux-aarch64.tar.gz', 'linux-aarch64.deb', 'linux-aarch64.rpm',
+            'macos-aarch64.tar.gz', 'macos-aarch64.dmg',
+            'macos-x86_64.tar.gz', 'macos-x86_64.dmg',
+            'windows-x86_64.zip', 'windows-x86_64-setup.exe')]
+        self.assertEqual(publish_distributions.missing_assets('v' + version, complete), [])
+        archives_only = [name for name in complete if name.endswith(('.tar.gz', '.zip'))]
+        missing = publish_distributions.missing_assets('v' + version, archives_only)
+        self.assertIn(f'zuse-{version}-macos-aarch64.dmg', missing)
+        self.assertIn(f'zuse-{version}-windows-x86_64-setup.exe', missing)
+        with self.assertRaisesRegex(ValueError, 'macos-x86_64.dmg'):
+            publish_distributions.require_complete('v' + version, archives_only)
+
     def test_version_cannot_escape_the_release_url(self):
         bootstrap = bootstrap_module()
         for version in ('../../main', 'v0.26.0/escape', '0.26.0\n'):

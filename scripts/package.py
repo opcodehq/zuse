@@ -19,6 +19,8 @@ try:
 except ModuleNotFoundError:
     raise SystemExit("Packaging requires Python 3.11 or newer") from None
 
+from distribution import retrying
+
 ROOT = Path(__file__).resolve().parent.parent
 BINS = ("zuse", "zuse-server", "zuse-relay")
 HOST_SYSTEMS = {"Linux": "linux", "Darwin": "macos", "Windows": "windows"}
@@ -145,14 +147,15 @@ def sign_macos(app, run=subprocess.run):
     if not identity:
         return False
     keychain = os.environ.get("ZUSE_MACOS_KEYCHAIN")
+    apple = retrying(run)
     base = ["codesign", "--force", "--timestamp", "--options", "runtime", "--sign", identity]
     if keychain:
         base += ["--keychain", keychain]
     # Helpers first, then the bundle, whose seal covers the main executable.
     for name in BINS:
         if name != "zuse":
-            run(base + [str(app / "Contents/MacOS" / name)], check=True)
-    run(base + ["--entitlements", str(ROOT / "dist/macos/Zuse.entitlements"), str(app)], check=True)
+            apple(base + [str(app / "Contents/MacOS" / name)], check=True)
+    apple(base + ["--entitlements", str(ROOT / "dist/macos/Zuse.entitlements"), str(app)], check=True)
     run(["codesign", "--verify", "--strict", "--verbose=2", str(app)], check=True)
     apple_id, password, team = (os.environ.get(key) for key in (
         "APPLE_ID", "APPLE_APP_SPECIFIC_PASSWORD", "APPLE_TEAM_ID"))
@@ -161,17 +164,17 @@ def sign_macos(app, run=subprocess.run):
     with tempfile.TemporaryDirectory(prefix="zuse-notarize-") as temporary:
         upload = Path(temporary) / "Zuse.zip"
         run(["ditto", "-c", "-k", "--keepParent", str(app), str(upload)], check=True)
-        submitted = run(["xcrun", "notarytool", "submit", str(upload), "--apple-id", apple_id,
-                         "--password", password, "--team-id", team, "--wait",
-                         "--output-format", "json"], check=True, capture_output=True, text=True)
+        submitted = apple(["xcrun", "notarytool", "submit", str(upload), "--apple-id", apple_id,
+                           "--password", password, "--team-id", team, "--wait",
+                           "--output-format", "json"], check=True, capture_output=True, text=True)
         result = json.loads(submitted.stdout)
         if result.get("status") != "Accepted":
             run(["xcrun", "notarytool", "log", result.get("id", ""), "--apple-id", apple_id,
                  "--password", password, "--team-id", team], check=False)
             raise ValueError(f"Notarization was not accepted: {result.get('status')}")
-    run(["xcrun", "stapler", "staple", str(app)], check=True)
-    run(["xcrun", "stapler", "validate", str(app)], check=True)
-    run(["spctl", "--assess", "--type", "execute", "--verbose=2", str(app)], check=True)
+    apple(["xcrun", "stapler", "staple", str(app)], check=True)
+    apple(["xcrun", "stapler", "validate", str(app)], check=True)
+    apple(["spctl", "--assess", "--type", "execute", "--verbose=2", str(app)], check=True)
     return True
 
 
@@ -270,6 +273,7 @@ def main():
     stage = parser.add_mutually_exclusive_group()
     stage.add_argument("--build-only", action="store_true", help="Build the web assets and executables, then stop")
     stage.add_argument("--skip-build", action="store_true", help="Assemble what --build-only produced in this checkout")
+    parser.add_argument("--skip-web", action="store_true", help="Use the browser assets already in dist/web")
     args = parser.parse_args()
     workspace_version = tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"]["package"]["version"]
     version = args.version or workspace_version
@@ -286,7 +290,8 @@ def main():
         if args.assets.resolve() != (ROOT / "dist/web").resolve():
             parser.error("Default builds produce dist/web; use --binaries to assemble other assets")
         if not args.skip_build:
-            subprocess.run([bash(), "scripts/build-web.sh", "--release"], cwd=ROOT, check=True)
+            if not args.skip_web:
+                subprocess.run([bash(), "scripts/build-web.sh", "--release"], cwd=ROOT, check=True)
             subprocess.run(["cargo", "+stable", "build", "--locked", "--profile", args.profile,
                             "-p", "zuse", "-p", "zuse-cli", "-p", "zuse-relay", "--bins"], cwd=ROOT, check=True)
         if args.build_only:

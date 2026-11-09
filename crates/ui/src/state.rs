@@ -51,6 +51,7 @@ struct CachedTranscript {
     entries: Vec<SessionMessageEntry>,
     context_usage: Option<zuse_protocol::ContextUsage>,
     bytes: usize,
+    history: NativeHistory,
 }
 
 // A cancelled GPUI watch may own a whale's mirror between updates. Its
@@ -60,12 +61,6 @@ struct WatchPreparation {
     executor: gpui::BackgroundExecutor,
 }
 impl WatchPreparation {
-    fn new(executor: gpui::BackgroundExecutor) -> Self {
-        Self {
-            worker: Some(Default::default()),
-            executor,
-        }
-    }
     fn prepare(
         &mut self,
         update: &zuse_doc::TranscriptUpdate,
@@ -88,8 +83,12 @@ impl Drop for WatchPreparation {
 // Engine handle
 // ---------------------------------------------------------------------------
 
+mod history_window;
+use history_window::{HistoryFrame, NativeHistory, WatchSeed};
+
 mod account_connection;
 mod cloud_connection;
+mod cloud_sidebar;
 pub use cloud_connection::CloudTarget;
 mod remote_connection;
 pub use account_connection::{AccountTarget, RemoteTarget};
@@ -631,7 +630,7 @@ impl EngineHandle {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "appshots-fixture"))]
     pub(crate) fn from_test_client(client: RpcClient) -> Self {
         Self {
             inner: Arc::new(RemoteEngine {
@@ -907,6 +906,8 @@ struct PendingChatArchive {
 /// are plain `&mut self` functions so tests construct the struct directly; gpui
 /// glue ([`Self::bootstrap`], [`Self::select_chat`]) layers subscriptions on top.
 pub struct AppState {
+    pub zots: Vec<zuse_protocol::zots::Zot>,
+    zot_watches: HashMap<String, Task<()>>,
     pub connection: ConnectionStatus,
     /// Fixed data boundary of the attached engine. Authentication may change
     /// in place, but changing this scope requires assembling a new runtime.
@@ -915,6 +916,7 @@ pub struct AppState {
     pub auth: Option<AuthState>,
     /// Account identity for cloud features, independent of device/workspace auth.
     pub cloud_account: Option<serde_json::Value>,
+    cloud_sidebar: cloud_sidebar::Catalog,
     pub devices: Vec<Device>,
     pub project_creations: HashMap<String, Vec<zuse_protocol::project_creation::ProjectCreation>>,
     project_creation_watches: HashMap<String, Task<()>>,
@@ -984,12 +986,14 @@ pub struct AppState {
     /// agent was busy, in the order it will be sent. Device-agnostic: the
     /// chat's doc holds them (every device sees the same queue).
     pub queue: Vec<zuse_doc::QueuedMessage>,
+    pub(crate) cloud_queue_revisions: HashMap<(String, String), i64>,
     pub context_usage: Option<zuse_protocol::ContextUsage>,
     /// The selected chat has a transcript from a `WatchDocMessages` reset
     /// (including a retained reset from an earlier visit). An
     /// empty transcript is otherwise indistinguishable from the pre-replay
     /// gap after selection, where optimistic echoes may already be visible.
     pub transcript_replayed: bool,
+    transcript_history: NativeHistory,
     transcript_baselines: HashMap<String, Arc<zuse_doc::TranscriptBaseline>>,
     transcript_cache: std::collections::VecDeque<CachedTranscript>,
     pub(crate) prepared_transcripts: HashMap<String, Arc<crate::transcript::PreparedTranscript>>,
@@ -1045,6 +1049,7 @@ pub struct AppState {
     /// subagent tabs read these). Independent of `selected_chat`: a tab's
     /// feed must survive chat switches — the tab itself is what scopes it.
     sub_transcripts: HashMap<String, Vec<SessionMessageEntry>>,
+    sub_history: HashMap<String, NativeHistory>,
     /// One watch task per live subagent doc (single-flight per key).
     /// Dropping a task cancels the engine-side watch and unpins the doc from
     /// the engine LRU — closing a tab MUST go through
@@ -1114,10 +1119,13 @@ impl Default for AppState {
 impl AppState {
     pub fn new() -> Self {
         Self {
+            zots: Vec::new(),
+            zot_watches: HashMap::new(),
             connection: ConnectionStatus::Connecting,
             workspace_scope: None,
             auth: None,
             cloud_account: None,
+            cloud_sidebar: Default::default(),
             devices: Vec::new(),
             project_creations: HashMap::new(),
             project_creation_watches: HashMap::new(),
@@ -1145,8 +1153,10 @@ impl AppState {
             pending_cloud_resume: None,
             transcript: Vec::new(),
             queue: Vec::new(),
+            cloud_queue_revisions: HashMap::new(),
             context_usage: None,
             transcript_replayed: false,
+            transcript_history: NativeHistory::default(),
             transcript_baselines: HashMap::new(),
             transcript_cache: Default::default(),
             prepared_transcripts: HashMap::new(),
@@ -1173,6 +1183,7 @@ impl AppState {
             queue_task: None,
             change_requests_visible: true,
             sub_transcripts: HashMap::new(),
+            sub_history: HashMap::new(),
             sub_watch_tasks: HashMap::new(),
             auto_selected: false,
             chats_synced: false,
@@ -1575,6 +1586,7 @@ impl AppState {
             self.context_usage = None;
             self.transcript_revision = self.transcript_revision.wrapping_add(1);
             self.transcript_replayed = false;
+            self.transcript_history = NativeHistory::default();
             self.transcript_task = None;
             self.queue.clear();
             self.queue_task = None;
@@ -1619,6 +1631,94 @@ impl AppState {
         }
         self.heal_space_selection();
         changed || self.selected_space != previous_selection
+    }
+
+    /// Whether the selected chat is a Zot's coordinator, current or earlier.
+    /// These run in the Zot's own folder, with no repository or checkout.
+    pub fn selected_chat_is_zot_coordinator(&self) -> bool {
+        self.selected_chat.as_ref().is_some_and(|chat| {
+            self.zots.iter().any(|z| {
+                &z.coordinator_chat_id == chat || z.previous_coordinator_chats.contains(chat)
+            })
+        })
+    }
+
+    pub fn apply_zots(&mut self, zots: Vec<zuse_protocol::zots::Zot>) -> bool {
+        if self.zots == zots {
+            return false;
+        }
+        self.zots = zots;
+        true
+    }
+
+    fn reconcile_zot_watches(&mut self, cx: &mut Context<Self>) {
+        let Some(handle) = self.engine.clone() else {
+            return;
+        };
+        if !handle
+            .engine_info()
+            .supports(zuse_protocol::zots::CAPABILITY)
+        {
+            return;
+        }
+        let local = handle.engine_info().device_id.clone();
+        let mut devices: Vec<String> = self.devices.iter().map(|d| d.id.clone()).collect();
+        if !devices.contains(&local) {
+            devices.push(local);
+        }
+        self.zot_watches.retain(|id, _| devices.contains(id));
+        for device in devices {
+            if self.zot_watches.contains_key(&device) {
+                continue;
+            }
+            let engine = handle.clone();
+            let target = device.clone();
+            let task = cx.spawn(async move |this, cx| {
+                loop {
+                    let mut stream = match engine
+                        .client()
+                        .subscribe_scoped(
+                            zuse_protocol::control::WATCH_ZOTS,
+                            serde_json::json!({"targetDeviceId":target}),
+                        )
+                        .await
+                    {
+                        Ok(stream) => stream,
+                        Err(_) => {
+                            cx.background_executor()
+                                .timer(std::time::Duration::from_secs(3))
+                                .await;
+                            continue;
+                        }
+                    };
+                    while let Some(value) = stream.recv().await {
+                        let Ok(zots) =
+                            serde_json::from_value::<Vec<zuse_protocol::zots::Zot>>(value)
+                        else {
+                            continue;
+                        };
+                        if this
+                            .update(cx, |state, cx| {
+                                state.zots.retain(|z| z.config.home_device_id != target);
+                                state.zots.extend(zots);
+                                state.zots.sort_by(|a, b| a.config.name.cmp(&b.config.name));
+                                cx.notify();
+                            })
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                    if this.update(cx, |_, _| {}).is_err() {
+                        return;
+                    }
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_secs(3))
+                        .await;
+                }
+            });
+            self.zot_watches.insert(device, task);
+        }
     }
 
     fn heal_space_selection(&mut self) {
@@ -1911,12 +2011,24 @@ impl AppState {
         if self.cloud_account.as_ref() == Some(&value) {
             return false;
         }
+        let scope_changed = self
+            .cloud_account
+            .as_ref()
+            .map(|old| (&old["user"]["id"], &old["orgId"]))
+            != Some((&value["user"]["id"], &value["orgId"]));
+        if scope_changed {
+            self.clear_cloud_sidebar();
+        }
         self.cloud_account = Some(value);
         true
     }
 
     pub fn cloud_user_id(&self) -> Option<&str> {
         self.cloud_account.as_ref()?["user"]["id"].as_str()
+    }
+
+    pub fn cloud_organization_id(&self) -> Option<&str> {
+        self.cloud_account.as_ref()?["orgId"].as_str()
     }
 
     /// The signed-in user, if the engine reports one.
@@ -2068,7 +2180,9 @@ impl AppState {
             return;
         };
         self.sub_transcripts.entry(doc_id.clone()).or_default();
-        let task = spawn_subagent_watch(cx, handle, doc_id.clone());
+        let history = self.sub_history.entry(doc_id.clone()).or_default();
+        history.generation = uuid::Uuid::new_v4();
+        let task = spawn_subagent_watch(cx, handle, doc_id.clone(), history.generation);
         self.sub_watch_tasks.insert(doc_id, task);
     }
 
@@ -2078,6 +2192,7 @@ impl AppState {
         self.transcript_revision = self.transcript_revision.wrapping_add(1);
         self.sub_watch_tasks.remove(doc_id);
         self.sub_transcripts.remove(doc_id);
+        self.sub_history.remove(doc_id);
         self.prepared_transcripts.remove(doc_id);
         self.transcript_baselines.remove(doc_id);
     }
@@ -2088,6 +2203,7 @@ impl AppState {
         self.prepared_transcripts.remove(&doc_id);
         self.transcript_revision = self.transcript_revision.wrapping_add(1);
         self.sub_watch_tasks.remove(&doc_id);
+        self.sub_history.remove(&doc_id);
         self.transcript_baselines.insert(
             doc_id.clone(),
             Arc::new(zuse_doc::TranscriptBaseline::capture(&entries)),
@@ -2103,6 +2219,7 @@ impl AppState {
     ) {
         self.transcript_revision = self.transcript_revision.wrapping_add(1);
         self.sub_watch_tasks.remove(&doc_id);
+        self.sub_history.remove(&doc_id);
         self.transcript_baselines
             .insert(doc_id.clone(), prepared.navigation_baseline.clone());
         self.prepared_transcripts.insert(doc_id.clone(), prepared);
@@ -2460,6 +2577,7 @@ impl AppState {
         let mut chats: Vec<&Chat> = self
             .visible_chats()
             .filter(|c| c.space_id.as_deref() == Some(space_id))
+            .filter(|c| !zuse_protocol::presentation::zot_panel::zot_owns_chat(&self.zots, &c.id))
             .collect();
         sort_tabs(&mut chats);
         chats
@@ -2553,6 +2671,10 @@ impl AppState {
         }
         rows.into_iter()
             .filter(|(_, chat)| chat.thread_id.is_none() && in_filter(chat))
+            // Zots list their own threads; projects don't repeat them.
+            .filter(|(_, chat)| {
+                !zuse_protocol::presentation::zot_panel::zot_owns_chat(&self.zots, &chat.id)
+            })
             .map(|(status, chat)| {
                 (
                     thread_status
@@ -2863,6 +2985,8 @@ impl AppState {
     /// stopped. The next bootstrap must never render rows from the previous
     /// account while the local profile is opening.
     pub fn prepare_runtime_replacement(&mut self, cx: &mut Context<Self>) {
+        self.zots.clear();
+        self.zot_watches.clear();
         self.engine = None;
         self.chat_configuration = Default::default();
         self.watch_tasks.clear();
@@ -2901,6 +3025,10 @@ impl AppState {
         self.context_usage = None;
         self.transcript_revision = self.transcript_revision.wrapping_add(1);
         self.transcript_replayed = false;
+        self.transcript_history = NativeHistory::default();
+        self.sub_watch_tasks.clear();
+        self.sub_transcripts.clear();
+        self.sub_history.clear();
         self.echoes.clear();
         self.pending_sends.clear();
         self.upload_progress = None;
@@ -3005,7 +3133,13 @@ impl AppState {
         let Some(handle) = self.engine.clone() else {
             return;
         };
-        self.transcript_task = Some(spawn_transcript_watch(cx, handle.clone(), chat_id.clone()));
+        self.transcript_history.generation = uuid::Uuid::new_v4();
+        self.transcript_task = Some(spawn_transcript_watch(
+            cx,
+            handle.clone(),
+            chat_id.clone(),
+            self.transcript_history.generation,
+        ));
         if handle
             .engine_info()
             .supports(zuse_protocol::capabilities::MESSAGE_QUEUE_V1)
@@ -3084,6 +3218,33 @@ impl AppState {
         true
     }
 
+    /// Retire a cloud computer's execution subscriptions without clearing its
+    /// account-owned conversation, transcript, queue or current selection.
+    pub(crate) fn detach_cloud_conversation_execution(&mut self, cx: &mut Context<Self>) {
+        self.engine = None;
+        self.watch_tasks.clear();
+        self.transcript_task = None;
+        self.change_request_tasks.clear();
+        self.change_requests = ChangeRequestClientState::default();
+        self.reset_configuration_transport();
+        self.workspace_scope = None;
+        self.connection = ConnectionStatus::Connecting;
+        cx.notify();
+    }
+
+    /// Install execution only in an already-selected native cloud conversation.
+    /// The controller/navigation state must never call this method.
+    pub(crate) fn attach_cloud_conversation(
+        &mut self,
+        handle: EngineHandle,
+        session: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.attach_engine(handle, cx);
+        self.select_chat(Some(session), cx);
+        cx.notify();
+    }
+
     /// Wire the connected engine: mark Ready and start the standing watches.
     /// Methods the engine doesn't serve yet (chats/devices/auth land with the
     /// workspace doc in M4) fail their subscribe and are skipped gracefully.
@@ -3092,6 +3253,7 @@ impl AppState {
         self.project_creations.clear();
         self.reset_configuration_transport();
         self.cloud_account = None;
+        self.clear_cloud_sidebar();
         // The attachment notification precedes the first connectivity frame.
         // Make that bootstrap gap explicit so the shell resets its alert
         // baseline instead of comparing the new runtime with the old one.
@@ -3189,6 +3351,7 @@ impl AppState {
                 AppState::apply_cloud_account,
             ),
             spawn_local_device_probe(cx, handle.clone()),
+            cloud_sidebar::spawn(cx, handle.controller()),
         ]);
         if supports_harness_updates {
             watch_tasks.push(spawn_watch(
@@ -3199,6 +3362,7 @@ impl AppState {
             ));
         }
         self.watch_tasks = watch_tasks;
+        self.reconcile_zot_watches(cx);
         self.reconcile_change_request_watches(cx);
         // EngineInfo is part of the attachment boundary: views must know which
         // data profile they reached before they are allowed to render Ready.
@@ -3206,8 +3370,13 @@ impl AppState {
         self.reconcile_configuration_watch(cx);
         // Re-subscribe the transcript if a chat was already selected (reconnect path).
         if let Some(chat_id) = self.selected_chat.clone() {
-            self.transcript_task =
-                Some(spawn_transcript_watch(cx, handle.clone(), chat_id.clone()));
+            self.transcript_history.generation = uuid::Uuid::new_v4();
+            self.transcript_task = Some(spawn_transcript_watch(
+                cx,
+                handle.clone(),
+                chat_id.clone(),
+                self.transcript_history.generation,
+            ));
             if handle
                 .engine_info()
                 .supports(zuse_protocol::capabilities::MESSAGE_QUEUE_V1)
@@ -3401,6 +3570,7 @@ impl AppState {
                     chat_id: previous.clone(),
                     entries,
                     context_usage: self.context_usage,
+                    history: self.transcript_history.clone(),
                     bytes,
                 });
                 while self.transcript_cache.len() > TRANSCRIPT_CACHE_CAP
@@ -3426,6 +3596,7 @@ impl AppState {
         self.context_usage = None;
         self.transcript_revision = self.transcript_revision.wrapping_add(1);
         self.transcript_replayed = false;
+        self.transcript_history = NativeHistory::default();
         if let Some(cached) = cached {
             self.transcript_baselines.insert(
                 cached.chat_id.clone(),
@@ -3440,6 +3611,8 @@ impl AppState {
             if let Some(prepared) = cached.prepared {
                 self.prepared_transcripts.insert(cached.chat_id, prepared);
             }
+            self.transcript_history = cached.history;
+            self.transcript_history.loading = false;
             self.transcript = cached.entries;
             self.context_usage = cached.context_usage;
             self.transcript_replayed = true;
@@ -3637,7 +3810,7 @@ fn spawn_chats_watch(cx: &mut Context<AppState>, handle: EngineHandle) -> Task<(
         loop {
             let mut rx = match handle
                 .client()
-                .subscribe_scoped(methods::WATCH_CHATS, serde_json::json!({}))
+                .subscribe_scoped(methods::WATCH_CHATS, serde_json::json!({"delta":true}))
                 .await
             {
                 Ok(rx) => rx,
@@ -3650,14 +3823,20 @@ fn spawn_chats_watch(cx: &mut Context<AppState>, handle: EngineHandle) -> Task<(
                     continue;
                 }
             };
+            let mut retained = Vec::new();
             while let Some(value) = rx.recv().await {
-                let parsed: Vec<Chat> = match serde_json::from_value(value) {
-                    Ok(parsed) => parsed,
-                    Err(err) => {
-                        tracing::warn!(error = %err, "dropping malformed chats frame");
-                        continue;
-                    }
-                };
+                if let Err(error) = zuse_protocol::list_delta::apply(&mut retained, &value, "id") {
+                    tracing::warn!(error, "chat list delta desync; resubscribing");
+                    break;
+                }
+                let parsed: Vec<Chat> =
+                    match serde_json::from_value(serde_json::Value::Array(retained.clone())) {
+                        Ok(parsed) => parsed,
+                        Err(err) => {
+                            tracing::warn!(error = %err, "dropping malformed chats frame");
+                            continue;
+                        }
+                    };
                 let alive = this.update(cx, |state, cx| {
                     // Identical re-published lists skip the re-sort fan-out:
                     // watch reconciliation and a whole-shell re-render.
@@ -3840,9 +4019,17 @@ fn spawn_watch<T: DeserializeOwned + 'static>(
         // devices never arrived again — "the session never completes").
         const RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
         loop {
+            let delta = method == methods::WATCH_SESSIONS;
             let mut rx = match handle
                 .client()
-                .subscribe_scoped(method, serde_json::json!({}))
+                .subscribe_scoped(
+                    method,
+                    if delta {
+                        serde_json::json!({"delta":true})
+                    } else {
+                        serde_json::json!({})
+                    },
+                )
                 .await
             {
                 Ok(rx) => rx,
@@ -3855,7 +4042,19 @@ fn spawn_watch<T: DeserializeOwned + 'static>(
                     continue;
                 }
             };
+            let mut retained = Vec::new();
             while let Some(value) = rx.recv().await {
+                let value = if delta {
+                    if let Err(error) =
+                        zuse_protocol::list_delta::apply(&mut retained, &value, "chatId")
+                    {
+                        tracing::warn!(error, "session list delta desync; resubscribing");
+                        break;
+                    }
+                    serde_json::Value::Array(retained.clone())
+                } else {
+                    value
+                };
                 let parsed: T = match serde_json::from_value(value) {
                     Ok(parsed) => parsed,
                     Err(err) => {
@@ -3868,6 +4067,7 @@ fn spawn_watch<T: DeserializeOwned + 'static>(
                     let linked = state.apply_pending_deep_link(cx);
                     if changed && matches!(method, methods::WATCH_SPACES | methods::WATCH_DEVICES) {
                         state.reconcile_change_request_watches(cx);
+                        state.reconcile_zot_watches(cx);
                     }
                     if changed || linked {
                         cx.notify();
@@ -3924,6 +4124,7 @@ fn spawn_transcript_watch(
     cx: &mut Context<AppState>,
     handle: EngineHandle,
     chat_id: String,
+    generation: uuid::Uuid,
 ) -> Task<()> {
     // The scoped subscription cancels even a silent server stream on drop;
     // otherwise a deselected chat would retain its protected sync slot.
@@ -3938,7 +4139,29 @@ fn spawn_transcript_watch(
         // deselected or deleted, so retrying can't outlive relevance.
         const RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
         'resubscribe: loop {
-            let params = serde_json::json!({ "chatId": chat_id, "openingTail": true });
+            let Ok(Some(seed)) = this.update(cx, |state, _| {
+                (state.selected_chat.as_deref() == Some(chat_id.as_str())
+                    && state.transcript_history.generation == generation)
+                    .then(|| {
+                        WatchSeed::capture(
+                            &state.transcript_history,
+                            &state.transcript,
+                            state.prepared_transcripts.get(&chat_id).cloned(),
+                        )
+                    })
+            }) else {
+                return;
+            };
+            let request_chat = chat_id.clone();
+            let (params, worker, resume_requested) = cx
+                .background_executor()
+                .spawn(async move { seed.prepare(&request_chat) })
+                .await;
+            let mut preparation = WatchPreparation {
+                worker: Some(worker),
+                executor: cx.background_executor().clone(),
+            };
+            let mut opening = true;
             let mut rx = match handle
                 .client()
                 .subscribe_checked(methods::WATCH_DOC_MESSAGES, params)
@@ -3954,17 +4177,19 @@ fn spawn_transcript_watch(
                     continue 'resubscribe;
                 }
             };
-            let mut preparation = WatchPreparation::new(cx.background_executor().clone());
             while let Some(value) = rx.recv().await {
+                let history = HistoryFrame::parse(&value, resume_requested);
                 let history_pending = value
                     .get("historyPending")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
+                let validation = history.clone();
                 let decoded = cx
                     .background_executor()
                     .spawn(async move {
                         let update: zuse_doc::TranscriptUpdate =
                             serde_json::from_value(value).map_err(|e| e.to_string())?;
+                        validation.validate_opening(opening, &update.frame)?;
                         let prepared = preparation.prepare(&update).map_err(|e| e.to_string())?;
                         Ok::<_, String>((update, prepared, preparation))
                     })
@@ -3982,10 +4207,14 @@ fn spawn_transcript_watch(
                     }
                 };
                 preparation = next_preparation;
+                let was_opening = opening;
+                opening = false;
                 let mut desync = false;
                 let alive = this.update(cx, |state, cx| {
                     // Guard against a stale pump racing a newer selection.
-                    if state.selected_chat.as_deref() == Some(chat_id.as_str()) {
+                    if state.selected_chat.as_deref() == Some(chat_id.as_str())
+                        && state.transcript_history.generation == generation
+                    {
                         if history_pending && state.transcript_replayed {
                             return;
                         }
@@ -3995,7 +4224,15 @@ fn spawn_transcript_watch(
                             tracing::warn!(%chat_id, error = %err, "resubscribing transcript");
                             desync = true;
                         } else {
+                            let history_changed =
+                                state.transcript_history.receive(&history, was_opening);
+                            if history.resumed {
+                                state.transcript_replayed = true;
+                            }
                             state.prepared_transcripts.insert(chat_id.clone(), prepared);
+                            if history_changed || history.resumed {
+                                cx.notify();
+                            }
                         }
                     }
                 });
@@ -4051,6 +4288,16 @@ fn spawn_queue_watch(
                 }
             };
             while let Some(value) = rx.recv().await {
+                let revisions = value["items"]
+                    .as_array()
+                    .map(|rows| {
+                        rows.iter()
+                            .filter_map(|r| {
+                                Some((r["id"].as_str()?.to_owned(), r["revision"].as_i64()?))
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
                 let frame: QueueFrame = match serde_json::from_value(value) {
                     Ok(frame) => frame,
                     Err(err) => {
@@ -4061,6 +4308,14 @@ fn spawn_queue_watch(
                 let alive = this.update(cx, |state, cx| {
                     // Guard against a stale pump racing a newer selection.
                     if state.selected_chat.as_deref() == Some(chat_id.as_str()) {
+                        state
+                            .cloud_queue_revisions
+                            .retain(|(chat, _), _| chat != &chat_id);
+                        for (id, revision) in revisions {
+                            state
+                                .cloud_queue_revisions
+                                .insert((chat_id.clone(), id), revision);
+                        }
                         state.apply_queue(frame.items);
                         cx.notify();
                     }
@@ -4084,11 +4339,36 @@ fn spawn_subagent_watch(
     cx: &mut Context<AppState>,
     handle: EngineHandle,
     doc_id: String,
+    generation: uuid::Uuid,
 ) -> Task<()> {
     cx.spawn(async move |this, cx| {
         const RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
         'resubscribe: loop {
-            let params = serde_json::json!({ "chatId": doc_id });
+            let Ok(Some(seed)) = this.update(cx, |state, _| {
+                state
+                    .sub_history
+                    .get(&doc_id)
+                    .filter(|history| history.generation == generation)
+                    .map(|history| {
+                        WatchSeed::capture(
+                            history,
+                            state.sub_transcript(&doc_id),
+                            state.prepared_transcripts.get(&doc_id).cloned(),
+                        )
+                    })
+            }) else {
+                return;
+            };
+            let request_doc = doc_id.clone();
+            let (params, worker, resume_requested) = cx
+                .background_executor()
+                .spawn(async move { seed.prepare(&request_doc) })
+                .await;
+            let mut preparation = WatchPreparation {
+                worker: Some(worker),
+                executor: cx.background_executor().clone(),
+            };
+            let mut opening = true;
             let mut rx = match handle
                 .client()
                 .subscribe_checked(methods::WATCH_DOC_MESSAGES, params)
@@ -4104,13 +4384,15 @@ fn spawn_subagent_watch(
                     continue 'resubscribe;
                 }
             };
-            let mut preparation = WatchPreparation::new(cx.background_executor().clone());
             while let Some(value) = rx.recv().await {
+                let history = HistoryFrame::parse(&value, resume_requested);
+                let validation = history.clone();
                 let decoded = cx
                     .background_executor()
                     .spawn(async move {
                         let update: zuse_doc::TranscriptUpdate =
                             serde_json::from_value(value).map_err(|e| e.to_string())?;
+                        validation.validate_opening(opening, &update.frame)?;
                         let prepared = preparation.prepare(&update).map_err(|e| e.to_string())?;
                         Ok::<_, String>((update, prepared, preparation))
                     })
@@ -4124,9 +4406,18 @@ fn spawn_subagent_watch(
                     }
                 };
                 preparation = next_preparation;
+                let was_opening = opening;
+                opening = false;
                 let mut desync = false;
                 let alive = this.update(cx, |state, cx| {
-                    // A stale pump racing a snapshot/unwatch finds no key.
+                    // Same-doc pagination and frozen snapshots invalidate old pumps too.
+                    if !state
+                        .sub_history
+                        .get(&doc_id)
+                        .is_some_and(|h| h.generation == generation)
+                    {
+                        return;
+                    }
                     if let Some(rows) = state.sub_transcripts.get_mut(&doc_id) {
                         let frame = update.frame;
                         let text_only = is_text_append(&frame);
@@ -4136,6 +4427,11 @@ fn spawn_subagent_watch(
                             desync = true;
                         }
                         if !desync {
+                            state
+                                .sub_history
+                                .get_mut(&doc_id)
+                                .unwrap()
+                                .receive(&history, was_opening);
                             state.prepared_transcripts.insert(doc_id.clone(), prepared);
                         }
                         if !desync && let Some(baseline) = update.replay_baseline {
@@ -6921,6 +7217,15 @@ mod tests {
 #[cfg(any(feature = "appshots-fixture", feature = "pull-request-fixture"))]
 impl AppState {
     /// Keep fixture documents deterministic while using the real attachment RPC.
+    pub fn fixture_cloud_sidebar_catalog(
+        &mut self,
+        client: RpcClient,
+        context: &serde_json::Value,
+        list: &serde_json::Value,
+    ) -> bool {
+        self.engine = Some(EngineHandle::from_test_client(client));
+        self.apply_cloud_sidebar_catalog(context, list)
+    }
     pub fn fixture_attachment_engine(&mut self, engine: EngineHandle) {
         self.engine = Some(engine);
     }

@@ -28,6 +28,8 @@ pub struct EngineProfile {
     org_id: String,
     user_id: String,
     durable_command_commits: bool,
+    managed_recovery: bool,
+    preparation_pending: bool,
 }
 
 impl EngineProfile {
@@ -43,6 +45,8 @@ impl EngineProfile {
             org_id: LOCAL_ORG_ID.to_string(),
             user_id: profile_id,
             durable_command_commits: false,
+            managed_recovery: false,
+            preparation_pending: false,
         })
     }
 
@@ -69,6 +73,8 @@ impl EngineProfile {
             org_id: org_id.to_string(),
             user_id: user_id.to_string(),
             durable_command_commits: false,
+            managed_recovery: false,
+            preparation_pending: false,
         }
     }
 
@@ -76,6 +82,22 @@ impl EngineProfile {
     pub fn with_durable_command_commits(mut self) -> Self {
         self.durable_command_commits = true;
         self
+    }
+    /// Managed computers recover receipts and retained context, never blindly
+    /// redispatch the last prompt after an uncertain process interruption.
+    pub fn with_managed_recovery(mut self) -> Self {
+        self.managed_recovery = true;
+        self
+    }
+    pub(crate) fn managed_recovery(&self) -> bool {
+        self.managed_recovery
+    }
+    pub fn with_preparation_pending(mut self) -> Self {
+        self.preparation_pending = true;
+        self
+    }
+    pub(crate) fn preparation_pending(&self) -> bool {
+        self.preparation_pending
     }
     pub(crate) fn durable_command_commits(&self) -> bool {
         self.durable_command_commits

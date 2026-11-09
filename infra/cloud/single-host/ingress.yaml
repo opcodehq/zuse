@@ -1,0 +1,36 @@
+services:
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    environment:
+      PRODUCTION_DOMAIN: ${PRODUCTION_DOMAIN:?}
+      STAGING_DOMAIN: ${STAGING_DOMAIN:?}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    cpus: 0.5
+    mem_limit: 128m
+    pids_limit: 128
+    security_opt: [no-new-privileges:true]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks: [production, staging]
+
+networks:
+  production:
+    name: zuse-production-edge
+    enable_ipv6: true
+  staging:
+    name: zuse-staging-edge
+    enable_ipv6: true
+
+volumes:
+  caddy-data:
+  caddy-config:

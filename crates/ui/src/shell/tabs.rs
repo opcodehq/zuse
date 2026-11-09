@@ -156,6 +156,7 @@ impl Shell {
         self.overlay_owns_keyboard(cx)
             || self.sync_flow.has_visible_overlay()
             || self.delete_confirm.is_some()
+            || self.zot_ui.dialog.is_some()
             || self.delete_space_confirm.is_some()
             || self.chat_rename.is_some()
             || self.rename_space_dialog.is_some()
@@ -179,7 +180,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         self.navigation_focus.right_was_focused = true;
-        self.composer
+        self.conversation_composer(cx)
             .update(cx, |composer, _| composer.focus_pending = false);
         // Establish a stable target before detaching the old editor. Read-only
         // surfaces keep it; editable surfaces claim their own focus below/on mount.
@@ -197,13 +198,13 @@ impl Shell {
             self.activate_right_surface(self.resolved_right_active(cx), window, cx);
         } else {
             self.navigation_focus.right_was_focused = false;
-            window.focus(&self.composer.focus_handle(cx), cx);
+            window.focus(&self.conversation_composer(cx).focus_handle(cx), cx);
         }
     }
 
     /// Navigation requests focus once the destination composer renders.
     pub(super) fn focus_composer(&mut self, cx: &mut Context<Self>) {
-        self.composer.update(cx, |composer, cx| {
+        self.conversation_composer(cx).update(cx, |composer, cx| {
             composer.focus_pending = true;
             cx.notify();
         });
@@ -235,6 +236,9 @@ impl Shell {
     /// chats frame has synced (manual selection wins; no chats → the
     /// new-session canvas shows).
     pub(super) fn boot_select_chat(&mut self, cx: &mut Context<Self>) {
+        if self.cloud_conversation.is_some() {
+            return;
+        }
         let first = {
             let state = self.state.read(cx);
             if !state.chats_synced || state.selected_chat.is_some() || state.auto_selected {
@@ -254,6 +258,8 @@ impl Shell {
 
     /// Open a session from the sidebar: select it, the main area follows.
     pub(crate) fn open_chat(&mut self, chat_id: String, cx: &mut Context<Self>) {
+        self.cloud_conversation = None;
+        self.cloud_conversation_events = None;
         self.command_palette = None;
         // Opening any session steps the voice stage aside — including the one
         // already selected under it. The call keeps running in the background.
@@ -277,6 +283,70 @@ impl Shell {
     /// `project` (the per-project `+` on a sidebar group header) homes the
     /// canvas on that project and wins over the sidebar filter.
     pub(super) fn open_new_session(&mut self, project: Option<String>, cx: &mut Context<Self>) {
+        self.sync_cloud_tab_scope(cx);
+        if !self.cloud_tab_navigation_ready(cx) {
+            return;
+        }
+        if project.is_none() {
+            let cloud_only = {
+                let state = self.state.read(cx);
+                // Only launch choices filter unavailable repositories. The
+                // sidebar retains all projects and their existing history.
+                let projects: Vec<_> = state
+                    .cloud_sidebar_projects()
+                    .into_iter()
+                    .filter(|project| project["canCreate"] != false)
+                    .collect();
+                let remembered = state.cloud_project.as_ref().and_then(|selected| {
+                    projects
+                        .iter()
+                        .find(|row| {
+                            row["projectId"] == selected["projectId"]
+                                && row["accountId"] == selected["accountId"]
+                        })
+                        .cloned()
+                });
+                let explicit_local = self
+                    .settings
+                    .space_filter
+                    .as_deref()
+                    .and_then(|id| state.space_row(id))
+                    .or_else(|| state.selected_space_row())
+                    .is_some_and(|space| {
+                        !zuse_protocol::projectless::is_projectless_cwd(Some(&space.path))
+                    });
+                if explicit_local {
+                    None
+                } else {
+                    remembered.or_else(|| {
+                        (!state.spaces.iter().any(|space| {
+                            !zuse_protocol::projectless::is_projectless_cwd(Some(&space.path))
+                        }))
+                        .then(|| projects.into_iter().next())
+                        .flatten()
+                    })
+                }
+            };
+            if let Some(project) = cloud_only {
+                self.open_new_cloud_session(project, cx);
+                return;
+            }
+        }
+        self.reset_new_session_canvas(project, cx);
+    }
+
+    /// Reuse the current native conversation surface; callers choose its destination.
+    pub(super) fn reset_new_session_canvas(
+        &mut self,
+        project: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.cloud_tab_navigation_ready(cx) {
+            return;
+        }
+        self.cloud_tabs.clear_current();
+        self.cloud_conversation = None;
+        self.cloud_conversation_events = None;
         self.command_palette = None;
         self.set_voice_stage_open(false, cx);
         self.set_route(Route::Chat, cx);
@@ -334,6 +404,7 @@ impl Shell {
             panel.update(cx, |panel, cx| panel.set_open(false, cx));
         }
         cx.notify();
+        self.initialize_new_cloud_canvas(cx);
     }
 
     /// The trailing titlebar strip follows the columns beneath it.
@@ -1048,7 +1119,7 @@ impl Shell {
         // header over the empty canvas was noise); the bar keeps its height,
         // drag region, and buttons. Where a session runs, and its side-chat
         // and project actions, live in the session card.
-        let on_canvas = self.state.read(cx).selected_chat_row().is_none();
+        let on_canvas = !self.has_conversation(cx);
 
         // The new-session `+` renders in the WINDOW-CONTROL CLUSTER whenever a
         // session is selected (`render_titlebar_cluster`) — this row budgets
@@ -1166,7 +1237,10 @@ impl Shell {
                                 icons::sidebar_glyph(
                                     motion::state_t(
                                         "toggle-changes",
-                                        self.right_pane_open(cx) && fit.right,
+                                        self.selected_zot(cx)
+                                            .map_or(self.right_pane_open(cx) && fit.right, |_| {
+                                                !self.zot_ui.panel_hidden
+                                            }),
                                         motion::GLYPH_STATE,
                                         self.reduced_motion,
                                     ),
@@ -1188,7 +1262,9 @@ impl Shell {
         // The conversation's own top-bar actions, in the reference order:
         // Open in, the environment summary, then the bottom terminal; the
         // right pane's toggle anchors the far edge.
-        let session_info_toggle = (!takeover && !on_canvas).then(|| {
+        // A Zot's coordinator has no repository, branch or environment to show.
+        let zot_coordinator = self.state.read(cx).selected_chat_is_zot_coordinator();
+        let session_info_toggle = (!takeover && !on_canvas && !zot_coordinator).then(|| {
             let open = self.session_info_visible();
             header_icon_button(
                 "toggle-session-info",
@@ -1207,28 +1283,38 @@ impl Shell {
             )
             .when(open, |button| button.bg(theme.text.opacity(0.10)))
         });
-        let open_in = if !takeover && !on_canvas {
+        let open_in = if !takeover && !on_canvas && !zot_coordinator {
             self.render_open_in(&theme, cx)
         } else {
             None
         };
-        let terminal_toggle = (!takeover && !on_canvas).then(|| {
-            let open = self.terminal_open(cx);
-            header_icon_button(
-                "toggle-bottom-terminal",
-                icons::PANEL_BOTTOM,
-                "Toggle bottom terminal",
-                &theme,
-                cx.listener(|this, _, window, cx| this.toggle_terminal(window, cx)),
-            )
-            .role(gpui::Role::Button)
-            .aria_label(tr(cx, msg::common::toggle_bottom_terminal))
-            .aria_selected(open)
-            .flex_none()
-            .when(open, |button| button.bg(theme.text.opacity(0.10)))
-        });
+        let terminal_toggle =
+            (!takeover && !on_canvas && !zot_coordinator && self.cloud_conversation.is_none())
+                .then(|| {
+                    let open = self.terminal_open(cx);
+                    header_icon_button(
+                        "toggle-bottom-terminal",
+                        icons::PANEL_BOTTOM,
+                        "Toggle bottom terminal",
+                        &theme,
+                        cx.listener(|this, _, window, cx| this.toggle_terminal(window, cx)),
+                    )
+                    .role(gpui::Role::Button)
+                    .aria_label(tr(cx, msg::common::toggle_bottom_terminal))
+                    .aria_selected(open)
+                    .flex_none()
+                    .when(open, |button| button.bg(theme.text.opacity(0.10)))
+                });
         // The left cluster: owner avatar, branch and copy (reference top bar).
-        let identity = if !takeover && !on_canvas {
+        let identity = if !takeover && !on_canvas && zot_coordinator {
+            // With no branch to show, the conversation tabs take this row.
+            Some(
+                div()
+                    .pt(px(10.))
+                    .child(self.render_thread_conversations(cx))
+                    .into_any_element(),
+            )
+        } else if !takeover && !on_canvas {
             self.render_top_bar_branch(&theme, cx)
         } else {
             None

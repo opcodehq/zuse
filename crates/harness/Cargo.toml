@@ -32,4 +32,5 @@ libc.workspace = true
 reqwest.workspace = true
 
 [dev-dependencies]
+flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
 tempfile.workspace = true

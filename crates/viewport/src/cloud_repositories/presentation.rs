@@ -28,11 +28,84 @@ pub(super) fn avatar(name: &str, url: Option<&str>, size: f32) -> AnyElement {
         frame.child(fallback).into_any_element()
     }
 }
+/// "18h ago", "3w ago", "4y ago" for a GitHub ISO timestamp.
+pub(super) fn ago(iso: &str) -> Option<String> {
+    let then = chrono::DateTime::parse_from_rfc3339(iso).ok()?;
+    let secs = (chrono::Utc::now() - then.with_timezone(&chrono::Utc))
+        .num_seconds()
+        .max(0);
+    Some(match secs {
+        s if s < 3_600 => format!("{}m ago", (s / 60).max(1)),
+        s if s < 86_400 => format!("{}h ago", s / 3_600),
+        s if s < 7 * 86_400 => format!("{}d ago", s / 86_400),
+        s if s < 365 * 86_400 => format!("{}w ago", s / (7 * 86_400)),
+        s => format!("{}y ago", s / (365 * 86_400)),
+    })
+}
+fn owner_of(name: &str) -> &str {
+    name.split('/').next().unwrap_or(name)
+}
 impl RepositoryPanel {
-    fn github_connected(&self) -> bool {
+    pub(super) fn github_connected(&self) -> bool {
         self.github
             .as_ref()
             .is_some_and(|g| g.installations.iter().any(|i| !i.suspended))
+    }
+    /// GitHub's page for changing which repositories the app can see.
+    fn github_manage_url(&self) -> Option<String> {
+        let install = self
+            .github
+            .as_ref()?
+            .installations
+            .iter()
+            .find(|i| !i.suspended)?;
+        Some(
+            if install.account_type.eq_ignore_ascii_case("organization") {
+                format!(
+                    "https://github.com/organizations/{}/settings/installations/{}",
+                    install.account_login, install.installation_id
+                )
+            } else {
+                format!(
+                    "https://github.com/settings/installations/{}",
+                    install.installation_id
+                )
+            },
+        )
+    }
+    fn picker_link(
+        id: &'static str,
+        glyph: &'static str,
+        label: &'static str,
+        handle: &FocusHandle,
+        enabled: bool,
+    ) -> Stateful<Div> {
+        div()
+            .id(id)
+            .role(Role::Button)
+            .aria_label(label)
+            .track_focus(&handle.clone().tab_stop(enabled))
+            .tab_index(0)
+            .h(px(30.))
+            .px(px(8.))
+            .rounded(px(7.))
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .text_size(px(12.))
+            .text_color(palette::rgb(TEXT))
+            .when(!enabled, |v| v.opacity(0.5))
+            .when(enabled, |v| {
+                v.cursor_pointer().hover(|v| v.bg(s::frame_bg()))
+            })
+            .focus_visible(|v| v.border_1().border_color(palette::rgb(0x89ca21)))
+            .child(icon(glyph).size(px(14.)).text_color(palette::rgb(MUTED)))
+            .child(div().flex_1().min_w_0().truncate().child(label))
+            .child(
+                icon("arrow-up-right")
+                    .size(px(12.))
+                    .text_color(palette::rgb(MUTED)),
+            )
     }
     fn close_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.picker = false;
@@ -77,6 +150,28 @@ impl RepositoryPanel {
             })
             .unwrap_or_default();
         let count = available.len();
+        // Installations keep their GitHub order; newest pushes first within one.
+        let order = |name: &str| {
+            self.github
+                .as_ref()
+                .and_then(|g| {
+                    g.installations
+                        .iter()
+                        .position(|i| i.account_login.eq_ignore_ascii_case(owner_of(name)))
+                })
+                .unwrap_or(usize::MAX)
+        };
+        let mut available = available;
+        available.sort_by(|a, b| {
+            order(&a.name_with_owner)
+                .cmp(&order(&b.name_with_owner))
+                .then_with(|| {
+                    owner_of(&a.name_with_owner)
+                        .to_lowercase()
+                        .cmp(&owner_of(&b.name_with_owner).to_lowercase())
+                })
+                .then_with(|| b.updated_at.cmp(&a.updated_at))
+        });
         (
             count,
             available
@@ -120,13 +215,29 @@ impl RepositoryPanel {
             }
             let mut choices = column()
                 .id("cloud-repository-choices")
-                .max_h(px(288.))
+                .max_h(px(336.))
                 .overflow_y_scroll()
                 .p(px(4.))
                 .rounded(px(7.))
                 .bg(s::frame_bg().opacity(0.3));
+            let mut owner: Option<String> = None;
             for repo in repos {
                 let name = repo.name_with_owner.clone();
+                let repo_owner = owner_of(&name).to_owned();
+                if owner.as_deref() != Some(repo_owner.as_str()) {
+                    choices = choices.child(
+                        div()
+                            .px(px(8.))
+                            .pt(px(if owner.is_none() { 4. } else { 10. }))
+                            .pb(px(4.))
+                            .text_size(px(10.))
+                            .line_height(px(13.5))
+                            .text_color(palette::rgb(MUTED))
+                            .child(repo_owner.clone()),
+                    );
+                    owner = Some(repo_owner);
+                }
+                let updated = ago(&repo.updated_at);
                 let selected = self.selected.contains(&name);
                 let handle = self
                     .choice_focus
@@ -144,7 +255,7 @@ impl RepositoryPanel {
                         .aria_selected(selected)
                         .track_focus(&handle.clone().tab_stop(true))
                         .tab_index(0)
-                        .h(px(28.))
+                        .h(px(32.))
                         .px(px(8.))
                         .rounded(px(7.))
                         .flex()
@@ -152,8 +263,9 @@ impl RepositoryPanel {
                         .gap(px(8.))
                         .cursor_pointer()
                         .hover(|v| v.bg(s::frame_bg()))
+                        .when(selected, |v| v.bg(s::frame_bg().opacity(0.6)))
                         .focus_visible(|v| v.border_1().border_color(palette::rgb(0x89ca21)))
-                        .child(avatar(&name, repo.owner_avatar_url.as_deref(), 24.))
+                        .child(avatar(&name, repo.owner_avatar_url.as_deref(), 20.))
                         .child(
                             div()
                                 .flex_1()
@@ -164,14 +276,41 @@ impl RepositoryPanel {
                                 .child(name.clone()),
                         )
                         .when(repo.is_private, |v| {
-                            v.child(icon("access-ask").size(px(12.)))
+                            v.child(
+                                icon("access-ask")
+                                    .size(px(12.))
+                                    .text_color(palette::rgb(MUTED)),
+                            )
                         })
-                        .when(selected, |v| {
-                            v.child(icon("check").size(px(14.)).text_color(palette::tone(
-                                hsla(133.9 / 360., 0.606, 0.488, 1.),
-                                hsla(131.4 / 360., 0.734, 0.31, 1.),
-                            )))
+                        .when_some(updated, |v, updated| {
+                            v.child(
+                                div()
+                                    .flex_none()
+                                    .text_size(px(11.))
+                                    .text_color(palette::rgb(MUTED))
+                                    .child(updated),
+                            )
                         })
+                        .child(
+                            div()
+                                .flex_none()
+                                .size(px(14.))
+                                .rounded(px(4.))
+                                .border_1()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .when(!selected, |v| v.border_color(palette::rgb(BORDER)))
+                                .when(selected, |v| {
+                                    let lime = palette::tone(
+                                        hsla(83. / 360., 0.72, 0.46, 1.),
+                                        hsla(83. / 360., 0.74, 0.43, 1.),
+                                    );
+                                    v.border_color(lime)
+                                        .bg(lime.opacity(0.18))
+                                        .child(icon("check").size(px(10.)).text_color(lime))
+                                }),
+                        )
                         .on_key_down(|e: &KeyDownEvent, _, cx| {
                             if matches!(e.keystroke.key.as_str(), "space" | "enter") {
                                 cx.stop_propagation();
@@ -201,6 +340,58 @@ impl RepositoryPanel {
                         }),
                 );
             }
+            let manage_url = self.github_manage_url();
+            let can_install = !busy && self.can_manage();
+            if manage_url.is_some() {
+                focus.push(self.picker_manage.clone());
+            }
+            if can_install {
+                focus.push(self.picker_install.clone());
+            }
+            let github_links = column()
+                .px(px(4.))
+                .child(
+                    div()
+                        .px(px(8.))
+                        .pb(px(4.))
+                        .text_size(px(10.))
+                        .line_height(px(13.5))
+                        .text_color(palette::rgb(MUTED))
+                        .child("Don't see a repository?"),
+                )
+                .child(
+                    Self::picker_link(
+                        "cloud-picker-manage-access",
+                        "site-github",
+                        "Manage repository access on GitHub",
+                        &self.picker_manage,
+                        manage_url.is_some(),
+                    )
+                    .on_click(move |_, _, cx| {
+                        if let Some(url) = &manage_url {
+                            cx.open_url(url);
+                        }
+                    }),
+                )
+                .child(
+                    Self::picker_link(
+                        "cloud-picker-install-account",
+                        "plus",
+                        "Install on another GitHub account",
+                        &self.picker_install,
+                        can_install,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if !this.repository_busy() && this.can_manage() {
+                            this.call(
+                                "github-install",
+                                methods::CLOUD_GITHUB_INSTALL,
+                                json!({}),
+                                cx,
+                            );
+                        }
+                    })),
+                );
             let count = self.selected.len();
             let can_add = count > 0 && !busy && self.can_manage();
             if can_add {
@@ -265,6 +456,7 @@ impl RepositoryPanel {
                         ),
                 )
                 .child(choices)
+                .child(github_links)
                 .child(
                     row()
                         .h(px(28.))
@@ -341,7 +533,7 @@ impl RepositoryPanel {
         }
         trigger.into_any_element()
     }
-    fn repositories(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
+    pub(super) fn repositories(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         let busy = self.repository_busy();
         let can_manage = self.can_manage();
         let empty = self.projects.is_empty();
@@ -389,7 +581,7 @@ impl RepositoryPanel {
             let removing = self.pending.values().any(|p| p.kind == "remove");
             body = body.child(
                 row()
-                    .h(px(40.))
+                    .h(px(48.))
                     .gap(px(10.))
                     .px(px(12.))
                     .when(i > 0, |v| {
@@ -412,11 +604,34 @@ impl RepositoryPanel {
                                     .line_height(px(13.5))
                                     .text_color(palette::rgb(MUTED))
                                     .child(format!(
-                                        "{} · selected for cloud image",
-                                        project.default_branch
+                                        "{} · {}{}",
+                                        project.default_branch,
+                                        match project.visibility {
+                                            zuse_protocol::cloud_projects::ProjectVisibility::Private => "Private",
+                                            zuse_protocol::cloud_projects::ProjectVisibility::Public => "Public",
+                                        },
+                                        repo.and_then(|r| ago(&r.updated_at))
+                                            .map(|t| format!(" · pushed {t}"))
+                                            .unwrap_or_default(),
                                     )),
                             ),
                     )
+                    .when(self.page != CloudPage::All, |v| {
+                        let id = id.clone();
+                        v.child(
+                            cs::button(
+                                SharedString::from(format!("cloud-repository-setup-{id}")),
+                                "Setup",
+                                false,
+                                false,
+                                false,
+                            )
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.select_environment(id.clone(), cx);
+                                cx.emit(OpenPage(CloudPage::Environments));
+                            })),
+                        )
+                    })
                     .child(
                         cs::icon_button(
                             SharedString::from(format!("remove-cloud-repository-{id}")),
@@ -470,8 +685,22 @@ impl RepositoryPanel {
             body,
         )
     }
-    fn github_group(&self, window: &Window, cx: &mut Context<Self>) -> Div {
-        let loading = self.pending.values().any(|p| p.kind == "github");
+    pub(super) fn github_group(&self, window: &Window, cx: &mut Context<Self>) -> Div {
+        if let Some(body) = self.github_operation_rows(cx) {
+            return cs::group(
+                "GitHub",
+                Some(
+                    "Connect your own GitHub account, then choose the installation to use with this workspace.",
+                ),
+                None,
+                body,
+            );
+        }
+
+        let loading = self
+            .pending
+            .values()
+            .any(|p| matches!(p.kind, "github" | "github-install"));
         let configured = self.github.as_ref().is_none_or(|g| g.configured);
         let connected = self.github_connected();
         let mut body = column();
@@ -485,22 +714,31 @@ impl RepositoryPanel {
         } else if self
             .github
             .as_ref()
-            .is_none_or(|g| g.installations.is_empty())
+            .is_none_or(|g| g.installations.is_empty() || g.user.is_none())
         {
             body = body.child(cs::setting_row(
                 true,
                 "Connect repositories",
-                "",
+                "Install the Zuse app on GitHub, then choose which repositories cloud agents can work on.",
                 Some(
                     cs::icon_label_button(
-                        "check-github-connection",
-                        "refresh",
-                        "Check connection",
-                        false,
+                        "connect-cloud-github",
+                        "github",
+                        "Connect GitHub",
+                        true,
                         loading,
                         loading,
                     )
-                    .on_click(cx.listener(|this, _, _, cx| this.refresh(cx)))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if !this.repository_busy() {
+                            this.call(
+                                "github-install",
+                                zuse_protocol::methods::CLOUD_GITHUB_INSTALL,
+                                serde_json::json!({}),
+                                cx,
+                            );
+                        }
+                    }))
                     .into_any_element(),
                 ),
             ));
@@ -544,6 +782,9 @@ impl RepositoryPanel {
                 body=body.child(cs::setting_row(false,github.user.as_ref().map(|u|format!("Connected as {}",u.login)).unwrap_or_else(||"Connection status".into()),"Repository changes refresh automatically when you return from GitHub. Existing cloud chats are not affected.",Some(cs::icon_label_button("refresh-cloud-github","refresh","Refresh",false,loading,loading).on_click(cx.listener(|this,_,_,cx|this.refresh(cx))).into_any_element())));
             }
         }
+        if let Some(disconnect) = self.github_disconnect_row(cx) {
+            body = body.child(disconnect);
+        }
         cs::group(
             "GitHub",
             Some(
@@ -562,15 +803,61 @@ impl Render for RepositoryPanel {
         if self.usage_only {
             return self.render_storage(window, cx);
         }
-        let image = self.render_image(window, cx);
+        match self.page {
+            CloudPage::All => {}
+            CloudPage::Overview => {
+                if self.agent_recovery_open() {
+                    return column().gap(px(16.)).child(self.render_agents(window, cx));
+                }
+                if self.guide_visible() {
+                    return self.render_guide(window, cx);
+                }
+                return self.render_overview(window, cx);
+            }
+            CloudPage::Repositories => {
+                let github = self.github_group(window, cx);
+                let repos = self.repositories(window, cx);
+                return if self.github_connected() {
+                    column().gap(px(16.)).child(repos).child(github)
+                } else {
+                    column().gap(px(16.)).child(github).child(repos)
+                };
+            }
+            CloudPage::Environments => {
+                return column()
+                    .gap(px(16.))
+                    .child(self.render_environment(window, cx));
+            }
+            CloudPage::Machine => return column().gap(px(16.)).child(self.render_machine(cx)),
+            CloudPage::Agents => {
+                return column().gap(px(16.)).child(self.render_agents(window, cx));
+            }
+        }
+        if self.guide_visible() && !self.agent_recovery_open() {
+            return self.render_guide(window, cx);
+        }
+        let entry = self.guide_entry(cx);
         let repos = self.repositories(window, cx);
         let github = self.github_group(window, cx);
-        let mut root = column().gap(px(16.)).child(image);
+        let agents = self.render_agents(window, cx);
+        let environment = self.render_environment(window, cx);
+        let machine = self.render_machine(cx);
+        let mut root = column()
+            .gap(px(16.))
+            .when_some(entry, |root, entry| root.child(entry));
+        if self.agent_recovery_open() {
+            return root
+                .child(agents)
+                .child(github)
+                .child(repos)
+                .child(machine)
+                .child(environment);
+        }
         if self.github_connected() {
             root = root.child(repos).child(github);
         } else {
             root = root.child(github).child(repos);
         }
-        root
+        root.child(agents).child(machine).child(environment)
     }
 }
