@@ -2,6 +2,7 @@ name: Cloud control plane
 
 on:
   push:
+    branches: [main]
     paths:
       - apps/cloud/**
       - apps/cloud-runtime/**
@@ -83,7 +84,8 @@ permissions:
 
 concurrency:
   group: cloud-${{ github.ref }}
-  cancel-in-progress: true
+  # Main always finishes, so its caches get saved for every branch.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   cloud:
@@ -119,6 +121,7 @@ jobs:
           components: rustfmt
       - uses: Swatinem/rust-cache@v2
         with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           key: cloud
           cache-on-failure: true
       - run: sudo apt-get update && sudo apt-get install -y cmake libclang-dev libasound2-dev ripgrep

@@ -15,10 +15,32 @@ def gh(*arguments):
     return subprocess.check_output(['gh', 'release', *arguments, '-R', REPOSITORY], text=True)
 
 
-def publish(tag, output, command=gh):
+def missing_assets(tag, names):
+    """Every release ships every format; name what is absent from `names`."""
+    version = release_version(tag)
+    suffixes = {
+        'linux-x86_64': ('.tar.gz', '.deb', '.rpm'),
+        'linux-aarch64': ('.tar.gz', '.deb', '.rpm'),
+        'macos-aarch64': ('.tar.gz', '.dmg'),
+        'macos-x86_64': ('.tar.gz', '.dmg'),
+        'windows-x86_64': ('.zip', '-setup.exe'),
+    }
+    required = {'install.sh'} | {f'zuse-{version}-{target}{suffix}' for target, kinds in suffixes.items() for suffix in kinds}
+    return sorted(required - set(names))
+
+
+def require_complete(tag, names):
+    missing = missing_assets(tag, names)
+    if missing:
+        raise ValueError('Release is missing: ' + ', '.join(missing))
+
+
+def publish(tag, output, command=gh, complete=False):
     release_version(tag)
     output = output.resolve()
     assets = {asset['name'] for asset in json.loads(command('view', tag, '--json', 'assets'))['assets']}
+    if complete:
+        require_complete(tag, assets | {path.name for path in output.iterdir()})
     checksums = {}
     if 'SHA256SUMS' in assets:
         command('download', tag, '--pattern', 'SHA256SUMS', '--dir', str(output), '--clobber')
@@ -58,5 +80,9 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('tag')
     parser.add_argument('output', type=Path)
+    parser.add_argument('--check-only', action='store_true', help='Verify the directory holds every format and publish nothing')
     args = parser.parse_args()
-    publish(args.tag, args.output)
+    if args.check_only:
+        require_complete(args.tag, [path.name for path in args.output.iterdir()])
+    else:
+        publish(args.tag, args.output, complete=True)

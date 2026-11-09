@@ -2062,7 +2062,7 @@ impl SessionsEngine {
                 let request = checkpoint
                     .map(|checkpoint| checkpoint.request)
                     .or_else(|| sessions.last_request(&chat_id))
-                    .or_else(|| host.request_from_chat_row(&chat_id, &prompt_text))
+                    .or_else(|| host.continuation_request_from_chat_row(&chat_id, &prompt_text))
                     // Last resort: the journal's own cwd (zuse's draft config)
                     // — a crash can predate the debounced workspace-row write.
                     .or_else(|| {

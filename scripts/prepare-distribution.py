@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Fetch a verified existing release archive, or prepare native sources for a missing architecture."""
 import argparse
+import hashlib
 import os
 from pathlib import Path
 import subprocess
@@ -15,13 +16,16 @@ def main():
     parser.add_argument('--platform', required=True, choices=('linux', 'macos', 'windows'))
     parser.add_argument('--arch', required=True, choices=('x86_64', 'aarch64'))
     parser.add_argument('--cached', action='store_true', help='Reuse an input artifact downloaded from a previous run')
+    parser.add_argument('--staged', action='store_true', help='Reuse an unpublished archive built earlier in this run')
     args = parser.parse_args()
     version = release_version(args.tag)
     incoming = Path('incoming')
     incoming.mkdir(exist_ok=True)
     suffix = '.zip' if args.platform == 'windows' else '.tar.gz'
     filename = f'zuse-{version}-{args.platform}-{args.arch}{suffix}'
-    if args.cached:
+    if args.staged:
+        (incoming / 'SHA256SUMS').write_text(f'{hashlib.sha256((incoming / filename).read_bytes()).hexdigest()}  {filename}\n')
+    if args.cached or args.staged:
         check_archive(incoming / filename, incoming / 'SHA256SUMS')
         with tempfile.TemporaryDirectory(prefix='zuse-cached-') as temporary:
             package, manifest = unpack(incoming / filename, Path(temporary))
