@@ -231,6 +231,11 @@ pub struct WorkspaceView {
     pairing_fetch: Option<u64>,
     relay_status: Value,
     relay_fetch: Option<u64>,
+    direct_status: Value,
+    direct_fetch: Option<u64>,
+    direct_action: Option<u64>,
+    /// The route the browser's paired connection is using right now.
+    link_route: Value,
     relay_action: Option<u64>,
     relay_origin: Entity<input::TextInput>,
     relay_credential: Entity<input::TextInput>,
@@ -758,6 +763,10 @@ impl WorkspaceView {
             pairing_fetch: None,
             relay_status: Value::Null,
             relay_fetch: None,
+            direct_status: Value::Null,
+            direct_fetch: None,
+            direct_action: None,
+            link_route: Value::Null,
             relay_action: None,
             relay_origin,
             relay_credential,
@@ -1062,6 +1071,11 @@ impl WorkspaceView {
         }
         if let Some(paired) = frame["paired"].as_bool() {
             self.paired = paired;
+        }
+        if frame.get("linkRoute").is_some() {
+            self.link_route = frame["linkRoute"].clone();
+            cx.notify();
+            return;
         }
         if let Some(origin) = frame["pairingOrigin"].as_str() {
             self.pairing_origin = origin.into();

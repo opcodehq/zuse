@@ -6,6 +6,8 @@ from pathlib import Path
 import subprocess
 import sys
 
+from build_cache import prepare
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -47,6 +49,12 @@ def main():
     elif args == ["--print-icon-fingerprint"]:
         print(env["HUGEICONS_BUILD_KEY"])
     else:
+        if any(arg in {"build", "check", "test", "run", "rustc", "clippy",
+                       "bench", "doc", "rustdoc"} for arg in args):
+            try:
+                prepare(env=env, target=env["CARGO_TARGET_DIR"])
+            except (RuntimeError, OSError) as error:
+                sys.exit(str(error))
         os.execvpe("cargo", ["cargo", *args], env)
 
 

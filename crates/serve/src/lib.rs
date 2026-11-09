@@ -7,6 +7,7 @@ use axum::{
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{get, post},
+    serve::ListenerExt,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use futures::StreamExt;
@@ -25,9 +26,17 @@ const SOCKET_OUTPUT_CAPACITY: usize = 8;
 const SOCKET_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
 pub mod managed;
 mod paired;
+mod paired_session;
 pub mod relay;
 mod tls;
+pub use paired_session::PairedSessions;
 pub use tls::TlsConfig;
+
+/// Streamed replies are many small frames; Nagle would hold each one back for
+/// the previous frame's delayed ACK.
+pub(crate) fn no_delay(stream: &mut tokio::net::TcpStream) {
+    let _ = stream.set_nodelay(true);
+}
 
 #[derive(Clone)]
 pub struct BrowserServer {
@@ -35,6 +44,9 @@ pub struct BrowserServer {
     pairings: Option<(zuse_remote::authority::Authority, String)>,
     managed: Option<Arc<dyn managed::Authority>>,
     paired_slots: Arc<tokio::sync::Semaphore>,
+    paired_sessions: Arc<PairedSessions>,
+    owns_sessions: bool,
+    advertised_routes: tokio::sync::watch::Receiver<Vec<zuse_remote::Route>>,
     token: Arc<str>,
     public_origin: Option<String>,
     secure_transport: bool,
@@ -70,6 +82,9 @@ impl BrowserServer {
             pairings: None,
             managed: None,
             paired_slots: Arc::new(tokio::sync::Semaphore::new(64)),
+            paired_sessions: Arc::default(),
+            owns_sessions: true,
+            advertised_routes: tokio::sync::watch::channel(vec![]).1,
             token: token.into(),
             secure_transport: public_origin.is_some(),
             public_origin,
@@ -87,6 +102,22 @@ impl BrowserServer {
     /// Share one admission budget across direct listeners and outbound relay.
     pub fn with_pairing_slots(mut self, slots: Arc<tokio::sync::Semaphore>) -> Self {
         self.paired_slots = slots;
+        self
+    }
+
+    /// Let a session opened through this server continue through another.
+    pub fn with_paired_sessions(mut self, sessions: Arc<PairedSessions>) -> Self {
+        self.paired_sessions = sessions;
+        self.owns_sessions = false;
+        self
+    }
+
+    /// Addresses paired clients can learn and try for this host.
+    pub fn with_advertised_routes(
+        mut self,
+        routes: tokio::sync::watch::Receiver<Vec<zuse_remote::Route>>,
+    ) -> Self {
+        self.advertised_routes = routes;
         self
     }
 
@@ -186,6 +217,7 @@ impl BrowserServer {
         let shutdown = self.shutdown.clone();
         let _guard = shutdown.clone().drop_guard();
         let connections = self.connections.clone();
+        let (owns_sessions, sessions) = (self.owns_sessions, self.paired_sessions.clone());
         let signal = async move {
             signal.await;
             shutdown.cancel();
@@ -198,11 +230,43 @@ impl BrowserServer {
                     .await?
             }
             None => {
-                axum::serve(listener, router)
+                axum::serve(listener.tap_io(no_delay), router)
                     .with_graceful_shutdown(signal)
                     .await?
             }
         }
+        connections.close();
+        connections.wait().await;
+        if owns_sessions {
+            sessions.close();
+        }
+        Ok(())
+    }
+
+    /// Serve encrypted paired RPC alone, to private network peers only. There
+    /// are no application files or cookie sessions on this listener, which is
+    /// what lets a LAN or tailnet device reach it without TLS.
+    pub async fn serve_paired_only<F>(self, listener: TcpListener, signal: F) -> anyhow::Result<()>
+    where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
+        let shutdown = self.shutdown.clone();
+        let _guard = shutdown.clone().drop_guard();
+        let connections = self.connections.clone();
+        let signal = async move {
+            signal.await;
+            shutdown.cancel();
+        };
+        let router = Router::new()
+            .route("/api/paired-rpc/{pair_id}", get(paired::upgrade))
+            .layer(axum::middleware::from_fn(private_peers_only))
+            .with_state(self);
+        axum::serve(
+            listener.tap_io(no_delay),
+            router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .with_graceful_shutdown(signal)
+        .await?;
         connections.close();
         connections.wait().await;
         Ok(())
@@ -257,6 +321,17 @@ impl BrowserServer {
         };
         format!("zuse_session={value}; Path=/; HttpOnly; SameSite=Strict{secure}")
     }
+}
+
+async fn private_peers_only(
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    if !zuse_remote::routes::is_private_host(&peer.ip().to_canonical().to_string()) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    next.run(request).await
 }
 
 #[derive(Deserialize)]

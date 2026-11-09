@@ -11,6 +11,8 @@ pub struct Channel {
     pub outgoing: mpsc::Sender<String>,
     pub incoming: mpsc::Receiver<String>,
     pub closed: CancellationToken,
+    /// Host identity already delivered while the channel was being set up.
+    pub engine_info: Option<serde_json::Value>,
 }
 
 #[derive(Clone)]
@@ -126,6 +128,7 @@ mod tests {
                 outgoing,
                 incoming,
                 closed: CancellationToken::new(),
+                engine_info: None,
             },
             requests,
             replies,

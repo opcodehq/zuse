@@ -738,6 +738,7 @@ pub struct EngineRpc {
     pairings: Option<zuse_remote::authority::Authority>,
     browser_access: Option<crate::browser_access::BrowserAccess>,
     relay_access: Option<crate::relay_access::RelayAccess>,
+    direct_access: Option<crate::direct_access::DirectAccess>,
     model_connections: Option<crate::model_connections::ModelConnections>,
     account: Option<crate::account::Account>,
     managed_access: Option<crate::managed_access::AccountClient>,
@@ -803,6 +804,7 @@ impl EngineRpc {
             pairings: None,
             browser_access: None,
             relay_access: None,
+            direct_access: None,
             model_connections: None,
             account: None,
             managed_access: None,
@@ -902,6 +904,11 @@ impl EngineRpc {
     /// Attach the auth service (AuthStatus + AuthRpc mutations).
     pub fn with_auth(mut self, auth: Auth) -> Self {
         self.auth = Some(auth);
+        self
+    }
+
+    pub fn with_direct_access(mut self, access: crate::direct_access::DirectAccess) -> Self {
+        self.direct_access = Some(access);
         self
     }
 
@@ -2376,6 +2383,56 @@ impl RpcService for EngineRpc {
         let failed = |error: crate::EngineError| RpcError::Failed(error.to_string());
         if matches!(
             method,
+            methods::DIRECT_ACCESS_STATUS
+                | methods::START_DIRECT_ACCESS
+                | methods::STOP_DIRECT_ACCESS
+        ) {
+            if params
+                .get("targetDeviceId")
+                .filter(|v| !v.is_null())
+                .is_some_and(|v| v.as_str() != Some(self.doc_host.device_id()))
+            {
+                return Err(RpcError::BadParams(
+                    "Network access belongs to the connected profile".into(),
+                ));
+            }
+            let access = self
+                .direct_access
+                .clone()
+                .ok_or_else(|| RpcError::Failed("Network access is unavailable".into()))?;
+            if method == methods::DIRECT_ACCESS_STATUS {
+                return RpcReply::value(&access.status().await);
+            }
+            let mut params = params;
+            if let Some(object) = params.as_object_mut() {
+                object.remove("targetDeviceId");
+            }
+            let service: std::sync::Arc<dyn RpcService> = std::sync::Arc::new(self.clone());
+            let start = (method == methods::START_DIRECT_ACCESS)
+                .then(|| parse_params::<crate::direct_access::Start>(params))
+                .transpose()?;
+            // Admitted control operations finish even if their caller disconnects.
+            return tokio::spawn(async move {
+                match start {
+                    Some(start) => {
+                        let status = access.start(start, service).await.map_err(|_| {
+                            RpcError::Failed("Could not turn on network access.".into())
+                        })?;
+                        RpcReply::value(&status)
+                    }
+                    None => RpcReply::value(&access.stop().await),
+                }
+            })
+            .await
+            .map_err(|_| {
+                RpcError::Failed(
+                    "Network control stopped unexpectedly. Refresh its status before trying again."
+                        .into(),
+                )
+            })?;
+        }
+        if matches!(
+            method,
             methods::RELAY_ACCESS_STATUS
                 | methods::START_RELAY_ACCESS
                 | methods::STOP_RELAY_ACCESS
@@ -2518,6 +2575,18 @@ impl RpcService for EngineRpc {
                             Some(access) => access.status().await.origin,
                             None => None,
                         });
+                    let origin = match (origin, &self.direct_access) {
+                        // A loopback address cannot be opened from another device.
+                        (origin, Some(direct))
+                            if origin.as_deref().is_none_or(|origin| {
+                                zuse_remote::routes::classify_origin(origin)
+                                    == zuse_remote::RouteKind::Loopback
+                            }) =>
+                        {
+                            direct.invitation_origin().await.or(origin)
+                        }
+                        (origin, _) => origin,
+                    };
                     RpcReply::value(
                         &serde_json::json!({"peer":peer,"fragment":fragment,"origin":origin}),
                     )

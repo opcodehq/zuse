@@ -532,12 +532,13 @@ private fun ConversationPane(
                 list.layoutInfo.totalItemsCount - 1
         }
     }
+    val groups by remember { derivedStateOf { TranscriptGroup.project(workspace.messages.toList()) } }
     val dragging by list.interactionSource.collectIsDraggedAsState()
     LaunchedEffect(dragging, atBottom) { if (dragging) follow = atBottom }
     LaunchedEffect(session?.id) {
         if (workspace.messages.isNotEmpty())
             list.scrollToItem(
-                workspace.messages.lastIndex + if (workspace.olderSequence != null) 1 else 0
+                groups.lastIndex + if (workspace.olderSequence != null) 1 else 0
             )
     }
     LaunchedEffect(
@@ -652,8 +653,21 @@ private fun ConversationPane(
                                 )
                             }
                         }
-                    items(workspace.messages, key = { it.id }, contentType = { it.kind }) { message
-                        ->
+                    items(
+                        groups,
+                        key = { it.id },
+                        contentType = { if (it.isActivity) "activity" else it.rows[0].message.kind },
+                    ) { group ->
+                        if (group.isActivity) {
+                            ToolActivityGroup(
+                                group,
+                                live =
+                                    group.hasRunningTool ||
+                                        (workspace.activeTurnId != null && group == groups.last()),
+                            )
+                            return@items
+                        }
+                        val message = group.rows[0].message
                         MessageRow(
                             message,
                             onAttachment = { ref ->

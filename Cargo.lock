@@ -4950,6 +4950,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "if-addrs"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c0a05c691e1fae256cf7013d99dad472dc52d5543322761f83ec8d47eab40d2b"
+dependencies = [
+ "libc",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "ignore"
 version = "0.4.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -14048,6 +14058,7 @@ dependencies = [
  "fff-search",
  "futures",
  "gethostname",
+ "if-addrs",
  "ignore",
  "jsonwebtoken",
  "libc",
@@ -14194,8 +14205,10 @@ name = "zuse-mobile-bridge"
 version = "0.26.0"
 dependencies = [
  "base64 0.22.1",
+ "if-addrs",
  "serde",
  "serde_json",
+ "tempfile",
  "zuse-remote",
 ]
 
@@ -14353,6 +14366,7 @@ version = "0.26.0"
 dependencies = [
  "base64 0.22.1",
  "getrandom 0.3.4",
+ "lz4_flex",
  "serde",
  "serde_json",
  "snow",
@@ -14411,6 +14425,7 @@ dependencies = [
  "zuse-protocol",
  "zuse-remote",
  "zuse-rpc",
+ "zuse-sync",
 ]
 
 [[package]]
@@ -14438,6 +14453,7 @@ dependencies = [
  "block2 0.6.2",
  "chrono",
  "futures",
+ "if-addrs",
  "loro",
  "loro-protocol",
  "reqwest",

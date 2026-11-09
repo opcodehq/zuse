@@ -5,10 +5,7 @@ use serde::Deserialize;
 use serde_json::json;
 use std::{sync::Arc, time::Duration};
 use tokio::{sync::mpsc, time::Instant};
-use tokio_tungstenite::{
-    connect_async_with_config,
-    tungstenite::{Message, protocol::WebSocketConfig},
-};
+use tokio_tungstenite::tungstenite::{Message, protocol::WebSocketConfig};
 use tokio_util::{sync::CancellationToken, task::AbortOnDropHandle};
 use zuse_protocol::managed_connection::{Bootstrap, Control, PROTOCOL, renew_in_ms};
 #[async_trait::async_trait]
@@ -118,9 +115,10 @@ pub async fn connect_channel(
             max_frame_size: Some(2 * 1024 * 1024),
             ..Default::default()
         };
-        let (mut socket, _) = connect_async_with_config(&url, Some(config), false)
+        let mut socket = zuse_sync::dial::connect_ws_with_config(&url, Some(config))
             .await
-            .map_err(|_| RpcError::Transport("Could not reach the selected computer".into()))?;
+            .map_err(|_| RpcError::Transport("Could not reach the selected computer".into()))?
+            .socket;
         socket
             .send(auth(&grant))
             .await
@@ -229,5 +227,6 @@ pub async fn connect_channel(
         outgoing: output,
         incoming,
         closed,
+        engine_info: None,
     })
 }

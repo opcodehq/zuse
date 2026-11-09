@@ -312,6 +312,7 @@ pub fn retryable_read(method: &str, params: &serde_json::Value) -> bool {
         | WATCH_CHANGE_REQUEST
         | GET_BRANCH_GRAPH
         | RELAY_ACCESS_STATUS
+        | DIRECT_ACCESS_STATUS
         | BROWSER_ACCESS_STATUS
         | LIST_PAIRINGS
         | LIST_ACCOUNT_ROUTES
@@ -379,6 +380,8 @@ mod retry_tests {
         for method in [
             CREATE_PAIRING,
             REVOKE_PAIRING,
+            START_DIRECT_ACCESS,
+            STOP_DIRECT_ACCESS,
             START_RELAY_ACCESS,
             RESUME_RELAY_ACCESS,
             SET_RELAY_AUTO_START,
@@ -444,6 +447,9 @@ pub const START_BROWSER_ACCESS: &str = "StartBrowserAccess";
 pub const STOP_BROWSER_ACCESS: &str = "StopBrowserAccess";
 
 /// Profile-owned outbound relay; routing credentials never appear in status.
+pub const DIRECT_ACCESS_STATUS: &str = "DirectAccessStatus";
+pub const START_DIRECT_ACCESS: &str = "StartDirectAccess";
+pub const STOP_DIRECT_ACCESS: &str = "StopDirectAccess";
 pub const RELAY_ACCESS_STATUS: &str = "RelayAccessStatus";
 /// Resume the saved profile-local relay configuration; never automatically retry.
 pub const RESUME_RELAY_ACCESS: &str = "ResumeRelayAccess";

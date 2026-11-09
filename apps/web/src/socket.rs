@@ -10,8 +10,11 @@ use std::{
 use wasm_bindgen::{JsCast, closure::Closure, prelude::wasm_bindgen};
 use web_sys::{MessageEvent, WebSocket};
 use zuse_remote::{
-    Invitation, MAX_MESSAGE_BYTES, MAX_RECORD_BYTES, SecureChannel,
+    Invitation, MAX_MESSAGE_BYTES, MAX_RECORD_BYTES, PairedTarget, Route, RouteTable,
+    SecureChannel,
     heartbeat::{Action, Heartbeat},
+    routes::Decision,
+    session::{self, AttachReply, AttachRequest, Control, Resume},
 };
 
 #[wasm_bindgen(module = "/src/rpc_compression.js")]
@@ -48,6 +51,7 @@ pub(super) struct Socket {
     channel: Option<SecureChannel>,
     heartbeat: Option<Heartbeat>,
     account: Option<Account>,
+    session: Option<Session>,
     clock: web_time::Instant,
     plain_probe: zuse_protocol::rpc_probe::Probe,
     // Connection.send can cancel receive. Keep an in-progress decode owned
@@ -182,6 +186,7 @@ impl Socket {
             channel: None,
             heartbeat: None,
             account: None,
+            session: None,
             clock: web_time::Instant::now(),
             plain_probe: Default::default(),
             decoder: create_rpc_decoder(),
@@ -331,6 +336,13 @@ impl Socket {
             return Err("Engine connection is too slow".into());
         }
         if self.channel.is_some() {
+            if let Some(session) = &mut self.session {
+                let wire = session::encode_message(text.as_bytes(), session.compress);
+                session.resume.record_sent(wire.clone());
+                // A failed write is kept and resent after reattaching.
+                let _ = self.send_secure(&wire);
+                return Ok(());
+            }
             self.send_secure(text.as_bytes())?;
         } else {
             self.socket
@@ -344,11 +356,18 @@ impl Socket {
             return self.receive_account().await;
         }
         loop {
+            self.send_due_ack()?;
             let frame = if let Some(pending) = self.pending_text.as_mut() {
                 let decoded = pending.await;
                 self.pending_text = None;
                 Incoming::Text(decoded?)
-            } else if let Some(ms) = self.poll_heartbeat()? {
+            } else if let Some(ms) = self.poll_heartbeat()?.map(|ms| {
+                if self.session.is_some() {
+                    ms.min(session::ACK_INTERVAL_MS)
+                } else {
+                    ms
+                }
+            }) {
                 futures::select_biased! {
                     frame = self.raw().fuse() => frame?,
                     _ = super::connection::delay(ms as u32).fuse() => continue,
@@ -400,14 +419,353 @@ impl Socket {
                                 .consume(&message, self.clock.elapsed().as_millis() as u64)
                                 .map_err(|error| error.to_string())?
                             {
+                                self.record_rtt();
                                 continue;
                             }
                         }
-                        return String::from_utf8(message)
-                            .map_err(|_| "Invalid engine message".into());
+                        if self.session.is_none() {
+                            return String::from_utf8(message)
+                                .map_err(|_| "Invalid engine message".into());
+                        }
+                        match self.receive_session(message)? {
+                            Some(text) => return Ok(text),
+                            None => continue,
+                        }
                     }
                 }
                 _ => return Err("Engine sent an unexpected transport frame".into()),
+            }
+        }
+    }
+}
+/// A paired session that outlives this WebSocket; see `zuse_remote::session`.
+struct Session {
+    id: String,
+    resume: Resume,
+    compress: bool,
+    route: Route,
+    table: Rc<RefCell<RouteTable>>,
+    invitation: Invitation,
+    ack_at: web_time::Instant,
+    ended: bool,
+}
+const RACE_STAGGER_MS: u32 = 200;
+pub(super) type ProbeResult = (Route, Option<(Socket, u32)>);
+
+fn now_ms() -> u64 {
+    js_sys::Date::now() as u64
+}
+impl Socket {
+    /// Browsers can only open HTTPS routes from an HTTPS page, so the race
+    /// and later probes are limited to those.
+    async fn race(
+        table: &Rc<RefCell<RouteTable>>,
+        invitation: &Invitation,
+    ) -> Result<(Socket, Route), String> {
+        use futures::stream::FuturesUnordered;
+        let mut queue = std::collections::VecDeque::from(table.borrow().dial_order(true));
+        let mut pending = FuturesUnordered::new();
+        let start = |route: Route, pending: &mut FuturesUnordered<_>| {
+            let invitation = invitation.clone();
+            pending.push(
+                async move {
+                    let url = PairedTarget::for_route(&route.origin, invitation.clone())
+                        .map_err(|_| "Invalid route".to_owned())?
+                        .socket_url();
+                    let socket = Self::connect(&url, Some(&invitation)).await?;
+                    Ok::<_, String>((socket, route))
+                }
+                .boxed_local(),
+            );
+        };
+        let first = queue.pop_front().ok_or("No route to the paired engine")?;
+        start(first, &mut pending);
+        let mut last_error = "Could not reach engine".to_owned();
+        loop {
+            futures::select_biased! {
+                finished = pending.next().fuse() => match finished {
+                    Some(Ok(winner)) => return Ok(winner),
+                    Some(Err(error)) => {
+                        last_error = error;
+                        if let Some(next) = queue.pop_front() {
+                            start(next, &mut pending);
+                        } else if pending.is_empty() {
+                            return Err(last_error);
+                        }
+                    }
+                    None => return Err(last_error),
+                },
+                _ = super::connection::delay(RACE_STAGGER_MS).fuse() => {
+                    if let Some(next) = queue.pop_front() {
+                        start(next, &mut pending);
+                    }
+                },
+            }
+        }
+    }
+
+    /// Open a session over the fastest route that answers.
+    pub async fn connect_paired(
+        table: Rc<RefCell<RouteTable>>,
+        invitation: &Invitation,
+    ) -> Result<Self, String> {
+        let (mut socket, route) = Self::race(&table, invitation).await?;
+        table.borrow_mut().record_connected(&route, now_ms());
+        // A host that predates sessions answers with an error and stays usable.
+        if let Some(reply) = socket
+            .exchange_attach(&AttachRequest {
+                session: None,
+                received: 0,
+                caps: vec![session::CAP_LZ4.into()],
+            })
+            .await?
+        {
+            table.borrow_mut().learn(reply.routes.clone());
+            socket.session = Some(Session {
+                id: reply.session.clone(),
+                resume: Resume::default(),
+                compress: reply.caps.iter().any(|cap| cap == session::CAP_LZ4),
+                route,
+                table,
+                invitation: invitation.clone(),
+                ack_at: web_time::Instant::now(),
+                ended: false,
+            });
+        }
+        Ok(socket)
+    }
+
+    async fn exchange_attach(
+        &mut self,
+        request: &AttachRequest,
+    ) -> Result<Option<AttachReply>, String> {
+        let frame = serde_json::json!({
+            "id": session::ATTACH_ID,
+            "method": session::ATTACH_METHOD,
+            "params": request,
+        })
+        .to_string();
+        self.send_secure(frame.as_bytes())?;
+        let reply = async {
+            loop {
+                let Incoming::Binary(record) = self.raw().await? else {
+                    return Err("Unexpected transport frame".to_owned());
+                };
+                let channel = self.channel.as_mut().ok_or("Paired channel unavailable")?;
+                let Some(payload) = channel
+                    .open(&record)
+                    .map_err(|_| "Paired authentication failed")?
+                else {
+                    continue;
+                };
+                let value: serde_json::Value =
+                    serde_json::from_slice(&payload).map_err(|_| "Invalid attach reply")?;
+                if value["id"].as_u64() != Some(session::ATTACH_ID) {
+                    return Err("Invalid attach reply".to_owned());
+                }
+                if value.get("err").is_some() {
+                    return Ok(None);
+                }
+                return serde_json::from_value(value["ok"].clone())
+                    .map(Some)
+                    .map_err(|_| "Invalid attach reply".to_owned());
+            }
+        };
+        futures::select_biased! {
+            reply = reply.fuse() => reply,
+            _ = super::connection::delay(10_000).fuse() => Err("Paired host did not attach".into()),
+        }
+    }
+
+    /// True when a lost socket can be replaced without disturbing the session.
+    pub fn resumable(&self) -> bool {
+        self.session.as_ref().is_some_and(|s| !s.ended)
+    }
+
+    /// The address uploads should use while this route is active.
+    pub fn current_target(&self) -> Option<PairedTarget> {
+        let session = self.session.as_ref()?;
+        PairedTarget::for_route(&session.route.origin, session.invitation.clone()).ok()
+    }
+
+    /// What the interface shows about the route in use.
+    pub fn route_status(&self) -> Option<serde_json::Value> {
+        let session = self.session.as_ref()?;
+        Some(serde_json::json!({
+            "kind": session.route.kind,
+            "label": session.route.kind.label(),
+            "rttMs": session.table.borrow().rtt(&session.route),
+        }))
+    }
+
+    fn record_rtt(&mut self) {
+        let rtt = self.heartbeat.as_ref().and_then(Heartbeat::last_rtt_ms);
+        if let (Some(rtt), Some(session)) = (rtt, &self.session) {
+            session.table.borrow_mut().record_rtt(&session.route, rtt);
+        }
+    }
+
+    fn send_due_ack(&mut self) -> Result<(), String> {
+        let Some(session) = &mut self.session else {
+            return Ok(());
+        };
+        if session.ack_at.elapsed().as_millis() < session::ACK_INTERVAL_MS as u128 {
+            return Ok(());
+        }
+        session.ack_at = web_time::Instant::now();
+        match session.resume.pending_ack() {
+            Some(ack) => self.send_secure(&ack),
+            None => Ok(()),
+        }
+    }
+
+    fn receive_session(&mut self, message: Vec<u8>) -> Result<Option<String>, String> {
+        let session = self.session.as_mut().ok_or("Paired session unavailable")?;
+        match session::parse_control(&message).map_err(|_| "Invalid session frame")? {
+            Some(Control::Ack(count)) => {
+                session
+                    .resume
+                    .acknowledge(count)
+                    .map_err(|_| "Invalid session frame")?;
+                return Ok(None);
+            }
+            Some(Control::Routes(routes)) => {
+                session.table.borrow_mut().learn(routes);
+                return Ok(None);
+            }
+            Some(Control::End) => {
+                session.ended = true;
+                return Err("Paired session ended".into());
+            }
+            None => {}
+        }
+        let size = message.len();
+        let decoded = session::decode_message(message).map_err(|_| "Invalid engine message")?;
+        let text = String::from_utf8(decoded).map_err(|_| "Invalid engine message")?;
+        if let Some(ack) = session.resume.record_received(size) {
+            self.send_secure(&ack)?;
+        }
+        Ok(Some(text))
+    }
+
+    /// Move this session onto `next`. False means the host no longer has it.
+    async fn adopt(&mut self, mut next: Socket, route: Route) -> Result<bool, String> {
+        let mut carried = self.session.take().ok_or("Paired session unavailable")?;
+        let reply = next
+            .exchange_attach(&AttachRequest {
+                session: Some(carried.id.clone()),
+                received: carried.resume.received(),
+                caps: vec![session::CAP_LZ4.into()],
+            })
+            .await;
+        let reply = match reply {
+            Ok(Some(reply)) => reply,
+            Ok(None) | Err(_) => {
+                self.session = Some(carried);
+                return Err("Paired host did not attach".into());
+            }
+        };
+        if !reply.resumed {
+            return Ok(false);
+        }
+        carried.table.borrow_mut().learn(reply.routes.clone());
+        let replay = carried
+            .resume
+            .rewind(reply.received)
+            .map_err(|_| "Invalid session state")?;
+        for wire in replay {
+            next.send_secure(&wire)?;
+        }
+        carried.route = route;
+        next.session = Some(carried);
+        *self = next;
+        Ok(true)
+    }
+
+    /// Replace a lost socket within the host's holding window.
+    pub async fn reattach(&mut self) -> bool {
+        let deadline = now_ms() + session::CLIENT_RESUME_WINDOW_MS;
+        let mut backoff = 100;
+        let Some((table, invitation)) = self
+            .session
+            .as_ref()
+            .map(|s| (s.table.clone(), s.invitation.clone()))
+        else {
+            return false;
+        };
+        while now_ms() < deadline {
+            if let Ok((next, route)) = Self::race(&table, &invitation).await {
+                match self.adopt(next, route.clone()).await {
+                    Ok(true) => {
+                        table.borrow_mut().record_connected(&route, now_ms());
+                        return true;
+                    }
+                    Ok(false) => return false,
+                    Err(_) => {}
+                }
+            }
+            super::connection::delay(backoff).await;
+            backoff = (backoff * 2).min(2_000);
+        }
+        false
+    }
+
+    /// A probe to run beside the session when one is due. It owns everything
+    /// it needs, so the session keeps working while it is in flight.
+    pub fn due_probe(&self) -> Option<futures::future::LocalBoxFuture<'static, ProbeResult>> {
+        let session = self.session.as_ref()?;
+        let route = session
+            .table
+            .borrow()
+            .probes_due(&session.route, now_ms(), true)
+            .into_iter()
+            .next()?;
+        let invitation = session.invitation.clone();
+        Some(
+            async move {
+                let measured = async {
+                    let url = PairedTarget::for_route(&route.origin, invitation.clone())
+                        .ok()?
+                        .socket_url();
+                    let socket = Self::connect(&url, Some(&invitation)).await.ok()?;
+                    let rtt = socket.heartbeat.as_ref()?.last_rtt_ms()?;
+                    Some((socket, rtt))
+                }
+                .await;
+                (route, measured)
+            }
+            .boxed_local(),
+        )
+    }
+
+    /// Apply a probe result, moving the session if the route clearly won.
+    pub async fn finish_probe(&mut self, result: ProbeResult) -> bool {
+        let (route, measured) = result;
+        let Some(session) = &self.session else {
+            return true;
+        };
+        let table = session.table.clone();
+        let current = session.route.clone();
+        let Some((candidate, rtt)) = measured else {
+            table.borrow_mut().record_failure(&route, now_ms());
+            return true;
+        };
+        let decision = table
+            .borrow_mut()
+            .judge_probe(&current, &route, rtt, now_ms());
+        if decision != Decision::Switch {
+            return true;
+        }
+        match self.adopt(candidate, route.clone()).await {
+            Ok(alive) => {
+                if alive {
+                    table.borrow_mut().record_switched(&route, now_ms());
+                }
+                alive
+            }
+            Err(_) => {
+                table.borrow_mut().record_failed_takeover(&route, now_ms());
+                true
             }
         }
     }

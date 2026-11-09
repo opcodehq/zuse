@@ -358,6 +358,22 @@ struct WorkspaceView: View {
     composerFocused || !workspace.attachments.isEmpty
       || workspace.transcript.activeTurnID != nil
   }
+  /// Where a message from the composer will run.
+  private var composerContext: String? {
+    let name = workspace.projects.first { $0.id == workspace.selectedSession?.projectId }?.name
+    let parts = [name, branchName].compactMap { $0 }
+    return parts.isEmpty ? nil : parts.joined(separator: " · ")
+  }
+  private var composerPlaceholder: String {
+    if workspace.connectionIssue { return "Reconnecting to your computer…" }
+    return workspace.transcript.activeTurnID != nil ? "Send a follow-up…" : "Ask Zuse"
+  }
+  private var hasDraft: Bool {
+    !workspace.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      || !workspace.attachments.isEmpty
+  }
+  /// Mid-turn a written message is a follow-up, and the host queues it.
+  private var stopsTurn: Bool { workspace.transcript.activeTurnID != nil && !hasDraft }
   private var composer: some View {
     VStack(spacing: 8) {
       connectionNotice
@@ -377,7 +393,12 @@ struct WorkspaceView: View {
             }.padding(.horizontal, 12).padding(.top, 10)
           }.scrollIndicators(.hidden)
         }
-        TextField("Ask Zuse", text: $workspace.draft, axis: .vertical)
+        if composerExpanded, let context = composerContext {
+          Text(context).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 14).padding(.top, 10)
+        }
+        TextField(composerPlaceholder, text: $workspace.draft, axis: .vertical)
           .disabled(!workspace.composerEditable && workspace.connectionState != "Preview · offline")
           .focused($composerFocused).accessibilityIdentifier("chat-composer")
           .font(.system(size: 17)).lineLimit(1...(composerExpanded ? 6 : 1))
@@ -501,7 +522,7 @@ struct WorkspaceView: View {
   private var sendControl: some View {
     Button {
       Task {
-        if workspace.transcript.activeTurnID != nil {
+        if stopsTurn {
           await workspace.stop()
         } else {
           await workspace.send()
@@ -509,22 +530,15 @@ struct WorkspaceView: View {
       }
     } label: {
       ComposerSendGlyph(
-        symbol: workspace.transcript.activeTurnID != nil ? "stop.fill" : "arrow.up",
+        symbol: stopsTurn ? "stop.fill" : "arrow.up",
         enabled: !sendDisabled, busy: workspace.sending)
     }.buttonStyle(.plain)
-      .accessibilityLabel(
-        workspace.transcript.activeTurnID != nil ? "Stop response" : "Send message"
-      )
+      .accessibilityLabel(stopsTurn ? "Stop response" : "Send message")
       .disabled(sendDisabled).keyboardShortcut(.return, modifiers: [.command])
   }
   private var sendDisabled: Bool {
-    if workspace.transcript.activeTurnID != nil {
-      return workspace.sending || workspace.connectionState != "Connected"
-    }
-    return !workspace.canSend || workspace.sending
-      || (workspace.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        && workspace.attachments.isEmpty)
-
+    if stopsTurn { return workspace.sending || workspace.connectionState != "Connected" }
+    return !workspace.canSend || workspace.sending || !hasDraft
   }
 }
 

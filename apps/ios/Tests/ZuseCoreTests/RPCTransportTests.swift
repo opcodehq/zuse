@@ -520,6 +520,43 @@ struct RPCTransportTests {
     #endif
   }()
 
+  /// Set by acceptance runs against an isolated engine. Linux Foundation has
+  /// no WebSocket client, so only Apple platforms can run this.
+  private static let realHost: (address: URL, token: String)? = {
+    #if !canImport(Darwin)
+      if true { return nil }
+    #endif
+    let environment = ProcessInfo.processInfo.environment
+    guard bridgeAvailable, let address = environment["ZUSE_NATIVE_RPC_ADDRESS"].flatMap(URL.init),
+      let token = environment["ZUSE_NATIVE_RPC_TOKEN"]
+    else { return nil }
+    return (address, token)
+  }()
+
+  @Test(.enabled(if: Self.realHost != nil))
+  func pairedConnectionReachesARealHostThroughTheLink() async throws {
+    let (address, token) = try #require(Self.realHost)
+    let owner = try RPCClient(url: address, token: token)
+    try await owner.connect()
+    let grant = try await owner.call(
+      "CreatePairing", ["label": .string("Native acceptance")])
+    let fragment = try #require(grant["fragment"].string)
+    var origin = try #require(URLComponents(url: address, resolvingAgainstBaseURL: false))
+    origin.scheme = "http"
+    origin.path = ""
+    let routes = LockedRoutes()
+    let paired = try RPCClient(
+      pairingLink: try #require(origin.url).absoluteString + "/" + fragment,
+      onRoute: { routes.append($0) })
+    try await paired.connect()
+    let info = try await paired.call("EngineInfo")
+    #expect(info["deviceId"].string?.isEmpty == false)
+    #expect(routes.last?.state == "connected")
+    #expect(routes.last?.resumable == true)
+    await paired.close()
+    await owner.close()
+  }
+
   @Test(.enabled(if: Self.bridgeAvailable))
   func loadedBridgeValidatesInvitationsAndRetiresFailedSessions() throws {
     let native = try NativePairing()
@@ -548,4 +585,11 @@ struct RPCTransportTests {
       _ = try native.request(["op": .string("poll"), "handle": handle])
     }
   }
+}
+
+private final class LockedRoutes: @unchecked Sendable {
+  private let lock = NSLock()
+  private var values: [PairedRouteStatus] = []
+  func append(_ value: PairedRouteStatus) { lock.withLock { values.append(value) } }
+  var last: PairedRouteStatus? { lock.withLock { values.last } }
 }

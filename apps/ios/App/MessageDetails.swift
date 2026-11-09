@@ -210,14 +210,7 @@ struct ToolTreeRow: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var expanded = false
   private var message: ChatMessage { row.message }
-  private var title: String {
-    message.kind == "thinking" ? "Reasoning" : message.content["tool"].string ?? "Tool output"
-  }
-  private var summary: String {
-    let input = message.content["input"]
-    return input["command"].string ?? input["file_path"].string ?? input["path"].string
-      ?? input["description"].string ?? ""
-  }
+  private var step: ToolStep { row.step }
   var body: some View {
     HStack(alignment: .top, spacing: 7) {
       TreeConnector(previous: row.joinsPrevious, next: row.joinsNext)
@@ -228,18 +221,19 @@ struct ToolTreeRow: View {
           changeExpansion()
         } label: {
           HStack(spacing: 7) {
-            Image(systemName: message.kind == "thinking" ? "brain" : "terminal")
-              .font(.system(size: 14)).frame(width: 18).foregroundStyle(.secondary)
-            Text(title).font(.system(size: 14, weight: .medium)).foregroundStyle(.secondary)
-            if !summary.isEmpty {
-              Text(summary).font(.system(size: 13, design: .monospaced))
+            if row.running {
+              ProgressView().controlSize(.mini).frame(width: 18)
+            } else {
+              Image(systemName: row.failed ? "exclamationmark.circle" : step.symbol)
+                .font(.system(size: 14)).frame(width: 18)
+                .foregroundStyle(row.failed ? Color.red : Color.secondary)
+            }
+            Text(step.label).font(.system(size: 14, weight: .medium)).foregroundStyle(.secondary)
+            if !step.detail.isEmpty {
+              Text(step.detail).font(.system(size: 13, design: .monospaced))
                 .lineLimit(1).truncationMode(.middle).foregroundStyle(.secondary)
                 .padding(.horizontal, 6).padding(.vertical, 3)
                 .background(.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 5))
-            }
-            if let result = row.result, result.content["isError"].bool {
-              Image(systemName: "exclamationmark.circle").font(.system(size: 13)).foregroundStyle(
-                .red)
             }
             Image(systemName: "chevron.right")
               .font(.system(size: 10, weight: .medium)).foregroundStyle(.tertiary)
@@ -316,7 +310,9 @@ struct ToolActivityGroup: View {
   let group: TranscriptGroup
   var toggleDisclosure: ((() -> Void) -> Void)? = nil
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  @State private var expanded = true
+  /// Set only by a tap. Otherwise running work stays open and settled work folds.
+  @State private var choice: Bool?
+  private var expanded: Bool { choice ?? group.hasRunningTool }
   @State private var page: Int
   private let pageSize = 12
   init(group: TranscriptGroup, toggleDisclosure: ((() -> Void) -> Void)? = nil) {
@@ -324,17 +320,15 @@ struct ToolActivityGroup: View {
     self.toggleDisclosure = toggleDisclosure
     _page = State(initialValue: max(0, (group.rows.count - 1) / 12))
   }
-  private var heading: String {
-    group.toolCount == 0
-      ? "Activity" : "\(group.toolCount) tool \(group.toolCount == 1 ? "call" : "calls")"
-  }
+  private var heading: String { group.title }
+  private func toggle() { choice = !expanded }
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
       Button {
         if let toggleDisclosure {
-          toggleDisclosure { expanded.toggle() }
+          toggleDisclosure { toggle() }
         } else {
-          expanded.toggle()
+          toggle()
         }
       } label: {
         HStack(spacing: 7) {
@@ -342,7 +336,12 @@ struct ToolActivityGroup: View {
             .font(.system(size: 11, weight: .medium))
             .rotationEffect(.degrees(expanded ? 90 : 0))
             .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: expanded)
-          Text(heading).font(.system(size: 14)).monospacedDigit()
+          Text(heading).font(.system(size: 14)).monospacedDigit().lineLimit(1)
+            .truncationMode(.middle)
+          if group.failed {
+            Image(systemName: "exclamationmark.circle").font(.system(size: 13)).foregroundStyle(
+              .red)
+          }
         }.foregroundStyle(.secondary).frame(minHeight: 34).contentShape(Rectangle())
       }.buttonStyle(.plain).padding(.horizontal, 20)
         .accessibilityLabel(heading).accessibilityValue(expanded ? "Expanded" : "Collapsed")

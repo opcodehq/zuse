@@ -474,7 +474,7 @@ struct ComputerConnectionsView: View {
             } label: {
               SettingsRow(
                 title: connection.displayName,
-                subtitle: current ? workspace.connectionState : connection.transportName,
+                subtitle: current ? workspace.connectionSummary : connection.transportName,
                 icon: "laptopcomputer", brand: current)
             }.contextMenu {
               Button("Forget computer", role: .destructive) { forgetting = connection }
