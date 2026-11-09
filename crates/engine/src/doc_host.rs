@@ -3616,7 +3616,7 @@ impl DocHost {
         let handle = self.open(chat_id)?;
         let id = new_id();
         if self.inner.store.durable_commits()
-            && let Some(mut request) = self.request_from_chat_row(chat_id, text)
+            && let Some(mut request) = self.continuation_request_from_chat_row(chat_id, text)
         {
             if let Some(previous) = self
                 .sessions()
@@ -4444,7 +4444,7 @@ impl DocHost {
         let previous = sessions.last_request(chat_id);
         // ... and on its model, effort and options, not the chat's saved ones.
         let request = held.or_else(|| {
-            self.request_from_chat_row(chat_id, &prompt)
+            self.continuation_request_from_chat_row(chat_id, &prompt)
                 .map(|mut current| {
                     if let Some(previous) = &previous {
                         current.auto_approve = previous.auto_approve;
@@ -5927,7 +5927,7 @@ impl DocHost {
                 // makes that answer still WORK.
                 let request = sessions
                     .last_request(chat_id)
-                    .or_else(|| self.request_from_chat_row(chat_id, ""));
+                    .or_else(|| self.continuation_request_from_chat_row(chat_id, ""));
                 let Some(mut request) = request else {
                     return Ok((
                         SessionCommandStatus::Rejected,
@@ -6055,7 +6055,7 @@ impl DocHost {
                 }
                 let request = sessions
                     .last_request(chat_id)
-                    .or_else(|| self.request_from_chat_row(chat_id, &prompt));
+                    .or_else(|| self.continuation_request_from_chat_row(chat_id, &prompt));
                 let Some(mut request) = request else {
                     return Ok((
                         SessionCommandStatus::Rejected,
@@ -6363,6 +6363,21 @@ impl DocHost {
         Ok(true)
     }
 
+    /// [`Self::request_from_chat_row`] for continuing the user's own chat
+    /// after a restart. The row saves the sandbox but not `auto_approve`, so
+    /// derive it the way the composer does; otherwise a Full access chat
+    /// comes back asking for approval. Automated runs (Zots, CI repair,
+    /// voice) keep using the row as-is and never gain the bypass here.
+    pub(crate) fn continuation_request_from_chat_row(
+        &self,
+        chat_id: &str,
+        prompt: &str,
+    ) -> Option<zuse_protocol::RunRequest> {
+        let mut request = self.request_from_chat_row(chat_id, prompt)?;
+        request.auto_approve = request.sandbox == zuse_protocol::SandboxLevel::DangerFullAccess;
+        Some(request)
+    }
+
     /// A steer-turned-run with no in-process `last_request` (engine restarted
     /// since the last turn): rebuild the run config from the chat's workspace
     /// row — cwd from the row, model/reasoning/options/sandbox from its config
@@ -6524,6 +6539,79 @@ fn encode_part_segment(part_id: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod continuation_request_tests {
+    use super::*;
+    use zuse_protocol::{ChatConfig, SandboxLevel};
+
+    fn host_with_chat(root: &std::path::Path, sandbox: SandboxLevel) -> DocHost {
+        let store = Arc::new(DocsStore::open(root).unwrap());
+        let host = DocHost::new(
+            store.clone(),
+            DocHostConfig {
+                device_id: "host".into(),
+                default_harness: HarnessId::Mock,
+                edge: None,
+            },
+        );
+        let workspace = WorkspaceHost::open(
+            store,
+            crate::workspace_host::WorkspaceHostConfig {
+                device_id: "host".into(),
+                device_name: "Test host".into(),
+                platform: "linux".into(),
+                org_id: "test-org".into(),
+                user_id: "test-user".into(),
+                edge: None,
+                local_only: false,
+            },
+        )
+        .unwrap();
+        let config = ChatConfig {
+            plan: false,
+            harness: HarnessId::Mock,
+            model: None,
+            reasoning: None,
+            model_options: Default::default(),
+            sandbox,
+        };
+        workspace
+            .create_chat("chat", None, Some("host"), Some(config), None)
+            .unwrap();
+        host.set_workspace(workspace);
+        host
+    }
+
+    #[tokio::test]
+    async fn restarted_full_access_chat_keeps_its_approval_bypass() {
+        let root = tempfile::tempdir().unwrap();
+        let host = host_with_chat(root.path(), SandboxLevel::DangerFullAccess);
+        let request = host
+            .continuation_request_from_chat_row("chat", "go on")
+            .unwrap();
+        assert!(request.auto_approves_tools());
+        // Automated callers read the row directly and stay without the bypass.
+        assert!(
+            !host
+                .request_from_chat_row("chat", "go on")
+                .unwrap()
+                .auto_approve
+        );
+    }
+
+    #[tokio::test]
+    async fn restarted_restricted_chats_still_ask() {
+        for sandbox in [SandboxLevel::WorkspaceWrite, SandboxLevel::Auto] {
+            let root = tempfile::tempdir().unwrap();
+            let host = host_with_chat(root.path(), sandbox);
+            let request = host
+                .continuation_request_from_chat_row("chat", "go on")
+                .unwrap();
+            assert!(!request.auto_approve, "{sandbox:?}");
+        }
+    }
 }
 
 #[cfg(test)]
