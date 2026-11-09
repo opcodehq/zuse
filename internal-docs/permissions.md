@@ -1,6 +1,6 @@
 # Chat permissions
 
-A new chat starts with the saved permission default. Its composer can select Ask for approval, Approve for me, Full access, or Read only. An existing chat retains its own configuration when the default changes. Read only remains selectable for existing restrictive workflows; it is not an automatic approval-judging mode.
+A new chat starts with the saved permission default. Choosing Ask for approval, Approve for me, or Full access in the composer also saves that choice as the global default for future chats across projects and app restarts. An existing chat retains its own configuration when the default changes. The temporary plan-mode toggle does not change the saved default.
 
 The canonical run contract is `RunRequest.sandbox` plus `autoApprove`. Approval bypass requires **both** `danger-full-access` and `autoApprove: true`, expressed by `RunRequest::auto_approves_tools()`. A stale auto-approval flag cannot authorize bypass for a restricted run. The native composer and browser persist existing-chat changes through `setChatConfig`, so later queued turns use the saved posture. Unconfirmed saves fence new sends until the current mode has been read again.
 

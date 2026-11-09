@@ -8,6 +8,54 @@ pub(super) struct PendingAccessSave {
     pub config: Value,
     pub previous: Value,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::prelude::v1::test;
+
+    #[gpui::test]
+    fn access_choice_becomes_the_default_for_the_next_project(cx: &mut TestAppContext) {
+        cx.update(initialize);
+        let (requests, mut saved) = futures::channel::mpsc::unbounded();
+        let (_events, frames) = futures::channel::mpsc::unbounded();
+        let window = cx.add_window(|window, cx| {
+            WorkspaceView::new(
+                Transport {
+                    requests,
+                    events: frames,
+                },
+                window,
+                cx,
+            )
+        });
+        window.update(cx, |view, _, cx| {
+            view.connected = true;
+            view.choose_access(SandboxLevel::DangerFullAccess, cx);
+            assert_eq!(view.preferences.default_permission_mode.sandbox(), SandboxLevel::DangerFullAccess);
+            view.project = Some(json!({"path":"/another-project"}));
+            assert!(view.new_chat(cx));
+            assert_eq!(view.sandbox, SandboxLevel::DangerFullAccess);
+
+            // Selecting an existing chat still uses its own saved access.
+            view.selected = Some(json!({"id":"existing","deviceId":"local","config":{"harness":"codex","sandbox":"read-only"}}));
+            view.workspace_synced = true;
+            view.choose_access(SandboxLevel::WorkspaceWrite, cx);
+            assert!(view.access_save.is_some());
+            assert_eq!(view.preferences.default_permission_mode.sandbox(), SandboxLevel::WorkspaceWrite);
+        }).unwrap();
+        let mut defaults = Vec::new();
+        while let Ok(frame) = saved.try_recv() {
+            if frame["ui"] == "savePreferences" {
+                defaults.push(frame["value"]["defaultPermissionMode"].clone());
+            }
+        }
+        assert_eq!(
+            defaults,
+            vec![json!("full-access"), json!("approval-required")]
+        );
+    }
+}
 impl WorkspaceView {
     pub(super) fn toggle_access(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.access_save.is_some() {
@@ -87,6 +135,7 @@ impl WorkspaceView {
         }
         let Some(chat) = self.selected.as_ref() else {
             self.sandbox = level;
+            self.remember_access(level);
             cx.notify();
             return;
         };
@@ -121,7 +170,15 @@ impl WorkspaceView {
             config,
             previous,
         });
+        self.remember_access(level);
         cx.notify();
+    }
+    fn remember_access(&mut self, level: SandboxLevel) {
+        let Some(mode) = zuse_protocol::presentation::PermissionMode::from_sandbox(level) else {
+            return;
+        };
+        self.preferences.default_permission_mode = mode;
+        self.save_preferences();
     }
     pub(super) fn receive_access(
         &mut self,

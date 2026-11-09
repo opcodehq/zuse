@@ -62,6 +62,14 @@ pub enum PermissionMode {
 }
 impl PermissionMode {
     pub const ALL: [Self; 3] = [Self::ApprovalRequired, Self::Auto, Self::FullAccess];
+    pub fn from_sandbox(level: crate::SandboxLevel) -> Option<Self> {
+        match level {
+            crate::SandboxLevel::WorkspaceWrite => Some(Self::ApprovalRequired),
+            crate::SandboxLevel::Auto => Some(Self::Auto),
+            crate::SandboxLevel::DangerFullAccess => Some(Self::FullAccess),
+            crate::SandboxLevel::ReadOnly => None,
+        }
+    }
     pub fn label(self) -> &'static str {
         access_details(self.sandbox()).label
     }
@@ -515,6 +523,16 @@ mod binary_switch_tests {
 mod permission_tests {
     use super::*;
     use crate::SandboxLevel;
+    #[test]
+    fn every_access_choice_round_trips_as_a_new_chat_default() {
+        for level in ACCESS_LEVELS {
+            let mode = PermissionMode::from_sandbox(level).unwrap();
+            let stored = serde_json::to_value(mode).unwrap();
+            let loaded: PermissionMode = serde_json::from_value(stored).unwrap();
+            assert_eq!(loaded.for_chat(None), level);
+            assert!(PermissionMode::ALL.contains(&loaded));
+        }
+    }
     #[test]
     fn new_defaults_never_rewrite_existing_or_legacy_chat_permissions() {
         let mut chat: crate::Chat = serde_json::from_value(serde_json::json!({"id":"c","deviceId":"d","archived":false,"createdAt":"2026-01-01T00:00:00Z","config":{"harness":"codex","sandbox":"read-only"}})).unwrap();
