@@ -25,6 +25,7 @@ use tokio::net::TcpStream;
 use tokio_tungstenite::MaybeTlsStream;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::error::{Error as WsError, UrlError};
+use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 
 /// Delay before starting the next address attempt while one is still pending
 /// (RFC 8305 §5's "Connection Attempt Delay"; 250ms is its recommended value).
@@ -37,9 +38,18 @@ pub type WsStream = crate::socket::Connection<MaybeTlsStream<crate::socket::Prog
 /// [`crate::wake::notify_online`] so sibling sockets waiting out a reconnect
 /// backoff redial immediately instead of sleeping through the recovery.
 pub async fn connect_ws(url: &str) -> Result<WsStream, WsError> {
+    connect_ws_with_config(url, None).await
+}
+
+/// [`connect_ws`] for callers with their own request headers or frame limits.
+pub async fn connect_ws_with_config<R: IntoClientRequest>(
+    request: R,
+    config: Option<WebSocketConfig>,
+) -> Result<WsStream, WsError> {
+    let request = request.into_client_request()?;
     // Bound DNS, all TCP attempts, TLS and HTTP upgrade together. Some
     // callers (notably the host relay) have no outer connection deadline.
-    tokio::time::timeout(Duration::from_secs(20), connect_ws_inner(url))
+    tokio::time::timeout(Duration::from_secs(20), connect_ws_inner(request, config))
         .await
         .map_err(|_| {
             WsError::Io(io::Error::new(
@@ -49,8 +59,10 @@ pub async fn connect_ws(url: &str) -> Result<WsStream, WsError> {
         })?
 }
 
-async fn connect_ws_inner(url: &str) -> Result<WsStream, WsError> {
-    let request = url.into_client_request()?;
+async fn connect_ws_inner(
+    request: tokio_tungstenite::tungstenite::handshake::client::Request,
+    config: Option<WebSocketConfig>,
+) -> Result<WsStream, WsError> {
     let uri = request.uri();
     let host = uri
         .host()
@@ -72,7 +84,7 @@ async fn connect_ws_inner(url: &str) -> Result<WsStream, WsError> {
     let _ = stream.set_nodelay(true);
     let (stream, progress) = crate::socket::ProgressIo::new(stream);
     let (ws, _response) =
-        tokio_tungstenite::client_async_tls_with_config(request, stream, None, None).await?;
+        tokio_tungstenite::client_async_tls_with_config(request, stream, config, None).await?;
     crate::wake::notify_online();
     Ok(crate::socket::Connection {
         socket: ws,

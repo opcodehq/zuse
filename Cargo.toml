@@ -183,11 +183,14 @@ strip = "symbols"
 [profile.dev]
 # gpui is slow unoptimized; match zed's approach for deps
 opt-level = 0
-# Full debug info is most of target/'s size; file:line backtraces are enough.
-debug = "line-tables-only"
+# Keep agent worktrees small: debug symbols and incremental state otherwise
+# accumulate tens of GB. Opt in per build when debugging compiler output.
+debug = 0
+incremental = false
 
 [profile.dev.package."*"]
 opt-level = 2
+debug = 0
 
 # Scenes rasterize in software every frame the camera moves.
 [profile.dev.package.zuse-visual]

@@ -34,8 +34,11 @@ public actor RPCClient {
   private var readiness: CheckedContinuation<Void, Error>?
   private var readinessTimer: Task<Void, Never>?
 
-  public init(pairingLink: String, session: URLSession = .shared) throws {
-    let paired = try PairedTransport(link: pairingLink, session: session)
+  public init(
+    pairingLink: String, session: URLSession = .shared,
+    onRoute: (@Sendable (PairedRouteStatus) -> Void)? = nil
+  ) throws {
+    let paired = try PairedTransport(link: pairingLink, session: session, onRoute: onRoute)
     transport = paired.transport
     canonical = true
     available = true

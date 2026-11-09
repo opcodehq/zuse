@@ -64,6 +64,14 @@ pub enum PermissionMode {
 }
 impl PermissionMode {
     pub const ALL: [Self; 3] = [Self::ApprovalRequired, Self::Auto, Self::FullAccess];
+    /// Convert a composer access selection into its persisted new-chat default.
+    pub fn from_sandbox(level: crate::SandboxLevel) -> Self {
+        match level {
+            crate::SandboxLevel::WorkspaceWrite => Self::ApprovalRequired,
+            crate::SandboxLevel::Auto => Self::Auto,
+            crate::SandboxLevel::DangerFullAccess => Self::FullAccess,
+        }
+    }
     pub fn label(self) -> &'static str {
         access_details(self.sandbox()).label
     }
@@ -539,6 +547,16 @@ mod binary_switch_tests {
 mod permission_tests {
     use super::*;
     use crate::SandboxLevel;
+    #[test]
+    fn every_access_choice_round_trips_as_a_new_chat_default() {
+        for level in ACCESS_LEVELS {
+            let mode = PermissionMode::from_sandbox(level);
+            let stored = serde_json::to_value(mode).unwrap();
+            let loaded: PermissionMode = serde_json::from_value(stored).unwrap();
+            assert_eq!(loaded.for_chat(None), level);
+            assert!(PermissionMode::ALL.contains(&loaded));
+        }
+    }
     #[test]
     fn new_defaults_never_rewrite_existing_or_legacy_chat_permissions() {
         let mut chat: crate::Chat = serde_json::from_value(serde_json::json!({"id":"c","deviceId":"d","archived":false,"createdAt":"2026-01-01T00:00:00Z","config":{"harness":"codex","sandbox":"read-only"}})).unwrap();

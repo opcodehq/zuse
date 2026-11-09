@@ -163,6 +163,7 @@ impl super::remote_connection::Source for Source {
                 outgoing,
                 incoming,
                 closed,
+                engine_info: None,
             },
             format!("cloud:{}", self.target.workspace),
         ))

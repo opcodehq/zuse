@@ -15,7 +15,12 @@ class MainActivity : ComponentActivity() {
     private val networkCallback =
         object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
+                sh.zuse.core.PairedNetwork.changed()
                 runOnUiThread { workspace.networkRecovered() }
+            }
+
+            override fun onLost(network: Network) {
+                sh.zuse.core.PairedNetwork.changed()
             }
         }
 

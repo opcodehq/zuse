@@ -13,3 +13,7 @@ zuse-remote = { path = "../remote" }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 base64 = "0.22"
+if-addrs = "0.15"
+
+[dev-dependencies]
+tempfile.workspace = true

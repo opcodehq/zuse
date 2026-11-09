@@ -149,6 +149,9 @@ trait EngineBackend: Send + Sync {
     fn remote_status(&self) -> Option<tokio::sync::watch::Receiver<remote_connection::Status>> {
         None
     }
+    fn link_status(&self) -> Option<remote_connection::LinkWatch> {
+        None
+    }
     fn retry_connection(&self) -> bool {
         false
     }
@@ -385,7 +388,9 @@ impl EngineHandle {
             return match target {
                 RemoteTarget::Cloud(target) => cloud_connection::bootstrap(target).await,
                 RemoteTarget::Account(target) => account_connection::bootstrap(target).await,
-                RemoteTarget::Paired(target) => remote_connection::paired(target).await,
+                RemoteTarget::Paired(target) => {
+                    remote_connection::paired(target, &config.data_dir).await
+                }
             };
         }
         // Invariant: at most one bootstrap in this process runs probe+embed at
@@ -671,6 +676,11 @@ impl EngineHandle {
 
     pub async fn media_client(&self) -> Result<RpcClient, RpcError> {
         self.inner.media_client().await
+    }
+
+    /// The route and latency of a paired connection, when this is one.
+    pub fn link_status(&self) -> Option<zuse_rpc::paired_link::LinkStatus> {
+        self.inner.link_status()?.borrow().clone()
     }
 
     pub fn engine_info(&self) -> &EngineInfo {

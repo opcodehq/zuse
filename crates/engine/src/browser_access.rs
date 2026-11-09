@@ -48,6 +48,8 @@ struct Shared {
     device_id: String,
     pairings: zuse_remote::authority::Authority,
     slots: Arc<tokio::sync::Semaphore>,
+    sessions: Arc<zuse_serve::PairedSessions>,
+    advertised: tokio::sync::watch::Sender<Vec<zuse_remote::Route>>,
     closed: CancellationToken,
     managed: Option<Arc<dyn zuse_serve::managed::Authority>>,
     state: Mutex<State>,
@@ -72,6 +74,8 @@ impl Owner {
             device_id,
             pairings,
             slots: Arc::new(tokio::sync::Semaphore::new(64)),
+            sessions: Arc::default(),
+            advertised: tokio::sync::watch::Sender::new(vec![]),
             closed: CancellationToken::new(),
             managed: None,
             state: Mutex::new(State::default()),
@@ -100,6 +104,13 @@ impl Owner {
 impl BrowserAccess {
     pub fn pairing_slots(&self) -> Arc<tokio::sync::Semaphore> {
         self.0.slots.clone()
+    }
+    /// Sessions continue across this profile's listeners and connectors.
+    pub fn paired_sessions(&self) -> Arc<zuse_serve::PairedSessions> {
+        self.0.sessions.clone()
+    }
+    pub fn advertised_routes(&self) -> tokio::sync::watch::Sender<Vec<zuse_remote::Route>> {
+        self.0.advertised.clone()
     }
     /// The foreground server owns its listener and shutdown; Settings can still
     /// issue invitations using its actual origin without starting a second host.
@@ -183,6 +194,8 @@ impl BrowserAccess {
         let mut browser = BrowserServer::new(service, token, options.public_origin.clone())?
             .with_pairings(self.0.pairings.clone(), self.0.device_id.clone())
             .with_pairing_slots(self.0.slots.clone())
+            .with_paired_sessions(self.0.sessions.clone())
+            .with_advertised_routes(self.0.advertised.subscribe())
             .with_shutdown_token(shutdown.clone());
         if let Some(authority) = &self.0.managed {
             browser = browser.with_managed_authority(authority.clone());

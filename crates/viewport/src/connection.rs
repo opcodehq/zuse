@@ -181,6 +181,9 @@ impl WorkspaceView {
         self.relay_fetch = None;
         self.relay_action = None;
         self.relay_status = Value::Null;
+        self.direct_fetch = None;
+        self.direct_action = None;
+        self.direct_status = Value::Null;
         self.pairing_action = None;
         self.terminal_watch = None;
         self.terminal_write = None;

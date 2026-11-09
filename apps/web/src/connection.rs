@@ -289,6 +289,14 @@ pub(super) async fn run(mut outbound: mpsc::UnboundedReceiver<Value>, events: Se
         .as_ref()
         .map(PairedTarget::socket_url)
         .unwrap_or_else(|| format!("{scheme}://{}/api/rpc", location.host().unwrap_or_default()));
+    let routes = target.as_ref().map(|target| {
+        std::rc::Rc::new(std::cell::RefCell::new(zuse_remote::RouteTable::new(
+            zuse_remote::Route {
+                kind: zuse_remote::routes::classify_origin(target.origin()),
+                origin: target.origin().to_owned(),
+            },
+        )))
+    });
     let mut link = BrowserLink::default();
     let mut attempt = 0;
     loop {
@@ -361,13 +369,13 @@ pub(super) async fn run(mut outbound: mpsc::UnboundedReceiver<Value>, events: Se
                 Some(controller) => {
                     super::socket::Socket::connect_account(controller.clone()).await
                 }
-                None => {
-                    super::socket::Socket::connect(
-                        &url,
-                        target.as_ref().map(PairedTarget::invitation),
-                    )
-                    .await
-                }
+                None => match (&routes, &target) {
+                    (Some(routes), Some(target)) => {
+                        super::socket::Socket::connect_paired(routes.clone(), target.invitation())
+                            .await
+                    }
+                    _ => super::socket::Socket::connect(&url, None).await,
+                },
             }
         };
         let Some(socket) = connecting(establish, &mut outbound, &events).await else {
@@ -413,10 +421,16 @@ pub(super) async fn run(mut outbound: mpsc::UnboundedReceiver<Value>, events: Se
             );
             controller.remember(&origin).await;
         }
-        let upload_target = controller
+        let paired_upload = |socket: &super::socket::Socket| {
+            socket
+                .current_target()
+                .or_else(|| target.clone())
+                .map(crate::attachments::UploadTarget::Paired)
+        };
+        let mut upload_target = controller
             .clone()
             .map(crate::attachments::UploadTarget::Account)
-            .or_else(|| target.clone().map(crate::attachments::UploadTarget::Paired));
+            .or_else(|| paired_upload(&socket));
         let epoch = link.open();
         crate::history_cache::opened(
             socket
@@ -427,14 +441,34 @@ pub(super) async fn run(mut outbound: mpsc::UnboundedReceiver<Value>, events: Se
         let _ =
             events.unbounded_send(json!({"connection":"connected","epoch":epoch,"paired":paired && account_target.is_none(),"accountRemote":account_target.is_some()}));
         let mut application_closed = false;
+        let mut probe = None;
+        let mut shown_route = Value::Null;
         loop {
             enum Next {
                 Inbound(Result<String, String>),
                 Outbound(Option<Value>),
+                Probed(super::socket::ProbeResult),
             }
-            let next = futures::select_biased! {
-                text = socket.receive().fuse() => Next::Inbound(text),
-                frame = outbound.next().fuse() => Next::Outbound(frame),
+            if probe.is_none() {
+                probe = socket.due_probe();
+            }
+            let route = socket.route_status().unwrap_or(Value::Null);
+            if route != shown_route {
+                let _ = events.unbounded_send(json!({"linkRoute":route}));
+                shown_route = route;
+            }
+            let next = {
+                let probed = async {
+                    match probe.as_mut() {
+                        Some(probe) => probe.await,
+                        None => futures::future::pending().await,
+                    }
+                };
+                futures::select_biased! {
+                    text = socket.receive().fuse() => Next::Inbound(text),
+                    frame = outbound.next().fuse() => Next::Outbound(frame),
+                    result = probed.fuse() => Next::Probed(result),
+                }
             };
             let frame = match next {
                 Next::Inbound(Ok(text)) => {
@@ -450,6 +484,37 @@ pub(super) async fn run(mut outbound: mpsc::UnboundedReceiver<Value>, events: Se
                                 }
                             }
                         }
+                    }
+                    continue;
+                }
+                Next::Probed(result) => {
+                    probe = None;
+                    let Some(alive) =
+                        connecting(socket.finish_probe(result), &mut outbound, &events).await
+                    else {
+                        application_closed = true;
+                        break;
+                    };
+                    if !alive {
+                        break;
+                    }
+                    if controller.is_none() {
+                        upload_target = paired_upload(&socket);
+                    }
+                    continue;
+                }
+                Next::Inbound(Err(_)) if socket.resumable() => {
+                    probe = None;
+                    let Some(resumed) = connecting(socket.reattach(), &mut outbound, &events).await
+                    else {
+                        application_closed = true;
+                        break;
+                    };
+                    if !resumed {
+                        break;
+                    }
+                    if controller.is_none() {
+                        upload_target = paired_upload(&socket);
                     }
                     continue;
                 }

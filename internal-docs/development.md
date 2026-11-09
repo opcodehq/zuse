@@ -7,6 +7,57 @@ The next send uses the saved provider/model choice and the engine's context
 handoff, retaining the same chat history. Each conversation tab shows its own
 provider icon. Pending first sends keep their original configuration snapshot.
 
+## Build speed and disk usage
+
+Use the Cargo launcher for local work:
+
+```sh
+python3 scripts/cargo_dev.py check -p zuse-engine
+python3 scripts/cargo_dev.py run -p zuse
+python3 scripts/cargo_dev.py test -p zuse-protocol --lib
+python3 scripts/cargo_dev.py --print-target-dir
+```
+
+Native and browser development launchers select the same cache automatically.
+Each repository gets one directory under `${XDG_CACHE_HOME:-~/.cache}/zuse/cargo`,
+identified by its common Git directory; linked worktrees reuse it. Browser output
+uses its `browser` subdirectory to isolate nightly/build-std artifacts. Set
+`CARGO_TARGET_DIR` to an absolute path to override the location. CI continues to
+use checkout-local `target` directories for Actions caching.
+
+Cargo locks the shared output during builds, so simultaneous worktree builds
+wait for one another. Switching branches may still rebuild changed crates;
+sharing avoids maintaining a full dependency tree for every worktree. Bare
+`cargo` uses the usual checkout-local target and does not get this sharing.
+
+Development builds omit debug symbols and incremental output to reduce disk
+usage, while retaining optimized dependencies for GPUI. For workspace debugging,
+set `CARGO_PROFILE_DEV_DEBUG=2`; dependency debugging additionally requires
+an override of `[profile.dev.package."*"].debug`. Set `CARGO_INCREMENTAL=1` to
+opt into faster incremental edits at the cost of more disk space.
+
+Cargo and native/browser development launchers check the development cache
+before builds and stop if it exceeds 20 GiB, printing a cleanup command. Stop
+concurrent builds, then run `python3 scripts/build_cache.py --clean` to remove
+oversized development artifacts from the shared cache (or pass `--target-dir`
+for an old checkout-local cache). Cargo clean does not lock out concurrent
+builds, so cleanup is explicit. Release outputs and source files remain.
+This is a pre-build retention budget, not a filesystem quota: one build can
+exceed it. Bare `cargo` bypasses the guard and cache sharing. Changing profile
+settings does not remove old artifacts.
+
+The launcher also supplies a hash of the icon license configuration. This lets
+Cargo reuse unchanged icons and their UI dependents without writing the license
+key into Cargo fingerprints. Key changes are picked up on the next invocation;
+restart a running native watcher after changing its environment. Bare Cargo
+retains automatic license detection but must rerun the icon selector every time.
+
+Existing checkout-local `target` directories are not moved or deleted. After
+stopping builds that use an old directory, `cargo clean --target-dir /path/to/old/target`
+reclaims it; the next build using that directory must compile again. To clear
+the shared cache, use `python3 scripts/cargo_dev.py clean`. Avoid cleaning as
+part of ordinary development, since that removes the output that speeds up builds.
+
 ## Native development reload
 
 Run `python3 scripts/dev-native.py` on macOS or Linux. It builds the app, starts
@@ -15,44 +66,11 @@ Successful builds relaunch only the native UI; active agents and chat history
 stay in the engine. Failed builds leave the current window running until the
 next edit. No watcher package is required.
 
-The launcher uses line-table debug symbols for first-party runtime crates,
-preserving line-number backtraces and existing third-party build profiles.
-Pass `--full-debug` when you need debugger variable/type inspection. Switching
-symbol profiles rebuilds affected local crates once. An explicit
-`CARGO_PROFILE_DEV_DEBUG` value is respected. Ordinary `cargo build` retains
-the workspace's original profile.
-
-The watcher follows the desktop's local runtime/build dependencies and bundled
-assets, excluding unrelated cloud crates, tests and package documentation.
-Content hashes ignore timestamp-only sync updates. A successful Cargo build
-that leaves the executable unchanged keeps the current UI open. Build duration
-is printed, and Cargo writes a report under `target/cargo-timings/`.
-The launcher also selects `ZUSE_ICON_STYLE=free` or `solid` from license-key
-presence before invoking Cargo. This public selector avoids the icon build
-script's automatic presence check forcing downstream recompilation every time;
-the license key itself is never added to Cargo's tracked environment inputs.
-An explicit selector is respected. Restart the launcher after changing icon
-credentials; when rotating a solid-icon key, rebuild the icon package explicitly
-to revalidate authorization. Direct Cargo builds retain automatic style checks.
-Desktop resource watches are platform-specific, so absent Windows resources do
-not force macOS/Linux builds to relink.
-
-On the owner's arm64 Mac (2026-10-29), the repaired cached build finished in
-1.69 seconds with all 1,113 artifacts fresh. The first successful local-crate
-recompile after disk recovery took 93 seconds. The cached measurement represents
-an unchanged build, not the latency of compiling a UI edit.
-
-Keep several GiB free for generated artifacts; large builds can require more.
-The launcher refuses to begin with less than 1 GiB available, but this cannot
-guarantee sufficient space for the whole build. It never deletes caches
-automatically. If disk space is tight, `CARGO_BUILD_JOBS=2` reduces concurrent
-compiler output; it does not reduce the final cache size. Avoid routine
-`cargo clean`, which discards reusable dependencies.
-
 This is automatic rebuild/relaunch, not Rust code replacement inside a running
 process. Unsaved editor buffers and UI-only drafts do not survive a relaunch.
-Engine or protocol changes require restarting the command so both processes use
-the new engine code. Ctrl+C stops the UI and its development engine.
+Changes outside the UI crates (`crates/ui`, `crates/viewport`) also restart the
+development engine, so both processes run the new code. Ctrl+C stops the UI and
+its development engine.
 
 The default profile is `.context/native-profile`, with IPC on `127.0.0.1:27664`.
 Use `--data-dir /path/to/profile` and `--ipc-port 27665` to override them;
@@ -62,7 +80,8 @@ cloud sync is opt-in through `ZUSE_WORKOS_CLIENT_ID` or `ZUSE_EDGE_TOKEN`.
 
 ### Staging cloud account sign-in
 
-General settings signs in through WorkOS device authorization. This is separate
+General settings signs in through the browser (WorkOS AuthKit with a loopback
+`http://127.0.0.1` callback); there is no device-code fallback. This is separate
 from the optional workspace/device/relay identity using `ZUSE_EDGE_URL` and
 `/auth/*`. The cloud REST API is not an auth-edge replacement.
 

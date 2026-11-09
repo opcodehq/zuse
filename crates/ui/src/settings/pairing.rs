@@ -17,6 +17,7 @@ pub struct PairingCard {
     engine: Option<EngineHandle>,
     status: Value,
     relay_status: Value,
+    direct_status: Value,
     relay_origin: Entity<ComposerInput>,
     relay_credential: Entity<ComposerInput>,
     peers: Vec<zuse_remote::PeerMetadata>,
@@ -61,6 +62,7 @@ impl PairingCard {
             this.peers.clear();
             this.status = Value::Null;
             this.relay_status = Value::Null;
+            this.direct_status = Value::Null;
             this.relay_origin
                 .update(cx, |input, cx| input.set_text("", cx));
             this.relay_credential
@@ -82,6 +84,7 @@ impl PairingCard {
             cx.new(|cx| ComposerInput::new("Private host credential file on this computer", cx));
         let mut card = Self {
             relay_status: Value::Null,
+            direct_status: Value::Null,
             relay_origin,
             relay_credential,
             state,
@@ -116,18 +119,25 @@ impl PairingCard {
         };
         let epoch = self.epoch;
         self.load = Some(cx.spawn(async move |this, cx| {
-            let (status, peers, relay) = futures::join!(
+            let (status, peers, relay, direct) = futures::join!(
                 engine
                     .client()
                     .call(methods::BROWSER_ACCESS_STATUS, json!({})),
                 engine.client().call(methods::LIST_PAIRINGS, json!({})),
                 engine
                     .client()
-                    .call(methods::RELAY_ACCESS_STATUS, json!({}))
+                    .call(methods::RELAY_ACCESS_STATUS, json!({})),
+                engine
+                    .client()
+                    .call(methods::DIRECT_ACCESS_STATUS, json!({}))
             );
             let _ = this.update(cx, |card, cx| {
                 if card.epoch != epoch {
                     return;
+                }
+                // Older hosts have no direct access to report.
+                if let Ok(status) = direct {
+                    card.direct_status = status;
                 }
                 match relay {
                     Ok(status) => card.relay_status = status,
@@ -168,9 +178,9 @@ impl PairingCard {
                     Ok(value)=>{
                         if method==methods::CREATE_PAIRING {
                             card.invitation=value["fragment"].as_str().and_then(|fragment|zuse_remote::Invitation::parse_fragment(fragment).ok())
-                                .and_then(|invitation|value["origin"].as_str().and_then(|origin|zuse_remote::PairedTarget::new(origin,invitation).ok()));
+                                .and_then(|invitation|value["origin"].as_str().and_then(|origin|zuse_remote::PairedTarget::for_route(origin,invitation).ok()));
                             if card.invitation.is_none(){card.error=Some("The invitation was created, but its connection URL is unavailable. Start browser or relay access before sharing it.".into());}
-                        }else if matches!(method, methods::REVOKE_PAIRING | methods::START_RELAY_ACCESS | methods::STOP_RELAY_ACCESS | methods::RESUME_RELAY_ACCESS | methods::SET_RELAY_AUTO_START){card.invitation=None;}
+                        }else if matches!(method, methods::REVOKE_PAIRING | methods::START_DIRECT_ACCESS | methods::STOP_DIRECT_ACCESS | methods::START_RELAY_ACCESS | methods::STOP_RELAY_ACCESS | methods::RESUME_RELAY_ACCESS | methods::SET_RELAY_AUTO_START){card.invitation=None;}
                         if method != methods::CREATE_PAIRING { card.dialog = None; }
                         card.refresh(cx);
                     },
@@ -413,7 +423,32 @@ impl PairingCard {
                 cx.listener(|this, _, window, cx| this.open_dialog(Dialog::Computer, window, cx)),
             )
             .into_any_element();
+        let direct_running = self.direct_status["running"] == true;
+        let direct_serve = self.direct_status["tailscaleServe"] == true;
+        let direct_routes = zuse_viewport::remote_access_style::route_summary(&self.direct_status);
+        let connected_through = self
+            .engine
+            .as_ref()
+            .and_then(|e| e.link_status())
+            .map(|link| {
+                let latency = link
+                    .rtt_ms
+                    .map(|ms| format!(" · {ms} ms"))
+                    .unwrap_or_default();
+                format!("Connected through {}{latency}", link.route.kind.label())
+            });
+        let direct = r::frame("Direct connections","Let paired devices reach this computer over your local network or Tailscale. Zuse uses whichever route is fastest and stays end-to-end encrypted.",None)
+            .child(s::card()
+                .when_some(connected_through,|v,line|v.child(widgets::card_row(&theme,true).child(details(&theme,"This window",&line))))
+                .child(widgets::card_row(&theme,true).child(details(&theme,"Local network and Tailscale",if direct_running {direct_routes.as_str()}else{"Off"}))
+                    .child(widgets::toggle_switch(&theme,direct_running,"native-direct-access").id("native-direct-access").role(Role::Switch).aria_label("Allow local network and Tailscale connections").aria_toggled(if direct_running {gpui::Toggled::True}else{gpui::Toggled::False}).tab_index(0)
+                        .on_click(cx.listener(move|this,_,_,cx|if direct_running {this.request(methods::STOP_DIRECT_ACCESS,json!({}),cx)}else{this.request(methods::START_DIRECT_ACCESS,json!({"tailscaleServe":direct_serve}),cx)}))))
+                .when(direct_running&&self.direct_status["tailscaleAvailable"]==true,|v|v.child(widgets::card_row(&theme,false).child(details(&theme,"Tailscale HTTPS","Also publish on your tailnet with a trusted certificate, so browsers can use it."))
+                    .child(widgets::toggle_switch(&theme,direct_serve,"native-tailscale-serve").id("native-tailscale-serve").role(Role::Switch).aria_label("Publish over Tailscale HTTPS").aria_toggled(if direct_serve {gpui::Toggled::True}else{gpui::Toggled::False}).tab_index(0)
+                        .on_click(cx.listener(move|this,_,_,cx|this.request(methods::START_DIRECT_ACCESS,json!({"tailscaleServe":!direct_serve}),cx))))))
+                .when_some(self.direct_status["error"].as_str(),|v,error|v.child(widgets::error_strip(&theme,error.to_owned()))));
         let advanced = Some(div().flex().flex_col().gap(px(10.))
+            .child(direct)
             .child(div().flex().justify_end().child(r::button("advanced-connection-settings",if self.advanced {"Hide advanced"}else{"Advanced connection settings"})
                 .on_click(cx.listener(|this,_,_,cx|{this.advanced=!this.advanced;cx.notify();}))))
             .when(self.advanced,|view| view.child(r::frame("Relay access","Configure an outbound relay for connections across networks.",None)

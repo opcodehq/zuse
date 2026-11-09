@@ -222,6 +222,7 @@ pub async fn connect_channel(
         outgoing,
         incoming,
         closed,
+        engine_info: None,
     })
 }
 pub struct Connection {

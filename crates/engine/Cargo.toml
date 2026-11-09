@@ -62,6 +62,7 @@ fff-search.workspace = true
 
 same-file = "1"
 tempfile.workspace = true
+if-addrs = "0.15"
 
 [target.'cfg(windows)'.dependencies]
 dunce = "1"

@@ -43,6 +43,7 @@ pub mod chat2_host;
 mod chat_persistence;
 pub mod desktop_import;
 pub mod diff_sync;
+pub mod direct_access;
 pub mod doc_host;
 pub mod execution;
 pub mod execution_progress;
@@ -187,6 +188,7 @@ pub struct EngineCore {
     pub pairings: zuse_remote::authority::Authority,
     pub browser_access: browser_access::Owner,
     pub relay_access: relay_access::Owner,
+    pub direct_access: direct_access::Owner,
     pub account: account::Account,
     pub managed_access: managed_access::AccountClient,
     pub managed_host: managed_access::host::Owner,
@@ -468,7 +470,24 @@ impl EngineCore {
             device_id.clone(),
             pairings.clone(),
             browser_access.control().pairing_slots(),
+        )
+        .with_paired_state(
+            browser_access.control().paired_sessions(),
+            browser_access.control().advertised_routes(),
         );
+        let direct_access = direct_access::Owner::new(
+            profile.store_root().into(),
+            device_id.clone(),
+            pairings.clone(),
+            &browser_access.control(),
+        );
+        direct_access
+            .control()
+            .set_other_routes(direct_access::OtherRoutes {
+                relay: Some(relay_access.control()),
+                browser: Some(browser_access.control()),
+                managed: Some(managed_host.control()),
+            });
         let usage = usage::Usage::local(profile.store_root().join("journals"));
         let pr_watches =
             pr_watch::PrWatches::open(profile.store_root(), workspace.clone(), doc_host.clone())?;
@@ -477,6 +496,7 @@ impl EngineCore {
             pr_watches,
             usage,
             relay_access,
+            direct_access,
             browser_access,
             pairings,
             harness_models,
@@ -673,6 +693,7 @@ impl EngineCore {
         .with_pairings(self.pairings.clone())
         .with_browser_access(self.browser_access.control())
         .with_relay_access(self.relay_access.control())
+        .with_direct_access(self.direct_access.control())
         .with_model_connections(self.model_connections.clone())
         .with_account(self.account.clone(), self.plugins.clone())
         .with_managed_access(self.managed_access.clone())
@@ -708,6 +729,7 @@ impl EngineCore {
     /// kill live PTYs, stamp our workspace `lastSeenAt`, and flush every open doc
     /// snapshot.
     pub async fn shutdown(&self) {
+        self.direct_access.begin_close();
         self.pr_watches.shutdown();
         self.managed_host.begin_close();
         self.browser_access.begin_close();
@@ -730,6 +752,7 @@ impl EngineCore {
         self.managed_host.close().await;
         self.browser_access.close().await;
         self.relay_access.close().await;
+        self.direct_access.close().await;
         self.sessions.shutdown().await;
         self.harness_models.shutdown().await;
         self.model_connections.retire().await;
@@ -1093,6 +1116,10 @@ impl Engine {
         });
 
         core.relay_access
+            .control()
+            .restore_on_startup(core.rpc_service())
+            .await;
+        core.direct_access
             .control()
             .restore_on_startup(core.rpc_service())
             .await;

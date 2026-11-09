@@ -79,7 +79,9 @@ async fn native_paired_reconnect_uses_fresh_encryption_without_replaying_a_write
         watches: AtomicUsize::new(0),
     });
     let (stop, task) = serve(listener, service.clone(), authority.clone(), root.path());
-    let engine = bounded(paired(target.clone())).await.unwrap();
+    let engine = bounded(paired(target.clone(), &std::env::temp_dir()))
+        .await
+        .unwrap();
     let mut status = engine.inner.remote_status().unwrap();
     let mut watch = engine
         .client()
@@ -156,7 +158,9 @@ async fn native_paired_reconnect_uses_fresh_encryption_without_replaying_a_write
         "fresh"
     );
     drop(independent);
-    let engine = bounded(paired(target)).await.unwrap();
+    let engine = bounded(paired(target, &std::env::temp_dir()))
+        .await
+        .unwrap();
     let mut status = engine.inner.remote_status().unwrap();
     service.info.write().unwrap().cursor_sdk_version = Some("updated".into());
     stop.cancel();

@@ -219,28 +219,33 @@ async fn upload_remote(
     let mut offset = 0usize;
     let mut seq = 0usize;
     let size = file.size() as usize;
+    // Chunks stay in flight together so a slow route is not limited to one
+    // chunk per round trip. The host orders them by `seq`.
+    let mut in_flight = std::collections::HashSet::new();
     loop {
-        let end = (offset + 45_000).min(size);
-        let slice = file
-            .slice_with_f64_and_f64(offset as f64, end as f64)
-            .map_err(|_| "Could not read attachment")?;
-        let bytes = JsFuture::from(slice.array_buffer())
-            .await
-            .map_err(|_| "Could not read attachment")?;
-        let data = base64::engine::general_purpose::STANDARD
-            .encode(js_sys::Uint8Array::new(&bytes).to_vec());
-        paired_upload_call(
-            &mut socket,
-            seq as u64 + 1,
-            zuse_protocol::methods::UPLOAD_CHUNK,
-            json!({"uploadId":upload_id,"seq":seq,"data":data}),
-        )
-        .await?;
-        seq += 1;
-        offset = end;
-        if offset == size {
+        while in_flight.len() < UPLOAD_WINDOW && (offset < size || seq == 0) {
+            let end = (offset + 45_000).min(size);
+            let slice = file
+                .slice_with_f64_and_f64(offset as f64, end as f64)
+                .map_err(|_| "Could not read attachment")?;
+            let bytes = JsFuture::from(slice.array_buffer())
+                .await
+                .map_err(|_| "Could not read attachment")?;
+            let data = base64::engine::general_purpose::STANDARD
+                .encode(js_sys::Uint8Array::new(&bytes).to_vec());
+            let id = seq as u64 + 1;
+            socket.send(
+                &json!({"id":id,"method":zuse_protocol::methods::UPLOAD_CHUNK,"params":{"uploadId":upload_id,"seq":seq,"data":data}})
+                    .to_string(),
+            )?;
+            in_flight.insert(id);
+            seq += 1;
+            offset = end;
+        }
+        if in_flight.is_empty() {
             break;
         }
+        await_upload_reply(&mut socket, &mut in_flight).await?;
     }
     let result = paired_upload_call(
         &mut socket,
@@ -254,6 +259,27 @@ async fn upload_remote(
     }
     Ok(result)
 }
+const UPLOAD_WINDOW: usize = 8;
+
+async fn await_upload_reply(
+    socket: &mut super::socket::Socket,
+    in_flight: &mut std::collections::HashSet<u64>,
+) -> Result<(), String> {
+    use futures::FutureExt;
+    let text = futures::select_biased! {
+        result = socket.receive().fuse() => result?,
+        _ = super::connection::delay(30_000).fuse() => return Err("Upload connection timed out. Try attaching the file again.".into()),
+    };
+    let reply: Value = serde_json::from_str(&text).map_err(|_| "Invalid upload response")?;
+    if !reply["id"].as_u64().is_some_and(|id| in_flight.remove(&id)) {
+        return Err("Invalid upload response".into());
+    }
+    if let Some(error) = reply["err"].as_str() {
+        return Err(error.to_owned());
+    }
+    Ok(())
+}
+
 async fn paired_upload_call(
     socket: &mut super::socket::Socket,
     id: u64,

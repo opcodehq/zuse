@@ -95,6 +95,15 @@ import ZuseCore
   private var foreground = true
   private var networkAvailable = true
   private let network = NWPathMonitor()
+  private(set) var linkRoute: PairedRouteStatus?
+  private var linkResumes: Bool { linkRoute?.resumable == true && rpc != nil }
+  /// The connection state, plus the route it is using once there is one.
+  var connectionSummary: String {
+    guard connectionState == "Connected", let route = linkRoute, let label = route.label else {
+      return connectionState
+    }
+    return route.rttMs.map { "\(label) · \($0) ms" } ?? label
+  }
   private var drafts: [String: String] = [:]
   enum Source {
     case cloud(String)
@@ -137,14 +146,24 @@ import ZuseCore
     } catch { self.error = error.localizedDescription }
     network.pathUpdateHandler = { [weak self] path in
       let available = path.status == .satisfied
+      // Fires for Wi-Fi to cellular too, where the old socket is silently dead.
+      PairedNetwork.changed()
       Task { @MainActor in
         guard let self else { return }
         let recovered = available && !self.networkAvailable
         self.networkAvailable = available
-        if recovered && self.foreground && self.source != nil { self.reconnect() }
+        // A resumable link moves itself; a new connection would discard its session.
+        if recovered && self.foreground && self.source != nil && !self.linkResumes {
+          self.reconnect()
+        }
       }
     }
     network.start(queue: DispatchQueue(label: "sh.zuse.native.network"))
+    if let support = FileManager.default.urls(
+      for: .applicationSupportDirectory, in: .userDomainMask
+    ).first {
+      PairedNetwork.setRoutesDirectory(support.appendingPathComponent("paired-routes").path)
+    }
     #if DEBUG
       if ProcessInfo.processInfo.arguments.contains("--rpc-fixture"),
         let address = ProcessInfo.processInfo.environment["ZUSE_IOS_FIXTURE_URL"],
@@ -463,6 +482,7 @@ import ZuseCore
     let cloudClient = cloud
     loading = true
     connectionState = "Connecting…"
+    linkRoute = nil
     connectionProblem = nil
     connectionTask = Task {
       var pendingClient: RPCClient?
@@ -515,7 +535,11 @@ import ZuseCore
           url.queryItems = items
           guard let address = url.url else { throw ClientError("Invalid remote address.") }
           if let invitation = connection.pairingLink {
-            client = try RPCClient(pairingLink: invitation)
+            client = try RPCClient(
+              pairingLink: invitation,
+              onRoute: { [weak self] status in
+                Task { @MainActor in self?.linkRoute = status }
+              })
           } else if let pin = connection.certificatePin, address.scheme == "wss" {
             client = try RPCClient(
               url: address, session: PinnedConnection.session(pin: pin), ownsSession: true)
@@ -1385,6 +1409,7 @@ import ZuseCore
   func sceneChanged(active: Bool) {
     foreground = active
     if active {
+      PairedNetwork.changed()
       if source != nil { reconnect() }
       Task { await refreshCloud() }
     } else {

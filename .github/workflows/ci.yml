@@ -6,8 +6,12 @@ on:
 
 concurrency:
   group: validate-${{ github.ref }}
-  # Let the current native build finish and save its cache during iterative pushes.
-  cancel-in-progress: false
+  cancel-in-progress: true
+
+env:
+  CARGO_PROFILE_DEV_DEBUG: 0
+  CARGO_PROFILE_TEST_DEBUG: 0
+  CARGO_INCREMENTAL: 0
 
 jobs:
   localization:
@@ -32,6 +36,7 @@ jobs:
       - run: python3 -m unittest discover -s scripts -p test_package.py -v
       - run: python3 -m unittest discover -s scripts -p test_distribution.py -v
       - run: python3 -m unittest discover -s scripts -p test_release_notes.py -v
+      - run: python3 -m unittest discover -s scripts -p test_cargo_dev.py -v
 
   engine:
     runs-on: ubuntu-24.04
@@ -49,7 +54,8 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - run: python3 scripts/test_dev_native.py
+        with:
+          cache-on-failure: true
       - run: sudo apt-get update && sudo apt-get install -y cmake libclang-dev libasound2-dev ripgrep
       - run: cargo fmt --all --check
       - run: cargo check -p zuse-cli -p zuse-relay
@@ -127,11 +133,15 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/boost
           df -h /
       - uses: actions/checkout@v4
+      - run: python3 scripts/cargo_dev.py --github-env
       - uses: actions/setup-node@v4
         with:
           node-version: 22
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+          env-vars: "CARGO CC CFLAGS CXX CMAKE RUST HUGEICONS_BUILD_KEY"
       - if: runner.os == 'Linux'
         run: >-
           sudo apt-get update && sudo apt-get install -y
@@ -185,6 +195,7 @@ jobs:
       HUGEICONS_SOLID_VERSION: ${{ vars.HUGEICONS_SOLID_VERSION }}
     steps:
       - uses: actions/checkout@v4
+      - run: python3 scripts/cargo_dev.py --github-env
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -195,6 +206,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: browser
+          workspaces: ". -> target/browser"
+          cache-on-failure: true
+          env-vars: "CARGO CC CFLAGS CXX CMAKE RUST HUGEICONS_BUILD_KEY"
       - uses: taiki-e/install-action@v2
         with:
           tool: trunk@0.21.14
@@ -222,6 +236,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: native-model-transport
+          cache-on-failure: true
       - run: sudo apt-get update && sudo apt-get install -y ripgrep
       - run: cargo test --locked -p zuse-harness -p zuse-harness-extensions --all-targets
       - run: cargo build --locked --release -p zuse-harness --example harness-evaluate
