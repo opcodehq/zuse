@@ -1,7 +1,9 @@
 //! Compact chat/PR permission controls, backed by the owning engine's watch.
+use crate::localization::message as tr;
 use crate::{state::AppState, theme::Theme};
-use gpui::{Context, Entity, SharedString, Task, Window, div, prelude::*, px};
+use gpui::{Context, Entity, SharedString, Subscription, Task, Window, div, prelude::*, px};
 use std::time::Duration;
+use zuse_i18n::messages as msg;
 use zuse_protocol::pr_watch::{
     MAX_REPAIR_ATTEMPTS, PrWatchRequest, PrWatchStatus, SetPrWatchRequest,
 };
@@ -18,6 +20,8 @@ pub(crate) struct PrWatchControl {
     busy: bool,
     _watch: Option<Task<()>>,
     action: Option<Task<()>>,
+    engine: Option<crate::state::EngineHandle>,
+    _state: Subscription,
 }
 
 impl PrWatchControl {
@@ -29,6 +33,26 @@ impl PrWatchControl {
         compact: bool,
         cx: &mut Context<Self>,
     ) -> Self {
+        let observe = cx.observe(&state, |control, _, cx| {
+            let engine = control.state.read(cx).engine().cloned();
+            let same = match (&control.engine, &engine) {
+                (Some(a), Some(b)) => a.same_connection(b),
+                (None, None) => true,
+                _ => false,
+            };
+            if !same {
+                control._watch = None;
+                control.action = None;
+                control.connected = false;
+                control.busy = false;
+                control.status = None;
+                control.error = None;
+                control.engine = engine;
+                control.connect(cx);
+                cx.notify();
+            }
+        });
+        let engine = state.read(cx).engine().cloned();
         let mut control = Self {
             state,
             request: PrWatchRequest { chat_id, url },
@@ -40,6 +64,8 @@ impl PrWatchControl {
             busy: false,
             _watch: None,
             action: None,
+            engine,
+            _state: observe,
         };
         control.connect(cx);
         control
@@ -54,7 +80,7 @@ impl PrWatchControl {
             let mut delay = 1;
             loop {
                 let params = serde_json::json!({"chatId": request.chat_id, "url": request.url, "targetDeviceId": target});
-                let observed = engine.client().call(methods::OBSERVE_PR_WATCH, params).await;
+                let observed = crate::pull_request_detail::read_request(&engine, methods::OBSERVE_PR_WATCH, params, cx.background_executor().clone()).await;
                 if let Err(error) = &observed {
                     let message = match error {
                         zuse_rpc::RpcError::UnknownMethod(_) => "Update Zuse on the chat's device to watch CI.".to_string(),
@@ -103,12 +129,19 @@ impl PrWatchControl {
         }
         self.busy = true;
         self.action = Some(cx.spawn(async move |this, cx| {
-            let result = engine.client().call(methods::SET_PR_WATCH, params).await;
+            let call = engine.client().call(methods::SET_PR_WATCH, params);
+            let deadline = cx.background_executor().timer(Duration::from_secs(45));
+            futures::pin_mut!(call, deadline);
+            let result = match futures::future::select(call, deadline).await {
+                futures::future::Either::Left((result, _)) => result,
+                futures::future::Either::Right(_) => Err(zuse_rpc::RpcError::Failed("Couldn't confirm the automation setting. Reconnect to check its current state before trying again.".into())),
+            };
             let _ = this.update(cx, |control, cx| {
                 control.busy = false;
                 match result {
                     Ok(value) => match serde_json::from_value::<PrWatchStatus>(value) {
-                        Ok(_) => {
+                        Ok(status) => {
+                            control.status = Some(status);
                             control.error = None;
                         }
                         Err(_) => control.error = Some(
@@ -125,14 +158,94 @@ impl PrWatchControl {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pull_request_test_support::{self as fixture, ScriptedRpc};
+    use futures::StreamExt;
+
+    #[gpui::test]
+    fn pull_request_watch_late_connection_and_setting_receipt_update_the_controls(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let runtime = fixture::runtime();
+        let _runtime = runtime.enter();
+        fixture::init(cx);
+        let status = PrWatchStatus {
+            chat_id: "chat".into(),
+            url: "https://github.com/acme/app/pull/1".into(),
+            branch: "feature".into(),
+            enabled: true,
+            auto_fix: false,
+            attempts: 1,
+            max_attempts: 3,
+            ci: zuse_protocol::change_request_assessment::CiState::Passed,
+            failure_sequence: 0,
+            error: None,
+            repairing: false,
+            can_auto_fix: true,
+        };
+        let rpc = ScriptedRpc::new({
+            let status = status.clone();
+            move |method, _| {
+                let mut status = status.clone();
+                async move {
+                    match method.as_str() {
+                        methods::OBSERVE_PR_WATCH => zuse_rpc::RpcReply::value(&status),
+                        methods::WATCH_PR_WATCHES => Ok(zuse_rpc::RpcReply::Stream(
+                            futures::stream::once(async move {
+                                serde_json::to_value(vec![status]).unwrap()
+                            })
+                            .chain(futures::stream::pending())
+                            .boxed(),
+                        )),
+                        methods::SET_PR_WATCH => {
+                            status.enabled = false;
+                            zuse_rpc::RpcReply::value(&status)
+                        }
+                        _ => Err(zuse_rpc::RpcError::UnknownMethod(method)),
+                    }
+                }
+            }
+        });
+        let (state, control) = cx.update(|cx| {
+            let state = fixture::state(cx, None);
+            let control = cx.new(|cx| {
+                PrWatchControl::new(
+                    state.clone(),
+                    "chat".into(),
+                    status.url.clone(),
+                    None,
+                    false,
+                    cx,
+                )
+            });
+            (state, control)
+        });
+        assert!(!control.read_with(cx, |control, _| control.connected));
+        state.update(cx, |state, cx| {
+            state.set_test_engine(crate::state::EngineHandle::from_test_client(rpc.client()));
+            cx.notify();
+        });
+        rpc.settle(cx, &runtime, |cx| {
+            control.read_with(cx, |control, _| control.connected)
+        });
+        assert!(control.read_with(cx, |control, _| control.status.as_ref().unwrap().enabled));
+        control.update(cx, |control, cx| control.set(false, false, false, cx));
+        rpc.settle(cx, &runtime, |cx| {
+            control.read_with(cx, |control, _| !control.busy)
+        });
+        assert!(!control.read_with(cx, |control, _| control.status.as_ref().unwrap().enabled));
+    }
+}
+
 impl Render for PrWatchControl {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx).clone();
         let status = self.status.as_ref();
         let watching = status.is_some_and(|s| s.enabled);
         let fixing = status.is_some_and(|s| s.auto_fix);
-        let attempts = status.map_or(0, |s| s.attempts);
-        let exhausted = attempts >= MAX_REPAIR_ATTEMPTS;
+        let exhausted = status.map_or(0, |s| s.attempts) >= MAX_REPAIR_ATTEMPTS;
         let writable = self
             .state
             .read(cx)
@@ -145,33 +258,32 @@ impl Render for PrWatchControl {
             .error
             .clone()
             .or_else(|| status.and_then(|s| s.error.clone()));
-        let ci = status
-            .map(|s| s.ci.label())
-            .unwrap_or("Connecting to CI watcher…");
-        let watch_button = div()
-            .id("pr-watch-toggle")
-            .role(gpui::Role::Button)
-            .tab_index(if ready { 0 } else { -1 })
-            .aria_label(if watching {
-                ("Pause CI watch").to_string()
+        let fix_ready = ready && ((writable && status.is_some_and(|s| s.can_auto_fix)) || fixing);
+        let toggle = div()
+            .id("pr-auto-fix-toggle")
+            .role(gpui::Role::Switch)
+            .aria_toggled(if fixing {
+                gpui::Toggled::True
             } else {
-                crate::localization::text("projects-github_watch_ci", cx)
+                gpui::Toggled::False
             })
+            .tab_index(if fix_ready { 0 } else { -1 })
+            .aria_label(tr(cx, msg::native::pr_watch_auto_fix))
+            .flex()
+            .items_center()
+            .gap(px(6.0))
             .rounded(px(5.0))
-            .px(px(6.0))
-            .py(px(3.0))
-            .text_color(if watching {
-                theme.accent
-            } else {
-                theme.text_muted
-            })
+            .when(!fix_ready, |el| el.opacity(0.45))
             .focus_visible(move |el| el.border_1().border_color(theme.accent))
-            .when(ready, |el| {
+            .tooltip(crate::settings::widgets::text_tooltip(tr(
+                cx,
+                msg::native::pr_watch_auto_fix_help,
+            )))
+            .when(fix_ready, |el| {
                 el.cursor_pointer()
-                    .hover(|el| el.bg(theme.element_hover))
                     .on_click(cx.listener(move |control, _, _, cx| {
                         cx.stop_propagation();
-                        control.set(!watching, false, false, cx);
+                        control.set(!fixing, !fixing, exhausted && !fixing, cx);
                     }))
                     .on_key_down(cx.listener(move |_, event: &gpui::KeyDownEvent, _, cx| {
                         if matches!(event.keystroke.key.as_str(), "enter" | "space") {
@@ -180,55 +292,49 @@ impl Render for PrWatchControl {
                         }
                     }))
             })
-            .child(if watching {
-                ("Watching CI").to_string()
-            } else {
-                crate::localization::text("projects-github_watch_ci", cx)
-            });
-        let fix_ready = ready && ((writable && status.is_some_and(|s| s.can_auto_fix)) || fixing);
-        let fix_label = if fixing {
-            format!("Auto-fix on · {attempts}/3")
-        } else if exhausted {
-            "Restart auto-fix · 3/3".into()
-        } else {
-            format!("Auto-fix · {attempts}/3")
-        };
-        let fix_button = div().id("pr-auto-fix-toggle").role(gpui::Role::Button).tab_index(if fix_ready { 0 } else { -1 })
-            .flex().items_center().gap(px(4.0))
-            .aria_label(fix_label.clone()).rounded(px(5.0)).px(px(6.0)).py(px(3.0))
-            .text_color(if fixing { theme.accent } else { theme.text_muted })
-            .when(!fix_ready, |el| el.opacity(0.45))
-            .focus_visible(move |el| el.border_1().border_color(theme.accent))
-            .tooltip(crate::settings::widgets::text_tooltip("Allow up to three CI repairs in this chat, including commits and normal pushes. Never force-push or merge. Restart grants a fresh budget after reviewing prior repairs."))
-            .when(fix_ready, |el| el.cursor_pointer().hover(|el| el.bg(theme.element_hover)).on_click(cx.listener(move |control, _, _, cx| {
-                cx.stop_propagation(); control.set(true, !fixing, exhausted && !fixing, cx);
-            })).on_key_down(cx.listener(move |_, event: &gpui::KeyDownEvent, _, cx| {
-                if matches!(event.keystroke.key.as_str(), "enter" | "space") { cx.stop_propagation(); }
-            })))
-            .child(crate::icons::icon(crate::icons::PR_REPAIR).size(px(12.0)))
-            .child(SharedString::from(fix_label));
-        let help = error.clone().unwrap_or_else(|| ci.to_string());
+            .when(self.compact, |el| {
+                el.child(if exhausted && !fixing {
+                    tr(cx, msg::native::pr_watch_restart_auto_fix)
+                } else {
+                    tr(cx, msg::native::pr_watch_auto_fix)
+                })
+            })
+            .child(crate::settings::widgets::toggle_switch(
+                &theme,
+                fixing,
+                format!("pr-auto-fix-{}", cx.entity_id()),
+            ));
         div()
             .id("pr-watch-controls")
-            .tooltip(crate::settings::widgets::text_tooltip(help))
+            .w_full()
+            .min_w_0()
             .flex()
-            .flex_col()
-            .gap(px(2.0))
+            .items_center()
+            .flex_wrap()
+            .gap(px(8.0))
             .text_size(crate::typography::text_xs())
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(4.0))
-                    .child(watch_button)
-                    .child(fix_button)
-                    .when(!self.compact, |el| {
-                        el.child(div().text_color(theme.text_muted).child(ci))
-                    }),
-            )
+            .text_color(theme.text_muted)
+            .child(toggle)
+            // A watch started without auto-fix has no switch of its own.
+            .when(watching && !fixing && ready, |el| {
+                el.child(
+                    div()
+                        .id("pr-watch-stop")
+                        .role(gpui::Role::Button)
+                        .tab_index(0)
+                        .cursor_pointer()
+                        .hover(|style| style.text_color(theme.text))
+                        .child("Stop watching")
+                        .on_click(cx.listener(|control, _, _, cx| {
+                            cx.stop_propagation();
+                            control.set(false, false, false, cx);
+                        })),
+                )
+            })
             .when_some(error.filter(|_| !self.compact), |el, error| {
                 el.child(
                     div()
+                        .min_w_0()
                         .text_color(theme.danger)
                         .child(SharedString::from(error)),
                 )

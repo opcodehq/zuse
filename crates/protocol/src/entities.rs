@@ -1275,6 +1275,8 @@ pub struct ChangeRequestComment {
     pub state: String,
     pub created_at: String,
     pub submitted_at: String,
+    /// The diff an inline review comment is anchored to, ending at its line.
+    pub diff_hunk: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -1309,10 +1311,13 @@ pub struct ChangeRequestCheck {
 /// Latest successful change request resolution for one checkout and branch.
 ///
 /// `change_request: None` is an authoritative successful lookup with no match;
-/// resolution failures must retain the previous successful snapshot instead.
+/// resolution failures retain previous values and set `error`; an initial
+/// failure has no authoritative lookup result.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CheckoutChangeRequestStatus {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
     pub checkout_id: String,
     pub device_id: String,
     pub cwd: String,
@@ -1723,6 +1728,7 @@ mod tests {
             (ChangeRequestState::Merged, "merged"),
         ] {
             let status = CheckoutChangeRequestStatus {
+                error: None,
                 checkout_id: "checkout-1".into(),
                 device_id: "device-1".into(),
                 cwd: "/repo".into(),

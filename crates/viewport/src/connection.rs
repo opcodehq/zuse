@@ -117,6 +117,7 @@ impl WorkspaceView {
             self.queue_unconfirmed.insert(action.chat);
         }
         self.interrupt_cloud_archive();
+        self.interrupt_ui_block_replies(cx);
         self.pending.clear();
         self.stop_transcript();
         // This card is read-only: keep it usable while retrying the same host.

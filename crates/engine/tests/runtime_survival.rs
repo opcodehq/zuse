@@ -957,6 +957,53 @@ async fn a_steer_sent_before_stop_is_cancelled_with_it() {
     rig.core.sessions.shutdown().await;
 }
 
+/// An idle thread can still hold a background shell. Archive ends it rather
+/// than refusing with nothing on screen to stop.
+#[tokio::test]
+async fn archive_ends_a_parked_runtime_holding_background_work() {
+    let rig = rig();
+    let client = zuse_rpc::memory_client(rig.core.rpc_service());
+    client
+        .call(
+            zuse_rpc::methods::MUTATE,
+            serde_json::json!({"op":"createChat","chatId":CHAT,"deviceId":rig.core.device_id}),
+        )
+        .await
+        .expect("createChat");
+    rig.core
+        .workspace
+        .rename_chat(CHAT, "Pre-titled")
+        .expect("rename chat");
+    rig.core
+        .sessions
+        .dispatch(
+            CHAT,
+            HarnessId::Mock,
+            request("launch a background scout"),
+            None,
+        )
+        .await
+        .unwrap();
+    settle(&rig, 1).await;
+    let turn = rig.ledger.turn.lock().unwrap().clone().unwrap();
+    turn.set_background(1);
+    assert_eq!(status(&rig.core), Some(SessionStatus::Idle));
+    assert!(rig.core.sessions.holds_background_work(CHAT));
+
+    client
+        .call(
+            zuse_rpc::methods::MUTATE,
+            serde_json::json!({"op":"setChatArchived","chatId":CHAT,"archived":true}),
+        )
+        .await
+        .expect("archive ends the background work and succeeds");
+
+    assert!(rig.core.workspace.chat(CHAT).unwrap().unwrap().archived);
+    assert_eq!(rig.ledger.kills.load(Ordering::SeqCst), 1);
+    assert!(!rig.core.sessions.has_run(CHAT));
+    rig.core.sessions.shutdown().await;
+}
+
 /// The idle reaper spares a parked runtime holding background work, so the
 /// user's Stop must reach it and end that work.
 #[tokio::test]

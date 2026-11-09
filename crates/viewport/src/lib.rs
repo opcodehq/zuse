@@ -85,6 +85,8 @@ mod thread_actions;
 mod title_settings;
 mod tool_results;
 mod transcript;
+pub mod ui_block;
+mod ui_block_parts;
 pub mod usage_dashboard;
 mod usage_host;
 mod visuals;
@@ -138,6 +140,7 @@ pub struct WorkspaceView {
     environment: environment::Environment,
     browser: browser::Browser,
     visuals: visuals::Visuals,
+    ui_blocks: ui_block_parts::UiBlocks,
     git_controls: Entity<git_controls::GitControls>,
     pull_requests: pull_requests::PullRequests,
     git_requests: HashMap<u64, u64>,
@@ -507,6 +510,25 @@ impl WorkspaceView {
                         )
                     });
                     return;
+                }
+                if event.method == methods::WATCH_GIT_WORKSPACE {
+                    let watches: Vec<_> = this
+                        .git_requests
+                        .keys()
+                        .copied()
+                        .filter(|id| {
+                            this.pending
+                                .get(id)
+                                .is_some_and(|m| m == methods::WATCH_GIT_WORKSPACE)
+                        })
+                        .collect();
+                    for id in watches {
+                        this.git_requests.remove(&id);
+                        this.cancel(id);
+                    }
+                    if event.params["chatId"].is_null() {
+                        return;
+                    }
                 }
                 let id = this.call(event.method, event.params.clone());
                 this.git_requests.insert(id, event.id);
@@ -886,6 +908,7 @@ impl WorkspaceView {
             composer_generation: 0,
             voice: voice::Voice::default(),
             visuals: visuals::Visuals::default(),
+            ui_blocks: ui_block_parts::UiBlocks::default(),
             git_controls,
             pull_requests,
             git_requests: HashMap::new(),
@@ -948,6 +971,7 @@ impl WorkspaceView {
     }
 
     fn receive(&mut self, frame: Value, cx: &mut Context<Self>) {
+        self.receive_ui_block_reply(&frame, cx);
         if self.receive_creation_source(&frame, cx) {
             return;
         }
@@ -1108,6 +1132,25 @@ impl WorkspaceView {
             return;
         }
         if let Some(panel_id) = self.git_requests.get(&id).copied() {
+            if method == methods::WATCH_GIT_WORKSPACE {
+                if let Some(value) = frame.get("item").or_else(|| frame.get("ok")) {
+                    if let Ok(status) = serde_json::from_value(value.clone()) {
+                        self.git_controls
+                            .update(cx, |panel, cx| panel.observe(status, cx));
+                    }
+                }
+                if frame.get("err").is_some() || frame["done"] == true {
+                    self.git_requests.remove(&id);
+                    self.pending.remove(&id);
+                    self.git_controls.update(cx, |panel, cx| {
+                        panel.observation_error(
+                            "Git status disconnected. Reconnect or refresh.".into(),
+                            cx,
+                        )
+                    });
+                }
+                return;
+            }
             if frame.get("ok").is_some() || frame.get("err").is_some() || frame["done"] == true {
                 self.git_requests.remove(&id);
                 self.pending.remove(&id);

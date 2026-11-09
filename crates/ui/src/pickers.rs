@@ -3155,7 +3155,8 @@ impl Pickers {
         let no_project = state.no_project && state.cloud_project.is_none();
         let mut choices = div()
             .id("creation-native-projects")
-            .max_h(px(192.))
+            .max_h(px(240.))
+            .gap(px(1.))
             .overflow_y_scroll()
             .track_scroll(&self.menu_scroll)
             .flex()
@@ -3203,9 +3204,9 @@ impl Pickers {
             .flex()
             .flex_col()
             .child(
-                div().px(px(4.)).pb(px(6.)).child(
+                div().pb(px(6.)).child(
                     div()
-                        .h(px(28.))
+                        .h(px(32.))
                         .flex()
                         .items_center()
                         .gap(px(8.))
@@ -3213,7 +3214,7 @@ impl Pickers {
                         .rounded(px(7.))
                         .border_1()
                         .border_color(theme.border)
-                        .bg(theme.bg.opacity(0.5))
+                        .bg(theme.bg)
                         .child(
                             crate::icons::icon(crate::icons::MAGNIFER)
                                 .size(px(14.))
@@ -3801,11 +3802,11 @@ impl Pickers {
         let mut overlay: Option<(PickerKind, AnyElement)> = match self.mounted_kind() {
             Some(PickerKind::Space) => {
                 let content = self.render_space_popover(cx);
-                Some((PickerKind::Space, self.popover_frame(256.0, content, cx)))
+                Some((PickerKind::Space, self.popover_frame(280.0, content, cx)))
             }
             Some(PickerKind::Device) => {
                 let content = self.render_device_popover(cx);
-                Some((PickerKind::Device, self.popover_frame(256.0, content, cx)))
+                Some((PickerKind::Device, self.popover_frame(280.0, content, cx)))
             }
             _ => None,
         };

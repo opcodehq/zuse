@@ -123,11 +123,9 @@ impl AccentColor {
             },
             selection: primary.opacity(if appearance.is_dark() { 0.35 } else { 0.24 }),
             caret: primary,
-            code_text: primary,
-            code_wash: primary.opacity(match appearance {
-                Appearance::Dark => 0.12,
-                Appearance::Light => 0.10,
-            }),
+            // Neutral plate: the accent text already marks the span, and an
+            // accent wash under accent text read as a loud double tint.
+            code_wash: wash_for(appearance, 0.08),
             activity: primary,
             glyph: GlyphPalette::for_accent(primary, strong, appearance),
         }
@@ -206,7 +204,6 @@ struct AccentTokens {
     wash: Hsla,
     selection: Hsla,
     caret: Hsla,
-    code_text: Hsla,
     code_wash: Hsla,
     activity: Hsla,
     glyph: GlyphPalette,
@@ -735,7 +732,7 @@ pub struct Theme {
     pub danger_strong: Hsla,
 
     // ---- paint: code & diff ----
-    /// Inline-code text in the selected accent family.
+    /// Inline-code text: neutral strong ink, not the accent.
     pub code_text: Hsla,
     /// Inline-code wash behind [`Self::code_text`].
     pub code_wash: Hsla,
@@ -808,9 +805,11 @@ impl Theme {
     /// scrim is 0.76 over `hsl(0 0% 3%)`, but it sits on Electron's
     /// `under-window` vibrancy MATERIAL, which pre-darkens the blur; our bare
     /// backdrop blur has no material layer, so the scrim runs heavier to land
-    /// on the same perceived tone (see [`Theme::glass`]).
+    /// on the same perceived tone (see [`Theme::glass`]). Since lightened so
+    /// the sidebar reads as glass rather than a tinted slab; the contrast
+    /// guard in [`Theme::glass`] still raises it where shell text needs it.
     pub const GLASS_ALPHA: f32 = if cfg!(any(target_os = "macos", target_os = "windows")) {
-        0.80
+        0.68
     } else {
         1.0
     };
@@ -883,7 +882,19 @@ impl Theme {
     /// appearance. A theme with unusually delicate contrast may therefore get
     /// denser glass, never silently broken text.
     fn contrast_checked_glass_alpha(&self, base: f32) -> f32 {
-        self.contrast_checked_tint_alpha(self.surface, base, self.adverse_backdrop())
+        self.contrast_checked_tint_alpha(self.surface, base, self.window_backdrop())
+    }
+
+    /// The desktop the window glass is guarded against. The compositor blurs
+    /// whatever sits behind the window before our tint lands, which averages
+    /// away pure white or black, so the shell checks a softened extreme. In-app
+    /// frosted surfaces keep [`Self::adverse_backdrop`]: their blur runs over
+    /// content we do not control the brightness of.
+    fn window_backdrop(&self) -> Hsla {
+        match self.appearance {
+            Appearance::Dark => grey(0xd8),
+            Appearance::Light => grey(0x28),
+        }
     }
 
     /// Increase tint coverage only as far as needed for Zuse's shared text
@@ -919,11 +930,24 @@ impl Theme {
         self.glass().a < 1.0
     }
 
-    /// Shared background for the editor host and the adjacent Files column:
-    /// the conversation panel's solid tone, so content panes read as one
-    /// plane beside the translucent sidebar.
+    /// Coverage of the content cards (conversation, right pane) over the
+    /// window glass: denser than the sidebar, so the desktop tints through
+    /// faintly and the cards still read as the working plane.
+    pub const CARD_GLASS_ALPHA: f32 = 0.82;
+
+    /// Shared background for the conversation card, the right pane and the
+    /// panes inside it, so content panes read as one plane beside the
+    /// sidebar. Over the window glass it is a faint frost (see
+    /// [`Self::CARD_GLASS_ALPHA`]); opaque, it is the solid panel tone.
     pub fn panel_bg(&self) -> Hsla {
-        self.bg
+        if !self.is_glass() {
+            return self.bg;
+        }
+        self.bg.opacity(self.contrast_checked_tint_alpha(
+            self.bg,
+            Self::CARD_GLASS_ALPHA,
+            flatten(self.glass(), self.window_backdrop()),
+        ))
     }
 
     /// Whether FLOATING surfaces (popovers, the composer pill) paint their
@@ -1363,7 +1387,9 @@ impl Theme {
             cursor: hsla(0.0, 0.0, 1.0, 0.35),
             caret: accent.caret,
             danger_strong: oklch(0.58, 0.16, 25.0),
-            code_text: accent.code_text,
+            // Inline code stays neutral — the mono face and the faint plate
+            // mark it; an accent tint on every span read as noise.
+            code_text: grey(0xf4),
             code_wash: accent.code_wash,
             syntax: SyntaxPalette::for_appearance(
                 Appearance::Dark,
@@ -1458,7 +1484,7 @@ impl Theme {
             cursor: hsla(0.0, 0.0, 0.0, 0.55),
             caret: accent.caret,
             danger_strong: oklch(0.51, 0.20, 25.0),
-            code_text: accent.code_text,
+            code_text: grey(0x0f),
             code_wash: accent.code_wash,
             syntax: SyntaxPalette::for_appearance(
                 Appearance::Light,
@@ -1667,8 +1693,8 @@ impl Theme {
         theme.cursor = model_color(colors.cursor);
         theme.caret = model_color(accent.caret);
         theme.danger_strong = model_color(colors.danger);
-        theme.code_text = model_color(accent.primary);
-        theme.code_wash = model_color(accent.wash);
+        theme.code_text = theme.text_strong;
+        theme.code_wash = theme.wash(0.08);
         theme.syntax = SyntaxPalette::from_variant(variant, theme.syntax);
         theme.diff_add = model_color(colors.diff_add);
         theme.diff_del = model_color(colors.diff_delete);
@@ -2276,13 +2302,13 @@ mod tests {
         assert_eq!(dark.accent_color, AccentColor::Zuse);
         assert_eq!(dark.accent, hsla(83. / 360., 0.72, 0.46, 1.));
         assert_eq!(dark.accent_strong, hsla(83. / 360., 0.72, 0.46, 1.));
-        assert_eq!(dark.code_text, dark.accent);
+        assert_eq!(dark.code_text, dark.text_strong);
         assert_eq!(dark.busy, dark.accent);
         assert_eq!(dark.glyph.mid, dark.accent);
         assert_eq!(dark.caret, dark.accent);
         assert_eq!(light.accent, hsla(83. / 360., 0.74, 0.43, 1.));
         assert_eq!(light.accent_strong, hsla(83. / 360., 0.74, 0.43, 1.));
-        assert_eq!(light.code_text, light.accent);
+        assert_eq!(light.code_text, light.text_strong);
         assert_eq!(light.busy, light.accent);
         assert_eq!(light.glyph.mid, light.accent);
         assert_eq!(light.caret, light.accent);
@@ -2408,17 +2434,12 @@ mod tests {
     fn forced_frost_preserves_shell_text_contrast_for_every_builtin() {
         let registry = ThemeRegistry::builtin();
         for variant in registry.families.iter().flat_map(|family| &family.variants) {
-            let appearance = model_appearance(variant.appearance);
             let theme = Theme::from_variant(
                 variant,
                 AccentSelection::ThemeDefault,
                 SurfacePreference::Frosted,
             );
-            let adverse_backdrop = match appearance {
-                Appearance::Dark => grey(0xff),
-                Appearance::Light => grey(0),
-            };
-            let composite = flatten(theme.glass(), adverse_backdrop);
+            let composite = flatten(theme.glass(), theme.window_backdrop());
             assert!(
                 painted_contrast(theme.text, composite) >= 4.5,
                 "{} primary shell text",
@@ -2540,7 +2561,7 @@ mod tests {
                 );
                 assert!(contrast_ratio(theme.code_text, theme.bg) >= minimum);
                 assert!(contrast_ratio(theme.busy, theme.bg) >= minimum.min(3.0));
-                assert_eq!(theme.code_text, theme.accent);
+                assert_eq!(theme.code_text, theme.text_strong);
                 assert_eq!(theme.busy, theme.accent);
                 assert_eq!(theme.glyph.mid, theme.accent);
                 assert_ne!(theme.glyph.light, theme.glyph.mid);
@@ -2564,7 +2585,6 @@ mod tests {
                 assert_eq!(theme.diff_add, baseline.diff_add);
                 assert_eq!(theme.diff_del, baseline.diff_del);
                 if accent != AccentColor::Zuse {
-                    assert_ne!(theme.code_text, baseline.code_text);
                     assert_ne!(theme.busy, baseline.busy);
                     assert_ne!(theme.selection, baseline.selection);
                 }

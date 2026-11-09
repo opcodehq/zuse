@@ -660,6 +660,8 @@ impl ArchivedPage {
         let Some(engine) = self.state.read(cx).engine().cloned() else {
             return;
         };
+        self.state
+            .update(cx, |state, _| state.clear_chat_archive_intent(&chat_id));
         self.busy = Some(chat_id.clone());
         self.error = None;
         let params = serde_json::json!({

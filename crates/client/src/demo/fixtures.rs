@@ -460,6 +460,7 @@ pub(crate) fn seed(
         }
         if let (Some((number, state, title)), Some(source)) = (demo.pr, &source_context) {
             change_requests.push(CheckoutChangeRequestStatus {
+                error: None,
                 checkout_id: source.checkout_id.clone(),
                 device_id: demo.device.into(),
                 cwd: source.repo_root.clone(),

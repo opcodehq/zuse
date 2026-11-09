@@ -512,14 +512,27 @@ impl SessionsEngine {
         }
     }
 
-    pub(crate) fn archive_busy(&self, chat_id: &str) -> bool {
-        lock(&self.inner.filesystem_admissions)
-            .get(chat_id)
-            .copied()
-            .unwrap_or(0)
-            != 0
-            || self.turn_in_flight(chat_id)
-            || self.holds_background_work(chat_id)
+    /// Archive always wins: end the chat's runtime and everything it holds,
+    /// then wait out any dispatch admitted before archive took the gate. That
+    /// dispatch can register a run after the first terminate, so terminate
+    /// repeats until the claim and the run are both gone.
+    pub(crate) async fn end_for_archive(&self, chat_id: &str) -> Result<(), EngineError> {
+        const SETTLE: std::time::Duration = std::time::Duration::from_secs(10);
+        let deadline = tokio::time::Instant::now() + SETTLE;
+        loop {
+            self.terminate(chat_id).await?;
+            let admitted = lock(&self.inner.filesystem_admissions).contains_key(chat_id);
+            if !admitted && !self.has_run(chat_id) {
+                return Ok(());
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(EngineError::Other(
+                    "The agent did not stop in time. Its worktree was kept; try archiving again."
+                        .into(),
+                ));
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
     }
 
     fn require_unarchived(&self, chat_id: &str) -> Result<(), EngineError> {

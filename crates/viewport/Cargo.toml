@@ -13,6 +13,7 @@ zuse-orb.workspace = true
 zuse-remote.workspace = true
 zuse-protocol.workspace = true
 zuse-model.workspace = true
+zuse-ui-block.workspace = true
 uuid = { workspace = true, features = ["js"] }
 gpui.workspace = true
 gpui-base.workspace = true

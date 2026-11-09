@@ -1877,6 +1877,18 @@ chat-tool_group_notes =
        [one] Eine Notiz geschrieben
        *[other] { $count } Notizen geschrieben
     }
+# Variables: count
+chat-tool_group_tool_calls =
+    { $count ->
+       [one] { $count } Tool-Aufruf
+       *[other] { $count } Tool-Aufrufe
+    }
+# Variables: count
+chat-tool_group_messages =
+    { $count ->
+       [one] { $count } Nachricht
+       *[other] { $count } Nachrichten
+    }
 
 chat-find_in_chat_placeholder = Im Chat suchen
 chat-find_in_chat_count = { $current } von { $total }
@@ -1898,3 +1910,6 @@ chat-history_search_use = übernehmen
 chat-history_search_cancel = abbrechen
 chat-stash_saved_notice = Entwurf zurückgelegt · <part0>{ $shortcut }</part0> zum Anzeigen
 chat-chat_composer_press_esc_again_to_clear = Zum Leeren erneut <part0>Esc</part0> drücken
+chat-worktree_fetching = Neueste Änderungen von { $branch } werden abgerufen…
+chat-worktree_creating = Worktree wird aus { $branch } erstellt…
+chat-worktree_offline = Remote nicht erreichbar · lokales { $branch } wird verwendet

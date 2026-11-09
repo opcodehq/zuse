@@ -44,6 +44,10 @@ name = "appshots-fixture"
 required-features = ["appshots-fixture"]
 
 [[example]]
+name = "ui-block-fixture"
+required-features = ["appshots-fixture"]
+
+[[example]]
 name = "tool-images-fixture"
 required-features = ["appshots-fixture"]
 

@@ -1841,6 +1841,10 @@ chat-tool_group_failed = { $count } 个失败
 chat-tool_group_agents_done = { $count } 个已完成
 # Variables: count
 chat-tool_group_notes = 写了 { $count } 条笔记
+# Variables: count
+chat-tool_group_tool_calls = { $count } 次工具调用
+# Variables: count
+chat-tool_group_messages = { $count } 条消息
 
 chat-find_in_chat_placeholder = 在对话中查找
 chat-find_in_chat_count = 第 { $current } 个，共 { $total } 个
@@ -1862,3 +1866,6 @@ chat-history_search_use = 使用
 chat-history_search_cancel = 取消
 chat-stash_saved_notice = 草稿已暂存 · 按 <part0>{ $shortcut }</part0> 查看
 chat-chat_composer_press_esc_again_to_clear = 再按一次 <part0>Esc</part0> 即可清除
+chat-worktree_fetching = 正在获取最新的 { $branch }…
+chat-worktree_creating = 正在从 { $branch } 创建工作树…
+chat-worktree_offline = 无法连接远程仓库 · 使用本地 { $branch }

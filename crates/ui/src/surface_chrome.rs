@@ -47,6 +47,16 @@ pub(crate) fn toolbar(theme: &Theme) -> Div {
         })
 }
 
+/// A toolbar's height without its rules, for content that flows from the tabs.
+pub(crate) fn flowing_header() -> Div {
+    div()
+        .h(px(HEADER_HEIGHT))
+        .w_full()
+        .flex_none()
+        .flex()
+        .items_center()
+}
+
 /// Neutral navigation chip shared by the right-panel strip and PR navigation.
 pub(crate) fn tab_frame(
     id: impl Into<gpui::ElementId>,

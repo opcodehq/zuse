@@ -244,7 +244,6 @@ pub const SETTINGS_PLUGINS: &str = "icons/settings-plugins.svg";
 pub const SETTINGS_REMOTE: &str = "icons/settings-remote.svg";
 /// The session card's activity sections and a stopped task's mark.
 pub const SUMMARY_BACKGROUND: &str = "icons/summary-background.svg";
-pub const SUMMARY_AGENTS: &str = "icons/summary-agents.svg";
 pub const TASK_STOPPED: &str = "icons/task-stopped.svg";
 /// The session card's pull request menu.
 pub const PR_VIEW: &str = "icons/pr-view.svg";

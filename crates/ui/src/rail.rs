@@ -729,7 +729,7 @@ impl Transcript {
             .debug_selector(|| "transcript-outline".into())
             .absolute()
             .top(px(Theme::TITLEBAR_HEIGHT + OUTLINE_TOP))
-            .right(px(OUTLINE_RIGHT + self.outline_inset()))
+            .right(px(OUTLINE_RIGHT))
             .child(div().relative().child(trigger).children(list))
             .into_any_element()
     }

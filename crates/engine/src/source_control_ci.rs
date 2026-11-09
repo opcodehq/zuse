@@ -6,45 +6,6 @@ use zuse_protocol::{
 };
 
 impl GitHubCli {
-    pub(crate) async fn ci_snapshot(
-        &self,
-        url: &str,
-    ) -> Result<ChangeRequestDetail, ChangeRequestError> {
-        let url = validated_pull_request_url(url)?;
-        let output = self
-            .runner
-            .run(ProcessRequest {
-                args: vec![
-                    "pr".into(),
-                    "view".into(),
-                    url,
-                    "--json".into(),
-                    "url,number,state,isDraft,headRefName,headRefOid,headRepository,statusCheckRollup".into(),
-                ],
-                ..github_request()
-            })
-            .await
-            .map_err(classify_run_error)?;
-        if !output.success {
-            return Err(classify_github_failure(&output.stderr));
-        }
-        if output.stdout_truncated {
-            return Err(ChangeRequestError::Decode);
-        }
-        let mut value: serde_json::Value =
-            serde_json::from_slice(&output.stdout).map_err(|_| ChangeRequestError::Decode)?;
-        let reported = value.get("statusCheckRollup").is_some_and(|v| !v.is_null());
-        remove_nulls(&mut value);
-        let mut detail: ChangeRequestDetail =
-            serde_json::from_value(value).map_err(|_| ChangeRequestError::Decode)?;
-        if reported {
-            detail.ci = zuse_protocol::change_request_assessment::ChangeRequestCi::from_checks(
-                &detail.status_check_rollup,
-            );
-        }
-        Ok(detail)
-    }
-
     /// Require the exact checked-out commit. No checkout, fetch or push is performed.
     pub(crate) async fn ci_checkout_matches(
         &self,

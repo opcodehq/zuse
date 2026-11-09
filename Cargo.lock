@@ -14111,6 +14111,7 @@ dependencies = [
  "zuse-serve",
  "zuse-simulator",
  "zuse-sync",
+ "zuse-ui-block",
  "zuse-update",
  "zuse-usage",
  "zuse-visual",
@@ -14205,6 +14206,7 @@ dependencies = [
  "zuse-doc",
  "zuse-protocol",
  "zuse-rpc",
+ "zuse-ui-block",
  "zuse-visual",
 ]
 
@@ -14613,6 +14615,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "zuse-ui-block"
+version = "0.26.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "zuse-update"
 version = "0.26.0"
 dependencies = [
@@ -14673,6 +14684,7 @@ dependencies = [
  "zuse-orb",
  "zuse-protocol",
  "zuse-remote",
+ "zuse-ui-block",
  "zuse-voice-session",
 ]
 

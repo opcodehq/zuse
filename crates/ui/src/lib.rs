@@ -31,6 +31,7 @@ pub mod comments;
 pub mod composer;
 mod composer_dock;
 mod composer_markdown;
+pub mod context_items;
 mod context_usage;
 pub mod desktop_import;
 mod dictation;
@@ -64,6 +65,7 @@ mod project_archive;
 pub mod pull_request_card;
 pub mod pull_request_detail;
 mod pull_request_media;
+mod pull_request_review_hunk;
 mod pull_request_skeleton;
 #[cfg(test)]
 mod pull_request_test_support;

@@ -1372,7 +1372,12 @@ pub fn btn_ghost(theme: &Theme, label: &str, fade_key: impl Into<SharedString>) 
     btn
 }
 
-/// Primary button (`btnPrimary`): white fill, near-black text.
+/// Ink of the dithered olive key — the composer's send key and every
+/// primary button: `rgb(151 183 76)`.
+pub(crate) const DITHER_KEY_RGB: [u8; 3] = [151, 183, 76];
+pub(crate) const DITHER_KEY_RADIUS: f32 = 7.0;
+
+/// Primary button: the send key's dithered olive plate with a white label.
 pub fn btn_primary(theme: &Theme, label: &str) -> gpui::Div {
     dither_button(theme, DitherKey::Primary, label)
 }
@@ -1396,7 +1401,12 @@ fn dither_button(theme: &Theme, key: DitherKey, label: &str) -> gpui::Div {
         key,
         8.0,
     )
-    .child(SharedString::from(label.to_string()))
+    // Above the absolutely positioned dither fill.
+    .child(
+        div()
+            .relative()
+            .child(SharedString::from(label.to_string())),
+    )
 }
 
 #[derive(Clone, Copy)]
@@ -1423,7 +1433,7 @@ pub fn dither_key<E: Styled + ParentElement>(
             } else {
                 gpui::rgb(0x13150f).into()
             },
-            zuse_viewport::dither::KEY_RGB,
+            DITHER_KEY_RGB,
             theme.accent.opacity(0.4),
         ),
         DitherKey::Danger => (

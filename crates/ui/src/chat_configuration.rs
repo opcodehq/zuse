@@ -93,6 +93,18 @@ impl AppState {
         })
     }
 
+    /// Treat the selected chat's saved choices as already read back, as the
+    /// configuration watch does once it hears from the host.
+    #[cfg(test)]
+    pub(crate) fn confirm_selected_chat_configuration_for_test(&mut self) {
+        let target = self.configuration_target();
+        let config = self
+            .selected_chat_row()
+            .and_then(|chat| chat.config.clone());
+        self.chat_configuration.target = target;
+        self.chat_configuration.confirmed = Some(config);
+    }
+
     pub(crate) fn configuration_saving(&self) -> bool {
         self.selected_chat
             .as_ref()

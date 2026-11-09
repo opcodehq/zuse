@@ -27,7 +27,7 @@ use zuse_rpc::methods;
 use crate::change_requests::ChangeRequestBadgeTone;
 use crate::icons::{self, icon};
 use crate::popover;
-use crate::pull_request_detail::{PullRequestRepair, failure_reason, repair_prompt};
+use crate::pull_request_detail::{PullRequestRepair, failure_reason, repair_message};
 use crate::state::AppState;
 use crate::theme::Theme;
 
@@ -40,6 +40,15 @@ pub const CREATE_PR_PROMPT: &str = "Create PR: commit what's left, push the bran
 #[action(namespace = shell, no_json)]
 pub struct SendToChat(pub String);
 
+/// Send `text` to the focused chat's agent with `context` riding ahead of it:
+/// the bubble shows `text`, the context renders as a pill.
+#[derive(Clone, PartialEq, Action)]
+#[action(namespace = shell, no_json)]
+pub struct SendContextToChat {
+    pub text: String,
+    pub context: crate::context_items::ContextItem,
+}
+
 const ROW_HEIGHT: f32 = 26.0;
 const LANE_SPACING: f32 = 12.0;
 const GUTTER_PAD: f32 = 7.0;
@@ -47,8 +56,6 @@ const NODE_RADIUS: f32 = 3.5;
 const STROKE: f32 = 1.5;
 /// Commits listed before the rest fold under "N earlier commits".
 const VISIBLE_COMMITS: usize = 10;
-const POLL_BUSY: Duration = Duration::from_secs(12);
-const POLL_IDLE: Duration = Duration::from_secs(60);
 /// A commit row's entrance, one row after another.
 const ROW_ENTER: Duration = Duration::from_millis(420);
 const ROW_STAGGER: Duration = Duration::from_millis(55);
@@ -385,9 +392,12 @@ pub struct PullRequestCard {
     fixture: bool,
     fetch: Option<Task<()>>,
     _poll: Option<Task<()>>,
+    watch_engine: Option<crate::state::EngineHandle>,
+    connection_subscription: Option<Subscription>,
     update: Option<Task<()>>,
     merging: bool,
     notice: Option<SharedString>,
+    load_error: Option<SharedString>,
     merge_menu: bool,
     conflicts_open: bool,
     /// Asked the agent to resolve; cleared once its turn ends.
@@ -424,9 +434,12 @@ impl PullRequestCard {
             fixture: false,
             fetch: None,
             _poll: None,
+            watch_engine: None,
+            connection_subscription: None,
             update: None,
             merging: false,
             notice: None,
+            load_error: None,
             merge_menu: false,
             conflicts_open: false,
             resolving: false,
@@ -436,26 +449,10 @@ impl PullRequestCard {
             stage_since: None,
         };
         card.set_opened(opened, cx);
-        let poll = cx.spawn(async move |this, cx| {
-            loop {
-                let delay = this
-                    .update(cx, |card, cx| card.poll_interval(cx))
-                    .ok()
-                    .flatten();
-                let Some(delay) = delay else { break };
-                cx.background_executor().timer(delay).await;
-                // Only the chat on screen reads GitHub and the remote.
-                let refreshed = this.update(cx, |card, cx| {
-                    if card.state.read(cx).selected_chat.as_deref() == Some(card.chat_id.as_str()) {
-                        card.refresh(true, cx);
-                    }
-                });
-                if refreshed.is_err() {
-                    break;
-                }
-            }
-        });
-        card._poll = Some(poll);
+        card.connection_subscription = Some(cx.observe(&card.state, |card, _, cx| {
+            card.ensure_watch(cx);
+        }));
+        card.ensure_watch(cx);
         card
     }
 
@@ -470,7 +467,10 @@ impl PullRequestCard {
         self.url = opened.url.clone();
         self.step = opened.step;
         if url_changed || first {
+            self.fetch = None;
             self.detail = None;
+            self.load_error = None;
+            self.set_graph(None);
             let key = self.url.clone().unwrap_or_default();
             if let Some((detail, graph)) = cx
                 .try_global::<PullRequestCardFixtures>()
@@ -555,23 +555,119 @@ impl PullRequestCard {
         )
     }
 
-    fn poll_interval(&mut self, cx: &mut Context<Self>) -> Option<Duration> {
-        if self.fixture {
-            return None;
+    fn ensure_watch(&mut self, cx: &mut Context<Self>) {
+        let engine = self.state.read(cx).engine().cloned();
+        let selected = self.state.read(cx).selected_chat.as_deref() == Some(self.chat_id.as_str());
+        if !selected || self.fixture || self.url.is_none() {
+            self._poll = None;
+            self.watch_engine = None;
+            return;
         }
-        if self.resolving && !self.agent_working(cx) {
-            // The agent's turn ended: read where that left the PR.
-            self.resolving = false;
-            return Some(Duration::from_millis(500));
+        if match (&self.watch_engine, &engine) {
+            (Some(a), Some(b)) => a.same_connection(b),
+            (None, None) => true,
+            _ => false,
+        } {
+            return;
         }
-        let stage = self.stage();
-        Some(if stage.busy() || self.agent_working(cx) {
-            POLL_BUSY
-        } else if matches!(stage, Stage::Merged | Stage::Closed) {
-            Duration::from_secs(10 * 60)
-        } else {
-            POLL_IDLE
-        })
+        self._poll = None;
+        self.watch_engine = engine.clone();
+        let Some(engine) = engine else {
+            return;
+        };
+        let mut params = serde_json::json!({"url":self.url});
+        if let Some(target) = self.target(cx) {
+            params["targetDeviceId"] = target.into();
+        }
+        self._poll = Some(cx.spawn(async move |this, cx| {
+            loop {
+                match engine
+                    .client()
+                    .subscribe_checked(methods::WATCH_CHANGE_REQUEST, params.clone())
+                    .await
+                {
+                    Ok(mut stream) => {
+                        let mut seen = None::<serde_json::Value>;
+                        let mut seeded = false;
+                        while let Some(value) = stream.recv().await {
+                            let Ok(frame) = serde_json::from_value::<
+                                zuse_protocol::git_workspace::SourceControlFrame,
+                            >(value) else {
+                                continue;
+                            };
+                            let active = this.update(cx, |card, cx| {
+                                if frame.reset {
+                                    card.fetch = None;
+                                    card.detail = None;
+                                    card.set_graph(None);
+                                }
+                                if let Some(error) = frame.error {
+                                    card.load_error = Some(error.into());
+                                    card.changed(cx);
+                                }
+                                if frame.refreshing {
+                                    return;
+                                }
+                                let Some(value) = frame.snapshot else {
+                                    return;
+                                };
+                                if seen.as_ref() == Some(&value) {
+                                    return;
+                                }
+                                if !seeded {
+                                    seeded = true;
+                                    if card.detail.is_some() {
+                                        return;
+                                    }
+                                }
+                                seen = Some(value.clone());
+                                let Ok(detail) =
+                                    serde_json::from_value::<ChangeRequestDetail>(value)
+                                else {
+                                    return;
+                                };
+                                if card.detail.as_ref().is_some_and(|old| {
+                                    old.head_ref_oid != detail.head_ref_oid
+                                        || old.base_ref_oid != detail.base_ref_oid
+                                }) {
+                                    card.fetch = None;
+                                    card.set_graph(None);
+                                }
+                                card.detail = Some(detail);
+                                card.load_error = None;
+                                if card.resolving && !card.agent_working(cx) {
+                                    card.resolving = false;
+                                }
+                                card.changed(cx);
+                                card.refresh(false, cx);
+                            });
+                            if active.is_err() {
+                                return;
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        let terminal = matches!(error, zuse_rpc::RpcError::UnknownMethod(_));
+                        // Older hosts still support explicit detail reads.
+                        if terminal {
+                            return;
+                        }
+                        let _ = this.update(cx, |card, cx| {
+                            card.load_error = Some(if terminal {
+                                "Update Zuse on this device for automatic PR updates.".into()
+                            } else {
+                                "PR updates disconnected. Reconnecting…".into()
+                            });
+                            card.changed(cx);
+                        });
+                        if terminal {
+                            return;
+                        }
+                    }
+                }
+                cx.background_executor().timer(Duration::from_secs(2)).await;
+            }
+        }));
     }
 
     fn set_graph(&mut self, graph: Option<BranchGraph>) {
@@ -610,7 +706,7 @@ impl PullRequestCard {
     /// Read the PR and the branch graph from the chat's device. `refresh`
     /// asks GitHub and the remote for their latest.
     fn refresh(&mut self, refresh: bool, cx: &mut Context<Self>) {
-        if self.fixture {
+        if self.fixture || self.fetch.is_some() {
             return;
         }
         let Some(engine) = self.state.read(cx).engine().cloned() else {
@@ -634,18 +730,36 @@ impl PullRequestCard {
                 }
                 params
             };
-            let detail = match &url {
-                Some(url) => engine
-                    .client()
-                    .call(
+            let result = match &url {
+                Some(url) => crate::pull_request_detail::read_request(
+                        &engine,
                         methods::GET_CHANGE_REQUEST,
-                        with_target(serde_json::json!({ "url": url, "refresh": refresh })),
+                        with_target(serde_json::json!({ "url": url, "refresh": refresh, "summary": true })),
+                        cx.background_executor().clone(),
                     )
                     .await
-                    .ok()
-                    .and_then(|value| serde_json::from_value::<ChangeRequestDetail>(value).ok()),
-                None => None,
+                    .map_err(|error| format!("Couldn't refresh this pull request. {}", failure_reason(&error)))
+                    .and_then(|value| serde_json::from_value::<ChangeRequestDetail>(value).map(Some).map_err(|_| "The device returned an unreadable pull request. Update Zuse on the selected device.".to_string())),
+                None => Ok(None),
             };
+            let failed = result.is_err();
+            let detail = result.as_ref().ok().cloned().flatten();
+            // GitHub metadata is useful immediately, even if fetching the
+            // base's branch graph is slow or unavailable.
+            let active = this.update(cx, |card, cx| {
+                if card.url != url { return false; }
+                card.load_error = result.err().map(SharedString::from);
+                if failed { card.fetch = None; }
+                if let Some(detail) = &detail {
+                    if card.detail.as_ref().is_some_and(|old| old.head_ref_oid != detail.head_ref_oid) {
+                        card.set_graph(None);
+                    }
+                    card.detail = Some(detail.clone());
+                }
+                card.changed(cx);
+                true
+            }).unwrap_or(false);
+            if !active || failed { return; }
             let base = detail
                 .as_ref()
                 .map(|detail| detail.base_ref_name.clone())
@@ -657,14 +771,14 @@ impl PullRequestCard {
                     let request = BranchGraphRequest {
                         cwd,
                         base,
-                        fetch: refresh,
+                        fetch: false,
                         limit: Some(24),
                     };
-                    engine
-                        .client()
-                        .call(
+                    crate::pull_request_detail::read_request(
+                            &engine,
                             methods::GET_BRANCH_GRAPH,
                             with_target(serde_json::to_value(request).unwrap_or_default()),
+                            cx.background_executor().clone(),
                         )
                         .await
                         .ok()
@@ -676,11 +790,11 @@ impl PullRequestCard {
                 if card.url != url {
                     return;
                 }
-                if detail.is_some() {
-                    card.detail = detail;
-                }
-                if graph.is_some() {
-                    card.set_graph(graph);
+                card.fetch = None;
+                if let Some(graph) = graph {
+                    let matches_head = card.detail.as_ref().is_none_or(|detail| detail.head_ref_oid.is_empty()
+                        || graph.head_sha.as_deref() == Some(detail.head_ref_oid.as_str()));
+                    if matches_head { card.set_graph(Some(graph)); }
                 }
                 card.changed(cx);
             });
@@ -691,10 +805,10 @@ impl PullRequestCard {
         let (Some(detail), Some(url)) = (&self.detail, &self.url) else {
             return;
         };
-        let prompt = repair_prompt(repair, detail, url);
+        let (text, context) = repair_message(repair, detail, url);
         self.resolving = repair == PullRequestRepair::Conflicts;
         self.conflicts_open = false;
-        window.dispatch_action(Box::new(SendToChat(prompt)), cx);
+        window.dispatch_action(Box::new(SendContextToChat { text, context }), cx);
         self.changed(cx);
     }
 
@@ -1734,6 +1848,7 @@ impl PullRequestCard {
 
 impl gpui::Render for PullRequestCard {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.ensure_watch(cx);
         let theme = Theme::of(cx).clone();
         let stage = self.stage();
         let now = Instant::now();
@@ -1814,16 +1929,19 @@ impl gpui::Render for PullRequestCard {
                 .child(merge_row)
                 .children(commits)
                 .children(checks)
-                .when_some(self.notice.clone(), |el, notice| {
-                    el.child(
-                        div()
-                            .px(px(14.0))
-                            .pt(px(6.0))
-                            .text_size(px(11.5))
-                            .text_color(theme.danger)
-                            .child(notice),
-                    )
-                })
+                .when_some(
+                    self.notice.clone().or(self.load_error.clone()),
+                    |el, notice| {
+                        el.child(
+                            div()
+                                .px(px(14.0))
+                                .pt(px(6.0))
+                                .text_size(px(11.5))
+                                .text_color(theme.danger)
+                                .child(notice),
+                        )
+                    },
+                )
                 .child(footer),
         )
     }
@@ -1953,6 +2071,100 @@ pub fn composer_chips(state: &AppState, theme: &Theme, cx: &App) -> Option<AnyEl
 mod tests {
     use super::*;
     use zuse_protocol::ChangeRequestCheck;
+
+    #[gpui::test]
+    fn pull_request_card_slow_graph_does_not_hide_details_or_restart_reads(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use crate::pull_request_test_support::{self as fixture, ScriptedRpc};
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        let runtime = fixture::runtime();
+        let _runtime = runtime.enter();
+        fixture::init(cx);
+        let reads = Arc::new(AtomicUsize::new(0));
+        let graphs = Arc::new(AtomicUsize::new(0));
+        let rpc = ScriptedRpc::new({
+            let reads = reads.clone();
+            let graphs = graphs.clone();
+            move |method, _| {
+                let reads = reads.clone();
+                let graphs = graphs.clone();
+                async move {
+                    match method.as_str() {
+                        methods::GET_CHANGE_REQUEST => {
+                            reads.fetch_add(1, Ordering::SeqCst);
+                            zuse_rpc::RpcReply::value(&ChangeRequestDetail {
+                                title: "Loaded while fetching".into(),
+                                base_ref_name: "main".into(),
+                                ..Default::default()
+                            })
+                        }
+                        methods::GET_BRANCH_GRAPH => {
+                            graphs.fetch_add(1, Ordering::SeqCst);
+                            futures::future::pending().await
+                        }
+                        _ => Err(zuse_rpc::RpcError::UnknownMethod(method)),
+                    }
+                }
+            }
+        });
+        let card = cx.update(|cx| {
+            let state = fixture::state(cx, Some(rpc.client()));
+            state.update(cx, |state, _| {
+                state.chats.push(zuse_protocol::Chat {
+                    id: "chat".into(),
+                    device_id: "local".into(),
+                    title: None,
+                    archived: false,
+                    cwd: Some("/repo".into()),
+                    branch: None,
+                    checkout_id: None,
+                    source_context: None,
+                    config: None,
+                    last_message_preview: None,
+                    last_message_at: None,
+                    created_at: Utc::now(),
+                    harness_session_id: None,
+                    harness_session_cwd: None,
+                    space_id: None,
+                    last_seen_at: None,
+                    room_gen: None,
+                    parent_chat_id: None,
+                    thread_id: None,
+                })
+            });
+            cx.new(|cx| {
+                PullRequestCard::new(
+                    state,
+                    "chat".into(),
+                    &OpenedPullRequest {
+                        url: Some("https://github.com/acme/app/pull/1".into()),
+                        step: None,
+                    },
+                    cx,
+                )
+            })
+        });
+        rpc.settle(cx, &runtime, |_| graphs.load(Ordering::SeqCst) == 1);
+        assert_eq!(
+            card.read_with(cx, |card, _| card
+                .detail
+                .as_ref()
+                .map(|d| d.title.as_str())
+                .map(str::to_owned)),
+            Some("Loaded while fetching".into())
+        );
+        card.update(cx, |card, cx| card.refresh(true, cx));
+        cx.run_until_parked();
+        assert_eq!(
+            reads.load(Ordering::SeqCst),
+            1,
+            "polling must keep the in-flight read"
+        );
+    }
 
     fn exec(command: &str) -> ToolCall {
         ToolCall::Exec {

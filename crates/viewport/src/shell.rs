@@ -730,6 +730,7 @@ impl WorkspaceView {
                                             .into_any_element(),
                                     ),
                                     "visual" => Some(self.visual_part(part,cx)),
+                                    "uiBlock" => Some(self.ui_block_part(part, i + 1 == self.messages.len(), cx)),
                                     "tool" | "reasoning" => Some(self.activity_part(&entry.id,part,cx)),
                                     "image" => Some(self.image_preview(
                                         part["path"].as_str().unwrap_or_default(),

@@ -192,6 +192,14 @@ impl Pickers {
             });
         }));
     }
+    /// Cloud status only matters once the account has cloud destinations; a
+    /// failed or signed-out lookup with nothing to offer stays out of the
+    /// local project and computer pickers.
+    fn cloud_notice(&self) -> Option<String> {
+        (!self.cloud.rows.is_empty() || !self.cloud.workspaces.is_empty())
+            .then(|| self.cloud.error.clone())
+            .flatten()
+    }
     pub(super) fn filtered_cloud_projects(&self, cx: &App) -> Vec<Value> {
         let query = self.search.read(cx).text().to_lowercase();
         self.cloud
@@ -268,7 +276,7 @@ impl Pickers {
                 })),
             );
         }
-        view.when_some(self.cloud.error.clone(), |v, error| {
+        view.when_some(self.cloud_notice(), |v, error| {
             v.child(
                 div()
                     .p_2()
@@ -381,7 +389,7 @@ impl Pickers {
                     window.dispatch_action(Box::new(crate::shell::OpenDevices), cx);
                 })),
             )
-            .when_some(self.cloud.error.clone(), |view, error| {
+            .when_some(self.cloud_notice(), |view, error| {
                 view.child(
                     div()
                         .p_2()

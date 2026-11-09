@@ -57,6 +57,7 @@ impl WorkspaceView {
     }
     pub(super) fn begin_transcript(&mut self, cx: &mut Context<Self>) {
         self.stop_transcript();
+        self.release_ui_blocks(cx);
         self.subscribe_transcript(cx);
     }
     fn subscribe_transcript(&mut self, cx: &mut Context<Self>) {
