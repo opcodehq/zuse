@@ -28,7 +28,10 @@ and authorization generation. Unsupported requested features fail before dispatc
 The Zuse model picker also includes `local/codex/<model>`,
 `local/claude/<model>` and `local/grok/<model>` when the matching CLI has an
 active local login. Catalog discovery uses the existing provider adapters; an
-explicit refresh reaches their catalog caches. These models run through Zuse's
+explicit refresh reaches their catalog caches. Local inventories are cached for
+60 seconds per active credential, with concurrent cold probes coalesced and
+immediate invalidation on sign-out or credential changes. Inventory paths use
+the same ordering by qualified model ID. These models run through Zuse's
 own tools, permissions and durable agent loop. Selecting the standalone Codex,
 Claude Code or Grok provider continues to run that provider's CLI harness.
 

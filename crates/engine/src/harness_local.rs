@@ -5,7 +5,8 @@ use crate::{
 use sha2::{Digest, Sha256};
 #[cfg(test)]
 use std::sync::Arc;
-use std::sync::Weak;
+use std::{sync::Weak, time::Duration};
+use tokio::{sync::Mutex, time::Instant};
 use zuse_harness::{
     Error,
     transport::{Authentication, Capabilities, Credential, Protocol, Route},
@@ -13,9 +14,16 @@ use zuse_harness::{
 use zuse_protocol::HarnessId;
 
 pub(crate) struct LocalModels {
-    pub accounts: AgentAccounts,
+    accounts: AgentAccounts,
     // The registry owns the native harness backed by these models.
-    pub registry: Weak<HarnessRegistry>,
+    registry: Weak<HarnessRegistry>,
+    inventories: [Mutex<Option<CachedInventory>>; 3],
+}
+const INVENTORY_TTL: Duration = Duration::from_secs(60);
+struct CachedInventory {
+    credential: [u8; 32],
+    loaded: Instant,
+    models: Vec<HarnessModel>,
 }
 const PROVIDERS: [(&str, HarnessId); 3] = [
     ("codex", HarnessId::Codex),
@@ -38,31 +46,59 @@ fn parse(id: &str) -> Result<(HarnessId, &str), Error> {
     Ok((harness, model))
 }
 impl LocalModels {
+    pub fn new(accounts: AgentAccounts, registry: Weak<HarnessRegistry>) -> Self {
+        Self {
+            accounts,
+            registry,
+            inventories: std::array::from_fn(|_| Mutex::new(None)),
+        }
+    }
     pub async fn models(&self, force: bool) -> Vec<HarnessModel> {
         let Some(registry) = self.registry.upgrade() else {
             return vec![];
         };
-        let inventories = futures::future::join_all(PROVIDERS.map(|(name, harness)| {
-            let registry = &registry;
-            async move {
-                if self.accounts.harness_token(harness).await.is_none() {
-                    return vec![];
+        let inventories = futures::future::join_all(PROVIDERS.into_iter().enumerate().map(
+            |(index, (name, harness))| {
+                let registry = &registry;
+                async move {
+                    // Serialize each provider's cold probe, including credential lookup,
+                    // so concurrent starts reuse one completed inventory.
+                    let mut slot = self.inventories[index].lock().await;
+                    let Some(token) = self.accounts.harness_token(harness).await else {
+                        *slot = None;
+                        return vec![];
+                    };
+                    let credential: [u8; 32] = Sha256::digest(token.as_bytes()).into();
+                    if !force
+                        && let Some(cached) = slot.as_ref()
+                        && cached.credential == credential
+                        && cached.loaded.elapsed() < INVENTORY_TTL
+                    {
+                        return cached.models.clone();
+                    }
+                    let Ok(models) = registry.discover_models_force(harness, force).await else {
+                        *slot = None;
+                        return vec![];
+                    };
+                    let models = models
+                        .into_iter()
+                        .map(|model| HarnessModel {
+                            id: format!("local/{name}/{}", model.id),
+                            label: format!("{} · {name} (local)", model.label),
+                            context_window_tokens: None,
+                            auto_compact_token_limit: None,
+                            effective_context_window_percent: None,
+                        })
+                        .collect::<Vec<_>>();
+                    *slot = Some(CachedInventory {
+                        credential,
+                        loaded: Instant::now(),
+                        models: models.clone(),
+                    });
+                    models
                 }
-                registry
-                    .discover_models_force(harness, force)
-                    .await
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|model| HarnessModel {
-                        id: format!("local/{name}/{}", model.id),
-                        label: format!("{} · {name} (local)", model.label),
-                        context_window_tokens: None,
-                        auto_compact_token_limit: None,
-                        effective_context_window_percent: None,
-                    })
-                    .collect::<Vec<_>>()
-            }
-        }))
+            },
+        ))
         .await;
         inventories.into_iter().flatten().collect()
     }
@@ -160,10 +196,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let config = AgentAccountsConfig::isolated(dir.path());
         let registry = Arc::new(HarnessRegistry::new());
-        let local = LocalModels {
-            accounts: AgentAccounts::new(config.clone()),
-            registry: Arc::downgrade(&registry),
-        };
+        let local = LocalModels::new(
+            AgentAccounts::new(config.clone()),
+            Arc::downgrade(&registry),
+        );
         (dir, config, local, registry)
     }
     fn write(path: &std::path::Path, body: serde_json::Value) {
@@ -294,10 +330,7 @@ mod live_tests {
             "No active local login for {provider}"
         );
         let registry = Arc::new(crate::registry::default_registry());
-        let local = LocalModels {
-            accounts,
-            registry: Arc::downgrade(&registry),
-        };
+        let local = LocalModels::new(accounts, Arc::downgrade(&registry));
         let model = match std::env::var("ZUSE_LIVE_MODEL") {
             Ok(model) => model,
             Err(_) => registry

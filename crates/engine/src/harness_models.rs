@@ -291,7 +291,7 @@ impl HarnessModels {
         let _ = self
             .transport
             .local
-            .set(crate::harness_local::LocalModels { accounts, registry });
+            .set(crate::harness_local::LocalModels::new(accounts, registry));
         self
     }
     pub fn subscribe(&self) -> broadcast::Receiver<AccountNotice> {
@@ -316,8 +316,9 @@ impl HarnessModels {
             let rows = self.transport.sync().await?;
             let candidates = rows.iter().filter(|c| c.authorized).collect::<Vec<_>>();
             if candidates.is_empty() {
-                let mut models = local;
-                models.extend(self.transport.api.models());
+                let mut models = self.transport.api.models();
+                models.extend(local);
+                models.sort_by(|a, b| a.id.cmp(&b.id));
                 return Ok(models);
             }
             let inventories = join_all(
@@ -1073,6 +1074,7 @@ mod local_tests {
     use zuse_providers::{Harness, HarnessError, RunControls};
     struct Catalog {
         id: HarnessId,
+        calls: Arc<std::sync::atomic::AtomicUsize>,
         // Mirror the real registry -> native harness -> model transport ownership.
         _models: HarnessModels,
     }
@@ -1094,6 +1096,7 @@ mod local_tests {
             &[]
         }
         async fn models(&self) -> Result<Vec<Model>, HarnessError> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Ok(vec![Model {
                 id: "test-model".into(),
                 label: "Test".into(),
@@ -1156,7 +1159,7 @@ mod local_tests {
             Ok(())
         }
     }
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn local_catalog_and_dispatch_work_without_registered_model_accounts() {
         let dir = tempfile::tempdir().unwrap();
         let config = crate::agent_accounts::AgentAccountsConfig::isolated(dir.path());
@@ -1166,30 +1169,53 @@ mod local_tests {
             br#"{"tokens":{"access_token":"local-token"}}"#,
         )
         .unwrap();
-        let accounts = crate::agent_accounts::AgentAccounts::new(config);
+        let accounts = crate::agent_accounts::AgentAccounts::new(config.clone());
         let registry = Arc::new(crate::registry::HarnessRegistry::new());
-        let models = HarnessModels::configured(
+        let api_path = dir.path().join("providers.json");
+        std::fs::write(&api_path, serde_json::json!({"connections":[{
+            "id":"fixture", "protocol":"responses", "endpoint":"https://example.invalid/v1/responses",
+            "credentialEnv":"PATH", "capabilities":{"images":true,"tools":true,"reasoning":true,"promptCache":true},
+            "models":[{"id":"api-first","label":"API first","contextWindowTokens":32000}]
+        }]}).to_string()).unwrap();
+        let models = HarnessModels::configured_api(
+            crate::harness_api::ApiModels::load(&api_path).unwrap(),
             Arc::new(EmptyAccounts),
             Arc::new(LocalWire),
             ["unused".into(), "unused".into()],
         )
         .unwrap()
         .with_local(accounts, Arc::downgrade(&registry));
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         registry.register(Arc::new(Catalog {
             id: HarnessId::Codex,
+            calls: calls.clone(),
             _models: models.clone(),
         }));
         let inventory = models
             .models(true, &CancellationToken::new())
             .await
             .unwrap();
-        assert_eq!(inventory.len(), 1);
-        assert_eq!(inventory[0].id, "local/codex/test-model");
+        assert_eq!(
+            inventory.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+            vec!["api/fixture/api-first", "local/codex/test-model"]
+        );
+        let count = || calls.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(count(), 1);
+        let cancel = CancellationToken::new();
+        models.models(false, &cancel).await.unwrap();
+        assert_eq!(count(), 1, "warm inventories must not probe a CLI again");
+        models.models(true, &cancel).await.unwrap();
+        assert_eq!(count(), 2, "explicit refresh bypasses the cache");
+        tokio::time::advance(Duration::from_secs(61)).await;
+        let (a, b) = tokio::join!(models.models(false, &cancel), models.models(false, &cancel));
+        assert_eq!(a.unwrap().len(), 2);
+        assert_eq!(b.unwrap().len(), 2);
+        assert_eq!(count(), 3, "expired concurrent callers share one probe");
         let output = models
             .request(ModelInput {
                 root_id: "root".into(),
                 agent_id: "root".into(),
-                model: inventory[0].id.clone(),
+                model: "local/codex/test-model".into(),
                 reasoning: None,
                 messages: Arc::new(vec![]),
                 tools: Arc::new(zuse_harness::Tools::new()),
@@ -1203,18 +1229,30 @@ mod local_tests {
             .await
             .unwrap();
         assert_eq!(output.text, "local reply");
+        std::fs::write(
+            config.codex_home.join("auth.json"),
+            br#"{"tokens":{"access_token":"new-local-token"}}"#,
+        )
+        .unwrap();
+        models.models(false, &cancel).await.unwrap();
+        assert_eq!(
+            count(),
+            4,
+            "a changed login invalidates the inventory immediately"
+        );
+        std::fs::remove_file(config.codex_home.join("auth.json")).unwrap();
+        assert_eq!(models.models(false, &cancel).await.unwrap().len(), 1);
+        assert_eq!(
+            count(),
+            4,
+            "signed-out models must disappear without a probe"
+        );
         let weak = Arc::downgrade(&registry);
         drop(registry);
         assert!(
             weak.upgrade().is_none(),
             "local models must not retain their owning registry"
         );
-        assert!(
-            models
-                .models(false, &CancellationToken::new())
-                .await
-                .unwrap()
-                .is_empty()
-        );
+        assert_eq!(models.models(false, &cancel).await.unwrap().len(), 1);
     }
 }
