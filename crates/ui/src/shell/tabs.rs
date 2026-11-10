@@ -1194,7 +1194,10 @@ impl Shell {
         // right pane's toggle anchors the far edge.
         // A Zot's coordinator has no repository, branch or environment to show.
         let zot_coordinator = self.state.read(cx).selected_chat_is_zot_coordinator();
-        let session_info_toggle = (!takeover && !on_canvas && !zot_coordinator).then(|| {
+        // Neither does a Zot thread that hasn't created its worktree yet.
+        let no_checkout =
+            zot_coordinator || self.state.read(cx).selected_chat_awaits_zot_worktree();
+        let session_info_toggle = (!takeover && !on_canvas && !no_checkout).then(|| {
             let open = self.session_info_visible();
             header_icon_button(
                 "toggle-session-info",
@@ -1213,12 +1216,12 @@ impl Shell {
             )
             .when(open, |button| button.bg(theme.text.opacity(0.10)))
         });
-        let open_in = if !takeover && !on_canvas && !zot_coordinator {
+        let open_in = if !takeover && !on_canvas && !no_checkout {
             self.render_open_in(&theme, cx)
         } else {
             None
         };
-        let terminal_toggle = (!takeover && !on_canvas && !zot_coordinator).then(|| {
+        let terminal_toggle = (!takeover && !on_canvas && !no_checkout).then(|| {
             let open = self.terminal_open(cx);
             header_icon_button(
                 "toggle-bottom-terminal",
