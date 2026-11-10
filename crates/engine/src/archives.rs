@@ -1132,6 +1132,96 @@ mod tests {
             "newer edits"
         );
     }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn force_delete_rpc_removes_socket_worktree_but_preserves_shared_and_main_folders() {
+        use serde_json::json;
+        use zuse_rpc::{RpcService, methods};
+        let f = Fixture::new().await;
+        f.edit();
+        let _socket = std::os::unix::net::UnixListener::bind(
+            f.checkout.join(".context/appshot-activation.sock"),
+        )
+        .unwrap();
+        let core = crate::EngineCore::assemble_with_profile(
+            crate::EngineProfile::local(&f.data).unwrap(),
+            std::sync::Arc::new(crate::HarnessRegistry::new()),
+            zuse_protocol::HarnessId::Mock,
+            None,
+        )
+        .unwrap();
+        core.workspace
+            .create_space(
+                "project",
+                &core.device_id,
+                &f.repo.to_string_lossy(),
+                None,
+                true,
+            )
+            .unwrap();
+        let rpc = core.rpc_service();
+        for (id, cwd) in [
+            ("first", &f.checkout),
+            ("shared", &f.checkout),
+            ("main", &f.repo),
+        ] {
+            rpc.handle(methods::MUTATE, json!({"op":"createChat","chatId":id,"spaceId":"project","cwd":cwd,"config":{"harness":"mock","sandbox":"workspace-write"}})).await.unwrap();
+        }
+        assert!(
+            rpc.handle(
+                methods::MUTATE,
+                json!({"op":"forceDeleteChat","chatId":"first","targetDeviceId":"wrong-host"})
+            )
+            .await
+            .is_err()
+        );
+        rpc.handle(
+            methods::MUTATE,
+            json!({"op":"forceDeleteChat","chatId":"shared"}),
+        )
+        .await
+        .unwrap();
+        assert!(f.checkout.exists());
+        assert!(core.workspace.chat("first").unwrap().is_some());
+        assert!(core.workspace.chat("shared").unwrap().is_none());
+        let error = rpc
+            .handle(
+                methods::MUTATE,
+                json!({"op":"setChatArchived","chatId":"first","archived":true}),
+            )
+            .await
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains("Cannot preserve special file"));
+        // Deleting a side chat keeps its parent's worktree; deleting the parent
+        // also removes any remaining child conversations.
+        for id in ["side", "agent"] {
+            rpc.handle(methods::MUTATE, json!({"op":"createChat","chatId":id,"spaceId":"project","cwd":f.checkout,"parentChatId":"first","config":{"harness":"mock","sandbox":"workspace-write"}})).await.unwrap();
+        }
+        rpc.handle(methods::MUTATE, json!({"op":"forceDeleteChat","chatId":"side"})).await.unwrap();
+        assert!(f.checkout.exists());
+        assert!(core.workspace.chat("side").unwrap().is_none());
+        rpc.handle(
+            methods::MUTATE,
+            json!({"op":"forceDeleteChat","chatId":"first"}),
+        )
+        .await
+        .unwrap();
+        assert!(!f.checkout.exists());
+        assert!(core.workspace.chat("first").unwrap().is_none());
+        assert!(core.workspace.chat("agent").unwrap().is_none());
+        assert!(f.archives.record(&f.checkout).unwrap().is_none());
+        rpc.handle(
+            methods::MUTATE,
+            json!({"op":"forceDeleteChat","chatId":"main"}),
+        )
+        .await
+        .unwrap();
+        assert!(f.repo.join("tracked.txt").exists());
+        assert!(core.workspace.chat("main").unwrap().is_none());
+        core.sessions.shutdown().await;
+    }
+
     #[tokio::test]
     async fn archive_rpc_reclaims_only_after_last_shared_thread_and_restores_before_activation() {
         use serde_json::json;

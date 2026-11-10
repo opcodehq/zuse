@@ -13,12 +13,15 @@
 //! Push from anywhere with [`error`], [`success`] or [`info`]; the shell
 //! mounts [`render_toaster`] once per window.
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gpui::{
     AnyElement, App, Global, InteractiveElement as _, IntoElement, ParentElement as _,
     SharedString, StatefulInteractiveElement as _, Styled as _, Task, Window, div, point, px,
 };
+
+use gpui::prelude::FluentBuilder;
 
 use crate::motion::CubicBezier;
 use crate::theme::Theme;
@@ -87,10 +90,18 @@ impl Glide {
     }
 }
 
+#[derive(Clone)]
+struct ToastAction {
+    key: SharedString,
+    label: SharedString,
+    run: Rc<dyn Fn(&mut Window, &mut App)>,
+}
+
 struct Toast {
     id: u64,
     kind: ToastKind,
     message: SharedString,
+    action: Option<ToastAction>,
     created: Instant,
     /// Countdown left, and when it last resumed (`None` while paused).
     remaining: Duration,
@@ -146,11 +157,25 @@ struct ToastStore {
 impl Global for ToastStore {}
 
 fn push(cx: &mut App, kind: ToastKind, message: SharedString) {
+    push_with_action(cx, kind, message, None);
+}
+
+fn push_with_action(
+    cx: &mut App,
+    kind: ToastKind,
+    message: SharedString,
+    action: Option<ToastAction>,
+) {
     let message: SharedString = message.trim().to_owned().into();
     if message.is_empty() {
         return;
     }
     let now = Instant::now();
+    let duration = if action.is_some() {
+        Duration::from_secs(12)
+    } else {
+        DURATION
+    };
     let store = cx.default_global::<ToastStore>();
     // A repeat of the live front toast restarts it instead of stacking.
     if let Some(front) = store
@@ -160,8 +185,11 @@ fn push(cx: &mut App, kind: ToastKind, message: SharedString) {
         .find(|toast| toast.closing.is_none())
         && front.kind == kind
         && front.message == message
+        && front.action.as_ref().map(|action| &action.key)
+            == action.as_ref().map(|action| &action.key)
     {
-        front.remaining = DURATION;
+        front.action = action;
+        front.remaining = duration;
         front.resumed = (!store.hovered).then_some(now);
     } else {
         store.next_id += 1;
@@ -171,8 +199,9 @@ fn push(cx: &mut App, kind: ToastKind, message: SharedString) {
             id,
             kind,
             message,
+            action,
             created: now,
-            remaining: DURATION,
+            remaining: duration,
             resumed: (!hovered).then_some(now),
             closing: None,
             height: 0.0,
@@ -193,6 +222,27 @@ pub fn show(cx: &mut App, kind: ToastKind, message: impl Into<SharedString>) {
 /// A failure toast.
 pub fn error(cx: &mut App, message: impl Into<SharedString>) {
     push(cx, ToastKind::Error, message.into());
+}
+
+/// An error with a recovery action below its message. The action opens a
+/// confirmation; it must never perform a destructive operation immediately.
+pub fn error_with_action(
+    cx: &mut App,
+    message: impl Into<SharedString>,
+    key: impl Into<SharedString>,
+    label: impl Into<SharedString>,
+    run: impl Fn(&mut Window, &mut App) + 'static,
+) {
+    push_with_action(
+        cx,
+        ToastKind::Error,
+        message.into(),
+        Some(ToastAction {
+            key: key.into(),
+            label: label.into(),
+            run: Rc::new(run),
+        }),
+    );
 }
 
 /// A confirmation toast ("Link copied").
@@ -457,6 +507,7 @@ pub fn render_toaster(window: &mut Window, cx: &mut App) -> Option<AnyElement> {
         }
         let kind = toast.kind;
         let message = toast.message.clone();
+        let action = toast.action.clone();
         let content = div()
             .id(("toast-content", id as usize))
             .w_full()
@@ -469,7 +520,40 @@ pub fn render_toaster(window: &mut Window, cx: &mut App) -> Option<AnyElement> {
             .text_size(crate::typography::text_sm())
             .text_color(theme.text)
             .child(kind_icon(kind, &theme))
-            .child(div().flex_1().min_w_0().child(message.clone()))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap(px(10.))
+                    .child(message.clone())
+                    .when_some(action, |view, action| {
+                        view.child(
+                            div().flex().child(
+                                crate::popover::btn_ghost(
+                                    &theme,
+                                    &action.label,
+                                    format!("toast-action-{id}"),
+                                )
+                                .id(("toast-action", id as usize))
+                                .role(gpui::Role::Button)
+                                .aria_label(action.label.clone())
+                                .text_color(theme.danger)
+                                .border_1()
+                                .border_color(theme.danger.opacity(0.25))
+                                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| {
+                                    cx.stop_propagation()
+                                })
+                                .on_click(move |_, window, cx| {
+                                    cx.stop_propagation();
+                                    dismiss(id, cx);
+                                    (action.run)(window, cx);
+                                }),
+                            ),
+                        )
+                    }),
+            )
             .child(
                 // Measure the natural height for the stack's layout.
                 gpui::canvas(
@@ -631,6 +715,7 @@ mod tests {
             id: store.next_id,
             kind: ToastKind::Error,
             message: message.to_owned().into(),
+            action: None,
             created: now,
             remaining: DURATION,
             resumed: Some(now),
