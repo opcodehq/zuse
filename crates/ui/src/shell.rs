@@ -5620,6 +5620,13 @@ impl Shell {
     }
 
     /// Close the session-row context menu through the exit animation.
+    /// Whether the open chat menu belongs to `chat_id`'s row (not a tab).
+    pub(super) fn chat_menu_targets(&self, chat_id: &str) -> bool {
+        self.chat_menu
+            .get()
+            .is_some_and(|menu| menu.tab.is_none() && menu.chat_id == chat_id)
+    }
+
     fn close_chat_menu(&mut self, cx: &mut Context<Self>) {
         self.chat_copy_intent.reset();
         if self.chat_menu.begin_close() {
@@ -7056,6 +7063,19 @@ impl Shell {
 
     fn delete_chat(&mut self, chat_id: String, cx: &mut Context<Self>) {
         self.delete_confirm = None;
+        // Take a Zapper thread off its Zapper first, so the Zapper stops
+        // counting it and sending it work.
+        if let Some(zot) = self.zot_of_thread(&chat_id, cx) {
+            self.send_zot_command(
+                zot.id.clone(),
+                Some(zot.revision),
+                zuse_protocol::zots::ZotAction::ReleaseWorker {
+                    chat_id: chat_id.clone(),
+                },
+                zot_forms::ZotAfter::Stay,
+                cx,
+            );
+        }
         if let Some(tabs) = self.right_tabs.get(&chat_id) {
             for surface in tabs {
                 if let RightSurface::Browser(id) = surface {
@@ -9250,6 +9270,9 @@ impl Shell {
         // below its near-opaque selected fill, and blending toward it visibly
         // dimmed the active row under the pointer (user report).
         let hover_bg = if selected { selected_wash } else { hover };
+        // The row a context menu was opened on stays lit while the menu is
+        // up; the pointer leaving it for the menu must not drop the wash.
+        let menu_target = !preview && self.chat_menu_targets(&id);
         // Brightness is the read state: titles rest gray and an unseen finish
         // stands out in full white, with no status mark beside it.
         let finished_unseen =
@@ -9282,8 +9305,16 @@ impl Shell {
             .px(px(Theme::SPACE_SM))
             .when(sidebar, |el| el.justify_center())
             .when(!sidebar, |el| el.py(px(6.0)))
-            .text_color(motion::hover_blend(&fade_key, rest_text, theme.text_strong))
-            .bg(motion::hover_blend(&fade_key, rest_bg, hover_bg))
+            .text_color(if menu_target {
+                theme.text_strong
+            } else {
+                motion::hover_blend(&fade_key, rest_text, theme.text_strong)
+            })
+            .bg(if menu_target {
+                hover_bg
+            } else {
+                motion::hover_blend(&fade_key, rest_bg, hover_bg)
+            })
             // No selection ring (user request) — the wash alone marks the
             // active row.
             // Row hover drives BOTH the wash blend and the corner's
@@ -11992,6 +12023,9 @@ impl Shell {
             cx.notify();
             return true;
         }
+        if self.dismiss_zot_overlay(cx) {
+            return true;
+        }
         if self.harness_update_expanded {
             self.set_harness_updates_expanded(false, cx);
             return true;
@@ -12227,6 +12261,7 @@ impl Shell {
         overlays.push(self.desktop_import.clone().into_any_element());
         overlays.extend(self.render_shortcuts_panel(viewport, cx));
         overlays.extend(self.render_zot_dialog(viewport, window, cx));
+        overlays.extend(self.render_zot_overlays(viewport, cx));
 
         if let Some(menu_state) = self.chat_menu.get().cloned() {
             let chat_id = menu_state.chat_id;
@@ -12240,6 +12275,9 @@ impl Shell {
                     .iter()
                     .any(|chat| chat.id == chat_id && chat.parent_chat_id.is_some());
             let is_pinned = self.active_sidebar_pins(cx).contains(&chat_id);
+            // A Zapper thread lives under its Zapper, so it has no pin, and
+            // archiving goes through the Zapper so it stops sending work.
+            let thread_zot = self.zot_of_thread(&chat_id, cx);
             let rename_id = chat_id.clone();
             let pin_id = chat_id.clone();
             let archive_id = chat_id.clone();
@@ -12285,9 +12323,16 @@ impl Shell {
                     let archive =
                         popover::menu_row(&theme, false, format!("chat-menu-archive-{chat_id}"))
                             .id("chat-menu-archive")
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.archive_chat(archive_id.clone(), cx)
-                            }))
+                            .on_click({
+                                let thread_zot = thread_zot.clone();
+                                cx.listener(move |this, _, _, cx| match &thread_zot {
+                                    Some(zot) => {
+                                        this.close_chat_menu(cx);
+                                        this.archive_zot_thread(zot, archive_id.clone(), cx);
+                                    }
+                                    None => this.archive_chat(archive_id.clone(), cx),
+                                })
+                            })
                             .child(
                                 icon(icons::ARCHIVE_MINIMALISTIC)
                                     .size(px(16.0))
@@ -12295,8 +12340,12 @@ impl Shell {
                             )
                             .child(SharedString::from("Archive"));
                     let copy = self.render_chat_copy_trigger(&chat_id, copy_open, &theme, cx);
-                    menu.child(self.chat_menu_hover_row(CHAT_MENU_ROW_PIN, pin, cx))
-                        .child(self.chat_menu_hover_row(CHAT_MENU_ROW_ARCHIVE, archive, cx))
+                    let menu = if thread_zot.is_some() {
+                        menu
+                    } else {
+                        menu.child(self.chat_menu_hover_row(CHAT_MENU_ROW_PIN, pin, cx))
+                    };
+                    menu.child(self.chat_menu_hover_row(CHAT_MENU_ROW_ARCHIVE, archive, cx))
                         .child(self.chat_menu_hover_row(CHAT_MENU_ROW_COPY, copy, cx))
                 };
                 let delete =

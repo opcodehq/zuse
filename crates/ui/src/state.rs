@@ -1643,6 +1643,25 @@ impl AppState {
         })
     }
 
+    pub fn chat_is_archived(&self, chat_id: &str) -> bool {
+        self.chats.iter().any(|c| c.id == chat_id && c.archived)
+    }
+
+    /// Whether the selected chat is a Zot thread still waiting for the
+    /// worktree its first run creates. Until then its folder is the main repo.
+    pub fn selected_chat_awaits_zot_worktree(&self) -> bool {
+        self.selected_chat.as_ref().is_some_and(|id| {
+            self.zots
+                .iter()
+                .any(|z| z.workers.iter().any(|w| &w.chat_id == id))
+                && self
+                    .chats
+                    .iter()
+                    .find(|c| &c.id == id)
+                    .is_none_or(|c| c.branch.is_none())
+        })
+    }
+
     pub fn apply_zots(&mut self, zots: Vec<zuse_protocol::zots::Zot>) -> bool {
         if self.zots == zots {
             return false;
@@ -6390,6 +6409,17 @@ mod tests {
                 sandbox: zuse_protocol::SandboxLevel::WorkspaceWrite,
             },
         );
+    }
+
+    #[test]
+    fn chat_is_archived_needs_a_known_archived_row() {
+        let mut state = AppState::new();
+        let mut archived = chat("a", 0, Some(99));
+        archived.archived = true;
+        state.apply_chats(vec![archived, chat("b", 1, None)]);
+        assert!(state.chat_is_archived("a"));
+        assert!(!state.chat_is_archived("b"));
+        assert!(!state.chat_is_archived("missing"));
     }
 
     #[test]

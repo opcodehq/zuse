@@ -186,9 +186,9 @@ impl WorkspaceView {
                 .justify_between()
                 .text_size(px(11.))
                 .text_color(rgb(FAINT))
-                .child("Zots")
+                .child("Zappers")
                 .child(
-                    icon_button("new-zot", "plus", "New Zot")
+                    icon_button("new-zot", "plus", "New Zapper")
                         .size(px(20.))
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.open_zot_form(None, FormKind::Config, window, cx)
@@ -264,8 +264,13 @@ impl WorkspaceView {
                     .on_click(cx.listener(move |this, _, _, cx| this.open_zot_chat(&id, cx))),
             );
             // A Zot's threads live under it instead of under their projects.
-            let total = z.workers.len();
-            for (index, worker) in z.workers.iter().enumerate() {
+            let threads: Vec<_> = z
+                .workers
+                .iter()
+                .filter(|w| !self.zot_thread_archived(&w.chat_id))
+                .collect();
+            let total = threads.len();
+            for (index, worker) in threads.into_iter().enumerate() {
                 let chat = worker.chat_id.clone();
                 let current = selected.as_deref() == Some(chat.as_str());
                 let (dot, _) = thread_state(self.zot_thread_status(&chat));
@@ -469,7 +474,7 @@ impl WorkspaceView {
             FormKind::Config => {
                 let name = get("Name").trim().to_owned();
                 if name.is_empty() {
-                    self.error = Some("Name the Zot".into());
+                    self.error = Some("Name the Zapper".into());
                     cx.notify();
                     return;
                 }
@@ -612,12 +617,12 @@ impl WorkspaceView {
         let title = match &form.kind {
             FormKind::File(file) if file.version == 0 => "New document".to_owned(),
             FormKind::File(file) => file.path.clone(),
-            FormKind::Config if form.zot.is_none() => "New Zot".to_owned(),
-            FormKind::Config => "Zot settings".to_owned(),
+            FormKind::Config if form.zot.is_none() => "New Zapper".to_owned(),
+            FormKind::Config => "Zapper settings".to_owned(),
             FormKind::Worker(Some(_)) => "Message thread".to_owned(),
             FormKind::Worker(None) => "New thread".to_owned(),
             FormKind::Decision(_) => "Answer".to_owned(),
-            FormKind::Delete => "Delete Zot?".to_owned(),
+            FormKind::Delete => "Delete Zapper?".to_owned(),
         };
         let close = cx.listener(|this, _, _, cx| {
             this.zots.form = None;
@@ -654,7 +659,11 @@ impl WorkspaceView {
                         }),
                 );
                 if let Some(input) = name("Purpose") {
-                    body = body.child(field("Purpose", "What this Zot is responsible for", input));
+                    body = body.child(field(
+                        "Purpose",
+                        "What this Zapper is responsible for",
+                        input,
+                    ));
                 }
                 body = body.child(
                     column()
@@ -695,7 +704,7 @@ impl WorkspaceView {
                         .text_size(px(12.5))
                         .line_height(px(19.))
                         .text_color(rgb(MUTED))
-                        .child("The coordinator stops and the Zot is removed. Its threads, documents and repository files are kept."),
+                        .child("The coordinator stops and the Zapper is removed. Its threads, documents and repository files are kept."),
                 );
             }
             _ => {
@@ -769,7 +778,7 @@ impl WorkspaceView {
                     if saving {
                         "Saving…"
                     } else if delete {
-                        "Delete Zot"
+                        "Delete Zapper"
                     } else if matches!(form.kind, FormKind::Worker(_)) {
                         "Send"
                     } else if matches!(form.kind, FormKind::Config) && form.zot.is_none() {
@@ -882,7 +891,8 @@ impl WorkspaceView {
             return Empty.into_any_element();
         };
         if self.zots.spaces.is_empty() {
-            return muted("Open a project first to give this Zot a repository.").into_any_element();
+            return muted("Open a project first to give this Zapper a repository.")
+                .into_any_element();
         }
         let mut list = column()
             .p(px(4.))
@@ -973,6 +983,11 @@ impl WorkspaceView {
         list.into_any_element()
     }
     /// Live run state of one thread, ignoring rows a crashed host left behind.
+    fn zot_thread_archived(&self, chat: &str) -> bool {
+        self.chats
+            .iter()
+            .any(|c| c["id"] == chat && c["archived"] == true)
+    }
     fn zot_thread_status(&self, chat: &str) -> &str {
         self.sessions
             .iter()
@@ -1086,7 +1101,7 @@ impl WorkspaceView {
                 )
             })
             .child(
-                quiet_icon("zot-settings", "settings", "Zot settings").on_click(cx.listener(
+                quiet_icon("zot-settings", "settings", "Zapper settings").on_click(cx.listener(
                     move |this, _, window, cx| {
                         this.open_zot_form(Some(settings.clone()), FormKind::Config, window, cx)
                     },
@@ -1213,7 +1228,14 @@ impl WorkspaceView {
             .rounded(px(10.))
             .border_1()
             .border_color(rgb(BORDER))
-            .child(stat("Threads", zot.workers.len(), false))
+            .child(stat(
+                "Threads",
+                zot.workers
+                    .iter()
+                    .filter(|w| !self.zot_thread_archived(&w.chat_id))
+                    .count(),
+                false,
+            ))
             .child(div().w(px(1.)).h(px(34.)).bg(rgb(BORDER)))
             .child(stat("Working", working, false))
             .child(div().w(px(1.)).h(px(34.)).bg(rgb(BORDER)))
@@ -1331,7 +1353,14 @@ impl WorkspaceView {
     }
     fn zot_threads(&self, zot: &Zot, cx: &mut Context<Self>) -> AnyElement {
         let mut threads = group();
-        for worker in &zot.workers {
+        let workers: Vec<_> = zot
+            .workers
+            .iter()
+            .filter(|w| !self.zot_thread_archived(&w.chat_id))
+            .collect();
+        let empty = workers.is_empty();
+        let count = workers.len();
+        for worker in workers {
             let id = worker.chat_id.clone();
             let (dot, status) = thread_state(self.zot_thread_status(&id));
             let title = self
@@ -1413,12 +1442,12 @@ impl WorkspaceView {
         let mut view = column().gap(px(16.)).child(
             column()
                 .gap(px(6.))
-                .child(section(format!("Threads · {}", zot.workers.len())))
-                .child(if zot.workers.is_empty() {
+                .child(section(format!("Threads · {count}")))
+                .child(if empty {
                     empty_state(
                         "chat-round-line",
                         "No threads yet",
-                        "Threads this Zot starts or adopts appear here.",
+                        "Threads this Zapper starts or adopts appear here.",
                     )
                 } else {
                     threads.into_any_element()
@@ -1539,7 +1568,7 @@ impl WorkspaceView {
             .child(item(
                 "release",
                 "arrow-up-right",
-                "Release from Zot",
+                "Release from Zapper",
                 false,
                 Some(|chat_id| ZotAction::ReleaseWorker { chat_id }),
             ))
@@ -1625,7 +1654,7 @@ impl WorkspaceView {
                 empty_state(
                     "folder-open",
                     "Nothing here yet",
-                    "Rules, notes and the digest this Zot keeps.",
+                    "Rules, notes and the digest this Zapper keeps.",
                 )
             } else {
                 list.into_any_element()

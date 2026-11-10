@@ -2272,7 +2272,7 @@
     "projects-projects_sidebar_github_starring": "d28042e1048f4c2729d4a230c888f839c8ccf540b5c1282c552d468f1b375701",
     "projects-new_chat_without_project": "cb5424c7c4fb5dbae4d3a4eab3b4091974c528a32666f2e2bf680f8d7e01a57d",
     "projects-no_project": "f34c2be0d1c5f5622eb03be1f67e13dee2ce3dbb71201d909e76a761c29d8bcb",
-    "projects-masters_create_master": "ad32b465b7c603d4640248b11cdf1427fb8acd2277013547e49392b482022966",
+    "projects-masters_create_master": "e098f462695d16f176945676886f3bd2e8887d5b911306228f570513b61ea9eb",
     "projects-masters_master_name": "dcd1d5223f73b3a965c07e3ff5dbee3eedcfedb806686a05b9b3868a2c3d6d50",
     "projects-masters_this_environment": "549c026884663411deb52dbe0d0f423e997e07692e1cbbd0c97b508ddfe4bb47",
     "projects-masters_repositories": "1e32af87ea74279d860df7cf62f0fa4e1207caf75db1d3d2bf5e23a6af5ba18c",
@@ -2285,8 +2285,8 @@
     "projects-masters_this_screen_requests_an_action": "20ce8932f87a3d5e9531e015bf309f6b9f786e2cfe1ba9a662bae1454317a0ed",
     "projects-masters_run_action": "6df427955ff889e60715ba32a8b8718a448c82e280ae7e21c3a615dd17cad35e",
     "projects-masters_decline": "a2d285b352873457207a34a015267524bb4613c3e8c961c8998da4e08e0d5745",
-    "projects-masters_master_generated_screen": "d564369cb902f1dab21616aba432a75a76a62d47058d91e5dc7d9b0b5d166a08",
-    "projects-masters_masters": "2b92e057de11930e9d77bbe4b7a0390145ed806db63a7a74146200679837342f",
+    "projects-masters_master_generated_screen": "99e9e1928fb5434bc71901620ef10021eeb5e8d4e3373788bf4de32301b307fc",
+    "projects-masters_masters": "06bffa0cdfca2e257ffff99e48593407174857da750c2937fa5b7913be0d2209",
     "projects-masters_one_conversation_to_coordinate_your_work": "b6fdb2021c5aafc24a504bcaa3408258300e0d88e82f750d678a267ba3c83ef9",
     "projects-masters_retry": "942087cc2d41e01304b7195558d093d10c72af8e838c7556d6a02d471ee71852",
     "projects-masters_pause": "858e4ba7a29fd38b630ed73a79e2738333b3fc6778fafa90252f5556c1262fdc",
@@ -2295,7 +2295,7 @@
     "projects-masters_some_environments_are_offline_their_workers_remain_attached_reconnect_to_refresh_their_status": "19739bdb826fd9b7040c99556b94a909009770e19eef054ca1c5be6b458e72b0",
     "projects-masters_slaves": "39d16c3dbc60a23e38bd3986fac5bbb21797f01938b1d8ddbf2903800ac0a330",
     "projects-masters_fresh_chat": "9b29250bed424c07478781023547c5ea1b6ec38990e0729016224a44b2bc1514",
-    "projects-masters_ask_the_master_to_start_work_it_will_decide_which_tasks_need_separate_agents": "2eb64296aeee20715198611ecc3c6a3f01f3ea34d2e75634bb06a2c208cc2c47",
+    "projects-masters_ask_the_master_to_start_work_it_will_decide_which_tasks_need_separate_agents": "20693ec010013902dbf0b89cd4a733b1ca6c90a8afe28189c7445c02d42838a1",
     "projects-masters_open_chat": "0600175af8429c3cd44ab859dcdd3cfa5c763d9b352c7b03520196d4ceb59a88",
     "projects-masters_stop_agent": "a8b750b1f3236f7b5dfe4777a7d6fa52255679811a498b0e418e55d9d7eee42e",
     "projects-masters_mark_done": "95acc4a22bdeebf1b0c212bc4f3bdfbda8cefaf89c6cdabc82ad710962389bfb",
@@ -2304,7 +2304,7 @@
     "projects-masters_artifacts": "314ae71b8c8dc9c952f0ffc58e35e6d9a41b5cf4756471c7cab0c9476cd5d20b",
     "projects-masters_working": "a92f0449a9f7235bf69dc2e8ff7070bfae3f00ec8f8f26e5457a9beac53466ac",
     "projects-masters_needs_attention": "c1ebc7817870e5be78fceae559ba5fcac2b68d5c5498d8080298004f3f79d62d",
-    "projects-masters_loading": "5a5fdb1e0898e494595d08939b44f6c4a22fcdd653d2e5c3e9780657d2fea3c3",
+    "projects-masters_loading": "b7a1a26b06b0f84b81a9cc6a2ac7d2dca1282a10016089ba4c0f216a859e4791",
     "projects-masters_offline": "a1794783aab72d205dc532b1170d1be63ebdce8816b57c21acb451c15dab969a",
     "projects-masters_idle": "ab0171ca0494d441cb6fe96e2efbe1c2a129f1d87cd6c17f03613cfd111149dd",
     "projects-masters_conversation_number": "b88b4e46d4040479a91a5b1f08303ce08a4b64935059725d15014a79e2a9c564",
@@ -2329,7 +2329,7 @@
     "projects-masters_previous_conversations": "a3532ab67c8602c3a6873ea139b81d964951b95a38438c1092def8add44428a5",
     "projects-masters_add_work_model": "b2609f7d7b0979ee35f26c9f2741d627cfb8f4b8fbed701af607a39928ba2f57",
     "projects-masters_auto_follow_ups": "cfc889e0647febd7ff64ff5f82454ded620930d4c4eeeb35cce2228c51f39ee0",
-    "projects-masters_auto_follow_ups_help": "f13e9fe0fb429b1825e6fb558ed5484271070b4a134058cb3ff6fe3feada8b51",
+    "projects-masters_auto_follow_ups_help": "d9f8429581515cb2123beb25ce944ff4eaf9c5696619f4b6db2034bdce6728e9",
     "projects-masters_limits": "dffb64dc70011ecf3ef3ad62cdd271f08f1b86601d7c2bc54f91978a32ca8cf4",
     "projects-masters_no_skills_installed": "83340970a652762d4a360b57e18abae3ac9dc91bd8cc42b4136bb6c611061133",
     "projects-masters_parallel_slaves": "6a7556926205bc7a64be4a9d06e47b68c989ea1cb99ce4ffdb6b6f7040f17b56",
@@ -2342,12 +2342,12 @@
     "projects-masters_work_models": "c9fab6b2b801d6d9f0cc680d4c02f732982c70736d43ee9f3ad2c5c716ea16e9",
     "projects-masters_add_repository": "2eda4d8210b2780a7d747f736375ca1f8f0ec9112d6d0778c10ed83c5cac2dc1",
     "projects-masters_color": "3a9dfa58df63e0dda962a147a6cea86cc5294a5e859d89ddfa8e74a977fedf5d",
-    "projects-masters_create_failed": "aa8980996d2d8aa00a5a01f93c774a30aee97f47ff93e481ecc27cf2b500317c",
+    "projects-masters_create_failed": "35bca2484bd7cdeb64efa1731a06eacf8425daad421da23892d0e53b07d4fb99",
     "projects-masters_details": "45989de49fb7f66dfe17a8fc26f3a02c7abcd74f7e8e6cf9f39fa0e3775780df",
     "projects-masters_hero_no_repositories": "051a8bde31c36429cc01bb5ad770150d99338a1903cac121c296ca1ef9740a51",
     "projects-masters_hide_details": "c9722a7a962a84359c87e56fe578f36a2bc75e66eee3ebce15963229fa12667d",
     "projects-masters_mascot": "612a2d03fcae41b8930fd414ac806fa75e2765dcdd9f09539d3f0f87302f29b9",
-    "projects-masters_needs_setup": "a0602977f88578384f512e3f5c16986c8b209b1a3ed728096ca76a7ae68e26c0",
+    "projects-masters_needs_setup": "3b34a0ddbd1ad3f17f053c041802962b28afc7fbd7a151aae12c4b66c46ab921",
     "projects-masters_remove_repository": "d72a656ddc77379f1566b8f8e3e9c2b5f54319a0c14b774321b78fd827a69f82",
     "projects-masters_save": "1509f561f2416598629b886ad7d3c05a7e221e4e0675c84bbff4ee6d9e03913d",
     "projects-masters_save_restarts_chat": "0b754bd3ff4654c7265351a9de804b0e51d2eaff516c069a699ced2ee16043ab",
@@ -2364,7 +2364,7 @@
     "projects-masters_memory_run_cancelled": "d353a99eb4556847ceeb3c306ac886cf6b4fa13043eb1864b9aeb0607fd5f2cc",
     "projects-masters_memory_search": "2ef51f84fc9c0d9175888c0dac2e1cdc95ac105a23a8bc733c3f32c401e16e4d",
     "projects-masters_memory_archived": "bdb86505f8062d15f152cef71dd4ca89609d5bf8e98771dcd2c9f70d247403da",
-    "projects-masters_memory_empty": "e00947fe7b2a5493350f62c7ef652b01d3799ba2922dedf4899a68fd8ce67f7e",
+    "projects-masters_memory_empty": "330ae87d0fa0108fbd171b5decf6bcd462f03976cb80f7d7bee0bff0ea1a643d",
     "projects-masters_memory_previous": "a57b08a480b822a0a572b993391c292ede593bf8000b406675b180bbb16260fa",
     "projects-masters_memory_next": "1ff57a29d7c9d11bdf61c1b80f2b289b44c1ea844824d4b94a0d52b6ba5fc858",
     "projects-masters_memory_content": "69191fe1c012849dbda36d1d37f478452e5bb05a7bcf1efd496dd8c9198903cb",
@@ -2399,11 +2399,11 @@
     "projects-masters_color_teal": "fa15a5c1d61010553974997a19c7baef52cedd7f7ba0042d9cdf03aec5105c3d",
     "projects-masters_color_blue": "ec7d56a01607001e6401366417c5e2eb00ffa0df17ca1a9a831e0b32c8f11bf7",
     "projects-masters_color_pink": "bd38ed7732402b1a93261916c5906016cdccd1a9600b3864208246f6a3299bd0",
-    "projects-masters_no_signed_in_agent": "31cd3675298f3fff2a788be5f0900647b398d857c5e90e14e46f68dbb08f79c6",
+    "projects-masters_no_signed_in_agent": "65ae76a28f8be97edcf9c00f7b637c350198da735c0f5e8677c150e36279a529",
     "projects-masters_skills_failed": "f91ab8bebb9fe593b2273514fec1ddbcb3b0cf71f2d95c433dc01b6f37f25f82",
-    "projects-masters_home_only_note": "523bd717719f8795dc63af1687499e7531c8f045ae398b3a461121fa3109b2ff",
-    "projects-masters_guide_open": "02ca76ea4cdb620d2851e3002de2b65ebfe88407b723214170124c0ab48dd3c2",
-    "projects-masters_guide_how": "227ac0def1c42e02db463c3ba0dd9a0726fbfc69ff9493200d3043bf6ff9598d",
+    "projects-masters_home_only_note": "ecaacdf239e2ddddfa05ef03adcadcc43fc7c3b1aeb230cebad91e8aac662f43",
+    "projects-masters_guide_open": "a0bc01a2dadda56b2b86f47b31bdb9c45cf1434edb7420f06f398a32c4b52134",
+    "projects-masters_guide_how": "a762df582c683b0d24fc6429cc3abfd19afa2e5871c17b4e5eccd4b579f5d8b2",
     "projects-masters_guide_step_count": "5b4a2ea1ff8550629eb408d42d724afd73fb52476ca572cd330109344cccd49d",
     "projects-masters_guide_skip": "a25582e96b799c867bc6e1f302ee817c62363f0be9ebf128f806acb8151c2d38",
     "projects-masters_guide_not_now": "a0e63d7c7125d29af84d6919af5550529be77c327324940c98c4b2cb13a99c8c",
@@ -2412,18 +2412,18 @@
     "projects-masters_guide_next": "1ff57a29d7c9d11bdf61c1b80f2b289b44c1ea844824d4b94a0d52b6ba5fc858",
     "projects-masters_guide_done": "11a6767d5674c7e45f7e00dc525762275b3a48491ad6045427d2609cc496c516",
     "projects-masters_guide_target_hidden": "29edd439e900e916e1847e15a3365ce9ffb249ed71425d48c05f6b51ceb24c05",
-    "projects-masters_guide_welcome_title": "55a512b37428bf79f969ad17c5948fa82900813cb8a60b1ba51cbc8bae584bda",
-    "projects-masters_guide_welcome_body": "232f740a71a849bd440a19f4ddf0e9a08d014ca2a54032217d3c61385ad67a69",
-    "projects-masters_guide_welcome_preview": "b5348bef422c9e8a6c3ca9f3646109345752ea7869abd0747018ddb7befa9d5a",
+    "projects-masters_guide_welcome_title": "033cf0b4d0ef249395fa19e6cd18111f05827ea4abbb1ccc920711b2134787da",
+    "projects-masters_guide_welcome_body": "1a964acb5250589d05959cc340aea3a8c06d5743a387fb3d6d76bfb19994ba63",
+    "projects-masters_guide_welcome_preview": "791892bdca4921a7dae611ffb83e67fd3afc3e6b63b9edf9a5a62e5b6e93de37",
     "projects-masters_guide_repositories_title": "df6de5931aceb4479490c88cd6d954bfb401c758b2f6e34546f6f8dc3485a612",
-    "projects-masters_guide_repositories_summary": "516f2134647ebd3b1f247c17f9cb05e4e7b05ba72d69050ee09abf72814279fc",
-    "projects-masters_guide_repositories_body": "00ed0067920548f4a6e364c1b8583f35660e34edaade8a11fc9ab87d0a903855",
+    "projects-masters_guide_repositories_summary": "389c89769de8c64cd45b487ba896a0cedbe3ed3fa6c150f3f3d365ea74c94bec",
+    "projects-masters_guide_repositories_body": "e3f7ba6583a6f129ccc2a06b7be332305c06ff7ede01477f45e7aa25c9325cdc",
     "projects-masters_guide_repositories_empty": "f07db81ea46dc6cf2e123dc68e6f4f64b0305652a46d665bd18a25588dfcad64",
     "projects-masters_guide_repositories_optional": "a9832527bb2249853fb842bac84531556f6396b34d156672962180a53e8058fc",
     "projects-masters_guide_brief_title": "4ec07e069cb981ebae71c2fdac382fe7aa080289fb1ea1ddcc6bc8a49d89b3fd",
     "projects-masters_guide_brief_summary": "b6e75ba26636dbaca309e559ebcaf678136c5fef8b639a99fcc491d05da6b951",
-    "projects-masters_guide_brief_body": "50e0281f583405e30e2ecaf7622134733b97386f170991ac4156865af6837eab",
-    "projects-masters_guide_brief_model": "944e29836e135dddcfd602e2a92fb656d4413759499016a4447c7820b81d796a",
+    "projects-masters_guide_brief_body": "b565f364358ab05e8d58827446b389346587b15487b963d25389298bc9c04b30",
+    "projects-masters_guide_brief_model": "9a576a2724b02b0d8a02153f26c0479a0a9a458cd904d11db72620a3ea646b1d",
     "projects-masters_guide_brief_example": "2530c04512b78dcc9559de75b55ced6386ea960bc8ba9872f52bdd9f92ecae09",
     "projects-masters_guide_brief_example_hint": "09d1ae609bb80240fbae00bf89736bb82788a46665fbf030b84302f6f9b9aab6",
     "projects-masters_guide_example_delegate": "9dd1fae738026feda24155ea6167c80261ca687fdf4ee1cf6b23bf06b5c80ba8",
@@ -2440,8 +2440,8 @@
     "projects-masters_guide_continuity_summary": "ad0863efb0cb82eba4e7e481c7fade9dff63a71c25d512ab9007603a43ad208e",
     "projects-masters_guide_continuity_body": "82023ade2b1da026b68adfdbf80cd9f85ac24f23a54104a99b096ad20fd3cc6d",
     "projects-masters_guide_continuity_memory": "47c4f880c6280321542ff56cc45d2482f32f3e49f2b14829c7f6b9dba01d21a0",
-    "projects-masters_paused_notice": "7bcb0c6646f1fa870fcb8f80c190cc791dd293c77aa09f2ec2c63c2cabd59037",
-    "projects-masters_stopped_notice": "88847303777efc3fdb6b7cb12b9942995662a55198479a21e14be7d767e2930b",
+    "projects-masters_paused_notice": "bcc59ebdc26444fe68e455d2ceecf56157c26a7107b941d3eaaf2d0c911a0462",
+    "projects-masters_stopped_notice": "173f59e313e5746e517c251995e13179a4431069be8d7924a087846834d078d5",
     "projects-pr_pane_added_file_to_the_composer-plural": "4817b135e223fe78614cd86539eba23c2bbd6610f3113af52698e38667f864d8",
     "projects-branch_workflow_check_failing-plural": "00aa5200938446cf9697e3e96a5950bb894da841ccfd7aee9cb99218caa6b5b8",
     "projects-branch_workflow_check_running-plural": "e5aa9cfab8f1e39b5edecaee521367c5b7a7b8e074d949af42d97f0227bd2ce4",
@@ -4285,5 +4285,546 @@
     "usage-usage_limits_load_failed": "9ea7965ec16d2b726551c1ed71fb54620cf5809988b74caae66cd2f28535f12e",
     "usage-usage_limits_no_data": "a73a90cd3014728d9c6857af044b17ddeada4ef1400c9e775cd5976e6f4708ba"
   },
-  "reviews": {}
+  "reviews": {
+    "zh-Hans": {
+      "projects-masters_memory_empty": {
+        "status": "needs-review",
+        "sourceHash": "e00947fe7b2a5493350f62c7ef652b01d3799ba2922dedf4899a68fd8ce67f7e"
+      },
+      "projects-masters_auto_follow_ups_help": {
+        "status": "needs-review",
+        "sourceHash": "f13e9fe0fb429b1825e6fb558ed5484271070b4a134058cb3ff6fe3feada8b51"
+      },
+      "projects-masters_guide_brief_body": {
+        "status": "needs-review",
+        "sourceHash": "50e0281f583405e30e2ecaf7622134733b97386f170991ac4156865af6837eab"
+      },
+      "projects-masters_guide_brief_model": {
+        "status": "needs-review",
+        "sourceHash": "944e29836e135dddcfd602e2a92fb656d4413759499016a4447c7820b81d796a"
+      },
+      "projects-masters_guide_welcome_body": {
+        "status": "needs-review",
+        "sourceHash": "232f740a71a849bd440a19f4ddf0e9a08d014ca2a54032217d3c61385ad67a69"
+      },
+      "projects-masters_masters": {
+        "status": "needs-review",
+        "sourceHash": "2b92e057de11930e9d77bbe4b7a0390145ed806db63a7a74146200679837342f"
+      },
+      "projects-masters_paused_notice": {
+        "status": "needs-review",
+        "sourceHash": "7bcb0c6646f1fa870fcb8f80c190cc791dd293c77aa09f2ec2c63c2cabd59037"
+      },
+      "projects-masters_stopped_notice": {
+        "status": "needs-review",
+        "sourceHash": "88847303777efc3fdb6b7cb12b9942995662a55198479a21e14be7d767e2930b"
+      },
+      "projects-masters_no_signed_in_agent": {
+        "status": "needs-review",
+        "sourceHash": "31cd3675298f3fff2a788be5f0900647b398d857c5e90e14e46f68dbb08f79c6"
+      },
+      "projects-masters_loading": {
+        "status": "needs-review",
+        "sourceHash": "5a5fdb1e0898e494595d08939b44f6c4a22fcdd653d2e5c3e9780657d2fea3c3"
+      },
+      "projects-masters_master_generated_screen": {
+        "status": "needs-review",
+        "sourceHash": "d564369cb902f1dab21616aba432a75a76a62d47058d91e5dc7d9b0b5d166a08"
+      },
+      "projects-masters_guide_repositories_summary": {
+        "status": "needs-review",
+        "sourceHash": "516f2134647ebd3b1f247c17f9cb05e4e7b05ba72d69050ee09abf72814279fc"
+      },
+      "projects-masters_home_only_note": {
+        "status": "needs-review",
+        "sourceHash": "523bd717719f8795dc63af1687499e7531c8f045ae398b3a461121fa3109b2ff"
+      },
+      "projects-masters_create_master": {
+        "status": "needs-review",
+        "sourceHash": "ad32b465b7c603d4640248b11cdf1427fb8acd2277013547e49392b482022966"
+      },
+      "projects-masters_create_failed": {
+        "status": "needs-review",
+        "sourceHash": "aa8980996d2d8aa00a5a01f93c774a30aee97f47ff93e481ecc27cf2b500317c"
+      },
+      "projects-masters_needs_setup": {
+        "status": "needs-review",
+        "sourceHash": "a0602977f88578384f512e3f5c16986c8b209b1a3ed728096ca76a7ae68e26c0"
+      },
+      "projects-masters_guide_open": {
+        "status": "needs-review",
+        "sourceHash": "02ca76ea4cdb620d2851e3002de2b65ebfe88407b723214170124c0ab48dd3c2"
+      },
+      "projects-masters_guide_how": {
+        "status": "needs-review",
+        "sourceHash": "227ac0def1c42e02db463c3ba0dd9a0726fbfc69ff9493200d3043bf6ff9598d"
+      },
+      "projects-masters_guide_repositories_body": {
+        "status": "needs-review",
+        "sourceHash": "00ed0067920548f4a6e364c1b8583f35660e34edaade8a11fc9ab87d0a903855"
+      },
+      "projects-masters_guide_welcome_title": {
+        "status": "needs-review",
+        "sourceHash": "55a512b37428bf79f969ad17c5948fa82900813cb8a60b1ba51cbc8bae584bda"
+      },
+      "projects-masters_guide_welcome_preview": {
+        "status": "needs-review",
+        "sourceHash": "b5348bef422c9e8a6c3ca9f3646109345752ea7869abd0747018ddb7befa9d5a"
+      },
+      "projects-masters_ask_the_master_to_start_work_it_will_decide_which_tasks_need_separate_agents": {
+        "status": "needs-review",
+        "sourceHash": "2eb64296aeee20715198611ecc3c6a3f01f3ea34d2e75634bb06a2c208cc2c47"
+      }
+    },
+    "zh-Hant": {
+      "projects-masters_memory_empty": {
+        "status": "needs-review",
+        "sourceHash": "e00947fe7b2a5493350f62c7ef652b01d3799ba2922dedf4899a68fd8ce67f7e"
+      },
+      "projects-masters_auto_follow_ups_help": {
+        "status": "needs-review",
+        "sourceHash": "f13e9fe0fb429b1825e6fb558ed5484271070b4a134058cb3ff6fe3feada8b51"
+      },
+      "projects-masters_guide_brief_body": {
+        "status": "needs-review",
+        "sourceHash": "50e0281f583405e30e2ecaf7622134733b97386f170991ac4156865af6837eab"
+      },
+      "projects-masters_guide_brief_model": {
+        "status": "needs-review",
+        "sourceHash": "944e29836e135dddcfd602e2a92fb656d4413759499016a4447c7820b81d796a"
+      },
+      "projects-masters_guide_welcome_body": {
+        "status": "needs-review",
+        "sourceHash": "232f740a71a849bd440a19f4ddf0e9a08d014ca2a54032217d3c61385ad67a69"
+      },
+      "projects-masters_masters": {
+        "status": "needs-review",
+        "sourceHash": "2b92e057de11930e9d77bbe4b7a0390145ed806db63a7a74146200679837342f"
+      },
+      "projects-masters_paused_notice": {
+        "status": "needs-review",
+        "sourceHash": "7bcb0c6646f1fa870fcb8f80c190cc791dd293c77aa09f2ec2c63c2cabd59037"
+      },
+      "projects-masters_stopped_notice": {
+        "status": "needs-review",
+        "sourceHash": "88847303777efc3fdb6b7cb12b9942995662a55198479a21e14be7d767e2930b"
+      },
+      "projects-masters_no_signed_in_agent": {
+        "status": "needs-review",
+        "sourceHash": "31cd3675298f3fff2a788be5f0900647b398d857c5e90e14e46f68dbb08f79c6"
+      },
+      "projects-masters_loading": {
+        "status": "needs-review",
+        "sourceHash": "5a5fdb1e0898e494595d08939b44f6c4a22fcdd653d2e5c3e9780657d2fea3c3"
+      },
+      "projects-masters_master_generated_screen": {
+        "status": "needs-review",
+        "sourceHash": "d564369cb902f1dab21616aba432a75a76a62d47058d91e5dc7d9b0b5d166a08"
+      },
+      "projects-masters_guide_repositories_summary": {
+        "status": "needs-review",
+        "sourceHash": "516f2134647ebd3b1f247c17f9cb05e4e7b05ba72d69050ee09abf72814279fc"
+      },
+      "projects-masters_home_only_note": {
+        "status": "needs-review",
+        "sourceHash": "523bd717719f8795dc63af1687499e7531c8f045ae398b3a461121fa3109b2ff"
+      },
+      "projects-masters_create_master": {
+        "status": "needs-review",
+        "sourceHash": "ad32b465b7c603d4640248b11cdf1427fb8acd2277013547e49392b482022966"
+      },
+      "projects-masters_create_failed": {
+        "status": "needs-review",
+        "sourceHash": "aa8980996d2d8aa00a5a01f93c774a30aee97f47ff93e481ecc27cf2b500317c"
+      },
+      "projects-masters_needs_setup": {
+        "status": "needs-review",
+        "sourceHash": "a0602977f88578384f512e3f5c16986c8b209b1a3ed728096ca76a7ae68e26c0"
+      },
+      "projects-masters_guide_open": {
+        "status": "needs-review",
+        "sourceHash": "02ca76ea4cdb620d2851e3002de2b65ebfe88407b723214170124c0ab48dd3c2"
+      },
+      "projects-masters_guide_how": {
+        "status": "needs-review",
+        "sourceHash": "227ac0def1c42e02db463c3ba0dd9a0726fbfc69ff9493200d3043bf6ff9598d"
+      },
+      "projects-masters_guide_repositories_body": {
+        "status": "needs-review",
+        "sourceHash": "00ed0067920548f4a6e364c1b8583f35660e34edaade8a11fc9ab87d0a903855"
+      },
+      "projects-masters_guide_welcome_title": {
+        "status": "needs-review",
+        "sourceHash": "55a512b37428bf79f969ad17c5948fa82900813cb8a60b1ba51cbc8bae584bda"
+      },
+      "projects-masters_guide_welcome_preview": {
+        "status": "needs-review",
+        "sourceHash": "b5348bef422c9e8a6c3ca9f3646109345752ea7869abd0747018ddb7befa9d5a"
+      },
+      "projects-masters_ask_the_master_to_start_work_it_will_decide_which_tasks_need_separate_agents": {
+        "status": "needs-review",
+        "sourceHash": "2eb64296aeee20715198611ecc3c6a3f01f3ea34d2e75634bb06a2c208cc2c47"
+      }
+    },
+    "ja": {
+      "projects-masters_memory_empty": {
+        "status": "needs-review",
+        "sourceHash": "e00947fe7b2a5493350f62c7ef652b01d3799ba2922dedf4899a68fd8ce67f7e"
+      },
+      "projects-masters_auto_follow_ups_help": {
+        "status": "needs-review",
+        "sourceHash": "f13e9fe0fb429b1825e6fb558ed5484271070b4a134058cb3ff6fe3feada8b51"
+      },
+      "projects-masters_guide_brief_body": {
+        "status": "needs-review",
+        "sourceHash": "50e0281f583405e30e2ecaf7622134733b97386f170991ac4156865af6837eab"
+      },
+      "projects-masters_guide_brief_model": {
+        "status": "needs-review",
+        "sourceHash": "944e29836e135dddcfd602e2a92fb656d4413759499016a4447c7820b81d796a"
+      },
+      "projects-masters_guide_welcome_body": {
+        "status": "needs-review",
+        "sourceHash": "232f740a71a849bd440a19f4ddf0e9a08d014ca2a54032217d3c61385ad67a69"
+      },
+      "projects-masters_masters": {
+        "status": "needs-review",
+        "sourceHash": "2b92e057de11930e9d77bbe4b7a0390145ed806db63a7a74146200679837342f"
+      },
+      "projects-masters_paused_notice": {
+        "status": "needs-review",
+        "sourceHash": "7bcb0c6646f1fa870fcb8f80c190cc791dd293c77aa09f2ec2c63c2cabd59037"
+      },
+      "projects-masters_stopped_notice": {
+        "status": "needs-review",
+        "sourceHash": "88847303777efc3fdb6b7cb12b9942995662a55198479a21e14be7d767e2930b"
+      },
+      "projects-masters_no_signed_in_agent": {
+        "status": "needs-review",
+        "sourceHash": "31cd3675298f3fff2a788be5f0900647b398d857c5e90e14e46f68dbb08f79c6"
+      },
+      "projects-masters_loading": {
+        "status": "needs-review",
+        "sourceHash": "5a5fdb1e0898e494595d08939b44f6c4a22fcdd653d2e5c3e9780657d2fea3c3"
+      },
+      "projects-masters_master_generated_screen": {
+        "status": "needs-review",
+        "sourceHash": "d564369cb902f1dab21616aba432a75a76a62d47058d91e5dc7d9b0b5d166a08"
+      },
+      "projects-masters_guide_repositories_summary": {
+        "status": "needs-review",
+        "sourceHash": "516f2134647ebd3b1f247c17f9cb05e4e7b05ba72d69050ee09abf72814279fc"
+      },
+      "projects-masters_home_only_note": {
+        "status": "needs-review",
+        "sourceHash": "523bd717719f8795dc63af1687499e7531c8f045ae398b3a461121fa3109b2ff"
+      },
+      "projects-masters_create_master": {
+        "status": "needs-review",
+        "sourceHash": "ad32b465b7c603d4640248b11cdf1427fb8acd2277013547e49392b482022966"
+      },
+      "projects-masters_create_failed": {
+        "status": "needs-review",
+        "sourceHash": "aa8980996d2d8aa00a5a01f93c774a30aee97f47ff93e481ecc27cf2b500317c"
+      },
+      "projects-masters_needs_setup": {
+        "status": "needs-review",
+        "sourceHash": "a0602977f88578384f512e3f5c16986c8b209b1a3ed728096ca76a7ae68e26c0"
+      },
+      "projects-masters_guide_open": {
+        "status": "needs-review",
+        "sourceHash": "02ca76ea4cdb620d2851e3002de2b65ebfe88407b723214170124c0ab48dd3c2"
+      },
+      "projects-masters_guide_how": {
+        "status": "needs-review",
+        "sourceHash": "227ac0def1c42e02db463c3ba0dd9a0726fbfc69ff9493200d3043bf6ff9598d"
+      },
+      "projects-masters_guide_repositories_body": {
+        "status": "needs-review",
+        "sourceHash": "00ed0067920548f4a6e364c1b8583f35660e34edaade8a11fc9ab87d0a903855"
+      },
+      "projects-masters_guide_welcome_title": {
+        "status": "needs-review",
+        "sourceHash": "55a512b37428bf79f969ad17c5948fa82900813cb8a60b1ba51cbc8bae584bda"
+      },
+      "projects-masters_guide_welcome_preview": {
+        "status": "needs-review",
+        "sourceHash": "b5348bef422c9e8a6c3ca9f3646109345752ea7869abd0747018ddb7befa9d5a"
+      },
+      "projects-masters_ask_the_master_to_start_work_it_will_decide_which_tasks_need_separate_agents": {
+        "status": "needs-review",
+        "sourceHash": "2eb64296aeee20715198611ecc3c6a3f01f3ea34d2e75634bb06a2c208cc2c47"
+      }
+    },
+    "de": {
+      "projects-masters_memory_empty": {
+        "status": "needs-review",
+        "sourceHash": "e00947fe7b2a5493350f62c7ef652b01d3799ba2922dedf4899a68fd8ce67f7e"
+      },
+      "projects-masters_auto_follow_ups_help": {
+        "status": "needs-review",
+        "sourceHash": "f13e9fe0fb429b1825e6fb558ed5484271070b4a134058cb3ff6fe3feada8b51"
+      },
+      "projects-masters_guide_brief_body": {
+        "status": "needs-review",
+        "sourceHash": "50e0281f583405e30e2ecaf7622134733b97386f170991ac4156865af6837eab"
+      },
+      "projects-masters_guide_brief_model": {
+        "status": "needs-review",
+        "sourceHash": "944e29836e135dddcfd602e2a92fb656d4413759499016a4447c7820b81d796a"
+      },
+      "projects-masters_guide_welcome_body": {
+        "status": "needs-review",
+        "sourceHash": "232f740a71a849bd440a19f4ddf0e9a08d014ca2a54032217d3c61385ad67a69"
+      },
+      "projects-masters_masters": {
+        "status": "needs-review",
+        "sourceHash": "2b92e057de11930e9d77bbe4b7a0390145ed806db63a7a74146200679837342f"
+      },
+      "projects-masters_paused_notice": {
+        "status": "needs-review",
+        "sourceHash": "7bcb0c6646f1fa870fcb8f80c190cc791dd293c77aa09f2ec2c63c2cabd59037"
+      },
+      "projects-masters_stopped_notice": {
+        "status": "needs-review",
+        "sourceHash": "88847303777efc3fdb6b7cb12b9942995662a55198479a21e14be7d767e2930b"
+      },
+      "projects-masters_no_signed_in_agent": {
+        "status": "needs-review",
+        "sourceHash": "31cd3675298f3fff2a788be5f0900647b398d857c5e90e14e46f68dbb08f79c6"
+      },
+      "projects-masters_loading": {
+        "status": "needs-review",
+        "sourceHash": "5a5fdb1e0898e494595d08939b44f6c4a22fcdd653d2e5c3e9780657d2fea3c3"
+      },
+      "projects-masters_master_generated_screen": {
+        "status": "needs-review",
+        "sourceHash": "d564369cb902f1dab21616aba432a75a76a62d47058d91e5dc7d9b0b5d166a08"
+      },
+      "projects-masters_guide_repositories_summary": {
+        "status": "needs-review",
+        "sourceHash": "516f2134647ebd3b1f247c17f9cb05e4e7b05ba72d69050ee09abf72814279fc"
+      },
+      "projects-masters_home_only_note": {
+        "status": "needs-review",
+        "sourceHash": "523bd717719f8795dc63af1687499e7531c8f045ae398b3a461121fa3109b2ff"
+      },
+      "projects-masters_create_master": {
+        "status": "needs-review",
+        "sourceHash": "ad32b465b7c603d4640248b11cdf1427fb8acd2277013547e49392b482022966"
+      },
+      "projects-masters_create_failed": {
+        "status": "needs-review",
+        "sourceHash": "aa8980996d2d8aa00a5a01f93c774a30aee97f47ff93e481ecc27cf2b500317c"
+      },
+      "projects-masters_needs_setup": {
+        "status": "needs-review",
+        "sourceHash": "a0602977f88578384f512e3f5c16986c8b209b1a3ed728096ca76a7ae68e26c0"
+      },
+      "projects-masters_guide_open": {
+        "status": "needs-review",
+        "sourceHash": "02ca76ea4cdb620d2851e3002de2b65ebfe88407b723214170124c0ab48dd3c2"
+      },
+      "projects-masters_guide_how": {
+        "status": "needs-review",
+        "sourceHash": "227ac0def1c42e02db463c3ba0dd9a0726fbfc69ff9493200d3043bf6ff9598d"
+      },
+      "projects-masters_guide_repositories_body": {
+        "status": "needs-review",
+        "sourceHash": "00ed0067920548f4a6e364c1b8583f35660e34edaade8a11fc9ab87d0a903855"
+      },
+      "projects-masters_guide_welcome_title": {
+        "status": "needs-review",
+        "sourceHash": "55a512b37428bf79f969ad17c5948fa82900813cb8a60b1ba51cbc8bae584bda"
+      },
+      "projects-masters_guide_welcome_preview": {
+        "status": "needs-review",
+        "sourceHash": "b5348bef422c9e8a6c3ca9f3646109345752ea7869abd0747018ddb7befa9d5a"
+      },
+      "projects-masters_ask_the_master_to_start_work_it_will_decide_which_tasks_need_separate_agents": {
+        "status": "needs-review",
+        "sourceHash": "2eb64296aeee20715198611ecc3c6a3f01f3ea34d2e75634bb06a2c208cc2c47"
+      }
+    },
+    "ko": {
+      "projects-masters_memory_empty": {
+        "status": "needs-review",
+        "sourceHash": "e00947fe7b2a5493350f62c7ef652b01d3799ba2922dedf4899a68fd8ce67f7e"
+      },
+      "projects-masters_auto_follow_ups_help": {
+        "status": "needs-review",
+        "sourceHash": "f13e9fe0fb429b1825e6fb558ed5484271070b4a134058cb3ff6fe3feada8b51"
+      },
+      "projects-masters_guide_brief_body": {
+        "status": "needs-review",
+        "sourceHash": "50e0281f583405e30e2ecaf7622134733b97386f170991ac4156865af6837eab"
+      },
+      "projects-masters_guide_brief_model": {
+        "status": "needs-review",
+        "sourceHash": "944e29836e135dddcfd602e2a92fb656d4413759499016a4447c7820b81d796a"
+      },
+      "projects-masters_guide_welcome_body": {
+        "status": "needs-review",
+        "sourceHash": "232f740a71a849bd440a19f4ddf0e9a08d014ca2a54032217d3c61385ad67a69"
+      },
+      "projects-masters_masters": {
+        "status": "needs-review",
+        "sourceHash": "2b92e057de11930e9d77bbe4b7a0390145ed806db63a7a74146200679837342f"
+      },
+      "projects-masters_paused_notice": {
+        "status": "needs-review",
+        "sourceHash": "7bcb0c6646f1fa870fcb8f80c190cc791dd293c77aa09f2ec2c63c2cabd59037"
+      },
+      "projects-masters_stopped_notice": {
+        "status": "needs-review",
+        "sourceHash": "88847303777efc3fdb6b7cb12b9942995662a55198479a21e14be7d767e2930b"
+      },
+      "projects-masters_no_signed_in_agent": {
+        "status": "needs-review",
+        "sourceHash": "31cd3675298f3fff2a788be5f0900647b398d857c5e90e14e46f68dbb08f79c6"
+      },
+      "projects-masters_loading": {
+        "status": "needs-review",
+        "sourceHash": "5a5fdb1e0898e494595d08939b44f6c4a22fcdd653d2e5c3e9780657d2fea3c3"
+      },
+      "projects-masters_master_generated_screen": {
+        "status": "needs-review",
+        "sourceHash": "d564369cb902f1dab21616aba432a75a76a62d47058d91e5dc7d9b0b5d166a08"
+      },
+      "projects-masters_guide_repositories_summary": {
+        "status": "needs-review",
+        "sourceHash": "516f2134647ebd3b1f247c17f9cb05e4e7b05ba72d69050ee09abf72814279fc"
+      },
+      "projects-masters_home_only_note": {
+        "status": "needs-review",
+        "sourceHash": "523bd717719f8795dc63af1687499e7531c8f045ae398b3a461121fa3109b2ff"
+      },
+      "projects-masters_create_master": {
+        "status": "needs-review",
+        "sourceHash": "ad32b465b7c603d4640248b11cdf1427fb8acd2277013547e49392b482022966"
+      },
+      "projects-masters_create_failed": {
+        "status": "needs-review",
+        "sourceHash": "aa8980996d2d8aa00a5a01f93c774a30aee97f47ff93e481ecc27cf2b500317c"
+      },
+      "projects-masters_needs_setup": {
+        "status": "needs-review",
+        "sourceHash": "a0602977f88578384f512e3f5c16986c8b209b1a3ed728096ca76a7ae68e26c0"
+      },
+      "projects-masters_guide_open": {
+        "status": "needs-review",
+        "sourceHash": "02ca76ea4cdb620d2851e3002de2b65ebfe88407b723214170124c0ab48dd3c2"
+      },
+      "projects-masters_guide_how": {
+        "status": "needs-review",
+        "sourceHash": "227ac0def1c42e02db463c3ba0dd9a0726fbfc69ff9493200d3043bf6ff9598d"
+      },
+      "projects-masters_guide_repositories_body": {
+        "status": "needs-review",
+        "sourceHash": "00ed0067920548f4a6e364c1b8583f35660e34edaade8a11fc9ab87d0a903855"
+      },
+      "projects-masters_guide_welcome_title": {
+        "status": "needs-review",
+        "sourceHash": "55a512b37428bf79f969ad17c5948fa82900813cb8a60b1ba51cbc8bae584bda"
+      },
+      "projects-masters_guide_welcome_preview": {
+        "status": "needs-review",
+        "sourceHash": "b5348bef422c9e8a6c3ca9f3646109345752ea7869abd0747018ddb7befa9d5a"
+      },
+      "projects-masters_ask_the_master_to_start_work_it_will_decide_which_tasks_need_separate_agents": {
+        "status": "needs-review",
+        "sourceHash": "2eb64296aeee20715198611ecc3c6a3f01f3ea34d2e75634bb06a2c208cc2c47"
+      }
+    },
+    "fr": {
+      "projects-masters_memory_empty": {
+        "status": "needs-review",
+        "sourceHash": "e00947fe7b2a5493350f62c7ef652b01d3799ba2922dedf4899a68fd8ce67f7e"
+      },
+      "projects-masters_auto_follow_ups_help": {
+        "status": "needs-review",
+        "sourceHash": "f13e9fe0fb429b1825e6fb558ed5484271070b4a134058cb3ff6fe3feada8b51"
+      },
+      "projects-masters_guide_brief_body": {
+        "status": "needs-review",
+        "sourceHash": "50e0281f583405e30e2ecaf7622134733b97386f170991ac4156865af6837eab"
+      },
+      "projects-masters_guide_brief_model": {
+        "status": "needs-review",
+        "sourceHash": "944e29836e135dddcfd602e2a92fb656d4413759499016a4447c7820b81d796a"
+      },
+      "projects-masters_guide_welcome_body": {
+        "status": "needs-review",
+        "sourceHash": "232f740a71a849bd440a19f4ddf0e9a08d014ca2a54032217d3c61385ad67a69"
+      },
+      "projects-masters_masters": {
+        "status": "needs-review",
+        "sourceHash": "2b92e057de11930e9d77bbe4b7a0390145ed806db63a7a74146200679837342f"
+      },
+      "projects-masters_paused_notice": {
+        "status": "needs-review",
+        "sourceHash": "7bcb0c6646f1fa870fcb8f80c190cc791dd293c77aa09f2ec2c63c2cabd59037"
+      },
+      "projects-masters_stopped_notice": {
+        "status": "needs-review",
+        "sourceHash": "88847303777efc3fdb6b7cb12b9942995662a55198479a21e14be7d767e2930b"
+      },
+      "projects-masters_no_signed_in_agent": {
+        "status": "needs-review",
+        "sourceHash": "31cd3675298f3fff2a788be5f0900647b398d857c5e90e14e46f68dbb08f79c6"
+      },
+      "projects-masters_loading": {
+        "status": "needs-review",
+        "sourceHash": "5a5fdb1e0898e494595d08939b44f6c4a22fcdd653d2e5c3e9780657d2fea3c3"
+      },
+      "projects-masters_master_generated_screen": {
+        "status": "needs-review",
+        "sourceHash": "d564369cb902f1dab21616aba432a75a76a62d47058d91e5dc7d9b0b5d166a08"
+      },
+      "projects-masters_guide_repositories_summary": {
+        "status": "needs-review",
+        "sourceHash": "516f2134647ebd3b1f247c17f9cb05e4e7b05ba72d69050ee09abf72814279fc"
+      },
+      "projects-masters_home_only_note": {
+        "status": "needs-review",
+        "sourceHash": "523bd717719f8795dc63af1687499e7531c8f045ae398b3a461121fa3109b2ff"
+      },
+      "projects-masters_create_master": {
+        "status": "needs-review",
+        "sourceHash": "ad32b465b7c603d4640248b11cdf1427fb8acd2277013547e49392b482022966"
+      },
+      "projects-masters_create_failed": {
+        "status": "needs-review",
+        "sourceHash": "aa8980996d2d8aa00a5a01f93c774a30aee97f47ff93e481ecc27cf2b500317c"
+      },
+      "projects-masters_needs_setup": {
+        "status": "needs-review",
+        "sourceHash": "a0602977f88578384f512e3f5c16986c8b209b1a3ed728096ca76a7ae68e26c0"
+      },
+      "projects-masters_guide_open": {
+        "status": "needs-review",
+        "sourceHash": "02ca76ea4cdb620d2851e3002de2b65ebfe88407b723214170124c0ab48dd3c2"
+      },
+      "projects-masters_guide_how": {
+        "status": "needs-review",
+        "sourceHash": "227ac0def1c42e02db463c3ba0dd9a0726fbfc69ff9493200d3043bf6ff9598d"
+      },
+      "projects-masters_guide_repositories_body": {
+        "status": "needs-review",
+        "sourceHash": "00ed0067920548f4a6e364c1b8583f35660e34edaade8a11fc9ab87d0a903855"
+      },
+      "projects-masters_guide_welcome_title": {
+        "status": "needs-review",
+        "sourceHash": "55a512b37428bf79f969ad17c5948fa82900813cb8a60b1ba51cbc8bae584bda"
+      },
+      "projects-masters_guide_welcome_preview": {
+        "status": "needs-review",
+        "sourceHash": "b5348bef422c9e8a6c3ca9f3646109345752ea7869abd0747018ddb7befa9d5a"
+      },
+      "projects-masters_ask_the_master_to_start_work_it_will_decide_which_tasks_need_separate_agents": {
+        "status": "needs-review",
+        "sourceHash": "2eb64296aeee20715198611ecc3c6a3f01f3ea34d2e75634bb06a2c208cc2c47"
+      }
+    }
+  }
 }

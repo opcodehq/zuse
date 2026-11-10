@@ -14,7 +14,7 @@ pub(super) enum Kind {
 }
 
 pub(super) struct Form {
-    id: String,
+    pub(super) id: String,
     zot: Option<Zot>,
     kind: Kind,
     inputs: Vec<Entity<ComposerInput>>,
@@ -66,7 +66,7 @@ fn fields(kind: &Kind, zot: Option<&Zot>) -> Vec<(&'static str, String, Lines)> 
                 Lines::Single,
             ),
             (
-                "What this Zot is responsible for",
+                "What this Zapper is responsible for",
                 zot.map(|z| z.config.purpose.clone()).unwrap_or_default(),
                 Lines::Prose,
             ),
@@ -347,7 +347,7 @@ impl Shell {
                 .cloned()
         });
         if form.zot.is_some() && latest.is_none() {
-            error(self, "This Zot no longer exists", cx);
+            error(self, "This Zapper no longer exists", cx);
             return;
         }
         let revision = latest.as_ref().map(|z| z.revision);
@@ -360,7 +360,7 @@ impl Shell {
             Kind::Config => {
                 let name = values[0].trim().to_owned();
                 if name.is_empty() {
-                    error(self, "Give this Zot a name", cx);
+                    error(self, "Give this Zapper a name", cx);
                     return;
                 }
                 let (home_device_id, repositories, worker_device_id) = (
@@ -456,7 +456,7 @@ impl Shell {
                     })
                     .or(form.repositories.first());
                 let Some(repository) = repository else {
-                    error(self, "Add a repository to this Zot first", cx);
+                    error(self, "Add a repository to this Zapper first", cx);
                     return;
                 };
                 let zot = latest.as_ref().or(form.zot.as_ref()).unwrap();
@@ -910,7 +910,7 @@ impl Shell {
                                 div()
                                     .text_size(crate::typography::ui_rems(11.5))
                                     .text_color(theme.text_faint)
-                                    .child("Threads this Zot starts can work in the ones you switch on."),
+                                    .child("Threads this Zapper starts can work in the ones you switch on."),
                             ),
                     )
                     .child(
@@ -998,13 +998,17 @@ impl Shell {
         let header = div()
             .flex()
             .flex_col()
-            .child(widgets::page_header(&theme, "New Zot", None))
+            .child(widgets::page_header(&theme, "New Zapper", None))
             .child(widgets::page_subtitle(
                 &theme,
-                "A Zot is your captain: it runs work across your repositories, asks when it needs a decision and keeps its notes between conversations.",
+                "A Zapper is your captain: it runs work across your repositories, asks when it needs a decision and keeps its notes between conversations.",
             ));
         let fields = self.zot_form_fields(false, window, cx);
-        let submit = if saving { "Creating…" } else { "Create Zot" };
+        let submit = if saving {
+            "Creating…"
+        } else {
+            "Create Zapper"
+        };
         div()
             .id("zot-page")
             .debug_selector(|| "zot-page".into())
@@ -1263,7 +1267,7 @@ mod tests {
                 label
             })
             .collect();
-        assert_eq!(labels, ["Name", "What this Zot is responsible for"]);
+        assert_eq!(labels, ["Name", "What this Zapper is responsible for"]);
     }
 
     #[test]
