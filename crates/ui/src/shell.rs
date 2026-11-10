@@ -9025,7 +9025,7 @@ impl Shell {
         let working = status == zuse_protocol::ChatIndicator::Working && !queued && !undelivered;
         let compact_status = sidebar.then(|| {
             let glyph = if working {
-                loaders::dither_ring(format!("{row_id}-working"), 13.0, theme.text_muted)
+                loaders::terminal_spinner(format!("{row_id}-working"), 13.0, theme.text_muted)
                     .into_any_element()
             } else if status == zuse_protocol::ChatIndicator::Completed && !queued && !undelivered {
                 icon(icons::CHECK)
@@ -9126,8 +9126,12 @@ impl Shell {
                             .text_color(status_color)
                             .into_any_element()
                     } else if working {
-                        loaders::dither_ring(format!("{row_id}-working"), 13.0, theme.text_muted)
-                            .into_any_element()
+                        loaders::terminal_spinner(
+                            format!("{row_id}-working"),
+                            13.0,
+                            theme.text_muted,
+                        )
+                        .into_any_element()
                     } else {
                         attention_mark(13.0)
                     };
@@ -9606,7 +9610,7 @@ impl Shell {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .child(loaders::dither_ring(
+                            .child(loaders::terminal_spinner(
                                 format!("{row_id}-working"),
                                 10.0,
                                 theme.text_muted,
