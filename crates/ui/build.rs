@@ -5,6 +5,7 @@ fn main() {
     println!("cargo:rustc-check-cfg=cfg(feature, values(\"cargo-clippy\"))");
     if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
         println!("cargo:rerun-if-changed=src/dictation/permission.m");
+        println!("cargo:rerun-if-env-changed=MACOSX_DEPLOYMENT_TARGET");
         let out = PathBuf::from(env::var_os("OUT_DIR").unwrap());
         let object = out.join("voice-permission.o");
         assert!(
