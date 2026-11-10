@@ -8045,6 +8045,39 @@ impl Composer {
         cx.notify();
     }
 
+    /// Browser notes are staged without stealing focus from the page editor.
+    pub(crate) fn stage_browser_annotation(
+        &mut self,
+        key: String,
+        context: crate::context_items::ContextItem,
+        cx: &mut Context<Self>,
+    ) {
+        self.state.update(cx, |state, cx| {
+            state.add_context_item(&key, context);
+            cx.notify();
+        });
+        cx.notify();
+    }
+
+    pub(crate) fn remove_browser_annotation(
+        &mut self,
+        key: String,
+        id: &str,
+        cx: &mut Context<Self>,
+    ) {
+        self.state.update(cx, |state, cx| {
+            if state
+                .context_items(&key)
+                .iter()
+                .any(|item| item.id == id && item.browser_annotation.is_some())
+            {
+                state.remove_context_item(&key, id);
+                cx.notify();
+            }
+        });
+        cx.notify();
+    }
+
     fn render_appshot_strip(
         &self,
         theme: &Theme,
@@ -13297,13 +13330,7 @@ impl Render for Composer {
         } else {
             composer_total_height(content_height)
         };
-        let browser_context_row = self.browser_context_row(&theme, window, cx);
-        let browser_context_height = if browser_context_row.is_some() {
-            36.0
-        } else {
-            0.0
-        };
-        let extra_height = appshot_strip_height(appshot_count) + browser_context_height;
+        let extra_height = appshot_strip_height(appshot_count);
         let target_height = base_height + extra_height;
         dock_layout.extra_height = extra_height;
         let dock_owns_layout = self.dock_frame.is_some_and(|frame| frame.active)
@@ -13379,7 +13406,6 @@ impl Render for Composer {
         let surface_radius = COMPOSER_RADIUS;
         let textarea_height = (pill_height
             - appshot_strip_height(appshot_count)
-            - browser_context_height
             - PILL_BORDER_V
             - ACTIONS_ROW_HEIGHT)
             .max(0.0);
@@ -13740,7 +13766,6 @@ impl Render for Composer {
             .flex()
             .flex_col()
             .children(appshot_strip)
-            .children(browser_context_row)
             .child(
                 div()
                     .h(px(textarea_height))

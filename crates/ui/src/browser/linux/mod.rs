@@ -27,7 +27,9 @@ pub enum NativeEvent {
         generation: u64,
         result: Result<Option<String>, String>,
     },
+    ScreenshotSaved(Result<(std::path::PathBuf, Vec<u8>), String>),
     DataCleared(&'static str),
+    ControlError(String),
 }
 
 #[derive(Clone, Default)]
@@ -195,6 +197,28 @@ impl BrowserData {
             helper_override: None,
         }
     }
+    pub fn clear_data(&self, cookies: bool, tx: Sender<NativeEvent>) {
+        let worker = self.current.lock().unwrap().clone();
+        if let Some(worker) = worker {
+            // Any live tab routes the completion back to the initiating surface.
+            let id = worker
+                .routes
+                .lock()
+                .unwrap()
+                .iter()
+                .find_map(|(id, route)| {
+                    route
+                        .upgrade()
+                        .filter(|route| route.tx.same_channel(&tx))
+                        .map(|_| *id)
+                });
+            if let Some(id) = id {
+                if let Err(error) = worker.send(id, json!({"cmd":"clear-data","cookies":cookies})) {
+                    let _ = tx.try_send(NativeEvent::ControlError(error));
+                }
+            }
+        }
+    }
     /// Blocking initialization, called only by the dedicated startup thread.
     fn worker(&self) -> Result<Arc<Worker>, String> {
         let mut current = self.current.lock().unwrap();
@@ -282,21 +306,21 @@ impl BrowserData {
                             let Ok(state) = serde_json::from_slice(&data) else { continue; };
                             *route.state.lock().unwrap() = state; NativeEvent::Changed
                         }
+                        b'P' => NativeEvent::ScreenshotSaved(super::controls::save_screenshot(data)),
+                        b'X' => NativeEvent::ControlError(String::from_utf8_lossy(&data).into_owned()),
+                        b'D' => NativeEvent::DataCleared(if data == b"cookies" { "Cookies cleared" } else { "Cache cleared" }),
+                        b'A' => {
+                            let Ok(value) = serde_json::from_slice::<Value>(&data) else { continue; };
+                            NativeEvent::ElementSelected {
+                                page: value["page"].as_str().unwrap_or_default().into(),
+                                generation: value["generation"].as_u64().unwrap_or_default(),
+                                result: if let Some(error) = value["error"].as_str() { Err(error.into()) }
+                                    else { Ok(value["details"].as_str().map(str::to_owned)) },
+                            }
+                        }
                         b'M' => {let Ok(menu)=serde_json::from_slice(&data) else {continue;};NativeEvent::Menu(menu)}
                         b'C' => NativeEvent::Clipboard(String::from_utf8_lossy(&data).into_owned()),
                         b'N' => NativeEvent::NewTab(String::from_utf8_lossy(&data).into_owned()),
-                        b'P' => {
-                            let Ok(reply) = serde_json::from_slice::<Value>(&data) else { continue; };
-                            NativeEvent::ElementSelected {
-                                page: reply["page"].as_str().unwrap_or_default().to_owned(),
-                                generation: reply["generation"].as_u64().unwrap_or_default(),
-                                result: match reply["error"].as_str() {
-                                    Some(error) => Err(error.to_owned()),
-                                    None => Ok(reply["value"].as_str().map(str::to_owned)),
-                                },
-                            }
-                        }
-                        b'D' => NativeEvent::DataCleared(if data == b"cookies" { "Cookies cleared" } else { "Cache cleared" }),
                         #[cfg(feature = "browser-fixture")]
                         b'J' => { *route.evaluation.lock().unwrap() = serde_json::from_slice(&data).ok(); continue; }
                         _ => continue,
@@ -343,6 +367,7 @@ pub struct NativePage {
     id: u32,
     pub bounds: Bounds<Pixels>,
     pub scale: f32,
+    dark: std::cell::Cell<Option<bool>>,
     geometry: Option<(u32, u32, u32)>,
     presentation: Presentation,
     pub image: Option<Arc<RenderImage>>,
@@ -351,8 +376,6 @@ pub struct NativePage {
     pub menu_active: usize,
     preedit: String,
     pub pressed: std::cell::Cell<Option<gpui::MouseButton>>,
-    /// The last page appearance sent to the helper.
-    dark: Option<bool>,
 }
 impl NativePage {
     /// Extract, spawn and handshake entirely off the UI thread. Concurrent
@@ -399,6 +422,7 @@ impl NativePage {
             id,
             bounds: Bounds::default(),
             scale: 1.,
+            dark: std::cell::Cell::new(None),
             geometry: None,
             presentation: Presentation::Live,
             image: None,
@@ -407,11 +431,34 @@ impl NativePage {
             menu_active: 0,
             preedit: String::new(),
             pressed: std::cell::Cell::new(None),
-            dark: None,
         })
     }
     pub fn load(&self, url: &str) -> Result<(), String> {
         self.worker.send(self.id, json!({"cmd":"load","url":url}))
+    }
+    pub fn select_element(&self, page: String, generation: u64, script: String) {
+        self.command(
+            json!({"cmd":"select-element","page":page,"generation":generation,
+            "script":script}),
+        );
+    }
+    pub fn update_annotation_theme(&self, palette: &str) {
+        self.command(json!({"cmd":"annotation-theme","theme":palette}));
+    }
+    pub fn cancel_selection(&self) {
+        self.command(json!({"cmd":"cancel-selection"}));
+    }
+    pub fn toggle_devtools(&self) -> Result<(), String> {
+        self.worker.send(self.id, json!({"cmd":"devtools"}))
+    }
+    pub fn save_screenshot(&self, _tx: Sender<NativeEvent>) {
+        self.command(json!({"cmd":"screenshot"}));
+    }
+    pub fn set_appearance(&self, dark: bool) {
+        // Rendering calls this repeatedly; only send when the choice changes.
+        if self.dark.replace(Some(dark)) != Some(dark) {
+            self.command(json!({"cmd":"appearance","dark":dark}));
+        }
     }
     pub fn reload(&self) {
         self.command(json!({"cmd":"reload"}));
@@ -462,32 +509,6 @@ impl NativePage {
     }
     pub fn command(&self, value: Value) {
         let _ = self.worker.send(self.id, value);
-    }
-    /// WebKitGTK reads the colour scheme from GTK settings shared by the
-    /// helper's pages, so only changes are sent.
-    pub fn set_dark(&mut self, dark: bool) {
-        if self.dark != Some(dark) {
-            self.dark = Some(dark);
-            self.command(json!({"cmd":"appearance","dark":dark}));
-        }
-    }
-    pub(super) fn select_element(&self, page: String, generation: u64) {
-        let script = include_str!("../select_element.js");
-        self.command(
-            json!({"cmd":"select-element","script":script,"page":page,"generation":generation}),
-        );
-    }
-    pub(super) fn cancel_selection(&self) {
-        self.command(json!({"cmd":"cancel-selection"}));
-    }
-    /// WebKit's inspector opens in its own window: the page is offscreen.
-    pub(super) fn toggle_devtools(&self) -> Result<(), &'static str> {
-        self.command(json!({"cmd":"inspector"}));
-        Ok(())
-    }
-    /// Clears the whole profile; the helper is shared by its tabs.
-    pub(super) fn clear_data(&self, cookies: bool) {
-        self.command(json!({"cmd":"clear-data","cookies":cookies}));
     }
     #[cfg(feature = "browser-fixture")]
     pub fn evaluate(&self, script: &str) {
@@ -558,6 +579,14 @@ impl super::BrowserSurface {
         native.route.acknowledge(&event);
         native.update_frame(window);
         match event {
+            NativeEvent::ElementSelected {
+                page,
+                generation,
+                result,
+            } => self.element_selected(page, generation, result, cx),
+            NativeEvent::ScreenshotSaved(result) => self.screenshot_saved(result, cx),
+            NativeEvent::DataCleared(message) => crate::toast::success(cx, message),
+            NativeEvent::ControlError(error) => crate::toast::error(cx, error),
             NativeEvent::NewTab(url) => {
                 if self.presentation == Presentation::Live {
                     cx.emit(super::BrowserEvent::NewTab(Some(url)));
@@ -581,12 +610,6 @@ impl super::BrowserSurface {
             NativeEvent::Clipboard(text) => {
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
             }
-            NativeEvent::ElementSelected {
-                page,
-                generation,
-                result,
-            } => self.element_selected(page, generation, result, cx),
-            NativeEvent::DataCleared(message) => crate::toast::success(cx, message),
             NativeEvent::Frame | NativeEvent::Changed => {
                 let mut page = native.state();
                 if page.url.is_none() {
@@ -612,13 +635,12 @@ impl super::BrowserSurface {
                         self.context.recent.borrow_mut().record(url, &page.title);
                     }
                 }
-                // Navigating away ends element selection, as on macOS.
                 if self.selecting_element
                     && (page.url != self.page.url || (!self.page.loading && page.loading))
                 {
+                    native.cancel_selection();
                     self.selecting_element = false;
                     self.selection_generation = self.selection_generation.wrapping_add(1);
-                    native.cancel_selection();
                 }
                 if page != self.page {
                     self.page = page;

@@ -12,6 +12,8 @@ use macos as native;
 mod windows_webview;
 #[cfg(windows)]
 use windows_webview as native;
+#[cfg(any(target_os = "linux", windows))]
+mod controls;
 pub mod model;
 pub(crate) mod profile;
 mod recent;
@@ -21,6 +23,33 @@ use crate::composer::{ComposerInput, ComposerInputEvent};
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, Subscription, Window,
 };
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
+fn annotation_palette(theme: &crate::theme::Theme) -> serde_json::Value {
+    serde_json::json!({
+        "--fg": theme.text.to_string(),
+        "--muted": theme.text_muted.to_string(),
+        "--surface": theme.surface_overlay.to_string(),
+        "--border": theme.border.to_string(),
+        "--hover": theme.element_hover.to_string(),
+        "--accent": theme.accent.to_string(),
+        "--wash": theme.accent_wash.to_string(),
+        "--hover-wash": theme.accent.opacity(0.04).to_string(),
+        "--primary": theme.solid.to_string(),
+        "--on-primary": theme.on_solid.to_string(),
+        "--shadow": gpui::black().opacity(if theme.appearance.is_dark() { 0.25 } else { 0.12 }).to_string(),
+        "--font": format!("{}, system-ui, sans-serif", theme.font_sans),
+    })
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
+fn annotation_script(theme: &crate::theme::Theme, generation: u64) -> String {
+    format!(
+        "const zuseAnnotationGeneration = {generation};\nconst zuseAnnotationTheme = {};\n{}",
+        annotation_palette(theme),
+        include_str!("select_element.js")
+    )
+}
+
 use model::{PageState, Presentation};
 gpui::actions!(
     browser,
@@ -129,6 +158,7 @@ pub enum BrowserEvent {
     NewTab(Option<String>),
     Close,
     ElementSelected(crate::context_items::ContextItem),
+    AnnotationRemoved(String),
 }
 
 /// A profile's website data, allocated on first navigation. Default contexts are
@@ -166,20 +196,20 @@ pub struct BrowserSurface {
     address_edited: bool,
     validation: Option<String>,
     toolbar_menu: crate::popover::Popup<()>,
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
     appearance_menu_open: bool,
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
     appearance_menu_bounds: Option<gpui::Bounds<gpui::Pixels>>,
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
     appearance_hover: crate::popover::HoverIntent<()>,
     hovered_toolbar_button: Option<&'static str>,
-    /// The last saved screenshot, offered by the notice card.
     screenshot: Option<(std::path::PathBuf, Vec<u8>)>,
-    /// The screenshot editor; while open it covers (and hides) the page.
     markup: Option<markup::Markup>,
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
     selecting_element: bool,
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
+    annotation_theme: Option<String>,
+    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
     selection_generation: u64,
     remote: bool,
     previews: zuse_protocol::PreviewSnapshot,
@@ -271,18 +301,20 @@ impl BrowserSurface {
             address_edited: false,
             validation: None,
             toolbar_menu: Default::default(),
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            #[cfg(any(target_os = "macos", target_os = "linux", windows))]
             appearance_menu_open: false,
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            #[cfg(any(target_os = "macos", target_os = "linux", windows))]
             appearance_menu_bounds: None,
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            #[cfg(any(target_os = "macos", target_os = "linux", windows))]
             appearance_hover: Default::default(),
             hovered_toolbar_button: None,
             screenshot: None,
             markup: None,
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            #[cfg(any(target_os = "macos", target_os = "linux", windows))]
             selecting_element: false,
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            #[cfg(any(target_os = "macos", target_os = "linux", windows))]
+            annotation_theme: None,
+            #[cfg(any(target_os = "macos", target_os = "linux", windows))]
             selection_generation: 0,
             remote,
             previews: zuse_protocol::PreviewSnapshot::default(),
@@ -360,7 +392,7 @@ impl BrowserSurface {
             return;
         }
         self.presentation = presentation;
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        #[cfg(any(target_os = "macos", target_os = "linux", windows))]
         if presentation != Presentation::Live {
             self.cancel_selection();
         }
@@ -464,7 +496,7 @@ impl BrowserSurface {
                 return;
             }
         };
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        #[cfg(any(target_os = "macos", target_os = "linux", windows))]
         self.cancel_selection();
         self.validation = None;
         self.address
@@ -481,6 +513,7 @@ impl BrowserSurface {
                 self.favicon_generation += 1;
                 self.favicon_task = None;
             }
+            #[cfg(any(target_os = "macos", windows))]
             let shown = self.shown();
             let result = if let Some(native) = &self.native {
                 native.load(&url)
@@ -526,7 +559,7 @@ impl BrowserSurface {
     }
 
     fn close_toolbar_menu(&mut self, cx: &mut Context<Self>) {
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        #[cfg(any(target_os = "macos", target_os = "linux", windows))]
         {
             self.appearance_menu_open = false;
             self.appearance_menu_bounds = None;
@@ -538,7 +571,7 @@ impl BrowserSurface {
         }
     }
 
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
     fn cancel_selection(&mut self) {
         if self.selecting_element {
             self.selecting_element = false;
@@ -549,19 +582,23 @@ impl BrowserSurface {
         }
     }
 
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
     fn toggle_select_element(&mut self, cx: &mut Context<Self>) {
         if self.selecting_element {
             self.cancel_selection();
         } else if let (Some(native), Some(url)) = (&self.native, &self.page.url) {
             self.selection_generation = self.selection_generation.wrapping_add(1);
             self.selecting_element = true;
-            native.select_element(url.clone(), self.selection_generation);
+            native.select_element(
+                url.clone(),
+                self.selection_generation,
+                annotation_script(crate::theme::Theme::of(cx), self.selection_generation),
+            );
         }
         cx.notify();
     }
 
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
     fn toggle_devtools(&mut self, cx: &mut Context<Self>) {
         if let Some(native) = &self.native {
             if let Err(message) = native.toggle_devtools() {
@@ -570,57 +607,8 @@ impl BrowserSurface {
         }
     }
 
-    /// A picked element becomes a chat context item, unless the page or the
-    /// selection changed while the picker was open.
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
-    fn element_selected(
-        &mut self,
-        page: String,
-        generation: u64,
-        result: Result<Option<String>, String>,
-        cx: &mut Context<Self>,
-    ) {
-        if !self.selecting_element || generation != self.selection_generation {
-            return;
-        }
-        self.selecting_element = false;
-        if self.page.url.as_deref() == Some(&page) {
-            match result {
-                Ok(Some(details)) => {
-                    if let Ok(value) = serde_json::from_str::<serde_json::Value>(&details) {
-                        let selector = value["selector"].as_str().unwrap_or("element");
-                        let text = value["text"].as_str().unwrap_or("");
-                        let tag = value["tag"].as_str().unwrap_or("element");
-                        let summary: String = text.chars().take(60).collect();
-                        let label = if summary.is_empty() {
-                            tag.to_string()
-                        } else if text.chars().count() > 60 {
-                            format!("{tag} · {summary}…")
-                        } else {
-                            format!("{tag} · {summary}")
-                        };
-                        let mut body =
-                            format!("Selected browser element from {page}:\nElement: {selector}");
-                        if !text.is_empty() {
-                            body.push_str(&format!("\nText: {text}"));
-                        }
-                        let context = crate::context_items::ContextItem::new(
-                            format!("browser-element:{}", uuid::Uuid::new_v4()),
-                            label,
-                            body,
-                        );
-                        cx.emit(BrowserEvent::ElementSelected(context));
-                    }
-                }
-                Err(error) => crate::toast::error(cx, format!("Could not select element: {error}")),
-                _ => {}
-            }
-        }
-        cx.notify();
-    }
-
     /// Freeze the page and open the markup editor over it.
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
     fn take_screenshot(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.close_toolbar_menu(cx);
         // macOS captures asynchronously; `Captured` opens the editor.
@@ -628,6 +616,11 @@ impl BrowserSurface {
         if let Some(native) = &self.native {
             let _ = window;
             native.capture(self.native_tx.clone());
+        }
+        #[cfg(windows)]
+        if let Some(native) = &self.native {
+            let _ = window;
+            native.save_screenshot(self.native_tx.clone());
         }
         // Linux already composites WebKit's frames; freeze the current one.
         #[cfg(target_os = "linux")]
@@ -641,14 +634,14 @@ impl BrowserSurface {
         }
     }
 
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
     fn open_markup(
         &mut self,
         image: std::sync::Arc<gpui::RenderImage>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        #[cfg(any(target_os = "macos", target_os = "linux", windows))]
         self.cancel_selection();
         self.screenshot = None;
         if let Some(old) = self.markup.replace(markup::Markup::new(image)) {
@@ -695,7 +688,7 @@ impl BrowserSurface {
         .detach();
     }
 
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
     fn confirm_clear_data(&mut self, cookies: bool, window: &mut Window, cx: &mut Context<Self>) {
         self.close_toolbar_menu(cx);
         let (title, detail) = if cookies {
@@ -716,22 +709,11 @@ impl BrowserSurface {
             &["Clear", "Cancel"],
             cx,
         );
-        #[cfg(target_os = "macos")]
-        let (data, tx) = (self.context.data.clone(), self.native_tx.clone());
-        cx.spawn(async move |this, cx| {
+        let data = self.context.data.clone();
+        let tx = self.native_tx.clone();
+        cx.spawn(async move |_, _| {
             if matches!(answer.await, Ok(0)) {
-                #[cfg(target_os = "macos")]
-                {
-                    let _ = (this, cx);
-                    data.clear_data(cookies, tx);
-                }
-                // Linux clears through the page's helper, which owns the profile.
-                #[cfg(target_os = "linux")]
-                let _ = this.update(cx, |this, _| {
-                    if let Some(native) = &this.native {
-                        native.clear_data(cookies);
-                    }
-                });
+                data.clear_data(cookies, tx);
             }
         })
         .detach();
@@ -859,7 +841,6 @@ impl BrowserSurface {
                         self.context.recent.borrow_mut().record(url, &page.title);
                     }
                 }
-                #[cfg(target_os = "macos")]
                 if self.selecting_element
                     && (page.url != self.page.url || (!self.page.loading && page.loading))
                 {
@@ -873,18 +854,18 @@ impl BrowserSurface {
                 }
                 cx.notify();
             }
-            #[cfg(target_os = "macos")]
             native::NativeEvent::ElementSelected {
                 page,
                 generation,
                 result,
-            } => self.element_selected(page, generation, result, cx),
+            } => {
+                self.element_selected(page, generation, result, cx);
+            }
             #[cfg(target_os = "macos")]
             native::NativeEvent::InspectorUnavailable => crate::toast::info(
                 cx,
                 "Make the browser panel wider or taller to open developer tools inside it.",
             ),
-            #[cfg(target_os = "macos")]
             native::NativeEvent::DataCleared(message) => crate::toast::success(cx, message),
             #[cfg(target_os = "macos")]
             native::NativeEvent::Captured(result) => match result {
@@ -893,6 +874,16 @@ impl BrowserSurface {
                     crate::toast::error(cx, format!("Could not capture the page: {error}"))
                 }
             },
+            #[cfg(windows)]
+            native::NativeEvent::ScreenshotSaved(result) => match result {
+                Ok((_, bytes)) => match markup::decode(&bytes) {
+                    Ok(image) => self.open_markup(image, window, cx),
+                    Err(error) => crate::toast::error(cx, error),
+                },
+                Err(error) => crate::toast::error(cx, error),
+            },
+            #[cfg(windows)]
+            native::NativeEvent::ControlError(error) => crate::toast::error(cx, error),
             native::NativeEvent::NewTab(url) => {
                 if self.presentation == Presentation::Live {
                     cx.emit(BrowserEvent::NewTab(Some(url)));
@@ -1053,6 +1044,10 @@ impl BrowserContext {
 
 #[cfg(feature = "browser-fixture")]
 impl BrowserSurface {
+    pub fn fixture_annotate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus(&self.focus, cx);
+        self.toggle_select_element(cx);
+    }
     pub fn fixture_history(&mut self, forward: bool) {
         self.history(forward);
     }
@@ -1150,7 +1145,72 @@ impl BrowserSurface {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
+    #[test]
+    fn annotation_colors_come_from_the_active_app_theme() {
+        for mut theme in [crate::theme::Theme::light(), crate::theme::Theme::dark()] {
+            theme.accent = gpui::rgb(0xaa5500).into();
+            let palette = annotation_palette(&theme);
+            assert_eq!(palette["--surface"], theme.surface_overlay.to_string());
+            assert_eq!(palette["--fg"], theme.text.to_string());
+            assert_eq!(palette["--muted"], theme.text_muted.to_string());
+            assert_eq!(palette["--accent"], theme.accent.to_string());
+            assert_eq!(palette["--primary"], theme.solid.to_string());
+            assert_eq!(palette["--on-primary"], theme.on_solid.to_string());
+            let script = annotation_script(&theme, 1);
+            assert!(script.contains("const zuseAnnotationTheme = "));
+            assert!(!script.contains("prefers-color-scheme"));
+            assert!(!script.contains("#079c92"));
+        }
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
+    #[gpui::test]
+    fn browser_annotations_collect_multiple_notes_and_ignore_stale_completions(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(|cx| {
+            gpui_base::init(cx);
+            crate::composer::init(cx, Default::default());
+            cx.set_global(crate::theme::Theme::default());
+        });
+        let handle = cx.add_window(|window, cx| {
+            BrowserSurface::new(BrowserContext::default(), false, window, cx)
+        });
+        let captured = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let notes = captured.clone();
+        let _sub = cx.update(|cx| {
+            let browser = handle.entity(cx).unwrap();
+            cx.subscribe(&browser, move |_, event, _| {
+                if let BrowserEvent::ElementSelected(context) = event {
+                    notes.borrow_mut().push(context.clone());
+                }
+            })
+        });
+        handle.update(cx, |browser, _, cx| {
+            let page = "https://example.com/".to_string();
+            browser.page.url = Some(page.clone());
+            browser.selecting_element = true;
+            browser.selection_generation = 7;
+            let details = |comment: &str| Some(serde_json::json!({"comment":comment,"elements":[{"tag":"button","selector":"button#save","text":"Save"}]}).to_string());
+            browser.element_selected(page.clone(), 6, Ok(details("Stale note")), cx);
+            assert!(browser.selecting_element);
+            browser.element_selected(page.clone(), 7, Ok(details("First note")), cx);
+            assert!(browser.selecting_element);
+            browser.element_selected(page.clone(), 7, Ok(details("Second note")), cx);
+            assert!(browser.selecting_element);
+            browser.element_selected(page.clone(), 7, Ok(None), cx);
+            assert!(!browser.selecting_element);
+            browser.element_selected(page, 7, Ok(details("Too late")), cx);
+        }).unwrap();
+        cx.run_until_parked();
+        let notes = captured.borrow();
+        assert_eq!(notes.len(), 2);
+        assert!(notes[0].body.contains("First note"));
+        assert!(notes[1].body.contains("Second note"));
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
     #[gpui::test]
     fn browser_options_and_appearance_menu_render_and_accept_selection(
         cx: &mut gpui::TestAppContext,
@@ -1291,5 +1351,86 @@ mod tests {
                 1
             );
         });
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
+impl BrowserSurface {
+    fn element_selected(
+        &mut self,
+        page: String,
+        generation: u64,
+        result: Result<Option<String>, String>,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.selecting_element || generation != self.selection_generation {
+            return;
+        }
+        if self.page.url.as_deref() != Some(&page) {
+            self.cancel_selection();
+            cx.notify();
+            return;
+        }
+        match result {
+            Ok(Some(details)) => {
+                if let Some(id) = serde_json::from_str::<serde_json::Value>(&details)
+                    .ok()
+                    .and_then(|value| value["remove_id"].as_str().map(str::to_owned))
+                {
+                    cx.emit(BrowserEvent::AnnotationRemoved(id));
+                    if let Some(native) = &self.native {
+                        native.select_element(
+                            page,
+                            generation,
+                            annotation_script(crate::theme::Theme::of(cx), generation),
+                        );
+                    }
+                    cx.notify();
+                    return;
+                }
+                match crate::context_items::BrowserAnnotation::from_selection(&page, &details) {
+                    Ok(annotation) => {
+                        cx.emit(BrowserEvent::ElementSelected(
+                            crate::context_items::ContextItem::from_browser_annotation(annotation),
+                        ));
+                        // One native completion per note; keep the picker active for
+                        // the next note without moving focus to the composer.
+                        if let Some(native) = &self.native {
+                            native.select_element(
+                                page,
+                                generation,
+                                annotation_script(
+                                    crate::theme::Theme::of(cx),
+                                    self.selection_generation,
+                                ),
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        self.selecting_element = false;
+                        crate::toast::error(cx, error);
+                    }
+                }
+            }
+            Ok(None) => self.selecting_element = false,
+            Err(error) => {
+                self.selecting_element = false;
+                crate::toast::error(cx, format!("Could not annotate page: {error}"));
+            }
+        }
+        cx.notify();
+    }
+    fn screenshot_saved(
+        &mut self,
+        result: Result<(std::path::PathBuf, Vec<u8>), String>,
+        cx: &mut Context<Self>,
+    ) {
+        match result {
+            Ok(screenshot) => {
+                self.screenshot = Some(screenshot);
+                cx.notify();
+            }
+            Err(error) => crate::toast::error(cx, format!("Could not save screenshot: {error}")),
+        }
     }
 }

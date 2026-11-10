@@ -19,6 +19,8 @@
 typedef struct {
     guint id;
     GtkWidget *window;
+    GtkWidget *inspector_window;
+    gboolean inspector_open;
     WebKitWebView *web;
     gboolean visible, dirty;
     gchar *error;
@@ -294,8 +296,34 @@ static gboolean damaged(GtkWidget *widget, GdkEvent *event, Page *p) {
     p->dirty = TRUE;
     return FALSE;
 }
+static gboolean close_inspector_window(GtkWidget *window, GdkEvent *event, Page *p) {
+    webkit_web_inspector_close(webkit_web_view_get_inspector(p->web));
+    return TRUE;
+}
+static gboolean open_inspector(WebKitWebInspector *inspector, Page *p) {
+    if (!p->inspector_window) {
+        p->inspector_window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+        gtk_window_set_title(GTK_WINDOW(p->inspector_window), "Zuse Developer Tools");
+        gtk_window_set_default_size(GTK_WINDOW(p->inspector_window), 1000, 700);
+        gtk_container_add(GTK_CONTAINER(p->inspector_window),
+            GTK_WIDGET(webkit_web_inspector_get_web_view(inspector)));
+        g_signal_connect(p->inspector_window, "delete-event", G_CALLBACK(close_inspector_window), p);
+    }
+    gtk_widget_show_all(p->inspector_window);
+    gtk_window_present(GTK_WINDOW(p->inspector_window));
+    return TRUE;
+}
+static void inspector_closed(WebKitWebInspector *inspector, Page *p) {
+    p->inspector_open = FALSE;
+    if (p->inspector_window) {
+        GtkWidget *window = p->inspector_window;
+        p->inspector_window = NULL;
+        gtk_widget_destroy(window);
+    }
+}
 static void free_page(gpointer data) {
     Page *p = data;
+    webkit_web_inspector_close(webkit_web_view_get_inspector(p->web));
     if (p->options) {
         webkit_option_menu_close(p->options);
         g_clear_object(&p->options);
@@ -304,60 +332,6 @@ static void free_page(gpointer data) {
     g_free(p->error);
     g_free(p->context_link);
     g_free(p);
-}
-static gboolean keep_detached(WebKitWebInspector *inspector, gpointer unused) { return TRUE; }
-// Async replies outlive the command; they carry the page id and request data.
-typedef struct {
-    guint id;
-    gint64 generation;
-    gchar *page;
-    gboolean cookies;
-} Reply;
-static Reply *reply_new(guint id, JsonObject *o) {
-    Reply *r = g_new0(Reply, 1);
-    r->id = id;
-    r->generation = json_object_has_member(o, "generation")
-                        ? json_object_get_int_member(o, "generation")
-                        : 0;
-    r->page = g_strdup(json_object_has_member(o, "page") ? json_object_get_string_member(o, "page")
-                                                         : "");
-    r->cookies = json_object_has_member(o, "cookies") && json_object_get_boolean_member(o, "cookies");
-    return r;
-}
-static void reply_free(Reply *r) {
-    g_free(r->page);
-    g_free(r);
-}
-static void picked(GObject *web, GAsyncResult *result, gpointer data) {
-    Reply *r = data;
-    GError *error = NULL;
-    JSCValue *v =
-        webkit_web_view_call_async_javascript_function_finish(WEBKIT_WEB_VIEW(web), result, &error);
-    JsonBuilder *b = json_builder_new();
-    json_builder_begin_object(b);
-    json_builder_set_member_name(b, "generation");
-    json_builder_add_int_value(b, r->generation);
-    member_string(b, "page", r->page);
-    gchar *value = v && jsc_value_is_string(v) ? jsc_value_to_string(v) : NULL;
-    member_string(b, "value", value);
-    member_string(b, "error", error ? error->message : NULL);
-    json_builder_end_object(b);
-    send_json('P', r->id, b);
-    g_free(value);
-    g_clear_object(&v);
-    g_clear_error(&error);
-    reply_free(r);
-}
-static void cleared(GObject *manager, GAsyncResult *result, gpointer data) {
-    Reply *r = data;
-    GError *error = NULL;
-    if (webkit_website_data_manager_clear_finish(WEBKIT_WEBSITE_DATA_MANAGER(manager), result,
-                                                 &error)) {
-        const char *what = r->cookies ? "cookies" : "cache";
-        send_packet('D', r->id, what, strlen(what));
-    }
-    g_clear_error(&error);
-    reply_free(r);
 }
 static Page *new_page(guint id) {
     Page *p = g_new0(Page, 1);
@@ -368,14 +342,24 @@ static Page *new_page(guint id) {
     p->visible = TRUE;
     p->window = gtk_offscreen_window_new();
     p->web = WEBKIT_WEB_VIEW(webkit_web_view_new_with_context(context));
+    // Keep the isolated controls world alive between completed async calls.
+    // Without a user script WebKit may discard its global object, leaving
+    // visible editors whose session can no longer be resumed or cancelled.
+    WebKitUserScript *controls = webkit_user_script_new_for_world("void 0;",
+        WEBKIT_USER_CONTENT_INJECT_TOP_FRAME, WEBKIT_USER_SCRIPT_INJECT_AT_DOCUMENT_START,
+        "zuse-controls", NULL, NULL);
+    webkit_user_content_manager_add_script(webkit_web_view_get_user_content_manager(p->web), controls);
+    webkit_user_script_unref(controls);
+
     BrowserIM *im = g_object_new(browser_im_get_type(), NULL);
     im->id = id;
     webkit_web_view_set_input_method_context(p->web, WEBKIT_INPUT_METHOD_CONTEXT(im));
     g_object_unref(im);
-    // The page renders offscreen, so the inspector must stay in its own window.
     webkit_settings_set_enable_developer_extras(webkit_web_view_get_settings(p->web), TRUE);
-    g_signal_connect(webkit_web_view_get_inspector(p->web), "attach", G_CALLBACK(keep_detached),
-                     NULL);
+    WebKitWebInspector *inspector = webkit_web_view_get_inspector(p->web);
+    g_signal_connect(inspector, "open-window", G_CALLBACK(open_inspector), p);
+    g_signal_connect(inspector, "bring-to-front", G_CALLBACK(open_inspector), p);
+    g_signal_connect(inspector, "closed", G_CALLBACK(inspector_closed), p);
     gtk_container_add(GTK_CONTAINER(p->window), GTK_WIDGET(p->web));
     gtk_window_set_default_size(GTK_WINDOW(p->window), p->width, p->height);
     g_signal_connect(p->window, "damage-event", G_CALLBACK(damaged), p);
@@ -552,6 +536,61 @@ static void begin_shutdown(void) {
                                      "http://localhost/", NULL, shutdown_ready, NULL);
 }
 
+// Control completions own IDs/metadata, never a Page pointer: closing a tab
+// while WebKit is working must not leave a dangling callback.
+typedef struct { guint id; gchar *page; guint64 generation; } Selection;
+static void selected(GObject *web, GAsyncResult *result, gpointer data) {
+    Selection *selection = data;
+    GError *error = NULL;
+    JSCValue *value = webkit_web_view_call_async_javascript_function_finish(WEBKIT_WEB_VIEW(web), result, &error);
+    JsonBuilder *b = json_builder_new();
+    json_builder_begin_object(b);
+    member_string(b, "page", selection->page);
+    json_builder_set_member_name(b, "generation");
+    json_builder_add_int_value(b, selection->generation);
+    gchar *details = value && jsc_value_is_string(value) ? jsc_value_to_string(value) : NULL;
+    member_string(b, "details", details);
+    if (error) member_string(b, "error", error->message);
+    json_builder_end_object(b);
+    send_json('A', selection->id, b);
+    g_free(details); g_clear_object(&value); g_clear_error(&error);
+    g_free(selection->page); g_free(selection);
+}
+static cairo_status_t png_bytes(void *data, const unsigned char *bytes, unsigned int length) {
+    GByteArray *buffer = data;
+    if (buffer->len + (guint64)length > MAX_DIMENSION * MAX_DIMENSION * 4)
+        return CAIRO_STATUS_WRITE_ERROR;
+    g_byte_array_append(buffer, bytes, length);
+    return CAIRO_STATUS_SUCCESS;
+}
+static void screenshot_ready(GObject *web, GAsyncResult *result, gpointer data) {
+    guint id = GPOINTER_TO_UINT(data);
+    GError *error = NULL;
+    cairo_surface_t *surface = webkit_web_view_get_snapshot_finish(WEBKIT_WEB_VIEW(web), result, &error);
+    GByteArray *buffer = g_byte_array_new();
+    if (surface && cairo_surface_write_to_png_stream(surface, png_bytes, buffer) == CAIRO_STATUS_SUCCESS)
+        send_packet('P', id, buffer->data, buffer->len);
+    else {
+        const char *message = error ? error->message : "Could not capture browser screenshot";
+        send_packet('X', id, message, strlen(message));
+    }
+    if (surface) cairo_surface_destroy(surface);
+    g_byte_array_unref(buffer); g_clear_error(&error);
+}
+typedef struct { guint id; gboolean cookies; } ClearData;
+static void data_cleared(GObject *manager, GAsyncResult *result, gpointer data) {
+    ClearData *clear = data;
+    GError *error = NULL;
+    if (webkit_website_data_manager_clear_finish(WEBKIT_WEBSITE_DATA_MANAGER(manager), result, &error)) {
+        const char *kind = clear->cookies ? "cookies" : "cache";
+        send_packet('D', clear->id, kind, strlen(kind));
+    } else {
+        const char *message = error ? error->message : "Could not clear browser data";
+        send_packet('X', clear->id, message, strlen(message));
+    }
+    g_clear_error(&error); g_free(clear);
+}
+
 static void command(JsonObject *o) {
     guint id = number(o, "id");
     const char *cmd = string(o, "cmd");
@@ -561,14 +600,6 @@ static void command(JsonObject *o) {
     }
     if (shutting_down)
         return;
-    if (!strcmp(cmd, "appearance")) {
-        // WebKitGTK derives prefers-color-scheme from these GTK settings. The
-        // stock theme keeps a user's dark system theme from forcing dark mode.
-        gboolean dark = json_object_has_member(o, "dark") && json_object_get_boolean_member(o, "dark");
-        g_object_set(gtk_settings_get_default(), "gtk-theme-name", "Adwaita",
-                     "gtk-application-prefer-dark-theme", dark, NULL);
-        return;
-    }
     Page *p = g_hash_table_lookup(pages, GUINT_TO_POINTER(id));
     if (!strcmp(cmd, "create")) {
         if (!p)
@@ -585,6 +616,48 @@ static void command(JsonObject *o) {
         const char *url = string(o, "url");
         if (allowed(url))
             webkit_web_view_load_uri(p->web, url);
+    } else if (!strcmp(cmd, "select-element")) {
+        Selection *selection = g_new0(Selection, 1);
+        selection->id = id;
+        selection->page = g_strdup(string(o, "page"));
+        selection->generation = json_object_get_int_member(o, "generation");
+        // WebKit's CSS device scale can include GTK DPI as well as page zoom.
+        // The annotation UI uses the GPUI scale, independently of page content.
+        gchar *script = g_strdup_printf("const zuseAnnotationDisplayScale = %.17g;\n%s", p->scale, string(o, "script"));
+        webkit_web_view_call_async_javascript_function(p->web, script, -1,
+            NULL, "zuse-controls", NULL, NULL, selected, selection);
+        g_free(script);
+    } else if (!strcmp(cmd, "annotation-theme")) {
+        gchar *script = g_strdup_printf("globalThis.zuseSetAnnotationTheme?.(%s)", string(o, "theme"));
+        webkit_web_view_evaluate_javascript(p->web, script, -1, "zuse-controls", NULL, NULL, NULL, NULL);
+        g_free(script);
+    } else if (!strcmp(cmd, "cancel-selection")) {
+        webkit_web_view_evaluate_javascript(p->web,
+            "globalThis.zuseCancelSelection?.()", -1, "zuse-controls", NULL, NULL, NULL, NULL);
+    } else if (!strcmp(cmd, "devtools")) {
+        WebKitWebInspector *inspector = webkit_web_view_get_inspector(p->web);
+        if (p->inspector_open)
+            webkit_web_inspector_close(inspector);
+        else {
+            p->inspector_open = TRUE;
+            webkit_web_inspector_show(inspector);
+            webkit_web_inspector_detach(inspector);
+            if (webkit_web_inspector_get_web_view(inspector)) open_inspector(inspector, p);
+        }
+    } else if (!strcmp(cmd, "screenshot")) {
+        webkit_web_view_get_snapshot(p->web, WEBKIT_SNAPSHOT_REGION_VISIBLE,
+            WEBKIT_SNAPSHOT_OPTIONS_NONE, NULL, screenshot_ready, GUINT_TO_POINTER(id));
+    } else if (!strcmp(cmd, "appearance")) {
+        g_object_set(gtk_settings_get_default(), "gtk-application-prefer-dark-theme",
+            json_object_get_boolean_member(o, "dark"), NULL);
+    } else if (!strcmp(cmd, "clear-data")) {
+        ClearData *clear = g_new0(ClearData, 1);
+        clear->id = id;
+        clear->cookies = json_object_get_boolean_member(o, "cookies");
+        WebKitWebsiteDataTypes types = clear->cookies ? WEBKIT_WEBSITE_DATA_COOKIES :
+            (WEBKIT_WEBSITE_DATA_MEMORY_CACHE | WEBKIT_WEBSITE_DATA_DISK_CACHE);
+        webkit_website_data_manager_clear(webkit_web_context_get_website_data_manager(context),
+            types, 0, NULL, data_cleared, clear);
     } else if (!strcmp(cmd, "dismiss-menu")) {
         if (p->options) {
             webkit_option_menu_close(p->options);
@@ -665,28 +738,6 @@ static void command(JsonObject *o) {
             p->dirty = TRUE;
         } else
             gtk_widget_hide(p->window);
-    } else if (!strcmp(cmd, "select-element"))
-        // An isolated world, like macOS: page scripts cannot reach the picker.
-        webkit_web_view_call_async_javascript_function(p->web, string(o, "script"), -1, NULL,
-                                                       "zuse", NULL, NULL, picked,
-                                                       reply_new(id, o));
-    else if (!strcmp(cmd, "cancel-selection"))
-        webkit_web_view_evaluate_javascript(
-            p->web, "if (globalThis.zuseCancelSelection) globalThis.zuseCancelSelection();", -1,
-            "zuse", NULL, NULL, NULL, NULL);
-    else if (!strcmp(cmd, "inspector")) {
-        WebKitWebInspector *inspector = webkit_web_view_get_inspector(p->web);
-        if (webkit_web_inspector_get_web_view(inspector))
-            webkit_web_inspector_close(inspector);
-        else
-            webkit_web_inspector_show(inspector);
-    } else if (!strcmp(cmd, "clear-data")) {
-        Reply *r = reply_new(id, o);
-        WebKitWebsiteDataTypes types =
-            r->cookies ? WEBKIT_WEBSITE_DATA_COOKIES
-                       : WEBKIT_WEBSITE_DATA_DISK_CACHE | WEBKIT_WEBSITE_DATA_MEMORY_CACHE;
-        webkit_website_data_manager_clear(webkit_web_context_get_website_data_manager(context),
-                                          types, 0, NULL, cleared, r);
     } else if (!strcmp(cmd, "eval"))
         webkit_web_view_evaluate_javascript(p->web, string(o, "script"), -1, NULL, NULL, NULL,
                                             evaluated, GUINT_TO_POINTER(id));

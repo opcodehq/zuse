@@ -79,7 +79,7 @@ pub(super) async fn exercise(
         .replace("{{origin}}", origin)
         .replace("{{long}}", &long);
     state.update(cx, |s, cx| {
-        let entries = serde_json::from_value(serde_json::json!([
+        let entries: Vec<zuse_doc::SessionMessageEntry> = serde_json::from_value(serde_json::json!([
             {"id":"fixture-links","role":"assistant","parts":[{"id":"text","kind":"text","text":markdown}],"createdAt":1788900001000_i64,"deviceId":"local","status":"complete"}
         ])).unwrap();
         s.receive_transcript_frame(zuse_doc::TranscriptFrame::Reset { reset: entries.into() }, cx).unwrap();

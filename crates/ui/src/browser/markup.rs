@@ -49,8 +49,6 @@ pub(super) struct Markup {
 }
 
 impl Markup {
-    // Windows has no capture yet, so only the editor's teardown is reachable there.
-    #[cfg_attr(windows, allow(dead_code))]
     pub(super) fn new(image: Arc<RenderImage>) -> Self {
         Self {
             image,
@@ -261,7 +259,7 @@ pub(super) fn freeze(frame: &RenderImage) -> Option<Arc<RenderImage>> {
 }
 
 /// Decode a platform capture (TIFF, PNG, ...) into GPUI's BGRA layout.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 pub(super) fn decode(bytes: &[u8]) -> Result<Arc<RenderImage>, String> {
     let mut buffer = image::load_from_memory(bytes)
         .map_err(|e| e.to_string())?
@@ -275,7 +273,8 @@ pub(super) fn decode(bytes: &[u8]) -> Result<Arc<RenderImage>, String> {
 /// Saved screenshots go to `~/Downloads/Zuse Screenshots`.
 pub(super) fn write(bytes: &[u8]) -> Result<std::path::PathBuf, String> {
     use std::io::Write;
-    let home = std::env::var_os("HOME").ok_or("Home directory unavailable")?;
+    let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+        .ok_or("Home directory unavailable")?;
     let dir = std::path::PathBuf::from(home)
         .join("Downloads")
         .join("Zuse Screenshots");

@@ -617,7 +617,7 @@ impl NativePage {
         *host.observer.ivars().requested_url.borrow_mut() = Some(url.into());
         host.web.load_url(url).map_err(|e| e.to_string())
     }
-    pub(super) fn select_element(&self, page: String, generation: u64) {
+    pub(super) fn select_element(&self, page: String, generation: u64, script: String) {
         let host = self.0.borrow();
         let tx = host.tx.clone();
         let completion = block2::RcBlock::new(move |value: *mut AnyObject, error: *mut NSError| {
@@ -642,11 +642,26 @@ impl NativePage {
                 objc2_web_kit::WKContentWorld::defaultClientWorld(MainThreadMarker::new().unwrap());
             host.view
                 .callAsyncJavaScript_arguments_inFrame_inContentWorld_completionHandler(
-                    &NSString::from_str(include_str!("select_element.js")),
+                    &NSString::from_str(&script),
                     None,
                     None,
                     &world,
                     Some(&completion),
+                );
+        }
+    }
+    pub(super) fn update_annotation_theme(&self, palette: &str) {
+        let host = self.0.borrow();
+        unsafe {
+            let world =
+                objc2_web_kit::WKContentWorld::defaultClientWorld(MainThreadMarker::new().unwrap());
+            host.view
+                .callAsyncJavaScript_arguments_inFrame_inContentWorld_completionHandler(
+                    &NSString::from_str(&format!("globalThis.zuseSetAnnotationTheme?.({palette})")),
+                    None,
+                    None,
+                    &world,
+                    None,
                 );
         }
     }

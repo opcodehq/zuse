@@ -166,6 +166,13 @@ impl BrowserSurface {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        #[cfg(any(target_os = "macos", target_os = "linux", windows))]
+        if event.keystroke.key == "escape" && self.selecting_element {
+            self.cancel_selection();
+            cx.notify();
+            cx.stop_propagation();
+            return;
+        }
         #[cfg(target_os = "linux")]
         if self.linux_menu_key(&event.keystroke.key, cx) {
             cx.stop_propagation();
@@ -838,10 +845,29 @@ impl BrowserSurface {
 impl Render for BrowserSurface {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx).clone();
+        #[cfg(any(target_os = "macos", target_os = "linux", windows))]
+        if self.selecting_element {
+            let palette = super::annotation_palette(&theme).to_string();
+            if self.annotation_theme.as_ref() != Some(&palette) {
+                if let Some(native) = &self.native {
+                    native.update_annotation_theme(&palette);
+                }
+                self.annotation_theme = Some(palette);
+            }
+        }
         #[cfg(target_os = "macos")]
         let persistence_notice = self.context.data.persistence_notice();
         #[cfg(not(target_os = "macos"))]
         let persistence_notice: Option<&str> = None;
+        #[cfg(any(target_os = "linux", windows))]
+        if let Some(native) = &self.native {
+            let dark = match crate::settings::current(cx).browser_appearance {
+                crate::appearance::AppearanceMode::System => theme.appearance.is_dark(),
+                crate::appearance::AppearanceMode::Light => false,
+                crate::appearance::AppearanceMode::Dark => true,
+            };
+            native.set_appearance(dark);
+        }
         let focused = self.address.focus_handle(cx).is_focused(window);
         let external = !cfg!(any(target_os = "macos", target_os = "linux", windows));
         let has_page = self.page.url.is_some();
@@ -953,10 +979,10 @@ impl Render for BrowserSurface {
         .when(has_page, |el| {
             el.on_click(cx.listener(|this, _, _, cx| this.open_external(cx)))
         });
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        #[cfg(any(target_os = "macos", target_os = "linux", windows))]
         let select = button(
             "browser-select-element",
-            "Select element",
+            "Annotate page",
             icons::BROWSER_SELECT,
             has_page,
             &theme,
@@ -965,9 +991,12 @@ impl Render for BrowserSurface {
         )
         .when(self.selecting_element, |el| el.bg(crate::theme::wash(0.10)))
         .when(has_page, |el| {
-            el.on_click(cx.listener(|this, _, _, cx| this.toggle_select_element(cx)))
+            el.on_click(cx.listener(|this, _, window, cx| {
+                window.focus(&this.focus, cx);
+                this.toggle_select_element(cx);
+            }))
         });
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        #[cfg(any(target_os = "macos", target_os = "linux", windows))]
         let devtools = button(
             "browser-developer-tools",
             "Developer tools",
@@ -1001,7 +1030,10 @@ impl Render for BrowserSurface {
                 this.close_toolbar_menu(cx);
             } else {
                 this.toolbar_menu.open(());
-                this.screenshot = None;
+                #[cfg(any(target_os = "macos", target_os = "linux", windows))]
+                {
+                    this.screenshot = None;
+                }
                 cx.notify();
             }
         }));
@@ -1021,18 +1053,18 @@ impl Render for BrowserSurface {
             let menu = crate::popover::popover_card(&theme.for_popup())
                 .w(px(184.0))
                 .on_mouse_down_out(cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
-                    #[cfg(any(target_os = "macos", target_os = "linux"))]
+                    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
                     if this
                         .appearance_menu_bounds
                         .is_some_and(|bounds| bounds.contains(&event.position))
                     {
                         return;
                     }
-                    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+                    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
                     let _ = event;
                     this.close_toolbar_menu(cx);
                 }));
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            #[cfg(any(target_os = "macos", target_os = "linux", windows))]
             let menu = menu.child(
                 browser_menu_row(
                     &theme,
@@ -1046,7 +1078,7 @@ impl Render for BrowserSurface {
                 .when(!has_page, |el| el.opacity(0.4).cursor_default()),
             );
             let menu = menu.child(copy);
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            #[cfg(any(target_os = "macos", target_os = "linux", windows))]
             let menu = {
                 use crate::appearance::AppearanceMode;
                 let current = crate::settings::current(cx).browser_appearance;
@@ -1168,9 +1200,9 @@ impl Render for BrowserSurface {
                         ),
                 )
             };
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            #[cfg(any(target_os = "macos", target_os = "linux", windows))]
             let menu = menu.child(div().h(px(1.0)).my(px(4.0)).bg(theme.border));
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            #[cfg(any(target_os = "macos", target_os = "linux", windows))]
             let menu = menu
                 .child(
                     browser_menu_row(
@@ -1210,6 +1242,7 @@ impl Render for BrowserSurface {
         } else {
             menu_trigger
         };
+        #[cfg(any(target_os = "macos", target_os = "linux", windows))]
         let menu_trigger = if let Some((path, bytes)) = &self.screenshot {
             let path_copy = path.to_string_lossy().into_owned();
             let path_reveal = path.clone();
@@ -1278,8 +1311,16 @@ impl Render for BrowserSurface {
                             ),
                         )
                         .child(
-                            action("browser-screenshot-reveal", REVEAL, false)
-                                .on_click(move |_, _, cx| cx.reveal_path(&path_reveal)),
+                            action(
+                                "browser-screenshot-reveal",
+                                if cfg!(target_os = "macos") {
+                                    "Reveal in Finder"
+                                } else {
+                                    "Show in folder"
+                                },
+                                false,
+                            )
+                            .on_click(move |_, _, cx| cx.reveal_path(&path_reveal)),
                         )
                         .child(
                             action("browser-screenshot-copy-image", "Copy image", true).on_click(
@@ -1307,7 +1348,7 @@ impl Render for BrowserSurface {
         let toolbar = surface_chrome::toolbar(&theme)
             .when(!external, |el| el.child(back).child(forward).child(reload))
             .child(address);
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        #[cfg(any(target_os = "macos", target_os = "linux", windows))]
         let toolbar = toolbar.child(select).child(devtools);
         let toolbar = toolbar.child(open).child(menu_trigger);
 
@@ -1434,7 +1475,7 @@ impl BrowserSurface {
                         window.handle_input(&focus,gpui::ElementInputHandler::new(bounds,view),cx);
                     }
                     let _ = entity.update(cx, |this,_| {
-                        if let Some(native)=&mut this.native { native.sync(bounds,scale); native.set_dark(dark); }
+                        if let Some(native)=&mut this.native { native.sync(bounds,scale); native.set_appearance(dark); }
                     });
                     let capture=entity.clone();
                     window.on_mouse_event(move |event: &gpui::MouseMoveEvent,phase,_,cx| {

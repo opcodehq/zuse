@@ -21,6 +21,178 @@ pub struct ContextItem {
     pub label: String,
     /// Markdown the agent reads and the pill's card renders.
     pub body: String,
+    pub browser_annotation: Option<BrowserAnnotation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct BrowserElement {
+    pub tag: String,
+    pub selector: String,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct BrowserPoint {
+    pub x: i32,
+    pub y: i32,
+}
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct BrowserRegion {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+}
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct BrowserStroke {
+    pub points: Vec<BrowserPoint>,
+    pub bounds: BrowserRegion,
+}
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct BrowserViewport {
+    pub width: u32,
+    pub height: u32,
+    pub scroll_x: i32,
+    pub scroll_y: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct BrowserAnnotation {
+    #[serde(default)]
+    pub id: String,
+    pub comment: String,
+    #[serde(default)]
+    pub elements: Vec<BrowserElement>,
+    #[serde(default)]
+    pub regions: Vec<BrowserRegion>,
+    #[serde(default)]
+    pub strokes: Vec<BrowserStroke>,
+    #[serde(default)]
+    pub viewport: Option<BrowserViewport>,
+    #[serde(default)]
+    pub page_title: String,
+    #[serde(default)]
+    pub page_url: String,
+}
+
+impl BrowserAnnotation {
+    pub fn from_selection(page: &str, details: &str) -> Result<Self, String> {
+        let mut annotation: Self = serde_json::from_str(details).map_err(|e| e.to_string())?;
+        annotation.page_url = page.to_owned();
+        annotation.id = annotation.id.chars().take(128).collect();
+        annotation.comment = annotation.comment.trim().chars().take(4000).collect();
+        annotation.elements.truncate(20);
+        annotation
+            .regions
+            .truncate(20usize.saturating_sub(annotation.elements.len()));
+        annotation.regions.retain(|region| {
+            region.width > 0 && region.height > 0 && region.width <= 32768 && region.height <= 32768
+        });
+        annotation
+            .strokes
+            .truncate(20usize.saturating_sub(annotation.elements.len() + annotation.regions.len()));
+        for stroke in &mut annotation.strokes {
+            stroke.points.truncate(2048);
+        }
+        annotation.strokes.retain(|stroke| {
+            stroke.points.len() >= 2 && (stroke.bounds.width > 0 || stroke.bounds.height > 0)
+        });
+        if annotation.comment.is_empty() || annotation.target_count() == 0 {
+            return Err("Mark a target and describe the change first".into());
+        }
+        for element in &mut annotation.elements {
+            element.tag = element.tag.chars().take(40).collect();
+            element.selector = element.selector.chars().take(300).collect();
+            element.text = element.text.chars().take(300).collect();
+        }
+        annotation.page_title = annotation.page_title.chars().take(200).collect();
+        Ok(annotation)
+    }
+
+    pub fn target_count(&self) -> usize {
+        self.elements.len() + self.regions.len() + self.strokes.len()
+    }
+
+    pub fn target_details(&self) -> String {
+        self.elements
+            .iter()
+            .map(|element| element.selector.clone())
+            .chain(
+                self.regions
+                    .iter()
+                    .enumerate()
+                    .map(|(index, _)| format!("Region {}", index + 1)),
+            )
+            .chain(
+                self.strokes
+                    .iter()
+                    .enumerate()
+                    .map(|(index, _)| format!("Drawing {}", index + 1)),
+            )
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    pub fn label(&self) -> String {
+        let host = url::Url::parse(&self.page_url)
+            .ok()
+            .and_then(|url| url.host_str().map(str::to_owned))
+            .unwrap_or_else(|| "Browser".into());
+        let count = self.target_count();
+        format!(
+            "{host} · {count} {}",
+            if !self.regions.is_empty() || !self.strokes.is_empty() {
+                if count == 1 { "target" } else { "targets" }
+            } else if count == 1 {
+                "element"
+            } else {
+                "elements"
+            }
+        )
+    }
+
+    fn body(&self) -> String {
+        let mut body = format!(
+            "Browser annotation\nPage: {}\nTitle: {}\n\nRequested change:\n{}\n\nSelected elements:",
+            self.page_url, self.page_title, self.comment
+        );
+        for (index, element) in self.elements.iter().enumerate() {
+            body.push_str(&format!("\n{}. {}", index + 1, element.selector));
+            if !element.text.is_empty() {
+                body.push_str(&format!("\n   Text: {}", element.text));
+            }
+        }
+        if let Some(viewport) = &self.viewport {
+            body.push_str(&format!("\n\nViewport: {} × {} CSS pixels; scroll offset ({}, {}). Region and drawing coordinates are document CSS pixels.", viewport.width, viewport.height, viewport.scroll_x, viewport.scroll_y));
+        }
+        for (index, region) in self.regions.iter().enumerate() {
+            body.push_str(&format!(
+                "\nRegion {}: x={}, y={}, width={}, height={}",
+                index + 1,
+                region.x,
+                region.y,
+                region.width,
+                region.height
+            ));
+        }
+        for (index, stroke) in self.strokes.iter().enumerate() {
+            body.push_str(&format!(
+                "\nDrawing {}: bounds x={}, y={}, width={}, height={}; path: {}",
+                index + 1,
+                stroke.bounds.x,
+                stroke.bounds.y,
+                stroke.bounds.width,
+                stroke.bounds.height,
+                stroke
+                    .points
+                    .iter()
+                    .map(|point| format!("{},{}", point.x, point.y))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            ));
+        }
+        body
+    }
 }
 
 impl ContextItem {
@@ -34,6 +206,28 @@ impl ContextItem {
             source_key: source_key.into(),
             label: label.into(),
             body: body.into(),
+            browser_annotation: None,
+        }
+    }
+
+    pub fn from_browser_annotation(annotation: BrowserAnnotation) -> Self {
+        let mut context = Self::new(
+            format!("browser-element:{}", uuid::Uuid::new_v4()),
+            annotation.label(),
+            annotation.body(),
+        );
+        if !annotation.id.is_empty() {
+            context.source_key = format!("browser-element:{}", annotation.id);
+            context.id = annotation.id.clone();
+        }
+        context.browser_annotation = Some(annotation);
+        context
+    }
+
+    pub fn update_browser_comment(&mut self, comment: String) {
+        if let Some(annotation) = &mut self.browser_annotation {
+            annotation.comment = comment;
+            self.body = annotation.body();
         }
     }
 }
@@ -224,6 +418,93 @@ mod tests {
 
     fn item(key: &str, label: &str, body: &str) -> ContextItem {
         ContextItem::new(key, label, body)
+    }
+
+    fn browser_note(comment: &str) -> ContextItem {
+        let details = serde_json::json!({"comment":comment,"elements":[{"tag":"button","selector":"button#save","text":"Save"}],"page_title":"Settings","page_url":"https://wrong.test/"});
+        ContextItem::from_browser_annotation(
+            BrowserAnnotation::from_selection("https://example.com/settings", &details.to_string())
+                .unwrap(),
+        )
+    }
+
+    #[test]
+    fn browser_annotations_collect_independently_and_keep_edits_in_the_sent_prompt() {
+        let mut notes = Vec::new();
+        upsert(&mut notes, browser_note("Make this button larger"));
+        upsert(&mut notes, browser_note("Use a clearer label"));
+        assert_eq!(notes.len(), 2);
+        assert_ne!(notes[0].id, notes[1].id);
+        notes[0].update_browser_comment("Use the accent color instead".into());
+        let prompt = with_contexts("Apply these changes together", &notes);
+        assert!(prompt.contains("Use the accent color instead"));
+        assert!(!prompt.contains("Make this button larger"));
+        assert!(prompt.contains("Use a clearer label"));
+        assert!(prompt.contains("button#save"));
+        assert!(prompt.contains("https://example.com/settings"));
+        assert!(!prompt.contains("wrong.test"));
+        let (text, badges) = extract_badges(&prompt).unwrap();
+        assert_eq!(text, "Apply these changes together");
+        assert_eq!(badges.len(), 2);
+        assert_eq!(badges[0].label.as_ref(), "example.com · 1 element");
+    }
+
+    #[test]
+    fn updates_to_the_same_browser_pin_replace_its_staged_note() {
+        let make = |comment| {
+            ContextItem::from_browser_annotation(
+                BrowserAnnotation::from_selection(
+                    "https://example.com",
+                    &serde_json::json!({
+                        "id":"pin-1", "comment":comment,
+                        "elements":[{"tag":"button","selector":"button#save","text":"Save"}]
+                    })
+                    .to_string(),
+                )
+                .unwrap(),
+            )
+        };
+        let mut notes = Vec::new();
+        upsert(&mut notes, make("First draft"));
+        upsert(&mut notes, make("Updated draft"));
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].id, "pin-1");
+        assert_eq!(
+            notes[0].browser_annotation.as_ref().unwrap().comment,
+            "Updated draft"
+        );
+    }
+
+    #[test]
+    fn browser_region_and_drawing_notes_are_valid_without_elements_and_survive_send() {
+        let details = serde_json::json!({"comment":"Move this area", "regions":[{"x":10,"y":20,"width":100,"height":80}],
+            "strokes":[{"points":[{"x":5,"y":6},{"x":15,"y":20}],"bounds":{"x":5,"y":6,"width":10,"height":14}}],
+            "viewport":{"width":800,"height":600,"scroll_x":0,"scroll_y":10}});
+        let annotation =
+            BrowserAnnotation::from_selection("https://example.com", &details.to_string()).unwrap();
+        assert_eq!(annotation.target_count(), 2);
+        assert_eq!(annotation.label(), "example.com · 2 targets");
+        let mut context = ContextItem::from_browser_annotation(annotation);
+        context.update_browser_comment("Resize both areas".into());
+        let prompt = with_contexts("Apply together", &[context]);
+        assert!(prompt.contains("Resize both areas"));
+        assert!(prompt.contains("Region 1: x=10, y=20, width=100, height=80"));
+        assert!(prompt.contains("Drawing 1: bounds x=5, y=6"));
+        assert!(prompt.contains("5,6 15,20"));
+        assert!(prompt.contains("800 × 600 CSS pixels"));
+    }
+
+    #[test]
+    fn browser_annotations_require_a_comment_and_a_target() {
+        for value in [
+            serde_json::json!({"comment":" ","elements":[]}),
+            serde_json::json!({"comment":"Fix this","elements":[]}),
+        ] {
+            assert!(
+                BrowserAnnotation::from_selection("https://example.com", &value.to_string())
+                    .is_err()
+            );
+        }
     }
 
     #[test]

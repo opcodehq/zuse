@@ -4468,9 +4468,22 @@ impl Shell {
                     {
                         let composer = this.composer.clone();
                         let details = details.clone();
+                        let draft_key = composer.read(cx).current_key.clone();
                         cx.defer(move |cx| {
                             composer.update(cx, |composer, cx| {
-                                composer.stage_context(details, cx);
+                                composer.stage_browser_annotation(draft_key, details, cx);
+                            })
+                        });
+                    }
+                }
+                crate::browser::BrowserEvent::AnnotationRemoved(id) => {
+                    if this.panel_key(cx) == owner {
+                        let composer = this.composer.clone();
+                        let draft_key = composer.read(cx).current_key.clone();
+                        let id = id.clone();
+                        cx.defer(move |cx| {
+                            composer.update(cx, |composer, cx| {
+                                composer.remove_browser_annotation(draft_key, &id, cx)
                             })
                         });
                     }
@@ -20119,6 +20132,19 @@ impl Shell {
 
     pub fn fixture_focus_mounted(&self, window: &Window, cx: &App) -> bool {
         self.shortcut_focus.contains_focused(window, cx)
+    }
+    pub fn fixture_browser_annotation_comments(&self, cx: &App) -> Vec<String> {
+        let composer = self.composer.read(cx);
+        self.state
+            .read(cx)
+            .context_items(&composer.current_key)
+            .iter()
+            .filter_map(|item| {
+                item.browser_annotation
+                    .as_ref()
+                    .map(|annotation| annotation.comment.clone())
+            })
+            .collect()
     }
     pub fn fixture_active_browser(
         &self,
