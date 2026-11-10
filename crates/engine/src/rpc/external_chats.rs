@@ -123,7 +123,7 @@ impl EngineRpc {
                     "That provider chat is no longer available. Reopen Import chat to refresh."
                         .to_owned()
                 })?;
-            crate::external_chats::read(&source.source, source.row.provider, true)
+            crate::external_chats::history(&source)
         })
         .await
         .map_err(failed)?

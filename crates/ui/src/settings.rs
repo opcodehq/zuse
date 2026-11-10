@@ -856,6 +856,9 @@ pub struct UiSettings {
     pub desktop_import_dismissed: bool,
     pub desktop_import_pending: Option<serde_json::Value>,
     pub desktop_import_applied: Vec<String>,
+    /// First-run onboarding finished, was skipped, or wasn't needed because
+    /// this workspace already had chats.
+    pub onboarding_completed: bool,
     pub display_name: String,
     pub dictation_enabled: bool,
     /// Dictation microphone as a `zuse_voice::InputDevice` id; `None`
@@ -1083,6 +1086,7 @@ impl Default for UiSettings {
             desktop_import_dismissed: false,
             desktop_import_pending: None,
             desktop_import_applied: Vec::new(),
+            onboarding_completed: false,
             dictation_enabled: false,
             dictation_input: None,
             window_geometry: None,
@@ -1980,6 +1984,7 @@ impl UiSettings {
             desktop_import_dismissed,
             desktop_import_pending,
             desktop_import_applied,
+            onboarding_completed,
             display_name,
             dictation_enabled,
             dictation_input,
@@ -3030,6 +3035,7 @@ mod tests {
             desktop_import_dismissed: false,
             desktop_import_pending: None,
             desktop_import_applied: Vec::new(),
+            onboarding_completed: false,
             default_model: Some(zuse_protocol::presentation::DefaultModelSelection {
                 provider: zuse_protocol::HarnessId::Codex,
                 model: "catalog-model".into(),

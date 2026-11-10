@@ -450,6 +450,67 @@ struct Connection {
     enabled: bool,
 }
 
+/// What first-run onboarding shows of the local MCP import. Never carries
+/// env values or headers: only names, sources, summaries and counts.
+pub struct ImportSummary {
+    pub servers: Vec<(String, String, String, usize)>,
+    pub selected: std::collections::BTreeSet<usize>,
+    pub loading: bool,
+    pub error: Option<String>,
+    pub submitted: Option<(usize, usize)>,
+    pub pending: usize,
+}
+
+/// First-run onboarding drives sign-in and the local MCP import through the
+/// same entity Settings uses, so both stay in step.
+impl PluginsCard {
+    pub fn account_ready(&self) -> bool {
+        self.account_loaded
+    }
+    pub fn is_signed_in(&self) -> bool {
+        self.signed_in()
+    }
+    pub fn signing_in(&self) -> bool {
+        self.account.login.is_some() || (self.busy && !self.signed_in())
+    }
+    pub fn account_error(&self) -> Option<String> {
+        self.error.clone().or_else(|| self.account.error.clone())
+    }
+    pub fn begin_sign_in(&mut self, cx: &mut Context<Self>) {
+        self.sign_in(cx);
+    }
+    /// The plugin workspace is known once the first list after sign-in lands.
+    pub fn workspace_ready(&self) -> bool {
+        self.plugins.snapshot["tenantId"].is_string()
+    }
+    pub fn begin_import(&mut self, cx: &mut Context<Self>) {
+        if self.import.is_none() {
+            self.open_import(cx);
+        }
+    }
+    pub fn import_summary(&self) -> Option<ImportSummary> {
+        let import = self.import.as_ref()?;
+        Some(ImportSummary {
+            servers: import
+                .servers
+                .iter()
+                .map(|s| (s.name.clone(), s.source.clone(), s.summary(), s.env.len()))
+                .collect(),
+            selected: import.selected.clone(),
+            loading: import.loading,
+            error: import.error.clone(),
+            submitted: import.submitted,
+            pending: self.import_queue.len() + usize::from(self.busy),
+        })
+    }
+    pub fn toggle_imported_server(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.toggle_import(index, cx);
+    }
+    pub fn import_selected(&mut self, cx: &mut Context<Self>) {
+        self.run_import(cx);
+    }
+}
+
 impl PluginsCard {
     fn signed_in(&self) -> bool {
         self.account.user.is_some()

@@ -54,16 +54,22 @@ pub enum PluginRequest {
         #[serde(skip_serializing_if = "Option::is_none")]
         return_to: Option<PluginReturnTo>,
     },
-    /// A stdio MCP server launched on the engine host. It never reaches the hosted API.
+    /// An MCP server run or reached from the engine host: a stdio `command`, or a
+    /// `url` with `headers` (credentials, like `env`). It never reaches the hosted API.
     AddLocalServer {
         tenant_id: String,
         request_id: String,
         name: String,
+        #[serde(default)]
         command: String,
         #[serde(default)]
         args: Vec<String>,
         #[serde(default)]
         env: BTreeMap<String, String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        url: Option<String>,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        headers: BTreeMap<String, String>,
     },
     RemoveServer {
         tenant_id: String,
@@ -157,7 +163,8 @@ pub struct PluginDefinition {
     pub url: Option<String>,
     #[serde(default)]
     pub api_key_header: Option<String>,
-    /// Present only on local stdio servers. Environment values are never included.
+    /// Present only on local servers: the stdio command line, or the URL without
+    /// credentials or query. Environment and header values are never included.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
 }
@@ -246,6 +253,26 @@ mod tests {
         assert_eq!(args, &["-y", "server"]);
         assert_eq!(env["TOKEN"], "value");
         assert_eq!(local.tenant_id(), Some("personal:user"));
+        // Stdio requests keep their wire shape; URL requests omit the command.
+        let wire = serde_json::to_value(&local).unwrap();
+        assert!(wire.get("url").is_none() && wire.get("headers").is_none());
+        let remote_local: PluginRequest = serde_json::from_value(json!({
+            "action":"addLocalServer","tenantId":"personal:user","requestId":"request",
+            "name":"Dev","url":"http://localhost:3000/mcp","headers":{"X-Key":"value"}
+        }))
+        .unwrap();
+        let PluginRequest::AddLocalServer {
+            command,
+            url,
+            headers,
+            ..
+        } = &remote_local
+        else {
+            panic!("expected a local server request");
+        };
+        assert!(command.is_empty());
+        assert_eq!(url.as_deref(), Some("http://localhost:3000/mcp"));
+        assert_eq!(headers["X-Key"], "value");
         let definition: PluginDefinition =
             serde_json::from_value(json!({"id":"hosted","name":"Hosted","description":""}))
                 .unwrap();

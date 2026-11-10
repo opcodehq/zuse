@@ -142,3 +142,122 @@ onboarding-provider_requires_subscription_sentence = Erfordert ein{ " " }{ $plan
 onboarding-provider_sessions_will_fail_if_your_plan_doesn_apos_t_include_subscri_sentence = Sitzungen schlagen fehl, wenn Ihr Plan{ " " }{ $plan }{ " " }nicht enthält. Abonnieren Sie (oder bestätigen Sie Ihren bestehenden Plan), bevor Sie{ " " }{ $value }{ " " }verwenden.
 
 onboarding-welcome_every_agent_one_workspace_sentence = Alle Agenten,<part0/>ein Arbeitsbereich.
+
+# First-run onboarding
+onboarding-flow_step = Schritt { $current } von { $total }
+onboarding-flow_back = Zurück
+onboarding-flow_skip = Überspringen
+onboarding-flow_skip_setup = Einrichtung überspringen
+onboarding-flow_continue = Weiter
+onboarding-flow_language = Sprache
+onboarding-flow_system_language = Systemsprache
+onboarding-flow_welcome_title = Willkommen bei Zuse
+onboarding-flow_welcome_back_title = Willkommen zurück
+onboarding-flow_welcome_body = Führen Sie Coding-Agenten parallel auf diesem Computer oder in der Cloud aus – mit allen Chats an einem Ort.
+onboarding-flow_welcome_back_body = Ihre Chats aus der vorherigen Version von Zuse befinden sich auf diesem Computer. Die Einrichtung übernimmt sie in wenigen Schritten.
+onboarding-flow_welcome_point_agents = Funktioniert mit den Agenten, die Sie bereits nutzen
+onboarding-flow_welcome_point_parallel = Mehrere Chats gleichzeitig, jeder in seinem eigenen Checkout
+onboarding-flow_welcome_point_phone = Vom Smartphone aus vorbeischauen und Aktionen freigeben
+onboarding-flow_get_started = Los geht's
+onboarding-flow_agents_title = Ihre Agenten
+onboarding-flow_agents_body = Zuse führt die auf diesem Computer installierten Agenten-Apps aus. Deaktivieren Sie in der Agentenauswahl alle, die Sie nicht möchten.
+onboarding-flow_agents_ready =
+    { $count ->
+        [one] 1 Agent bereit
+       *[other] { $count } Agenten bereit
+    }
+onboarding-flow_agents_loading = Suche nach Agenten…
+onboarding-flow_agents_none = Noch keine Agenten gefunden
+onboarding-flow_agents_none_body = Installieren Sie eine Agenten-App und aktivieren Sie sie dann unter Einstellungen → Anbieter. Sie können vorerst fortfahren.
+onboarding-flow_agents_more =
+    { $count ->
+        [one] 1 weiterer Agent kann später unter Einstellungen → Anbieter installiert werden.
+       *[other] { $count } weitere Agenten können später unter Einstellungen → Anbieter installiert werden.
+    }
+onboarding-flow_signin_title = Bei Zuse anmelden
+onboarding-flow_signin_body = Ein Konto ist optional. Damit kann die Einrichtung Ihre Tools mitnehmen.
+onboarding-flow_signin_point_mcp = Ihre MCP-Server in einem Schritt übernehmen
+onboarding-flow_signin_point_cloud = Dieselben Plugins in Cloud-Arbeitsbereichen nutzen
+onboarding-flow_signin_point_phone = Chats vom Smartphone aus prüfen und Aktionen freigeben
+onboarding-flow_signin_action = Mit Browser anmelden
+onboarding-flow_signin_waiting = Schließen Sie die Anmeldung im Browser ab…
+onboarding-flow_signin_done = Sie sind angemeldet
+onboarding-flow_signin_skip = Vorerst überspringen
+onboarding-flow_mcp_title = MCP-Server übernehmen
+onboarding-flow_mcp_body = Diese Server sind in den Agenten-Apps auf diesem Computer bereits eingerichtet. Agenten erhalten die ausgewählten in jedem Chat.
+onboarding-flow_mcp_loading = Suche nach MCP-Servern…
+onboarding-flow_mcp_waiting = Plugins werden vorbereitet…
+onboarding-flow_mcp_none = Keine MCP-Server gefunden
+onboarding-flow_mcp_none_body = Keine der Agenten-Apps auf diesem Computer hat einen konfiguriert. Sie können später unter Einstellungen → Plugins Server hinzufügen.
+onboarding-flow_mcp_env =
+    { $count ->
+        [one] 1 Umgebungsvariable
+       *[other] { $count } Umgebungsvariablen
+    }
+onboarding-flow_mcp_import =
+    { $count ->
+        [one] 1 Server importieren
+       *[other] { $count } Server importieren
+    }
+onboarding-flow_mcp_adding = Server werden hinzugefügt…
+onboarding-flow_mcp_added =
+    { $count ->
+        [one] 1 Server hinzugefügt
+       *[other] { $count } Server hinzugefügt
+    }
+onboarding-flow_mcp_skipped =
+    { $count ->
+        [one] 1 Server konnte nicht importiert werden.
+       *[other] { $count } Server konnten nicht importiert werden.
+    }
+onboarding-flow_chats_title = Chats übernehmen
+onboarding-flow_chats_body = Machen Sie dort weiter, wo Sie aufgehört haben. Importierte Chats behalten ihren Verlauf und laufen mit demselben Agenten weiter.
+onboarding-flow_previous_title = Vorherige Version von Zuse
+onboarding-flow_previous_summary = { $chats } Chats · { $projects } Projekte
+onboarding-flow_previous_settings = Auch unterstützte Einstellungen übernehmen
+onboarding-flow_chats_loading = Suche nach aktuellen Chats…
+onboarding-flow_chats_none = Keine weiteren Chats auf diesem Computer gefunden.
+onboarding-flow_chats_import =
+    { $count ->
+        [one] 1 Chat importieren
+       *[other] { $count } Chats importieren
+    }
+onboarding-flow_chats_importing = { $done } von { $total } werden importiert…
+onboarding-flow_chats_imported =
+    { $count ->
+        [one] 1 Chat importiert
+       *[other] { $count } Chats importiert
+    }
+onboarding-flow_chats_failed =
+    { $count ->
+        [one] 1 Chat konnte nicht importiert werden.
+       *[other] { $count } Chats konnten nicht importiert werden.
+    }
+onboarding-flow_personal_title = Passen Sie Zuse an
+onboarding-flow_personal_body = Sie können dies jederzeit in den Einstellungen ändern.
+onboarding-flow_appearance = Aussehen
+onboarding-flow_access = Neue Chats starten mit
+onboarding-flow_access_ask = Vor dem Handeln fragen
+onboarding-flow_access_ask_body = Agenten fragen, bevor sie Dateien bearbeiten oder Befehle ausführen.
+onboarding-flow_access_auto = Für mich freigeben
+onboarding-flow_access_auto_body = Ein automatischer Prüfer gibt Routineaktionen frei und fragt beim Rest nach.
+onboarding-flow_access_full = Vollzugriff
+onboarding-flow_access_full_body = Agenten handeln, ohne zu fragen. Am besten mit Arbeitsbäumen oder einem Cloud-Computer.
+onboarding-flow_launch_title = Alles bereit
+onboarding-flow_launch_body = Fügen Sie ein Projekt hinzu, um Agenten einen Arbeitsordner zu geben, oder starten Sie direkt einen Chat.
+onboarding-flow_launch_chats =
+    { $count ->
+        [one] 1 Chat bereit zum Fortsetzen
+       *[other] { $count } Chats bereit zum Fortsetzen
+    }
+onboarding-flow_launch_servers =
+    { $count ->
+        [one] 1 MCP-Server hinzugefügt
+       *[other] { $count } MCP-Server hinzugefügt
+    }
+onboarding-flow_launch_open = Zuse öffnen
+onboarding-flow_launch_project = Projekt hinzufügen
+onboarding-flow_launch_open_chats = Importierte Chats öffnen
+onboarding-flow_source_importing = Wird importiert…
+onboarding-flow_source_picked = { $picked } von { $count } Chats
+onboarding-flow_chats_hint = Apps, die auf diesen Agenten aufbauen, speichern ihre Chats am selben Ort – sie erscheinen daher ebenfalls hier.

@@ -10,6 +10,7 @@ use std::{
 };
 use zuse_doc::{MessagePart, MessageRole, MessageStatus, SessionMessageEntry};
 use zuse_protocol::{AgentEvent, HarnessId, ToolCall, external_chat::Row};
+mod opencode;
 
 pub(crate) struct Conversation {
     pub row: Row,
@@ -126,6 +127,11 @@ pub(crate) fn discover() -> Vec<Conversation> {
             }
         }
     }
+    for conversation in opencode::discover(&opencode::database()) {
+        found
+            .entry(conversation.row.id.clone())
+            .or_insert(conversation);
+    }
     let mut found: Vec<_> = found.into_values().collect();
     found.sort_by(|a, b| {
         b.row
@@ -134,6 +140,13 @@ pub(crate) fn discover() -> Vec<Conversation> {
             .then_with(|| a.row.id.cmp(&b.row.id))
     });
     found
+}
+/// Full transcript for a discovered conversation.
+pub(crate) fn history(found: &Conversation) -> Result<Conversation, String> {
+    match found.row.provider {
+        HarnessId::Opencode => opencode::read(&found.source, &found.cursor, true),
+        provider => read(&found.source, provider, true),
+    }
 }
 pub(crate) fn read(
     source: &Path,
@@ -212,15 +225,7 @@ pub(crate) fn read(
             && meaningful(&content)
             && (provider == HarnessId::ClaudeCode || row["type"] == "response_item")
         {
-            messages.push(entry(
-                MessageRole::User,
-                vec![MessagePart::Text {
-                    id: "t0".into(),
-                    text: content,
-                }],
-                timestamp,
-                messages.len(),
-            ));
+            user(&mut messages, content, timestamp);
         }
         let events = if provider == HarnessId::ClaudeCode
             && matches!(row["type"].as_str(), Some("assistant" | "user"))
@@ -231,49 +236,10 @@ pub(crate) fn read(
         } else {
             vec![]
         };
-        if events.is_empty() {
-            continue;
-        }
-        if messages
-            .last()
-            .is_none_or(|m| m.role != MessageRole::Assistant)
-        {
-            messages.push(entry(
-                MessageRole::Assistant,
-                vec![],
-                timestamp,
-                messages.len(),
-            ));
-        }
-        let current = messages.last_mut().unwrap();
-        for event in events {
-            zuse_model::fold_event_into_parts(&mut current.parts, &event);
-            if let Some(payload) = zuse_doc::sidecar_payload(&event) {
-                sidecars.push((current.id.clone(), payload));
-            }
-        }
+        append(&mut messages, &mut sidecars, events, timestamp);
     }
     if cursor.is_empty() || project.is_empty() {
         return Err("Provider chat has no session or project identity.".into());
-    }
-    let id = format!(
-        "{:x}",
-        Sha256::digest(format!("{provider:?}\0{cursor}\0{project}"))
-    );
-    let name = Path::new(&project)
-        .file_name()
-        .and_then(|v| v.to_str())
-        .unwrap_or_default()
-        .to_owned();
-    let preview = preview.unwrap_or_else(|| "Provider conversation".into());
-    let mut title = title.unwrap_or_else(|| preview.clone());
-    messages.retain(|message| !message.parts.is_empty());
-    for message in &mut messages {
-        for part in &mut message.parts {
-            if let MessagePart::Tool { call, .. } = part {
-                *call = zuse_model::sanitize_tool_call(call);
-            }
-        }
     }
     if provider == HarnessId::Codex {
         if let Some(root) = source
@@ -288,27 +254,120 @@ pub(crate) fn read(
                 if row["id"] == cursor
                     && let Some(name) = string(&row, "thread_name")
                 {
-                    title = name.to_owned();
+                    title = Some(name.to_owned());
                 }
             }
         }
     }
-    Ok(Conversation {
-        row: Row {
-            id,
-            provider,
-            title: clamp(&title, 96),
-            preview: clamp(&preview, 140),
-            project_path: project.clone(),
-            project_name: name,
-            updated_at: updated,
-            available: Path::new(&project).is_dir(),
-        },
+    let base = Base {
+        provider,
         cursor,
-        source: source.to_owned(),
-        messages,
-        sidecars,
-    })
+        project,
+        title,
+        preview,
+        updated,
+    };
+    Ok(base.finish(source, messages, sidecars))
+}
+pub(crate) struct Base {
+    pub provider: HarnessId,
+    pub cursor: String,
+    pub project: String,
+    pub title: Option<String>,
+    pub preview: Option<String>,
+    pub updated: i64,
+}
+impl Base {
+    pub fn finish(
+        self,
+        source: &Path,
+        mut messages: Vec<SessionMessageEntry>,
+        sidecars: Vec<(String, zuse_doc::SidecarPayload)>,
+    ) -> Conversation {
+        let Base {
+            provider,
+            cursor,
+            project,
+            title,
+            preview,
+            updated,
+        } = self;
+        let id = format!(
+            "{:x}",
+            Sha256::digest(format!("{provider:?}\0{cursor}\0{project}"))
+        );
+        let name = Path::new(&project)
+            .file_name()
+            .and_then(|v| v.to_str())
+            .unwrap_or_default()
+            .to_owned();
+        let preview = preview.unwrap_or_else(|| "Provider conversation".into());
+        let title = title.unwrap_or_else(|| preview.clone());
+        messages.retain(|message| !message.parts.is_empty());
+        for message in &mut messages {
+            for part in &mut message.parts {
+                if let MessagePart::Tool { call, .. } = part {
+                    *call = zuse_model::sanitize_tool_call(call);
+                }
+            }
+        }
+        Conversation {
+            row: Row {
+                id,
+                provider,
+                title: clamp(&title, 96),
+                preview: clamp(&preview, 140),
+                project_path: project.clone(),
+                project_name: name,
+                updated_at: updated,
+                available: Path::new(&project).is_dir(),
+            },
+            cursor,
+            source: source.to_owned(),
+            messages,
+            sidecars,
+        }
+    }
+}
+/// Assistant events fold into the open assistant entry, or start one.
+fn append(
+    messages: &mut Vec<SessionMessageEntry>,
+    sidecars: &mut Vec<(String, zuse_doc::SidecarPayload)>,
+    events: Vec<AgentEvent>,
+    timestamp: i64,
+) {
+    if events.is_empty() {
+        return;
+    }
+    if messages
+        .last()
+        .is_none_or(|m| m.role != MessageRole::Assistant)
+    {
+        messages.push(entry(
+            MessageRole::Assistant,
+            vec![],
+            timestamp,
+            messages.len(),
+        ));
+    }
+    let current = messages.last_mut().unwrap();
+    for event in events {
+        zuse_model::fold_event_into_parts(&mut current.parts, &event);
+        if let Some(payload) = zuse_doc::sidecar_payload(&event) {
+            sidecars.push((current.id.clone(), payload));
+        }
+    }
+}
+fn user(messages: &mut Vec<SessionMessageEntry>, text: String, timestamp: i64) {
+    messages.push(entry(
+        MessageRole::User,
+        vec![MessagePart::Text {
+            id: "t0".into(),
+            text,
+        }],
+        timestamp,
+        messages.len(),
+    ));
 }
 fn entry(
     role: MessageRole,

@@ -220,3 +220,122 @@ onboarding-provider_sessions_will_fail_if_your_plan_doesn_apos_t_include_subscri
 
 # Source key: onboarding:welcome_every_agent_one_workspace_sentence
 onboarding-welcome_every_agent_one_workspace_sentence = Every agent,<part0/>one workspace.
+
+# First-run onboarding
+onboarding-flow_step = Step { $current } of { $total }
+onboarding-flow_back = Back
+onboarding-flow_skip = Skip
+onboarding-flow_skip_setup = Skip setup
+onboarding-flow_continue = Continue
+onboarding-flow_language = Language
+onboarding-flow_system_language = System language
+onboarding-flow_welcome_title = Welcome to Zuse
+onboarding-flow_welcome_back_title = Welcome back
+onboarding-flow_welcome_body = Run coding agents side by side on this computer or in the cloud, with every chat in one place.
+onboarding-flow_welcome_back_body = Your chats from the previous version of Zuse are on this computer. Setup brings them over in a few steps.
+onboarding-flow_welcome_point_agents = Works with the agents you already use
+onboarding-flow_welcome_point_parallel = Several chats at once, each in its own checkout
+onboarding-flow_welcome_point_phone = Check in and approve actions from your phone
+onboarding-flow_get_started = Get started
+onboarding-flow_agents_title = Your agents
+onboarding-flow_agents_body = Zuse runs the agent apps installed on this computer. Turn off any you don't want in the agent picker.
+onboarding-flow_agents_ready =
+    { $count ->
+        [one] 1 agent ready
+       *[other] { $count } agents ready
+    }
+onboarding-flow_agents_loading = Looking for agents…
+onboarding-flow_agents_none = No agents found yet
+onboarding-flow_agents_none_body = Install an agent app, then turn it on in Settings → Providers. You can keep going for now.
+onboarding-flow_agents_more =
+    { $count ->
+        [one] 1 more agent can be installed later in Settings → Providers.
+       *[other] { $count } more agents can be installed later in Settings → Providers.
+    }
+onboarding-flow_signin_title = Sign in to Zuse
+onboarding-flow_signin_body = An account is optional. With one, setup can bring your tools along.
+onboarding-flow_signin_point_mcp = Bring your MCP servers over in one go
+onboarding-flow_signin_point_cloud = Use the same plugins in cloud workspaces
+onboarding-flow_signin_point_phone = Check chats and approve actions from your phone
+onboarding-flow_signin_action = Sign in with browser
+onboarding-flow_signin_waiting = Finish signing in in your browser…
+onboarding-flow_signin_done = You're signed in
+onboarding-flow_signin_skip = Skip for now
+onboarding-flow_mcp_title = Bring your MCP servers
+onboarding-flow_mcp_body = These servers are already set up in the agent apps on this computer. Agents get the ones you choose in every chat.
+onboarding-flow_mcp_loading = Looking for MCP servers…
+onboarding-flow_mcp_waiting = Getting your plugins ready…
+onboarding-flow_mcp_none = No MCP servers found
+onboarding-flow_mcp_none_body = None of the agent apps on this computer has one configured. You can add servers later in Settings → Plugins.
+onboarding-flow_mcp_env =
+    { $count ->
+        [one] 1 environment value
+       *[other] { $count } environment values
+    }
+onboarding-flow_mcp_import =
+    { $count ->
+        [one] Import 1 server
+       *[other] Import { $count } servers
+    }
+onboarding-flow_mcp_adding = Adding servers…
+onboarding-flow_mcp_added =
+    { $count ->
+        [one] Added 1 server
+       *[other] Added { $count } servers
+    }
+onboarding-flow_mcp_skipped =
+    { $count ->
+        [one] 1 server couldn't be imported.
+       *[other] { $count } servers couldn't be imported.
+    }
+onboarding-flow_chats_title = Bring your chats
+onboarding-flow_chats_body = Pick up where you left off. Imported chats keep their history and continue with the same agent.
+onboarding-flow_previous_title = Previous version of Zuse
+onboarding-flow_previous_summary = { $chats } chats · { $projects } projects
+onboarding-flow_previous_settings = Also bring over supported settings
+onboarding-flow_chats_loading = Looking for recent chats…
+onboarding-flow_chats_none = No other chats found on this computer.
+onboarding-flow_chats_import =
+    { $count ->
+        [one] Import 1 chat
+       *[other] Import { $count } chats
+    }
+onboarding-flow_chats_importing = Importing { $done } of { $total }…
+onboarding-flow_chats_imported =
+    { $count ->
+        [one] Imported 1 chat
+       *[other] Imported { $count } chats
+    }
+onboarding-flow_chats_failed =
+    { $count ->
+        [one] 1 chat couldn't be imported.
+       *[other] { $count } chats couldn't be imported.
+    }
+onboarding-flow_personal_title = Make it yours
+onboarding-flow_personal_body = You can change these any time in Settings.
+onboarding-flow_appearance = Appearance
+onboarding-flow_access = New chats start with
+onboarding-flow_access_ask = Ask before acting
+onboarding-flow_access_ask_body = Agents ask before editing files or running commands.
+onboarding-flow_access_auto = Approve for me
+onboarding-flow_access_auto_body = An automatic reviewer approves routine actions and asks about the rest.
+onboarding-flow_access_full = Full access
+onboarding-flow_access_full_body = Agents act without asking. Best with worktrees or a cloud computer.
+onboarding-flow_launch_title = You're all set
+onboarding-flow_launch_body = Add a project to give agents a folder to work in, or start a chat right away.
+onboarding-flow_launch_chats =
+    { $count ->
+        [one] 1 chat ready to continue
+       *[other] { $count } chats ready to continue
+    }
+onboarding-flow_launch_servers =
+    { $count ->
+        [one] 1 MCP server added
+       *[other] { $count } MCP servers added
+    }
+onboarding-flow_launch_open = Open Zuse
+onboarding-flow_launch_project = Add a project
+onboarding-flow_launch_open_chats = Open imported chats
+onboarding-flow_source_importing = Importing…
+onboarding-flow_source_picked = { $picked } of { $count } chats
+onboarding-flow_chats_hint = Apps built on these agents keep their chats in the same place, so those show up here too.

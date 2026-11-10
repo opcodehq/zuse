@@ -3952,6 +3952,11 @@ fn cap_text(text: &str, cap: usize) -> String {
     format!("{}…", &text[..end])
 }
 
+/// Type a saved opencode tool part (history import).
+pub fn tool_call(name: &str, input: &Value) -> ToolCall {
+    oc_tool_call(name, input)
+}
+
 /// Type an opencode-native tool invocation.
 fn oc_tool_call(name: &str, input: &Value) -> ToolCall {
     let s = |keys: &[&str]| {
@@ -3962,7 +3967,7 @@ fn oc_tool_call(name: &str, input: &Value) -> ToolCall {
             .map(str::to_owned)
     };
     match name {
-        "bash" => ToolCall::Exec {
+        "bash" | "shell" => ToolCall::Exec {
             command: s(&["command"]).unwrap_or_default(),
         },
         "read" => ToolCall::ReadFile {

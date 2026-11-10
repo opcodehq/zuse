@@ -15,6 +15,27 @@ pub struct Applied {
     pub open_chat: Option<String>,
     pub show_chats: bool,
 }
+/// What the first discovery found, for first-run onboarding.
+pub struct Discovery {
+    pub has_chats: bool,
+    /// An interrupted import is waiting to resume in this dialog.
+    pub pending: bool,
+    pub previous: Option<Previous>,
+}
+pub struct Previous {
+    pub name: String,
+    pub chats: u64,
+    pub projects: u64,
+}
+pub enum PreviousImport {
+    Idle,
+    Running(String),
+    Failed(String),
+    Done {
+        chats: u64,
+        open_chat: Option<String>,
+    },
+}
 pub struct Onboarding {
     state: Entity<AppState>,
     account: Entity<crate::settings::plugins::PluginsCard>,
@@ -36,6 +57,8 @@ pub struct Onboarding {
     focus_pending: bool,
     task: Option<Task<()>>,
     preferences_task: Option<Task<()>>,
+    embedded: bool,
+    destination_has_chats: Option<bool>,
 }
 impl EventEmitter<Applied> for Onboarding {}
 impl Onboarding {
@@ -64,6 +87,8 @@ impl Onboarding {
             focus_pending: false,
             task: None,
             preferences_task: None,
+            embedded: false,
+            destination_has_chats: None,
         };
         this.bind(cx);
         this
@@ -88,6 +113,7 @@ impl Onboarding {
         self.preferences_task = None;
         self.loading = false;
         self.engine = engine;
+        self.destination_has_chats = None;
         if self.busy {
             self.busy = false;
             self.error = Some("The connection changed. Retry to recover the same import.".into());
@@ -108,6 +134,67 @@ impl Onboarding {
             self.discover(None, cx);
         }
         cx.notify();
+    }
+    /// First-run onboarding owns the previous-version import while it runs,
+    /// so this dialog stays closed instead of competing with it.
+    pub fn set_embedded(&mut self, embedded: bool, cx: &mut Context<Self>) {
+        self.embedded = embedded;
+        if embedded && !self.manual {
+            self.visible = false;
+        }
+        cx.notify();
+    }
+    /// `None` until this engine's first discovery reply lands.
+    pub fn discovery(&self) -> Option<Discovery> {
+        let has_chats = self.destination_has_chats?;
+        let source = self
+            .sources
+            .get(self.selected)
+            .filter(|_| self.request_id.is_some())
+            .or_else(|| self.sources.iter().find(|s| s["importedBefore"] != true));
+        Some(Discovery {
+            has_chats,
+            pending: self.request_id.is_some() && self.result.is_none(),
+            previous: source.map(|s| Previous {
+                name: s["name"].as_str().unwrap_or("Zuse").to_owned(),
+                chats: s["summary"]["threads"].as_u64().unwrap_or(0),
+                projects: s["summary"]["projects"].as_u64().unwrap_or(0),
+            }),
+        })
+    }
+    pub fn progress(&self) -> PreviousImport {
+        if let Some(result) = &self.result {
+            return PreviousImport::Done {
+                chats: result["report"]["threads"].as_u64().unwrap_or(0),
+                open_chat: result["openChatId"].as_str().map(str::to_owned),
+            };
+        }
+        if self.busy {
+            return PreviousImport::Running(self.progress.clone());
+        }
+        match &self.error {
+            Some(error) => PreviousImport::Failed(error.clone()),
+            None => PreviousImport::Idle,
+        }
+    }
+    pub fn include_settings(&self) -> bool {
+        self.include_settings
+    }
+    pub fn set_include_settings(&mut self, include: bool, cx: &mut Context<Self>) {
+        if self.request_id.is_none() {
+            self.include_settings = include;
+            cx.notify();
+        }
+    }
+    /// Import the detected previous-version profile without the review dialog.
+    pub fn import_previous(&mut self, cx: &mut Context<Self>) {
+        if self.request_id.is_none() {
+            if let Some(index) = self.sources.iter().position(|s| s["importedBefore"] != true) {
+                self.selected = index;
+            }
+        }
+        self.review = true;
+        self.start(cx);
     }
     fn discover(&mut self, path: Option<String>, cx: &mut Context<Self>) {
         let Some(engine) = self.engine.clone() else {
@@ -133,6 +220,7 @@ impl Onboarding {
                     Ok(value)=>{
                         this.destination=value["destinationId"].as_str().unwrap_or_default().into();
                         this.sources=value["sources"].as_array().cloned().unwrap_or_default();this.selected=0;
+                        this.destination_has_chats=Some(value["destinationHasChats"]==true);
                         let prefs=settings::current(cx);
                         let pending=prefs.desktop_import_pending.as_ref().filter(|p|p["destinationId"]==this.destination);
                         if let Some(pending)=pending {
@@ -140,7 +228,7 @@ impl Onboarding {
                             this.include_settings=pending["includeSettings"].as_bool().unwrap_or(true);
                             this.request_id=pending["requestId"].as_str().map(str::to_owned);
                             this.review=true;this.visible=true;this.focus_pending=true;
-                        } else if !prefs.desktop_import_dismissed && value["destinationHasChats"] != true && this.sources.iter().any(|s|s["importedBefore"]!=true) {
+                        } else if !this.embedded && !prefs.desktop_import_dismissed && value["destinationHasChats"] != true && this.sources.iter().any(|s|s["importedBefore"]!=true) {
                             this.visible=true;this.focus_pending=true;
                         }
                         if this.sources.is_empty() && value["errors"].as_array().is_some_and(|v|!v.is_empty()) {

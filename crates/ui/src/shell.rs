@@ -2156,6 +2156,7 @@ pub struct Shell {
     cloud_conversation_events: Option<Subscription>,
     cloud_tabs: cloud_tabs::CloudTabs,
     desktop_import: Entity<crate::desktop_import::Onboarding>,
+    onboarding: Entity<crate::onboarding::Wizard>,
     sidebar_pane: Entity<SidebarPane>,
     sidebar_controls: Entity<zuse_viewport::sidebar_controls::SidebarControls>,
     workspace_sidebar_focus: FocusHandle,
@@ -2623,6 +2624,35 @@ impl Shell {
         )
         .detach();
 
+        let onboarding = cx.new(|cx| {
+            crate::onboarding::Wizard::new(state.clone(), desktop_import.clone(), cx)
+        });
+        cx.subscribe(
+            &onboarding,
+            |this: &mut Self, _, event: &crate::onboarding::Finished, cx| {
+                if let Some(id) = &event.open_chat {
+                    this.state.update(cx, |state, cx| {
+                        if let Some(chat) = state.chats.iter().find(|chat| &chat.id == id).cloned()
+                        {
+                            state.select_space(chat.space_id.clone(), cx);
+                            state.select_chat(Some(chat.id), cx);
+                        }
+                    });
+                    this.set_route(Route::Chat, cx);
+                } else if event.add_project {
+                    this.open_add_space(cx);
+                }
+                this.pull_settings(cx);
+                let pickers = this.composer.read(cx).pickers().clone();
+                pickers.update(cx, |pickers, cx| {
+                    pickers.reload_defaults();
+                    cx.notify();
+                });
+                cx.notify();
+            },
+        )
+        .detach();
+
         let observation = cx.observe(&state, |this: &mut Shell, state, cx| {
             this.on_state_changed(&state, cx);
             cx.notify();
@@ -2839,6 +2869,7 @@ impl Shell {
             cloud_conversation_events: None,
             cloud_tabs: Default::default(),
             desktop_import,
+            onboarding,
             zot_ui: zots::ZotUi::default(),
             sidebar_pane,
             sidebar_controls,
@@ -15956,6 +15987,13 @@ impl Render for Shell {
             }
             SplashPhase::Gone => root,
         };
+        // Onboarding fills the window below the caption controls and drag strip.
+        let onboarding = self.onboarding.read(cx).visible();
+        let root = if onboarding {
+            root.child(self.onboarding.clone())
+        } else {
+            root
+        };
 
         // Caption controls are shell-level chrome, not Ready-page content:
         // keep them above the splash and every auth/org/error gate as well as
@@ -15964,7 +16002,7 @@ impl Render for Shell {
         // the native `Drag` control area, on Linux the explicit
         // `start_window_move` strip (the control-area hit-test is inert
         // there); macOS drags gate windows natively.
-        let root = if (!restart_required && matches!(gate, GatePhase::Ready))
+        let root = if (!restart_required && matches!(gate, GatePhase::Ready) && !onboarding)
             || cfg!(target_os = "macos")
         {
             root
