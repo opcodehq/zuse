@@ -193,11 +193,9 @@ impl IssuePanel {
                 };
                 vec![match field {
                     Field::Title => ("Issue title", i.details.title.clone(), false),
-                    Field::Description => (
-                        "Add a description…",
-                        i.details.description.clone(),
-                        true,
-                    ),
+                    Field::Description => {
+                        ("Add a description…", i.details.description.clone(), true)
+                    }
                     Field::DueDate => (
                         "YYYY-MM-DD",
                         i.details.due_date.clone().unwrap_or_default(),
@@ -365,7 +363,8 @@ impl IssuePanel {
                     return;
                 }
                 if self.zot.status != ZotStatus::Active {
-                    self.error = Some("Resume this Zapper from Threads before starting work".into());
+                    self.error =
+                        Some("Resume this Zapper from Threads before starting work".into());
                     cx.notify();
                     return;
                 }
@@ -719,22 +718,18 @@ impl IssuePanel {
                 }))
                 .into_any_element(),
         };
-        body = body
-            .child(
-                column()
-                    .gap(px(8.))
-                    .child(title)
-                    .child(
-                        div()
-                            .text_color(rgb(MUTED))
-                            .text_size(px(12.))
-                            .child(format!(
-                                "{}  |  {}",
-                                issue.code(),
-                                relative_time(issue.created_at)
-                            )),
-                    ),
-            );
+        body = body.child(
+            column().gap(px(8.)).child(title).child(
+                div()
+                    .text_color(rgb(MUTED))
+                    .text_size(px(12.))
+                    .child(format!(
+                        "{}  |  {}",
+                        issue.code(),
+                        relative_time(issue.created_at)
+                    )),
+            ),
+        );
         let mut properties = column().gap(px(0.)).mt(px(18.));
         for (glyph, label, value, menu) in [
             (
@@ -1280,12 +1275,22 @@ impl IssuePanel {
                 .get(event.id.as_str())
                 .map(Vec::as_slice)
                 .unwrap_or(&[]);
-            body = body.child(self.activity_card(issue, event, actor, text, (glyph, color), thread, cx));
+            body = body.child(self.activity_card(
+                issue,
+                event,
+                actor,
+                text,
+                (glyph, color),
+                thread,
+                cx,
+            ));
         }
         let id = issue.id.clone();
         body.child(
             match self.inline_input(|k| matches!(k, EditorKind::Comment(i) if *i == issue.id)) {
-                Some(input) => inline_composer(input, "Comment", cx).mt(px(6.)).into_any_element(),
+                Some(input) => inline_composer(input, "Comment", cx)
+                    .mt(px(6.))
+                    .into_any_element(),
                 None => button("issue-comment", "Leave a comment…")
                     .w_full()
                     .mt(px(6.))
@@ -1376,7 +1381,10 @@ impl IssuePanel {
         let long = text.chars().count() > PREVIEW;
         let open = self.expanded.contains(&event.id);
         let shown = if long && !open {
-            format!("{}…", text.chars().take(PREVIEW).collect::<String>().trim_end())
+            format!(
+                "{}…",
+                text.chars().take(PREVIEW).collect::<String>().trim_end()
+            )
         } else {
             text.clone()
         };
@@ -1425,7 +1433,9 @@ impl IssuePanel {
                     .child(icon("copy").size(px(12.)))
                     .on_click({
                         let text = text.clone();
-                        move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))
+                        move |_, _, cx| {
+                            cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))
+                        }
                     }),
             )
             .child(
@@ -1778,7 +1788,10 @@ pub fn activity_notice(
     // Worker reports can be long; the copy action keeps the full text.
     const SHOWN: usize = 1200;
     let shown = if text.chars().count() > SHOWN {
-        format!("{}…", text.chars().take(SHOWN).collect::<String>().trim_end())
+        format!(
+            "{}…",
+            text.chars().take(SHOWN).collect::<String>().trim_end()
+        )
     } else {
         text.clone()
     };
