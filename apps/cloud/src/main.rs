@@ -792,6 +792,27 @@ async fn main() -> Result<()> {
                     }
                 }))
             };
+            // Provider running limits (E2B: one hour) must not pause a busy computer.
+            let keep_running_task = if once {
+                None
+            } else {
+                let runtime = runtime.clone();
+                let registry = registry.clone();
+                Some(tokio::spawn(async move {
+                    loop {
+                        if let Err(error) = runtime
+                            .keep_running_registry_once(&registry, now_ms())
+                            .await
+                        {
+                            tracing::warn!(code = error.code, "Provider running limits deferred");
+                        }
+                        tokio::time::sleep(std::time::Duration::from_secs(
+                            zuse_cloud::runtime::keep_running::INTERVAL_SECS,
+                        ))
+                        .await;
+                    }
+                }))
+            };
             // Remote object cleanup is independent of the latency-sensitive
             // lifecycle hint loop. Unknown PUT receipts survive cancellation.
             let object_cleanup_task = if once {
@@ -1021,6 +1042,9 @@ async fn main() -> Result<()> {
                 task.await??;
             }
             if let Some(task) = object_cleanup_task {
+                task.abort();
+            }
+            if let Some(task) = keep_running_task {
                 task.abort();
             }
             if let Some(task) = recovery_task {

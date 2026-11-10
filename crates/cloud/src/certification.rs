@@ -22,6 +22,8 @@ use zuse_protocol::cloud_computers::ProviderId;
 const CHECKS: &str = include_str!("certification/checks.sh");
 const SCRIPT: &str = "/tmp/zuse-certification.sh";
 const RUNTIME: &str = "/usr/local/bin/zuse-cloud-runtime --version";
+/// The lifetime production requests on create and resume.
+const LIFETIME_SECONDS: u32 = 86400;
 
 /// The candidate under test, read from its staged managed-base record.
 #[derive(Clone, Debug)]
@@ -229,7 +231,7 @@ pub async fn certify(provider: &dyn Provider, target: &Target, options: &Options
             name: &name,
             operation_id: &name,
             size: "default",
-            lifetime_seconds: 1800,
+            lifetime_seconds: LIFETIME_SECONDS,
         })
         .await;
     let create_ms = started.elapsed().as_millis() as u64;
@@ -364,7 +366,7 @@ async fn lifecycle(run: &mut Run<'_>, target: &Target, options: &Options, starte
         run.trait_("sleptForSecs", json!(options.sleep_wait.as_secs()));
     }
     let resumed = Instant::now();
-    let resume = match run.provider.resume(&run.machine, 1800).await {
+    let resume = match run.provider.resume(&run.machine, LIFETIME_SECONDS).await {
         Ok(receipt) => run.settle(&receipt, Duration::from_secs(180)).await,
         Err(error) => Err(format!("{error:?}")),
     };

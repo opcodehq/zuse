@@ -30,6 +30,7 @@ pub mod github;
 mod grant_receipts;
 pub mod grants;
 mod internal_observations;
+pub mod keep_running;
 pub mod lifecycle;
 pub mod mailbox;
 mod object_writes;
