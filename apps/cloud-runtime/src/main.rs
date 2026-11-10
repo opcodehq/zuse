@@ -484,6 +484,15 @@ async fn run() -> Result<()> {
     )?);
     phase.complete();
     drop(phase);
+    // Providers that do not keep memory restart this process on wake. Reopen
+    // the chat terminals that were open (fresh shells, same ids, a restart
+    // notice), and keep remembering them for the next restart.
+    core.terminals
+        .persist_to(directory.join("cloud-terminals.json"));
+    let reopened = core.terminals.restore();
+    if reopened > 0 {
+        tracing::info!(reopened, "Reopened terminals after a restart");
+    }
     if track_preparation {
         let data = directory.clone();
         let boot = bootstrap.clone();
