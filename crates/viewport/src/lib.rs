@@ -177,6 +177,12 @@ pub struct WorkspaceView {
     tool_results: HashMap<String, tool_results::ToolResultView>,
     tool_result_requests: HashMap<u64, (String, usize)>,
     transcript_scroll: ScrollHandle,
+    /// Older host history just replaced the transcript: the scroll height
+    /// and offset before it, so the reader's place survives the insert.
+    history_growth: Option<(gpui::Pixels, gpui::Point<gpui::Pixels>)>,
+    /// First message an automatic earlier-history request was made from. A
+    /// page that adds nothing leaves it unchanged and falls back to a click.
+    history_auto_from: Option<String>,
     input_answers: HashMap<String, zuse_protocol::input_answers::InputAnswers>,
     input_pending: HashMap<u64, String>,
     input_submitted: std::collections::HashSet<String>,
@@ -713,6 +719,8 @@ impl WorkspaceView {
             tool_results: HashMap::new(),
             tool_result_requests: HashMap::new(),
             transcript_scroll: ScrollHandle::new(),
+            history_growth: None,
+            history_auto_from: None,
             input_answers: HashMap::new(),
             input_pending: HashMap::new(),
             input_submitted: Default::default(),
