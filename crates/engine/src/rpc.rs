@@ -1609,6 +1609,7 @@ fn should_invalidate_link(error: &RpcError) -> bool {
 fn change_request_rpc_error(error: ChangeRequestError) -> RpcError {
     let code = match error {
         ChangeRequestError::CliUnavailable => capability_errors::PULL_REQUESTS_CLI_UNAVAILABLE,
+        ChangeRequestError::CliOutdated => capability_errors::PULL_REQUESTS_CLI_OUTDATED,
         ChangeRequestError::Authentication => capability_errors::PULL_REQUESTS_AUTHENTICATION,
         ChangeRequestError::RateLimited => capability_errors::PULL_REQUESTS_RATE_LIMITED,
         ChangeRequestError::Timeout => capability_errors::PULL_REQUESTS_TIMEOUT,
@@ -6878,6 +6879,10 @@ mod tests {
             (
                 ChangeRequestError::CliUnavailable,
                 capability_errors::PULL_REQUESTS_CLI_UNAVAILABLE,
+            ),
+            (
+                ChangeRequestError::CliOutdated,
+                capability_errors::PULL_REQUESTS_CLI_OUTDATED,
             ),
             (
                 ChangeRequestError::Authentication,
