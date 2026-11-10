@@ -500,7 +500,10 @@ mod tests {
             &serde_json::json!({"comment":"Make this button larger\nUse the accent color", "elements":[{"tag":"button", "selector":"button#save", "text":"Save"}]}).to_string(),
         ).unwrap();
         let context = crate::context_items::ContextItem::from_browser_annotation(annotation);
-        let (_, badges) = split(&crate::context_items::with_contexts("Apply this", &[context]));
+        let (_, badges) = split(&crate::context_items::with_contexts(
+            "Apply this",
+            &[context],
+        ));
         let badge = &badges[0];
         assert_eq!(badge.label.as_ref(), "example.com · 1 element");
         assert_eq!(
