@@ -680,7 +680,12 @@ pub struct PullRequestDetailPage {
     watch_engine: Option<crate::state::EngineHandle>,
     active: bool,
     connection_subscription: Option<Subscription>,
-    merge_options: bool,
+    merge_menu: summary::MergeMenu,
+    /// Mermaid fences in the description and comments, drawn off the UI thread.
+    diagrams: Rc<RefCell<crate::markdown::mermaid_cache::MermaidCache>>,
+    diagram_worker: Option<Task<()>>,
+    /// The diagram behind the open lightbox, whose raster is released on close.
+    diagram_zoom: Option<crate::image_media::MediaImage>,
     agent_expanded: bool,
     description_expanded: bool,
     /// The last merge or ready-for-review outcome, kept until the next one.
@@ -768,7 +773,10 @@ impl PullRequestDetailPage {
             watch_engine: None,
             active: true,
             connection_subscription: None,
-            merge_options: false,
+            merge_menu: summary::MergeMenu::Closed,
+            diagrams: Rc::default(),
+            diagram_worker: None,
+            diagram_zoom: None,
             agent_expanded: false,
             description_expanded: false,
             update_notice: None,
@@ -836,8 +844,10 @@ impl PullRequestDetailPage {
             page.ensure_watch(cx);
             cx.notify();
         }));
-        cx.on_release(|page: &mut Self, _| {
+        cx.on_release(|page: &mut Self, cx| {
             crate::markdown::render::clear_selection_surface(&page.selection_prefix);
+            page.close_diagram_zoom(cx);
+            crate::image_media::release_media(page.diagrams.borrow_mut().drain(), cx);
         })
         .detach();
         page.file_search_subscription =
@@ -952,9 +962,6 @@ impl PullRequestDetailPage {
         self.loading
     }
 
-    /// The pane's toolbar row: the repository and number on the left; the
-    /// state, star and the pull request's actions on the right. The title
-    /// itself leads the page below.
     pub(crate) fn watch_in_chat(&mut self, chat_id: String, cx: &mut Context<Self>) {
         self.watch_control = Some(cx.new(|cx| {
             crate::pr_watch::PrWatchControl::new(
@@ -968,9 +975,10 @@ impl PullRequestDetailPage {
         }));
     }
 
+    /// The pane's toolbar row: state and number on the left, the overflow
+    /// menu and Merge on the right. The title itself leads the page below.
     pub(crate) fn toolbar(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::of(cx).clone();
-        let url = self.url.clone();
         let copy_url = self.url.clone();
         let (number, title) = self.identity();
         let state = self
@@ -1016,11 +1024,11 @@ impl PullRequestDetailPage {
                     .overflow_hidden()
                     .flex()
                     .items_center()
-                    .gap(px(8.0))
-                    .text_size(crate::typography::text_xs())
+                    .gap(px(6.0))
+                    .text_size(crate::typography::text_sm())
                     .whitespace_nowrap()
                     .children(
-                        state.map(|(state, draft)| summary::state_pill(&state, draft, &theme)),
+                        state.map(|(state, draft)| summary::state_mark(&state, draft, &theme)),
                     )
                     .children(number.map(|number| {
                         div()
@@ -1028,12 +1036,6 @@ impl PullRequestDetailPage {
                             .text_color(theme.text_muted)
                             .child(format!("#{number}"))
                     })),
-            )
-            .child(
-                action("pr-external", "Open on GitHub", &theme).on_click(move |_, _, cx| {
-                    cx.stop_propagation();
-                    cx.open_url(&url);
-                }),
             )
             .child(self.overflow_menu(star_url, copy_url, &theme, cx))
             .children(merge.map(|merge| div().ml(px(6.0)).child(merge)))
@@ -1059,14 +1061,35 @@ impl PullRequestDetailPage {
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        use zuse_protocol::ChangeRequestUpdate as Update;
         let has_detail = self.detail.is_some();
+        let (is_open, is_closed, is_draft) =
+            self.detail.as_ref().map_or((false, false, false), |d| {
+                (
+                    d.state.eq_ignore_ascii_case("open"),
+                    d.state.eq_ignore_ascii_case("closed"),
+                    d.is_draft,
+                )
+            });
+        let branch = self
+            .detail
+            .as_ref()
+            .map(|detail| detail.head_ref_name.clone())
+            .filter(|branch| !branch.is_empty());
+        let open_url = copy_url.clone();
         let starred = crate::pull_requests::is_starred(&star_url, cx);
         let star_key = crate::pull_requests::star_key(&star_url);
-        let row = |id: &'static str, label: &'static str| {
+        let row = |id: &'static str, glyph: &'static str, label: &'static str| {
             crate::popover::menu_row(theme, false, label)
                 .id(id)
                 .debug_selector(move || id.to_owned())
                 .role(gpui::Role::MenuItem)
+                .child(
+                    crate::icons::icon(glyph)
+                        .size(px(14.0))
+                        .flex_none()
+                        .text_color(theme.text_muted),
+                )
                 .child(label)
         };
         let menu = self.more_open.then(|| {
@@ -1077,51 +1100,142 @@ impl PullRequestDetailPage {
                     .top_full()
                     .right_0()
                     .mt(px(4.0))
-                    .w(px(168.0))
+                    .w(px(208.0))
                     .occlude()
                     .on_mouse_down_out(cx.listener(|page, _, _, cx| {
                         page.more_open = false;
                         cx.notify();
                     }))
-                    .when(has_detail, |el| {
-                        el.child(row("pr-add-context", "Add to chat").on_click(cx.listener(
-                            |page, _, window, cx| {
-                                page.more_open = false;
-                                if let Some(detail) = &page.detail {
-                                    let context = chat_context(detail, &page.url);
-                                    window.dispatch_action(
-                                        Box::new(AddPullRequestContext(context)),
-                                        cx,
-                                    );
-                                }
-                                cx.notify();
-                            },
-                        )))
-                    })
                     .child(
-                        row("pr-menu-star", if starred { "Unstar" } else { "Star" }).on_click(
+                        row("pr-external", crate::icons::PR_GITHUB, "Open on GitHub").on_click(
                             cx.listener(move |page, _, _, cx| {
                                 page.more_open = false;
-                                crate::pull_requests::toggle_star(&star_key, cx);
+                                cx.open_url(&open_url);
                                 cx.notify();
                             }),
                         ),
                     )
-                    .child(row("pr-copy-url", "Copy link").on_click(cx.listener(
-                        move |page, _, _, cx| {
+                    .child(
+                        row("pr-copy-url", crate::icons::COPY, "Copy link").on_click(cx.listener(
+                            move |page, _, _, cx| {
+                                page.more_open = false;
+                                cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                    copy_url.clone(),
+                                ));
+                                cx.notify();
+                            },
+                        )),
+                    )
+                    .when_some(branch, |el, branch| {
+                        el.child(
+                            row(
+                                "pr-copy-branch",
+                                crate::icons::GIT_BRANCH,
+                                "Copy branch name",
+                            )
+                            .on_click(cx.listener(
+                                move |page, _, _, cx| {
+                                    page.more_open = false;
+                                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                        branch.clone(),
+                                    ));
+                                    cx.notify();
+                                },
+                            )),
+                        )
+                    })
+                    .when(has_detail, |el| {
+                        el.child(
+                            row(
+                                "pr-add-context",
+                                crate::icons::PR_ADD_TO_CHAT,
+                                "Add to chat",
+                            )
+                            .on_click(cx.listener(
+                                |page, _, window, cx| {
+                                    page.more_open = false;
+                                    if let Some(detail) = &page.detail {
+                                        let context = chat_context(detail, &page.url);
+                                        window.dispatch_action(
+                                            Box::new(AddPullRequestContext(context)),
+                                            cx,
+                                        );
+                                    }
+                                    cx.notify();
+                                },
+                            )),
+                        )
+                    })
+                    .child(
+                        row(
+                            "pr-menu-star",
+                            if starred {
+                                crate::icons::STAR_BOLD
+                            } else {
+                                crate::icons::STAR
+                            },
+                            if starred { "Unstar" } else { "Star" },
+                        )
+                        .on_click(cx.listener(move |page, _, _, cx| {
                             page.more_open = false;
-                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(
-                                copy_url.clone(),
-                            ));
+                            crate::pull_requests::toggle_star(&star_key, cx);
                             cx.notify();
-                        },
-                    )))
-                    .child(row("pr-detail-refresh", "Refresh").on_click(cx.listener(
-                        |page, _, _, cx| {
-                            page.more_open = false;
-                            page.refresh(cx);
-                        },
-                    ))),
+                        })),
+                    )
+                    .child(
+                        row("pr-detail-refresh", crate::icons::REFRESH, "Refresh").on_click(
+                            cx.listener(|page, _, _, cx| {
+                                page.more_open = false;
+                                page.refresh(cx);
+                            }),
+                        ),
+                    )
+                    .when(is_open || is_closed, |el| {
+                        el.child(crate::popover::menu_separator())
+                    })
+                    .when(is_open && !is_draft, |el| {
+                        el.child(
+                            row(
+                                "pr-menu-draft",
+                                crate::icons::PULL_REQUEST_DRAFT,
+                                "Convert to draft",
+                            )
+                            .on_click(
+                                cx.listener(|page, _, _, cx| page.update_pr(Update::MarkDraft, cx)),
+                            ),
+                        )
+                    })
+                    .when(is_open, |el| {
+                        el.child(
+                            crate::popover::menu_row(theme, false, "pr-menu-close")
+                                .id("pr-menu-close")
+                                .debug_selector(|| "pr-menu-close".into())
+                                .role(gpui::Role::MenuItem)
+                                .text_color(theme.danger)
+                                .child(
+                                    crate::icons::icon(crate::icons::CLOSE)
+                                        .size(px(14.0))
+                                        .flex_none()
+                                        .text_color(theme.danger),
+                                )
+                                .child("Close pull request")
+                                .on_click(
+                                    cx.listener(|page, _, _, cx| page.update_pr(Update::Close, cx)),
+                                ),
+                        )
+                    })
+                    .when(is_closed, |el| {
+                        el.child(
+                            row(
+                                "pr-menu-reopen",
+                                crate::icons::PULL_REQUEST,
+                                "Reopen pull request",
+                            )
+                            .on_click(
+                                cx.listener(|page, _, _, cx| page.update_pr(Update::Reopen, cx)),
+                            ),
+                        )
+                    }),
             )
         });
         div()
@@ -1133,6 +1247,7 @@ impl PullRequestDetailPage {
                     .on_click(cx.listener(|page, _, _, cx| {
                         cx.stop_propagation();
                         page.more_open = !page.more_open;
+                        page.merge_menu = summary::MergeMenu::Closed;
                         cx.notify();
                     })),
             )
@@ -1962,7 +2077,7 @@ pub(crate) fn fixture_seed_cache(cache: &Rc<RefCell<PullRequestCache>>) -> Strin
     };
     let detail = ChangeRequestDetail {
         title: "Fix mobile investment signing handoff and tax field prompts".into(),
-        body: "Fix native investment checkout after agreement preparation exceeded the mobile client's eight-second timeout: the server saved the application, but the client showed a canceled-fetch error.\n\n### Behavior and review points\n\n- Give subscription creation and revision **60 seconds** for document preparation. Other requests keep their eight-second deadline.\n- Offer **Continue investment** for pending or funded subscriptions while keeping read-only access gates.\n- Route directly to `deposit` once per saved agreement.\n\n```ts\nreturn paths.some((path) => AGREEMENT_PATHS.has(path))\n  ? AGREEMENT_PREPARATION_TIMEOUT_MS\n  : REQUEST_TIMEOUT_MS;\n```\n".into(),
+        body: "Fix native investment checkout after agreement preparation exceeded the mobile client's eight-second timeout: the server saved the application, but the client showed a canceled-fetch error.\n\n### Behavior and review points\n\n- Give subscription creation and revision **60 seconds** for document preparation. Other requests keep their eight-second deadline.\n- Offer **Continue investment** for pending or funded subscriptions while keeping read-only access gates.\n- Route directly to `deposit` once per saved agreement.\n\n```ts\nreturn paths.some((path) => AGREEMENT_PATHS.has(path))\n  ? AGREEMENT_PREPARATION_TIMEOUT_MS\n  : REQUEST_TIMEOUT_MS;\n```\n\n```mermaid\nflowchart LR\n  A[Prepare agreement] --> B{Under 60s?}\n  B -->|yes| C[Continue investment]\n  B -->|no| D[Show retry]\n```\n".into(),
         url: url.clone(),
         number: 2942,
         author: actor("swarajbachu"),
@@ -2069,6 +2184,12 @@ impl PullRequestDetailPage {
         if variant == "summary-checks" {
             self.checks_expanded = true;
         }
+        match variant {
+            "summary-merge" => self.merge_menu = summary::MergeMenu::Now,
+            "summary-merge-auto" => self.merge_menu = summary::MergeMenu::WhenReady,
+            "summary-more" => self.more_open = true,
+            _ => {}
+        }
         if variant == "code-open" {
             if let Some(path) = self
                 .parsed_diff()
@@ -2105,22 +2226,75 @@ impl PullRequestDetailPage {
     }
 }
 
+/// Mermaid fences in pull request text: the source until drawn or if it
+/// can't be, then the diagram with a source toggle and click-to-enlarge.
+fn diagram_handler(
+    cache: Rc<RefCell<crate::markdown::mermaid_cache::MermaidCache>>,
+    owner: gpui::WeakEntity<PullRequestDetailPage>,
+) -> Rc<dyn Fn(&str, SharedString, &Theme) -> crate::markdown::render::DiagramView> {
+    use crate::markdown::{
+        mermaid_cache::Lookup,
+        render::{DiagramUi, DiagramView},
+    };
+    Rc::new(move |code: &str, id: SharedString, _: &Theme| {
+        let lookup = cache.borrow_mut().request(code, &id);
+        match lookup {
+            Lookup::Pending => DiagramView::Source,
+            Lookup::Failed(reason) => DiagramView::Failed(reason),
+            Lookup::Ready(media) => {
+                let show_source = cache.borrow().source_visible(&id);
+                let body = if show_source {
+                    gpui::Empty.into_any_element()
+                } else {
+                    let open = owner.clone();
+                    let source = media.clone();
+                    crate::image_media::preview_element(
+                        &media,
+                        format!("{id}-image").into(),
+                        move |window, cx| {
+                            let _ = open.update(cx, |page, cx| {
+                                page.open_diagram(source.clone(), window, cx)
+                            });
+                        },
+                    )
+                };
+                let toggle = owner.clone();
+                DiagramView::Diagram(DiagramUi {
+                    body,
+                    show_source,
+                    toggle_source: Rc::new(move |_, cx| {
+                        let _ = toggle.update(cx, |page, cx| {
+                            page.diagrams.borrow_mut().toggle_source(&id);
+                            cx.notify();
+                        });
+                    }),
+                })
+            }
+        }
+    })
+}
+
 fn rich_text(
     body: &crate::markdown::BlockTree,
     key: String,
     url: &str,
     theme: &Theme,
     window: &mut Window,
+    diagrams: Rc<RefCell<crate::markdown::mermaid_cache::MermaidCache>>,
     owner: gpui::WeakEntity<PullRequestDetailPage>,
 ) -> AnyElement {
+    let diagram = diagram_handler(diagrams, owner.clone());
     let options = crate::markdown::render::RenderOptions {
         tasks: None,
-        media: Some(super::pull_request_media::media(
-            url,
-            Rc::new(move |source, window, cx| {
-                let _ = owner.update(cx, |page, cx| page.open_image(source, window, cx));
-            }),
-        )),
+        media: Some(crate::markdown::render::MediaUi {
+            diagram: Some(diagram),
+            ..super::pull_request_media::media(
+                url,
+                Rc::new(move |source, window, cx| {
+                    let _ = owner.update(cx, |page, cx| page.open_image(source, window, cx));
+                }),
+            )
+        }),
         row_key: key.into(),
         veil: None,
         cache: None,
@@ -2191,8 +2365,7 @@ fn activity_time(raw: &str) -> String {
 fn action(id: &'static str, label: &'static str, theme: &Theme) -> gpui::Stateful<gpui::Div> {
     let icon_only = matches!(
         id,
-        "pr-external"
-            | "pr-more"
+        "pr-more"
             | "pr-copy-patch"
             | "pr-copy-path"
             | "pr-files"
@@ -2209,7 +2382,7 @@ fn action(id: &'static str, label: &'static str, theme: &Theme) -> gpui::Statefu
         "pr-more" => Some(crate::icons::MORE_HORIZONTAL),
         "pr-copy-patch" | "pr-copy-path" => Some(crate::icons::COPY),
         "pr-retry" | "pr-retry-diff" => Some(crate::icons::REFRESH),
-        "pr-external" | "pr-review-open" | "pr-comment-open" => Some(crate::icons::ARROW_UP_RIGHT),
+        "pr-review-open" | "pr-comment-open" => Some(crate::icons::ARROW_UP_RIGHT),
         "pr-review-add" | "pr-comment-add" => Some(crate::icons::PR_ADD_TO_CHAT),
         "pr-files" => Some(crate::icons::MAGNIFER),
         _ => None,
@@ -2297,7 +2470,8 @@ fn status_style(raw: &str) -> (String, &'static str, StatusTone) {
             icons::CLOCK_CIRCLE,
             StatusTone::Warning,
         ),
-        "IN_PROGRESS" | "PENDING" | "QUEUED" | "WAITING" => {
+        "IN_PROGRESS" => ("Running".into(), icons::CLOCK_CIRCLE, StatusTone::Warning),
+        "PENDING" | "QUEUED" | "WAITING" => {
             (humanize(raw), icons::CLOCK_CIRCLE, StatusTone::Warning)
         }
         _ => (humanize(raw), icons::DOCUMENT, StatusTone::Neutral),
@@ -2342,6 +2516,7 @@ impl crate::popover::ScrollRailHost for PullRequestDetailPage {
 impl Render for PullRequestDetailPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.ensure_watch(cx);
+        self.begin_diagram_frame(window, cx);
         if let Some(focus) = self.return_focus.take() {
             window.focus(&focus, cx);
         }
@@ -2611,6 +2786,7 @@ impl Render for PullRequestDetailPage {
                                                         &self.url,
                                                         &theme,
                                                         window,
+                                                        self.diagrams.clone(),
                                                         cx.weak_entity(),
                                                     ))
                                                 },
@@ -2776,6 +2952,7 @@ impl Render for PullRequestDetailPage {
                     .children(composer)
                     .child(navigation),
             );
+        self.ensure_diagram_worker(cx);
         if let Some(preview) = &self.image_preview {
             let weak = cx.weak_entity();
             root = root.child(crate::attachments::lightbox(
@@ -2784,6 +2961,7 @@ impl Render for PullRequestDetailPage {
                 &self.image_focus,
                 move |window, cx| {
                     let _ = weak.update(cx, |page, cx| {
+                        page.close_diagram_zoom(cx);
                         page.image_preview = None;
                         if let Some(focus) = page.image_previous_focus.take() {
                             window.focus(&focus, cx);
@@ -4251,7 +4429,7 @@ mod tests {
             cx.simulate_resize(gpui::size(px(width), px(800.0)));
             cx.run_until_parked();
             let mut previous_right = px(0.0);
-            for selector in ["pr-toolbar-title", "pr-external", "pr-more"] {
+            for selector in ["pr-toolbar-title", "pr-more"] {
                 let bounds = cx.debug_bounds(selector).unwrap();
                 assert!(
                     bounds.left() >= previous_right && bounds.right() <= px(width),
@@ -4603,8 +4781,6 @@ mod tests {
         let (_, cx) = cx.add_window_view(|window, cx| DetailHost::new(window, cx, false));
         cx.simulate_resize(gpui::size(px(320.0), px(800.0)));
         cx.run_until_parked();
-        for selector in ["pr-more", "pr-external"] {
-            assert!(cx.debug_bounds(selector).is_some(), "{selector}");
-        }
+        assert!(cx.debug_bounds("pr-more").is_some());
     }
 }
