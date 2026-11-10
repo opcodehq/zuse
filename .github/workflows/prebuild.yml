@@ -11,6 +11,10 @@ on:
         description: Validate only the Intel macOS build and Rosetta startup
         type: boolean
         default: false
+      verify_intel_run_id:
+        description: Smoke-test Intel artifacts from a completed build without recompiling
+        type: string
+        default: ''
 
 concurrency:
   group: prebuild-${{ github.ref }}
@@ -18,10 +22,11 @@ concurrency:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   binaries:
-    if: inputs.intel_only != true
+    if: inputs.intel_only != true && inputs.verify_intel_run_id == ''
     uses: ./.github/workflows/native-binaries.yml
     with:
       ref: ${{ github.sha }}
@@ -30,7 +35,7 @@ jobs:
       HUGEICONS_LICENSE_KEY: ${{ secrets.HUGEICONS_LICENSE_KEY }}
 
   intel:
-    if: inputs.intel_only == true
+    if: inputs.intel_only == true && inputs.verify_intel_run_id == ''
     uses: ./.github/workflows/native-compile.yml
     with:
       ref: ${{ github.sha }}
@@ -41,3 +46,35 @@ jobs:
       retention_days: 14
     secrets:
       HUGEICONS_LICENSE_KEY: ${{ secrets.HUGEICONS_LICENSE_KEY }}
+
+  verify-intel:
+    if: inputs.verify_intel_run_id != ''
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: unsigned-macos-x86_64
+          path: incoming
+          run-id: ${{ inputs.verify_intel_run_id }}
+          github-token: ${{ github.token }}
+      - name: Verify the cross-compiled executables on an Intel host
+        run: |
+          python - <<'PYTHON'
+          from pathlib import Path
+          import subprocess, sys, time
+          sys.path.insert(0, 'scripts')
+          from package import BINS, binary_target
+          source = Path('incoming/target/release').resolve()
+          for name in BINS:
+              binary = source / name
+              if binary_target(binary) != ('macos', 'x86_64'):
+                  raise SystemExit(f'Wrong architecture: {binary}')
+              binary.chmod(0o755)
+          started = time.monotonic()
+          subprocess.run([str(source / 'zuse'), '--noop-browser'], check=True, timeout=30)
+          print(f'Native Intel startup passed in {time.monotonic() - started:.2f}s')
+          PYTHON
