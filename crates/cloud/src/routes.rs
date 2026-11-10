@@ -2273,8 +2273,8 @@ struct PrepaidReturn {
     funding: Option<String>,
 }
 async fn prepaid_complete(Query(query): Query<PrepaidReturn>) -> Response {
-    let funding = if query.funding.as_deref() == Some("hosted-models") {
-        "These credits fund models billed by Zuse. Cloud compute invoices and your own agent subscriptions are billed separately."
+    let funding = if query.funding.as_deref() == Some("shared-credits") {
+        "These credits fund cloud compute and models billed by Zuse from one balance. Your own agent subscriptions are billed separately."
     } else {
         "Credits apply automatically to future Zuse invoices, including subscriptions."
     };

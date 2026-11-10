@@ -188,6 +188,24 @@ impl Store {
             result.last_polar_reconciled_at = result.last_billing_reconciled_at;
         }
         tx.commit().await?;
+        if p["shared_credit_account"] == true {
+            let control = self.billing.as_ref().ok_or_else(invalid)?;
+            let available = control.shared_available_micros(owner).await?;
+            result.shared_credits = true;
+            result.included_provider_cost_micros = 40_000_000;
+            result.included_remaining_micros = available;
+            result.included_used_micros = (40_000_000 - available).max(0);
+            result.overage_charge_micros = 0;
+            result.current_invoice_estimate_micros = result.base_price_micros;
+            result.status = match p["status"].as_str() {
+                Some("active" | "pending") if available > 0 && p["shared_credit_hold"] != true => {
+                    BillingStatus::Active
+                }
+                Some("manual") => BillingStatus::Manual,
+                Some("ended") => BillingStatus::Ended,
+                _ => BillingStatus::BillingHold,
+            };
+        }
         Ok(result)
     }
     pub async fn billing_usage(
@@ -297,6 +315,7 @@ fn summary(
         last_billing_reconciled_at: None,
         last_polar_reconciled_at: None,
         usage_provisional: false,
+        shared_credits: false,
     })
 }
 

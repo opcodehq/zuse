@@ -170,14 +170,12 @@ async fn stripe_merchant_checkout_wallet_refund_and_compute() -> anyhow::Result<
         automatic_tax: false,
         signer: Some(super::integration::signer()),
         stripe_cloud_price: Some(price_id.clone()),
-        stripe_overage_price: None,
-        compute_metered: false,
     };
     let control =
         BillingControl::from_pool(pool.clone(), vec![owner.clone()]).with_native_billing(native);
     let mut customer_id = None;
     let outcome: anyhow::Result<()> = async {
-        control.publish_native_catalog(json!({"features":[{"id":MODEL_WALLET,"kind":"consumable"}],"plans":[{"id":CLOUD_PLAN,"name":"Zuse qualification","kind":"subscription","currency":"usd","amount":"40","interval":"month","stripePriceId":price_id,"items":[]}]}),0).await.map_err(|e|anyhow::anyhow!("{e:?}"))?;
+        control.publish_native_catalog(json!({"features":[{"id":CREDIT_WALLET,"kind":"consumable"}],"plans":[{"id":CLOUD_PLAN,"name":"Zuse qualification","kind":"subscription","currency":"usd","amount":"40","interval":"month","stripePriceId":price_id,"items":[{"feature":CREDIT_WALLET,"included":"40","reset":"month"}]}]}),0).await.map_err(|e|anyhow::anyhow!("{e:?}"))?;
         control.enroll_native(&owner,false,chrono::Utc::now().timestamp_millis()).await.map_err(|e|anyhow::anyhow!("{e:?}"))?;
         let checkout=control.native_checkout(&owner,CLOUD_PLAN,chrono::Utc::now().timestamp_millis(),Some("merchant-subscription")).await.map_err(|e|anyhow::anyhow!("{e:?}"))?.context("checkout URL")?;
         let prepaid=control.native_prepaid_checkout(&owner,1000,Some("merchant-wallet")).await.map_err(|e|anyhow::anyhow!("{e:?}"))?.context("wallet URL")?;
@@ -196,7 +194,7 @@ async fn stripe_merchant_checkout_wallet_refund_and_compute() -> anyhow::Result<
             delivered.push(event["id"].clone());
         }
         control.native_maintenance().await.map_err(|e|anyhow::anyhow!("{e:?}"))?;
-        ensure!(store.prepaid_balance(&owner).await.map_err(|e|anyhow::anyhow!("{e:?}"))?.credit_cents==1000,"Wallet should have exactly $10 after paid checkout");
+        ensure!(store.prepaid_balance(&owner).await.map_err(|e|anyhow::anyhow!("{e:?}"))?.credit_cents==5000,"Wallet should have exactly $50 after subscription and top-up checkout");
         let summary=store.billing_summary(&owner,chrono::Utc::now().timestamp_millis()).await.map_err(|e|anyhow::anyhow!("{e:?}"))?;
         ensure!(summary.base_price_micros==40_000_000,"Compute subscription projection");
         let sessions=api.call(reqwest::Method::GET,"checkout/sessions",&[("customer",id.clone()),("limit","10".into())]).await.map_err(|e|anyhow::anyhow!("{e:?}"))?;
@@ -210,12 +208,12 @@ async fn stripe_merchant_checkout_wallet_refund_and_compute() -> anyhow::Result<
         let event=events["data"].as_array().context("refund events")?.iter().find(|e|e["data"]["object"]["customer"]==id).context("real refund event")?;
         let (headers,body)=super::integration::signed(event);
         for _ in 0..2 {store.billing_webhook(Some("stripe"),&headers,&body,chrono::Utc::now().timestamp_millis()).await.map_err(|e|anyhow::anyhow!("{e:?}"))?;control.native_maintenance().await.map_err(|e|anyhow::anyhow!("{e:?}"))?;}
-        ensure!(store.prepaid_balance(&owner).await.map_err(|e|anyhow::anyhow!("{e:?}"))?.credit_cents==500,"Partial refund must claw back exactly $5 once");
+        ensure!(store.prepaid_balance(&owner).await.map_err(|e|anyhow::anyhow!("{e:?}"))?.credit_cents==4500,"Partial refund must claw back exactly $5 once");
         let request=ModelReservation{request_id:"merchant-model".into(),chat_id:"qualification-chat".into(),model:"qualification-model".into(),estimate_micros:1_000_000};
         store.reserve_hosted_model(&owner,&request,chrono::Utc::now().timestamp_millis()).await.map_err(|e|anyhow::anyhow!("{e:?}"))?;
         for _ in 0..2 {store.settle_hosted_model(&owner,&request.request_id,250_000).await.map_err(|e|anyhow::anyhow!("{e:?}"))?;}
-        ensure!(store.prepaid_balance(&owner).await.map_err(|e|anyhow::anyhow!("{e:?}"))?.credit_cents==475,"Settlement replay must charge $0.25 once");
-        std::fs::write(directory.join("result.json"),serde_json::to_vec_pretty(&json!({"passed":true,"customer":id,"events":delivered,"refund":refund["id"],"walletAfterPurchaseCents":1000,"walletAfterRefundCents":500,"walletAfterUsageCents":475,"computeBaseMicros":summary.base_price_micros,"delivery":"Retrieved real Stripe events signed locally; public delivery not qualified"}))?)?;
+        ensure!(store.prepaid_balance(&owner).await.map_err(|e|anyhow::anyhow!("{e:?}"))?.credit_cents==4475,"Settlement replay must charge $0.25 once");
+        std::fs::write(directory.join("result.json"),serde_json::to_vec_pretty(&json!({"passed":true,"customer":id,"events":delivered,"refund":refund["id"],"walletAfterPurchaseCents":5000,"walletAfterRefundCents":4500,"walletAfterUsageCents":4475,"computeBaseMicros":summary.base_price_micros,"delivery":"Retrieved real Stripe events signed locally; public delivery not qualified"}))?)?;
         Ok(())
     }.await;
     // Delete only resources created by this exercise; never inspect/change other customers.

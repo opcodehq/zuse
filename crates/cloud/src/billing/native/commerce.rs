@@ -1,6 +1,5 @@
 use super::*;
 use crate::billing::CheckoutSummary;
-use brokeboy::core::decimal::Decimal;
 use sha2::{Digest, Sha256};
 use zuse_protocol::cloud_billing::PrepaidBalance;
 
@@ -33,7 +32,7 @@ impl BillingControl {
         Ok(result)
     }
     /// Explicit enrollment is resumable. Existing Stripe identities require adoption.
-    /// Invoice credit stays at Stripe; it is never copied into the model wallet.
+    /// Invoice credit stays at Stripe; it is never copied into the shared wallet.
     pub async fn enroll_native(
         &self,
         owner: &str,
@@ -64,6 +63,12 @@ impl BillingControl {
                 .await?
                 .flatten();
         let existing: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM api_entitlements WHERE account_id=$1 AND provider_subscription_id IS NOT NULL)").bind(owner).fetch_one(&mut *tx).await?;
+        let spent:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM api_cloud_billing_usage u JOIN api_cloud_billing_periods p ON p.period_id=u.period_id WHERE p.account_id=$1 AND p.period_start<=$2 AND p.period_end>$2) OR EXISTS(SELECT 1 FROM api_cloud_billing_reservations WHERE account_id=$1 AND expires_at>$2) OR EXISTS(SELECT 1 FROM api_cloud_billing_outbox WHERE account_id=$1 AND acknowledged_at IS NULL)").bind(owner).bind(now).fetch_one(&mut *tx).await?;
+        if spent {
+            return Err(ApiError::conflict(
+                "billing_shared_cutover_reconciliation_required",
+            ));
+        }
         if (customer.is_some() || existing) && !adopt_existing {
             return Err(ApiError::conflict("billing_adoption_required"));
         }
@@ -171,12 +176,6 @@ impl BillingControl {
             percent_encoding::utf8_percent_encode(&receipt, percent_encoding::NON_ALPHANUMERIC)
         );
         let provider = account_provider(&self.pool, owner).await?;
-        if provider == "stripe"
-            && (native.stripe_cloud_price.is_none()
-                || (native.compute_metered && native.stripe_overage_price.is_none()))
-        {
-            return Err(ApiError::unavailable("billing_compute_catalog_mismatch"));
-        }
         let operation = self.native_payment(owner,&key,"subscriptions.checkout", json!({"customerId":owner,"planId":offer,"provider":provider,"successUrl":success,"automaticTax":native.automatic_tax,"idempotencyKey":key})).await?;
         self.sync_native_customer(owner).await?;
         Ok(Some(operation_url(&operation)?))
@@ -201,16 +200,7 @@ impl BillingControl {
         let Some(native) = self.native_for(owner).await? else {
             return Ok(None);
         };
-        let value = native
-            .engine
-            .call(
-                "credits.balance",
-                json!({"customerId":owner,"feature":MODEL_WALLET}),
-            )
-            .await
-            .map_err(failure)?;
-        let available: Decimal = text(&value, "available")?.parse().map_err(failure)?;
-        let micros = available.scaled();
+        let micros = i128::from(self.shared_available_micros(owner).await?);
         let mut invoice_credit_cents = None;
         let mut debit_cents = 0;
         if let Some(adapter) = self
@@ -238,7 +228,7 @@ impl BillingControl {
                 .map_err(|_| ApiError::unavailable("invalid_billing_result"))?,
             debit_cents,
             currency: "usd".into(),
-            funding: "hosted-models".into(),
+            funding: "shared-credits".into(),
             invoice_credit_cents,
         }))
     }
@@ -260,7 +250,7 @@ impl BillingControl {
             return Err(ApiError::unavailable("billing_approval_pending"));
         }
         let key = checkout_key(request_key)?;
-        let operation = self.native_payment(owner,&key,"prepaid.checkout", json!({"customerId":owner,"provider":"stripe","feature":MODEL_WALLET,"amountCents":cents,"successUrl":format!("{}/v1/billing/prepaid/complete?funding=hosted-models",native.return_origin),"idempotencyKey":key})).await?;
+        let operation = self.native_payment(owner,&key,"prepaid.checkout", json!({"customerId":owner,"provider":"stripe","feature":CREDIT_WALLET,"amountCents":cents,"successUrl":format!("{}/v1/billing/prepaid/complete?funding=shared-credits",native.return_origin),"idempotencyKey":key})).await?;
         self.sync_native_customer(owner).await?;
         Ok(Some(operation_url(&operation)?))
     }

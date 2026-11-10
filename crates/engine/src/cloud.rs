@@ -512,6 +512,15 @@ impl CloudApi {
                     Some("model_cost_reconciliation_required") => {
                         "This model request needs billing reconciliation. Its recorded payment will not be charged again."
                     }
+                    Some("shared_credit_exhausted") => {
+                        "Shared credits are exhausted. Add credits in workspace billing to continue compute and models."
+                    }
+                    Some(
+                        "billing_shared_allowance_required"
+                        | "billing_shared_cutover_reconciliation_required",
+                    ) => {
+                        "Shared billing needs configuration or balance reconciliation. Contact support."
+                    }
                     Some("invalid_billing_cap") => "Enter a valid nonnegative monthly cap.",
                     _ => "Cloud billing is unavailable. Refresh and try again.",
                 };

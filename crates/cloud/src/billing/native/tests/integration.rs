@@ -194,12 +194,10 @@ async fn native_commerce_webhooks_wallet_concurrency_and_recovery() {
         automatic_tax: false,
         signer: Some(signer()),
         stripe_cloud_price: Some("price_native".into()),
-        stripe_overage_price: None,
-        compute_metered: false,
     };
     let control = BillingControl::from_pool(pool.clone(), vec!["user-native".into()])
         .with_native_billing(native);
-    control.publish_native_catalog(json!({"features":[{"id":MODEL_WALLET,"kind":"consumable"}],"plans":[{"id":CLOUD_PLAN,"name":"Zuse Cloud","kind":"subscription","currency":"usd","amount":"40","interval":"month","stripePriceId":"price_native","items":[]}]}),0).await.unwrap();
+    control.publish_native_catalog(json!({"features":[{"id":CREDIT_WALLET,"kind":"consumable"}],"plans":[{"id":CLOUD_PLAN,"name":"Zuse Cloud","kind":"subscription","currency":"usd","amount":"40","interval":"month","stripePriceId":"price_native","items":[{"feature":CREDIT_WALLET,"included":"40","reset":"month"}]}]}),0).await.unwrap();
     let now = chrono::Utc::now().timestamp_millis();
     control
         .enroll_native("user-native", false, now)
@@ -227,7 +225,7 @@ async fn native_commerce_webhooks_wallet_concurrency_and_recovery() {
             .unwrap()
             .unwrap()
             .funding,
-        "hosted-models"
+        "shared-credits"
     );
     assert!(
         control
@@ -330,7 +328,7 @@ async fn native_commerce_webhooks_wallet_concurrency_and_recovery() {
             .unwrap()
             .unwrap()
             .credit_cents,
-        0
+        4000
     );
     processor.paid.store(true, Ordering::SeqCst);
     let mut event = event.clone();
@@ -354,7 +352,7 @@ async fn native_commerce_webhooks_wallet_concurrency_and_recovery() {
             .unwrap()
             .unwrap()
             .credit_cents,
-        1000
+        5000
     );
     let request = ModelReservation {
         request_id: "model-stream".into(),
@@ -398,7 +396,7 @@ async fn native_commerce_webhooks_wallet_concurrency_and_recovery() {
             .unwrap()
             .unwrap()
             .credit_cents,
-        750
+        4750
     );
     let mut tasks = vec![];
     for i in 0..12 {
@@ -410,7 +408,7 @@ async fn native_commerce_webhooks_wallet_concurrency_and_recovery() {
                     request_id: format!("race-{i}"),
                     chat_id: "chat".into(),
                     model: "model".into(),
-                    estimate_micros: 1_000_000,
+                    estimate_micros: 10_000_000,
                 },
                 now,
             )
@@ -424,7 +422,7 @@ async fn native_commerce_webhooks_wallet_concurrency_and_recovery() {
             admitted += 1;
         }
     }
-    assert_eq!(admitted, 7);
+    assert_eq!(admitted, 4);
     assert_eq!(
         control
             .native_balance("user-native")
@@ -432,7 +430,7 @@ async fn native_commerce_webhooks_wallet_concurrency_and_recovery() {
             .unwrap()
             .unwrap()
             .credit_cents,
-        50
+        750
     );
 
     // Simulate reply loss after the engine debit committed but before the host ACK.
@@ -443,7 +441,151 @@ async fn native_commerce_webhooks_wallet_concurrency_and_recovery() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(balance.credit_cents, 50);
+    assert_eq!(balance.credit_cents, 750);
+    // Compute and models spend the same subscription-funded pool. A confirmed
+    // $5 retail compute cost leaves $2.50 after the prior model reservations.
+    let period: Value = sqlx::query_scalar("SELECT to_jsonb(p) FROM api_cloud_billing_periods p WHERE account_id='user-native' ORDER BY period_start DESC LIMIT 1").fetch_one(&pool).await.unwrap();
+    assert_eq!(period["shared_credit_account"], true);
+    assert_eq!(period["included_provider_cost_micros"], 40_000_000);
+    let mut period = period;
+    period["markup_basis_points"] = json!(0);
+    let resource = json!({"accountId":"user-native","kind":"workspace","id":"compute-one"});
+    for _ in 0..2 {
+        let mut tx = control.owned_transaction("user-native").await.unwrap();
+        crate::billing::settlement::settle_segment(
+            &mut tx,
+            &resource,
+            crate::billing::settlement::UsageIdentity {
+                provider: "boxd",
+                entry: "shared-compute",
+                event: "shared-event",
+                execution: "shared-execution",
+                machine: None,
+            },
+            &period,
+            now - 1000,
+            now,
+            5_000_000,
+            1,
+            1_048_576,
+            now,
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+    }
+    assert_eq!(
+        control
+            .shared_available_micros("user-native")
+            .await
+            .unwrap(),
+        2_500_000
+    );
+    control.settle_compute_credits("user-native").await.unwrap();
+    // Lost host ACK replays the native debit, never charging twice.
+    sqlx::query("UPDATE zuse_brokeboy_compute_charges SET state='pending'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    control.settle_compute_credits("user-native").await.unwrap();
+    assert_eq!(
+        control
+            .native_balance("user-native")
+            .await
+            .unwrap()
+            .unwrap()
+            .credit_cents,
+        250
+    );
+    let invoices: i64 = sqlx::query_scalar("SELECT count(*) FROM api_cloud_billing_outbox")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(invoices, 0, "shared compute must not also be invoiced");
+    let last = ModelReservation {
+        request_id: "last-credits".into(),
+        chat_id: "chat".into(),
+        model: "model".into(),
+        estimate_micros: 2_500_000,
+    };
+    control
+        .reserve_hosted_model("user-native", &last, now)
+        .await
+        .unwrap();
+    let mut tx = pool.begin().await.unwrap();
+    assert_eq!(
+        crate::billing::require_capacity(&mut tx, "user-native", now)
+            .await
+            .unwrap_err()
+            .code,
+        "shared_credit_exhausted"
+    );
+    tx.rollback().await.unwrap();
+    control
+        .settle_hosted_model("user-native", "last-credits", 2_500_000)
+        .await
+        .unwrap();
+    assert_eq!(
+        control
+            .native_balance("user-native")
+            .await
+            .unwrap()
+            .unwrap()
+            .credit_cents,
+        0
+    );
+    // A paid top-up replenishes the very same pool and clears the admission hold.
+    engine.call("credits.grant",json!({"customerId":"user-native","feature":CREDIT_WALLET,"amount":"1","origin":"purchase","sourceId":"test-topup","idempotencyKey":"additional-topup"})).await.unwrap();
+    control.sync_credit_capacity("user-native").await.unwrap();
+    let mut tx = pool.begin().await.unwrap();
+    crate::billing::require_capacity(&mut tx, "user-native", now)
+        .await
+        .unwrap();
+    tx.rollback().await.unwrap();
+    let summary = store.billing_summary("user-native", now).await.unwrap();
+    assert!(summary.shared_credits);
+    assert_eq!(summary.included_remaining_micros, 1_000_000);
+    assert_eq!(summary.current_invoice_estimate_micros, 40_000_000);
+    // A late observation cannot silently debit a new month's allowance.
+    sqlx::query(
+        "UPDATE api_cloud_billing_periods SET period_end=$1 WHERE account_id='user-native'",
+    )
+    .bind(now - 1)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO zuse_brokeboy_compute_charges(account_id,entry_id,period_id,amount_micros,created_at) VALUES('user-native','late-compute',$1,500000,$2)").bind(period["period_id"].as_str().unwrap()).bind(now).execute(&pool).await.unwrap();
+    control.settle_compute_credits("user-native").await.unwrap();
+    let state: String = sqlx::query_scalar(
+        "SELECT state FROM zuse_brokeboy_compute_charges WHERE entry_id='late-compute'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(state, "reconciliation");
+    let wallet = engine
+        .call(
+            "credits.balance",
+            json!({"customerId":"user-native","feature":CREDIT_WALLET}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(wallet["available"], "1");
+    assert!(
+        control
+            .reserve_hosted_model(
+                "user-native",
+                &ModelReservation {
+                    request_id: "late-blocked".into(),
+                    chat_id: "chat".into(),
+                    model: "model".into(),
+                    estimate_micros: 1
+                },
+                now
+            )
+            .await
+            .is_err()
+    );
     sqlx::query("UPDATE zuse_rust_control_owners SET backend='legacy' WHERE resource_kind='billing' AND resource_id='user-native'").execute(&pool).await.unwrap();
     assert!(control.native_portal("user-native").await.is_err());
     control.close_native_billing().await.unwrap();

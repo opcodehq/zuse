@@ -24,7 +24,7 @@ FILES = ("0000_application.sql", "0001_control_plane.sql", "0002_gateway_leases.
 
 # Accepted only when separately installed by its explicit operator workflow.
 # Ordinary bootstrap never executes or backfills an optional migration.
-OPTIONAL_FILES = ("0028_project_environment_caches.sql", "0029_runtime_statement_batch.sql", "0030_transcript_write_intents.sql", "0032_brokeboy.sql")
+OPTIONAL_FILES = ("0028_project_environment_caches.sql", "0029_runtime_statement_batch.sql", "0030_transcript_write_intents.sql", "0032_brokeboy.sql", "0033_shared_credits.sql")
 
 
 def optional_migrations(root=MIGRATIONS):
@@ -149,7 +149,8 @@ def render_brokeboy(environment):
     permitted = base + optional_migrations()
     matches = " OR ".join(f"(name={literal(item['name'])} AND sha256={literal(item['sha256'])})" for item in permitted)
     required = " OR ".join(f"(name={literal(item['name'])} AND sha256={literal(item['sha256'])})" for item in base)
-    migration = next(item for item in permitted if item["name"] == name)
+    selected=[item for item in permitted if item["name"] in (name,"0033_shared_credits.sql")]
+    install="\n".join(f"SELECT {literal(item['sql'])} WHERE NOT EXISTS(SELECT 1 FROM zuse_cloud_schema_migrations WHERE name={literal(item['name'])})\n\\gexec\nINSERT INTO zuse_cloud_schema_migrations(name,sha256) VALUES({literal(item['name'])},{literal(item['sha256'])}) ON CONFLICT DO NOTHING;" for item in selected)
     return f'''BEGIN;
 SET LOCAL search_path TO "{schema}", pg_catalog;
 SET LOCAL lock_timeout='15s';
@@ -161,9 +162,7 @@ IF NOT EXISTS(SELECT 1 FROM zuse_cloud_schema_identity WHERE singleton AND envir
  OR EXISTS(SELECT 1 FROM zuse_cloud_schema_migrations WHERE NOT ({matches}))
 THEN RAISE EXCEPTION 'zuse_schema_manifest_mismatch'; END IF;
 END $$;
-SELECT {literal(migration['sql'])} WHERE NOT EXISTS(SELECT 1 FROM zuse_cloud_schema_migrations WHERE name={literal(name)})
-\\gexec
-INSERT INTO zuse_cloud_schema_migrations(name,sha256) VALUES({literal(name)},{literal(migration['sha256'])}) ON CONFLICT DO NOTHING;
+{install}
 DO $grants$ DECLARE item record; BEGIN
 IF EXISTS(SELECT 1 FROM pg_roles WHERE rolname={literal('zuse_cloud_' + environment)}) THEN
  FOR item IN SELECT tablename FROM pg_tables WHERE schemaname={literal(schema)} AND (tablename LIKE 'brokeboy\\_%' ESCAPE '\\' OR tablename LIKE 'zuse\\_brokeboy\\_%' ESCAPE '\\') LOOP

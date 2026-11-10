@@ -30,6 +30,11 @@ impl BillingControl {
         total_micros: i64,
     ) -> Result<(), ApiError> {
         amount(total_micros)?;
+        self.settle_compute_credits(owner).await?;
+        let pending: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM zuse_brokeboy_compute_charges WHERE account_id=$1 AND state IN ('pending','reconciliation'))").bind(owner).fetch_one(&self.pool).await?;
+        if pending {
+            return Err(ApiError::forbidden("shared_credit_exhausted"));
+        }
         self.drive_model_request(owner, request).await?;
         let mut tx = self.owned_transaction(owner).await?;
         let row: Value = sqlx::query_scalar("SELECT to_jsonb(r) FROM zuse_brokeboy_model_requests r WHERE account_id=$1 AND request_id=$2 FOR UPDATE").bind(owner).bind(request).fetch_optional(&mut *tx).await?.ok_or_else(||ApiError::not_found("model_request_not_found"))?;
@@ -67,6 +72,11 @@ impl BillingControl {
         self.native_for(owner)
             .await?
             .ok_or_else(|| ApiError::unavailable("embedded_billing_disabled"))?;
+        self.settle_compute_credits(owner).await?;
+        let pending:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM zuse_brokeboy_compute_charges WHERE account_id=$1 AND state IN ('pending','reconciliation'))").bind(owner).fetch_one(&self.pool).await?;
+        if pending {
+            return Err(ApiError::forbidden("shared_credit_exhausted"));
+        }
         let mut tx = self.owned_transaction(owner).await?;
         sqlx::query("INSERT INTO zuse_brokeboy_model_requests(account_id,request_id,chat_id,model,estimate_micros,held_micros,state,created_at,expires_at) VALUES($1,$2,$3,$4,$5,$5,'reserving',$6,$7) ON CONFLICT DO NOTHING").bind(owner).bind(&request.request_id).bind(&request.chat_id).bind(&request.model).bind(request.estimate_micros).bind(now).bind(now.checked_add(3_600_000).ok_or_else(||ApiError::bad_request("invalid_model_reservation"))?).execute(&mut *tx).await?;
         let row: Value = sqlx::query_scalar("SELECT to_jsonb(r) FROM zuse_brokeboy_model_requests r WHERE account_id=$1 AND request_id=$2 FOR UPDATE").bind(owner).bind(&request.request_id).fetch_one(&mut *tx).await?;
@@ -193,7 +203,7 @@ impl BillingControl {
                 tx.commit().await?;
                 return Err(ApiError::conflict("model_reservation_expired"));
             }
-            let result = match native.engine.call("reservations.create", json!({"customerId":owner,"feature":MODEL_WALLET,"amount":amount(row["estimate_micros"].as_i64().unwrap_or(-1))?,"expiresAt":row["expires_at"],"onExpiry":"settle_estimate","idempotencyKey":key(request,"reserve")})).await {
+            let result = match native.engine.call("reservations.create", json!({"customerId":owner,"feature":CREDIT_WALLET,"amount":amount(row["estimate_micros"].as_i64().unwrap_or(-1))?,"expiresAt":row["expires_at"],"onExpiry":"settle_estimate","idempotencyKey":key(request,"reserve")})).await {
                 Ok(result)=>result,
                 Err(error) if error.code=="insufficient_balance" => {
                     sqlx::query("UPDATE zuse_brokeboy_model_requests SET state='failed' WHERE account_id=$1 AND request_id=$2").bind(owner).bind(request).execute(&mut *tx).await?;
@@ -244,6 +254,7 @@ impl BillingControl {
             sqlx::query("UPDATE zuse_brokeboy_model_requests SET state=$3 WHERE account_id=$1 AND request_id=$2").bind(owner).bind(request).bind(if state=="settling" {"settled"} else {"released"}).execute(&mut *tx).await?;
         }
         tx.commit().await?;
+        self.sync_credit_capacity(owner).await?;
         Ok(())
     }
 }

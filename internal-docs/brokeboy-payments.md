@@ -1,6 +1,6 @@
 # Brokeboy integration assessment
 
-Reviewed 2026-11-09 against Brokeboy commit [`1e35dc7925f7b4df49c05283f687f51a77886e8a`](https://github.com/opcodehq/brokeboy/commit/1e35dc7925f7b4df49c05283f687f51a77886e8a) and Zuse `484d2c97`. This assessment preceded implementation. The embedded integration is now implemented in `crates/cloud/src/billing/native`; deployment, account enrollment and merchant qualification remain explicit operator work. See [operations](brokeboy-operations.md) for the implemented boundary and commands.
+Reviewed 2026-11-09 against Brokeboy commit [`1e35dc7925f7b4df49c05283f687f51a77886e8a`](https://github.com/opcodehq/brokeboy/commit/1e35dc7925f7b4df49c05283f687f51a77886e8a) and Zuse `484d2c97`. This assessment preceded implementation. **Final product policy:** the $40/month plan includes $40 shared compute/model credits; top-ups replenish the same wallet. The earlier separate-wallet recommendation below is superseded by this policy. The embedded integration is now implemented in `crates/cloud/src/billing/native`; deployment, account enrollment and merchant qualification remain explicit operator work. See [operations](brokeboy-operations.md) for the implemented boundary and commands.
 
 ## Recommendation
 
@@ -14,9 +14,9 @@ Brokeboy already audited this application's billing implementation and added sev
 | --- | --- |
 | Plans and payment operations | Brokeboy catalog, subscriptions, checkout, portal and durable operations; preserve processor/customer identity. |
 | Included compute and overage caps | Evaluate Brokeboy `periods` using our existing integer USD micros, included provider cost and markup policy; retain Zuse's observation and settlement evidence. |
-| Hosted-model credits | Separate model-credit feature and funding policy initially. Reserve an estimate before a call, increase before spending beyond it, settle actuals, release on cancellation. |
+| Hosted-model credits | One `zuse-usd` feature shared with compute, funded by the $40 monthly grant and top-ups. Reserve an estimate before a call, increase before spending beyond it, settle actuals, release on cancellation. |
 | BYO local/cloud agent subscriptions | Continue showing observed token/cost information separately. Do not debit Zuse credits for usage billed by the user's provider. |
-| Compute/model wallet sharing | Make pooling an explicit product decision later; separate features prevent accidentally consuming one allowance with another. |
+| Compute/model wallet sharing | Use one balance for subscription allowance and purchased credits, with compute/model usage attributed separately. |
 | Usage breakdown | Zuse keeps computer, chat, model, execution and provider dimensions. Translate receipts into existing desktop/API view models. |
 | Machine and snapshot lifecycle | Zuse keeps lifecycle fences, ownership, BYO-connection exclusions, price evidence, storage leases and fractional-cost checkpoints. |
 
@@ -58,7 +58,7 @@ The separate pool means no shared atomic host/billing transaction. Commit a host
 
 Today our prepaid balance is Stripe customer **invoice credit**. Brokeboy prepaid checkout funds a **local wallet**. That wallet does not automatically pay Stripe subscription or overage invoices. Likewise `periods.settle` calculates a cost receipt; it does not silently debit a wallet or issue an invoice. Charging both paths would double bill. Source: [prepaid and period semantics](https://github.com/opcodehq/brokeboy/blob/1e35dc7925f7b4df49c05283f687f51a77886e8a/internal-docs/embedding.md).
 
-For the first implementation, retain existing compute invoice funding and use a separate local wallet for new Zuse-hosted model usage. If later consolidating wallets, explicitly design invoice funding/transfers first. Existing Stripe credit must be transferred, never copied: fence writers/collection, inspect and drain uncertain work, adopt IDs, dry-run `migration.importStripeBalance`, debit the source through its recoverable operation, verify zero source balance and one local grant, then enable the new writer. Preserve the legacy path for historical refunds/disputes unless their provenance is imported. Source: [transfer and recovery procedure](https://github.com/opcodehq/brokeboy/blob/1e35dc7925f7b4df49c05283f687f51a77886e8a/internal-docs/embedding.md).
+The implementation uses one local wallet for native accounts. Confirmed compute retail costs and model settlements debit this wallet; native periods do not export metered overage to Stripe. Legacy accounts retain invoice-based compute funding. Existing Stripe invoice credit remains at Stripe unless an operator explicitly transfers it. Existing Stripe credit must be transferred, never copied: fence writers/collection, inspect and drain uncertain work, adopt IDs, dry-run `migration.importStripeBalance`, debit the source through its recoverable operation, verify zero source balance and one local grant, then enable the new writer. Preserve the legacy path for historical refunds/disputes unless their provenance is imported. Source: [transfer and recovery procedure](https://github.com/opcodehq/brokeboy/blob/1e35dc7925f7b4df49c05283f687f51a77886e8a/internal-docs/embedding.md).
 
 ## Proposed rollout and acceptance criteria
 

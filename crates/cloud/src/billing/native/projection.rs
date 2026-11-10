@@ -52,6 +52,7 @@ impl BillingControl {
             if value["plan"]["id"] != CLOUD_PLAN {
                 continue;
             }
+            native.validate_compute_plan(&value["plan"])?;
             let provider = value["provider"].as_str().unwrap_or("stripe");
             let sub = project(owner, value)?;
             if sub.paid_through <= sub.period_start {
@@ -69,8 +70,10 @@ impl BillingControl {
             );
             self.project_subscription(&mut tx, provider, &event, &sub, now, false)
                 .await?;
+            sqlx::query("UPDATE api_cloud_billing_periods SET shared_credit_account=true,included_provider_cost_micros=40000000 WHERE account_id=$1 AND provider_subscription_id=$2 AND period_start=$3").bind(owner).bind(&sub.id).bind(sub.period_start).execute(&mut *tx).await?;
         }
         tx.commit().await?;
+        self.sync_credit_capacity(owner).await?;
         Ok(())
     }
     pub(in crate::billing) async fn native_webhook(

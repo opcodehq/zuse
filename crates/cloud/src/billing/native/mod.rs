@@ -1,5 +1,6 @@
 //! Embedded billing. Resource accounting and legacy invoice credit remain host-owned.
 mod commerce;
+mod compute;
 mod models;
 mod projection;
 pub use models::ModelReservation;
@@ -19,8 +20,12 @@ use serde_json::{Value, json};
 use sqlx::PgPool;
 use std::{collections::HashSet, sync::Arc};
 
-pub const MIGRATION: &str = include_str!("../../../migrations/0032_brokeboy.sql");
-pub const MODEL_WALLET: &str = "hosted-model-usd";
+pub const MIGRATION: &str = concat!(
+    include_str!("../../../migrations/0032_brokeboy.sql"),
+    "\n",
+    include_str!("../../../migrations/0033_shared_credits.sql")
+);
+pub const CREDIT_WALLET: &str = "zuse-usd";
 const CLOUD_PLAN: &str = "cloud-workspace-standard-v1";
 
 pub struct NativeBilling {
@@ -31,8 +36,6 @@ pub struct NativeBilling {
     return_origin: String,
     automatic_tax: bool,
     stripe_cloud_price: Option<String>,
-    stripe_overage_price: Option<String>,
-    compute_metered: bool,
     pub(in crate::billing) signer: Option<crate::tickets::TicketSigner>,
 }
 
@@ -43,7 +46,7 @@ pub(super) fn failure(error: BillingError) -> ApiError {
             ApiError::unauthorized("invalid_billing_event")
         }
         "insufficient_balance" | "spend_limit_exceeded" => {
-            ApiError::forbidden("model_credit_exhausted")
+            ApiError::forbidden("shared_credit_exhausted")
         }
         "customer_mapping_conflict" => {
             ApiError::conflict("billing_customer_reconciliation_required")
@@ -184,9 +187,6 @@ impl NativeBilling {
             automatic_tax: std::env::var("STRIPE_AUTOMATIC_TAX_ENABLED").as_deref() != Ok("false"),
             signer,
             stripe_cloud_price: std::env::var("STRIPE_PRICE_CLOUD_WORKSPACE_STANDARD_V1").ok(),
-            stripe_overage_price: std::env::var("STRIPE_CLOUD_OVERAGE_PRICE_ID").ok(),
-            compute_metered: std::env::var("STRIPE_CLOUD_BILLING_MODE").as_deref()
-                != Ok("subscription-only"),
         }))
     }
     pub async fn close(&self) -> Result<(), ApiError> {
@@ -226,10 +226,23 @@ impl NativeBilling {
                 return Err(ApiError::conflict("billing_compute_catalog_mismatch"));
             }
         }
-        if let Some(price) = &self.stripe_overage_price {
-            if plan["stripeMeterPriceIds"]["cloud-overage-cent"] != *price {
-                return Err(ApiError::conflict("billing_compute_catalog_mismatch"));
-            }
+        // Enrolled accounts pay usage from the shared wallet, never a Stripe meter.
+        if plan["stripeMeterPriceIds"]
+            .as_object()
+            .is_some_and(|m| !m.is_empty())
+            || plan["items"]
+                .as_array()
+                .is_some_and(|items| items.iter().any(|i| i["overage"] == true))
+        {
+            return Err(ApiError::conflict("billing_compute_catalog_mismatch"));
+        }
+        let wallet = plan["items"]
+            .as_array()
+            .and_then(|items| items.iter().find(|i| i["feature"] == CREDIT_WALLET));
+        if !wallet
+            .is_some_and(|i| i["included"] == "40" && i["reset"] == "month" && i["pool"].is_null())
+        {
+            return Err(ApiError::conflict("billing_shared_allowance_required"));
         }
         Ok(())
     }
@@ -344,7 +357,9 @@ impl BillingControl {
             tx.commit().await?;
             reports.push(result);
             self.sync_native_subscriptions(owner).await?;
+            self.settle_compute_credits(owner).await?;
             self.sync_expired_model_requests(owner).await?;
+            self.sync_credit_capacity(owner).await?;
         }
         Ok(json!({"enabled":true,"reports":reports}))
     }

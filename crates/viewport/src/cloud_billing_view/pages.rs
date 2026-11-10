@@ -219,7 +219,11 @@ fn period<T: 'static>(
                                 .items_baseline()
                                 .gap(px(4.))
                                 .child(amount(usd(summary.included_remaining_micros), 13.))
-                                .child(caption("included left")),
+                                .child(caption(if summary.shared_credits {
+                                    "credits remaining"
+                                } else {
+                                    "included left"
+                                })),
                         )
                         .child(button(id, label, false, false, false).on_click(
                             cx.listener(move |this, _, window, cx| act(this, action, window, cx)),
@@ -568,7 +572,11 @@ pub fn billing<T: 'static>(
         (Some(false), _) => (
             "Not subscribed",
             false,
-            "$40/month, including $35 of cloud compute and image storage.".to_owned(),
+            if data.credits.is_some_and(|b| b.funding == "shared-credits") {
+                "$40/month, including $40 in shared credits for cloud compute, storage and models billed by Zuse.".to_owned()
+            } else {
+                "$40/month, including $35 of cloud compute and image storage.".to_owned()
+            },
         ),
         (None, _) => (
             if data.pending.loading {
@@ -657,20 +665,30 @@ pub fn billing<T: 'static>(
                         .flex()
                         .items_baseline()
                         .justify_between()
-                        .child(s::title_text("Included compute"))
+                        .child(s::title_text(if summary.shared_credits {
+                            "Shared credits remaining"
+                        } else {
+                            "Included compute"
+                        }))
                         .child(amount(usd(summary.included_remaining_micros), 18.)),
                 )
-                .child(meter(fraction, fraction >= 0.9))
+                .when(!summary.shared_credits, |v| {
+                    v.child(meter(fraction, fraction >= 0.9))
+                })
                 .child(
                     div()
                         .flex()
                         .justify_between()
                         .gap(px(12.))
-                        .child(caption(format!(
-                            "Used {} of {}",
-                            usd(used),
-                            usd(summary.included_provider_cost_micros)
-                        )))
+                        .child(caption(if summary.shared_credits {
+                            "$40 added each month. Top-ups share this balance.".to_owned()
+                        } else {
+                            format!(
+                                "Used {} of {}",
+                                usd(used),
+                                usd(summary.included_provider_cost_micros)
+                            )
+                        }))
                         .child(
                             button("billing-open-usage", "See usage", false, false, false)
                                 .on_click(cx.listener(move |this, _, window, cx| {
@@ -682,16 +700,22 @@ pub fn billing<T: 'static>(
         plan = plan.child(setting_row(
             false,
             "This invoice so far",
-            format!(
-                "{} plan + {} over the allowance (with {}% markup). Before tax.",
-                usd(summary.base_price_micros),
-                usd(summary.overage_charge_micros),
-                summary.markup_basis_points as f64 / 100.
-            ),
+            if summary.shared_credits {
+                "Monthly subscription before tax. Compute and models spend shared credits."
+                    .to_owned()
+            } else {
+                format!(
+                    "{} plan + {} invoiced overage ({}% compute rate markup). Before tax.",
+                    usd(summary.base_price_micros),
+                    usd(summary.overage_charge_micros),
+                    summary.markup_basis_points as f64 / 100.
+                )
+            },
             Some(amount(usd(summary.current_invoice_estimate_micros), 13.).into_any_element()),
         ));
-        let disabled = data.pending.loading || data.pending.cap;
-        plan = plan.child(setting_row(
+        if !summary.shared_credits {
+            let disabled = data.pending.loading || data.pending.cap;
+            plan = plan.child(setting_row(
             false,
             "Spending cap",
             "Monthly limit on usage beyond the allowance. Builds and cloud computers pause when it's reached.",
@@ -723,6 +747,7 @@ pub fn billing<T: 'static>(
                     .into_any_element(),
             ),
         ));
+        }
     }
     root = root.child(group("Plan", None, None, plan));
     root = root.child(group(
@@ -737,7 +762,7 @@ pub fn billing<T: 'static>(
         .child(setting_row(
             true,
             "Billed by Zuse",
-            "Cloud computers, image builds and image storage use your plan allowance and compute invoice. Hosted model credits are a separate balance.",
+            if data.credits.is_some_and(|b| b.funding == "shared-credits") { "Cloud computers, image builds, image storage and Zuse-billed models all use the same credits. Your $40/month plan adds $40, and top-ups add to that balance." } else { "Cloud computers, image builds and image storage use your plan allowance and compute invoice." },
             None,
         ))
         .child(setting_row(

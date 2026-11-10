@@ -2,20 +2,24 @@
 
 Zuse embeds Brokeboy at `1e35dc7925f7b4df49c05283f687f51a77886e8a`. Stripe remains the payment processor. Enable the same account list and environment in the cloud API and `billing-worker`. The default remains the existing backend until an operator enrolls an account.
 
-The implementation includes subscription checkout and portal operations, signed webhook intake, customer/subscription adoption, host entitlement and compute-period projection, a prepaid hosted-model wallet, durable model reservations/settlement/release/increases, maintenance and account-scoped operation recovery. Financial work retains the host's billing ownership fence.
+The implementation includes subscription checkout and portal operations, signed webhook intake, customer/subscription adoption, host entitlement and compute-period projection, one shared compute/model credit wallet, durable model reservations/settlement/release/increases, maintenance and account-scoped operation recovery. Financial work retains the host's billing ownership fence.
 
-Compute observations, ledger, spending-cap edits, storage settlement and original meter outboxes remain in Zuse. Admission and settlement use Brokeboy’s shared integer cost policy inside the existing host transactions, so mutable cap edits remain atomic without introducing a second period authority or a new startup round trip. This preserves the current allowance/markup/cap policy and historical delivery keys. Brokeboy does not independently export those compute events. Polar subscriptions can be retained through the native adapter, but its metering/reconciliation lane remains the existing host implementation; prepaid checkout currently requires Stripe.
+The $40/month plan grants **$40 in shared USD credits each paid month**. Compute, image storage and Zuse-funded models debit the same `zuse-usd` wallet; top-ups fund that wallet too. Compute retains the existing 5% rate markup. BYO provider usage is excluded. Monthly subscription grants expire at the end of their period; purchased credits retain their purchase policy.
+
+Zuse retains canonical provider observations, resource attribution, storage checkpoints and the ownership fence. Confirmed retail compute costs enqueue durable wallet charges in the same host transaction. The worker consumes those charges with stable native idempotency keys; shared periods never create Stripe overage exports. Legacy accounts keep the original invoice/cap lane. Subscription invoices still collect $40 through Stripe; the credit grant funds usage and does not pay the subscription invoice itself.
+
+Admission checks the projected shared-credit hold locally. Native model reservations and the maintenance worker refresh that hold. Exhaustion blocks new paid operations and requests a safe retained pause for supported online computers through the existing lifecycle worker. Compute is charged from confirmed observations, so delayed provider reporting can create outstanding liabilities; this is not a real-time prepaid guarantee. Pending compute reduces available credit and takes priority over new model reservations. Closed-period observations are held for reconciliation instead of silently consuming the next month's grant.
 
 ## Install schema and publish pricing
 
-Use the existing private-schema database workflow. Review `crates/cloud/migrations/0032_brokeboy.sql`, then run against the intended environment:
+Use the existing private-schema database workflow. Review `crates/cloud/migrations/0032_brokeboy.sql` and `0033_shared_credits.sql`, then run against the intended environment:
 
 ```sh
 python3 infra/cloud/database.py --environment staging apply-brokeboy
 python3 infra/cloud/database.py --environment staging check
 ```
 
-This optional migration verifies the base ledger and environment, uses the same schema lock as bootstrap, and records its checksum transactionally. Startup never applies DDL. Brokeboy opens an independent SQLx 0.9 pool (four connections); the host remains on SQLx 0.8. Budget API and worker pools separately. The connection URL must select the same private schema for both versions, for example with URL-encoded `options=-csearch_path=zuse_staging`.
+The optional migrations verify the base ledger and environment, uses the same schema lock as bootstrap, and records its checksum transactionally. Startup never applies DDL. Brokeboy opens an independent SQLx 0.9 pool (four connections); the host remains on SQLx 0.8. Budget API and worker pools separately. The connection URL must select the same private schema for both versions, for example with URL-encoded `options=-csearch_path=zuse_staging`.
 
 Configure secrets through the existing deployment environment, without copying values into the repository:
 
@@ -27,16 +31,16 @@ export BILLING_DEFAULT_PROVIDER=stripe
 export API_ISSUER=https://api-rust-stag.zuse.sh
 ```
 
-Keep existing `ZUSE_CLOUD_DATABASE_URL`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, the approved `STRIPE_PRICE_CLOUD_WORKSPACE_STANDARD_V1`, `STRIPE_CLOUD_OVERAGE_PRICE_ID`, `STRIPE_CLOUD_OVERAGE_METER_ID`, export ownership/configuration and signing key. Stripe test keys require `test`; live keys require `live`. `MACHINE_LIVE_CHECKOUT_ENABLED=true` and `RELAY_MINT_PRIVATE_JWK` enable signed checkout, including in the sandbox. With checkout disabled, balance reads remain available but purchases are unavailable.
+Keep existing `ZUSE_CLOUD_DATABASE_URL`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, the approved `STRIPE_PRICE_CLOUD_WORKSPACE_STANDARD_V1` and signing key. Keep meter/export configuration for legacy accounts only. Stripe test keys require `test`; live keys require `live`. `MACHINE_LIVE_CHECKOUT_ENABLED=true` and `RELAY_MINT_PRIVATE_JWK` enable signed checkout, including in the sandbox. With checkout disabled, balance reads remain available but purchases are unavailable.
 
-Copy `infra/cloud/brokeboy.catalog.example.json` into deployment configuration and replace both placeholder price IDs with the existing approved prices. The cloud plan must retain the current USD 40/month terms; the price and overage price must match the host's configuration. In explicit `STRIPE_CLOUD_BILLING_MODE=subscription-only` mode, omit the meter mapping and overage item. Do not publish a second independent meter for the same compute charges.
+Copy `infra/cloud/brokeboy.catalog.example.json` into deployment configuration and replace the placeholder subscription price ID with the approved USD 40/month price. The plan must include exactly 40 USD of `zuse-usd` credits resetting monthly. Validation rejects native metered prices and overage items, preventing duplicate compute collection.
 
 ```sh
 cargo run -p zuse-cloud-api -- billing-catalog \
   --catalog /path/to/reviewed-catalog.json --expected-revision 0
 ```
 
-Later publication uses the next reviewed expected revision. It creates immutable plan versions; startup never republishes prices. Model wallet amounts are exact six-place USD decimals. No included model allowance is invented by the example catalog.
+Later publication uses the next reviewed expected revision. It creates immutable plan versions; startup never republishes prices. Shared wallet amounts are exact six-place USD decimals. The example catalog explicitly grants the $40 monthly allowance.
 
 ## Enroll and serve
 
@@ -52,7 +56,7 @@ For an existing account, inspect its current subscriptions and financial operati
 cargo run -p zuse-cloud-api -- billing-enroll --owner user-id --adopt-existing
 ```
 
-Adoption retains Stripe customer and subscription IDs. It does not recreate subscriptions, charge the customer, or transfer invoice credit. An interrupted enrollment remains `initializing`, preventing checkout from falling back to the old writer. Repeat enrollment to resume. Active enrollment is idempotent. Accounts with active subscriptions across multiple processors require reconciliation before enrollment.
+Adoption retains Stripe customer and subscription IDs. It does not recreate subscriptions, charge the customer, or transfer invoice credit. An interrupted enrollment remains `initializing`, preventing checkout from falling back to the old writer. Repeat enrollment to resume. Active enrollment is idempotent. Adoption rejects a current period with recorded usage: reconcile its consumed allowance, pending reservations and exports before cutover. This is not an automatic mid-period balance migration. Existing native subscriptions or balances using the earlier model-only feature also need a reviewed cutover; publishing a new catalog does not rewrite immutable subscription versions. Accounts with active subscriptions across multiple processors require reconciliation before enrollment.
 
 Run the API and the existing `billing-worker` with matching configuration. The worker durably processes notifications, retries recoverable operations, projects canonical subscriptions, and recovers model billing requests. It runs bounded native maintenance under each account's existing ownership fence. Allow up to one worker polling interval for payment confirmation to appear in Zuse. Configure the Stripe endpoint as `/v1/billing/webhook/stripe`; the original raw signed bytes are required. The same route selects the correct financial handler, while historical invoice-credit purchases keep their original adjustment handling.
 
@@ -62,7 +66,7 @@ For Polar, configure its token, signing secret and `POLAR_PRODUCT_CLOUD_WORKSPAC
 
 ## Wallet and model calls
 
-`GET /v1/billing/prepaid` returns `funding: "hosted-models"` for enrolled accounts. The UI labels the model wallet separately and displays any retained invoice credit independently. Model wallet credit does not pay compute/subscription invoices. Existing invoice credit stays at Stripe and applies to those invoices as before. There is no automatic balance copying or wallet-to-invoice transfer.
+`GET /v1/billing/prepaid` returns `funding: "shared-credits"` for enrolled accounts. Workspace billing presents the combined balance and compute/model usage attribution. Retained legacy Stripe invoice credit stays at Stripe and applies to invoices; it is never copied into the shared wallet. There is no automatic wallet-to-invoice transfer.
 
 Existing checkout endpoints accept optional `idempotencyKey`; the desktop supplies one. Reuse it after a lost reply, and use a new key for a deliberate new purchase. Saved checkout payloads preserve signed return URLs across retries. A created checkout is pending payment until canonical paid state is observed; unsigned redirects never grant credit.
 
@@ -75,7 +79,7 @@ Zuse-funded inference integrations use the trusted server methods on `Store`:
 
 The one-hour reservation expiry settles an abandoned request at its funded estimate. Late or uncovered actual costs become explicit reconciliation work rather than a second debit. Stable host request records recover a committed native reservation/debit if the host ACK is lost. Insufficient initial funding refuses admission. Never call these methods for local or BYO provider subscriptions, and never derive actual cost from client-provided totals. This change supplies billing integration points; it does not add a new model inference transport or provider credentials.
 
-`GET /v1/billing/models/usage?limit=50&cursor=...` exposes paginated account-scoped model/chat/request attribution to authorized billing readers. Model usage remains separate from the compute summary and cap.
+`GET /v1/billing/models/usage?limit=50&cursor=...` exposes paginated account-scoped model/chat/request attribution to authorized billing readers. Usage attribution stays separate by resource while funding is shared. Legacy spending-cap controls are hidden for shared-credit accounts.
 
 ## Inspect and recover
 
@@ -104,7 +108,9 @@ Before enabling a merchant account, repeat checkout, signed public delivery, ren
 
 ### Zuse merchant exercise, 2026-11-10
 
-The opt-in `stripe_merchant_checkout_wallet_refund_and_compute` test passed against a real Stripe test account and a disposable PostgreSQL schema. Chrome completed both native-created hosted Checkouts using a Stripe test card. Stripe reported both payments paid. The $40/month subscription produced the host compute period, the $10 prepaid payment granted exactly 1,000 cents, a real successful $5 partial refund left 500 cents, and a replayed 25-cent model settlement left 475 cents. Replaying the refund notification did not claw back twice.
+Before the shared-credit policy change, the opt-in `stripe_merchant_checkout_wallet_refund_and_compute` test passed against a real Stripe test account and a disposable PostgreSQL schema. Chrome completed both native-created hosted Checkouts using a Stripe test card. Stripe reported both payments paid. The $40/month subscription produced the host compute period, the $10 prepaid payment granted exactly 1,000 cents, a real successful $5 partial refund left 500 cents, and a replayed 25-cent model settlement left 475 cents. Replaying the refund notification did not claw back twice.
+
+That historical run used the earlier model-only wallet policy; it does not qualify the new $40 monthly shared grant. The harness now expects $50 after subscription plus $10 top-up, $45 after the $5 refund and $44.75 after model settlement. Shared-policy accounting is covered by the isolated PostgreSQL integration test.
 
 The exercise retrieved real Stripe events and signed them locally before invoking Zuse's webhook entry point. This verifies canonical provider reconciliation and host accounting, **not registered public webhook delivery**. It does not qualify renewal, 3DS, ACH, disputes, tax, metered overage collection or live-mode payments. The first harness attempt included unrelated customer events despite having no legacy fallback adapter; the corrected harness selects the relevant billing notifications. No production billing change was required by this exercise.
 

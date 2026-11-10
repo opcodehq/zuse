@@ -26,8 +26,17 @@ pub(crate) async fn require_capacity(
     let period:Option<Value>=sqlx::query_scalar("SELECT to_jsonb(p) FROM api_cloud_billing_periods p WHERE account_id=$1 AND period_start<=$2 AND period_end>$2 ORDER BY period_start DESC LIMIT 1 FOR SHARE")
         .bind(account).bind(now).fetch_optional(&mut **tx).await?;
     let period = period.ok_or_else(|| ApiError::forbidden("cloud_billing_period_missing"))?;
+    if period["shared_credit_hold"] == true {
+        return Err(ApiError::forbidden("shared_credit_exhausted"));
+    }
     if period["currency"] != "USD" {
         return Err(ApiError::unavailable("cloud_billing_policy_invalid"));
+    }
+    if period["shared_credit_account"] == true {
+        return match period["status"].as_str() {
+            Some("active" | "pending" | "manual") => Ok(()),
+            _ => Err(ApiError::forbidden("cloud_billing_hold")),
+        };
     }
     let id = period["period_id"].as_str().ok_or_else(invalid)?;
     let totals:(i64,i64,i64)=sqlx::query_as("SELECT (SELECT COALESCE(SUM(amount_micros),0)::bigint FROM api_cloud_billing_ledger WHERE period_id=$1 AND kind='provider-cost'),(SELECT COALESCE(SUM(amount_micros),0)::bigint FROM api_cloud_billing_ledger WHERE period_id=$1 AND kind='overage-charge'),(SELECT COALESCE(SUM(provider_cost_micros),0)::bigint FROM api_cloud_billing_reservations WHERE period_id=$1 AND expires_at>$2)")
@@ -49,8 +58,17 @@ pub(crate) fn validate_capacity_snapshot(
     totals: &Value,
 ) -> Result<(), ApiError> {
     let period = period.ok_or_else(|| ApiError::forbidden("cloud_billing_period_missing"))?;
+    if period["shared_credit_hold"] == true {
+        return Err(ApiError::forbidden("shared_credit_exhausted"));
+    }
     if period["currency"] != "USD" {
         return Err(invalid());
+    }
+    if period["shared_credit_account"] == true {
+        return match period["status"].as_str() {
+            Some("active" | "pending" | "manual") => Ok(()),
+            _ => Err(ApiError::forbidden("cloud_billing_hold")),
+        };
     }
     period["period_id"].as_str().ok_or_else(invalid)?;
     let totals: (i64, i64, i64) = serde_json::from_value(totals.clone()).map_err(|_| invalid())?;
@@ -108,6 +126,27 @@ fn cost_policy(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn shared_capacity_uses_credit_hold_instead_of_legacy_overage_cap() {
+        let mut period = serde_json::json!({"currency":"USD","status":"active","shared_credit_account":true,"shared_credit_hold":false});
+        assert!(
+            validate_capacity_snapshot(
+                Some(period.clone()),
+                &serde_json::json!([100_000_000, 100_000_000, 0])
+            )
+            .is_ok()
+        );
+        period["shared_credit_hold"] = serde_json::json!(true);
+        assert_eq!(
+            validate_capacity_snapshot(Some(period.clone()), &serde_json::json!([0, 0, 0]))
+                .unwrap_err()
+                .code,
+            "shared_credit_exhausted"
+        );
+        period["shared_credit_hold"] = serde_json::json!(false);
+        period["status"] = serde_json::json!("billing-hold");
+        assert!(validate_capacity_snapshot(Some(period), &serde_json::json!([0, 0, 0])).is_err());
+    }
     #[test]
     fn capacity_matches_cumulative_ledger_and_live_reservations() {
         assert!(!held("active", 35_000_000, 500, 25_000_000, (35_000_000, 0, 0)).unwrap());
