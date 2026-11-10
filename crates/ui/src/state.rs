@@ -135,6 +135,9 @@ trait EngineBackend: Send + Sync {
     fn cloud_workspace(&self) -> Option<String> {
         None
     }
+    fn cloud_target(&self) -> Option<CloudTarget> {
+        None
+    }
     fn initial_chat(&self) -> Option<String> {
         None
     }
@@ -658,6 +661,9 @@ impl EngineHandle {
     }
     pub(crate) fn cloud_workspace(&self) -> Option<String> {
         self.inner.cloud_workspace()
+    }
+    pub(crate) fn cloud_target(&self) -> Option<CloudTarget> {
+        self.inner.cloud_target()
     }
     pub fn client(&self) -> &RpcClient {
         self.inner.client()

@@ -49,6 +49,12 @@ impl RpcService for Controller {
                     json!({"id":params["requestId"],"ok":[],"done":true}),
                 ]))))
             }
+            methods::CLOUD_DELETE => {
+                self.calls.lock().unwrap().push(params.clone());
+                RpcReply::value(
+                    &json!({"accountId":"owner","organizationId":null,"workspace":{"workspaceId":"workspace-one","state":"deleting"}}),
+                )
+            }
             methods::CLOUD_ACCOUNT_SIGN_OUT => RpcReply::value(&json!({"root":true})),
             _ => Err(RpcError::UnknownMethod(method.into())),
         }
@@ -100,4 +106,37 @@ async fn native_cloud_tools_share_workspace_authority_and_end_on_account_change(
         .await
         .unwrap();
     assert!(Source::open(target).await.is_err());
+}
+
+#[tokio::test]
+async fn cloud_delete_uses_bound_controller_lifecycle_and_rejects_other_sessions() {
+    let (account, _) = watch::channel(json!({"user":{"id":"owner"}}));
+    let root = Arc::new(Controller {
+        account,
+        calls: Default::default(),
+    });
+    let target = CloudTarget {
+        controller: EngineHandle::from_test_client(zuse_rpc::memory_client(root.clone())),
+        subject: "owner".into(),
+        organization: None,
+        workspace: "workspace-one".into(),
+        initial_session: "session-one".into(),
+    };
+    assert!(
+        target
+            .delete_session("other-session", "delete-command")
+            .await
+            .is_err()
+    );
+    assert!(root.calls.lock().unwrap().is_empty());
+    target
+        .delete_session("session-one", "delete-command")
+        .await
+        .unwrap();
+    let calls = root.calls.lock().unwrap();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0]["workspaceId"], "workspace-one");
+    assert_eq!(calls[0]["expectedAccountId"], "owner");
+    assert!(calls[0]["expectedOrganizationId"].is_null());
+    assert_eq!(calls[0]["commandId"], "delete-command");
 }

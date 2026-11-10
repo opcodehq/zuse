@@ -719,3 +719,17 @@ fn the_right_pane_toggle_closes_the_zot_panel(cx: &mut TestAppContext) {
         assert!(!shell.zot_ui.panel_hidden);
     });
 }
+
+#[gpui::test]
+fn pending_delete_dialog_can_be_dismissed_without_releasing_submission_guard(
+    cx: &mut TestAppContext,
+) {
+    let (shell, cx) = setup(cx);
+    shell.update(cx, |shell, cx| {
+        shell.delete_confirm = Some("parent".into());
+        shell.deleting_chat = true;
+        assert!(shell.capture_escape_surface(cx));
+        assert!(shell.delete_confirm.is_none());
+        assert!(shell.deleting_chat);
+    });
+}

@@ -2329,6 +2329,8 @@ pub struct Shell {
     chat_rename: Option<ChatRename>,
     /// Chat id awaiting delete confirmation.
     delete_confirm: Option<String>,
+    deleting_chat: bool,
+    cloud_delete_commands: std::collections::HashMap<String, String>,
     /// Global confirmation/error dialog for the Changes-pane trash action. The
     /// RPC task is retained separately so rerenders do not cancel it.
     discard_working_tree: Option<DiscardWorkingTreeFlow>,
@@ -2953,6 +2955,8 @@ impl Shell {
             chat_copy_left: false,
             chat_rename: None,
             delete_confirm: None,
+            deleting_chat: false,
+            cloud_delete_commands: std::collections::HashMap::new(),
             discard_working_tree: None,
             discard_working_tree_task: None,
             space_menu: popover::Popup::default(),
@@ -5648,6 +5652,32 @@ impl Shell {
         crate::toast::show(cx, kind, message);
     }
 
+    fn show_archive_error(&mut self, chat_id: String, message: String, cx: &mut Context<Self>) {
+        self.sidebar_notice = Some(message.clone().into());
+        let shell = cx.weak_entity();
+        crate::toast::error_with_action(
+            cx,
+            message,
+            chat_id.clone(),
+            "Force delete…",
+            move |_, cx| {
+                let _ = shell.update(cx, |this, cx| {
+                    if !this.deleting_chat
+                        && this
+                            .state
+                            .read(cx)
+                            .chats
+                            .iter()
+                            .any(|chat| chat.id == chat_id)
+                    {
+                        this.delete_confirm = Some(chat_id.clone());
+                        cx.notify();
+                    }
+                });
+            },
+        );
+    }
+
     fn set_chat_copy_open(&mut self, open: bool, cx: &mut Context<Self>) {
         let page = if open {
             ChatMenuPage::Copy
@@ -6975,7 +7005,11 @@ impl Shell {
                             if !shell.state.read(cx).engine().is_some_and(|current| current.same_connection(&engine)) {
                                 return;
                             }
-                            shell.show_notice(crate::toast::ToastKind::Error, format!("{error}"), cx);
+                            if archived {
+                                shell.show_archive_error(chat_id.clone(), format!("{error}"), cx);
+                            } else {
+                                shell.show_notice(crate::toast::ToastKind::Error, format!("{error}"), cx);
+                            }
                             cx.notify();
                         });
                     }
@@ -7062,7 +7096,14 @@ impl Shell {
     }
 
     fn delete_chat(&mut self, chat_id: String, cx: &mut Context<Self>) {
-        self.delete_confirm = None;
+        if self.deleting_chat {
+            return;
+        }
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            self.show_notice(crate::toast::ToastKind::Error, "Engine not connected", cx);
+            cx.notify();
+            return;
+        };
         // Take a Zapper thread off its Zapper first, so the Zapper stops
         // counting it and sending it work.
         if let Some(zot) = self.zot_of_thread(&chat_id, cx) {
@@ -7075,6 +7116,65 @@ impl Shell {
                 zot_forms::ZotAfter::Stay,
                 cx,
             );
+        }
+        let owner = self
+            .state
+            .read(cx)
+            .chats
+            .iter()
+            .find(|chat| chat.id == chat_id)
+            .map(|chat| chat.device_id.clone());
+        let cloud_request = engine.cloud_target().map(|target| {
+            let command_id = self
+                .cloud_delete_commands
+                .entry(chat_id.clone())
+                .or_insert_with(|| uuid::Uuid::new_v4().to_string())
+                .clone();
+            (target, command_id)
+        });
+        self.deleting_chat = true;
+        cx.spawn(async move |this, cx| {
+            let result = if let Some((target, command_id)) = cloud_request {
+                target.delete_session(&chat_id, &command_id).await
+            } else {
+                engine
+                    .client()
+                    .call(
+                        methods::MUTATE,
+                        serde_json::json!({
+                            "op": "forceDeleteChat", "chatId": chat_id, "targetDeviceId": owner,
+                        }),
+                    )
+                    .await
+            };
+            let _ = this.update(cx, |this, cx| {
+                this.deleting_chat = false;
+                if !this
+                    .state
+                    .read(cx)
+                    .engine()
+                    .is_some_and(|current| current.same_connection(&engine))
+                {
+                    cx.notify();
+                    return;
+                }
+                match result {
+                    Ok(_) => this.finish_delete_chat(chat_id, cx),
+                    Err(error) => {
+                        this.show_notice(crate::toast::ToastKind::Error, format!("{error}"), cx)
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn finish_delete_chat(&mut self, chat_id: String, cx: &mut Context<Self>) {
+        self.cloud_delete_commands.remove(&chat_id);
+        if self.delete_confirm.as_deref() == Some(chat_id.as_str()) {
+            self.delete_confirm = None;
         }
         if let Some(tabs) = self.right_tabs.get(&chat_id) {
             for surface in tabs {
@@ -7099,10 +7199,6 @@ impl Shell {
         }
         self.composer
             .update(cx, |composer, cx| composer.purge_chat(&chat_id, cx));
-        self.mutate(
-            serde_json::json!({ "op": "deleteChat", "chatId": chat_id }),
-            cx,
-        );
         cx.notify();
     }
 
@@ -12010,8 +12106,11 @@ impl Shell {
         // Modals and context menus sit above the rest of the shell. Preserve
         // their existing behavior: only surfaces that already have a Cancel
         // path close here; the others remain explicit blockers.
+        if self.delete_confirm.take().is_some() {
+            cx.notify();
+            return true;
+        }
         if self.sync_flow.has_visible_overlay()
-            || self.delete_confirm.is_some()
             || self.delete_space_confirm.is_some()
             || self.chat_menu.get().is_some()
             || self.space_menu.get().is_some()
@@ -12362,7 +12461,7 @@ impl Shell {
                                 .size(px(16.0))
                                 .text_color(theme.danger),
                         )
-                        .child(SharedString::from("Delete…"));
+                        .child(SharedString::from("Force delete…"));
                 menu.child(popover::menu_separator())
                     .child(self.chat_menu_hover_row(CHAT_MENU_ROW_DELETE, delete, cx))
             };
@@ -12436,14 +12535,29 @@ impl Shell {
                     .and_then(|c| c.title.clone())
                     .unwrap_or_else(|| "New session".into()),
             );
+            let cloud = self
+                .state
+                .read(cx)
+                .engine()
+                .is_some_and(|engine| engine.cloud_target().is_some());
             let card = popover::dialog_card(&theme)
-                .child(popover::dialog_title(&theme, "Delete session?"))
-                .child(div().mt(px(6.0)).child(popover::dialog_body(
-                    &theme,
-                    format!("\u{201C}{title}\u{201D} will be permanently deleted. This can\u{2019}t be undone."),
-                )))
+                .w(px(440.))
+                .overflow_hidden()
+                .child(
+                    div().flex().flex_col().gap(px(10.))
+                        .child(popover::dialog_title(&theme, "Force delete session?"))
+                        .child(popover::dialog_body(&theme,
+                            format!("“{title}” and its conversations and agents will be permanently deleted.")))
+                        .child(popover::dialog_body(&theme,
+                            if cloud {
+                                "Its cloud computer, disk, stored history and recovery data will be permanently deleted."
+                            } else {
+                                "Its private worktree and unsaved files will also be removed. Shared worktrees and your main project folder are kept."
+                            })),
+                )
                 .child(
                     popover::dialog_footer(&theme)
+                        .child(div().flex_1().text_size(px(11.)).text_color(theme.text_muted).child("This can’t be undone."))
                         .child(
                             popover::btn_ghost(&theme, &tr(cx, msg::common::cancel), "delete-chat-cancel")
                                 .id("delete-chat-cancel")
@@ -12453,8 +12567,12 @@ impl Shell {
                                 })),
                         )
                         .child(
-                            popover::btn_danger(&theme, "Delete")
+                            popover::btn_danger(
+                                &theme,
+                                if self.deleting_chat { "Deleting…" } else { "Force delete" },
+                            )
                                 .id("delete-chat-confirm")
+                                .opacity(if self.deleting_chat { 0.5 } else { 1. })
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.delete_chat(chat_id.clone(), cx)
                                 })),

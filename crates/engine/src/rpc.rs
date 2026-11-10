@@ -55,6 +55,7 @@ mod creation_sources;
 mod desktop_import;
 mod dictation;
 mod external_chats;
+mod force_delete;
 mod git_workspace;
 mod list_watch;
 mod simulators;
@@ -720,6 +721,9 @@ enum MutateParams {
     /// Tombstone: removes the chats-map row; the session doc remains.
     #[serde(rename_all = "camelCase")]
     DeleteChat { chat_id: String },
+    /// Remove an exclusive managed checkout without creating an archive.
+    #[serde(rename_all = "camelCase")]
+    ForceDeleteChat { chat_id: String },
     #[serde(rename_all = "camelCase")]
     RenameDevice { device_id: String, name: String },
     /// Synced seen marker (LWW + monotonic guard): clears the "completed"
@@ -1336,7 +1340,11 @@ impl EngineRpc {
             });
             return Ok(RpcReply::Stream(stream.boxed()));
         }
-        let deadline = if method == methods::MUTATE && params["op"] == "setChatArchived" {
+        let deadline = if method == methods::MUTATE
+            && matches!(
+                params["op"].as_str(),
+                Some("setChatArchived" | "forceDeleteChat")
+            ) {
             std::time::Duration::from_secs(10 * 60)
         } else {
             forward_deadline(method)
@@ -1500,9 +1508,11 @@ impl EngineRpc {
                     .map_err(failed)
                     .map(drop)
             }
-            MutateParams::SetChatArchived { .. } => Err(RpcError::Failed(
-                "Archive changes must use the host lifecycle handler.".into(),
-            )),
+            MutateParams::SetChatArchived { .. } | MutateParams::ForceDeleteChat { .. } => {
+                Err(RpcError::Failed(
+                    "Archive and force-delete changes must use the host lifecycle handler.".into(),
+                ))
+            }
             MutateParams::ChangeSidebarPin { change } => {
                 self.workspace.change_sidebar_pin(&change).map_err(failed)
             }
@@ -1765,8 +1775,10 @@ const LOGIN_TUNNEL_TTL: Duration = Duration::from_secs(15 * 60);
 fn forwardable_request(method: &str, params: &serde_json::Value) -> bool {
     forwardable(method)
         || (method == methods::MUTATE
-            && (params["op"] == "setChatArchived"
-                || (params["op"] == "setChatConfig" && params.get("expectedConfig").is_some())))
+            && (matches!(
+                params["op"].as_str(),
+                Some("setChatArchived" | "forceDeleteChat")
+            ) || (params["op"] == "setChatConfig" && params.get("expectedConfig").is_some())))
 }
 
 fn forwardable(method: &str) -> bool {
@@ -2700,7 +2712,11 @@ impl EngineRpc {
 
         let mut params = params;
         if method == methods::GET_CHAT_ARCHIVE_STATUS
-            || (method == methods::MUTATE && params["op"] == "setChatArchived")
+            || (method == methods::MUTATE
+                && matches!(
+                    params["op"].as_str(),
+                    Some("setChatArchived" | "forceDeleteChat")
+                ))
         {
             if let Some(id) = params["chatId"].as_str() {
                 if let Some(chat) = self.workspace.chat(id).map_err(failed)? {
@@ -2709,7 +2725,7 @@ impl EngineRpc {
                         .is_some_and(|target| target != chat.device_id)
                     {
                         return Err(RpcError::Failed(
-                            "This thread moved to another computer. Refresh before archiving it."
+                            "This thread moved to another computer. Refresh before changing it."
                                 .into(),
                         ));
                     }
@@ -4497,6 +4513,10 @@ impl EngineRpc {
                 if let MutateParams::SetChatArchived { chat_id, archived } = &p {
                     let outcome = self.archive_chat(chat_id, *archived).await?;
                     return RpcReply::value(&serde_json::json!({"ok":true,"archive":outcome}));
+                }
+                if let MutateParams::ForceDeleteChat { chat_id } = &p {
+                    self.force_delete_chat(chat_id).await?;
+                    return RpcReply::value(&serde_json::json!({"ok":true}));
                 }
                 let sidebar_pins = matches!(&p, MutateParams::ChangeSidebarPin { .. });
                 self.mutate(p)?;
