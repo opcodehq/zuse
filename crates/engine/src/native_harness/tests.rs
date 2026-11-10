@@ -988,6 +988,42 @@ async fn consumed_delivery_replay_only_acknowledges_in_live_and_reopened_runtime
 }
 
 #[test]
+fn thinking_is_routed_to_root_and_child_reasoning_events() {
+    let mut mapper = events::Mapper::new("root".into(), "/workspace".into(), "session".into());
+    for (agent, parents) in [("root", vec![]), ("child", vec!["spawn-call".to_owned()])] {
+        let events = mapper.translate(
+            zuse_harness::Event::Thinking {
+                agent_id: agent.into(),
+                item_id: "thinking-item".into(),
+                text: "Visible thought".into(),
+            },
+            &zuse_harness::AgentRoute {
+                model: "model".into(),
+                parents,
+            },
+            false,
+        );
+        let event = events.last().unwrap();
+        let reasoning = if agent == "child" {
+            let AgentEvent::Subagent {
+                parent_tool_use_id,
+                event,
+            } = event
+            else {
+                panic!("missing child routing")
+            };
+            assert_eq!(parent_tool_use_id, "spawn-call");
+            event.as_ref()
+        } else {
+            event
+        };
+        assert!(
+            matches!(reasoning, AgentEvent::ReasoningDelta { text } if text == "Visible thought")
+        );
+    }
+}
+
+#[test]
 fn replay_receipt_preserves_the_streamed_assistant_segment() {
     use events::Mapper;
     let mut mapper = Mapper::new("root".into(), "/workspace".into(), "session".into());
@@ -995,6 +1031,15 @@ fn replay_receipt_preserves_the_streamed_assistant_segment() {
         parents: vec![],
         model: "model".into(),
     };
+    mapper.translate(
+        zuse_harness::Event::Thinking {
+            agent_id: "root".into(),
+            item_id: "streaming-item".into(),
+            text: "Visible reasoning".into(),
+        },
+        &route,
+        false,
+    );
     mapper.translate(
         zuse_harness::Event::Text {
             agent_id: "root".into(),

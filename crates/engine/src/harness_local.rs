@@ -80,15 +80,14 @@ impl LocalModels {
                         *slot = None;
                         return vec![];
                     };
+                    let metadata = if harness == HarnessId::Codex {
+                        self.codex_context_metadata().await
+                    } else {
+                        vec![]
+                    };
                     let models = models
                         .into_iter()
-                        .map(|model| HarnessModel {
-                            id: format!("local/{name}/{}", model.id),
-                            label: format!("{} · {name} (local)", model.label),
-                            context_window_tokens: None,
-                            auto_compact_token_limit: None,
-                            effective_context_window_percent: None,
-                        })
+                        .map(|model| local_model(name, model, &metadata))
                         .collect::<Vec<_>>();
                     *slot = Some(CachedInventory {
                         credential,
@@ -101,6 +100,24 @@ impl LocalModels {
         ))
         .await;
         inventories.into_iter().flatten().collect()
+    }
+    async fn codex_context_metadata(&self) -> Vec<HarnessModel> {
+        let path = self.accounts.codex_models_cache_path();
+        if !tokio::fs::metadata(&path)
+            .await
+            .is_ok_and(|m| m.len() <= 2 * 1024 * 1024)
+        {
+            return vec![];
+        }
+        let Ok(bytes) = tokio::fs::read(path).await else {
+            return vec![];
+        };
+        serde_json::from_slice(&bytes)
+            .ok()
+            .and_then(|body| {
+                crate::harness_models::inventory(zuse_model_accounts::Provider::Chatgpt, body).ok()
+            })
+            .unwrap_or_default()
     }
     pub async fn credential(&self, id: &str) -> Result<(String, Credential), Error> {
         let (harness, model) = parse(id)?;
@@ -181,11 +198,83 @@ impl LocalModels {
     }
 }
 
+fn local_model(name: &str, model: zuse_protocol::Model, metadata: &[HarnessModel]) -> HarnessModel {
+    let limits = metadata
+        .iter()
+        .find(|m| m.id.strip_prefix("chatgpt/") == Some(model.id.as_str()));
+    HarnessModel {
+        context_window_tokens: Some(
+            limits
+                .and_then(|m| m.context_window_tokens)
+                .unwrap_or_else(|| zuse_harness::prompt::default_window(&model.id)),
+        ),
+        auto_compact_token_limit: limits.and_then(|m| m.auto_compact_token_limit),
+        effective_context_window_percent: limits.and_then(|m| m.effective_context_window_percent),
+        id: format!("local/{name}/{}", model.id),
+        label: format!("{} · {name} (local)", model.label),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::agent_accounts::AgentAccountsConfig;
     use serde_json::json;
+
+    fn model(id: &str) -> zuse_protocol::Model {
+        zuse_protocol::Model {
+            id: id.into(),
+            label: id.into(),
+            description: None,
+            reasoning_levels: vec![],
+            options: vec![],
+        }
+    }
+
+    #[test]
+    fn local_catalog_keeps_model_windows_and_provider_compaction_metadata() {
+        let metadata = crate::harness_models::inventory(
+            zuse_model_accounts::Provider::Chatgpt,
+            json!({
+                "models": [{"slug":"gpt-6.1-sol", "visibility":"list", "context_window":750000,
+                    "auto_compact_token_limit":650000, "effective_context_window_percent":96}]
+            }),
+        )
+        .unwrap();
+        let selected = local_model("codex", model("gpt-6.1-sol"), &metadata);
+        assert_eq!(selected.id, "local/codex/gpt-6.1-sol");
+        assert_eq!(selected.context_window_tokens, Some(750000));
+        assert_eq!(selected.auto_compact_token_limit, Some(650000));
+        assert_eq!(selected.effective_context_window_percent, Some(96.));
+        assert_eq!(
+            local_model("codex", model("gpt-6.1-sol"), &[]).context_window_tokens,
+            Some(500000)
+        );
+        assert_eq!(
+            local_model("claude", model("claude-opus-5-5"), &[]).context_window_tokens,
+            Some(1000000)
+        );
+        assert_eq!(
+            local_model("claude", model("claude-haiku-4-5"), &[]).context_window_tokens,
+            Some(200000)
+        );
+    }
+
+    #[tokio::test]
+    async fn codex_context_metadata_uses_the_configured_cli_home() {
+        let (_dir, config, local, _registry) = setup();
+        let path = config.codex_home.join("models_cache.json");
+        assert!(local.codex_context_metadata().await.is_empty());
+        write(
+            &path,
+            json!({"models":[{"slug":"gpt-6.1-sol", "visibility":"list", "context_window":500000}]}),
+        );
+        let metadata = local.codex_context_metadata().await;
+        assert_eq!(metadata.len(), 1);
+        assert_eq!(metadata[0].context_window_tokens, Some(500000));
+        std::fs::write(path, "invalid json").unwrap();
+        assert!(local.codex_context_metadata().await.is_empty());
+    }
 
     fn setup() -> (
         tempfile::TempDir,
@@ -358,6 +447,7 @@ mod live_tests {
             retry_index: 0,
             cancel: tokio_util::sync::CancellationToken::new(),
             text: Arc::new(|_| {}),
+            thinking: Arc::new(|_| {}),
             budget: Arc::new(Budget),
             report: Arc::new(|_| {}),
         };

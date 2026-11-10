@@ -69,6 +69,8 @@ pub struct ModelInput {
     pub retry_index: u32,
     pub cancel: CancellationToken,
     pub text: Arc<dyn Fn(String) + Send + Sync>,
+    /// Provider-visible reasoning summaries, separate from answer text.
+    pub thinking: Arc<dyn Fn(String) + Send + Sync>,
     pub budget: Arc<dyn RequestBudget>,
     pub report: Arc<dyn Fn(transport::Attempt) + Send + Sync>,
 }
@@ -132,6 +134,11 @@ pub enum Event {
         delivery_id: String,
     },
     Text {
+        agent_id: String,
+        item_id: String,
+        text: String,
+    },
+    Thinking {
         agent_id: String,
         item_id: String,
         text: String,

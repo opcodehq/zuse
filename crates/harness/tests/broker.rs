@@ -72,6 +72,7 @@ fn input(budget: Arc<Budget>) -> ModelInput {
         retry_index: 0,
         cancel: tokio_util::sync::CancellationToken::new(),
         text: Arc::new(|_| {}),
+        thinking: Arc::new(|_| {}),
         budget,
         report: Arc::new(|_| {}),
     }
