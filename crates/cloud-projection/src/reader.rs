@@ -367,6 +367,7 @@ mod cache_tests {
         let key = TranscriptKey::parse(&encoded).unwrap();
         let chat = serde_json::from_value(json!({"id":"session","deviceId":"device","title":"Private history","archived":true,"cwd":"/repo","branch":"feature","checkoutId":null,"config":null,"lastMessagePreview":null,"lastMessageAt":null,"createdAt":"2026-10-23T00:00:00Z"})).unwrap();
         let head = Head {
+            slack_results: Default::default(),
             schema_version: 1,
             payload_format: FORMAT.into(),
             workspace_id: "workspace".into(),
