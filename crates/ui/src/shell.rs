@@ -18747,8 +18747,8 @@ mod exit_regressions {
                     // below the titlebar band.
                     let title = cx.debug_bounds("pr-toolbar-title").unwrap();
                     assert!(title.top() >= px(Theme::TITLEBAR_HEIGHT));
-                    let external = cx.debug_bounds("pr-external").unwrap();
-                    assert!(external.right() <= px(width));
+                    let more = cx.debug_bounds("pr-more").unwrap();
+                    assert!(more.right() <= px(width));
                 }
             }
         }
