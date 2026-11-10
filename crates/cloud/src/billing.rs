@@ -7,6 +7,7 @@ mod storage;
 pub use exports::{ExportReport, MeterEvent, MeterExportConfig};
 pub use settlement::{BoxdSettlementConfig, SettlementReport};
 pub use storage::{SnapshotSettlementConfig, SnapshotSettlementReport};
+pub mod native;
 mod payments;
 use crate::error::ApiError;
 pub use catalog::BillingControl;
@@ -81,30 +82,29 @@ fn held(
     cap: i64,
     totals: (i64, i64, i64),
 ) -> Result<bool, ApiError> {
-    if !matches!(
-        status,
-        "active" | "pending" | "grace" | "billing-hold" | "ended" | "manual"
-    ) || [included, markup, cap].iter().any(|n| *n < 0)
-    {
-        return Err(invalid());
-    }
-    if status == "manual" {
-        return Ok(false);
-    }
-    if matches!(status, "grace" | "billing-hold" | "ended") {
-        return Ok(true);
-    }
-    let (confirmed, charged, reserved) = totals;
-    let raw = i128::from(confirmed);
-    let confirmed = raw.max(0);
-    let total = (raw + i128::from(reserved)).max(0);
-    let overage = (total - i128::from(included)).max(0);
-    let charge =
-        |cost: i128| (cost - i128::from(included)).max(0) * (10_000 + i128::from(markup)) / 10_000;
-    let reservation_charge = (charge(total) - charge(confirmed)).max(0);
-    let actual = (i128::from(charged) + reservation_charge).min(i128::from(cap));
-    Ok(overage > 0 && actual >= i128::from(cap))
+    cost_policy(status, included, markup, cap)?
+        .held(totals.0, totals.1, totals.2)
+        .map_err(|_| invalid())
 }
+/// Shared monetary policy, evaluated inside the host's existing admission transaction.
+/// Mutable cap terms stay in the host ledger rather than creating a second authority.
+fn cost_policy(
+    status: &str,
+    included: i64,
+    markup_basis_points: i64,
+    overage_cap: i64,
+) -> Result<brokeboy::core::periods::CostPolicy, ApiError> {
+    let status = serde_json::from_value(serde_json::json!(status)).map_err(|_| invalid())?;
+    let policy = brokeboy::core::periods::CostPolicy {
+        status,
+        included,
+        markup_basis_points,
+        overage_cap,
+    };
+    policy.validate().map_err(|_| invalid())?;
+    Ok(policy)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

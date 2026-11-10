@@ -103,6 +103,27 @@ class DatabaseBootstrapTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "zuse_schema_checksum_mismatch"):
                 database.execute(self.url, database.render("staging", root))
 
+    def test_brokeboy_optional_install_is_explicit_idempotent_and_checked(self):
+        database.execute(self.url,database.render("staging"))
+        role_spec=importlib.util.spec_from_file_location("billing_provision",SCRIPT.parent / "single-host/provision.py")
+        provision=importlib.util.module_from_spec(role_spec)
+        role_spec.loader.exec_module(provision)
+        name=self.url.split("/")[-1].split("?")[0]
+        role=database.execute(self.url,"SELECT json_build_object('present',EXISTS(SELECT 1 FROM pg_roles WHERE rolname='zuse_cloud_staging'));")[-1]
+        database.execute(self.url,provision.role_sql("staging",name,"synthetic-test-password",not role["present"]))
+        before=database.execute(self.url,"SELECT json_build_object('present',to_regclass('zuse_staging.brokeboy_customers') IS NOT NULL);")[-1]
+        self.assertFalse(before["present"])
+        for _ in range(2):
+            database.execute(self.url,database.render_brokeboy("staging"))
+        result=database.execute(self.url,"SET search_path=zuse_staging,pg_catalog; SELECT json_build_object('count',(SELECT count(*) FROM zuse_cloud_schema_migrations WHERE name='0032_brokeboy.sql'),'migrations',(SELECT json_agg(json_build_object('name',name,'sha256',sha256)) FROM zuse_cloud_schema_migrations));")[-1]
+        self.assertEqual(result["count"],1)
+        self.assertTrue(database.manifest_matches("staging",result["migrations"]))
+        grants=database.execute(self.url,"SELECT json_build_object('billing',has_table_privilege('zuse_cloud_staging','zuse_staging.brokeboy_customers','INSERT,UPDATE,DELETE'),'requests',has_table_privilege('zuse_cloud_staging','zuse_staging.zuse_brokeboy_model_requests','INSERT,UPDATE,DELETE'),'ledger',has_table_privilege('zuse_cloud_staging','zuse_staging.zuse_cloud_schema_migrations','UPDATE'));")[-1]
+        self.assertEqual(grants,{"billing":True,"requests":True,"ledger":False})
+        database.execute(self.url,"UPDATE zuse_staging.zuse_cloud_schema_migrations SET sha256=repeat('0',64) WHERE name='0032_brokeboy.sql';")
+        with self.assertRaisesRegex(ValueError,"zuse_schema_manifest_mismatch"):
+            database.execute(self.url,database.render_brokeboy("staging"))
+
     def test_failed_migration_rolls_back_entire_schema(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

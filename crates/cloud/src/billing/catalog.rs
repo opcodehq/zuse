@@ -15,6 +15,7 @@ pub struct BillingControl {
     pub(super) meter_exports: Option<Arc<super::MeterExportConfig>>,
     pub(super) accounts: Arc<HashSet<String>>,
     pub(super) payments: Option<Arc<super::PaymentProviders>>,
+    pub(super) native: Option<Arc<super::native::NativeBilling>>,
 }
 impl BillingControl {
     pub fn from_pool(pool: PgPool, accounts: Vec<String>) -> Self {
@@ -23,6 +24,7 @@ impl BillingControl {
             meter_exports: None,
             pool,
             payments: None,
+            native: None,
             accounts: Arc::new(accounts.into_iter().collect()),
         }
     }

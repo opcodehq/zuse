@@ -316,11 +316,18 @@ fn deltas(
     let br = bo * (10000 + markup) / 10000;
     let ar = ao * (10000 + markup) / 10000;
     let bc = charged as i128;
-    let ac = if p["status"] == "manual" {
-        0
-    } else {
-        ar.min(cap)
-    };
+    let policy = super::cost_policy(
+        p["status"].as_str().ok_or_else(invalid)?,
+        included as i64,
+        markup as i64,
+        cap as i64,
+    )?;
+    let ac = bc
+        + i128::from(
+            policy
+                .settlement(before, charged, cost)
+                .map_err(|_| invalid())?,
+        );
     [
         ("included-allowance", a.min(included) - b.min(included)),
         ("overage-provider-cost", ao - bo),

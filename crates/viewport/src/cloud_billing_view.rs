@@ -420,7 +420,13 @@ fn credits_body<T: 'static>(
                     .flex_wrap()
                     .items_center()
                     .gap(px(8.))
-                    .child(s::title_text(tr(cx, msg::settings::prepaid_title)))
+                    .child(s::title_text(
+                        if data.credits.is_some_and(|b| b.funding == "hosted-models") {
+                            "Hosted model credits".to_owned()
+                        } else {
+                            tr(cx, msg::settings::prepaid_title)
+                        },
+                    ))
                     .child(
                         div()
                             .rounded(px(7.))
@@ -461,6 +467,17 @@ fn credits_body<T: 'static>(
                 .child(format!(
                     "{} owed on future invoices",
                     cents(balance.debit_cents)
+                )),
+        );
+    }
+    if let Some(credit) = data.credits.and_then(|b| b.invoice_credit_cents) {
+        credits = credits.child(
+            div()
+                .text_size(px(12.))
+                .text_color(palette::rgb(MUTED))
+                .child(format!(
+                    "{} in compute invoice credit, separate from hosted model credits.",
+                    cents(credit)
                 )),
         );
     }
@@ -578,7 +595,7 @@ fn credits_body<T: 'static>(
             .text_size(px(12.))
             .line_height(px(19.5))
             .text_color(palette::rgb(MUTED))
-            .child(tr(cx, msg::settings::prepaid_description)),
+            .child(if data.credits.is_some_and(|b|b.funding=="hosted-models") { "For models billed by Zuse. These credits do not pay your Cloud compute invoice or your own agent subscriptions.".to_owned() } else { tr(cx, msg::settings::prepaid_description) }),
     );
     if data.credits.is_some_and(|b| !b.available) {
         credits = credits.child(

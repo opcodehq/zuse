@@ -737,7 +737,7 @@ pub fn billing<T: 'static>(
         .child(setting_row(
             true,
             "Billed by Zuse",
-            "Cloud computers, image builds and image storage. Paid from your plan's allowance, then credits, then your invoice.",
+            "Cloud computers, image builds and image storage use your plan allowance and compute invoice. Hosted model credits are a separate balance.",
             None,
         ))
         .child(setting_row(

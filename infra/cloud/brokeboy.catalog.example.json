@@ -1,0 +1,28 @@
+{
+  "features": [
+    { "id": "hosted-model-usd", "kind": "consumable" },
+    { "id": "cloud-overage-cent", "kind": "consumable" }
+  ],
+  "plans": [
+    {
+      "id": "cloud-workspace-standard-v1",
+      "name": "Zuse Cloud",
+      "kind": "subscription",
+      "currency": "usd",
+      "amount": "40",
+      "interval": "month",
+      "stripePriceId": "price_REPLACE_WITH_EXISTING_CLOUD_PRICE",
+      "stripeMeterPriceIds": {
+        "cloud-overage-cent": "price_REPLACE_WITH_EXISTING_OVERAGE_PRICE"
+      },
+      "items": [
+        {
+          "feature": "cloud-overage-cent",
+          "included": "0",
+          "overage": true,
+          "rate": { "amount": "0.01" }
+        }
+      ]
+    }
+  ]
+}

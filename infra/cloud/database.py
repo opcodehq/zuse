@@ -24,7 +24,7 @@ FILES = ("0000_application.sql", "0001_control_plane.sql", "0002_gateway_leases.
 
 # Accepted only when separately installed by its explicit operator workflow.
 # Ordinary bootstrap never executes or backfills an optional migration.
-OPTIONAL_FILES = ("0028_project_environment_caches.sql", "0029_runtime_statement_batch.sql", "0030_transcript_write_intents.sql")
+OPTIONAL_FILES = ("0028_project_environment_caches.sql", "0029_runtime_statement_batch.sql", "0030_transcript_write_intents.sql", "0032_brokeboy.sql")
 
 
 def optional_migrations(root=MIGRATIONS):
@@ -141,10 +141,44 @@ def execute(raw, sql):
     return [json.loads(line) for line in result.stdout.splitlines() if line.startswith("{")]
 
 
+def render_brokeboy(environment):
+    """Install the optional engine only after verifying the managed schema ledger."""
+    name = "0032_brokeboy.sql"
+    schema = SCHEMAS[environment]
+    base = plan(environment)["migrations"]
+    permitted = base + optional_migrations()
+    matches = " OR ".join(f"(name={literal(item['name'])} AND sha256={literal(item['sha256'])})" for item in permitted)
+    required = " OR ".join(f"(name={literal(item['name'])} AND sha256={literal(item['sha256'])})" for item in base)
+    migration = next(item for item in permitted if item["name"] == name)
+    return f'''BEGIN;
+SET LOCAL search_path TO "{schema}", pg_catalog;
+SET LOCAL lock_timeout='15s';
+SET LOCAL statement_timeout='120s';
+SELECT pg_advisory_xact_lock(hashtextextended(current_database() || {literal(':' + schema)},0));
+DO $$ BEGIN
+IF NOT EXISTS(SELECT 1 FROM zuse_cloud_schema_identity WHERE singleton AND environment={literal(environment)})
+ OR (SELECT count(*) FROM zuse_cloud_schema_migrations WHERE {required})<>{len(base)}
+ OR EXISTS(SELECT 1 FROM zuse_cloud_schema_migrations WHERE NOT ({matches}))
+THEN RAISE EXCEPTION 'zuse_schema_manifest_mismatch'; END IF;
+END $$;
+SELECT {literal(migration['sql'])} WHERE NOT EXISTS(SELECT 1 FROM zuse_cloud_schema_migrations WHERE name={literal(name)})
+\\gexec
+INSERT INTO zuse_cloud_schema_migrations(name,sha256) VALUES({literal(name)},{literal(migration['sha256'])}) ON CONFLICT DO NOTHING;
+DO $grants$ DECLARE item record; BEGIN
+IF EXISTS(SELECT 1 FROM pg_roles WHERE rolname={literal('zuse_cloud_' + environment)}) THEN
+ FOR item IN SELECT tablename FROM pg_tables WHERE schemaname={literal(schema)} AND (tablename LIKE 'brokeboy\\_%' ESCAPE '\\' OR tablename LIKE 'zuse\\_brokeboy\\_%' ESCAPE '\\') LOOP
+  EXECUTE format('GRANT SELECT,INSERT,UPDATE,DELETE ON TABLE %I.%I TO %I',{literal(schema)},item.tablename,{literal('zuse_cloud_' + environment)});
+ END LOOP;
+END IF;
+END $grants$;
+SELECT json_build_object('installed',true,'migration',{literal(name)});
+COMMIT;'''
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--environment", choices=SCHEMAS, required=True)
-    parser.add_argument("action", choices=("plan", "apply", "check"))
+    parser.add_argument("action", choices=("plan", "apply", "check", "apply-brokeboy"))
     args = parser.parse_args()
     if args.action == "plan":
         print(json.dumps(plan(args.environment), indent=2))
@@ -154,6 +188,8 @@ def main():
         raise ValueError("zuse_schema_explicit_database_url_required")
     if args.action == "apply":
         result = execute(raw, render(args.environment))
+    elif args.action == "apply-brokeboy":
+        result = execute(raw, render_brokeboy(args.environment))
     else:
         schema = SCHEMAS[args.environment]
         sql = f'''BEGIN READ ONLY;
