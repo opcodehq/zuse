@@ -88,9 +88,7 @@ impl StripePortal {
                     .request(reqwest::Method::GET, &["customers", customer])?,
             )
             .await?;
-            if v["id"] != customer
-                || v["deleted"] == true
-                || v["metadata"]["account_id"] != owner
+            if !stripe_customer_owned(&v, owner, customer)
                 || v["currency"].as_str().is_some_and(|s| s != "usd")
             {
                 return Err(unavailable());
@@ -105,6 +103,8 @@ impl StripePortal {
             credit_cents: if balance < 0 { -balance } else { 0 },
             debit_cents: balance.max(0),
             currency: "usd".into(),
+            funding: String::new(),
+            invoice_credit_cents: None,
         })
     }
     pub(super) async fn credit_checkout(
@@ -432,6 +432,9 @@ impl BillingControl {
         providers.providers.get(id).cloned().ok_or_else(unavailable)
     }
     async fn prepaid_balance(&self, owner: &str) -> Result<PrepaidBalance, ApiError> {
+        if let Some(balance) = self.native_balance(owner).await? {
+            return Ok(balance);
+        }
         let provider = self.credit_provider(owner).await?;
         let customer: Option<String> = if provider.provider_id() == "stripe" {
             sqlx::query_scalar("SELECT customer_id FROM api_stripe_customers WHERE account_id=$1")
@@ -451,9 +454,13 @@ impl BillingControl {
         owner: &str,
         amount: i64,
         now: i64,
+        key: Option<&str>,
     ) -> Result<String, ApiError> {
         if !PREPAID_CREDIT_AMOUNTS.contains(&amount) {
             return Err(ApiError::bad_request("invalid_prepaid_amount"));
+        }
+        if let Some(url) = self.native_prepaid_checkout(owner, amount, key).await? {
+            return Ok(url);
         }
         let providers = self.payments.as_ref().ok_or_else(unavailable)?;
         let settings = providers
@@ -494,10 +501,20 @@ impl Store {
         amount: i64,
         now: i64,
     ) -> Result<String, ApiError> {
+        self.prepaid_checkout_with_key(owner, amount, now, None)
+            .await
+    }
+    pub async fn prepaid_checkout_with_key(
+        &self,
+        owner: &str,
+        amount: i64,
+        now: i64,
+        key: Option<&str>,
+    ) -> Result<String, ApiError> {
         self.billing
             .as_ref()
             .ok_or_else(|| ApiError::unavailable("cloud_billing_writes_disabled"))?
-            .prepaid_checkout(owner, amount, now)
+            .prepaid_checkout(owner, amount, now, key)
             .await
     }
 }

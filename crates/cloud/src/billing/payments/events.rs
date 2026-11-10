@@ -372,6 +372,9 @@ impl BillingControl {
         body: &[u8],
         now: i64,
     ) -> Result<Value, ApiError> {
+        if let Some(result) = self.native_webhook(provider_id, headers, body).await? {
+            return Ok(result);
+        }
         let providers = self.payments.as_ref().ok_or_else(unavailable)?;
         let id = match provider_id {
             Some(id) => id,
@@ -446,12 +449,26 @@ impl BillingControl {
                 "billing_machine_processing_unavailable",
             ));
         }
-        let consumed:Option<String>=sqlx::query_scalar("INSERT INTO api_billing_events(provider,event_id,payload,received_at,processed_at) VALUES($1,$2,NULL,$3,$3) ON CONFLICT(provider,event_id) DO NOTHING RETURNING event_id").bind(id).bind(&event_id).bind(now).fetch_optional(&mut *tx).await?;
-        if consumed.is_none() {
-            tx.commit().await?;
+        let result = self
+            .project_subscription(&mut tx, id, &event_id, &sub, now, true)
+            .await?;
+        tx.commit().await?;
+        Ok(result)
+    }
+    pub(crate) async fn project_subscription(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        id: &str,
+        event_id: &str,
+        sub: &Subscription,
+        now: i64,
+        deduplicate: bool,
+    ) -> Result<Value, ApiError> {
+        let consumed:Option<String>=sqlx::query_scalar("INSERT INTO api_billing_events(provider,event_id,payload,received_at,processed_at) VALUES($1,$2,NULL,$3,$3) ON CONFLICT(provider,event_id) DO NOTHING RETURNING event_id").bind(id).bind(&event_id).bind(now).fetch_optional(&mut **tx).await?;
+        if consumed.is_none() && deduplicate {
             return Ok(json!({"ok":true,"duplicate":true,"provisioningQueued":false}));
         }
-        let existing=sqlx::query("SELECT entitlement_id,account_id FROM api_entitlements WHERE provider=$1 AND provider_subscription_id=$2 FOR UPDATE").bind(id).bind(&sub.id).fetch_all(&mut *tx).await?;
+        let existing=sqlx::query("SELECT entitlement_id,account_id FROM api_entitlements WHERE provider=$1 AND provider_subscription_id=$2 FOR UPDATE").bind(id).bind(&sub.id).fetch_all(&mut **tx).await?;
         if existing.len() > 1
             || existing
                 .first()
@@ -473,7 +490,7 @@ impl BillingControl {
         } else {
             None
         };
-        let written:Option<String>=sqlx::query_scalar("INSERT INTO api_entitlements(entitlement_id,account_id,kind,offer_id,provider,provider_subscription_id,status,period_start,paid_through,ended_at,credit_balance,created_at,updated_at) VALUES($1,$2,'cloud-workspace',$3,$4,$5,$6,$7,$8,$9,NULL,$10,$10) ON CONFLICT(entitlement_id) DO UPDATE SET kind=EXCLUDED.kind,offer_id=EXCLUDED.offer_id,status=EXCLUDED.status,period_start=EXCLUDED.period_start,paid_through=EXCLUDED.paid_through,ended_at=EXCLUDED.ended_at,updated_at=EXCLUDED.updated_at WHERE api_entitlements.account_id=EXCLUDED.account_id AND api_entitlements.provider=EXCLUDED.provider AND api_entitlements.provider_subscription_id=EXCLUDED.provider_subscription_id RETURNING entitlement_id").bind(&entitlement).bind(&sub.owner).bind(&sub.offer).bind(id).bind(&sub.id).bind(&sub.status).bind(sub.period_start).bind(sub.paid_through).bind(ended).bind(now).fetch_optional(&mut *tx).await?;
+        let written:Option<String>=sqlx::query_scalar("INSERT INTO api_entitlements(entitlement_id,account_id,kind,offer_id,provider,provider_subscription_id,status,period_start,paid_through,ended_at,credit_balance,created_at,updated_at) VALUES($1,$2,'cloud-workspace',$3,$4,$5,$6,$7,$8,$9,NULL,$10,$10) ON CONFLICT(entitlement_id) DO UPDATE SET kind=EXCLUDED.kind,offer_id=EXCLUDED.offer_id,status=EXCLUDED.status,period_start=EXCLUDED.period_start,paid_through=EXCLUDED.paid_through,ended_at=EXCLUDED.ended_at,updated_at=EXCLUDED.updated_at WHERE api_entitlements.account_id=EXCLUDED.account_id AND api_entitlements.provider=EXCLUDED.provider AND api_entitlements.provider_subscription_id=EXCLUDED.provider_subscription_id RETURNING entitlement_id").bind(&entitlement).bind(&sub.owner).bind(&sub.offer).bind(id).bind(&sub.id).bind(&sub.status).bind(sub.period_start).bind(sub.paid_through).bind(ended).bind(now).fetch_optional(&mut **tx).await?;
         if written.is_none() {
             return Err(ApiError::conflict("billing_subscription_owner_conflict"));
         }
@@ -483,11 +500,10 @@ impl BillingControl {
             _ => "active",
         };
         let period = format!("cloud:{}:{}", sub.owner, sub.period_start);
-        let written:Option<String>=sqlx::query_scalar("INSERT INTO api_cloud_billing_periods(period_id,account_id,provider_subscription_id,billing_provider,status,currency,period_start,period_end,base_price_micros,included_provider_cost_micros,markup_basis_points,price_catalog_version,overage_cap_micros,created_at,updated_at) VALUES($1,$2,$3,$4,$5,'USD',$6,$7,40000000,35000000,500,'provider-compute-v1',COALESCE((SELECT overage_cap_micros FROM api_cloud_billing_periods WHERE account_id=$2 AND period_start<$6 ORDER BY period_start DESC LIMIT 1),25000000),$8,$8) ON CONFLICT(account_id,period_start) DO UPDATE SET status=EXCLUDED.status,period_end=EXCLUDED.period_end,provider_subscription_id=EXCLUDED.provider_subscription_id,updated_at=EXCLUDED.updated_at WHERE api_cloud_billing_periods.billing_provider=EXCLUDED.billing_provider AND (api_cloud_billing_periods.provider_subscription_id IS NULL OR api_cloud_billing_periods.provider_subscription_id=EXCLUDED.provider_subscription_id) RETURNING period_id").bind(period).bind(&sub.owner).bind(&sub.id).bind(id).bind(period_status).bind(sub.period_start).bind(sub.paid_through).bind(now).fetch_optional(&mut *tx).await?;
+        let written:Option<String>=sqlx::query_scalar("INSERT INTO api_cloud_billing_periods(period_id,account_id,provider_subscription_id,billing_provider,status,currency,period_start,period_end,base_price_micros,included_provider_cost_micros,markup_basis_points,price_catalog_version,overage_cap_micros,created_at,updated_at) VALUES($1,$2,$3,$4,$5,'USD',$6,$7,40000000,35000000,500,'provider-compute-v1',COALESCE((SELECT overage_cap_micros FROM api_cloud_billing_periods WHERE account_id=$2 AND period_start<$6 ORDER BY period_start DESC LIMIT 1),25000000),$8,$8) ON CONFLICT(account_id,period_start) DO UPDATE SET status=EXCLUDED.status,period_end=EXCLUDED.period_end,provider_subscription_id=EXCLUDED.provider_subscription_id,updated_at=EXCLUDED.updated_at WHERE api_cloud_billing_periods.billing_provider=EXCLUDED.billing_provider AND (api_cloud_billing_periods.provider_subscription_id IS NULL OR api_cloud_billing_periods.provider_subscription_id=EXCLUDED.provider_subscription_id) RETURNING period_id").bind(period).bind(&sub.owner).bind(&sub.id).bind(id).bind(period_status).bind(sub.period_start).bind(sub.paid_through).bind(now).fetch_optional(&mut **tx).await?;
         if written.is_none() {
             return Err(ApiError::conflict("billing_period_owner_conflict"));
         }
-        tx.commit().await?;
         Ok(json!({"ok":true,"duplicate":false,"provisioningQueued":false}))
     }
 }

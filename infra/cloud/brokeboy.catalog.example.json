@@ -1,0 +1,9 @@
+{
+  "features": [{"id":"zuse-usd","kind":"consumable"}],
+  "plans": [{
+    "id":"cloud-workspace-standard-v1", "name":"Zuse", "kind":"subscription",
+    "currency":"usd", "amount":"40", "interval":"month",
+    "stripePriceId":"price_REPLACE_WITH_EXISTING_CLOUD_PRICE",
+    "items":[{"feature":"zuse-usd","included":"40","reset":"month"}]
+  }]
+}

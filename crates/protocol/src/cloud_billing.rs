@@ -34,6 +34,8 @@ pub struct BillingSummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_polar_reconciled_at: Option<i64>,
     pub usage_provisional: bool,
+    #[serde(default)]
+    pub shared_credits: bool,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -77,6 +79,8 @@ pub struct BillingUsageRequest {
 #[serde(rename_all = "camelCase")]
 pub struct BillingCheckoutRequest {
     pub offer_id: String,
+    #[serde(default)]
+    pub idempotency_key: Option<String>,
 }
 
 pub const PREPAID_CREDIT_AMOUNTS: [i64; 4] = [1000, 2500, 5000, 10000];
@@ -87,9 +91,17 @@ pub struct PrepaidBalance {
     pub credit_cents: i64,
     pub debit_cents: i64,
     pub currency: String,
+    /// Empty for legacy invoice credit; shared-credits denotes the compute/model USD wallet.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub funding: String,
+    /// Legacy invoice credit remains spendable only by invoices, never copied into the shared wallet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invoice_credit_cents: Option<i64>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PrepaidCheckoutRequest {
     pub amount_cents: i64,
+    #[serde(default)]
+    pub idempotency_key: Option<String>,
 }
