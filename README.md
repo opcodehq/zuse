@@ -88,6 +88,8 @@ website address or a search term in its address bar; search terms open
 DuckDuckGo. Recent pages appear on the browser home page. Use the toolbar to
 navigate, reload, or open the current page in your default browser.
 
+On Linux, the browser requires WebKitGTK 2.40 or later using the 4.1 API.
+
 On macOS, Linux and Windows, **Take screenshot** in the options menu freezes the page in
 an editor: drag to select a region, then mark it up with a pen, boxes, or
 arrows in one of three colours. Press Esc to cancel, Enter to save, and

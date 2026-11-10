@@ -1206,11 +1206,24 @@ mod tests {
             assert!(browser.selecting_element);
             browser.element_selected(page.clone(), 7, Ok(None), cx);
             assert!(!browser.selecting_element);
-            browser.element_selected(page, 7, Ok(details("Too late")), cx);
+            browser.element_selected(page.clone(), 7, Ok(details("Too late")), cx);
             browser.selecting_element = true;
             browser.set_presentation(Presentation::Hidden, cx);
             assert!(!browser.selecting_element);
             assert_eq!(browser.selection_generation, 8);
+            // Both malformed payloads and native errors must close the session
+            // and fence completions that arrive after the overlay is removed.
+            browser.selecting_element = true;
+            browser.element_selected(page.clone(), 8, Ok(Some("invalid JSON".into())), cx);
+            assert!(!browser.selecting_element);
+            assert_eq!(browser.selection_generation, 9);
+            browser.selecting_element = true;
+            browser.element_selected(page.clone(), 8, Ok(details("After parse error")), cx);
+            assert!(browser.selecting_element);
+            browser.element_selected(page.clone(), 9, Err("Fixture native error".into()), cx);
+            assert!(!browser.selecting_element);
+            assert_eq!(browser.selection_generation, 10);
+            browser.element_selected(page, 9, Ok(details("After native error")), cx);
         }).unwrap();
         cx.run_until_parked();
         let notes = captured.borrow();
@@ -1416,14 +1429,14 @@ impl BrowserSurface {
                         }
                     }
                     Err(error) => {
-                        self.selecting_element = false;
+                        self.cancel_selection();
                         crate::toast::error(cx, error);
                     }
                 }
             }
             Ok(None) => self.selecting_element = false,
             Err(error) => {
-                self.selecting_element = false;
+                self.cancel_selection();
                 crate::toast::error(cx, format!("Could not annotate page: {error}"));
             }
         }
