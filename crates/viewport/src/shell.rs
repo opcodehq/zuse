@@ -608,12 +608,96 @@ impl WorkspaceView {
             .into_any_element()
     }
 
+    /// Earlier history above the first message, from the host or a cloud
+    /// snapshot: `Some(loading)` while there is more to fetch.
+    fn history_paging(&self) -> Option<bool> {
+        if self.transcript_state.has_more {
+            Some(self.transcript_state.loading_earlier)
+        } else {
+            self.cloud.older_before.map(|_| self.cloud.older_loading)
+        }
+    }
+
+    pub(super) fn load_older_history(&mut self, cx: &mut Context<Self>) {
+        if self.transcript_state.has_more {
+            self.load_earlier_messages(cx);
+        } else if self.cloud.older_before.is_some() && !self.cloud.older_loading {
+            self.cloud.older_loading = true;
+            let _ = self
+                .requests
+                .unbounded_send(json!({"ui":"cloudHistoryOlder"}));
+            cx.notify();
+        }
+    }
+
+    fn auto_load_older_history(&mut self, cx: &mut Context<Self>) {
+        let first = self.messages.first().map(|entry| entry.id.clone());
+        if self.history_paging() != Some(false)
+            || first.is_none()
+            || first == self.history_auto_from
+        {
+            return;
+        }
+        self.history_auto_from = first;
+        self.load_older_history(cx);
+    }
+
+    /// The strip above the first message while older history exists. Drawn
+    /// within a screen of the top, it fetches the next page by itself; a
+    /// click is needed only when the previous page added nothing.
+    fn history_loader(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let loading = self.history_paging()?;
+        let stalled =
+            self.messages.first().map(|entry| &entry.id) == self.history_auto_from.as_ref();
+        let strip = row()
+            .id("load-earlier-messages")
+            .relative()
+            .w_full()
+            .h(px(36.))
+            .justify_center()
+            .gap_2()
+            .text_size(px(12.))
+            .text_color(rgb(FAINT));
+        if loading || !stalled {
+            let scroll = self.transcript_scroll.clone();
+            let view = cx.entity().downgrade();
+            let near_top = gpui::canvas(
+                move |bounds, _, cx| {
+                    if bounds.bottom() > scroll.bounds().top() - px(320.) {
+                        cx.defer(move |cx| {
+                            let _ = view.update(cx, |this, cx| this.auto_load_older_history(cx));
+                        });
+                    }
+                },
+                |_, _, _, _| (),
+            )
+            .absolute()
+            .size_0();
+            return Some(
+                strip
+                    .child(crate::acp_catalog::spinner("history-loader-spinner", 12.))
+                    .child(tr(cx, msg::chat::cloud_history_loading))
+                    .child(near_top)
+                    .into_any_element(),
+            );
+        }
+        Some(
+            strip
+                .cursor_pointer()
+                .hover(|style| style.text_color(rgb(TEXT)))
+                .child(tr(cx, msg::chat::cloud_history_load_earlier))
+                .on_click(cx.listener(|this, _, _, cx| this.load_older_history(cx)))
+                .into_any_element(),
+        )
+    }
+
     pub(super) fn transcript(&self, cx: &mut Context<Self>) -> AnyElement {
         let archived = self
             .selected
             .as_ref()
             .is_some_and(|chat| chat["archived"] == true);
         if !self.messages.is_empty()
+            && self.history_growth.is_none()
             && self.transcript_scroll.max_offset().y + self.transcript_scroll.offset().y <= px(24.)
         {
             self.transcript_scroll.scroll_to_bottom();
@@ -628,14 +712,29 @@ impl WorkspaceView {
             .pt_6()
             .pb_8()
             .gap_8()
-            .when(self.cloud.older_before.is_some(), |view| view.child(control("cloud-load-older",if self.cloud.older_loading { "Loading earlier messages…" } else { "Load earlier messages" })
-                .self_center().on_click(cx.listener(|this,_,_,cx| {
-                    if !this.cloud.older_loading {
-                        this.cloud.older_loading=true;
-                        let _=this.requests.unbounded_send(json!({"ui":"cloudHistoryOlder"}));
-                        cx.notify();
-                    }
-                }))))
+            .children(self.history_loader(cx))
+            .children(self.history_growth.map(|(height, offset)| {
+                // Older host history landed above the reader: once it is laid
+                // out, hold the same distance from the bottom, as cloud pages do.
+                let scroll = self.transcript_scroll.clone();
+                let view = cx.entity().downgrade();
+                gpui::canvas(
+                    move |_, window, _| {
+                        window.on_next_frame(move |_, cx| {
+                            let _ = view.update(cx, |this, cx| {
+                                if this.history_growth.take().is_some() {
+                                    let grown = scroll.max_offset().y - height;
+                                    scroll.set_offset(gpui::point(offset.x, offset.y - grown));
+                                    cx.notify();
+                                }
+                            });
+                        });
+                    },
+                    |_, _, _, _| (),
+                )
+                .absolute()
+                .size_0()
+            }))
             .when(self.messages.is_empty() && archived, |d| {
                 d.child(column().flex_1().justify_center().items_center().gap_3()
                     .child(icon("archive-minimalistic").size(px(24.)).text_color(rgb(MUTED)))
@@ -649,10 +748,6 @@ impl WorkspaceView {
                         .text_color(rgb(MUTED)).text_size(px(12.))
                         .on_click(cx.listener(|this, _, _, cx| { this.project = None; this.set_creation_destination(false, cx); cx.notify(); })))))
             })
-            .when(self.transcript_state.has_more, |view| view.child(
-                row().w_full().justify_center().child(control("load-earlier-messages", if self.transcript_state.loading_earlier { tr(cx, msg::chat::cloud_history_loading) } else { tr(cx, msg::chat::cloud_history_load_earlier) })
-                    .on_click(cx.listener(|this, _, _, cx| this.load_earlier_messages(cx))))
-            ))
             .children(self.messages.iter().enumerate().map(|(i, entry)| {
                 let message = serde_json::to_value(entry).unwrap_or(Value::Null);
                 let user = message["role"] == "user";
