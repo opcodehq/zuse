@@ -138,23 +138,34 @@ async fn lifecycle(
     candidate: Option<&[u8]>,
     scripts: Option<&std::path::Path>,
 ) -> Result<()> {
-    let (ready_ms, first) = tokio::join!(
-        provider_ready(provider, machine),
-        command(provider, machine, RUNTIME, Duration::from_secs(120))
-    );
-    let (ms, version) = first?;
+    // The fresh-start work runs while the provider may still be materializing
+    // the disk, as a boot would if it didn't wait for provider readiness.
+    let watch = Instant::now();
+    let fresh = async {
+        let (ms, version) = command(provider, machine, RUNTIME, Duration::from_secs(120)).await?;
+        let mut fresh = None;
+        if let Some(dir) = scripts {
+            provider
+                .upload(
+                    machine,
+                    "/tmp/zuse-timing-common.sh",
+                    &std::fs::read(dir.join("common.sh"))?,
+                )
+                .await
+                .map_err(|e| anyhow::anyhow!("upload common.sh: {e:?}"))?;
+            fresh = Some(script(provider, machine, dir, "fresh.sh").await?);
+        }
+        if let Some(fresh) = fresh.as_mut() {
+            fresh["finishedAfterCreateMs"] = json!(watch.elapsed().as_millis() as u64);
+        }
+        anyhow::Ok((ms, version, fresh))
+    };
+    let (ready_ms, fresh) = tokio::join!(provider_ready(provider, machine), fresh);
+    let (ms, version, fresh) = fresh?;
     receipt.record("providerReadyAfterCreateMs", ready_ms)?;
     receipt.record("runtimeReady", json!({"ms":ms,"version":version}))?;
-    if let Some(dir) = scripts {
-        provider
-            .upload(
-                machine,
-                "/tmp/zuse-timing-common.sh",
-                &std::fs::read(dir.join("common.sh"))?,
-            )
-            .await
-            .map_err(|e| anyhow::anyhow!("upload common.sh: {e:?}"))?;
-        receipt.record("fresh", script(provider, machine, dir, "fresh.sh").await?)?;
+    if let Some(fresh) = fresh {
+        receipt.record("fresh", fresh)?;
     }
     // What app features rely on inside the computer. Recorded, never fatal.
     let mut checks = serde_json::Map::new();

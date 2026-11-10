@@ -40,6 +40,16 @@ needed 2.1 s after the read.
 | Resume request to first command | 0.8 s | 6.2 s | 1.4 s | 1.8 s |
 | Restart before the agent is ready | None | Home files readable at ~14 s, then agent 7.6 s | None | Agent 0.1 s |
 
+### Boat waited for full hydration
+
+The worker treated a Boat computer as ready for its boot credential only once
+Boat reported the disk fully hydrated: 12–21 s after create and 10–11 s after a
+cold resume, while the installed runtime already answered after 2–9 s. Files
+written before hydration (64 MB of data, a credential-like file) survived
+hydration and a cold restore, and binaries read before hydration matched their
+hashes. Boat readiness is now "running and hydrated, or running and the
+installed runtime answers": 4.4 s after create and 3.0 s after a cold resume.
+
 Boat keeps a stopped machine in memory for ten minutes; within that window
 resume took 0.8–1.1 s with the agent alive. After it, resume is a cold restore
 from disk: `/tmp` and every process are gone, and the runtime and agent start
