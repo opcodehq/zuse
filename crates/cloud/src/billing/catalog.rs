@@ -15,6 +15,7 @@ pub struct BillingControl {
     pub(super) meter_exports: Option<Arc<super::MeterExportConfig>>,
     pub(super) accounts: Arc<HashSet<String>>,
     pub(super) payments: Option<Arc<super::PaymentProviders>>,
+    pub(super) wallet: Option<Arc<super::Wallet>>,
 }
 impl BillingControl {
     pub fn from_pool(pool: PgPool, accounts: Vec<String>) -> Self {
@@ -23,6 +24,7 @@ impl BillingControl {
             meter_exports: None,
             pool,
             payments: None,
+            wallet: None,
             accounts: Arc::new(accounts.into_iter().collect()),
         }
     }
@@ -171,7 +173,7 @@ impl Store {
             .await?;
         let p = period(&mut tx, owner, now, false).await?;
         let id = p["period_id"].as_str().ok_or_else(invalid)?;
-        let row=sqlx::query("SELECT (SELECT COALESCE(SUM(amount_micros),0)::bigint FROM api_cloud_billing_ledger WHERE period_id=$1 AND kind='provider-cost') AS confirmed,(SELECT COALESCE(SUM(amount_micros),0)::bigint FROM api_cloud_billing_ledger WHERE period_id=$1 AND kind='overage-charge') AS charged,(SELECT COALESCE(SUM(provider_cost_micros),0)::bigint FROM api_cloud_billing_reservations WHERE period_id=$1 AND expires_at>$2) AS reserved,(SELECT COALESCE(SUM(provider_cost_micros),0)::bigint FROM api_cloud_billing_usage WHERE period_id=$1 AND resource_kind='snapshot') AS storage, EXISTS(SELECT 1 FROM api_cloud_billing_usage WHERE period_id=$1 AND status='provisional') OR EXISTS(SELECT 1 FROM api_cloud_billing_reservations WHERE period_id=$1 AND expires_at>$2) AS provisional,(SELECT MAX(created_at) FROM api_cloud_billing_usage WHERE period_id=$1 AND status IN ('confirmed','corrected')) AS provider_at,(SELECT MAX(created_at) FROM api_cloud_billing_meter_reconciliations WHERE period_id=$1 AND provider=$3) AS billing_at").bind(id).bind(now).bind(p["billing_provider"].as_str().unwrap_or("polar")).fetch_one(&mut *tx).await?;
+        let row=sqlx::query("SELECT (SELECT COALESCE(SUM(amount_micros),0)::bigint FROM api_cloud_billing_ledger WHERE period_id=$1 AND kind='provider-cost') AS confirmed,(SELECT COALESCE(SUM(amount_micros),0)::bigint FROM api_cloud_billing_ledger WHERE period_id=$1 AND kind='overage-charge') AS charged,(SELECT COALESCE(SUM(provider_cost_micros),0)::bigint FROM api_cloud_billing_reservations WHERE period_id=$1 AND expires_at>$2) AS reserved,(SELECT COALESCE(SUM(provider_cost_micros),0)::bigint FROM api_cloud_billing_usage WHERE period_id=$1 AND resource_kind='snapshot') AS storage, EXISTS(SELECT 1 FROM api_cloud_billing_usage WHERE period_id=$1 AND status='provisional') OR EXISTS(SELECT 1 FROM api_cloud_billing_reservations WHERE period_id=$1 AND expires_at>$2) AS provisional,(SELECT MAX(created_at) FROM api_cloud_billing_usage WHERE period_id=$1 AND status IN ('confirmed','corrected')) AS provider_at,(SELECT MAX(created_at) FROM api_cloud_billing_meter_reconciliations WHERE period_id=$1 AND provider=$3) AS billing_at").bind(id).bind(now).bind(p["billing_provider"].as_str().unwrap_or("stripe")).fetch_one(&mut *tx).await?;
         let totals = (
             row.try_get::<i64, _>("confirmed")?,
             row.try_get::<i64, _>("charged")?,
@@ -182,9 +184,6 @@ impl Store {
         result.usage_provisional = row.try_get("provisional")?;
         result.last_provider_reconciled_at = row.try_get("provider_at")?;
         result.last_billing_reconciled_at = row.try_get("billing_at")?;
-        if p["billing_provider"].as_str().unwrap_or("polar") == "polar" {
-            result.last_polar_reconciled_at = result.last_billing_reconciled_at;
-        }
         tx.commit().await?;
         Ok(result)
     }
@@ -293,7 +292,6 @@ fn summary(
         current_invoice_estimate_micros: safe(i128::from(base) + actual)?,
         last_provider_reconciled_at: None,
         last_billing_reconciled_at: None,
-        last_polar_reconciled_at: None,
         usage_provisional: false,
     })
 }

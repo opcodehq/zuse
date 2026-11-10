@@ -407,6 +407,24 @@ impl Store {
                 return Err(ApiError::unavailable("cloud_transcript_schema_not_ready"));
             }
         }
+        if crate::models_gateway::ModelsGateway::shared().is_some() {
+            let ready: bool =
+                sqlx::query_scalar("SELECT to_regclass('zuse_rust_model_usage') IS NOT NULL")
+                    .fetch_one(&self.pool)
+                    .await?;
+            if !ready {
+                return Err(ApiError::unavailable("hosted_models_schema_not_ready"));
+            }
+        }
+        if crate::billing::Wallet::enabled() {
+            let ready: bool =
+                sqlx::query_scalar("SELECT to_regclass('brokeboy_reservations') IS NOT NULL")
+                    .fetch_one(&self.pool)
+                    .await?;
+            if !ready {
+                return Err(ApiError::unavailable("billing_wallet_schema_not_ready"));
+            }
+        }
         Ok(())
     }
 

@@ -24,7 +24,8 @@ FILES = ("0000_application.sql", "0001_control_plane.sql", "0002_gateway_leases.
 
 # Accepted only when separately installed by its explicit operator workflow.
 # Ordinary bootstrap never executes or backfills an optional migration.
-OPTIONAL_FILES = ("0028_project_environment_caches.sql", "0029_runtime_statement_batch.sql", "0030_transcript_write_intents.sql")
+OPTIONAL_FILES = ("0028_project_environment_caches.sql", "0029_runtime_statement_batch.sql", "0030_transcript_write_intents.sql",
+                  "0032_hosted_models.sql", "0033_brokeboy.sql")
 
 
 def optional_migrations(root=MIGRATIONS):

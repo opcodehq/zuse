@@ -69,38 +69,3 @@ async fn stripe_portal_verifies_original_customer_before_any_session() {
     assert_eq!(fixture.sessions.load(Ordering::SeqCst), 1);
     task.abort();
 }
-
-#[tokio::test]
-async fn polar_portal_uses_original_external_owner_and_rejects_unsafe_links() {
-    async fn session(Json(body): Json<Value>) -> Json<Value> {
-        let owner = body["external_customer_id"].as_str().unwrap();
-        assert_eq!(body.as_object().unwrap().len(), 1);
-        Json(
-            json!({"customer_portal_url":if owner=="organization:org-team" {"https://polar.sh/portal/fixture"}else{"http://unsafe.example.test/portal"}}),
-        )
-    }
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let origin = format!("http://{}/v1/", listener.local_addr().unwrap());
-    let task = tokio::spawn(
-        axum::serve(
-            listener,
-            Router::new().route("/v1/customer-sessions/", post(session)),
-        )
-        .into_future(),
-    );
-    let polar = PolarPortal {
-        checkout: None,
-        events: None,
-        http: ProviderHttp {
-            client: Client::new(),
-            origin: Url::parse(&origin).unwrap(),
-            secret: Zeroizing::new("fixture-polar-token".into()),
-        },
-    };
-    assert_eq!(
-        polar.portal("organization:org-team", None).await.unwrap(),
-        "https://polar.sh/portal/fixture"
-    );
-    assert!(polar.portal("user-other", None).await.is_err());
-    task.abort();
-}

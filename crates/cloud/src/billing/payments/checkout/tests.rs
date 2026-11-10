@@ -579,19 +579,7 @@ async fn checkout_reuses_identities_recovers_customers_and_activates_subscriptio
 }
 
 #[tokio::test]
-async fn polar_checkout_and_stripe_subscription_only_preserve_provider_parameters() {
-    async fn polar(h: HeaderMap, Json(value): Json<Value>) -> Json<Value> {
-        authorized(&h);
-        assert_eq!(value["external_customer_id"], "organization:org-team");
-        assert_eq!(value["products"], json!(["product_cloud"]));
-        assert_eq!(value["allow_trial"], false);
-        assert_eq!(value["metadata"]["offer_id"], CLOUD_OFFER);
-        assert_eq!(
-            value["success_url"],
-            "https://api-rust.zuse.sh/complete?checkout_id={CHECKOUT_ID}"
-        );
-        Json(json!({"url":"https://polar.example.test/checkout"}))
-    }
+async fn stripe_subscription_only_preserves_provider_parameters() {
     async fn stripe(h: HeaderMap, Form(form): Form<HashMap<String, String>>) -> Json<Value> {
         authorized(&h);
         assert_eq!(form["line_items[0][price]"], "price_cloud");
@@ -610,7 +598,6 @@ async fn polar_checkout_and_stripe_subscription_only_preserve_provider_parameter
         axum::serve(
             listener,
             Router::new()
-                .route("/checkouts/", post(polar))
                 .route("/checkout/sessions", post(stripe))
                 .route("/customers/cus_original", get(customer)),
         )
@@ -621,27 +608,6 @@ async fn polar_checkout_and_stripe_subscription_only_preserve_provider_parameter
         origin: Url::parse(&origin).unwrap(),
         secret: Zeroizing::new("fixture-key".into()),
     };
-    let polar = PolarPortal {
-        http: http(),
-        events: None,
-        checkout: Some(ProviderCheckout {
-            offers: HashMap::from([(CLOUD_OFFER.into(), "product_cloud".into())]),
-            overage: None,
-            automatic_tax: true,
-        }),
-    };
-    assert_eq!(
-        polar
-            .checkout(
-                "organization:org-team",
-                None,
-                CLOUD_OFFER,
-                "https://api-rust.zuse.sh/complete?checkout_id={CHECKOUT_ID}"
-            )
-            .await
-            .unwrap(),
-        "https://polar.example.test/checkout"
-    );
     let stripe = StripePortal {
         meter_price: None,
         credit_price: None,

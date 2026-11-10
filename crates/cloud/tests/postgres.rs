@@ -5928,7 +5928,7 @@ async fn cloud_billing_summary_usage_and_owned_cap_workflow() {
     ] {
         sqlx::query("INSERT INTO api_cloud_billing_periods VALUES($1,$2,'stripe','sub-preserved','active','USD',$3,$4,40000000,35000000,500,25000000,$3)").bind(id).bind(owner).bind(now-1000).bind(now+3600000).execute(&pool).await.unwrap();
     }
-    sqlx::raw_sql("INSERT INTO api_cloud_billing_ledger VALUES('cost','p-alice','provider-cost',40000000),('charge','p-alice','overage-charge',5250000); INSERT INTO api_cloud_billing_meter_reconciliations VALUES('p-alice','stripe',123),('p-alice','polar',999); INSERT INTO api_cloud_billing_usage VALUES('z-entry','p-alice','workspace','cloud-one','boxd','execution-one',10,20,2,4096,36000000,'confirmed',50),('y-entry','p-alice','snapshot','snap-one','boxd',NULL,10,20,0,0,4000000,'corrected',60);").execute(&pool).await.unwrap();
+    sqlx::raw_sql("INSERT INTO api_cloud_billing_ledger VALUES('cost','p-alice','provider-cost',40000000),('charge','p-alice','overage-charge',5250000); INSERT INTO api_cloud_billing_meter_reconciliations VALUES('p-alice','stripe',123),('p-alice','other',999); INSERT INTO api_cloud_billing_usage VALUES('z-entry','p-alice','workspace','cloud-one','boxd','execution-one',10,20,2,4096,36000000,'confirmed',50),('y-entry','p-alice','snapshot','snap-one','boxd',NULL,10,20,0,0,4000000,'corrected',60);").execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO api_cloud_billing_reservations VALUES('p-alice','workspace','active','boxd',10,20,2,4096,2000000,$1),('p-alice','workspace','expired','boxd',10,20,2,4096,99999999,0)").bind(now+3600000).execute(&pool).await.unwrap();
     let store = Store::from_pool(pool.clone()).with_billing_control(
         zuse_cloud::billing::BillingControl::from_pool(
@@ -5975,7 +5975,6 @@ async fn cloud_billing_summary_usage_and_owned_cap_workflow() {
     assert_eq!(summary["usageProvisional"], true);
     assert_eq!(summary["lastProviderReconciledAt"], 60);
     assert_eq!(summary["lastBillingReconciledAt"], 123);
-    assert!(summary.get("lastPolarReconciledAt").is_none());
     let (status, page) = request(&app, "/v1/cloud/billing/usage?limit=2", "alice", None).await;
     assert_eq!(status, StatusCode::OK, "{page}");
     assert_eq!(page["items"].as_array().unwrap().len(), 2);
@@ -6175,10 +6174,7 @@ async fn billing_portal_preserves_provider_customer_and_owner() {
             .with_payment_providers(
                 PaymentProviders::new(
                     "stripe".into(),
-                    vec![
-                        Arc::new(Provider("stripe", calls.clone())),
-                        Arc::new(Provider("polar", calls.clone())),
-                    ],
+                    vec![Arc::new(Provider("stripe", calls.clone()))],
                 )
                 .unwrap(),
             ),
@@ -6221,7 +6217,10 @@ async fn billing_portal_preserves_provider_customer_and_owner() {
     );
     let response = runtime_post(&app, path, "bob", &json!({})).await;
     assert_eq!(response.0, StatusCode::OK);
-    assert_eq!(response.1["portalUrl"], "https://polar.example.test/portal");
+    assert_eq!(
+        response.1["portalUrl"],
+        "https://stripe.example.test/portal"
+    );
     assert_eq!(
         app.clone()
             .oneshot(org_request("billing"))
@@ -6248,7 +6247,7 @@ async fn billing_portal_preserves_provider_customer_and_owner() {
         runtime_post(&app, path, "alice", &json!({})).await.1["error"],
         "cloud_billing_owner_not_rust"
     );
-    sqlx::raw_sql("UPDATE zuse_rust_control_owners SET backend='rust' WHERE resource_id='user-alice'; INSERT INTO api_entitlements VALUES('conflict','user-alice','cloud-workspace','cloud-workspace-standard-v1','polar','sub-other','active',9999999999999,NULL,100,100)").execute(&pool).await.unwrap();
+    sqlx::raw_sql("UPDATE zuse_rust_control_owners SET backend='rust' WHERE resource_id='user-alice'; INSERT INTO api_entitlements VALUES('conflict','user-alice','cloud-workspace','cloud-workspace-standard-v1','other','sub-other','active',9999999999999,NULL,100,100)").execute(&pool).await.unwrap();
     assert_eq!(
         runtime_post(&app, path, "alice", &json!({})).await.1["error"],
         "billing_provider_ambiguous"

@@ -976,8 +976,11 @@ pub(super) async fn observe_runtime(
             } else {
                 None
             };
-            payload["billingProvider"] = json!(billing.unwrap_or_else(|| "polar".into()));
-            sqlx::query("INSERT INTO api_cloud_usage_outbox(event_id,payload,created_at,next_attempt_at) VALUES($1,$2,$3,$3) ON CONFLICT DO NOTHING").bind(event).bind(payload).bind(now).execute(&mut **tx).await?;
+            // Telemetry needs a billing provider, and accounts without a period have none.
+            if let Some(billing) = billing {
+                payload["billingProvider"] = json!(billing);
+                sqlx::query("INSERT INTO api_cloud_usage_outbox(event_id,payload,created_at,next_attempt_at) VALUES($1,$2,$3,$3) ON CONFLICT DO NOTHING").bind(event).bind(payload).bind(now).execute(&mut **tx).await?;
+            }
         }
     }
     sqlx::query("UPDATE api_cloud_runtime_observations SET observation=$3 WHERE provider=$1 AND provider_sandbox_id=$2").bind(required(row,"provider")?).bind(source).bind(value).execute(&mut **tx).await?;

@@ -368,8 +368,8 @@ pub(super) async fn settle_segment(
     let kind = resource["kind"].as_str().ok_or_else(invalid)?;
     let id = resource["id"].as_str().ok_or_else(invalid)?;
     let period = p["period_id"].as_str().ok_or_else(invalid)?;
-    let provider = p["billing_provider"].as_str().unwrap_or("polar");
-    if !matches!(provider, "stripe" | "polar") {
+    let provider = p["billing_provider"].as_str().ok_or_else(invalid)?;
+    if provider != "stripe" {
         return Err(invalid());
     }
     let entry = identity.entry;

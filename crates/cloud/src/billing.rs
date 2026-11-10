@@ -8,14 +8,17 @@ pub use exports::{ExportReport, MeterEvent, MeterExportConfig};
 pub use settlement::{BoxdSettlementConfig, SettlementReport};
 pub use storage::{SnapshotSettlementConfig, SnapshotSettlementReport};
 mod payments;
+mod wallet;
 use crate::error::ApiError;
 pub use catalog::BillingControl;
 pub use payments::{
-    CheckoutSummary, CreditDispute, CreditEvent, CreditPurchase, CustomerPage, PaymentEvent,
-    PaymentProviders, PortalProvider, Subscription,
+    CheckoutSummary, CreditDispute, CreditEvent, CreditPurchase, CustomerPage,
+    HOSTED_MODELS_MIGRATION, HostedUsageReport, PaymentEvent, PaymentProviders, PortalProvider,
+    Subscription,
 };
 use serde_json::Value;
 use sqlx::{Postgres, Transaction};
+pub use wallet::{MIGRATION as WALLET_MIGRATION, Wallet};
 
 pub(crate) async fn require_capacity(
     tx: &mut Transaction<'_, Postgres>,

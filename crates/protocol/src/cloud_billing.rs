@@ -31,8 +31,6 @@ pub struct BillingSummary {
     pub last_provider_reconciled_at: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_billing_reconciled_at: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_polar_reconciled_at: Option<i64>,
     pub usage_provisional: bool,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

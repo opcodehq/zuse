@@ -22,7 +22,6 @@ struct Provider {
     fail_summary: AtomicBool,
     posts: Mutex<HashMap<String, (String, i64)>>,
     post_calls: AtomicUsize,
-    polar: Mutex<HashMap<String, Value>>,
     summary_calls: AtomicUsize,
     charge: AtomicI64,
 }
@@ -110,36 +109,15 @@ async fn summaries(
         ))
     }
 }
-async fn polar(State(f): State<Arc<Provider>>, h: HeaderMap, Json(v): Json<Value>) -> Json<Value> {
-    auth(&h);
-    let event = &v["events"][0];
-    assert_eq!(event["external_customer_id"], "user-bob");
-    let key = event["external_id"].as_str().unwrap().to_owned();
-    assert_eq!(event["metadata"]["idempotency_key"], key);
-    assert!(event["metadata"]["units"].is_i64());
-    let duplicate = f.polar.lock().unwrap().insert(key, event.clone()).is_some();
-    Json(json!({"inserted":if duplicate{0}else{1},"duplicates":if duplicate{1}else{0}}))
-}
-async fn polar_total(Query(q): Query<HashMap<String, String>>, h: HeaderMap) -> Json<Value> {
-    auth(&h);
-    assert_eq!(q["external_customer_id"], "user-bob");
-    assert_eq!(q["meter_id"], "meter-polar");
-    Json(
-        json!({"items":[{"meter_id":"meter-polar","customer":{"external_id":"user-bob"},"consumed_units":77.0}],"pagination":{"total_count":1,"max_page":1}}),
-    )
-}
 fn config(financial: bool, telemetry: bool) -> MeterExportConfig {
     MeterExportConfig {
         financial,
         telemetry,
-        meters: BTreeMap::from([
-            ("stripe".into(), "meter-stripe".into()),
-            ("polar".into(), "meter-polar".into()),
-        ]),
+        meters: BTreeMap::from([("stripe".into(), "meter-stripe".into())]),
     }
 }
 fn event(owner: &str, key: &str, name: &str, units: i64, now: i64) -> Value {
-    json!({"accountId":owner,"eventId":key,"eventName":name,"units":units,"occurredAtMs":now,"billingProvider":if owner=="user-alice"{"stripe"}else{"polar"},"metadata":{"billable":"false"}})
+    json!({"accountId":owner,"eventId":key,"eventName":name,"units":units,"occurredAtMs":now,"billingProvider":"stripe","metadata":{"billable":"false"}})
 }
 async fn usage(pool: &PgPool, key: &str, value: Value, now: i64) {
     sqlx::query("INSERT INTO api_cloud_usage_outbox(event_id,payload,created_at,next_attempt_at) VALUES($1,$2,$3,$3)").bind(key).bind(value).bind(now).execute(pool).await.unwrap();
@@ -157,7 +135,7 @@ async fn financial(
 }
 #[tokio::test]
 #[ignore = "requires explicit isolated localhost PostgreSQL"]
-async fn original_outboxes_export_once_recover_receipts_and_reconcile_both_providers() {
+async fn original_outboxes_export_once_recover_receipts_and_reconcile() {
     let url = std::env::var("ZUSE_CLOUD_TEST_DATABASE_URL")
         .expect("Explicit isolated PostgreSQL required");
     assert!(matches!(
@@ -203,12 +181,7 @@ async fn original_outboxes_export_once_recover_receipts_and_reconcile_both_provi
     let now = chrono::Utc::now().timestamp_millis() / 1000 * 1000;
     let start = now - 3600000;
     let end = now + 86400000;
-    for (period, owner, provider, sub) in [
-        ("p-alice", "user-alice", "stripe", "sub-preserved"),
-        ("p-bob", "user-bob", "polar", "legacy-sub"),
-    ] {
-        sqlx::query("INSERT INTO api_cloud_billing_periods VALUES($1,$2,$3,$4,'active','USD',$5,$6,40000000,35000000,500,31000000,$5)").bind(period).bind(owner).bind(provider).bind(sub).bind(start).bind(end).execute(&pool).await.unwrap();
-    }
+    sqlx::query("INSERT INTO api_cloud_billing_periods VALUES('p-alice','user-alice','stripe','sub-preserved','active','USD',$1,$2,40000000,35000000,500,31000000,$1)").bind(start).bind(end).execute(&pool).await.unwrap();
     financial(
         &pool,
         "legacy-stripe-key",
@@ -216,16 +189,6 @@ async fn original_outboxes_export_once_recover_receipts_and_reconcile_both_provi
         "p-alice",
         "stripe",
         123,
-        now,
-    )
-    .await;
-    financial(
-        &pool,
-        "legacy-polar-key",
-        "user-bob",
-        "p-bob",
-        "polar",
-        77,
         now,
     )
     .await;
@@ -237,7 +200,6 @@ async fn original_outboxes_export_once_recover_receipts_and_reconcile_both_provi
         fail_summary: AtomicBool::new(false),
         posts: Mutex::new(HashMap::new()),
         post_calls: AtomicUsize::new(0),
-        polar: Mutex::new(HashMap::new()),
         summary_calls: AtomicUsize::new(0),
         charge: AtomicI64::new(0),
     });
@@ -256,8 +218,6 @@ async fn original_outboxes_export_once_recover_receipts_and_reconcile_both_provi
                     "/billing/meters/meter-stripe/event_summaries",
                     get(summaries),
                 )
-                .route("/events/ingest", post(polar))
-                .route("/customer-meters/", get(polar_total))
                 .with_state(f.clone()),
         )
         .into_future(),
@@ -276,12 +236,7 @@ async fn original_outboxes_export_once_recover_receipts_and_reconcile_both_provi
         events: None,
         checkout: None,
     });
-    let polar = Arc::new(PolarPortal {
-        http: http(),
-        events: None,
-        checkout: None,
-    });
-    let providers = PaymentProviders::new("stripe".into(), vec![stripe, polar]).unwrap();
+    let providers = PaymentProviders::new("stripe".into(), vec![stripe]).unwrap();
     let base =
         BillingControl::from_pool(pool.clone(), vec!["user-alice".into(), "user-bob".into()])
             .with_payment_providers(providers);
@@ -291,13 +246,9 @@ async fn original_outboxes_export_once_recover_receipts_and_reconcile_both_provi
     assert_eq!(f.post_calls.load(Ordering::SeqCst), 0);
     sqlx::raw_sql("INSERT INTO zuse_rust_control_owners VALUES('billing-export','user-alice','rust',1,0),('billing-export','user-bob','rust',1,0)").execute(&pool).await.unwrap();
     let result = control.export_once(now, 25).await.unwrap();
-    assert_eq!(result.financial, 1);
+    assert_eq!(result.financial, 0);
     assert_eq!(result.retried, 1);
     assert_eq!(f.charge.load(Ordering::SeqCst), 123);
-    assert_eq!(
-        f.polar.lock().unwrap()["legacy-polar-key"]["metadata"]["billing_period_id"],
-        "p-bob"
-    );
     assert_eq!(
         control
             .export_once(now + 60001, 25)
@@ -337,14 +288,6 @@ async fn original_outboxes_export_once_recover_receipts_and_reconcile_both_provi
         0
     );
     assert_eq!(f.summary_calls.load(Ordering::SeqCst), 0);
-    assert_eq!(
-        telemetry
-            .export_once(now + 60004, 1)
-            .await
-            .unwrap()
-            .reconciled,
-        1
-    );
     sqlx::query("UPDATE api_cloud_billing_meter_reconciliation_attempts SET attempted_at=0 WHERE provider='stripe'").execute(&pool).await.unwrap();
     f.fail_summary.store(true, Ordering::SeqCst);
     let telemetry = base.clone().with_meter_exports(config(false, true));
@@ -404,10 +347,10 @@ async fn original_outboxes_export_once_recover_receipts_and_reconcile_both_provi
     .await;
     usage(
         &pool,
-        "polar-observation",
+        "cost-observation",
         event(
-            "user-bob",
-            "polar-observation",
+            "user-alice",
+            "cost-observation",
             "zuse_cloud_provider_cost_micros",
             5000,
             now,
@@ -419,10 +362,6 @@ async fn original_outboxes_export_once_recover_receipts_and_reconcile_both_provi
     assert_eq!(result.telemetry, 2);
     assert_eq!(result.retried, 1);
     assert_eq!(f.charge.load(Ordering::SeqCst), 123);
-    assert_eq!(
-        f.polar.lock().unwrap()["polar-observation"]["metadata"]["billable"],
-        "false"
-    );
     // A source period can admit a historical draft invoice, while a finalized invoice stays retryable.
     financial(
         &pool,

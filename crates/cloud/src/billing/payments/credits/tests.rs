@@ -312,14 +312,9 @@ async fn prepaid_credit_funding_refunds_disputes_and_legacy_receipts() {
         events: Some(events::EventConfig::fixture("whsec_fixture", "price_cloud")),
         checkout: None,
     });
-    let polar = Arc::new(PolarPortal {
-        http: http(),
-        events: None,
-        checkout: None,
-    });
     let signing = ed25519_dalek::SigningKey::from_bytes(&[20; 32]);
     let signer=crate::tickets::TicketSigner::from_jwk(&json!({"kty":"OKP","crv":"Ed25519","d":URL_SAFE_NO_PAD.encode([20;32]),"x":URL_SAFE_NO_PAD.encode(signing.verifying_key().as_bytes())}).to_string(),"https://api-rust.zuse.sh").unwrap();
-    let payments = PaymentProviders::new("stripe".into(), vec![stripe, polar])
+    let payments = PaymentProviders::new("stripe".into(), vec![stripe])
         .unwrap()
         .with_checkout(signer);
     let app = router(
@@ -360,12 +355,6 @@ async fn prepaid_credit_funding_refunds_disputes_and_legacy_receipts() {
             .await
             .1["creditCents"],
         0
-    );
-    assert_eq!(
-        request(&app, "GET", balance, "bob", None, json!({}))
-            .await
-            .1["available"],
-        false
     );
     assert_eq!(
         request(&app, "POST", buy, "alice", None, json!({"amountCents":999}))

@@ -15,6 +15,7 @@ path = "examples/ui_host.rs"
 required-features = ["runtime-acceptance"]
 
 [dependencies]
+brokeboy = { git = "https://github.com/opcodehq/brokeboy", rev = "1e35dc7925f7b4df49c05283f687f51a77886e8a", default-features = false, features = ["postgres", "stripe"] }
 zuse-cloud-projection.workspace = true
 zuse-engine = { workspace = true, optional = true }
 zuse-serve = { workspace = true, optional = true }

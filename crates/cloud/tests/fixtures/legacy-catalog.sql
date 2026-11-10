@@ -23,7 +23,7 @@ CREATE TABLE api_cloud_workspaces (
 );
 INSERT INTO api_entitlements VALUES
  ('ent-alice','user-alice','cloud-workspace','cloud-workspace-standard-v1','stripe','sub-preserved','active',9999999999999,NULL,100,100),
- ('ent-bob','user-bob','cloud-workspace','cloud-workspace-standard-v1','polar','legacy-sub','active',9999999999999,NULL,100,100),
+ ('ent-bob','user-bob','cloud-workspace','cloud-workspace-standard-v1','stripe','legacy-sub','active',9999999999999,NULL,100,100),
  ('ent-org','organization:org-team','cloud-workspace','cloud-workspace-standard-v1','stripe','sub-org','active',9999999999999,NULL,100,100);
 INSERT INTO api_cloud_workspaces VALUES
  ('ws-alice','user-alice','project','image','boxd','machine-alice','BOOT_HASH_PRIVATE','CREDENTIAL_HASH_PRIVATE','WRAPPED_KEY_PRIVATE','offline','chat-alice','session-alice','feature','main','archived','archived','archived','{"runtimeGeneration":2}',100,2592000100,NULL,5,1,3,2),

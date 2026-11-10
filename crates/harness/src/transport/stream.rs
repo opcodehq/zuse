@@ -587,14 +587,7 @@ impl Assembly {
         usage.connection_id = credential.connection_id.clone();
         usage.request_id = Some(request_id);
         usage.purpose = input.purpose;
-        usage.billing_route = Some(
-            if credential.route.subscription {
-                "subscription"
-            } else {
-                "api"
-            }
-            .into(),
-        );
+        usage.billing_route = Some(credential.billing_route().into());
         usage.prefix_fingerprint = Some(super::request::fingerprint(input, credential));
         usage.first_token_ms = self.first_token_ms;
         Ok(ModelOutput {

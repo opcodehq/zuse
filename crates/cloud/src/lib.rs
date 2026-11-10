@@ -27,6 +27,7 @@ pub mod host_link;
 pub mod jobs;
 pub mod managed_bases;
 pub mod model_catalog;
+pub mod models_gateway;
 pub mod project_caches;
 pub mod providers;
 pub mod routes;

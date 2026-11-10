@@ -33,22 +33,14 @@ pub(super) fn required<'a>(v: &'a Value, key: &str) -> Result<&'a str, ApiError>
         .ok_or_else(unavailable)
 }
 impl ProviderCheckout {
-    pub(super) fn from_env(prefix: &str, kind: &str) -> anyhow::Result<Option<Self>> {
+    pub(super) fn from_env() -> anyhow::Result<Option<Self>> {
         let mut offers = HashMap::new();
         let mut ids = std::collections::HashSet::new();
         for (suffix, offer) in [
             ("CLOUD_WORKSPACE_STANDARD_V1", CLOUD_OFFER),
             ("PERSISTENT_STANDARD_V1", "persistent-standard-v1"),
         ] {
-            let value = std::env::var(format!("{prefix}_{kind}_{suffix}"))
-                .ok()
-                .or_else(|| {
-                    if prefix == "POLAR" && offer == CLOUD_OFFER {
-                        std::env::var("POLAR_PRODUCT_SANDBOX_STANDARD_V1").ok()
-                    } else {
-                        None
-                    }
-                });
+            let value = std::env::var(format!("STRIPE_PRICE_{suffix}")).ok();
             if let Some(value) = value.filter(|v| !v.trim().is_empty()) {
                 anyhow::ensure!(
                     ids.insert(value.clone()),
@@ -62,11 +54,10 @@ impl ProviderCheckout {
         }
         let mode = std::env::var("STRIPE_CLOUD_BILLING_MODE").unwrap_or_else(|_| "metered".into());
         anyhow::ensure!(
-            prefix != "STRIPE" || matches!(mode.as_str(), "metered" | "subscription-only"),
+            matches!(mode.as_str(), "metered" | "subscription-only"),
             "Invalid Stripe cloud billing mode"
         );
-        let overage = if prefix == "STRIPE" && mode == "metered" && offers.contains_key(CLOUD_OFFER)
-        {
+        let overage = if mode == "metered" && offers.contains_key(CLOUD_OFFER) {
             let price = std::env::var("STRIPE_CLOUD_OVERAGE_PRICE_ID")
                 .ok()
                 .filter(|v| !v.trim().is_empty());
@@ -125,23 +116,6 @@ impl CheckoutSummary {
                 "failed"
             } else {
                 "pending"
-            }
-            .into(),
-        }
-        .validate()
-    }
-    pub(super) fn polar(v: &Value) -> Result<Self, ApiError> {
-        Self {
-            checkout_id: required(v, "id")?.into(),
-            amount_cents: v["total_amount"].as_i64().ok_or_else(unavailable)?,
-            currency: required(v, "currency")?.into(),
-            created_at_ms: chrono::DateTime::parse_from_rfc3339(required(v, "created_at")?)
-                .map_err(|_| unavailable())?
-                .timestamp_millis(),
-            status: match v["status"].as_str() {
-                Some("succeeded") => "paid",
-                Some("open" | "confirmed") => "pending",
-                _ => "failed",
             }
             .into(),
         }
