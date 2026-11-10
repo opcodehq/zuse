@@ -55,11 +55,15 @@ mod creation_sources;
 mod desktop_import;
 mod dictation;
 mod external_chats;
+mod force_delete;
 mod git_workspace;
+mod list_watch;
 mod simulators;
+mod transcript_window;
 mod visuals;
 mod voice_chat;
 mod voice_remote;
+mod zots;
 use async_trait::async_trait;
 use base64::Engine as _;
 use futures::StreamExt;
@@ -717,6 +721,9 @@ enum MutateParams {
     /// Tombstone: removes the chats-map row; the session doc remains.
     #[serde(rename_all = "camelCase")]
     DeleteChat { chat_id: String },
+    /// Remove an exclusive managed checkout without creating an archive.
+    #[serde(rename_all = "camelCase")]
+    ForceDeleteChat { chat_id: String },
     #[serde(rename_all = "camelCase")]
     RenameDevice { device_id: String, name: String },
     /// Synced seen marker (LWW + monotonic guard): clears the "completed"
@@ -737,6 +744,7 @@ pub struct EngineRpc {
     browser_access: Option<crate::browser_access::BrowserAccess>,
     relay_access: Option<crate::relay_access::RelayAccess>,
     direct_access: Option<crate::direct_access::DirectAccess>,
+    zots: Option<crate::zots::Zots>,
     model_connections: Option<crate::model_connections::ModelConnections>,
     account: Option<crate::account::Account>,
     managed_access: Option<crate::managed_access::AccountClient>,
@@ -803,6 +811,7 @@ impl EngineRpc {
             browser_access: None,
             relay_access: None,
             direct_access: None,
+            zots: None,
             model_connections: None,
             account: None,
             managed_access: None,
@@ -863,6 +872,11 @@ impl EngineRpc {
 
     pub(crate) fn with_visuals(mut self, visuals: crate::visuals::Visuals) -> Self {
         self.visuals = visuals;
+        self
+    }
+
+    pub fn with_zots(mut self, zots: crate::zots::Zots) -> Self {
+        self.zots = Some(zots);
         self
     }
 
@@ -957,6 +971,13 @@ impl EngineRpc {
         self
     }
 
+    pub(crate) fn with_github_launcher(
+        mut self,
+        launcher: crate::source_control::GitHubCommandLauncher,
+    ) -> Self {
+        self.github = self.github.with_launcher(launcher);
+        self
+    }
     #[cfg(test)]
     pub(crate) fn with_github(mut self, github: GitHubCli) -> Self {
         self.github = github;
@@ -1319,7 +1340,11 @@ impl EngineRpc {
             });
             return Ok(RpcReply::Stream(stream.boxed()));
         }
-        let deadline = if method == methods::MUTATE && params["op"] == "setChatArchived" {
+        let deadline = if method == methods::MUTATE
+            && matches!(
+                params["op"].as_str(),
+                Some("setChatArchived" | "forceDeleteChat")
+            ) {
             std::time::Duration::from_secs(10 * 60)
         } else {
             forward_deadline(method)
@@ -1483,17 +1508,27 @@ impl EngineRpc {
                     .map_err(failed)
                     .map(drop)
             }
-            MutateParams::SetChatArchived { .. } => Err(RpcError::Failed(
-                "Archive changes must use the host lifecycle handler.".into(),
-            )),
+            MutateParams::SetChatArchived { .. } | MutateParams::ForceDeleteChat { .. } => {
+                Err(RpcError::Failed(
+                    "Archive and force-delete changes must use the host lifecycle handler.".into(),
+                ))
+            }
             MutateParams::ChangeSidebarPin { change } => {
                 self.workspace.change_sidebar_pin(&change).map_err(failed)
             }
             MutateParams::SetChatConfig {
                 chat_id,
-                config,
+                mut config,
                 expected_config,
             } => {
+                if self
+                    .zots
+                    .as_ref()
+                    .is_some_and(|zots| zots.coordinator(&chat_id).ok().flatten().is_some())
+                {
+                    config.sandbox = zuse_protocol::SandboxLevel::WorkspaceWrite;
+                    config.plan = true;
+                }
                 if let Some(expected) = expected_config {
                     if expected.device_id != self.doc_host.device_id()
                         || !self
@@ -1513,11 +1548,39 @@ impl EngineRpc {
                     }
                 } else {
                     self.voice.retire_chat(&chat_id);
-                    return self
-                        .workspace
+                    self.workspace
                         .set_chat_config(&chat_id, &config)
                         .map_err(failed)
-                        .map(drop);
+                        .map(drop)?;
+                }
+                if let Some(zots) = &self.zots {
+                    if let Some(mut zot) = zots
+                        .coordinator(&chat_id)
+                        .map_err(|e| RpcError::Failed(e.to_string()))?
+                    {
+                        let harness = serde_json::to_value(config.harness)
+                            .map_err(|e| RpcError::BadParams(e.to_string()))?
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_owned();
+                        if zot.config.coordinator_model.harness != harness
+                            || zot.config.coordinator_model.model != config.model
+                        {
+                            zot.config.coordinator_model = zuse_protocol::zots::ZotModel {
+                                harness,
+                                model: config.model.clone(),
+                            };
+                            zots.command(zuse_protocol::zots::ZotCommand {
+                                command_id: uuid::Uuid::new_v4().to_string(),
+                                zot_id: zot.id,
+                                expected_revision: Some(zot.revision),
+                                action: zuse_protocol::zots::ZotAction::Configure {
+                                    config: zot.config,
+                                },
+                            })
+                            .map_err(|e| RpcError::Failed(e.to_string()))?;
+                        }
+                    }
                 }
                 self.voice.retire_chat(&chat_id);
                 Ok(())
@@ -1556,6 +1619,7 @@ fn should_invalidate_link(error: &RpcError) -> bool {
 fn change_request_rpc_error(error: ChangeRequestError) -> RpcError {
     let code = match error {
         ChangeRequestError::CliUnavailable => capability_errors::PULL_REQUESTS_CLI_UNAVAILABLE,
+        ChangeRequestError::CliOutdated => capability_errors::PULL_REQUESTS_CLI_OUTDATED,
         ChangeRequestError::Authentication => capability_errors::PULL_REQUESTS_AUTHENTICATION,
         ChangeRequestError::RateLimited => capability_errors::PULL_REQUESTS_RATE_LIMITED,
         ChangeRequestError::Timeout => capability_errors::PULL_REQUESTS_TIMEOUT,
@@ -1711,11 +1775,27 @@ const LOGIN_TUNNEL_TTL: Duration = Duration::from_secs(15 * 60);
 fn forwardable_request(method: &str, params: &serde_json::Value) -> bool {
     forwardable(method)
         || (method == methods::MUTATE
-            && (params["op"] == "setChatArchived"
-                || (params["op"] == "setChatConfig" && params.get("expectedConfig").is_some())))
+            && (matches!(
+                params["op"].as_str(),
+                Some("setChatArchived" | "forceDeleteChat")
+            ) || (params["op"] == "setChatConfig" && params.get("expectedConfig").is_some())))
 }
 
 fn forwardable(method: &str) -> bool {
+    if method == "BindZotWorker" {
+        return true;
+    }
+    if matches!(
+        method,
+        zuse_protocol::control::API_INFO
+            | zuse_protocol::control::ZOT_COMMAND
+            | zuse_protocol::control::WATCH_ZOTS
+            | zuse_protocol::control::ZOT_FILES
+            | zuse_protocol::control::ZOT_EVENTS
+            | zuse_protocol::control::ACK_ZOT_EVENTS
+    ) {
+        return true;
+    }
     if simulators::handles(method) || voice_remote::handles(method) {
         return true;
     }
@@ -1867,6 +1947,9 @@ fn forwardable(method: &str) -> bool {
 
 /// Forwardable methods whose reply is a stream (proxied item-by-item).
 fn is_stream_method(method: &str) -> bool {
+    if method == zuse_protocol::control::WATCH_ZOTS {
+        return true;
+    }
     if method == methods::SIMULATOR_FRAMES || method == methods::OWN_VOICE_V2 {
         return true;
     }
@@ -1946,10 +2029,11 @@ fn chat_config_stream(
 /// The transcript watch as delta frames (`zuse_doc::transcript_delta`): a
 /// full `reset` first, then only changed entries per commit — the whole-Vec
 /// serialization here was the per-tick cost that scaled with transcript size.
-fn doc_message_updates(
+fn doc_message_envelopes(
     rx: watch::Receiver<crate::doc_host::TranscriptSnapshot>,
     doc: std::sync::Arc<zuse_doc::SessionDoc>,
-) -> BoxStream<'static, zuse_doc::TranscriptUpdate> {
+    window: Option<transcript_window::Window>,
+) -> BoxStream<'static, transcript_window::Envelope> {
     use zuse_doc::transcript_delta::{TranscriptFrame, diff_transcript};
     futures::stream::unfold(
         (
@@ -1958,8 +2042,18 @@ fn doc_message_updates(
             doc,
             None,
             zuse_doc::TranscriptBaseline::default(),
+            window,
+            None,
         ),
-        |(mut rx, mut prev, doc, mut previous_usage, mut opening_baseline)| async move {
+        |(
+            mut rx,
+            mut prev,
+            doc,
+            mut previous_usage,
+            mut opening_baseline,
+            mut window,
+            mut previous_history,
+        )| async move {
             loop {
                 if prev.is_some() {
                     rx.changed().await.ok()?;
@@ -1967,10 +2061,25 @@ fn doc_message_updates(
                 // Watchers retain the immutable published snapshot. Each
                 // connection used to deep-copy the entire transcript here.
                 let current = rx.borrow_and_update().clone();
+                let (current, history) = match &mut window {
+                    Some(window) => {
+                        let (current, history) = window.project(current);
+                        (current, Some(history))
+                    }
+                    None => (current, None),
+                };
+                let resumed = if prev.is_none() {
+                    window
+                        .as_mut()
+                        .and_then(|window| window.resume_frame(&current.entries))
+                } else {
+                    None
+                };
+                let history_resumed = resumed.is_some();
                 let frame = match prev.as_ref() {
-                    None => TranscriptFrame::Reset {
+                    None => resumed.unwrap_or_else(|| TranscriptFrame::Reset {
                         reset: current.entries.clone(),
-                    },
+                    }),
                     Some(prev) => diff_transcript(&prev.entries, &current.entries),
                 };
                 let replay_baseline = match prev.as_ref() {
@@ -1989,13 +2098,39 @@ fn doc_message_updates(
                         // subscription's opening cutoff without capturing live
                         // appends or sharing another viewer's later cutoff.
                         // Ordinary live updates never rebuild this metadata.
-                        let mut baseline = (*current.replay_baseline).clone();
+                        let mut baseline = if window.is_some() {
+                            zuse_doc::TranscriptBaseline {
+                                entries: current
+                                    .entries
+                                    .iter()
+                                    .filter_map(|entry| {
+                                        current
+                                            .replay_baseline
+                                            .entries
+                                            .get(&entry.id)
+                                            .map(|parts| (entry.id.clone(), parts.clone()))
+                                    })
+                                    .collect(),
+                            }
+                        } else {
+                            (*current.replay_baseline).clone()
+                        };
                         for (entry, parts) in &opening_baseline.entries {
                             let merged = baseline.entries.entry(entry.clone()).or_default();
                             for (part, &len) in parts {
                                 let cutoff = merged.entry(part.clone()).or_default();
                                 *cutoff = (*cutoff).max(len);
                             }
+                        }
+                        if window.is_some() {
+                            let visible = current
+                                .entries
+                                .iter()
+                                .map(|entry| entry.id.as_str())
+                                .collect::<std::collections::HashSet<_>>();
+                            baseline
+                                .entries
+                                .retain(|id, _| visible.contains(id.as_str()));
                         }
                         Some(baseline)
                     }
@@ -2005,20 +2140,54 @@ fn doc_message_updates(
                 // No-op commits (a second watcher attaching, command-only
                 // changes) produce empty deltas — skip the frame entirely.
                 let usage = doc.context_usage();
-                if frame.is_empty_delta() && usage == previous_usage && replay_baseline.is_none() {
+                if frame.is_empty_delta()
+                    && usage == previous_usage
+                    && replay_baseline.is_none()
+                    && history == previous_history
+                {
                     continue;
                 }
                 previous_usage = usage;
+                let outgoing_history = if history == previous_history {
+                    None
+                } else {
+                    history.clone()
+                };
+                previous_history = history;
                 let value = zuse_doc::TranscriptUpdate {
                     frame,
                     context_usage: usage,
                     replay_baseline,
                 };
-                return Some((value, (rx, prev, doc, previous_usage, opening_baseline)));
+                return Some((
+                    transcript_window::Envelope {
+                        update: value,
+                        history: outgoing_history,
+                        history_resumed,
+                    },
+                    (
+                        rx,
+                        prev,
+                        doc,
+                        previous_usage,
+                        opening_baseline,
+                        window,
+                        previous_history,
+                    ),
+                ));
             }
         },
     )
     .boxed()
+}
+
+fn doc_message_updates(
+    rx: watch::Receiver<crate::doc_host::TranscriptSnapshot>,
+    doc: std::sync::Arc<zuse_doc::SessionDoc>,
+) -> BoxStream<'static, zuse_doc::TranscriptUpdate> {
+    doc_message_envelopes(rx, doc, None)
+        .map(|envelope| envelope.update)
+        .boxed()
 }
 
 fn doc_messages_typed_stream(
@@ -2159,6 +2328,12 @@ impl AuthRpc {
 #[async_trait]
 impl RpcService for AuthRpc {
     async fn handle(&self, method: &str, params: serde_json::Value) -> Result<RpcReply, RpcError> {
+        if crate::cloud::beta_gated(method) && !crate::cloud::beta_enabled() {
+            return Err(RpcError::Failed(crate::cloud::BETA_MESSAGE.into()));
+        }
+        if method == methods::CLOUD_EVENTS {
+            return crate::cloud::events::handle(&self.cloud, params).await;
+        }
         if matches!(method, methods::CLOUD_ENVIRONMENT | methods::CLOUD_RPC) {
             return crate::cloud::environment::handle(&self.cloud, method, params).await;
         }
@@ -2218,7 +2393,7 @@ impl RpcService for AuthRpc {
         if crate::cloud::handles(method) {
             let result = crate::cloud::handle(&self.cloud, method, params)
                 .await
-                .map_err(|error| RpcError::Failed(error.to_string()))?;
+                .map_err(crate::cloud::rpc_error)?;
             return RpcReply::value(&result);
         }
         match method {
@@ -2292,6 +2467,23 @@ impl RpcService for AuthRpc {
 #[async_trait]
 impl RpcService for EngineRpc {
     async fn handle(&self, method: &str, params: serde_json::Value) -> Result<RpcReply, RpcError> {
+        if methods::retryable_read(method, &params) {
+            return self.handle_admitted(method, params).await;
+        }
+        let permit = self
+            .sessions
+            .execution_admission()
+            .enter()
+            .map_err(|error| RpcError::Failed(error.to_string()))?;
+        permit.scope(self.handle_admitted(method, params)).await
+    }
+}
+impl EngineRpc {
+    async fn handle_admitted(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<RpcReply, RpcError> {
         let failed = |error: crate::EngineError| RpcError::Failed(error.to_string());
         if matches!(
             method,
@@ -2372,38 +2564,38 @@ impl RpcService for EngineRpc {
             let method = method.to_owned();
             // Admitted control operations finish even if their caller disconnects.
             return tokio::spawn(async move { match method.as_str() {
-                methods::RELAY_ACCESS_STATUS => RpcReply::value(&access.status().await),
-                methods::STOP_RELAY_ACCESS => RpcReply::value(&access.stop().await),
-                methods::RESUME_RELAY_ACCESS => {
-                    let status = access.resume(service.clone()).await
-                        .map_err(|_| RpcError::Failed("Could not resume relay access. Check the saved configuration and private credential file.".into()))?;
-                    RpcReply::value(&status)
+            methods::RELAY_ACCESS_STATUS => RpcReply::value(&access.status().await),
+            methods::STOP_RELAY_ACCESS => RpcReply::value(&access.stop().await),
+            methods::RESUME_RELAY_ACCESS => {
+                let status = access.resume(service.clone()).await
+                    .map_err(|_| RpcError::Failed("Could not resume relay access. Check the saved configuration and private credential file.".into()))?;
+                RpcReply::value(&status)
+            }
+            methods::SET_RELAY_AUTO_START => {
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct P {
+                    enabled: bool,
                 }
-                methods::SET_RELAY_AUTO_START => {
-                    #[derive(Deserialize)]
-                    #[serde(deny_unknown_fields)]
-                    struct P {
-                        enabled: bool,
-                    }
-                    let mut params = params;
-                    if let Some(object) = params.as_object_mut() {
-                        object.remove("targetDeviceId");
-                    }
-                    let p: P = parse_params(params)?;
-                    let status = access.set_auto_start(p.enabled).await
-                        .map_err(|_|RpcError::Failed("Could not save relay startup. Configure relay access and check its private credential file.".into()))?;
-                    RpcReply::value(&status)
+                let mut params = params;
+                if let Some(object) = params.as_object_mut() {
+                    object.remove("targetDeviceId");
                 }
-                _ => {
-                    let mut params = params;
-                    if let Some(object) = params.as_object_mut() {
-                        object.remove("targetDeviceId");
-                    }
-                    let status = access.start(parse_params(params)?, service.clone()).await
-                        .map_err(|_| RpcError::Failed("Could not start relay access. Check the relay URL and private host credential file.".into()))?;
-                    RpcReply::value(&status)
+                let p: P = parse_params(params)?;
+                let status = access.set_auto_start(p.enabled).await
+                    .map_err(|_|RpcError::Failed("Could not save relay startup. Configure relay access and check its private credential file.".into()))?;
+                RpcReply::value(&status)
+            }
+            _ => {
+                let mut params = params;
+                if let Some(object) = params.as_object_mut() {
+                    object.remove("targetDeviceId");
                 }
-            }}).await.map_err(|_|RpcError::Failed("Relay control stopped unexpectedly. Refresh its status before trying again.".into()))?;
+                let status = access.start(parse_params(params)?, service.clone()).await
+                    .map_err(|_| RpcError::Failed("Could not start relay access. Check the relay URL and private host credential file.".into()))?;
+                RpcReply::value(&status)
+            }
+        }}).await.map_err(|_|RpcError::Failed("Relay control stopped unexpectedly. Refresh its status before trying again.".into()))?;
         }
         if matches!(
             method,
@@ -2536,7 +2728,11 @@ impl RpcService for EngineRpc {
 
         let mut params = params;
         if method == methods::GET_CHAT_ARCHIVE_STATUS
-            || (method == methods::MUTATE && params["op"] == "setChatArchived")
+            || (method == methods::MUTATE
+                && matches!(
+                    params["op"].as_str(),
+                    Some("setChatArchived" | "forceDeleteChat")
+                ))
         {
             if let Some(id) = params["chatId"].as_str() {
                 if let Some(chat) = self.workspace.chat(id).map_err(failed)? {
@@ -2545,7 +2741,7 @@ impl RpcService for EngineRpc {
                         .is_some_and(|target| target != chat.device_id)
                     {
                         return Err(RpcError::Failed(
-                            "This thread moved to another computer. Refresh before archiving it."
+                            "This thread moved to another computer. Refresh before changing it."
                                 .into(),
                         ));
                     }
@@ -2556,6 +2752,73 @@ impl RpcService for EngineRpc {
 
         // Device-addressed routing: forward calls that target another device over its
         // relay. The target compares the id to its own, so forwards cannot loop.
+        if method == zuse_protocol::control::CALL {
+            let zots = self
+                .zots
+                .as_ref()
+                .ok_or_else(|| RpcError::Capability("control.v1".into()))?;
+            let token = params
+                .get("token")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let operation = params
+                .get("method")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let mut operation_params = params
+                .get("params")
+                .cloned()
+                .unwrap_or(serde_json::json!({}));
+            if !zots.authorize(token) {
+                let denied = || RpcError::Capability("control.unauthorized".into());
+                let chat = zots.grant_owner(token).ok_or_else(denied)?;
+                if !self.sessions.turn_in_flight(&chat) {
+                    return Err(denied());
+                }
+                let zot = zots
+                    .coordinator(&chat)
+                    .map_err(|e| RpcError::Failed(e.to_string()))?
+                    .ok_or_else(denied)?;
+                let args = operation_params.clone();
+                if operation != zuse_protocol::control::API_INFO
+                    && args.get("zotId").and_then(|v| v.as_str()) != Some(zot.id.as_str())
+                {
+                    return Err(denied());
+                }
+                if operation == zuse_protocol::control::ZOT_COMMAND {
+                    let mut command: zuse_protocol::zots::ZotCommand = parse_params(args)?;
+                    if matches!(
+                        command.action,
+                        zuse_protocol::zots::ZotAction::Create { .. }
+                            | zuse_protocol::zots::ZotAction::Configure { .. }
+                            | zuse_protocol::zots::ZotAction::Delete
+                            | zuse_protocol::zots::ZotAction::SetStatus { .. }
+                            | zuse_protocol::zots::ZotAction::AdoptWorker { .. }
+                    ) {
+                        return Err(denied());
+                    }
+                    if let zuse_protocol::zots::ZotAction::MessageWorker { automatic, .. } =
+                        &mut command.action
+                    {
+                        *automatic = true;
+                    }
+                    operation_params = serde_json::to_value(command)
+                        .map_err(|e| RpcError::BadParams(e.to_string()))?;
+                } else if !matches!(
+                    operation,
+                    zuse_protocol::control::API_INFO
+                        | zuse_protocol::control::ZOT_FILES
+                        | zuse_protocol::control::ZOT_EVENTS
+                        | zuse_protocol::control::ACK_ZOT_EVENTS
+                ) {
+                    return Err(denied());
+                }
+            }
+            if !zuse_protocol::control::METHODS.contains(&operation) {
+                return Err(RpcError::Capability("control.unsupported_operation".into()));
+            }
+            return Box::pin(self.handle(operation, operation_params)).await;
+        }
         if forwardable_request(method, &params)
             && let Some(target) = params.get("targetDeviceId").and_then(|v| v.as_str())
             && target != self.doc_host.device_id()
@@ -2765,6 +3028,97 @@ impl RpcService for EngineRpc {
                 usage
                     .handle(method, request, &spaces, self.doc_host.device_id())
                     .await
+            }
+            zuse_protocol::control::API_INFO => {
+                RpcReply::value(&zuse_protocol::control::ControlInfo {
+                    api_version: zuse_protocol::control::API_VERSION,
+                    app_version: env!("CARGO_PKG_VERSION").into(),
+                    schemas: serde_json::json!({"ZotCommand":zuse_protocol::zots::command_schema()}),
+                    capabilities: if self.zots.is_some() {
+                        vec![zuse_protocol::zots::CAPABILITY.into()]
+                    } else {
+                        vec![]
+                    },
+                    methods: zuse_protocol::control::METHODS
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect(),
+                })
+            }
+            "ControlUpdateStatus" => RpcReply::value(
+                &zuse_update::control::status().map_err(|e| RpcError::Failed(e.to_string()))?,
+            ),
+            "RetryControlUpdate" => RpcReply::value(
+                &zuse_update::control::synchronize_bundled()
+                    .await
+                    .map_err(|e| RpcError::Failed(e.to_string()))?,
+            ),
+            "BindZotWorker" => {
+                let binding: crate::zots::WorkerBinding = parse_params(params)?;
+                self.zots
+                    .as_ref()
+                    .ok_or_else(|| RpcError::Capability("zots.v1".into()))?
+                    .bind_worker(&binding)
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(&serde_json::json!({"ok":true}))
+            }
+            zuse_protocol::control::WATCH_ZOTS => {
+                let zots = self
+                    .zots
+                    .clone()
+                    .ok_or_else(|| RpcError::Capability("zots.v1".into()))?;
+                let rx = zots.watch();
+                let stream =
+                    futures::stream::unfold((zots, rx, true), |(zots, mut rx, first)| async move {
+                        if !first {
+                            rx.changed().await.ok()?;
+                        }
+                        rx.borrow_and_update();
+                        let value = serde_json::to_value(zots.list().ok()?).ok()?;
+                        Some((value, (zots, rx, false)))
+                    });
+                Ok(RpcReply::Stream(stream.boxed()))
+            }
+            zuse_protocol::control::ZOT_COMMAND => self.zot_command(params).await,
+            zuse_protocol::control::ZOT_FILES
+            | zuse_protocol::control::ZOT_EVENTS
+            | zuse_protocol::control::ACK_ZOT_EVENTS => {
+                let zots = self
+                    .zots
+                    .as_ref()
+                    .ok_or_else(|| RpcError::Capability("zots.v1".into()))?;
+                let id = params
+                    .get("zotId")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| RpcError::BadParams("zotId is required".into()))?;
+                let failure = |e: anyhow::Error| RpcError::Failed(e.to_string());
+                match method {
+                    zuse_protocol::control::ZOT_FILES => RpcReply::value(
+                        &zots
+                            .files(
+                                id,
+                                params
+                                    .get("history")
+                                    .and_then(|v| v.as_bool())
+                                    .unwrap_or(false),
+                            )
+                            .map_err(failure)?,
+                    ),
+                    zuse_protocol::control::ZOT_EVENTS => {
+                        RpcReply::value(&zots.events(id).map_err(failure)?)
+                    }
+                    _ => {
+                        let ids: Vec<String> = serde_json::from_value(
+                            params
+                                .get("eventIds")
+                                .cloned()
+                                .unwrap_or(serde_json::json!([])),
+                        )
+                        .map_err(|e| RpcError::BadParams(e.to_string()))?;
+                        zots.acknowledge(id, &ids).map_err(failure)?;
+                        RpcReply::value(&serde_json::json!({"ok":true}))
+                    }
+                }
             }
             methods::INSPECT_RECOVERY | methods::RESOLVE_RECOVERY => {
                 let profile = self.repos.data_dir().to_path_buf();
@@ -3077,11 +3431,11 @@ impl RpcService for EngineRpc {
                                 .map_err(|e| RpcError::Failed(e.to_string()))?;
                         }
                         let listen = browser.listen
-                            .filter(|address| browser.running && browser.local_http
-                                && address.ip() == std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST))
-                            .ok_or_else(|| RpcError::Failed(
-                                "Start an HTTP browser listener on 127.0.0.1 before linking this computer".into()
-                            ))?;
+                        .filter(|address| browser.running && browser.local_http
+                            && address.ip() == std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST))
+                        .ok_or_else(|| RpcError::Failed(
+                            "Start an HTTP browser listener on 127.0.0.1 before linking this computer".into()
+                        ))?;
                         host.link(label, listen.port())
                             .await
                             .map_err(|e| RpcError::Failed(e.to_string()))?
@@ -3111,12 +3465,12 @@ impl RpcService for EngineRpc {
                     .account
                     .as_ref()
                     .ok_or_else(|| RpcError::Failed("Account service is unavailable.".into()))?;
-                // Only a client on this machine can follow a loopback redirect;
-                // remote browsers confirm a device code instead.
+                // Browser sign-in only: the loopback callback lives on this
+                // machine, so a client elsewhere must sign in from here.
                 let progress = if params["browser"] == true {
                     account.sign_in_in_browser().await
                 } else {
-                    account.sign_in().await
+                    Err(crate::account::AccountError::BrowserRequired)
                 }
                 .map_err(|e| RpcError::Failed(e.to_string()))?;
                 RpcReply::value(&progress)
@@ -3173,6 +3527,37 @@ impl RpcService for EngineRpc {
                 RpcReply::value(&response)
             }
             methods::ENGINE_INFO => RpcReply::value(&self.engine_info),
+            methods::SSH_PREPARE => {
+                let key = params["publicKey"].as_str().unwrap_or_default();
+                let prepared = crate::ssh_access::prepare(key, None)
+                    .await
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(&prepared)
+            }
+            methods::SSH_TUNNEL => {
+                let stream = crate::ssh_access::open_tunnel()
+                    .await
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                Ok(RpcReply::Stream(stream))
+            }
+            methods::SSH_TUNNEL_WRITE => {
+                crate::ssh_access::write_tunnel(
+                    params["tunnel"].as_str().unwrap_or_default(),
+                    params["data"].as_str().unwrap_or_default(),
+                )
+                .await
+                .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(&serde_json::json!({"ok": true}))
+            }
+            methods::SSH_TUNNEL_CLOSE => {
+                crate::ssh_access::close_tunnel(params["tunnel"].as_str().unwrap_or_default())
+                    .await;
+                RpcReply::value(&serde_json::json!({"ok": true}))
+            }
+            methods::MACHINE_RESOURCES => {
+                let root = std::env::current_dir().unwrap_or_else(|_| "/".into());
+                RpcReply::value(&crate::machine_resources::snapshot(&root).await)
+            }
             methods::ENGINE_READY => RpcReply::value(&serde_json::json!({ "ready": true })),
             methods::LIST_HARNESSES => RpcReply::value(&self.registry.descriptors()),
             methods::INSTALL_HARNESS => {
@@ -3210,10 +3595,10 @@ impl RpcService for EngineRpc {
                     .flatten();
                 RpcReply::value(
                     &serde_json::json!({"chatId":chat.id,"archived":chat.archived,
-                    "phase":record.as_ref().map(|record|&record.phase),
-                    "storageReclaimed":record.as_ref().is_some_and(|record|!record.checkout.exists() && record.phase!=crate::archives::Phase::Restored),
-                    "checkpoint":record.as_ref().map(|record|&record.checkpoint),
-                    "changedPaths":record.as_ref().map(|record|&record.changed_paths).cloned().unwrap_or_default()}),
+                "phase":record.as_ref().map(|record|&record.phase),
+                "storageReclaimed":record.as_ref().is_some_and(|record|!record.checkout.exists() && record.phase!=crate::archives::Phase::Restored),
+                "checkpoint":record.as_ref().map(|record|&record.checkpoint),
+                "changedPaths":record.as_ref().map(|record|&record.changed_paths).cloned().unwrap_or_default()}),
                 )
             }
             zuse_protocol::custom_acp::catalog::GET => {
@@ -3299,6 +3684,7 @@ impl RpcService for EngineRpc {
                     harness,
                     p.force,
                     Some(lease),
+                    self.registry.pinned_models(p.harness),
                 )
                 .await
                 .map_err(|e| RpcError::Failed(e.to_string()))?;
@@ -3648,12 +4034,49 @@ impl RpcService for EngineRpc {
                     .get("openingTail")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
+                let window = params
+                    .get("tailLimit")
+                    .and_then(|v| v.as_u64())
+                    .map(|rows| {
+                        transcript_window::Window::new(
+                            rows.min(usize::MAX as u64) as usize,
+                            params
+                                .get("tailBytes")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(64 * 1024)
+                                .min(usize::MAX as u64) as usize,
+                        )
+                        .with_anchor(
+                            params
+                                .get("tailAnchor")
+                                .and_then(|value| value.as_str())
+                                .map(str::to_owned),
+                        )
+                        .with_resume(
+                            params
+                                .get("resume")
+                                .and_then(|value| serde_json::from_value(value.clone()).ok()),
+                        )
+                    });
                 let p: ChatParams = parse_params(params)?;
                 // An open transcript keeps its chat's checkout diff live (and
                 // discardable) even when the chat is archived; the guard lives
                 // exactly as long as the stream.
                 let interest = self.diff_sync.retain_chat(&p.chat_id);
-                let stream = if opening_tail {
+                let stream = if let Some(window) = window {
+                    let host = self.doc_host.clone();
+                    let chat_id = p.chat_id;
+                    let (rx, doc) = tokio::task::spawn_blocking(move || {
+                        let handle = host.open(&chat_id)?;
+                        Ok::<_, crate::EngineError>((handle.watch_messages(), handle.doc_arc()))
+                    })
+                    .await
+                    .map_err(|e| RpcError::Failed(e.to_string()))?
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                    doc_message_envelopes(rx, doc, Some(window))
+                        .map(zuse_rpc::RpcStreamItem::new)
+                        .boxed()
+                } else if opening_tail {
                     opening_doc_messages_typed_stream(self.doc_host.clone(), p.chat_id).await?
                 } else {
                     let handle = self
@@ -3960,7 +4383,12 @@ impl RpcService for EngineRpc {
                 )))
             }
             methods::WATCH_CHATS => {
-                Ok(RpcReply::Stream(watch_stream(self.workspace.watch_chats())))
+                let rx = self.workspace.watch_chats();
+                if params["delta"] == true {
+                    Ok(RpcReply::TypedStream(list_watch::stream(rx, |row| &row.id)))
+                } else {
+                    Ok(RpcReply::Stream(watch_stream(rx)))
+                }
             }
             methods::WATCH_SIDEBAR_PREFERENCES => Ok(RpcReply::Stream(watch_stream(
                 self.workspace.watch_sidebar_preferences(),
@@ -3976,10 +4404,26 @@ impl RpcService for EngineRpc {
                 let merged = self
                     .workspace
                     .merged_sessions_watch(self.sessions.watch_sessions());
-                Ok(RpcReply::Stream(watch_stream(merged)))
+                if params["delta"] == true {
+                    Ok(RpcReply::TypedStream(list_watch::stream(merged, |row| {
+                        &row.chat_id
+                    })))
+                } else {
+                    Ok(RpcReply::Stream(watch_stream(merged)))
+                }
             }
             methods::LOCAL_DEVICE => {
                 RpcReply::value(&serde_json::json!({ "deviceId": self.doc_host.device_id() }))
+            }
+            methods::DISCOVER_LOCAL_MCP_SERVERS => {
+                let home = std::env::var_os("HOME")
+                    .map(std::path::PathBuf::from)
+                    .ok_or_else(|| RpcError::Failed("home directory unavailable".into()))?;
+                let servers =
+                    tokio::task::spawn_blocking(move || crate::local_mcp::discover(&home))
+                        .await
+                        .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(&serde_json::json!({ "servers": servers }))
             }
             methods::LOCAL_IMPORT_STATUS => {
                 let importer = self.local_importer()?.clone();
@@ -4086,6 +4530,10 @@ impl RpcService for EngineRpc {
                     let outcome = self.archive_chat(chat_id, *archived).await?;
                     return RpcReply::value(&serde_json::json!({"ok":true,"archive":outcome}));
                 }
+                if let MutateParams::ForceDeleteChat { chat_id } = &p {
+                    self.force_delete_chat(chat_id).await?;
+                    return RpcReply::value(&serde_json::json!({"ok":true}));
+                }
                 let sidebar_pins = matches!(&p, MutateParams::ChangeSidebarPin { .. });
                 self.mutate(p)?;
                 if sidebar_pins {
@@ -4162,7 +4610,8 @@ impl RpcService for EngineRpc {
                 // never probes arbitrary directories for their remotes.
                 let cwd = self.change_request_root(&p.cwd).await?;
                 let cwd = cwd.as_path();
-                let resolver = crate::source_control::ChangeRequestResolver::new();
+                let resolver = crate::source_control::ChangeRequestResolver::new()
+                    .with_github(self.github.clone());
                 let repository = match p.repository {
                     Some(repository) => {
                         resolver
@@ -6466,6 +6915,10 @@ mod tests {
             (
                 ChangeRequestError::CliUnavailable,
                 capability_errors::PULL_REQUESTS_CLI_UNAVAILABLE,
+            ),
+            (
+                ChangeRequestError::CliOutdated,
+                capability_errors::PULL_REQUESTS_CLI_OUTDATED,
             ),
             (
                 ChangeRequestError::Authentication,

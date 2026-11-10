@@ -705,9 +705,9 @@ projects-new_chat_without_project = 新增無專案聊天
 
 projects-no_project = 無專案
 
-projects-masters_create_master = 新增 Zot
+projects-masters_create_master = 新增 Zapper
 
-projects-masters_master_name = Zot 名稱
+projects-masters_master_name = Zapper 名稱
 
 projects-masters_this_environment = 此環境
 
@@ -731,9 +731,9 @@ projects-masters_run_action = 執行操作
 
 projects-masters_decline = 拒絕
 
-projects-masters_master_generated_screen = Zot 產生的介面
+projects-masters_master_generated_screen = Zapper 產生的介面
 
-projects-masters_masters = Zots
+projects-masters_masters = Zappers
 
 projects-masters_one_conversation_to_coordinate_your_work = 用一個對話統籌您的工作。
 
@@ -751,7 +751,7 @@ projects-masters_slaves = Slaves
 
 projects-masters_fresh_chat = 新對話
 
-projects-masters_ask_the_master_to_start_work_it_will_decide_which_tasks_need_separate_agents = 讓 Zot 開始工作，它會決定哪些工作需要分派給獨立的 Slave。
+projects-masters_ask_the_master_to_start_work_it_will_decide_which_tasks_need_separate_agents = 讓 Zapper 開始工作，它會決定哪些工作需要分派給獨立的 Slave。
 
 projects-masters_open_chat = 開啟對話
 
@@ -769,7 +769,7 @@ projects-masters_working = 工作中
 
 projects-masters_needs_attention = 需要關注
 
-projects-masters_loading = 正在載入 Zot…
+projects-masters_loading = 正在載入 Zapper…
 
 projects-masters_offline = 離線
 
@@ -819,7 +819,7 @@ projects-masters_add_work_model = 新增模型
 
 projects-masters_auto_follow_ups = 自動跟進
 
-projects-masters_auto_follow_ups_help = Zot 在停下來詢問您之前，可以主動給一個 Slave 發訊息的次數。
+projects-masters_auto_follow_ups_help = Zapper 在停下來詢問您之前，可以主動給一個 Slave 發訊息的次數。
 
 projects-masters_limits = 限制
 
@@ -845,7 +845,7 @@ projects-masters_add_repository = 新增存放庫
 
 projects-masters_color = 顏色
 
-projects-masters_create_failed = 無法建立 Zot
+projects-masters_create_failed = 無法建立 Zapper
 
 projects-masters_details = 詳細資料
 
@@ -855,7 +855,7 @@ projects-masters_hide_details = 隱藏詳細資料
 
 projects-masters_mascot = 吉祥物
 
-projects-masters_needs_setup = 在詳細資料中儲存設定以啟動此 Zot。
+projects-masters_needs_setup = 在詳細資料中儲存設定以啟動此 Zapper。
 
 projects-masters_remove_repository = 移除{ " " }{ $name }
 
@@ -889,7 +889,7 @@ projects-masters_memory_search = 搜尋記憶
 
 projects-masters_memory_archived = 已歸檔
 
-projects-masters_memory_empty = 尚無學習內容。此 Zot 及其 Slaves 的發現會整理成主題顯示在這裡。
+projects-masters_memory_empty = 尚無學習內容。此 Zapper 及其 Slaves 的發現會整理成主題顯示在這裡。
 
 projects-masters_memory_previous = 上一版
 
@@ -959,15 +959,15 @@ projects-masters_color_blue = 藍色
 
 projects-masters_color_pink = 粉色
 
-projects-masters_no_signed_in_agent = 建立 Zot 前請先登入一個代理程式。
+projects-masters_no_signed_in_agent = 建立 Zapper 前請先登入一個代理程式。
 
 projects-masters_skills_failed = 無法載入技能。
 
-projects-masters_home_only_note = 在此預覽版中，Slaves 與此 Zot 執行在同一臺電腦上。
+projects-masters_home_only_note = 在此預覽版中，Slaves 與此 Zapper 執行在同一臺電腦上。
 
-projects-masters_guide_open = Zot 指南
+projects-masters_guide_open = Zapper 指南
 
-projects-masters_guide_how = Zots 的工作方式
+projects-masters_guide_how = Zappers 的工作方式
 
 projects-masters_guide_step_count = 第{ " " }{ $current }{ " " }步，共{ " " }{ $total }{ " " }步
 
@@ -985,17 +985,17 @@ projects-masters_guide_done = 完成
 
 projects-masters_guide_target_hidden = 此控制項目前不可見。關閉已開啟的頁面或顯示詳細資料即可找到它。
 
-projects-masters_guide_welcome_title = 認識您的 Zot
+projects-masters_guide_welcome_title = 認識您的 Zapper
 
-projects-masters_guide_welcome_body = Zot 能把一份工作說明變成協調進行的工作。它會制定計畫，把工作交給稱為 Slaves 的獨立對話，並持續跟進。
+projects-masters_guide_welcome_body = Zapper 能把一份工作說明變成協調進行的工作。它會制定計畫，把工作交給稱為 Slaves 的獨立對話，並持續跟進。
 
-projects-masters_guide_welcome_preview = 預覽版：Zot 及其 Slaves 執行在建立它的電腦上，請讓這臺電腦保持開機和連線。
+projects-masters_guide_welcome_preview = 預覽版：Zapper 及其 Slaves 執行在建立它的電腦上，請讓這臺電腦保持開機和連線。
 
 projects-masters_guide_repositories_title = 選擇存放庫
 
-projects-masters_guide_repositories_summary = 決定 Zot 可以在哪裡工作。
+projects-masters_guide_repositories_summary = 決定 Zapper 可以在哪裡工作。
 
-projects-masters_guide_repositories_body = Zot 只會在您在這裡新增的存放庫中工作。新增存放庫不會向其中已有的對話傳送任何內容。
+projects-masters_guide_repositories_body = Zapper 只會在您在這裡新增的存放庫中工作。新增存放庫不會向其中已有的對話傳送任何內容。
 
 projects-masters_guide_repositories_empty = 還沒有存放庫？先在 Zuse 中開啟一個存放庫，再在這裡新增。
 
@@ -1005,9 +1005,9 @@ projects-masters_guide_brief_title = 撰寫工作說明
 
 projects-masters_guide_brief_summary = 描述您想要的結果。
 
-projects-masters_guide_brief_body = 說明完成後是什麼樣子：結果、範圍和限制。Zot 會據此制定計畫並分派工作。
+projects-masters_guide_brief_body = 說明完成後是什麼樣子：結果、範圍和限制。Zapper 會據此制定計畫並分派工作。
 
-projects-masters_guide_brief_model = 模型選擇器用於設定 Zot 制定計畫時使用的模型。長期指令位於偏好設定中。
+projects-masters_guide_brief_model = 模型選擇器用於設定 Zapper 制定計畫時使用的模型。長期指令位於偏好設定中。
 
 projects-masters_guide_brief_example = 試用示例
 
@@ -1041,9 +1041,9 @@ projects-masters_guide_continuity_body = 對話變長時，在這裡選擇「新
 
 projects-masters_guide_continuity_memory = 隨時可以從此選單重新開啟本指南。
 
-projects-masters_paused_notice = 已暫停。Zot 仍可回覆，但在您恢復之前不會啟動 Slaves 或向其傳送訊息。
+projects-masters_paused_notice = 已暫停。Zapper 仍可回覆，但在您恢復之前不會啟動 Slaves 或向其傳送訊息。
 
-projects-masters_stopped_notice = 已停止。Zot 仍可回覆，但在您恢復之前不會啟動 Slaves 或向其傳送訊息。
+projects-masters_stopped_notice = 已停止。Zapper 仍可回覆，但在您恢復之前不會啟動 Slaves 或向其傳送訊息。
 
 # Complete plural message. $count is numeric; remaining variables retain their source names.
 projects-pr_pane_added_file_to_the_composer-plural =

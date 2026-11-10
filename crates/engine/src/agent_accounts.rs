@@ -771,6 +771,10 @@ pub struct AgentAccounts {
 }
 
 impl AgentAccounts {
+    pub(crate) fn codex_models_cache_path(&self) -> PathBuf {
+        self.inner.config.codex_home.join("models_cache.json")
+    }
+
     pub fn new(config: AgentAccountsConfig) -> Self {
         Self::with_endpoints(config, ProbeEndpoints::default(), Default::default())
     }
@@ -2735,6 +2739,45 @@ impl AgentAccounts {
         )
         .await?;
         claude_usage_windows(&body).ok_or_else(|| schema_error("claude-code", &body))
+    }
+
+    /// Read the active local login without copying it into Zuse's account vault.
+    /// CLI-owned refresh tokens remain owned by the CLI.
+    pub(crate) async fn harness_token(&self, harness: HarnessId) -> Option<String> {
+        let _ops = self.inner.ops.lock().await;
+        match harness {
+            HarnessId::Codex => {
+                let auth = read_json(&self.inner.config.codex_auth_file())?;
+                str_field(auth.get("tokens")?, "access_token")
+            }
+            HarnessId::ClaudeCode => {
+                let (credentials, _) = self.read_claude_credentials().await;
+                str_field(credentials?.get("claudeAiOauth")?, "accessToken")
+            }
+            HarnessId::Grok => {
+                let auth = read_json(&self.inner.config.grok_home.join("auth.json"))?;
+                let detected = stores::parse_grok_auth(auth)?;
+                let credentials = detected.credentials.as_ref()?;
+                // Enterprise issuer tokens must never be sent to the public xAI API.
+                let issuer = str_field(credentials, "oidc_issuer").or_else(|| {
+                    detected
+                        .store_key
+                        .as_deref()?
+                        .split("::")
+                        .next()
+                        .map(str::to_owned)
+                })?;
+                if !matches!(
+                    issuer.trim_end_matches('/'),
+                    "https://auth.x.ai" | "https://accounts.x.ai/sign-in"
+                ) {
+                    return None;
+                }
+                str_field(credentials, "key")
+            }
+            _ => None,
+        }
+        .filter(|token| !token.is_empty())
     }
 
     /// Dictation shares the active Codex login. The refreshed account is

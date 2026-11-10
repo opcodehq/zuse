@@ -234,22 +234,24 @@ impl UsageDashboard {
             .size_full()
             .min_w_0()
             .min_h_0()
-            .bg(rgb(BG))
+            .when(!self.embedded, |v| v.bg(rgb(BG)))
             .text_color(rgb(TEXT))
             .text_size(px(14.))
             .line_height(px(18.9))
-            .child(
-                row()
-                    .flex_none()
-                    .h(px(48.))
-                    .px(px(20.))
-                    .border_b_1()
-                    .border_color(rgb(BORDER))
-                    .child(
-                        label(tr(cx, msg::usage::usage_dashboard_usage), 14.)
-                            .font_weight(FontWeight::MEDIUM),
-                    ),
-            )
+            .when(!self.embedded, |v| {
+                v.child(
+                    row()
+                        .flex_none()
+                        .h(px(48.))
+                        .px(px(20.))
+                        .border_b_1()
+                        .border_color(rgb(BORDER))
+                        .child(
+                            label(tr(cx, msg::usage::usage_dashboard_usage), 14.)
+                                .font_weight(FontWeight::MEDIUM),
+                        ),
+                )
+            })
             .child(controls);
         if self.report_error.is_some() && report.is_some() {
             root = root.child(

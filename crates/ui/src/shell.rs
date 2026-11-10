@@ -99,6 +99,7 @@ pub(crate) mod project_icon;
 mod pull_request_pane;
 mod search_warm;
 mod session_info;
+mod settings_cloud;
 mod side_chats;
 mod sidebar_controls;
 mod sidebar_pins;
@@ -109,8 +110,14 @@ mod thread_search;
 mod usage_dashboard;
 mod workspace_layout;
 mod workspace_storage;
+mod zot_forms;
+mod zots;
 use side_chats::SideChatTab;
+mod cloud_conversation;
 mod cloud_info;
+mod cloud_sidebar;
+mod cloud_start;
+mod cloud_tabs;
 mod tabs;
 mod top_bar;
 mod voice_stage;
@@ -507,7 +514,17 @@ pub fn apply_keymap(
 /// The settings sections (feature-inventory §1.5 routes).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SettingsSection {
+    /// Cloud computer → Overview (slug `cloud`, the historical Cloud page).
     Cloud,
+    CloudRepositories,
+    CloudEnvironments,
+    CloudMachine,
+    /// Agent subscriptions cloud tasks sign in with.
+    CloudAgents,
+    /// Model usage on this computer's agents, plus Cloud compute.
+    Usage,
+    /// The Cloud plan, money left, credits and payment.
+    Billing,
     Devices,
     /// Which harnesses the composer offers (enable/disable toggles) —
     /// labeled "Providers".
@@ -530,21 +547,67 @@ pub enum SettingsSection {
 
 impl SettingsSection {
     /// Sections shown in Settings. `Agents` is a legacy Accounts route alias.
-    pub const ALL: [SettingsSection; 13] = [
+    /// Grouped by where things run: agents on this computer, the cloud
+    /// computer, what it all costs, then the app itself. See [`Self::heading`].
+    pub const ALL: [SettingsSection; 19] = [
         SettingsSection::General,
         SettingsSection::Harnesses,
         SettingsSection::Defaults,
         SettingsSection::Plugins,
-        SettingsSection::Devices,
         SettingsSection::Cloud,
+        SettingsSection::CloudRepositories,
+        SettingsSection::CloudEnvironments,
+        SettingsSection::CloudMachine,
+        SettingsSection::CloudAgents,
+        SettingsSection::Usage,
+        SettingsSection::Billing,
         SettingsSection::Appearance,
         SettingsSection::Notifications,
         SettingsSection::Voice,
         SettingsSection::Shortcuts,
         SettingsSection::Files,
+        SettingsSection::Devices,
         SettingsSection::Appshots,
         SettingsSection::Archived,
     ];
+
+    /// The sidebar heading this section opens, if it starts a group.
+    fn heading(self) -> Option<&'static str> {
+        match self {
+            SettingsSection::Harnesses => Some("Local agents"),
+            SettingsSection::Cloud => Some("Cloud computer · Beta"),
+            SettingsSection::Usage => Some("Plan & usage"),
+            SettingsSection::Appearance => Some("App"),
+            _ => None,
+        }
+    }
+
+    /// The Cloud page a Cloud section shows.
+    fn cloud_view(self) -> Option<settings::cloud_billing::CloudView> {
+        use settings::cloud_billing::CloudView;
+        Some(match self {
+            SettingsSection::Cloud => CloudView::Overview,
+            SettingsSection::CloudRepositories => CloudView::Repositories,
+            SettingsSection::CloudEnvironments => CloudView::Environments,
+            SettingsSection::CloudMachine => CloudView::Machine,
+            SettingsSection::CloudAgents => CloudView::Agents,
+            SettingsSection::Billing => CloudView::Billing,
+            _ => return None,
+        })
+    }
+
+    fn from_cloud_view(view: settings::cloud_billing::CloudView) -> Self {
+        use settings::cloud_billing::CloudView;
+        match view {
+            CloudView::Overview => SettingsSection::Cloud,
+            CloudView::Repositories => SettingsSection::CloudRepositories,
+            CloudView::Environments => SettingsSection::CloudEnvironments,
+            CloudView::Machine => SettingsSection::CloudMachine,
+            CloudView::Agents => SettingsSection::CloudAgents,
+            CloudView::Compute => SettingsSection::Usage,
+            CloudView::Billing => SettingsSection::Billing,
+        }
+    }
 
     /// The former Accounts page is folded into Providers. Keep its route alias
     /// for old navigation entries and dev links without showing a hidden tab.
@@ -557,7 +620,22 @@ impl SettingsSection {
     }
 
     fn visible_in_nav(self) -> bool {
-        self != Self::Agents && (self != Self::Appshots || crate::appshots::is_desktop())
+        self != Self::Agents
+            && (self != Self::Appshots || crate::appshots::is_desktop())
+            && (!self.cloud_computer() || crate::cloud_beta())
+    }
+
+    /// The Cloud computer group, shown only while cloud computers are in beta
+    /// here.
+    fn cloud_computer(self) -> bool {
+        matches!(
+            self,
+            Self::Cloud
+                | Self::CloudRepositories
+                | Self::CloudEnvironments
+                | Self::CloudMachine
+                | Self::CloudAgents
+        )
     }
 
     /// Where a generic "open Settings" lands for a remembered section: legacy
@@ -576,6 +654,12 @@ impl SettingsSection {
     fn slug(self) -> &'static str {
         match self {
             SettingsSection::Cloud => "cloud",
+            SettingsSection::CloudRepositories => "cloud-repositories",
+            SettingsSection::CloudEnvironments => "cloud-environments",
+            SettingsSection::CloudMachine => "cloud-machine",
+            SettingsSection::CloudAgents => "cloud-agents",
+            SettingsSection::Usage => "usage",
+            SettingsSection::Billing => "billing",
             SettingsSection::Devices => "devices",
             SettingsSection::Harnesses => "providers",
             SettingsSection::Defaults => "defaults",
@@ -596,6 +680,12 @@ impl SettingsSection {
     fn from_slug(slug: &str) -> Option<Self> {
         Some(match slug {
             "cloud" => SettingsSection::Cloud,
+            "cloud-repositories" | "repositories" => SettingsSection::CloudRepositories,
+            "cloud-environments" | "environments" => SettingsSection::CloudEnvironments,
+            "cloud-machine" | "machine" => SettingsSection::CloudMachine,
+            "cloud-agents" => SettingsSection::CloudAgents,
+            "usage" => SettingsSection::Usage,
+            "billing" => SettingsSection::Billing,
             "devices" => SettingsSection::Devices,
             "providers" | "harnesses" => SettingsSection::Harnesses,
             "defaults" | "default-models" => SettingsSection::Defaults,
@@ -617,11 +707,17 @@ impl SettingsSection {
     /// `settingsTitle` — the same strings in both places).
     pub fn label(self) -> &'static str {
         match self {
-            SettingsSection::Cloud => "Cloud workspaces",
+            SettingsSection::Cloud => "Overview",
+            SettingsSection::CloudRepositories => "Repositories",
+            SettingsSection::CloudEnvironments => "Environments",
+            SettingsSection::CloudMachine => "Machine",
+            SettingsSection::CloudAgents => "Agent accounts",
+            SettingsSection::Usage => "Usage",
+            SettingsSection::Billing => "Billing",
             SettingsSection::Devices => "Remote access",
-            SettingsSection::Harnesses => "Providers",
+            SettingsSection::Harnesses => "Providers & accounts",
             SettingsSection::Defaults => "Default models",
-            SettingsSection::Plugins => "Plugins",
+            SettingsSection::Plugins => "Plugins & MCP",
             SettingsSection::Agents => "Accounts",
             SettingsSection::Appearance => "Appearance",
             SettingsSection::Files => "Files",
@@ -673,6 +769,8 @@ pub enum Route {
     Plugins,
     Archives,
     Usage,
+    /// The New Zot page; [`zots::ZotUi`] holds the form.
+    Zot,
     Settings(SettingsSection),
 }
 
@@ -870,6 +968,7 @@ pub enum NavEntry {
     Settings(SettingsSection),
     Plugins,
     Archives(String),
+    NewZot,
     Usage {
         project: Option<String>,
         project_scope: bool,
@@ -1034,6 +1133,9 @@ impl Shell {
             || self.settings.sidebar_organization == SidebarOrganization::InOneList
     }
 }
+
+/// Sidebar row ids for cloud tasks: `cloud:<workspace id>`.
+pub(crate) const CLOUD_ROW_PREFIX: &str = "cloud:";
 
 fn sidebar_row_height(compact: bool, show_label: bool, nested: bool) -> f32 {
     if compact || nested || !show_label {
@@ -1986,6 +2088,8 @@ struct SubagentTab {
     _fetch: Option<Task<()>>,
     /// Spawn chips INSIDE the subagent transcript open their own tabs.
     _events: Subscription,
+    /// A workflow agent's conversation follows its run's progress.
+    _feed: Option<Subscription>,
 }
 
 /// Sidebar render identity lets transcript/caret frames reuse its GPUI scene.
@@ -2032,6 +2136,13 @@ enum PendingExit {
     InstallUpdate(PathBuf),
 }
 
+/// A capture destination contains identity metadata only, never credentials.
+#[derive(Clone, Default)]
+pub(crate) struct AppshotDeliveryIdentity {
+    pub(crate) account: Option<String>,
+    pub(crate) organization: Option<String>,
+    pub(crate) canvas: Option<String>,
+}
 fn dismiss_update_prompt(cx: &mut App) {
     if let Some(update) = crate::app_update::AppUpdate::global(cx) {
         update.update(cx, |update, cx| update.dismiss_prompt(cx));
@@ -2041,7 +2152,11 @@ fn dismiss_update_prompt(cx: &mut App) {
 pub struct Shell {
     update_restart: Option<update_restart::RestartPlan>,
     update_restart_task: Option<Task<()>>,
+    zot_ui: zots::ZotUi,
     state: Entity<AppState>,
+    cloud_conversation: Option<Entity<cloud_conversation::CloudConversation>>,
+    cloud_conversation_events: Option<Subscription>,
+    cloud_tabs: cloud_tabs::CloudTabs,
     desktop_import: Entity<crate::desktop_import::Onboarding>,
     sidebar_pane: Entity<SidebarPane>,
     sidebar_controls: Entity<zuse_viewport::sidebar_controls::SidebarControls>,
@@ -2180,6 +2295,9 @@ pub struct Shell {
     pull_request_cache:
         std::rc::Rc<std::cell::RefCell<crate::pull_request_detail::PullRequestCache>>,
     cloud_billing_page: Option<Entity<settings::cloud_billing::CloudBillingPage>>,
+    cloud_page_sub: Option<Subscription>,
+    /// Settings → Usage shows Cloud compute instead of model usage.
+    usage_settings_compute: bool,
     devices_page: Option<Entity<DevicesPage>>,
     archived_page: Option<Entity<ArchivedPage>>,
     archive_project: Option<String>,
@@ -2213,6 +2331,8 @@ pub struct Shell {
     chat_rename: Option<ChatRename>,
     /// Chat id awaiting delete confirmation.
     delete_confirm: Option<String>,
+    deleting_chat: bool,
+    cloud_delete_commands: std::collections::HashMap<String, String>,
     /// Global confirmation/error dialog for the Changes-pane trash action. The
     /// RPC task is retained separately so rerenders do not cancel it.
     discard_working_tree: Option<DiscardWorkingTreeFlow>,
@@ -2378,9 +2498,6 @@ pub struct Shell {
     /// they last painted with their content held at its layout width (same
     /// order).
     fit_exits: [Option<(WidthTween, f32)>; 3],
-    /// The window width the surface host's share was last split for. Seeded
-    /// by the first frame, so a saved divider survives a relaunch.
-    split_viewport: Option<f32>,
     /// The last window fit and the inputs it was computed from, one slot
     /// per `closing` flag of `fit`: layout helpers ask for both many times
     /// per frame while a close runs. Not a per-frame value, since handlers
@@ -2552,10 +2669,46 @@ impl Shell {
         let composer_events = cx.subscribe(&composer, {
             let transcript = transcript.clone();
             move |this: &mut Shell, _, event: &ComposerEvent, cx| match event {
+                ComposerEvent::CloudAdmitted {
+                    workspace,
+                    account,
+                    organization,
+                    launch,
+                } => {
+                    let controller = this
+                        .state
+                        .read(cx)
+                        .engine()
+                        .map(|engine| engine.controller());
+                    if let Some(controller) = controller {
+                        let Some(id) = workspace["workspaceId"]
+                            .as_str()
+                            .filter(|id| !id.is_empty())
+                        else {
+                            return;
+                        };
+                        let Some(session) = workspace["initialSessionId"]
+                            .as_str()
+                            .filter(|id| !id.is_empty())
+                        else {
+                            return;
+                        };
+                        let target = crate::state::CloudTarget {
+                            controller,
+                            subject: account.clone(),
+                            organization: organization.clone(),
+                            workspace: id.into(),
+                            initial_session: session.into(),
+                        };
+                        this.open_cloud_conversation(target, workspace.clone(), launch.clone(), cx);
+                    }
+                }
                 ComposerEvent::CloudLaunchChanged => {
                     cx.notify();
                 }
-                ComposerEvent::ResumeCloud { .. } => {}
+                ComposerEvent::ResumeCloud { .. }
+                | ComposerEvent::CloudSleepRequested
+                | ComposerEvent::CloudForegroundAdmitted => {}
                 ComposerEvent::WorkspaceCommand(command) => {
                     this.pending_workspace_command = Some(*command);
                     cx.notify();
@@ -2621,6 +2774,7 @@ impl Shell {
         let route = match open_route.as_deref() {
             Some("pull-requests") => Route::PullRequests,
             Some("plugins") => Route::Plugins,
+            Some("zots/new") => Route::Zot,
             Some(route) if route == "settings" || route.starts_with("settings/") => {
                 match settings_open_route(route, settings.settings_section) {
                     Some(section) => {
@@ -2665,6 +2819,7 @@ impl Shell {
             Route::PullRequests => NavEntry::PullRequests,
             Route::Plugins => NavEntry::Plugins,
             Route::Archives => NavEntry::Archives(String::new()),
+            Route::Zot => NavEntry::NewZot,
             Route::Usage => NavEntry::Usage {
                 project: None,
                 project_scope: false,
@@ -2684,7 +2839,11 @@ impl Shell {
         let sidebar_controls = Self::create_sidebar_controls(state.clone(), cx);
         Self {
             state: state.clone(),
+            cloud_conversation: None,
+            cloud_conversation_events: None,
+            cloud_tabs: Default::default(),
             desktop_import,
+            zot_ui: zots::ZotUi::default(),
             sidebar_pane,
             sidebar_controls,
             workspace_sidebar_focus: cx.focus_handle().tab_stop(true),
@@ -2769,6 +2928,8 @@ impl Shell {
             pending_pull_request: None,
             pull_request_cache: Default::default(),
             cloud_billing_page: None,
+            cloud_page_sub: None,
+            usage_settings_compute: false,
             devices_page: None,
             archived_page: None,
             archive_project: None,
@@ -2776,7 +2937,7 @@ impl Shell {
             usage_tasks: Default::default(),
             usage_project: None,
             usage_project_scope: false,
-            usage_pending: false,
+            usage_pending: route == Route::Settings(SettingsSection::Usage),
             project_archives: std::collections::HashMap::new(),
             project_archive_events: std::collections::HashMap::new(),
             appearance_page: None,
@@ -2796,6 +2957,8 @@ impl Shell {
             chat_copy_left: false,
             chat_rename: None,
             delete_confirm: None,
+            deleting_chat: false,
+            cloud_delete_commands: std::collections::HashMap::new(),
             discard_working_tree: None,
             discard_working_tree_task: None,
             space_menu: popover::Popup::default(),
@@ -2891,7 +3054,6 @@ impl Shell {
             files_content_tween: None,
             painted_columns: None,
             fit_exits: [None; 3],
-            split_viewport: None,
             fit_memo: Default::default(),
             right_images_suspended: false,
             sidebar_edge_bounce: None,
@@ -2937,6 +3099,81 @@ impl Shell {
         }
     }
 
+    pub(crate) fn appshot_capture_identity(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> AppshotDeliveryIdentity {
+        self.sync_cloud_tab_scope(cx);
+        let (account, organization) = {
+            let state = self.state.read(cx);
+            (
+                state.cloud_user_id().map(str::to_owned),
+                state.cloud_organization_id().map(str::to_owned),
+            )
+        };
+        let canvas = if self.settings.appshot_destination
+            == crate::appshots::AppshotDestination::Automatic
+        {
+            if let Some(view) = &self.cloud_conversation {
+                Some(view.read(cx).target.initial_session.clone())
+            } else if self.state.read(cx).selected_chat.is_none()
+                && self.state.read(cx).cloud_project.is_some()
+            {
+                self.track_current_cloud_canvas(cx);
+                Some(self.composer.read(cx).current_key.clone())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        AppshotDeliveryIdentity {
+            account,
+            organization,
+            canvas,
+        }
+    }
+    pub(crate) fn accepts_appshot_identity(
+        &self,
+        identity: &AppshotDeliveryIdentity,
+        cx: &App,
+    ) -> bool {
+        let state = self.state.read(cx);
+        state.cloud_user_id() == identity.account.as_deref()
+            && state.cloud_organization_id() == identity.organization.as_deref()
+            && identity.canvas.as_deref().is_none_or(|key| {
+                self.retains_cloud_canvas(key)
+                    || self.cloud_tabs.composer_for_session(key, cx).is_some()
+            })
+    }
+    pub(crate) fn receive_scoped_appshot(
+        &mut self,
+        identity: AppshotDeliveryIdentity,
+        appshot: crate::appshots::CapturedAppshot,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        self.sync_cloud_tab_scope(cx);
+        if !self.accepts_appshot_identity(&identity, cx) {
+            return false;
+        }
+        if let Some(key) = identity.canvas {
+            let composer = self
+                .cloud_tabs
+                .composer_for_session(&key, cx)
+                .unwrap_or_else(|| self.composer.clone());
+            let accepted = composer.update(cx, |composer, cx| {
+                composer.stage_appshot_for(key.clone(), appshot, cx)
+            });
+            if composer.read(cx).current_key == key {
+                window.focus(&composer.focus_handle(cx), cx);
+            }
+            cx.notify();
+            return accepted;
+        }
+        self.receive_appshot(appshot, window, cx);
+        true
+    }
     /// Route a completed viewer-side capture only after its source window is
     /// safely captured. The explicit target key avoids relying on the
     /// state-observation/draft-swap effect ordering when opening the canvas.
@@ -2969,7 +3206,10 @@ impl Shell {
         } else {
             self.set_route(Route::Chat, cx);
         }
-        let key = target.unwrap_or_default();
+        if target.is_none() && self.state.read(cx).cloud_project.is_some() {
+            self.track_current_cloud_canvas(cx);
+        }
+        let key = target.unwrap_or_else(|| self.composer.read(cx).current_key.clone());
         self.composer.update(cx, |composer, cx| {
             composer.stage_appshot_for(key, appshot, cx)
         });
@@ -3342,7 +3582,12 @@ impl Shell {
         // snap, no tween — the panels belong to the destination chat). The
         // new-chat canvas is the exception: it always lands with the terminal
         // hidden.
-        let selected = state.read(cx).selected_chat.clone().unwrap_or_default();
+        let selected = self
+            .conversation_state(cx)
+            .read(cx)
+            .selected_chat
+            .clone()
+            .unwrap_or_default();
         if !selected.is_empty() {
             self.last_appshot_chat = Some(selected.clone());
         }
@@ -3431,7 +3676,7 @@ impl Shell {
     /// Does the selected space's folder have git? Owner-stamped and synced —
     /// gates the Changes pane, its toggle, and Cmd-B with zero RPCs.
     fn space_git_detected(&self, cx: &App) -> bool {
-        self.state.read(cx).selected_space_git()
+        self.conversation_state(cx).read(cx).selected_space_git()
     }
 
     /// The current chat's changes-pane flag (per-session, in-memory), gated on
@@ -3464,7 +3709,7 @@ impl Shell {
 
     /// The current chat's terminal flag (per-session, in-memory).
     fn terminal_open(&self, cx: &App) -> bool {
-        self.panels.get(&self.panel_key(cx)).terminal_open
+        self.cloud_conversation.is_none() && self.panels.get(&self.panel_key(cx)).terminal_open
     }
 
     fn right_target(&self, cx: &App) -> f32 {
@@ -3526,6 +3771,11 @@ impl Shell {
     /// it opens the surface host beside it, and it never hides the explorer —
     /// only the explorer's own toggle undocks that portion.
     fn toggle_right_pane(&mut self, cx: &mut Context<Self>) {
+        if matches!(self.route, Route::Chat) && self.selected_zot(cx).is_some() {
+            self.zot_ui.panel_hidden = !self.zot_ui.panel_hidden;
+            cx.notify();
+            return;
+        }
         if self.right_pane_open(cx) && self.promote_hidden_panel(AuxiliaryPanel::Right, cx) {
             return;
         }
@@ -3609,6 +3859,16 @@ impl Shell {
     }
 
     fn right_terminal_panel(&mut self, cx: &mut Context<Self>) -> Entity<TerminalPanel> {
+        if let Some(view) = self.cloud_conversation.clone() {
+            return view.update(cx, |view, cx| {
+                if let Some(terminal) = &view.terminal {
+                    return terminal.clone();
+                }
+                let terminal = cx.new(|cx| TerminalPanel::new_embedded(view.state.clone(), cx));
+                view.terminal = Some(terminal.clone());
+                terminal
+            });
+        }
         if let Some(terminal) = &self.right_terminal {
             return terminal.clone();
         }
@@ -3630,8 +3890,17 @@ impl Shell {
             .get(&key)
             .map(|v| v.as_slice())
             .unwrap_or(&[]);
-        let terminals: Vec<(u64, SharedString, bool)> = self
-            .right_terminal
+        let terminal = self
+            .cloud_conversation
+            .as_ref()
+            .and_then(|view| view.read(cx).terminal.clone())
+            .or_else(|| {
+                self.cloud_conversation
+                    .is_none()
+                    .then(|| self.right_terminal.clone())
+                    .flatten()
+            });
+        let terminals: Vec<(u64, SharedString, bool)> = terminal
             .as_ref()
             .map(|t| t.read(cx).tab_summaries(cx))
             .unwrap_or_default();
@@ -4231,7 +4500,7 @@ impl Shell {
 
     /// Open or focus a session-owned editor tab. The explorer is independent.
     fn add_file_surface(&mut self, path: String, window: &mut Window, cx: &mut Context<Self>) {
-        let owner = (self.active_chat.clone(), self.state.clone());
+        let owner = (self.active_chat.clone(), self.conversation_state(cx));
         self.add_file_surface_at(owner, path, None, window, cx);
     }
 
@@ -4239,7 +4508,7 @@ impl Shell {
     /// an open side chat's own (its chat row may not reach the main list yet).
     fn link_owner(&self, chat_id: &str, cx: &App) -> Option<(String, Entity<AppState>)> {
         if chat_id == self.active_chat {
-            return Some((chat_id.to_owned(), self.state.clone()));
+            return Some((chat_id.to_owned(), self.conversation_state(cx)));
         }
         self.side_chats
             .values()
@@ -4540,6 +4809,13 @@ impl Shell {
     /// The picker's Terminal card / the `+` menu's Terminal row: every click
     /// opens a fresh embedded terminal tab.
     fn add_terminal_surface(&mut self, cx: &mut Context<Self>) {
+        if self
+            .cloud_conversation
+            .as_ref()
+            .is_some_and(|view| !view.read(cx).ready(cx))
+        {
+            return;
+        }
         let panel = self.right_terminal_panel(cx);
         let opened = panel.update(cx, |panel, cx| {
             panel.set_open(true, cx);
@@ -4578,6 +4854,19 @@ impl Shell {
                     cx,
                 );
             }
+            TranscriptEvent::OpenWorkflowAgent {
+                row_id,
+                agent_index,
+                title,
+            } => {
+                self.add_workflow_agent_surface(
+                    transcript,
+                    row_id.clone(),
+                    *agent_index,
+                    title.clone(),
+                    cx,
+                );
+            }
             // A reply's Fork menu: a new tab in this thread, or a new thread.
             TranscriptEvent::ForkChat { chat_id, target } => {
                 let source = self
@@ -4599,6 +4888,91 @@ impl Shell {
                 });
             }
         }
+    }
+
+    /// A workflow board's agent row: open that agent as a subagent tab. A
+    /// workflow agent has no doc of its own, so its conversation (what it was
+    /// asked, what it returned) is built from the run's progress and kept in
+    /// step with it; the tab then reads exactly like any other transcript.
+    fn add_workflow_agent_surface(
+        &mut self,
+        transcript: Entity<Transcript>,
+        row_id: SharedString,
+        index: u32,
+        title: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.set_surfaces_open(true, cx);
+        let doc_id = format!("workflow-agent:{row_id}:{index}");
+        if let Some((&id, _)) = self
+            .subagent_tabs
+            .iter()
+            .find(|(_, tab)| tab.doc_id == doc_id)
+        {
+            self.set_right_active(RightSurface::Subagent(id), cx);
+            return;
+        }
+        let Some(snapshot) = transcript.read(cx).workflow_agent(&row_id, index) else {
+            return;
+        };
+        let device = self
+            .state
+            .read(cx)
+            .local_device_id
+            .clone()
+            .unwrap_or_default();
+        let entries = crate::workflow_board::agent_entries(&snapshot, &device);
+        let live = matches!(
+            snapshot.agent.status,
+            crate::workflow_board::AgentStatus::Working
+                | crate::workflow_board::AgentStatus::Queued
+        );
+        self.state.update(cx, |state, cx| {
+            state.set_subagent_snapshot(doc_id.clone(), entries.clone());
+            cx.notify();
+        });
+        let last = std::cell::RefCell::new(entries);
+        let state = self.state.clone();
+        let feed_doc = doc_id.clone();
+        let feed = cx.observe(&transcript, move |_, source, cx| {
+            let Some(snapshot) = source.read(cx).workflow_agent(&row_id, index) else {
+                return;
+            };
+            let entries = crate::workflow_board::agent_entries(&snapshot, &device);
+            if *last.borrow() == entries {
+                return;
+            }
+            last.replace(entries.clone());
+            state.update(cx, |state, cx| {
+                state.set_subagent_snapshot(feed_doc.clone(), entries);
+                cx.notify();
+            });
+        });
+        self.subagent_seq += 1;
+        let id = self.subagent_seq;
+        let view = cx.new(|cx| Transcript::for_doc(self.state.clone(), doc_id.clone(), live, cx));
+        let links = Self::session_links(Some(self.active_chat.clone()), cx);
+        view.update(cx, |view, _| view.set_workspace_link_handler(links));
+        let events = cx.subscribe(&view, Self::on_transcript_event);
+        self.subagent_tabs.insert(
+            id,
+            SubagentTab {
+                doc_id,
+                // Workflows are a Claude Code feature.
+                harness: Some(zuse_protocol::HarnessId::ClaudeCode),
+                title: title.into(),
+                transcript: view,
+                _fetch: None,
+                _events: events,
+                _feed: Some(feed),
+            },
+        );
+        let key = self.panel_key(cx);
+        self.right_tabs
+            .entry(key)
+            .or_default()
+            .push(RightSurface::Subagent(id));
+        self.set_right_active(RightSurface::Subagent(id), cx);
     }
 
     /// A spawn chip's "Open subagent": focus the existing tab for that doc,
@@ -4674,6 +5048,7 @@ impl Shell {
                 transcript,
                 _fetch: fetch,
                 _events: events,
+                _feed: None,
             },
         );
         let key = self.panel_key(cx);
@@ -5056,6 +5431,29 @@ impl Shell {
     /// animates 200 ms; closing detaches (PTYs stay alive), opening restores.
     /// The flag is per chat (zuse `sessionPanels`).
     fn toggle_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Cloud tools belong to the task's right sidebar, never the local
+        // controller's bottom terminal. Reuse its existing terminal tab.
+        if let Some(conversation) = &self.cloud_conversation {
+            if !conversation.read(cx).ready(cx) {
+                return;
+            }
+            let terminal =
+                self.right_surface_rows(cx)
+                    .into_iter()
+                    .find_map(|(surface, _, _, _)| {
+                        matches!(surface, RightSurface::Terminal(_)).then_some(surface)
+                    });
+            if let Some(terminal) = terminal {
+                if self.right_pane_open(cx) && self.resolved_right_active(cx) == terminal {
+                    self.toggle_right_pane(cx);
+                } else {
+                    self.set_right_active(terminal, cx);
+                }
+            } else {
+                self.add_terminal_surface(cx);
+            }
+            return;
+        }
         let from = self.terminal_geometry.get().height;
         let key = self.panel_key(cx);
         let open = self.panels.toggle_terminal(&key);
@@ -5293,12 +5691,21 @@ impl Shell {
                 page.update(cx, |page, cx| page.on_hidden(cx));
             }
         }
-        if matches!(self.route, Route::Usage) && !matches!(route, Route::Usage) {
+        // The model-usage dashboard shows on the Usage route and on
+        // Settings → Usage → Models; it loads on entry and stops on exit.
+        let shows_usage = |route: Route, compute: bool| {
+            matches!(route, Route::Usage)
+                || (route == Route::Settings(SettingsSection::Usage) && !compute)
+        };
+        let compute = self.usage_settings_compute;
+        if shows_usage(self.route, compute) && !shows_usage(route, compute) {
             if let Some(dashboard) = self.usage_dashboard.clone() {
                 dashboard.update(cx, |dashboard, cx| dashboard.hide(cx));
             }
         }
-        if matches!(route, Route::Usage) && !matches!(self.route, Route::Usage) {
+        if shows_usage(route, compute) && !shows_usage(self.route, compute)
+            || matches!(route, Route::Usage) && !matches!(self.route, Route::Usage)
+        {
             self.usage_pending = true;
         }
         self.route = route;
@@ -5318,6 +5725,13 @@ impl Shell {
     }
 
     /// Close the session-row context menu through the exit animation.
+    /// Whether the open chat menu belongs to `chat_id`'s row (not a tab).
+    pub(super) fn chat_menu_targets(&self, chat_id: &str) -> bool {
+        self.chat_menu
+            .get()
+            .is_some_and(|menu| menu.tab.is_none() && menu.chat_id == chat_id)
+    }
+
     fn close_chat_menu(&mut self, cx: &mut Context<Self>) {
         self.chat_copy_intent.reset();
         if self.chat_menu.begin_close() {
@@ -5337,6 +5751,32 @@ impl Shell {
         let message = message.into();
         self.sidebar_notice = Some(message.clone());
         crate::toast::show(cx, kind, message);
+    }
+
+    fn show_archive_error(&mut self, chat_id: String, message: String, cx: &mut Context<Self>) {
+        self.sidebar_notice = Some(message.clone().into());
+        let shell = cx.weak_entity();
+        crate::toast::error_with_action(
+            cx,
+            message,
+            chat_id.clone(),
+            "Force delete…",
+            move |_, cx| {
+                let _ = shell.update(cx, |this, cx| {
+                    if !this.deleting_chat
+                        && this
+                            .state
+                            .read(cx)
+                            .chats
+                            .iter()
+                            .any(|chat| chat.id == chat_id)
+                    {
+                        this.delete_confirm = Some(chat_id.clone());
+                        cx.notify();
+                    }
+                });
+            },
+        );
     }
 
     fn set_chat_copy_open(&mut self, open: bool, cx: &mut Context<Self>) {
@@ -5897,6 +6337,7 @@ impl Shell {
                 self.pending_pull_request = Some((url, device));
             }
             NavEntry::Plugins => self.set_route(Route::Plugins, cx),
+            NavEntry::NewZot => self.show_new_zot(cx),
             NavEntry::Usage {
                 project,
                 project_scope,
@@ -5963,27 +6404,26 @@ impl Shell {
                         settings::widgets::settings_page_column(window)
                             .child(settings::widgets::section_title(
                                 &theme,
-                                "Plugins",
-                                "Turn plugins and MCP servers on or off for your agents.",
+                                "Plugins & MCP",
+                                "Turn plugins and MCP servers on or off for your agents, or import the ones already on this computer.",
                             ))
-                            .child(div().mt(px(20.)).child(card)),
+                            .child(settings::widgets::section_stack().child(card)),
                     )
                     .into_any_element()
             }
 
-            SettingsSection::Cloud => {
-                if self.cloud_billing_page.is_none() {
-                    let state = self.state.clone();
-                    self.cloud_billing_page = Some(cx.new(|cx| {
-                        settings::cloud_billing::CloudBillingPage::new(state, window, cx)
-                    }));
-                }
-                self.cloud_billing_page
-                    .as_ref()
-                    .unwrap()
-                    .clone()
-                    .into_any_element()
+            SettingsSection::Cloud
+            | SettingsSection::CloudRepositories
+            | SettingsSection::CloudEnvironments
+            | SettingsSection::CloudMachine
+            | SettingsSection::CloudAgents
+            | SettingsSection::Billing => {
+                let view = section.cloud_view().unwrap_or_default();
+                let page = self.ensure_cloud_page(window, cx);
+                page.update(cx, |page, cx| page.set_view(view, cx));
+                page.into_any_element()
             }
+            SettingsSection::Usage => self.usage_settings(window, cx),
             SettingsSection::Devices => {
                 if self.devices_page.is_none() {
                     self.devices_page = Some(self.create_devices_page(cx));
@@ -6666,7 +7106,11 @@ impl Shell {
                             if !shell.state.read(cx).engine().is_some_and(|current| current.same_connection(&engine)) {
                                 return;
                             }
-                            shell.show_notice(crate::toast::ToastKind::Error, format!("{error}"), cx);
+                            if archived {
+                                shell.show_archive_error(chat_id.clone(), format!("{error}"), cx);
+                            } else {
+                                shell.show_notice(crate::toast::ToastKind::Error, format!("{error}"), cx);
+                            }
                             cx.notify();
                         });
                     }
@@ -6753,7 +7197,86 @@ impl Shell {
     }
 
     fn delete_chat(&mut self, chat_id: String, cx: &mut Context<Self>) {
-        self.delete_confirm = None;
+        if self.deleting_chat {
+            return;
+        }
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            self.show_notice(crate::toast::ToastKind::Error, "Engine not connected", cx);
+            cx.notify();
+            return;
+        };
+        // Take a Zapper thread off its Zapper first, so the Zapper stops
+        // counting it and sending it work.
+        if let Some(zot) = self.zot_of_thread(&chat_id, cx) {
+            self.send_zot_command(
+                zot.id.clone(),
+                Some(zot.revision),
+                zuse_protocol::zots::ZotAction::ReleaseWorker {
+                    chat_id: chat_id.clone(),
+                },
+                zot_forms::ZotAfter::Stay,
+                cx,
+            );
+        }
+        let owner = self
+            .state
+            .read(cx)
+            .chats
+            .iter()
+            .find(|chat| chat.id == chat_id)
+            .map(|chat| chat.device_id.clone());
+        let cloud_request = engine.cloud_target().map(|target| {
+            let command_id = self
+                .cloud_delete_commands
+                .entry(chat_id.clone())
+                .or_insert_with(|| uuid::Uuid::new_v4().to_string())
+                .clone();
+            (target, command_id)
+        });
+        self.deleting_chat = true;
+        cx.spawn(async move |this, cx| {
+            let result = if let Some((target, command_id)) = cloud_request {
+                target.delete_session(&chat_id, &command_id).await
+            } else {
+                engine
+                    .client()
+                    .call(
+                        methods::MUTATE,
+                        serde_json::json!({
+                            "op": "forceDeleteChat", "chatId": chat_id, "targetDeviceId": owner,
+                        }),
+                    )
+                    .await
+            };
+            let _ = this.update(cx, |this, cx| {
+                this.deleting_chat = false;
+                if !this
+                    .state
+                    .read(cx)
+                    .engine()
+                    .is_some_and(|current| current.same_connection(&engine))
+                {
+                    cx.notify();
+                    return;
+                }
+                match result {
+                    Ok(_) => this.finish_delete_chat(chat_id, cx),
+                    Err(error) => {
+                        this.show_notice(crate::toast::ToastKind::Error, format!("{error}"), cx)
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn finish_delete_chat(&mut self, chat_id: String, cx: &mut Context<Self>) {
+        self.cloud_delete_commands.remove(&chat_id);
+        if self.delete_confirm.as_deref() == Some(chat_id.as_str()) {
+            self.delete_confirm = None;
+        }
         if let Some(tabs) = self.right_tabs.get(&chat_id) {
             for surface in tabs {
                 if let RightSurface::Browser(id) = surface {
@@ -6777,10 +7300,6 @@ impl Shell {
         }
         self.composer
             .update(cx, |composer, cx| composer.purge_chat(&chat_id, cx));
-        self.mutate(
-            serde_json::json!({ "op": "deleteChat", "chatId": chat_id }),
-            cx,
-        );
         cx.notify();
     }
 
@@ -7608,7 +8127,10 @@ impl Shell {
     /// the pull request pane's tabs.
     fn render_title_bar(&mut self, cx: &mut Context<Self>) -> AnyElement {
         // The Plugins page has no tabs: a bare strip that still drags.
-        if matches!(self.route, Route::Plugins | Route::Archives | Route::Usage) {
+        if matches!(
+            self.route,
+            Route::Plugins | Route::Archives | Route::Usage | Route::Zot
+        ) {
             return self
                 .titlebar_drag_region("plugins-titlebar", div().size_full(), cx)
                 .into_any_element();
@@ -7803,9 +8325,9 @@ impl Shell {
                     .child(window_control_button(
                         "titlebar-new-session",
                         icons::PLUS,
-                        ShortcutId::NewSession.label(),
+                        "New tab",
                         &theme,
-                        cx.listener(|this, _, _, cx| this.open_new_session(None, cx)),
+                        cx.listener(|this, _, _, cx| this.open_new_conversation_tab(cx)),
                     ))
             }))
             .into_any_element()
@@ -7866,8 +8388,7 @@ impl Shell {
     pub(super) fn titlebar_plus_alpha(&self, cx: &App) -> f32 {
         let sidebar_reveal =
             (self.sidebar_now() / self.sidebar_content_width().max(1.0)).clamp(0.0, 1.0);
-        titlebar_new_session_alpha(&self.route, self.state.read(cx).selected_chat.is_some())
-            * (1.0 - sidebar_reveal)
+        titlebar_new_session_alpha(&self.route, self.has_conversation(cx)) * (1.0 - sidebar_reveal)
     }
 
     /// Native Windows caption controls integrated into Zuse's unified
@@ -8430,6 +8951,12 @@ impl Shell {
             SettingsSection::General => icons::DITHER_GEAR,
             SettingsSection::Appshots => icons::DITHER_DOCUMENT,
             SettingsSection::Archived => icons::DITHER_ARCHIVE,
+            SettingsSection::CloudRepositories => icons::GIT_BRANCH,
+            SettingsSection::CloudEnvironments => icons::DITHER_TERMINAL,
+            SettingsSection::CloudMachine => icons::DITHER_MONITOR,
+            SettingsSection::CloudAgents => icons::DITHER_KEY,
+            SettingsSection::Usage => icons::DASHBOARD_SPEED,
+            SettingsSection::Billing => icons::TAG,
         };
         settings::widgets::scroll_faded(
             "settings-nav-scroll",
@@ -8455,7 +8982,26 @@ impl Shell {
                             SettingsSection::ALL
                                 .into_iter()
                                 .filter(|item| item.visible_in_nav())
-                                .map(|item| {
+                                .flat_map(|item| {
+                                    let heading = item.heading().map(|heading| {
+                                        if compact {
+                                            div()
+                                                .mx(px(8.))
+                                                .my(px(8.))
+                                                .h(px(1.))
+                                                .bg(theme.border)
+                                                .into_any_element()
+                                        } else {
+                                            div()
+                                                .px(px(8.))
+                                                .pt(px(14.))
+                                                .pb(px(4.))
+                                                .text_size(crate::typography::text_xs())
+                                                .text_color(theme.text_muted)
+                                                .child(heading)
+                                                .into_any_element()
+                                        }
+                                    });
                                     let index = SettingsSection::ALL
                                         .iter()
                                         .position(|s| *s == item)
@@ -8478,7 +9024,7 @@ impl Shell {
                                         ),
                                         theme.text_strong,
                                     );
-                                    settings::widgets::section_tab(
+                                    let tab = settings::widgets::section_tab(
                                         theme,
                                         selected,
                                         selection_t,
@@ -8533,7 +9079,8 @@ impl Shell {
                                     )
                                     .when(!compact, |view| {
                                         view.child(SharedString::from(item.label()))
-                                    })
+                                    });
+                                    heading.into_iter().chain([tab.into_any_element()])
                                 }),
                         ),
                 ),
@@ -8574,8 +9121,11 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         // The Plugins page owns the main area, so no chat reads as current.
-        let selected =
-            selected && !matches!(self.route, Route::Plugins | Route::Archives | Route::Usage);
+        let selected = selected
+            && !matches!(
+                self.route,
+                Route::Plugins | Route::Archives | Route::Usage | Route::Zot
+            );
         // Activity, not position: status is a small colored
         // word + glyph in the row's top-right corner — Working animates the
         // composer-strip spinner, Done wears a check; Idle rows show the
@@ -8628,7 +9178,11 @@ impl Shell {
         let project_icon = (project_icon && search_query.is_none() && !nested).then(|| {
             self.render_project_icon(&id, spaces::SIDEBAR_PROJECT_AVATAR_SIZE, selected, cx)
         });
-        let corner_hovered = !preview && self.chat_status_hover.as_deref() == Some(row_id.as_str());
+        // A cloud task row (`cloud:<workspace>`) opens its conversation; the
+        // local-only actions (archive, rename, the chat menu) don't apply.
+        let cloud = id.starts_with(CLOUD_ROW_PREFIX);
+        let corner_hovered =
+            !preview && !cloud && self.chat_status_hover.as_deref() == Some(row_id.as_str());
         let archived_muted = archived && search_query.is_none() && !selected && !corner_hovered;
         let project_icon = project_icon.map(|icon| {
             div()
@@ -8688,7 +9242,7 @@ impl Shell {
         let working = status == zuse_protocol::ChatIndicator::Working && !queued && !undelivered;
         let compact_status = sidebar.then(|| {
             let glyph = if working {
-                loaders::dither_ring(format!("{row_id}-working"), 13.0, theme.text_muted)
+                loaders::terminal_spinner(format!("{row_id}-working"), 13.0, theme.text_muted)
                     .into_any_element()
             } else if status == zuse_protocol::ChatIndicator::Completed && !queued && !undelivered {
                 icon(icons::CHECK)
@@ -8789,8 +9343,12 @@ impl Shell {
                             .text_color(status_color)
                             .into_any_element()
                     } else if working {
-                        loaders::dither_ring(format!("{row_id}-working"), 13.0, theme.text_muted)
-                            .into_any_element()
+                        loaders::terminal_spinner(
+                            format!("{row_id}-working"),
+                            13.0,
+                            theme.text_muted,
+                        )
+                        .into_any_element()
                     } else {
                         attention_mark(13.0)
                     };
@@ -8893,7 +9451,7 @@ impl Shell {
         let select_id = id.clone();
         let menu_id = id.clone();
         let search_query_none = search_query.is_none();
-        let rename_input = (search_query_none && !preview)
+        let rename_input = (search_query_none && !preview && !cloud)
             .then(|| self.rename_input_for(&id, ChatRenameSurface::Sidebar))
             .flatten();
         // Hover fades over transition-colors (zuse session-row.tsx) — both
@@ -8909,6 +9467,9 @@ impl Shell {
         // below its near-opaque selected fill, and blending toward it visibly
         // dimmed the active row under the pointer (user report).
         let hover_bg = if selected { selected_wash } else { hover };
+        // The row a context menu was opened on stays lit while the menu is
+        // up; the pointer leaving it for the menu must not drop the wash.
+        let menu_target = !preview && self.chat_menu_targets(&id);
         // Brightness is the read state: titles rest gray and an unseen finish
         // stands out in full white, with no status mark beside it.
         let finished_unseen =
@@ -8941,8 +9502,16 @@ impl Shell {
             .px(px(Theme::SPACE_SM))
             .when(sidebar, |el| el.justify_center())
             .when(!sidebar, |el| el.py(px(6.0)))
-            .text_color(motion::hover_blend(&fade_key, rest_text, theme.text_strong))
-            .bg(motion::hover_blend(&fade_key, rest_bg, hover_bg))
+            .text_color(if menu_target {
+                theme.text_strong
+            } else {
+                motion::hover_blend(&fade_key, rest_text, theme.text_strong)
+            })
+            .bg(if menu_target {
+                hover_bg
+            } else {
+                motion::hover_blend(&fade_key, rest_bg, hover_bg)
+            })
             // No selection ring (user request) — the wash alone marks the
             // active row.
             // Row hover drives BOTH the wash blend and the corner's
@@ -8968,6 +9537,10 @@ impl Shell {
                 })
                 .cursor_pointer()
                 .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
+                    if cloud {
+                        this.open_cloud_sidebar_row(&select_id, cx);
+                        return;
+                    }
                     // The palette's copy of the row only opens; the sidebar's
                     // double-click edits the title in place.
                     if event.click_count() >= 2 && search_query_none {
@@ -8979,6 +9552,9 @@ impl Shell {
                 .on_mouse_down(
                     MouseButton::Right,
                     cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                        if cloud {
+                            return;
+                        }
                         this.chat_menu.open(ChatMenuState {
                             tab: None,
                             chat_id: menu_id.clone(),
@@ -9262,7 +9838,7 @@ impl Shell {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .child(loaders::dither_ring(
+                            .child(loaders::terminal_spinner(
                                 format!("{row_id}-working"),
                                 10.0,
                                 theme.text_muted,
@@ -10209,7 +10785,9 @@ impl Shell {
             // (No titlebar strip: the unified window titlebar spans the whole
             // window above this column.)
             .child(self.render_sidebar_nav(theme, cx))
+            .child(self.render_zot_sidebar(theme, cx))
             .child(self.render_sidebar_modes(theme, cx))
+            .children(self.render_cloud_sidebar_status(theme, cx))
             .child(filter_row)
             .child(sidebar_lists)
             // Global connection pill (durable-by-design UI truth): appears
@@ -10452,6 +11030,25 @@ impl Shell {
     fn render_update_pill(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
         use crate::app_update::{Flow, StripAction};
         let update = crate::app_update::AppUpdate::global(cx)?;
+        if let Some(problem) = update.read(cx).control_problem() {
+            return Some(
+                div()
+                    .id("control-update-retry")
+                    .mx(px(8.0))
+                    .p(px(8.0))
+                    .text_size(crate::typography::ui_rems(12.0))
+                    .text_color(theme.danger)
+                    .cursor_pointer()
+                    .tooltip(crate::settings::widgets::text_tooltip(problem))
+                    .child("Control tools update failed · Retry")
+                    .on_click(cx.listener(|_, _, _, cx| {
+                        if let Some(update) = crate::app_update::AppUpdate::global(cx) {
+                            update.update(cx, |update, cx| update.retry_control(cx));
+                        }
+                    }))
+                    .into_any_element(),
+            );
+        }
         let (status, action) = update.read(cx).strip()?;
         let flow = update.read(cx).flow().clone();
         let notes = update
@@ -11610,13 +12207,23 @@ impl Shell {
         // Modals and context menus sit above the rest of the shell. Preserve
         // their existing behavior: only surfaces that already have a Cancel
         // path close here; the others remain explicit blockers.
+        if self.delete_confirm.take().is_some() {
+            cx.notify();
+            return true;
+        }
         if self.sync_flow.has_visible_overlay()
-            || self.delete_confirm.is_some()
             || self.delete_space_confirm.is_some()
             || self.chat_menu.get().is_some()
             || self.space_menu.get().is_some()
             || self.user_menu.get().is_some()
         {
+            return true;
+        }
+        if self.zot_ui.dialog.take().is_some() {
+            cx.notify();
+            return true;
+        }
+        if self.dismiss_zot_overlay(cx) {
             return true;
         }
         if self.harness_update_expanded {
@@ -11677,6 +12284,10 @@ impl Shell {
         }
         if self.conversation_history.is_open() {
             self.close_conversation_history(cx);
+            return true;
+        }
+        if matches!(self.route, Route::Zot) || self.zot_editor_open(cx) {
+            self.leave_zot_page(cx);
             return true;
         }
         self.active_changes(cx)
@@ -11849,6 +12460,8 @@ impl Shell {
         let mut overlays: Vec<AnyElement> = Vec::new();
         overlays.push(self.desktop_import.clone().into_any_element());
         overlays.extend(self.render_shortcuts_panel(viewport, cx));
+        overlays.extend(self.render_zot_dialog(viewport, window, cx));
+        overlays.extend(self.render_zot_overlays(viewport, cx));
 
         if let Some(menu_state) = self.chat_menu.get().cloned() {
             let chat_id = menu_state.chat_id;
@@ -11862,6 +12475,9 @@ impl Shell {
                     .iter()
                     .any(|chat| chat.id == chat_id && chat.parent_chat_id.is_some());
             let is_pinned = self.active_sidebar_pins(cx).contains(&chat_id);
+            // A Zapper thread lives under its Zapper, so it has no pin, and
+            // archiving goes through the Zapper so it stops sending work.
+            let thread_zot = self.zot_of_thread(&chat_id, cx);
             let rename_id = chat_id.clone();
             let pin_id = chat_id.clone();
             let archive_id = chat_id.clone();
@@ -11907,9 +12523,16 @@ impl Shell {
                     let archive =
                         popover::menu_row(&theme, false, format!("chat-menu-archive-{chat_id}"))
                             .id("chat-menu-archive")
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.archive_chat(archive_id.clone(), cx)
-                            }))
+                            .on_click({
+                                let thread_zot = thread_zot.clone();
+                                cx.listener(move |this, _, _, cx| match &thread_zot {
+                                    Some(zot) => {
+                                        this.close_chat_menu(cx);
+                                        this.archive_zot_thread(zot, archive_id.clone(), cx);
+                                    }
+                                    None => this.archive_chat(archive_id.clone(), cx),
+                                })
+                            })
                             .child(
                                 icon(icons::ARCHIVE_MINIMALISTIC)
                                     .size(px(16.0))
@@ -11917,8 +12540,12 @@ impl Shell {
                             )
                             .child(SharedString::from("Archive"));
                     let copy = self.render_chat_copy_trigger(&chat_id, copy_open, &theme, cx);
-                    menu.child(self.chat_menu_hover_row(CHAT_MENU_ROW_PIN, pin, cx))
-                        .child(self.chat_menu_hover_row(CHAT_MENU_ROW_ARCHIVE, archive, cx))
+                    let menu = if thread_zot.is_some() {
+                        menu
+                    } else {
+                        menu.child(self.chat_menu_hover_row(CHAT_MENU_ROW_PIN, pin, cx))
+                    };
+                    menu.child(self.chat_menu_hover_row(CHAT_MENU_ROW_ARCHIVE, archive, cx))
                         .child(self.chat_menu_hover_row(CHAT_MENU_ROW_COPY, copy, cx))
                 };
                 let delete =
@@ -11935,7 +12562,7 @@ impl Shell {
                                 .size(px(16.0))
                                 .text_color(theme.danger),
                         )
-                        .child(SharedString::from("Delete…"));
+                        .child(SharedString::from("Force delete…"));
                 menu.child(popover::menu_separator())
                     .child(self.chat_menu_hover_row(CHAT_MENU_ROW_DELETE, delete, cx))
             };
@@ -12009,14 +12636,29 @@ impl Shell {
                     .and_then(|c| c.title.clone())
                     .unwrap_or_else(|| "New session".into()),
             );
+            let cloud = self
+                .state
+                .read(cx)
+                .engine()
+                .is_some_and(|engine| engine.cloud_target().is_some());
             let card = popover::dialog_card(&theme)
-                .child(popover::dialog_title(&theme, "Delete session?"))
-                .child(div().mt(px(6.0)).child(popover::dialog_body(
-                    &theme,
-                    format!("\u{201C}{title}\u{201D} will be permanently deleted. This can\u{2019}t be undone."),
-                )))
+                .w(px(440.))
+                .overflow_hidden()
+                .child(
+                    div().flex().flex_col().gap(px(10.))
+                        .child(popover::dialog_title(&theme, "Force delete session?"))
+                        .child(popover::dialog_body(&theme,
+                            format!("“{title}” and its conversations and agents will be permanently deleted.")))
+                        .child(popover::dialog_body(&theme,
+                            if cloud {
+                                "Its cloud computer, disk, stored history and recovery data will be permanently deleted."
+                            } else {
+                                "Its private worktree and unsaved files will also be removed. Shared worktrees and your main project folder are kept."
+                            })),
+                )
                 .child(
                     popover::dialog_footer(&theme)
+                        .child(div().flex_1().text_size(px(11.)).text_color(theme.text_muted).child("This can’t be undone."))
                         .child(
                             popover::btn_ghost(&theme, &tr(cx, msg::common::cancel), "delete-chat-cancel")
                                 .id("delete-chat-cancel")
@@ -12026,8 +12668,12 @@ impl Shell {
                                 })),
                         )
                         .child(
-                            popover::btn_danger(&theme, "Delete")
+                            popover::btn_danger(
+                                &theme,
+                                if self.deleting_chat { "Deleting…" } else { "Force delete" },
+                            )
                                 .id("delete-chat-confirm")
+                                .opacity(if self.deleting_chat { 0.5 } else { 1. })
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.delete_chat(chat_id.clone(), cx)
                                 })),
@@ -12210,9 +12856,39 @@ impl Shell {
         transcript_width: f32,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        // Active cloud tabs share the normal header's tab row. Draft tabs
+        // retain their canvas strip until a conversation is admitted.
+        let strip = self
+            .cloud_conversation
+            .is_none()
+            .then(|| self.render_cloud_tabs(cx))
+            .flatten();
+        let content = self.render_main_content(window, main_content_width, transcript_width, cx);
+        div()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .flex()
+            .flex_col()
+            .children(strip)
+            .child(content)
+            .into_any_element()
+    }
+
+    fn render_main_content(
+        &mut self,
+        window: &mut Window,
+        main_content_width: f32,
+        transcript_width: f32,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let theme_owned = Theme::of(cx).clone();
         let theme = &theme_owned;
         let (border, text, faint) = (theme.border, theme.text, theme.text_faint);
+
+        if matches!(self.route, Route::Zot) {
+            return self.render_zot_page(window, cx);
+        }
 
         if matches!(self.route, Route::PullRequests) {
             if self.pull_requests_page.is_none() {
@@ -12261,9 +12937,28 @@ impl Shell {
                 .into_any_element();
         }
 
+        if let Some(conversation) = self.cloud_conversation.clone() {
+            // The environment summary toggle works for cloud chats too.
+            let reveal = self.session_info_reveal(true);
+            let card = self.render_cloud_session_info(
+                &conversation,
+                reveal,
+                self.viewport_height - Theme::TITLEBAR_HEIGHT - 160.0,
+                cx,
+            );
+            return div()
+                .relative()
+                .flex_1()
+                .min_w_0()
+                .h_full()
+                .child(conversation)
+                .children(card)
+                .into_any_element();
+        }
         let _ = (text, border);
         let has_selection = self.state.read(cx).selected_chat.is_some();
-        let has_spaces = !self.state.read(cx).spaces.is_empty();
+        let has_spaces = !self.state.read(cx).spaces.is_empty()
+            || !self.state.read(cx).cloud_sidebar_projects().is_empty();
         let cloud_starting = !has_selection && self.composer.read(cx).cloud_launch_pending(cx);
         let has_appshots = !self.composer.read(cx).staged_appshots().is_empty();
         let no_project = self.state.read(cx).no_project;
@@ -12315,12 +13010,14 @@ impl Shell {
         let session_reveal = self.session_info_reveal(has_selection);
         // Panel open/close glides the composer width; a window resize or a
         // seam drag is direct manipulation, so the width tracks the pointer.
+        // The Zot panel leaves a narrow column; keep the composer off its edges.
+        let zot_coordinator = self.state.read(cx).selected_chat_is_zot_coordinator();
         let direct_width =
             self.reduced_motion || self.viewport_resized || self.pane_resize_dragging.is_some();
         let composer_width = self.composer_dock.borrow_mut().layout_width(
             composer_target_width(
                 main_content_width
-                    - if has_selection || cloud_starting {
+                    - if (has_selection && !zot_coordinator) || cloud_starting {
                         0.
                     } else {
                         2. * if self.viewport_width <= 800. {
@@ -12439,7 +13136,7 @@ impl Shell {
                 })
                 .into_any_element()
         } else if cloud_starting {
-            div().into_any_element()
+            self.render_cloud_launch_outlet(cx)
         } else if !has_spaces && !no_project {
             // Onboarding (first boot / after the destructive wipe): no folders
             // to work in yet — one clear affordance.
@@ -12468,22 +13165,37 @@ impl Shell {
                                 .text_size(crate::typography::text_lg())
                                 .font_weight(gpui::FontWeight::MEDIUM)
                                 .text_color(theme.text_strong)
-                                .child(SharedString::from("Add a project to get started")),
+                                .child(SharedString::from("Where should agents work?")),
                         )
                         .child(
                             div()
                                 .mt(px(6.0))
+                                .max_w(px(360.))
+                                .text_center()
                                 .text_size(crate::typography::text_sm())
                                 .text_color(theme.text_muted.opacity(0.7))
                                 .child(SharedString::from(
-                                    "A project is a folder on one of your devices.",
+                                    "Add a folder from one of your devices, or run agents on a cloud computer with a GitHub repository.",
                                 )),
                         )
                         .child(
-                            popover::btn_primary(&theme_owned, "Add a project")
-                                .id("onboarding-add-space")
+                            div()
                                 .mt(px(20.0))
-                                .on_click(cx.listener(|this, _, _, cx| this.open_add_space(cx))),
+                                .flex()
+                                .items_center()
+                                .gap(px(8.))
+                                .child(
+                                    popover::btn_primary(&theme_owned, "Add a project")
+                                        .id("onboarding-add-space")
+                                        .on_click(cx.listener(|this, _, _, cx| this.open_add_space(cx))),
+                                )
+                                .when(crate::cloud_beta(), |row| row.child(
+                                    popover::btn_ghost(&theme_owned, "Set up Cloud", "onboarding-cloud")
+                                        .id("onboarding-cloud")
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.open_settings(SettingsSection::Cloud, cx)
+                                        })),
+                                )),
                         )
                         .child(
                             div()
@@ -12738,7 +13450,13 @@ impl Shell {
                                     .id("persistent-composer")
                                     .relative()
                                     .w(px(composer_width))
-                                    .pb(px(if cloud_starting { 16. } else { 0. }))
+                                    .pb(px(if cloud_starting {
+                                        16.
+                                    } else if zot_coordinator {
+                                        12.
+                                    } else {
+                                        0.
+                                    }))
                                     .opacity(composer_opacity)
                                     .mx_auto()
                                     .child(self.composer.clone())
@@ -13721,8 +14439,9 @@ impl Shell {
         if plus_open {
             let closing = self.right_plus.closing_since();
             let menu = self.render_right_plus_menu(&theme, cx).into_any_element();
-            // Right-aligned to the trigger, opening over the pane.
-            plus = plus.relative().child(popover::anchored_menu_below_end(
+            // Align the menu's left edge with the trigger so it opens into
+            // the surface pane instead of covering the conversation.
+            plus = plus.relative().child(popover::anchored_menu_below(
                 "right-plus-menu",
                 menu,
                 closing,
@@ -14460,6 +15179,7 @@ fn header_icon_button_with(
 
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.sync_cloud_tab_scope(cx);
         // Every repaint (state frame, input, or the clock firing) reschedules
         // the next clock-driven one; the sidebar and transcript follow this
         // view's notifications.
@@ -14522,7 +15242,7 @@ impl Render for Shell {
             use crate::composer::WorkspaceCommand;
             match command {
                 WorkspaceCommand::Model => self
-                    .composer
+                    .conversation_composer(cx)
                     .update(cx, |c, cx| c.open_model_menu(window, cx)),
                 WorkspaceCommand::New => self.open_new_session(None, cx),
                 WorkspaceCommand::Resume => self.toggle_command_palette(window, cx),
@@ -14541,9 +15261,9 @@ impl Render for Shell {
                 WorkspaceCommand::Rename if !self.active_chat.is_empty() => {
                     self.open_rename_chat(self.active_chat.clone(), cx)
                 }
-                WorkspaceCommand::Stop => {
-                    self.composer.update(cx, |c, cx| c.interrupt_selected(cx))
-                }
+                WorkspaceCommand::Stop => self
+                    .conversation_composer(cx)
+                    .update(cx, |c, cx| c.interrupt_selected(cx)),
                 _ => {}
             }
         }
@@ -15123,6 +15843,17 @@ impl Render for Shell {
                 } else {
                     0.0
                 };
+                // The Zot panel replaces the right pane but takes the same room.
+                let on_zot = on_chat && self.selected_zot(cx).is_some();
+                let right_target_width = if on_zot {
+                    if self.zot_ui.panel_hidden {
+                        0.0
+                    } else {
+                        zots::ZOT_PANEL_WIDTH
+                    }
+                } else {
+                    right_target_width
+                };
                 let main_target_width = self.main_target_width(right_target_width, cx);
                 // Navigation can change either edge: Files and responsive
                 // sidebar fitting matter just as much as the right surface.
@@ -15192,7 +15923,7 @@ impl Render for Shell {
                 // never renders it (zuse __root.tsx `!isSettings && activeChat`
                 // around the diff column) — the per-session open flags stay
                 // intact for the return trip.
-                let right_open = on_chat && self.right_pane_shown(cx);
+                let right_open = on_chat && !on_zot && self.right_pane_shown(cx);
                 // Takeover mode derives its width from the viewport, so a
                 // manual drag handle would fight the expanded target.
                 let right_handle = (right_open
@@ -15216,7 +15947,11 @@ impl Render for Shell {
                         .then(|| self.pull_request_pane_handle(cx))
                         .flatten()
                 });
-                let right: AnyElement = if on_chat {
+                let right: AnyElement = if on_zot && self.zot_ui.panel_hidden {
+                    Empty.into_any_element()
+                } else if on_zot {
+                    self.render_zot_inspector(window, cx)
+                } else if on_chat {
                     self.render_right_pane(window, cx)
                 } else if on_pull_requests {
                     self.render_pull_request_pane(window, cx)
@@ -15316,9 +16051,7 @@ impl Render for Shell {
                 } else {
                     Empty.into_any_element()
                 };
-                let show_main_chrome = self.workspace_gutter() == 0.
-                    || self.state.read(cx).selected_chat.is_some()
-                    || self.settings.sidebar_collapsed;
+                let show_main_chrome = self.main_chrome_visible(cx);
                 let title_bar = show_main_chrome.then(|| self.render_title_bar(cx));
                 // Sidebar tone: a slightly lighter column behind the sidebar.
                 // Its width rides the same tween as the sidebar, so the tone
@@ -15399,7 +16132,18 @@ impl Render for Shell {
             }
             phase @ (GatePhase::Failed(_) | GatePhase::SignIn) => {
                 let card = self.render_gate_card(phase, cx);
-                root.child(card)
+                if matches!(phase, GatePhase::Failed(_)) && self.has_offline_cloud_navigation(cx) {
+                    let sidebar = self.render_offline_cloud_sidebar(cx);
+                    root.child(
+                        div()
+                            .size_full()
+                            .flex()
+                            .child(sidebar)
+                            .child(div().flex_1().min_w_0().h_full().child(card)),
+                    )
+                } else {
+                    root.child(card)
+                }
             }
         };
         let root = if restart_required {
@@ -17092,6 +17836,58 @@ mod exit_regressions {
     }
 
     #[gpui::test]
+    fn right_panel_opens_at_default_and_remembers_a_resized_width(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        cx.update(|cx| {
+            settings::init(settings::UiSettings::default(), dir.path(), cx);
+            crate::history::init(
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                cx,
+            );
+            gpui_base::init(cx);
+            cx.set_global(Theme::default());
+            crate::app_menus::init(cx);
+        });
+        let window = cx.add_window(|_, cx| {
+            let state = cx.new(|_| AppState::new());
+            Shell::new(
+                state,
+                EngineBootConfig {
+                    target: None,
+                    data_dir: dir.path().into(),
+                    ipc_port: 0,
+                    edge_url: "http://127.0.0.1:1".into(),
+                    edge_token: None,
+                    org_id: None,
+                    workos_client_id: None,
+                    default_harness: zuse_protocol::HarnessId::Mock,
+                },
+                cx,
+            )
+        });
+        window
+            .update(cx, |shell, _, cx| {
+                shell.active_chat = "preview".into();
+                shell.viewport_width = 1400.0;
+                shell.set_surfaces_open(true, cx);
+                assert_eq!(shell.right_settled_target(cx), 520.0);
+
+                // A drag updates this preference; closing and reopening the
+                // panel must not replace it with the default or an even split.
+                shell.settings.right_pane_width = 400.0;
+                shell.set_surfaces_open(false, cx);
+                shell.set_surfaces_open(true, cx);
+                assert_eq!(shell.right_settled_target(cx), 400.0);
+                shell.observe_viewport_width(1500.0, cx);
+                assert_eq!(shell.right_settled_target(cx), 400.0);
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
     fn pane_geometry_uses_one_animation_time_per_frame(cx: &mut TestAppContext) {
         let dir = tempfile::tempdir().unwrap();
         cx.update(|cx| {
@@ -18223,8 +19019,8 @@ mod exit_regressions {
                     // below the titlebar band.
                     let title = cx.debug_bounds("pr-toolbar-title").unwrap();
                     assert!(title.top() >= px(Theme::TITLEBAR_HEIGHT));
-                    let external = cx.debug_bounds("pr-external").unwrap();
-                    assert!(external.right() <= px(width));
+                    let more = cx.debug_bounds("pr-more").unwrap();
+                    assert!(more.right() <= px(width));
                 }
             }
         }
@@ -21296,6 +22092,14 @@ mod settings_modal_regressions {
             ("settings/files", SettingsSection::Files),
             ("settings/appshots", SettingsSection::Appshots),
             ("settings/archived", SettingsSection::Archived),
+            ("settings/cloud", SettingsSection::Cloud),
+            (
+                "settings/cloud-repositories",
+                SettingsSection::CloudRepositories,
+            ),
+            ("settings/cloud-machine", SettingsSection::CloudMachine),
+            ("settings/usage", SettingsSection::Usage),
+            ("settings/billing", SettingsSection::Billing),
         ] {
             assert_eq!(
                 settings_open_route(route, remembered),
@@ -21303,7 +22107,7 @@ mod settings_modal_regressions {
                 "{route}"
             );
         }
-        assert_eq!(settings_open_route("settings/billing", remembered), None);
+        assert_eq!(settings_open_route("settings/invoices", remembered), None);
         assert_eq!(settings_open_route("new", remembered), None);
     }
 
@@ -21426,7 +22230,7 @@ mod settings_modal_regressions {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             settings::UiSettings::path(dir.path()),
-            r#"{"sidebarWidth": 300, "settingsSection": "billing"}"#,
+            r#"{"sidebarWidth": 300, "settingsSection": "invoices"}"#,
         )
         .unwrap();
         let saved = settings::UiSettings::load(dir.path());

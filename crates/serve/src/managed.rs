@@ -166,20 +166,25 @@ async fn session(server: BrowserServer, mut socket: WebSocket) {
     let (grants, current) = tokio::sync::watch::channel(grant);
     let lifetime = current.clone();
     let (mut writer, mut reader) = socket.split();
-    let (output, mut outgoing) = mpsc::channel::<String>(16);
+    let (output, mut outgoing) =
+        mpsc::channel::<zuse_rpc::OutputFrame>(crate::SOCKET_OUTPUT_CAPACITY);
     let (input, incoming) = mpsc::channel::<String>(16);
     let service = Arc::new(Authorized {
         inner: server.service,
         grant: current,
     });
     let dispatch = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(
-        zuse_rpc::serve_connection(service, output, incoming),
+        zuse_rpc::serve_connection_bounded(service, output, incoming, crate::SOCKET_OUTPUT_BYTES),
     ));
     let exchange = async {
         loop {
             tokio::select! {
                 frame = outgoing.recv() => match frame {
-                    Some(frame) => writer.send(Message::Text(frame.into())).await.map_err(|_| ())?,
+                    Some(mut frame) => {
+                        let text=std::mem::take(&mut frame.text);
+                        writer.send(Message::Text(text.into())).await.map_err(|_| ())?;
+                        drop(frame);
+                    },
                     None => return Ok::<_, ()>(()),
                 },
                 frame = reader.next() => match frame {

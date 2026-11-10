@@ -11450,6 +11450,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
+name = "ts-rs"
+version = "11.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4994acea2522cd2b3b85c1d9529a55991e3ad5e25cdcd3de9d505972c4379424"
+dependencies = [
+ "serde_json",
+ "thiserror 2.0.20",
+ "ts-rs-macros",
+]
+
+[[package]]
+name = "ts-rs-macros"
+version = "11.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ee6ff59666c9cbaec3533964505d39154dc4e0a56151fdea30a09ed0301f62e2"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+ "termcolor",
+]
+
+[[package]]
 name = "ttf-parser"
 version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -13819,6 +13842,7 @@ name = "zuse"
 version = "0.26.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "clap",
  "embed-resource",
  "libc",
@@ -13828,6 +13852,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
  "windows-sys 0.61.2",
  "zuse-engine",
  "zuse-mcp",
@@ -13938,6 +13963,8 @@ dependencies = [
  "tokio-util",
  "tower",
  "tower-http",
+ "tracing",
+ "tracing-subscriber",
  "uuid",
  "zeroize",
  "zuse-cloud-projection",
@@ -13947,6 +13974,7 @@ dependencies = [
  "zuse-protocol",
  "zuse-providers",
  "zuse-rpc",
+ "zuse-serve",
 ]
 
 [[package]]
@@ -13958,6 +13986,7 @@ dependencies = [
  "clap",
  "serde_json",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
  "zuse-cloud",
@@ -13994,9 +14023,12 @@ dependencies = [
  "futures",
  "rand 0.8.7",
  "reqwest",
+ "rusqlite",
  "serde",
  "serde_json",
  "sha2",
+ "tempfile",
+ "tokio",
  "zeroize",
  "zuse-model",
  "zuse-protocol",
@@ -14013,6 +14045,7 @@ dependencies = [
  "base64 0.22.1",
  "ed25519-dalek",
  "flate2",
+ "futures",
  "hmac",
  "jsonwebtoken",
  "libc",
@@ -14036,6 +14069,20 @@ dependencies = [
  "zuse-engine",
  "zuse-protocol",
  "zuse-providers",
+ "zuse-rpc",
+]
+
+[[package]]
+name = "zuse-control"
+version = "0.26.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "serde",
+ "serde_json",
+ "tokio",
+ "url",
+ "zuse-protocol",
  "zuse-rpc",
 ]
 
@@ -14084,6 +14131,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "subtle",
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
@@ -14124,6 +14172,7 @@ version = "0.26.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
+ "flate2",
  "futures",
  "libc",
  "reqwest",
@@ -14229,6 +14278,7 @@ version = "0.26.0"
 dependencies = [
  "serde",
  "serde_json",
+ "sha2",
  "similar",
  "thiserror 2.0.20",
  "zuse-protocol",
@@ -14322,8 +14372,10 @@ version = "0.26.0"
 dependencies = [
  "chrono",
  "pulldown-cmark",
+ "schemars",
  "serde",
  "serde_json",
+ "ts-rs",
  "url",
  "uuid",
 ]
@@ -14417,6 +14469,7 @@ dependencies = [
  "async-trait",
  "axum",
  "base64 0.22.1",
+ "flate2",
  "futures",
  "rcgen",
  "reqwest",

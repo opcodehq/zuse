@@ -45,6 +45,22 @@ pub struct Tools {
     pending_turns: tokio::sync::Mutex<HashMap<String, Arc<PendingTurn>>>,
 }
 
+fn coordinator_tool(name: &str) -> bool {
+    name.starts_with("zot_")
+        || matches!(
+            name,
+            "whoami"
+                | "list_devices"
+                | "list_projects"
+                | "list_harnesses"
+                | "list_models"
+                | "list_chats"
+                | "get_chat"
+                | "read_chat"
+                | "wait_for_turn"
+        )
+}
+
 fn chat_key_schema(extra: Value) -> Value {
     let mut properties = json!({
         "chat": {
@@ -735,15 +751,41 @@ impl Tools {
 
     pub fn list(&self) -> Vec<ToolDef> {
         let in_chat = self.zuse.origin().chat_id.is_some();
-        catalog()
-            .into_iter()
+        let mut all = catalog();
+        for (name, description) in [
+            (
+                "zot_command",
+                "Apply a scoped Zot command. Supply commandId, zotId, expectedRevision and action. Reuse the commandId on retry. Actions include delegate (worker, model, base), messageWorker, stopWorker, archiveWorker, releaseWorker, decide, writeFile, restoreFile and freshConversation.",
+            ),
+            (
+                "zot_files",
+                "Read versioned Zot rules, notes, digest and reports. Supply zotId and optional history.",
+            ),
+            (
+                "zot_events",
+                "Read durable worker reports and blockers. Supply zotId.",
+            ),
+            (
+                "zot_acknowledge",
+                "Acknowledge handled worker reports. Supply zotId and eventIds; unresolved human decisions remain separate.",
+            ),
+        ] {
+            all.push(ToolDef {
+                name,
+                description,
+                input_schema: if name=="zot_command" {zuse_protocol::zots::command_schema()}else{json!({"type":"object","properties":{"zotId":{"type":"string"},"history":{"type":"boolean"},"eventIds":{"type":"array","items":{"type":"string"}}},"required":["zotId"]})},
+            });
+        }
+        all.into_iter()
             .filter(|tool| {
-                in_chat
+                (in_chat
                     || (tool.name != "request_secret"
                         && tool.name != SHOW_VISUAL
                         && tool.name != SHOW_UI
                         && !tool.name.starts_with("plugins_")
-                        && !tool.name.starts_with("device_"))
+                        && !tool.name.starts_with("device_")))
+                    && (!self.zuse.is_coordinator() || coordinator_tool(tool.name))
+                    && (!tool.name.starts_with("zot_") || self.zuse.is_coordinator())
             })
             .collect()
     }
@@ -755,6 +797,9 @@ impl Tools {
     /// `Ok` is the tool's structured result; `Err` is a message the model
     /// should read (surfaced as `isError`, never as a protocol error).
     pub async fn call(&self, name: &str, args: Value) -> Result<Value, String> {
+        if self.zuse.is_coordinator() && !coordinator_tool(name) {
+            return Err("coordinators delegate mutations through scoped Zot commands".into());
+        }
         let result = match name {
             "request_secret" => {
                 let chat = self
@@ -764,6 +809,26 @@ impl Tools {
                     .as_deref()
                     .ok_or("Private secrets require an originating chat")?;
                 self.zuse.call_once(zuse_rpc::methods::REQUEST_PRIVATE_OPERATION, json!({"chatId":chat,"targetDeviceId":self.zuse.origin().device_id,"operation":args})).await
+            }
+            "zot_command" => {
+                self.zuse
+                    .control(zuse_protocol::control::ZOT_COMMAND, args)
+                    .await
+            }
+            "zot_files" => {
+                self.zuse
+                    .control(zuse_protocol::control::ZOT_FILES, args)
+                    .await
+            }
+            "zot_events" => {
+                self.zuse
+                    .control(zuse_protocol::control::ZOT_EVENTS, args)
+                    .await
+            }
+            "zot_acknowledge" => {
+                self.zuse
+                    .control(zuse_protocol::control::ACK_ZOT_EVENTS, args)
+                    .await
             }
             "plugins_list" | "plugins_search" | "plugins_schema" | "plugins_call" => {
                 self.plugin_tool(name, args).await

@@ -22,15 +22,21 @@ mod chat_config;
 mod client;
 pub use chat_config::ChatConfigTarget;
 pub mod cloud;
+#[cfg(feature = "relay")]
 pub mod managed;
+#[cfg(feature = "relay")]
 mod paired;
+#[cfg(feature = "relay")]
 pub mod paired_link;
 pub mod reconnect;
+#[cfg(feature = "relay")]
 pub use paired::{connect_paired, connect_paired_channel};
+#[cfg(feature = "relay")]
 pub mod device_room;
 mod server;
 
 pub use client::{RpcClient, RpcForward, RpcSubscription, connect_ws};
+#[cfg(feature = "relay")]
 pub use device_room::{
     DeviceFrameHeader, DeviceLink, HostRelay, HostRelayConfig, LinkCache, LinkCacheConfig,
     NudgeHandler, PeerLiveness, PeerLivenessProbe, StaticToken, TokenError, TokenSource,
@@ -45,6 +51,7 @@ pub use zuse_protocol::methods;
 /// Stable capability error codes transported without provider stderr.
 pub mod capability_errors {
     pub const PULL_REQUESTS_CLI_UNAVAILABLE: &str = "pull_requests.cli_unavailable";
+    pub const PULL_REQUESTS_CLI_OUTDATED: &str = "pull_requests.cli_outdated";
     pub const PULL_REQUESTS_AUTHENTICATION: &str = "pull_requests.authentication";
     pub const PULL_REQUESTS_RATE_LIMITED: &str = "pull_requests.rate_limited";
     pub const PULL_REQUESTS_TIMEOUT: &str = "pull_requests.timeout";
@@ -553,3 +560,7 @@ mod tests {
         assert_eq!(echoed, serde_json::json!(2));
     }
 }
+
+mod output;
+pub use output::OutputFrame;
+pub use server::serve_connection_bounded;

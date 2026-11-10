@@ -2,6 +2,7 @@ name: Cloud control plane
 
 on:
   push:
+    branches: [main]
     paths:
       - apps/cloud/**
       - apps/cloud-runtime/**
@@ -12,6 +13,9 @@ on:
       - crates/cloud-runtime/**
       - crates/providers/src/credentials.rs
       - crates/providers/src/claude/**
+      - crates/providers/src/codex/**
+      - crates/providers/src/acp/**
+      - crates/providers/tests/codex.rs
       - crates/providers/src/lib.rs
       - crates/providers/Cargo.toml
       - crates/cloud/**
@@ -23,11 +27,18 @@ on:
       - crates/engine/src/doc_host.rs
       - crates/engine/src/profile.rs
       - crates/engine/src/lib.rs
+      - crates/engine/src/execution.rs
+      - crates/engine/src/parking.rs
+      - crates/engine/src/sessions.rs
+      - crates/engine/src/rpc.rs
+      - crates/engine/src/native_harness/**
       - crates/sync/src/store.rs
       - crates/doc/src/queue.rs
       - crates/doc/src/rebuild.rs
       - Cargo.toml
       - Cargo.lock
+      - scripts/cloud-provider-benchmark.mjs
+      - scripts/cloud-provider-benchmark.test.mjs
       - .github/workflows/cloud.yml
   pull_request:
     paths:
@@ -40,6 +51,9 @@ on:
       - crates/cloud-runtime/**
       - crates/providers/src/credentials.rs
       - crates/providers/src/claude/**
+      - crates/providers/src/codex/**
+      - crates/providers/src/acp/**
+      - crates/providers/tests/codex.rs
       - crates/providers/src/lib.rs
       - crates/providers/Cargo.toml
       - crates/cloud/**
@@ -51,11 +65,18 @@ on:
       - crates/engine/src/doc_host.rs
       - crates/engine/src/profile.rs
       - crates/engine/src/lib.rs
+      - crates/engine/src/execution.rs
+      - crates/engine/src/parking.rs
+      - crates/engine/src/sessions.rs
+      - crates/engine/src/rpc.rs
+      - crates/engine/src/native_harness/**
       - crates/sync/src/store.rs
       - crates/doc/src/queue.rs
       - crates/doc/src/rebuild.rs
       - Cargo.toml
       - Cargo.lock
+      - scripts/cloud-provider-benchmark.mjs
+      - scripts/cloud-provider-benchmark.test.mjs
       - .github/workflows/cloud.yml
 
 permissions:
@@ -63,7 +84,8 @@ permissions:
 
 concurrency:
   group: cloud-${{ github.ref }}
-  cancel-in-progress: true
+  # Main always finishes, so its caches get saved for every branch.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   cloud:
@@ -99,19 +121,54 @@ jobs:
           components: rustfmt
       - uses: Swatinem/rust-cache@v2
         with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           key: cloud
           cache-on-failure: true
       - run: sudo apt-get update && sudo apt-get install -y cmake libclang-dev libasound2-dev ripgrep
       - run: cargo fmt -p zuse-cloud-projection -p zuse-cloud -p zuse-cloud-api -p zuse-cloud-runtime -p zuse-cloud-guest -p zuse-rpc --check
-      - run: rustfmt --edition 2024 --check crates/protocol/src/cloud.rs crates/protocol/src/cloud_gateway.rs crates/protocol/src/cloud_commands.rs crates/protocol/src/session_commands.rs crates/protocol/src/cloud_auth.rs crates/protocol/src/cloud_lifecycle.rs
+      - run: rustfmt --edition 2024 --check crates/protocol/src/cloud.rs crates/protocol/src/cloud_gateway.rs crates/protocol/src/cloud_commands.rs crates/protocol/src/session_commands.rs crates/protocol/src/cloud_auth.rs crates/protocol/src/cloud_lifecycle.rs crates/protocol/src/cloud_computers.rs crates/protocol/src/cloud_connections.rs
       - run: cargo check --locked -p zuse-cloud-api -p zuse-cloud-guest -p zuse-client
       - run: cargo build --locked -p zuse-cloud-guest
-      - run: rustfmt --edition 2024 --config skip_children=true --check crates/engine/src/doc_host.rs crates/engine/src/workspace_host.rs crates/engine/src/profile.rs crates/engine/src/lib.rs crates/sync/src/store.rs crates/doc/src/queue.rs crates/doc/src/rebuild.rs crates/doc/src/commands.rs crates/providers/src/claude/mod.rs crates/providers/src/credentials.rs crates/providers/src/lib.rs
+      - run: cargo test --locked -p zuse-cloud-guest --test project_cache_cli
+      - run: rustfmt --edition 2024 --config skip_children=true --check crates/engine/src/execution.rs crates/engine/src/parking.rs crates/engine/src/sessions.rs crates/engine/src/rpc.rs crates/engine/src/native_harness/tests.rs crates/engine/src/doc_host.rs crates/engine/src/workspace_host.rs crates/engine/src/profile.rs crates/engine/src/lib.rs crates/sync/src/store.rs crates/doc/src/queue.rs crates/doc/src/rebuild.rs crates/doc/src/commands.rs crates/providers/src/claude/mod.rs crates/providers/src/credentials.rs crates/providers/src/lib.rs crates/providers/src/codex/mod.rs crates/providers/src/codex/auth.rs
+      - run: python3 infra/cloud/tests/harness-release.py
+      - run: python3 -W error::ResourceWarning infra/cloud/tests/auth-driver.py
+      - run: python3 infra/cloud/tests/single-host.py
+      - run: python3 infra/cloud/tests/github-app-check.py
+      - run: python3 infra/cloud/tests/launch-runtime.py
+      - run: python3 infra/cloud/tests/runtime-supervisor.py
+      - run: python3 infra/cloud/tests/runtime-repair.py
+      - run: python3 infra/cloud/tests/runtime-recreation.py
+      - run: python3 infra/cloud/tests/recovery-launcher.py
+      - run: python3 infra/cloud/tests/managed-base-release.py
+      - run: python3 infra/cloud/tests/fetch-harness-candidates.py
+      - run: python3 infra/cloud/tests/authority-launcher.py
+      - run: node --test infra/cloud/tests/build-managed-base.mjs infra/cloud/tests/probe-boxd-supervisor.mjs infra/cloud/tests/probe-boat-supervisor.mjs
+      - name: Verify standalone database bootstrap and restricted roles
+        run: |
+          for candidate in /usr/lib/postgresql/*/bin; do
+            if [ -x "$candidate/initdb" ]; then
+              export PATH="$candidate:$PATH"
+              break
+            fi
+          done
+          python3 infra/cloud/tests/database.py
+          python3 -W error::ResourceWarning infra/cloud/tests/account-events.py
+      - run: node --test scripts/cloud-provider-benchmark.test.mjs
+      - run: cargo test --locked -p zuse-providers --lib codex::auth::tests
+      - run: cargo test --locked -p zuse-providers --lib brokered_grok
+      - run: cargo test --locked -p zuse-providers --test codex
+      - run: cargo test --locked -p zuse-engine --lib execution::tests
+      - run: cargo test --locked -p zuse-engine --lib memory_parking_retains
       - run: cargo test --locked -p zuse-doc --lib commands::tests
       - run: cargo test --locked -p zuse-doc --lib queued_cloud_request_and_pause_survive_snapshot_and_epoch_rebuild
       - run: cargo test --locked -p zuse-sync --lib hosted_admission_and_processed_claims_use_full_wal_commits
       - run: cargo test --locked -p zuse-cloud-projection
       - run: cargo test --locked -p zuse-cloud-runtime -- --include-ignored
+      - run: cargo test --locked -p zuse-cloud-runtime --features engine --lib grok_auth::tests
       - run: cargo test --locked -p zuse-cloud -- --include-ignored
+      # These fixtures use the same workspace IDs across isolated database schemas.
+      # Serialize them so the shared provider-effect guard remains enforced.
       - run: cargo test --locked -p zuse-cloud --features runtime-acceptance --test postgres rust_cloud -- --ignored --test-threads=1 --skip rust_cloud_composer_launch_close_and_reopen
+      - run: cargo test --locked -p zuse-cloud --features runtime-acceptance --test postgres recovery_acceptance -- --ignored --test-threads=1
       - run: cargo test --locked -p zuse-protocol cloud

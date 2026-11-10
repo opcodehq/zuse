@@ -1,11 +1,11 @@
-//! A native workflow run as a phase board: one column per phase, left to
-//! right in run order, each agent a tile. Selecting a tile shows what it was
-//! asked and what it returned; columns stack when the transcript is narrow.
+//! A native workflow run in the transcript: one summary line, then a line per
+//! phase in run order, with the live phase's agents beneath it. Clicking an
+//! agent opens it in the right pane (see [`crate::workflow_agent_pane`]).
 //!
 //! The pure half ([`workflow_sections`], [`phase_state`]) groups a run's
 //! snapshot ([`WorkflowProgress`], carried on the run's tool call) into
-//! sections; [`render_board`] draws them. Interaction state (selection,
-//! expanded columns, the script disclosure) lives with the transcript, keyed
+//! sections; [`render_board`] draws them. Interaction state (folded and
+//! expanded phases, the script disclosure) lives with the transcript, keyed
 //! by row, and comes back through [`BoardAction`]s.
 
 use std::collections::{HashMap, HashSet};
@@ -13,16 +13,13 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gpui::{AnyElement, App, Hsla, SharedString, Window, div, prelude::*, px};
+use zuse_doc::{MessagePart, MessageRole, MessageStatus, SessionMessageEntry};
 use zuse_protocol::{WorkflowAgentProgress, WorkflowAgentState, WorkflowProgress};
 
 use crate::theme::Theme;
 
-/// Tiles a column shows before its "Show N more" control.
-pub(crate) const VISIBLE_AGENTS: usize = 6;
-/// Below this content width the columns stack (a 32rem container).
-pub(crate) const STACK_BELOW_WIDTH: f32 = 512.0;
-/// A working agent's mark turns once per this period.
-const MARK_TURN: Duration = Duration::from_secs(3);
+/// Agents a phase shows before its "Show N more" control.
+pub(crate) const VISIBLE_AGENTS: usize = 8;
 
 /// The run's lifecycle, from its chip.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -59,10 +56,9 @@ pub(crate) struct AgentView {
     pub index: u32,
     pub label: String,
     pub status: AgentStatus,
-    /// The tile's hover text: the result (or error), else the prompt.
-    pub preview: Option<String>,
     pub prompt: Option<String>,
     pub result: Option<String>,
+    pub model: Option<String>,
     pub started_at: Option<i64>,
     pub completed_at: Option<i64>,
 }
@@ -123,9 +119,9 @@ fn agent_view(agent: &WorkflowAgentProgress, run: RunStatus, phase: Option<&str>
         index: agent.index,
         label: label_within_phase(&agent.label, phase),
         status,
-        preview: result.clone().or_else(|| agent.prompt_preview.clone()),
         prompt: agent.prompt_preview.clone(),
         result,
+        model: agent.model.clone(),
         started_at: agent.started_at,
         completed_at: match (settled, agent.started_at, agent.duration_ms) {
             (true, Some(start), Some(duration)) => Some(start.saturating_add(duration as i64)),
@@ -300,31 +296,15 @@ fn run_span(sections: &[Section]) -> (Option<i64>, Option<i64>) {
     (start, end)
 }
 
-fn run_label(status: RunStatus) -> &'static str {
-    match status {
-        RunStatus::Working => "Running",
-        RunStatus::Done => "Done",
-        RunStatus::Failed => "Failed",
-        RunStatus::Stopped => "Stopped",
-    }
-}
-
-fn agent_label(status: AgentStatus) -> &'static str {
-    match status {
-        AgentStatus::Queued => "Queued",
-        AgentStatus::Working => "Running",
-        AgentStatus::Done => "Done",
-        AgentStatus::Failed => "Failed",
-        AgentStatus::Stopped => "Stopped",
-    }
-}
-
 /// Per-row interaction state, owned by the transcript.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct BoardState {
-    pub selected: Option<u32>,
-    /// Section keys whose every tile shows.
+    /// Section keys whose every agent shows.
     pub expanded: HashSet<String>,
+    /// Section keys the user flipped from their default open state.
+    pub flipped: HashSet<String>,
+    /// The user flipped the whole run from its default open state.
+    pub board_flipped: bool,
     pub script_open: bool,
 }
 
@@ -332,12 +312,17 @@ impl BoardState {
     /// Apply an action; `true` when the board's height may have changed.
     pub(crate) fn apply(&mut self, action: &BoardAction) -> bool {
         match action {
-            BoardAction::Select(index) => {
-                self.selected = (self.selected != Some(*index)).then_some(*index);
-            }
+            // Opening an agent happens in the right pane; the board is unchanged.
+            BoardAction::Open(_) => return false,
             BoardAction::ShowAll(key) => {
                 self.expanded.insert(key.clone());
             }
+            BoardAction::ToggleSection(key) => {
+                if !self.flipped.remove(key) {
+                    self.flipped.insert(key.clone());
+                }
+            }
+            BoardAction::ToggleBoard => self.board_flipped = !self.board_flipped,
             BoardAction::ToggleScript => self.script_open = !self.script_open,
         }
         true
@@ -346,10 +331,14 @@ impl BoardState {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum BoardAction {
-    /// Toggle the detail panel for this agent.
-    Select(u32),
-    /// Show every tile of this section.
+    /// Open this agent in the right pane.
+    Open(u32),
+    /// Show every agent of this section.
     ShowAll(String),
+    /// Fold or unfold this section's agents.
+    ToggleSection(String),
+    /// Fold or unfold the whole run.
+    ToggleBoard,
     ToggleScript,
 }
 
@@ -362,55 +351,38 @@ pub(crate) struct BoardProps<'a> {
     pub run: RunStatus,
     pub progress: Option<&'a WorkflowProgress>,
     pub script_path: Option<SharedString>,
-    /// The chat provider's mark; a generic agent glyph without one.
-    pub brand: Option<&'static str>,
-    pub stacked: bool,
     pub state: &'a BoardState,
     pub now_ms: i64,
-    /// Elapsed since an arbitrary epoch, for the turning marks; `None` holds
-    /// them still (reduced motion).
-    pub spin: Option<Duration>,
-    /// The status word's shimmer: (text, phase) → element.
+    /// The summary's shimmer while the run works: text → element.
     pub status_shimmer: Option<Box<dyn FnOnce(SharedString) -> AnyElement + 'a>>,
+    /// Elapsed since an arbitrary epoch, for the turning Claude marks;
+    /// `None` holds them still (reduced motion).
+    pub spin: Option<Duration>,
 }
 
-/// Run status tones (lime while working, emerald when done).
-fn run_tone(status: RunStatus, theme: &Theme) -> Hsla {
-    match status {
-        RunStatus::Working => theme.busy,
-        RunStatus::Done => theme.success,
-        RunStatus::Failed => theme.danger,
-        RunStatus::Stopped => theme.text_muted,
-    }
-}
+/// Header, phase and agent lines share one height.
+const LINE_HEIGHT: f32 = 26.0;
+/// Status marks sit in a fixed slot so every line's text starts together.
+const MARK_SLOT: f32 = 12.0;
+/// Claude marks are a touch larger than status marks; they lead their line.
+const CLAUDE_SLOT: f32 = 14.0;
+/// A working Claude mark turns once per this period.
+const MARK_TURN: Duration = Duration::from_secs(3);
 
-fn column_tone(state: PhaseState, theme: &Theme) -> Hsla {
-    match state {
-        PhaseState::Pending | PhaseState::Stopped => theme.ink(0.025),
-        PhaseState::Active => theme.busy.opacity(0.06),
-        PhaseState::Done => theme.ink(0.04),
-        PhaseState::Failed => theme.danger.opacity(0.06),
-    }
-}
-
-/// The provider's mark: it turns while the agent works and takes the
-/// outcome's tone after.
-fn agent_mark(
-    brand: Option<&'static str>,
-    status: AgentStatus,
-    spin: Option<Duration>,
-    theme: &Theme,
-) -> AnyElement {
-    let tone = match status {
-        AgentStatus::Queued | AgentStatus::Stopped => theme.text_muted.opacity(0.4),
-        AgentStatus::Working => theme.text.opacity(0.85),
+/// The Claude mark for one agent (workflows are a Claude Code feature, so
+/// every agent runs on Claude): it turns in Claude's orange while working,
+/// rests muted once done, and takes the danger tone on failure.
+fn claude_mark(status: AgentStatus, spin: Option<Duration>, theme: &Theme) -> AnyElement {
+    let color = match status {
+        AgentStatus::Working => crate::icons::claude_brand(),
         AgentStatus::Done => theme.text_muted,
         AgentStatus::Failed => theme.danger,
+        AgentStatus::Queued | AgentStatus::Stopped => theme.text_muted.opacity(0.35),
     };
-    let mark = crate::icons::icon(brand.unwrap_or(crate::icons::BOT))
-        .size(px(14.0))
-        .text_color(tone);
-    match spin.filter(|_| status == AgentStatus::Working) {
+    let mark = crate::icons::icon(crate::icons::CLAUDE_MARK)
+        .size(px(CLAUDE_SLOT))
+        .text_color(color);
+    let mark = match spin.filter(|_| status == AgentStatus::Working) {
         Some(spin) => {
             let turn = (spin.as_secs_f32() % MARK_TURN.as_secs_f32()) / MARK_TURN.as_secs_f32();
             mark.with_transformation(gpui::Transformation::rotate(gpui::radians(
@@ -419,76 +391,106 @@ fn agent_mark(
             .into_any_element()
         }
         None => mark.into_any_element(),
-    }
+    };
+    div()
+        .size(px(CLAUDE_SLOT))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(mark)
+        .into_any_element()
 }
 
-/// A phase's glyph: a live dot while active, else its outcome.
-fn phase_glyph(state: PhaseState, theme: &Theme) -> AnyElement {
+/// One clock for every board's turning marks.
+pub(crate) fn spin_epoch() -> Instant {
+    static EPOCH: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    *EPOCH.get_or_init(Instant::now)
+}
+
+/// An outlined ring, dashed while waiting, with a bar through it once stopped.
+fn ring(size: f32, dashed: bool, bar: bool, color: Hsla) -> AnyElement {
+    div()
+        .size(px(size))
+        .rounded_full()
+        .border_1()
+        .when(dashed, |ring| ring.border_dashed())
+        .border_color(color)
+        .flex()
+        .items_center()
+        .justify_center()
+        .when(bar, |ring| {
+            ring.child(div().w(px(size / 2.0)).h(px(1.0)).bg(color))
+        })
+        .into_any_element()
+}
+
+/// A small status mark, the same vocabulary delegation rows use: a live dot
+/// in a soft halo while working, a check or cross once settled, a dashed
+/// ring while waiting.
+pub(crate) fn status_mark(status: AgentStatus, size: f32, theme: &Theme) -> AnyElement {
     let slot = div()
-        .size(px(14.0))
+        .size(px(size))
         .flex_none()
         .flex()
         .items_center()
         .justify_center();
-    match state {
-        PhaseState::Active => slot
-            .child(
-                div()
-                    .size(px(14.0))
-                    .rounded_full()
-                    .bg(theme.busy.opacity(0.2))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(div().size(px(8.0)).rounded_full().bg(theme.busy)),
-            )
-            .into_any_element(),
-        PhaseState::Pending => slot
-            .child(
-                div()
-                    .size(px(11.0))
-                    .rounded_full()
-                    .border_1()
-                    .border_dashed()
-                    .border_color(theme.text_muted.opacity(0.5)),
-            )
-            .into_any_element(),
-        PhaseState::Done => slot
-            .child(
-                crate::icons::icon(crate::icons::CHECK_CIRCLE)
-                    .size(px(14.0))
-                    .text_color(theme.success),
-            )
-            .into_any_element(),
-        PhaseState::Failed => slot
-            .child(
-                crate::icons::icon(crate::icons::CLOSE_CIRCLE)
-                    .size(px(14.0))
-                    .text_color(theme.danger),
-            )
-            .into_any_element(),
-        PhaseState::Stopped => slot
-            .child(
-                div()
-                    .size(px(11.0))
-                    .rounded_full()
-                    .border_1()
-                    .border_color(theme.text_muted.opacity(0.6))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(
-                        div()
-                            .w(px(5.0))
-                            .h(px(1.0))
-                            .bg(theme.text_muted.opacity(0.6)),
-                    ),
-            )
-            .into_any_element(),
+    match status {
+        AgentStatus::Working => slot.child(
+            div()
+                .size(px(size * 0.75))
+                .rounded_full()
+                .bg(theme.busy.opacity(0.25))
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(div().size(px(size * 0.42)).rounded_full().bg(theme.busy)),
+        ),
+        AgentStatus::Queued => {
+            slot.child(ring(size * 0.7, true, false, theme.text_muted.opacity(0.5)))
+        }
+        AgentStatus::Stopped => {
+            slot.child(ring(size * 0.7, false, true, theme.text_muted.opacity(0.6)))
+        }
+        AgentStatus::Done => slot.child(
+            crate::icons::icon(crate::icons::CHECK)
+                .size(px(size))
+                .text_color(theme.success),
+        ),
+        AgentStatus::Failed => slot.child(
+            crate::icons::icon(crate::icons::CLOSE)
+                .size(px(size))
+                .text_color(theme.danger),
+        ),
     }
+    .into_any_element()
 }
 
-fn agent_timing(agent: &AgentView, now_ms: i64) -> Option<String> {
+/// A phase's status mark, centred in the Claude marks' slot so phase and
+/// agent text start on the same edge as their rails.
+fn phase_mark(state: PhaseState, theme: &Theme) -> AnyElement {
+    let mark = status_mark(
+        match state {
+            PhaseState::Pending => AgentStatus::Queued,
+            PhaseState::Active => AgentStatus::Working,
+            PhaseState::Done => AgentStatus::Done,
+            PhaseState::Failed => AgentStatus::Failed,
+            PhaseState::Stopped => AgentStatus::Stopped,
+        },
+        MARK_SLOT,
+        theme,
+    );
+    div()
+        .size(px(CLAUDE_SLOT))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(mark)
+        .into_any_element()
+}
+
+pub(crate) fn agent_timing(agent: &AgentView, now_ms: i64) -> Option<String> {
     if agent.status == AgentStatus::Queued {
         return None;
     }
@@ -500,475 +502,536 @@ fn agent_timing(agent: &AgentView, now_ms: i64) -> Option<String> {
     )
 }
 
-#[allow(clippy::too_many_arguments)]
-fn agent_tile(
-    row_id: &SharedString,
+/// Collapse whitespace runs so multi-line previews read as one line.
+fn one_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// The quiet line after an agent's label: what it returned once settled,
+/// what it was asked while it runs.
+pub(crate) fn agent_tail(agent: &AgentView) -> Option<String> {
+    let text = match agent.status {
+        AgentStatus::Queued => return Some("Queued".into()),
+        AgentStatus::Working => agent.prompt.as_deref(),
+        AgentStatus::Done | AgentStatus::Failed => agent.result.as_deref(),
+        AgentStatus::Stopped => agent.result.as_deref().or(Some("Stopped")),
+    }?;
+    let line = one_line(text);
+    (!line.is_empty()).then_some(line)
+}
+
+/// One agent: status, name, what it is doing, time, and an open arrow on
+/// hover. The whole line opens the agent in the right pane.
+fn agent_line(
+    props: &BoardProps<'_>,
     agent: &AgentView,
-    selected: bool,
-    brand: Option<&'static str>,
-    spin: Option<Duration>,
-    now_ms: i64,
     dispatch: &BoardDispatch,
     theme: &Theme,
 ) -> AnyElement {
-    let inspectable = agent.prompt.is_some() || agent.result.is_some();
-    let tile = div()
+    let index = agent.index;
+    let dispatch = dispatch.clone();
+    let failed = agent.status == AgentStatus::Failed;
+    let hover = theme.ink(0.05);
+    div()
         .id(SharedString::from(format!(
-            "{row_id}-agent-{}",
-            agent.index
+            "{}-agent-{index}",
+            props.row_id
         )))
-        .h(px(32.0))
-        .w_full()
+        .group("workflow-agent")
+        .h(px(LINE_HEIGHT))
+        .ml(px(-6.0))
+        .px(px(6.0))
         .min_w_0()
         .flex()
         .flex_row()
         .items_center()
         .gap(px(8.0))
-        .px(px(8.0))
-        .rounded(px(8.0))
-        .border_1()
-        .border_color(if selected {
-            theme.hairline(0.2)
-        } else {
-            gpui::transparent_black()
-        })
-        .bg(theme.bg.opacity(0.7))
-        .child(agent_mark(brand, agent.status, spin, theme))
+        .rounded(px(4.0))
+        .cursor_pointer()
+        .hover(move |style| style.bg(hover))
+        .on_click(move |_, window, cx| dispatch(BoardAction::Open(index), window, cx))
+        .child(claude_mark(agent.status, props.spin, theme))
+        .child(
+            div()
+                .flex_none()
+                .max_w(gpui::relative(0.45))
+                .truncate()
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(if failed {
+                    theme.danger
+                } else if agent.status == AgentStatus::Queued {
+                    theme.text_muted
+                } else {
+                    theme.text.opacity(0.9)
+                })
+                .child(SharedString::from(agent.label.clone())),
+        )
         .child(
             div()
                 .min_w_0()
                 .flex_1()
                 .truncate()
-                .text_color(if agent.status == AgentStatus::Failed {
-                    theme.danger
+                .text_color(if failed {
+                    theme.danger.opacity(0.75)
                 } else {
-                    theme.text.opacity(0.85)
+                    theme.text_muted
                 })
-                .child(SharedString::from(agent.label.clone())),
+                .children(agent_tail(agent).map(SharedString::from)),
         )
-        .when_some(agent_timing(agent, now_ms), |tile, timing| {
-            tile.child(
+        .when_some(agent_timing(agent, props.now_ms), |row, timing| {
+            row.child(
                 div()
                     .flex_none()
-                    .text_color(theme.text_muted.opacity(0.7))
+                    .text_color(theme.text_faint)
                     .child(SharedString::from(timing)),
             )
-        });
-    if !inspectable {
-        return tile.into_any_element();
-    }
-    let index = agent.index;
-    let dispatch = dispatch.clone();
-    let hover = theme.bg;
-    tile.cursor_pointer()
-        .hover(move |style| style.bg(hover))
-        .when_some(agent.preview.clone(), |tile, preview| {
-            tile.tooltip(crate::settings::widgets::text_tooltip(preview))
         })
-        .on_click(move |_, window, cx| dispatch(BoardAction::Select(index), window, cx))
+        .child(
+            crate::icons::icon(crate::icons::ARROW_UP_RIGHT)
+                .flex_none()
+                .size(px(12.0))
+                .text_color(theme.text_muted)
+                .opacity(0.0)
+                .group_hover("workflow-agent", |style| style.opacity(1.0)),
+        )
         .into_any_element()
 }
 
-#[allow(clippy::too_many_arguments)]
-fn phase_column(
+fn chevron(open: bool, theme: &Theme) -> AnyElement {
+    crate::icons::icon(if open {
+        crate::icons::ALT_ARROW_DOWN
+    } else {
+        crate::icons::ALT_ARROW_RIGHT
+    })
+    .flex_none()
+    .size(px(12.0))
+    .text_color(theme.text_muted)
+    .opacity(0.6)
+    .into_any_element()
+}
+
+/// "Show N more" under a phase's visible agents.
+fn more_control(
     props: &BoardProps<'_>,
     section: &Section,
-    state: PhaseState,
-    last: bool,
+    hidden: usize,
     dispatch: &BoardDispatch,
     theme: &Theme,
 ) -> AnyElement {
-    let show_all = props.state.expanded.contains(&section.key);
-    let visible = if show_all {
-        section.agents.len()
-    } else {
-        section.agents.len().min(VISIBLE_AGENTS)
-    };
-    let hidden = section.agents.len() - visible;
-    let header = div()
-        .h(px(24.0))
-        .min_w_0()
+    let key = section.key.clone();
+    let dispatch = dispatch.clone();
+    let hover_text = theme.text;
+    div()
+        .id(SharedString::from(format!(
+            "{}-more-{}",
+            props.row_id, section.key
+        )))
+        .h(px(LINE_HEIGHT))
         .flex()
-        .flex_row()
         .items_center()
-        .gap(px(6.0))
-        .px(px(4.0))
-        .child(phase_glyph(state, theme))
-        .child(
-            div()
-                .min_w_0()
-                .truncate()
-                .font_weight(gpui::FontWeight::MEDIUM)
-                .text_color(if state == PhaseState::Pending {
-                    theme.text_muted
-                } else {
-                    theme.text.opacity(0.9)
-                })
-                .child(SharedString::from(
-                    section.title.clone().unwrap_or_else(|| "Agents".into()),
-                )),
-        )
-        .when(!section.agents.is_empty(), |header| {
-            header.child(
-                div()
-                    .ml_auto()
-                    .flex_none()
-                    .text_color(theme.text_muted.opacity(0.7))
-                    .child(SharedString::from(format!(
-                        "{}/{}",
-                        section.done,
-                        section.agents.len()
-                    ))),
-            )
-        });
-    let body = if section.agents.is_empty() {
-        div()
-            .px(px(4.0))
-            .pb(px(4.0))
-            .text_color(theme.text_muted.opacity(0.6))
-            .child(SharedString::from(section.detail.clone().unwrap_or_else(
-                || {
-                    if state == PhaseState::Pending {
-                        "Starts after the earlier phases finish".into()
-                    } else {
-                        "No agents ran in this phase".into()
-                    }
-                },
-            )))
-            .into_any_element()
-    } else {
-        div()
-            .min_w_0()
-            .flex()
-            .flex_col()
-            .gap(px(4.0))
-            .children(section.agents[..visible].iter().map(|agent| {
-                agent_tile(
-                    &props.row_id,
-                    agent,
-                    props.state.selected == Some(agent.index),
-                    props.brand,
-                    props.spin,
-                    props.now_ms,
-                    dispatch,
-                    theme,
-                )
-            }))
-            .into_any_element()
-    };
-    let more = (hidden > 0).then(|| {
-        let key = section.key.clone();
-        let dispatch = dispatch.clone();
-        let hover_bg = theme.bg.opacity(0.6);
-        let hover_text = theme.text;
-        div()
-            .id(SharedString::from(format!(
-                "{}-more-{}",
-                props.row_id, section.key
-            )))
-            .h(px(28.0))
-            .px(px(8.0))
-            .flex()
-            .items_center()
-            .rounded(px(8.0))
-            .cursor_pointer()
-            .text_color(theme.text_muted)
-            .hover(move |style| style.bg(hover_bg).text_color(hover_text))
-            .on_click(move |_, window, cx| dispatch(BoardAction::ShowAll(key.clone()), window, cx))
-            .child(SharedString::from(format!("Show {hidden} more")))
-    });
-    let column = div()
-        .min_w_0()
-        .flex_1()
-        .flex()
-        .flex_col()
-        .gap(px(4.0))
-        .p(px(8.0))
-        .rounded(px(12.0))
-        .bg(column_tone(state, theme))
-        .child(header)
-        .child(body)
-        .children(more);
-    div()
-        .min_w_0()
-        .flex_1()
-        .flex()
-        .flex_row()
-        .items_stretch()
-        .gap(px(6.0))
-        .when(!props.stacked, |item| item.min_w(px(160.0)))
-        .child(column)
-        .when(!last && !props.stacked, |item| {
-            item.child(
-                div().flex_none().flex().items_center().child(
-                    crate::icons::icon(crate::icons::ALT_ARROW_RIGHT)
-                        .size(px(12.0))
-                        .text_color(theme.text_muted.opacity(0.4)),
-                ),
-            )
-        })
+        .cursor_pointer()
+        .text_color(theme.text_muted)
+        .hover(move |style| style.text_color(hover_text))
+        .on_click(move |_, window, cx| dispatch(BoardAction::ShowAll(key.clone()), window, cx))
+        .child(SharedString::from(format!("Show {hidden} more")))
         .into_any_element()
 }
 
-fn preview(
-    title: &'static str,
-    text: &str,
-    failed: bool,
-    id: SharedString,
+fn script_control(
+    props: &BoardProps<'_>,
+    dispatch: &BoardDispatch,
     theme: &Theme,
-) -> AnyElement {
-    div()
-        .min_w_0()
-        .flex()
-        .flex_col()
-        .child(
-            div()
-                .text_size(px(11.0))
-                .font_weight(gpui::FontWeight::MEDIUM)
-                .text_color(theme.text_muted)
-                .child(title),
-        )
-        .child(
-            div()
-                .id(id)
-                .mt(px(2.0))
-                .max_h(px(160.0))
-                .overflow_y_scroll()
-                .line_height(px(19.5))
-                .text_color(if failed {
-                    theme.danger
-                } else {
-                    theme.text.opacity(0.85)
-                })
-                .child(SharedString::from(text.to_owned())),
-        )
-        .into_any_element()
-}
-
-fn agent_detail(props: &BoardProps<'_>, agent: &AgentView, theme: &Theme) -> AnyElement {
-    div()
-        .mt(px(6.0))
-        .min_w_0()
-        .flex()
-        .flex_col()
-        .gap(px(10.0))
-        .rounded(px(12.0))
-        .bg(theme.ink(0.035))
-        .px(px(12.0))
-        .py(px(10.0))
-        .child(
-            div()
-                .min_w_0()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(px(8.0))
-                .child(agent_mark(props.brand, agent.status, props.spin, theme))
-                .child(
-                    div()
-                        .min_w_0()
-                        .truncate()
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .text_color(theme.text.opacity(0.9))
-                        .child(SharedString::from(agent.label.clone())),
-                )
-                .child(
-                    div()
-                        .flex_none()
-                        .text_color(theme.text_muted)
-                        .child(agent_label(agent.status)),
-                )
-                .when_some(agent_timing(agent, props.now_ms), |row, timing| {
-                    row.child(
-                        div()
-                            .ml_auto()
-                            .flex_none()
-                            .text_color(theme.text_muted.opacity(0.7))
-                            .child(SharedString::from(timing)),
-                    )
-                }),
-        )
-        .when_some(agent.prompt.as_deref(), |detail, prompt| {
-            detail.child(preview(
-                "Prompt",
-                prompt,
-                false,
-                SharedString::from(format!("{}-prompt-{}", props.row_id, agent.index)),
-                theme,
-            ))
-        })
-        .when_some(agent.result.as_deref(), |detail, result| {
-            detail.child(preview(
-                "Result",
-                result,
-                agent.status == AgentStatus::Failed,
-                SharedString::from(format!("{}-result-{}", props.row_id, agent.index)),
-                theme,
-            ))
-        })
-        .into_any_element()
-}
-
-/// The whole board for one run.
-pub(crate) fn render_board(
-    mut props: BoardProps<'_>,
-    dispatch: BoardDispatch,
-    theme: &Theme,
-) -> AnyElement {
-    let sections = workflow_sections(&[], props.progress, props.run);
-    let states: Vec<PhaseState> = sections.iter().map(|s| phase_state(s, props.run)).collect();
-    let agents: Vec<&AgentView> = sections.iter().flat_map(|s| &s.agents).collect();
-    let done = agents
-        .iter()
-        .filter(|a| a.status == AgentStatus::Done)
-        .count();
-    let failed = agents
-        .iter()
-        .filter(|a| a.status == AgentStatus::Failed)
-        .count();
-    let selected = props
-        .state
-        .selected
-        .and_then(|ix| agents.iter().find(|a| a.index == ix).copied());
-    let (start, end) = run_span(&sections);
-    let run_elapsed = elapsed(
-        start,
-        (props.run != RunStatus::Working).then_some(end).flatten(),
-        props.run == RunStatus::Working,
-        props.now_ms,
-    );
-    let mut facts = String::new();
-    if !agents.is_empty() {
-        facts.push_str(&format!(" · {done} of {} agents done", agents.len()));
-    }
-    if failed > 0 {
-        facts.push_str(&format!(" · {failed} failed"));
-    }
-    if let Some(elapsed) = &run_elapsed {
-        facts.push_str(&format!(" · {elapsed}"));
-    }
-    let status_text = SharedString::from(run_label(props.run));
-    let status = match props.status_shimmer.take() {
-        Some(shimmer) if props.run == RunStatus::Working => shimmer(status_text),
-        _ => status_text.into_any_element(),
-    };
-    let header = div()
-        .min_w_0()
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap(px(10.0))
-        .child(
-            crate::icons::icon(props.brand.unwrap_or(crate::icons::TOOL_AGENT))
-                .size(px(16.0))
-                .text_color(theme.text.opacity(0.8)),
-        )
-        .child(
-            div()
-                .min_w_0()
-                .flex_shrink(1.0)
-                .truncate()
-                .text_size(px(13.0))
-                .font_weight(gpui::FontWeight::MEDIUM)
-                .text_color(theme.text)
-                .child(props.name.clone()),
-        )
-        .child(
-            div()
-                .ml_auto()
-                .min_w_0()
-                .max_w(gpui::relative(0.65))
-                .flex_none()
-                .flex()
-                .flex_row()
-                .items_center()
-                .overflow_hidden()
-                .text_color(theme.text_muted)
-                .child(
-                    div()
-                        .flex_none()
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .text_color(run_tone(props.run, theme))
-                        .child(status),
-                )
-                .child(div().min_w_0().truncate().child(SharedString::from(facts))),
-        );
-    let columns = (!sections.is_empty()).then(|| {
-        let last = sections.len() - 1;
+) -> Option<AnyElement> {
+    let path = props.script_path.clone()?;
+    let open = props.state.script_open;
+    let dispatch = dispatch.clone();
+    let hover_text = theme.text;
+    Some(
         div()
-            .mt(px(12.0))
-            .min_w_0()
-            .flex()
-            .gap(px(6.0))
-            .map(|list| {
-                if props.stacked {
-                    list.flex_col()
-                } else {
-                    list.flex_row().items_stretch()
-                }
-            })
-            .children(
-                sections
-                    .iter()
-                    .zip(&states)
-                    .enumerate()
-                    .map(|(ix, (section, state))| {
-                        phase_column(&props, section, *state, ix == last, &dispatch, theme)
-                    }),
-            )
-    });
-    let detail = selected.map(|agent| agent_detail(&props, agent, theme));
-    let script = props.script_path.clone().map(|path| {
-        let open = props.state.script_open;
-        let dispatch = dispatch.clone();
-        let hover_bg = theme.ink(0.06);
-        let hover_text = theme.text;
-        div()
-            .mt(px(6.0))
             .min_w_0()
             .flex()
             .flex_col()
             .child(
                 div()
                     .id(SharedString::from(format!("{}-script", props.row_id)))
-                    .ml(px(-6.0))
-                    .h(px(24.0))
-                    .px(px(6.0))
+                    .h(px(LINE_HEIGHT))
                     .flex()
-                    .flex_row()
                     .items_center()
-                    .gap(px(6.0))
-                    .rounded(px(4.0))
                     .cursor_pointer()
-                    .text_color(theme.text_muted)
-                    .hover(move |style| style.bg(hover_bg).text_color(hover_text))
+                    .text_color(theme.text_faint)
+                    .hover(move |style| style.text_color(hover_text))
                     .on_click(move |_, window, cx| dispatch(BoardAction::ToggleScript, window, cx))
-                    .child(crate::icons::icon(crate::icons::FILE_CODE).size(px(14.0)))
                     .child(if open { "Hide script" } else { "View script" }),
             )
             .when(open, |block| {
                 block.child(
                     div()
-                        .mt(px(4.0))
                         .font_family(theme.font_mono.clone())
                         .text_size(px(11.0))
                         .text_color(theme.text_muted)
                         .child(path),
                 )
             })
+            .into_any_element(),
+    )
+}
+
+/// What the whole board needs to know about its run, computed once.
+struct RunFacts {
+    sections: Vec<Section>,
+    states: Vec<PhaseState>,
+    total: usize,
+    done: usize,
+    failed: usize,
+    elapsed: Option<String>,
+}
+
+impl RunFacts {
+    fn new(props: &BoardProps<'_>) -> Self {
+        let sections = workflow_sections(&[], props.progress, props.run);
+        let states = sections.iter().map(|s| phase_state(s, props.run)).collect();
+        let agents = || sections.iter().flat_map(|s| &s.agents);
+        let total = agents().count();
+        let done = agents().filter(|a| a.status == AgentStatus::Done).count();
+        let failed = agents().filter(|a| a.status == AgentStatus::Failed).count();
+        let (start, end) = run_span(&sections);
+        let elapsed = elapsed(
+            start,
+            (props.run != RunStatus::Working).then_some(end).flatten(),
+            props.run == RunStatus::Working,
+            props.now_ms,
+        );
+        Self {
+            sections,
+            states,
+            total,
+            done,
+            failed,
+            elapsed,
+        }
+    }
+
+    /// The phase the run is in now (its first active phase).
+    fn current_phase(&self) -> Option<&str> {
+        self.sections
+            .iter()
+            .zip(&self.states)
+            .find(|(_, state)| matches!(state, PhaseState::Active))
+            .and_then(|(section, _)| section.title.as_deref())
+    }
+
+    /// "Verify · 4 of 6 done · 2m 23s"
+    fn summary(&self) -> String {
+        let mut parts: Vec<String> = Vec::new();
+        parts.extend(self.current_phase().map(str::to_owned));
+        if self.total > 0 {
+            parts.push(format!("{} of {} done", self.done, self.total));
+        }
+        if self.failed > 0 {
+            parts.push(format!("{} failed", self.failed));
+        }
+        parts.extend(self.elapsed.clone());
+        parts.join(" · ")
+    }
+}
+
+/// Live and failed phases list their agents; settled ones fold to a line
+/// unless the user opened them.
+fn section_open(props: &BoardProps<'_>, section: &Section, state: PhaseState) -> bool {
+    let default = matches!(state, PhaseState::Active | PhaseState::Failed);
+    !section.agents.is_empty() && default != props.state.flipped.contains(&section.key)
+}
+
+/// A section's visible agents and how many stay behind "Show N more".
+fn visible_agents<'s>(props: &BoardProps<'_>, section: &'s Section) -> (&'s [AgentView], usize) {
+    let shown = if props.state.expanded.contains(&section.key) {
+        section.agents.len()
+    } else {
+        section.agents.len().min(VISIBLE_AGENTS)
+    };
+    (&section.agents[..shown], section.agents.len() - shown)
+}
+
+fn pending_text(section: &Section, state: PhaseState) -> String {
+    section.detail.clone().unwrap_or_else(|| {
+        if state == PhaseState::Pending {
+            "Waiting for earlier phases".into()
+        } else {
+            "No agents ran".into()
+        }
+    })
+}
+
+/// A section's own span, for its phase line.
+fn section_elapsed(section: &Section, state: PhaseState, now_ms: i64) -> Option<String> {
+    let (start, end) = run_span(std::slice::from_ref(section));
+    let live = state == PhaseState::Active;
+    elapsed(start, (!live).then_some(end).flatten(), live, now_ms)
+}
+
+/// The run's header line; the whole line folds the run.
+fn header_line(
+    props: &mut BoardProps<'_>,
+    facts: &RunFacts,
+    open: bool,
+    dispatch: &BoardDispatch,
+    theme: &Theme,
+) -> AnyElement {
+    let dispatch = dispatch.clone();
+    let hover_text = theme.text;
+    let summary = SharedString::from(facts.summary());
+    let summary = match props.status_shimmer.take() {
+        Some(shimmer) if props.run == RunStatus::Working => shimmer(summary),
+        _ => summary.into_any_element(),
+    };
+    div()
+        .id(SharedString::from(format!("{}-header", props.row_id)))
+        .h(px(LINE_HEIGHT))
+        .min_w_0()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(8.0))
+        .cursor_pointer()
+        .text_color(theme.text_muted)
+        .hover(move |style| style.text_color(hover_text))
+        .on_click(move |_, window, cx| dispatch(BoardAction::ToggleBoard, window, cx))
+        .child(claude_mark(
+            match props.run {
+                RunStatus::Working => AgentStatus::Working,
+                RunStatus::Failed => AgentStatus::Failed,
+                // A settled run keeps Claude's colour: it names the run.
+                RunStatus::Done | RunStatus::Stopped => AgentStatus::Working,
+            },
+            props.spin.filter(|_| props.run == RunStatus::Working),
+            theme,
+        ))
+        .child(
+            div()
+                .flex_none()
+                .max_w(gpui::relative(0.5))
+                .truncate()
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(theme.text)
+                .child(props.name.clone()),
+        )
+        .child(div().min_w_0().truncate().child(summary))
+        .child(chevron(open, theme))
+        .into_any_element()
+}
+
+/// One phase: its line, then its agents while open.
+fn phase_block(
+    props: &BoardProps<'_>,
+    section: &Section,
+    state: PhaseState,
+    dispatch: &BoardDispatch,
+    theme: &Theme,
+) -> AnyElement {
+    let open = section_open(props, section, state);
+    let has_agents = !section.agents.is_empty();
+    let mut meta: Vec<String> = Vec::new();
+    if has_agents {
+        let n = section.agents.len();
+        meta.push(if open {
+            format!("{}/{n}", section.done)
+        } else {
+            format!("{n} {}", if n == 1 { "agent" } else { "agents" })
+        });
+        meta.extend(section_elapsed(section, state, props.now_ms));
+    } else {
+        meta.push(pending_text(section, state));
+    }
+    let key = section.key.clone();
+    let toggle = dispatch.clone();
+    let hover_text = theme.text;
+    let line = div()
+        .id(SharedString::from(format!(
+            "{}-phase-{}",
+            props.row_id, section.key
+        )))
+        .h(px(LINE_HEIGHT))
+        .min_w_0()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(8.0))
+        .text_color(theme.text_muted)
+        .when(has_agents, |row| {
+            row.cursor_pointer()
+                .hover(move |style| style.text_color(hover_text))
+                .on_click(move |_, window, cx| {
+                    toggle(BoardAction::ToggleSection(key.clone()), window, cx)
+                })
+        })
+        .child(phase_mark(state, theme))
+        .child(
+            div()
+                .flex_none()
+                .text_color(if state == PhaseState::Pending {
+                    theme.text_muted
+                } else {
+                    theme.text
+                })
+                .child(SharedString::from(
+                    section.title.clone().unwrap_or_else(|| "Agents".into()),
+                )),
+        )
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .text_color(theme.text_faint)
+                .child(SharedString::from(meta.join(" · "))),
+        )
+        .when(has_agents, |row| row.child(chevron(open, theme)));
+    let (agents, hidden) = visible_agents(props, section);
+    div()
+        .min_w_0()
+        .flex()
+        .flex_col()
+        .child(line)
+        .when(open, |block| {
+            block.child(
+                div()
+                    .ml(px(CLAUDE_SLOT / 2.0))
+                    .pl(px(CLAUDE_SLOT / 2.0 + 8.0))
+                    .border_l_1()
+                    .border_color(theme.hairline(0.1))
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .children(
+                        agents
+                            .iter()
+                            .map(|agent| agent_line(props, agent, dispatch, theme)),
+                    )
+                    .when(hidden > 0, |block| {
+                        block.child(more_control(props, section, hidden, dispatch, theme))
+                    }),
+            )
+        })
+        .into_any_element()
+}
+
+/// The whole run: one summary line, then (while open) a line per phase with
+/// the live phase's agents beneath it. No card: it sits on the transcript's
+/// text edge like any other work row.
+pub(crate) fn render_board(
+    mut props: BoardProps<'_>,
+    dispatch: BoardDispatch,
+    theme: &Theme,
+) -> AnyElement {
+    let facts = RunFacts::new(&props);
+    // A live run stays open, like a working subagent group; a settled run
+    // folds to its header line.
+    let open = (props.run == RunStatus::Working) != props.state.board_flipped;
+    let header = header_line(&mut props, &facts, open, &dispatch, theme);
+    let body = open.then(|| {
+        div()
+            .ml(px(CLAUDE_SLOT / 2.0))
+            .pl(px(CLAUDE_SLOT / 2.0 + 8.0))
+            .border_l_1()
+            .border_color(theme.hairline(0.1))
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .children(
+                facts
+                    .sections
+                    .iter()
+                    .zip(&facts.states)
+                    .map(|(section, state)| phase_block(&props, section, *state, &dispatch, theme)),
+            )
+            .children(script_control(&props, &dispatch, theme))
     });
     div()
         .min_w_0()
         .w_full()
-        .px(px(16.0))
-        .py(px(6.0))
+        .py(px(4.0))
         .text_size(px(12.0))
         .line_height(px(16.0))
         .child(header)
-        .children(columns)
-        .children(detail)
-        .children(script)
+        .children(body)
         .into_any_element()
+}
+
+/// One agent as the right pane shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AgentSnapshot {
+    pub workflow: SharedString,
+    pub phase: Option<String>,
+    pub run: RunStatus,
+    pub agent: AgentView,
+}
+
+/// Find one agent of a run by its index, with the phase it ran under.
+pub(crate) fn find_agent(
+    progress: Option<&WorkflowProgress>,
+    run: RunStatus,
+    index: u32,
+) -> Option<(Option<String>, AgentView)> {
+    workflow_sections(&[], progress, run)
+        .into_iter()
+        .find_map(|section| {
+            let title = section.title;
+            section
+                .agents
+                .into_iter()
+                .find(|agent| agent.index == index)
+                .map(|agent| (title, agent))
+        })
+}
+
+/// One agent as a conversation the transcript can render: what it was
+/// asked as the user turn, what it returned (or the error) as the reply. The
+/// reply streams while the agent works and is absent while it waits.
+pub(crate) fn agent_entries(snapshot: &AgentSnapshot, device_id: &str) -> Vec<SessionMessageEntry> {
+    let agent = &snapshot.agent;
+    let started = agent.started_at.unwrap_or(0);
+    let text = |id: &str, text: String| MessagePart::Text {
+        id: id.into(),
+        text,
+    };
+    let mut entries = vec![SessionMessageEntry {
+        id: format!("workflow-agent-{}-prompt", agent.index),
+        role: MessageRole::User,
+        parts: vec![text(
+            "prompt",
+            agent.prompt.clone().unwrap_or_else(|| agent.label.clone()),
+        )],
+        created_at: started,
+        device_id: device_id.to_owned(),
+        status: None,
+        continuation_of: None,
+        duration_ms: None,
+    }];
+    if agent.status == AgentStatus::Queued {
+        return entries;
+    }
+    let status = match agent.status {
+        AgentStatus::Working | AgentStatus::Queued => MessageStatus::Streaming,
+        AgentStatus::Done | AgentStatus::Failed => MessageStatus::Complete,
+        AgentStatus::Stopped => MessageStatus::Aborted,
+    };
+    entries.push(SessionMessageEntry {
+        id: format!("workflow-agent-{}-reply", agent.index),
+        role: MessageRole::Assistant,
+        parts: agent
+            .result
+            .clone()
+            .map(|result| vec![text("reply", result)])
+            .unwrap_or_default(),
+        created_at: started,
+        device_id: device_id.to_owned(),
+        status: Some(status),
+        continuation_of: None,
+        duration_ms: agent
+            .completed_at
+            .zip(agent.started_at)
+            .map(|(end, start)| end - start),
+    });
+    entries
 }
 
 /// Wall-clock now in epoch ms (agent timestamps are epoch ms).
@@ -977,12 +1040,6 @@ pub(crate) fn now_ms() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
-}
-
-/// One clock for every board's turning marks.
-pub(crate) fn spin_epoch() -> Instant {
-    static EPOCH: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
-    *EPOCH.get_or_init(Instant::now)
 }
 
 #[cfg(test)]
@@ -1097,12 +1154,12 @@ mod tests {
             ]
         );
         let first = &sections[2].agents[0];
-        assert_eq!(first.preview.as_deref(), Some("A is fine"));
+        assert_eq!(first.result.as_deref(), Some("A is fine"));
         assert_eq!(first.prompt.as_deref(), Some("Read a"));
         assert_eq!((first.started_at, first.completed_at), (Some(10), Some(15)));
         let running = &sections[2].agents[1];
         assert_eq!((running.started_at, running.completed_at), (Some(12), None));
-        assert_eq!(sections[1].agents[0].preview.as_deref(), Some("Timed out"));
+        assert_eq!(sections[1].agents[0].result.as_deref(), Some("Timed out"));
         assert_eq!(sections[3].detail.as_deref(), Some("Not started"));
     }
 
@@ -1242,12 +1299,65 @@ mod tests {
     }
 
     #[test]
-    fn board_actions_toggle_selection_and_disclosures() {
+    fn agent_lines_say_what_each_agent_is_doing() {
+        let sections = workflow_sections(&[], Some(&progress()), RunStatus::Working);
+        let (phase, done) = find_agent(Some(&progress()), RunStatus::Working, 1).unwrap();
+        assert_eq!(phase.as_deref(), Some("Map"));
+        assert_eq!(agent_tail(&done).as_deref(), Some("A is fine"));
+        let running = &sections[1].agents[1];
+        assert_eq!(running.status, AgentStatus::Working);
+        assert_eq!(agent_tail(running).as_deref(), Some("Read b"));
+        let queued = &sections[0].agents[0];
+        assert_eq!(agent_tail(queued).as_deref(), Some("Queued"));
+        assert!(find_agent(Some(&progress()), RunStatus::Working, 99).is_none());
+        assert_eq!(one_line("  a\n\tb  c "), "a b c");
+    }
+
+    #[test]
+    fn an_agent_reads_as_prompt_then_reply() {
+        let snapshot = |index| {
+            let (phase, agent) = find_agent(Some(&progress()), RunStatus::Working, index).unwrap();
+            AgentSnapshot {
+                workflow: "audit".into(),
+                phase,
+                run: RunStatus::Working,
+                agent,
+            }
+        };
+        let text = |entry: &SessionMessageEntry| match entry.parts.first() {
+            Some(MessagePart::Text { text, .. }) => Some(text.clone()),
+            _ => None,
+        };
+        let done = agent_entries(&snapshot(1), "device");
+        assert_eq!(done.len(), 2);
+        assert_eq!(done[0].role, MessageRole::User);
+        assert_eq!(text(&done[0]).as_deref(), Some("Read a"));
+        assert_eq!(done[1].role, MessageRole::Assistant);
+        assert_eq!(text(&done[1]).as_deref(), Some("A is fine"));
+        assert_eq!(done[1].status, Some(MessageStatus::Complete));
+        assert_eq!(done[1].duration_ms, Some(5));
+        let working = agent_entries(&snapshot(2), "device");
+        assert_eq!(working[1].status, Some(MessageStatus::Streaming));
+        assert!(working[1].parts.is_empty(), "no reply until it returns");
+        let queued = agent_entries(&snapshot(3), "device");
+        assert_eq!(queued.len(), 1, "a waiting agent has only its prompt");
+        assert_eq!(text(&queued[0]).as_deref(), Some("setup"));
+    }
+
+    #[test]
+    fn board_actions_toggle_disclosures() {
         let mut state = BoardState::default();
-        state.apply(&BoardAction::Select(3));
-        assert_eq!(state.selected, Some(3));
-        state.apply(&BoardAction::Select(3));
-        assert_eq!(state.selected, None);
+        assert!(
+            !state.apply(&BoardAction::Open(3)),
+            "opening leaves the board as is"
+        );
+        assert_eq!(state, BoardState::default());
+        state.apply(&BoardAction::ToggleSection("runtime:1".into()));
+        assert!(state.flipped.contains("runtime:1"));
+        state.apply(&BoardAction::ToggleSection("runtime:1".into()));
+        assert!(state.flipped.is_empty());
+        state.apply(&BoardAction::ToggleBoard);
+        assert!(state.board_flipped);
         state.apply(&BoardAction::ShowAll("runtime:1".into()));
         assert!(state.expanded.contains("runtime:1"));
         state.apply(&BoardAction::ToggleScript);

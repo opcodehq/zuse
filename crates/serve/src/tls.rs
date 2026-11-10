@@ -190,15 +190,15 @@ mod tests {
             "require-corp"
         );
         assert!(page.text().await.unwrap().contains("Zuse"));
-        let compressed = client
-            .get(format!("{base}/"))
-            .header("Accept-Encoding", "gzip")
+        // Compression and caching are covered by assets.rs; this checks the shared router is mounted.
+        let script = client
+            .get(format!("{base}/missing.js"))
             .send()
             .await
             .unwrap();
-        assert_eq!(compressed.headers()["content-encoding"], "gzip");
+        assert_eq!(script.headers()["cache-control"], "no-cache");
         assert_eq!(
-            compressed.headers()["cross-origin-embedder-policy"],
+            script.headers()["cross-origin-embedder-policy"],
             "require-corp"
         );
         let session = client

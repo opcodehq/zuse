@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.26.0-preview.4 - 2026-11-09
+
+### Added
+
+- Zots coordinators and a control SDK for driving Zuse programmatically.
+- Use local CLI models and sign-ins in the Zuse harness.
+
+### Changed
+
+- Every release now ships all download formats together: DMG, Setup EXE, DEB, RPM and archives for each platform.
+- Pick the fastest route to paired computers and refine mobile chat.
+- Improve the workspace panel and terminal layout.
+- Save permission choices as the default for new chats.
+- Reduce idle agent retention.
+
 ## 0.26.0-preview.3 - 2026-11-09
 
 ### Added

@@ -1,6 +1,8 @@
 //! Read-only cloud context shared by native and browser viewports.
+mod retained_history;
 use crate::schema::SessionMessageEntry;
 use crate::transcript_delta::TranscriptUpdate;
+pub use retained_history::merge_loaded_prefix;
 use serde::{Deserialize, Serialize};
 use zuse_protocol::Chat;
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -59,6 +61,14 @@ impl LocalMirrorCleanup {
 #[serde(rename_all = "camelCase")]
 pub struct Workspace {
     pub workspace_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<i64>,
     pub chat_id: String,
     pub initial_session_id: String,
     pub branch: String,
@@ -274,6 +284,10 @@ mod tests {
     fn workspace(id: &str) -> Workspace {
         Workspace {
             workspace_id: id.into(),
+            project_id: None,
+            provider_id: None,
+            created_at: None,
+            updated_at: None,
             chat_id: format!("chat-{id}"),
             initial_session_id: format!("session-{id}"),
             branch: "feature".into(),
@@ -286,6 +300,20 @@ mod tests {
             local_mirror_cleanup: None,
             archive_status: None,
         }
+    }
+    #[test]
+    fn workspace_list_round_trip_preserves_project_grouping_and_sort_metadata() {
+        let mut wire = serde_json::to_value(workspace("task")).unwrap();
+        wire["projectId"] = serde_json::json!("project-cloud");
+        wire["providerId"] = serde_json::json!("boxd");
+        wire["createdAt"] = serde_json::json!(40);
+        wire["updatedAt"] = serde_json::json!(42);
+        let decoded: Workspace = serde_json::from_value(wire).unwrap();
+        let forwarded = serde_json::to_value(decoded).unwrap();
+        assert_eq!(forwarded["projectId"], "project-cloud");
+        assert_eq!(forwarded["providerId"], "boxd");
+        assert_eq!(forwarded["createdAt"], 40);
+        assert_eq!(forwarded["updatedAt"], 42);
     }
     fn recovery(id: &str, phase: &str) -> zuse_protocol::cloud::CloudArchiveStatus {
         serde_json::from_value(serde_json::json!({"workspaceId":id,"archived":true,"machineRetained":true,

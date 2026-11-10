@@ -2191,6 +2191,7 @@ pub struct ComposerInput {
     text_size: f32,
     configured_line_height: f32,
     single_line: bool,
+    enter_inserts_newline: bool,
     scroll_left: f32,
     // -- measured state (written during layout/paint) --
     last_lines: Vec<WrappedLine>,
@@ -2311,6 +2312,7 @@ impl ComposerInput {
             text_size: INPUT_TEXT_SIZE,
             configured_line_height: INPUT_LINE_HEIGHT,
             single_line: false,
+            enter_inserts_newline: false,
             scroll_left: 0.0,
             last_lines: Vec::new(),
             line_starts: vec![0],
@@ -2374,6 +2376,12 @@ impl ComposerInput {
 
     pub fn with_single_line(mut self) -> Self {
         self.single_line = true;
+        self
+    }
+
+    /// Long-form text in a form: Enter starts a new line instead of submitting.
+    pub(crate) fn with_enter_newline(mut self) -> Self {
+        self.enter_inserts_newline = true;
         self
     }
 
@@ -3971,7 +3979,11 @@ impl ComposerInput {
         }
     }
 
-    fn submit(&mut self, _: &Submit, _: &mut Window, cx: &mut Context<Self>) {
+    fn submit(&mut self, _: &Submit, window: &mut Window, cx: &mut Context<Self>) {
+        if self.enter_inserts_newline {
+            self.newline(&Newline, window, cx);
+            return;
+        }
         match enter_outcome(self.mention_has_selection, EnterOutcome::Submit) {
             EnterOutcome::AcceptCompletion => cx.emit(ComposerInputEvent::MentionAccept),
             EnterOutcome::Submit => cx.emit(ComposerInputEvent::Submitted),
@@ -5889,6 +5901,16 @@ impl Render for ComposerInput {
 #[derive(Debug, Clone)]
 pub enum ComposerEvent {
     CloudLaunchChanged,
+    /// Only a verified foreground Run receipt may reattach execution passively.
+    CloudForegroundAdmitted,
+    CloudSleepRequested,
+    /// An accepted task selects the current native conversation surface.
+    CloudAdmitted {
+        workspace: serde_json::Value,
+        account: String,
+        organization: Option<String>,
+        launch: serde_json::Value,
+    },
     ResumeCloud {
         text: String,
         send: bool,
@@ -6501,6 +6523,12 @@ fn slash_error_message(err: &RpcError, skill: bool) -> SharedString {
     }
 }
 
+#[derive(Clone)]
+struct AttachmentDestination {
+    key: String,
+    account: Option<String>,
+    organization: Option<String>,
+}
 pub struct Composer {
     cloud: cloud::Launch,
     pub(crate) state: Entity<AppState>,
@@ -6556,6 +6584,9 @@ pub struct Composer {
     /// Advertised invocations for the current device/harness/workspace.
     /// Invalidated on context changes; filtering stays local while typing.
     slash_cache: HashMap<String, Vec<InvocationCandidate>>,
+    /// The last catalog loaded in full, keyed without the workspace. Another
+    /// chat's rows stand in for this one's until its own catalog arrives.
+    slash_recent: Option<(String, Vec<InvocationCandidate>)>,
     /// Slash-popup row scroll — the stack overflows into a wheel/keyboard-
     /// scrollable list once it outgrows the card.
     slash_scroll: gpui::ScrollHandle,
@@ -6565,6 +6596,12 @@ pub struct Composer {
     /// they never show at once (mutually exclusive by token shape).
     popup_bar: crate::popover::MenuScrollbarState,
     pub(crate) current_key: String,
+    /// Explicit cloud canvas identity; established chats still use their chat ID.
+    cloud_canvas_key: Option<String>,
+    retired_cloud_canvas_keys: HashSet<String>,
+    known_cloud_canvas_keys: HashSet<String>,
+    cloud_canvas_scope: Option<(Option<String>, Option<String>)>,
+    file_picker_generation: u64,
     sending: bool,
     /// Armed immediately before a blank-canvas send selects its minted chat.
     /// The state observer consumes it to distinguish that handoff from normal
@@ -6593,6 +6630,7 @@ pub struct Composer {
     /// delivery. The text buffer is kept until Finish receives an ACK.
     pub(crate) queue_edit_lease_id: Option<String>,
     pub(crate) queue_edit_base_text_hash: Option<String>,
+    pub(crate) queue_edit_revision: Option<i64>,
     pub(crate) queue_edit_chat_id: Option<String>,
     pub(crate) queue_edit_host_device_id: Option<String>,
     pub(crate) queue_edit_instance_id: String,
@@ -6678,6 +6716,8 @@ pub struct Composer {
     dictation_activation: Option<Subscription>,
     dictation_blur: Option<Subscription>,
     dictation_focus: FocusHandle,
+    /// The game above the card while an agent works.
+    runner: Entity<crate::arcade::Runner>,
     /// The last live frame of the voice pill, kept so it can settle away
     /// after the transcript lands instead of vanishing.
     voice_last: Option<VoiceFrame>,
@@ -6934,6 +6974,143 @@ impl Composer {
         self.surface_bounds.clone()
     }
 
+    #[cfg(test)]
+    pub(crate) fn send_for_test(&mut self, text: String, queue: bool, cx: &mut Context<Self>) {
+        self.send(text, queue, false, false, cx);
+    }
+    #[cfg(test)]
+    pub(crate) fn seed_pending_cloud_creation_for_test(&mut self, request: serde_json::Value) {
+        self.cloud.request = Some(request);
+    }
+    #[cfg(test)]
+    pub(crate) fn pending_cloud_creation_for_test(&self) -> Option<&serde_json::Value> {
+        self.cloud.request.as_ref()
+    }
+    fn canvas_account_scope(&self, cx: &App) -> (Option<String>, Option<String>) {
+        let state = self.state.read(cx);
+        (
+            state.cloud_user_id().map(str::to_owned),
+            state.cloud_organization_id().map(str::to_owned),
+        )
+    }
+    fn drop_revoked_canvas_scope(&mut self, cx: &mut Context<Self>) {
+        if self
+            .cloud_canvas_scope
+            .as_ref()
+            .is_some_and(|scope| *scope != self.canvas_account_scope(cx))
+        {
+            let keys = self
+                .known_cloud_canvas_keys
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>();
+            self.revoke_cloud_canvases(&keys, cx);
+            self.cloud_canvas_scope = None;
+        }
+    }
+    pub(crate) fn cloud_canvas_navigation_ready(&mut self, cx: &mut Context<Self>) -> bool {
+        self.drop_revoked_canvas_scope(cx);
+        if self.pickers.read(cx).preparing_source(cx) {
+            self.failure=Some("This tab is preparing its selected source. Wait for that operation to finish before changing tabs.".into());
+            self.failure_key = Some(self.current_key.clone());
+            cx.notify();
+            return false;
+        }
+        if self.cloud.request.is_some() || self.cloud.task.is_some() {
+            self.failure=Some("This tab has a pending task creation. Check or retry its original request here before changing tabs. Your draft and request are preserved.".into());
+            self.failure_key = Some(self.current_key.clone());
+            cx.notify();
+            return false;
+        }
+        true
+    }
+    pub(crate) fn ensure_cloud_canvas_key(&mut self, cx: &mut Context<Self>) -> String {
+        self.drop_revoked_canvas_scope(cx);
+        if self.cloud_canvas_key.is_none() && self.state.read(cx).selected_chat.is_none() {
+            let key = format!("cloud-canvas:{}", uuid::Uuid::new_v4());
+            let old = self.current_key.clone();
+            if let Some(value) = self.drafts.remove(&old) {
+                self.drafts.insert(key.clone(), value);
+            }
+            if let Some(value) = self.attachments.remove(&old) {
+                self.attachments.insert(key.clone(), value);
+            }
+            if let Some(value) = self.attachment_drafts.remove(&old) {
+                self.attachment_drafts.insert(key.clone(), value);
+            }
+            if let Some(value) = self.appshots.remove(&old) {
+                self.appshots.insert(key.clone(), value);
+            }
+            self.known_cloud_canvas_keys.insert(key.clone());
+            self.cloud_canvas_scope = Some(self.canvas_account_scope(cx));
+            self.cloud_canvas_key = Some(key.clone());
+            self.current_key = key;
+            self.sync_attachment_chips(cx);
+        }
+        self.current_key.clone()
+    }
+    pub(crate) fn set_cloud_canvas_key(&mut self, key: Option<String>, cx: &mut Context<Self>) {
+        self.drop_revoked_canvas_scope(cx);
+        if let Some(key) = &key {
+            self.known_cloud_canvas_keys.insert(key.clone());
+            self.cloud_canvas_scope = Some(self.canvas_account_scope(cx));
+        }
+        self.cloud_canvas_key = key;
+        self.on_state_changed(cx);
+        self.sync_attachment_chips(cx);
+        cx.notify();
+    }
+    pub(crate) fn discard_cloud_canvas_keys(&mut self, keys: &[String], cx: &mut Context<Self>) {
+        self.cloud = Default::default();
+        let active = keys.contains(&self.current_key);
+        let scoped = self
+            .cloud_canvas_key
+            .as_ref()
+            .is_some_and(|key| keys.contains(key));
+        if scoped {
+            self.cloud_canvas_key = None;
+            self.cloud = Default::default();
+        }
+        for key in keys {
+            self.known_cloud_canvas_keys.remove(key);
+            if key.starts_with("cloud-canvas:") {
+                self.retired_cloud_canvas_keys.insert(key.clone());
+            }
+            self.drafts.remove(key);
+            self.attachment_drafts.remove(key);
+            for attachment in self.attachments.remove(key).unwrap_or_default() {
+                self.attachment_original_names.remove(&attachment.id);
+            }
+            self.appshots.remove(key);
+        }
+        if active {
+            self.cloud = Default::default();
+            self.cloud_canvas_key = None;
+            self.failure = None;
+            self.failure_key = None;
+            self.preview = None;
+            self.queue_edit_draft = None;
+            self.queue_edit_attachment_draft = None;
+            self.input.update(cx, |input, cx| input.set_text("", cx));
+            self.current_key = self
+                .state
+                .read(cx)
+                .selected_chat
+                .clone()
+                .unwrap_or_default();
+            self.sync_attachment_chips(cx);
+        }
+        cx.notify();
+    }
+    pub(crate) fn revoke_cloud_canvases(&mut self, keys: &[String], cx: &mut Context<Self>) {
+        self.file_picker_generation = self.file_picker_generation.wrapping_add(1);
+        self.picker_task = None;
+        self.discard_cloud_canvas_keys(keys, cx);
+        self.cloud = Default::default();
+        self.cloud_canvas_scope = None;
+        self.pickers
+            .update(cx, |p, cx| p.revoke_cloud_canvas_scope(cx));
+    }
     /// The picker entity, for the shell's canvas target selectors.
     pub fn pickers(&self) -> &Entity<Pickers> {
         &self.pickers
@@ -6978,6 +7155,11 @@ impl Composer {
             input
         });
         let pickers = cx.new(|cx| Pickers::new(state.clone(), cx));
+        let runner = {
+            let owner = cx.weak_entity();
+            let input_focus = input.read(cx).focus_handle.clone();
+            cx.new(|cx| crate::arcade::Runner::new(owner, input_focus, cx))
+        };
         let account_usage = cx.new(|cx| crate::account_usage::AccountUsage::new(state.clone(), cx));
         // The footer toolbar (checkout kind + ref picker) is rendered INLINE
         // by the composer from picker state — a pickers-side notify (refs
@@ -7143,10 +7325,16 @@ impl Composer {
             slash_task: None,
             slash: SlashState::default(),
             slash_cache: HashMap::new(),
+            slash_recent: None,
             slash_scroll: gpui::ScrollHandle::new(),
             mention_scroll: gpui::ScrollHandle::new(),
             popup_bar: crate::popover::MenuScrollbarState::default(),
             current_key,
+            cloud_canvas_key: None,
+            retired_cloud_canvas_keys: HashSet::new(),
+            known_cloud_canvas_keys: HashSet::new(),
+            cloud_canvas_scope: None,
+            file_picker_generation: 0,
             sending: false,
             launching_new_chat: false,
             failure: None,
@@ -7166,6 +7354,7 @@ impl Composer {
             editing_queued: None,
             queue_edit_lease_id: None,
             queue_edit_base_text_hash: None,
+            queue_edit_revision: None,
             queue_edit_chat_id: None,
             queue_edit_host_device_id: None,
             queue_edit_instance_id: uuid::Uuid::new_v4().to_string(),
@@ -7210,6 +7399,7 @@ impl Composer {
             dictation_activation: None,
             dictation_blur: None,
             dictation_focus: cx.focus_handle(),
+            runner,
             dictation_ready: Default::default(),
             dictation_ready_task: None,
             dictation_button_focus: cx.focus_handle(),
@@ -7357,6 +7547,9 @@ impl Composer {
         appshot: CapturedAppshot,
         cx: &mut Context<Self>,
     ) -> bool {
+        if self.retired_cloud_canvas_keys.contains(&key) {
+            return false;
+        }
         let staged_bytes = self
             .appshots
             .get(&key)
@@ -7458,40 +7651,80 @@ impl Composer {
     /// draft that is current now, even if the user has navigated away by the
     /// time it finishes. Failures surface in that draft's failure notice, all
     /// of them together so one refused file does not hide another.
+    fn attachment_destination(&mut self, cx: &mut Context<Self>) -> AttachmentDestination {
+        self.drop_revoked_canvas_scope(cx);
+        if self.state.read(cx).selected_chat.is_none()
+            && self.state.read(cx).cloud_project.is_some()
+        {
+            self.ensure_cloud_canvas_key(cx);
+        }
+        let state = self.state.read(cx);
+        AttachmentDestination {
+            key: self.current_key.clone(),
+            account: state.cloud_user_id().map(str::to_owned),
+            organization: state.cloud_organization_id().map(str::to_owned),
+        }
+    }
+    fn attachment_destination_valid(&self, destination: &AttachmentDestination, cx: &App) -> bool {
+        let state = self.state.read(cx);
+        !self.retired_cloud_canvas_keys.contains(&destination.key)
+            && state.cloud_user_id() == destination.account.as_deref()
+            && state.cloud_organization_id() == destination.organization.as_deref()
+    }
+    fn finish_attachment_staging(
+        &mut self,
+        destination: AttachmentDestination,
+        results: Vec<Result<StagedAttachment, String>>,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.attachment_destination_valid(&destination, cx) {
+            return;
+        }
+        let mut staged = Vec::new();
+        let mut refused = Vec::new();
+        for result in results {
+            match result {
+                Ok(file) => staged.push(file),
+                Err(error) => refused.push(error),
+            }
+        }
+        if !refused.is_empty() {
+            self.failure = Some(refused.join(" ").into());
+            self.failure_key = Some(destination.key.clone());
+        }
+        if !staged.is_empty() && !self.queue_edit_finishing {
+            let focused = destination.key == self.current_key;
+            self.adopt_staged_attachments(destination.key, staged, cx);
+            if focused {
+                self.focus_pending = true;
+            }
+        }
+        cx.notify();
+    }
+    fn stage_in_background_for(
+        &mut self,
+        destination: AttachmentDestination,
+        stage: impl FnOnce() -> Vec<Result<StagedAttachment, String>> + Send + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        self.staging_in_flight += 1;
+        cx.spawn(async move |this, cx| {
+            let results = cx.background_executor().spawn(async move { stage() }).await;
+            let _ = this.update(cx, |this, cx| {
+                this.staging_in_flight = this.staging_in_flight.saturating_sub(1);
+                this.finish_attachment_staging(destination, results, cx)
+            });
+        })
+        .detach();
+    }
     fn stage_in_background(
         &mut self,
         stage: impl FnOnce() -> Vec<Result<StagedAttachment, String>> + Send + 'static,
         cx: &mut Context<Self>,
     ) {
-        let key = self.current_key.clone();
-        self.staging_in_flight += 1;
-        cx.spawn(async move |this, cx| {
-            let results = cx.background_executor().spawn(async move { stage() }).await;
-            this.update(cx, |this, cx| {
-                this.staging_in_flight = this.staging_in_flight.saturating_sub(1);
-                let mut staged = Vec::new();
-                let mut refused = Vec::new();
-                for result in results {
-                    match result {
-                        Ok(att) => staged.push(att),
-                        Err(message) => refused.push(message),
-                    }
-                }
-                if !refused.is_empty() {
-                    this.failure = Some(refused.join(" ").into());
-                    this.failure_key = Some(key.clone());
-                }
-                if !staged.is_empty() && !this.queue_edit_finishing {
-                    this.adopt_staged_attachments(key, staged, cx);
-                    this.focus_pending = true;
-                }
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
+        let destination = self.attachment_destination(cx);
+        self.stage_in_background_for(destination, stage, cx);
     }
-
     /// Stage files (picker / drop / pasted paths): images with thumbnails, any
     /// other file as opaque bytes. Folders, read failures and oversize files
     /// surface in the failure notice.
@@ -7585,6 +7818,9 @@ impl Composer {
         mut staged: Vec<StagedAttachment>,
         cx: &mut Context<Self>,
     ) {
+        if self.retired_cloud_canvas_keys.contains(&key) {
+            return;
+        }
         if key != self.current_key {
             self.attachments.entry(key).or_default().extend(staged);
             return;
@@ -8051,7 +8287,45 @@ impl Composer {
 
     /// Paperclip: the native image picker (the original's hidden
     /// `<input type=file accept=image/* multiple>`).
+    fn finish_file_picker(
+        &mut self,
+        generation: u64,
+        destination: AttachmentDestination,
+        paths: Option<Vec<PathBuf>>,
+        cx: &mut Context<Self>,
+    ) {
+        if generation != self.file_picker_generation {
+            return;
+        }
+        self.picker_task = None;
+        if !self.attachment_destination_valid(&destination, cx) {
+            return;
+        }
+        let focused = destination.key == self.current_key;
+        if let Some(paths) = paths {
+            self.stage_in_background_for(
+                destination,
+                move || {
+                    paths
+                        .iter()
+                        .map(|path| attachments::stage_file(path))
+                        .collect()
+                },
+                cx,
+            );
+        }
+        if focused {
+            self.focus_pending = true;
+        }
+        cx.notify();
+    }
+    fn begin_file_picker(&mut self, cx: &mut Context<Self>) -> (u64, AttachmentDestination) {
+        let destination = self.attachment_destination(cx);
+        self.file_picker_generation = self.file_picker_generation.wrapping_add(1);
+        (self.file_picker_generation, destination)
+    }
     fn open_file_picker(&mut self, cx: &mut Context<Self>) {
+        let (generation, destination) = self.begin_file_picker(cx);
         let rx = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
@@ -8060,15 +8334,14 @@ impl Composer {
         });
         self.picker_task = Some(cx.spawn(async move |this, cx| {
             let result = rx.await;
-            this.update(cx, |composer, cx| {
-                if let Ok(Ok(Some(paths))) = result {
-                    composer.add_paths(paths, cx);
-                }
-                // Both Attach and Cancel return to the draft.
-                composer.focus_pending = true;
-                cx.notify();
-            })
-            .ok();
+            let _ = this.update(cx, |composer, cx| {
+                composer.finish_file_picker(
+                    generation,
+                    destination,
+                    result.ok().and_then(Result::ok).flatten(),
+                    cx,
+                )
+            });
         }));
     }
 
@@ -8824,6 +9097,19 @@ impl Composer {
             }
             return;
         };
+        let recent_key = format!(
+            "{skill}:{include_skills}:{commands_allowed}:{preferences:?}:{harness:?}:{}",
+            self.completion_connection_context(cx),
+        );
+        if !self.slash_cache.contains_key(&context)
+            && let Some((_, rows)) = self
+                .slash_recent
+                .as_ref()
+                .filter(|(key, _)| *key == recent_key)
+        {
+            let rows = self.finish_slash_catalog(rows.clone(), skill, commands_allowed, cx);
+            self.slash_cache.insert(context.clone(), rows);
+        }
         self.slash.request = self.slash.request.wrapping_add(1);
         let request = self.slash.request;
         self.slash.loading = true;
@@ -8868,6 +9154,7 @@ impl Composer {
                     return;
                 }
                 composer.slash.loading = false;
+                let selected = composer.active_slash_invocation();
                 let decoded = result.map(|(candidates, supported, warning)| {
                     composer.slash.supported = supported;
                     composer.slash.error = warning;
@@ -8875,14 +9162,11 @@ impl Composer {
                 });
                 match decoded {
                     Ok(candidates) => {
-                        let candidates = if !skill && commands_allowed {
-                            with_workspace_commands(
-                                candidates,
-                                composer.state.read(cx).selected_chat.is_some(),
-                            )
-                        } else {
-                            candidates
-                        };
+                        if composer.slash.error.is_none() {
+                            composer.slash_recent = Some((recent_key, candidates.clone()));
+                        }
+                        let candidates =
+                            composer.finish_slash_catalog(candidates, skill, commands_allowed, cx);
                         composer.slash_cache.insert(context, candidates);
                     }
                     Err(err) => {
@@ -8899,10 +9183,80 @@ impl Composer {
                         }
                     }
                 }
-                composer.refilter_slash(cx);
+                composer.slash_catalog_loaded(selected, cx);
             })
             .ok();
         }));
+        cx.notify();
+    }
+
+    fn finish_slash_catalog(
+        &self,
+        rows: Vec<InvocationCandidate>,
+        skill: bool,
+        commands_allowed: bool,
+        cx: &App,
+    ) -> Vec<InvocationCandidate> {
+        let mut rows = if !skill && commands_allowed {
+            with_workspace_commands(rows, self.state.read(cx).selected_chat.is_some())
+        } else {
+            rows
+        };
+        skill_completion::catalog_order(&mut rows);
+        rows
+    }
+
+    fn slash_commands(&self) -> &[InvocationCandidate] {
+        self.slash_cache
+            .get(&self.slash.context)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+    }
+
+    fn active_slash_invocation(&self) -> Option<zuse_protocol::invocation::Invocation> {
+        let row = *self.slash.filtered.get(self.slash.active?)?;
+        Some(self.slash_commands().get(row)?.invocation.clone())
+    }
+
+    fn slash_first_skill_row(&self) -> Option<usize> {
+        let query = self.slash.token.as_ref()?.query.as_str();
+        skill_completion::first_skill_row(query, &self.slash.filtered, self.slash_commands())
+    }
+
+    /// Keep a row in view, past any section headings stacked above it.
+    fn reveal_slash_row(&self, active: usize) {
+        let headings = self
+            .slash_first_skill_row()
+            .map_or(0, |skills| 1 + usize::from(active >= skills));
+        self.slash_scroll
+            .scroll_to_item(if active == 0 { 0 } else { active + headings });
+    }
+
+    /// Each open refreshes the catalog behind rows already on screen, so the
+    /// reply must not take the cursor away from the row the user is on.
+    fn slash_catalog_loaded(
+        &mut self,
+        selected: Option<zuse_protocol::invocation::Invocation>,
+        cx: &mut Context<Self>,
+    ) {
+        let query = self.slash.token.as_ref().map(|t| t.query.clone());
+        let filtered =
+            skill_completion::filter(query.as_deref().unwrap_or_default(), self.slash_commands());
+        let kept = selected.and_then(|selected| {
+            filtered.iter().position(|&ix| {
+                self.slash_commands()
+                    .get(ix)
+                    .is_some_and(|row| row.invocation == selected)
+            })
+        });
+        let Some(active) = kept else {
+            self.refilter_slash(cx);
+            return;
+        };
+        self.slash.filtered = filtered;
+        self.slash.active = Some(active);
+        self.reveal_slash_row(active);
+        self.sync_mention_controls(cx);
         cx.notify();
     }
 
@@ -8914,12 +9268,7 @@ impl Composer {
             .as_ref()
             .map(|t| t.query.clone())
             .unwrap_or_default();
-        let commands = self
-            .slash_cache
-            .get(&self.slash.context)
-            .map(Vec::as_slice)
-            .unwrap_or_default();
-        self.slash.filtered = skill_completion::filter(&query, commands);
+        self.slash.filtered = skill_completion::filter(&query, self.slash_commands());
         self.slash.active = (!self.slash.filtered.is_empty()).then_some(0);
         // A fresh query/reopen restarts the row stack at the top.
         crate::popover::reset_menu_scroll(&self.slash_scroll, &mut self.popup_bar);
@@ -8932,7 +9281,7 @@ impl Composer {
             crate::popover::menu_step(self.slash.active, self.slash.filtered.len(), delta);
         if let Some(active) = self.slash.active {
             // Keep the keyboard cursor visible in the scrolled row stack.
-            self.slash_scroll.scroll_to_item(active);
+            self.reveal_slash_row(active);
         }
         self.sync_mention_controls(cx);
         cx.notify();
@@ -9079,11 +9428,24 @@ impl Composer {
                     }),
             );
         } else {
-            let mut rows: Vec<gpui::AnyElement> = Vec::with_capacity(self.slash.filtered.len());
+            let mut rows: Vec<gpui::AnyElement> = Vec::with_capacity(self.slash.filtered.len() + 2);
+            let first_skill = self.slash_first_skill_row();
             for (row_ix, &cmd_ix) in self.slash.filtered.iter().enumerate() {
                 let Some(command) = commands.get(cmd_ix) else {
                     continue;
                 };
+                let heading = match first_skill {
+                    Some(_) if row_ix == 0 => Some(("Commands", 2.0)),
+                    Some(skills) if row_ix == skills => Some(("Skills", 6.0)),
+                    _ => None,
+                };
+                if let Some((label, top)) = heading {
+                    rows.push(
+                        crate::popover::menu_heading(theme, label)
+                            .pt(px(top))
+                            .into_any_element(),
+                    );
+                }
                 let selected = self.slash.active == Some(row_ix);
                 rows.push(
                     skill_completion::row(theme, command, selected, row_ix)
@@ -9148,6 +9510,7 @@ impl Composer {
     }
 
     fn on_state_changed(&mut self, cx: &mut Context<Self>) {
+        self.drop_revoked_canvas_scope(cx);
         let notice = self.state.read(cx).configuration_notice();
         if notice != self.configuration_notice_seen {
             if notice.is_none()
@@ -9189,7 +9552,10 @@ impl Composer {
         let (key, pending, edited_row_exists) = {
             let s = self.state.read(cx);
             (
-                s.selected_chat.clone().unwrap_or_default(),
+                s.selected_chat
+                    .clone()
+                    .or_else(|| self.cloud_canvas_key.clone())
+                    .unwrap_or_default(),
                 pending_input_request(&s.transcript),
                 editing_id
                     .as_ref()
@@ -9687,7 +10053,7 @@ impl Composer {
         if self.pickers.read(cx).preparing_source(cx) {
             return false;
         }
-        if self.send_cloud(text.clone(), cx) {
+        if self.send_cloud_task(text.clone(), queue, cx) || self.send_cloud(text.clone(), cx) {
             return true;
         }
         if self
@@ -11699,6 +12065,9 @@ impl Composer {
     }
 
     pub(crate) fn interrupt_selected(&mut self, cx: &mut Context<Self>) {
+        if self.interrupt_cloud_task(cx) {
+            return;
+        }
         let Some(chat_id) = self.state.read(cx).selected_chat.clone() else {
             return;
         };
@@ -12762,6 +13131,10 @@ impl Render for Composer {
             self.reset_slash(None, cx);
         }
         let mode = self.button_mode(cx);
+        let agent_working = mode == SendButtonMode::Stop;
+        let runner_mounted = self
+            .runner
+            .update(cx, |runner, cx| runner.mounted(agent_working, window, cx));
         // Shape the current draft before sizing the pill. Waiting for the child
         // layout leaves the parent using the previous edit's height.
         self.input.update(cx, |input, cx| {
@@ -13270,7 +13643,7 @@ impl Render for Composer {
             .render_permission_control(&theme, narrow, cx)
             .opacity(beneath_voice);
         let plan_chip = self
-            .render_plan_chip(&theme, narrow, cx)
+            .render_plan_chip(&theme, cx)
             .map(|chip| chip.opacity(beneath_voice));
         // Plugins: a quiet `size-7` icon key beside the access chip that opens
         // the plugins page.
@@ -13480,19 +13853,16 @@ impl Render for Composer {
             .children(self.render_emoji_popup(&theme, cx))
             .children(self.render_composer_list(&theme, cx))
             .children(self.render_flash(&theme, cx))
-            // While the agent works, a pixel bug walks the card's top edge
-            // eating a row of pellets.
-            .when(mode == SendButtonMode::Stop, |el| {
+            // While the agent works, a little runner plays itself in the
+            // reserved status strip until the user clicks to take over.
+            .when(runner_mounted, |el| {
                 el.child(
                     div()
                         .absolute()
-                        .top(px(-crate::arcade::PELLET_TRAIL_HEIGHT - 4.0))
+                        .top(px(-crate::arcade::RUNNER_HEIGHT - 1.0))
                         .left(px(surface_radius))
                         .right(px(surface_radius))
-                        .child(crate::arcade::pellet_trail(
-                            format!("composer-trail-{}", cx.entity_id()),
-                            theme.text_muted,
-                        )),
+                        .child(crate::arcade::runner_strip(&self.runner)),
                 )
             })
             .children(self.render_worktree_progress(&theme, cx));
@@ -18777,3 +19147,204 @@ impl Composer {
 #[cfg(test)]
 #[path = "composer_dictation_tests.rs"]
 mod dictation_tests;
+
+#[cfg(test)]
+mod cloud_canvas_tests {
+    use super::*;
+    #[gpui::test]
+    fn initial_unregistered_cloud_draft_clears_on_scope_change_before_admission(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let state = cx.new(|_| {
+            let mut state = crate::state::AppState::new();
+            state.apply_cloud_account(serde_json::json!({"user":{"id":"actor"},"orgId":null}));
+            state.cloud_project = Some(serde_json::json!({"projectId":"p","accountId":"actor"}));
+            state
+        });
+        let composer = cx.new(|cx| Composer::new(state.clone(), cx));
+        composer.update(cx, |c, cx| {
+            c.input.update(cx, |input, cx| {
+                input.set_text("Private initial cloud draft", cx)
+            });
+            let destination = c.attachment_destination(cx);
+            assert!(destination.key.starts_with("cloud-canvas:"));
+            c.attachments.insert(
+                destination.key.clone(),
+                vec![StagedAttachment::from_file(
+                    "private.txt",
+                    b"private".to_vec(),
+                )],
+            );
+            c.appshots
+                .insert(destination.key, vec![crate::appshots::tests::shot()]);
+        });
+        state.update(cx, |state, _| {
+            state.apply_cloud_account(serde_json::json!({"user":{"id":"other"},"orgId":null}));
+        });
+        composer.update(cx, |c, cx| {
+            c.on_state_changed(cx);
+            assert!(c.input.read(cx).text().is_empty());
+            assert!(c.attachments.is_empty());
+            assert!(c.appshots.is_empty());
+            assert!(c.known_cloud_canvas_keys.is_empty());
+        });
+    }
+    #[gpui::test]
+    fn delayed_file_picker_stages_into_original_canvas_and_never_revives_retired_scope(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("original.txt");
+        std::fs::write(&file, b"original canvas file").unwrap();
+        let state = cx.new(|_| {
+            let mut state = crate::state::AppState::new();
+            state.apply_cloud_account(serde_json::json!({"user":{"id":"actor"},"orgId":null}));
+            state
+        });
+        let composer = cx.new(|cx| Composer::new(state.clone(), cx));
+        let (tx, rx) = futures::channel::oneshot::channel::<Vec<PathBuf>>();
+        let completion = composer.update(cx, |c, cx| {
+            c.set_cloud_canvas_key(Some("cloud-canvas:chooser-a".into()), cx);
+            let (generation, destination) = c.begin_file_picker(cx);
+            cx.spawn(async move |this, cx| {
+                let paths = rx.await.unwrap();
+                let _ = this.update(cx, |c, cx| {
+                    c.finish_file_picker(generation, destination, Some(paths), cx)
+                });
+            })
+        });
+        composer.update(cx, |c, cx| {
+            c.set_cloud_canvas_key(Some("cloud-canvas:chooser-b".into()), cx)
+        });
+        tx.send(vec![file.clone()]).unwrap();
+        cx.run_until_parked();
+        composer.read_with(cx, |c, _| {
+            assert_eq!(c.current_key, "cloud-canvas:chooser-b");
+            assert_eq!(
+                c.attachments["cloud-canvas:chooser-a"][0].name,
+                "original.txt"
+            );
+            assert!(!c.attachments.contains_key("cloud-canvas:chooser-b"));
+        });
+        drop(completion);
+        let (tx, rx) = futures::channel::oneshot::channel::<Vec<PathBuf>>();
+        let completion = composer.update(cx, |c, cx| {
+            let (generation, destination) = c.begin_file_picker(cx);
+            cx.spawn(async move |this, cx| {
+                let paths = rx.await.unwrap();
+                let _ = this.update(cx, |c, cx| {
+                    c.finish_file_picker(generation, destination, Some(paths), cx)
+                });
+            })
+        });
+        composer.update(cx, |c, cx| {
+            c.revoke_cloud_canvases(
+                &[
+                    "cloud-canvas:chooser-a".into(),
+                    "cloud-canvas:chooser-b".into(),
+                ],
+                cx,
+            );
+            assert!(!c.stage_appshot_for(
+                "cloud-canvas:chooser-a".into(),
+                crate::appshots::tests::shot(),
+                cx
+            ));
+        });
+        state.update(cx, |state, _| {
+            state.apply_cloud_account(serde_json::json!({"user":{"id":"other"},"orgId":null}));
+        });
+        tx.send(vec![file]).unwrap();
+        cx.run_until_parked();
+        composer.read_with(cx, |c, _| {
+            assert!(c.attachments.is_empty());
+            assert!(c.appshots.is_empty());
+        });
+        drop(completion);
+    }
+    #[gpui::test]
+    fn background_file_result_is_rejected_after_account_change_without_retired_key(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let state = cx.new(|_| {
+            let mut state = crate::state::AppState::new();
+            state.apply_cloud_account(serde_json::json!({"user":{"id":"actor"},"orgId":"org-a"}));
+            state
+        });
+        let composer = cx.new(|cx| Composer::new(state.clone(), cx));
+        let destination = composer.update(cx, |c, cx| {
+            c.set_cloud_canvas_key(Some("cloud-canvas:actor-a".into()), cx);
+            c.attachment_destination(cx)
+        });
+        state.update(cx, |state, _| {
+            state.apply_cloud_account(serde_json::json!({"user":{"id":"actor"},"orgId":"org-b"}));
+        });
+        composer.update(cx, |c, cx| {
+            c.finish_attachment_staging(
+                destination,
+                vec![Ok(StagedAttachment::from_file(
+                    "private-path.txt",
+                    b"private contents".to_vec(),
+                ))],
+                cx,
+            );
+            assert!(c.attachments.is_empty());
+        });
+    }
+    #[gpui::test]
+    fn distinct_cloud_canvas_keys_restore_text_files_appshots_and_chip_numbers(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let state = cx.new(|_| crate::state::AppState::new());
+        let composer = cx.new(|cx| Composer::new(state, cx));
+        composer.update(cx, |c, cx| {
+            c.set_cloud_canvas_key(Some("cloud-canvas:a".into()), cx);
+            let mut file = StagedAttachment::from_file("a.txt", b"A file".to_vec());
+            file.mention = Some(7);
+            let aid = file.id.clone();
+            c.attachments.insert(c.current_key.clone(), vec![file]);
+            c.appshots
+                .insert(c.current_key.clone(), vec![crate::appshots::tests::shot()]);
+            let a_text = format!(
+                "A draft {}",
+                zuse_protocol::attachment_mentions::attachment_mention_link(7, Some("a.txt"))
+            );
+            c.input
+                .update(cx, |input, cx| input.set_text(a_text.clone(), cx));
+            c.sync_attachment_chips(cx);
+            c.set_cloud_canvas_key(Some("cloud-canvas:b".into()), cx);
+            assert_eq!(c.input.read(cx).text(), "");
+            assert!(c.staged().is_empty());
+            assert!(c.staged_appshots().is_empty());
+            c.attachments.insert(
+                c.current_key.clone(),
+                vec![StagedAttachment::from_file("b.txt", b"B file".to_vec())],
+            );
+            c.input
+                .update(cx, |input, cx| input.set_text("B draft", cx));
+            c.set_cloud_canvas_key(Some("cloud-canvas:a".into()), cx);
+            assert_eq!(c.input.read(cx).text(), a_text);
+            assert_eq!(c.staged()[0].id, aid);
+            assert_eq!(c.staged()[0].mention, Some(7));
+            assert_eq!(c.staged_appshots().len(), 1);
+            c.set_cloud_canvas_key(Some("cloud-canvas:b".into()), cx);
+            assert_eq!(c.input.read(cx).text(), "B draft");
+            assert_eq!(c.staged()[0].name, "b.txt");
+            assert!(c.staged_appshots().is_empty());
+            c.discard_cloud_canvas_keys(&["cloud-canvas:a".into(), "cloud-canvas:b".into()], cx);
+            assert!(c.input.read(cx).text().is_empty());
+            assert!(c.attachments.is_empty());
+            assert!(c.appshots.is_empty());
+            assert!(c.attachment_drafts.is_empty());
+            assert!(c.drafts.is_empty());
+        });
+    }
+    #[gpui::test]
+    fn uncertain_admission_blocks_navigation_without_changing_original_request(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let state = cx.new(|_| crate::state::AppState::new());
+        let composer = cx.new(|cx| Composer::new(state, cx));
+        composer.update(cx,|c,cx|{c.set_cloud_canvas_key(Some("cloud-canvas:pending".into()),cx);c.input.update(cx,|input,cx|input.set_text("Retained draft",cx));let request=serde_json::json!({"idempotencyKey":"same-key","projectId":"original-project","providerId":"e2b","firstMessage":"Original pending task"});c.cloud.request=Some(request.clone());assert!(!c.cloud_canvas_navigation_ready(cx));assert_eq!(c.cloud.request.as_ref(),Some(&request));assert_eq!(c.current_key,"cloud-canvas:pending");assert_eq!(c.input.read(cx).text(),"Retained draft");assert!(c.failure.as_ref().unwrap().contains("original request"));});
+    }
+}

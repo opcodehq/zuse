@@ -89,6 +89,15 @@ impl WorkspaceView {
         projects
     }
     pub(super) fn project_name(&self) -> String {
+        if self.cloud_models_active() {
+            return self
+                .cloud_draft_project()
+                .and_then(|row| row["displayName"].as_str().map(str::to_owned))
+                .unwrap_or_else(|| "Cloud project".into());
+        }
+        if self.cloud.guest || self.cloud.cached {
+            return "Cloud computer".into();
+        }
         let cwd = self.cwd();
         if zuse_protocol::projectless::is_projectless_cwd(Some(&cwd)) {
             return "Local workspace".into();
@@ -246,6 +255,10 @@ impl WorkspaceView {
     }
 
     pub(super) fn add_project(&mut self, cx: &mut Context<Self>) {
+        if self.cloud_controller {
+            self.open_project_setup(cx);
+            return;
+        }
         let path = self.project_input.read(cx).value(cx);
         self.project_error = None;
         if !path.trim().is_empty() {
@@ -274,7 +287,7 @@ impl WorkspaceView {
         if self.settings || !self.input.read(cx).focus_handle(cx).is_focused(window) {
             return false;
         }
-        if !self.connected {
+        if !self.connected && !self.cloud_server_commands() && !self.cloud_models_active() {
             self.error = Some("Reconnect to the engine before uploading files.".into());
             cx.notify();
             return false;
@@ -407,6 +420,9 @@ impl WorkspaceView {
 
 impl WorkspaceView {
     pub(super) fn draft_key(&self) -> String {
+        if let Some(key) = self.cloud_project_draft_key() {
+            return key;
+        }
         self.selected
             .as_ref()
             .and_then(|c| c["id"].as_str())

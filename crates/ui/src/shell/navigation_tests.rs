@@ -646,3 +646,90 @@ fn find_shortcut_searches_the_focused_side_chat(cx: &mut TestAppContext) {
         });
     });
 }
+
+#[gpui::test]
+fn zot_page_is_a_route_that_chats_and_history_can_leave(cx: &mut TestAppContext) {
+    let (shell, cx) = setup(cx);
+    shell.update(cx, |shell, cx| shell.open_new_zot(cx));
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("zot-page").is_some());
+
+    // Opening a chat from the sidebar leaves the form.
+    shell.update(cx, |shell, cx| shell.open_chat("parent".into(), cx));
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("zot-page").is_none());
+    shell.read_with(cx, |shell, _| {
+        assert!(matches!(shell.route, Route::Chat));
+        assert_eq!(shell.nav.current(), &NavEntry::Chat("parent".into()));
+        assert!(shell.nav.can_back());
+    });
+
+    // Back returns to the same draft, Forward to the chat.
+    shell.update(cx, |shell, cx| {
+        shell.navigate_back(cx);
+        assert!(matches!(shell.route, Route::Zot));
+        assert!(shell.creating_zot());
+        shell.navigate_forward(cx);
+        assert!(matches!(shell.route, Route::Chat));
+    });
+}
+
+#[gpui::test]
+fn cancelling_a_zot_page_returns_to_the_conversation(cx: &mut TestAppContext) {
+    let (shell, cx) = setup(cx);
+    shell.update(cx, |shell, cx| {
+        shell.open_chat("parent".into(), cx);
+        shell.open_new_zot(cx);
+        assert!(shell.zot_ui.page.is_some() || matches!(shell.route, Route::Zot));
+    });
+    cx.run_until_parked();
+    shell.update(cx, |shell, cx| {
+        shell.leave_zot_page(cx);
+        assert!(shell.zot_ui.page.is_none());
+        assert!(matches!(shell.route, Route::Chat));
+        assert_eq!(
+            shell.state.read(cx).selected_chat.as_deref(),
+            Some("parent")
+        );
+    });
+}
+
+#[gpui::test]
+fn the_right_pane_toggle_closes_the_zot_panel(cx: &mut TestAppContext) {
+    let (shell, cx) = setup(cx);
+    shell.update(cx, |shell, cx| {
+        let zot = serde_json::from_value(serde_json::json!({
+            "id": "zot", "revision": 1, "status": "active",
+            "coordinatorChatId": "parent", "previousCoordinatorChats": [],
+            "workers": [], "decisions": [],
+            "config": {
+                "name": "Captain", "purpose": "", "homeDeviceId": "d",
+                "repositories": [], "workerDeviceId": "d",
+                "coordinatorModel": { "harness": "codex", "model": null },
+                "maxConcurrentWorkers": 4, "maxFollowups": 3
+            }
+        }))
+        .unwrap();
+        shell.state.update(cx, |state, _| state.zots = vec![zot]);
+        assert!(shell.selected_zot(cx).is_some());
+        assert!(!shell.zot_ui.panel_hidden);
+        shell.toggle_right_pane(cx);
+        assert!(shell.zot_ui.panel_hidden);
+        shell.toggle_right_pane(cx);
+        assert!(!shell.zot_ui.panel_hidden);
+    });
+}
+
+#[gpui::test]
+fn pending_delete_dialog_can_be_dismissed_without_releasing_submission_guard(
+    cx: &mut TestAppContext,
+) {
+    let (shell, cx) = setup(cx);
+    shell.update(cx, |shell, cx| {
+        shell.delete_confirm = Some("parent".into());
+        shell.deleting_chat = true;
+        assert!(shell.capture_escape_surface(cx));
+        assert!(shell.delete_confirm.is_none());
+        assert!(shell.deleting_chat);
+    });
+}

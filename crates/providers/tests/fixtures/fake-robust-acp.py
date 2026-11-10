@@ -28,6 +28,10 @@ for line in sys.stdin:
         emit({"id": pending, "result": {"stopReason": "end_turn"}})
     elif method == "initialize":
         emit({"id": ident, "result": {"protocolVersion": 1, "agentCapabilities": {}}})
+    elif method == "session/load":
+        for index in range(160):
+            update("retired-credential-not-in-current-registry")
+        emit({"id": ident, "result": {"sessionId": "parent"}})
     elif method == "session/new":
         for index in range(40):
             emit({"method": "session/update", "params": {"sessionId": f"foreign-{index}", "update": {

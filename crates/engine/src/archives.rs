@@ -356,6 +356,69 @@ impl Archives {
         }
         Ok(Some(record))
     }
+    /// Forget recovery material only after the checkout has been removed.
+    pub(crate) async fn discard(&self, repo: &Path, checkout: &Path) -> Result<(), EngineError> {
+        if checkout.exists() {
+            return Err(error("Remove the worktree before discarding its archive."));
+        }
+        let record = self.record(checkout)?;
+        let physical = record
+            .as_ref()
+            .map(|record| record.checkout.as_path())
+            .unwrap_or(checkout);
+        if let Some(record) = &record {
+            if std::fs::canonicalize(repo)? != std::fs::canonicalize(&record.repo)? {
+                return Err(error("The archive belongs to another project."));
+            }
+        }
+        let prefix = format!("refs/zuse/archive/{}/", key(physical));
+        let refs = text(repo, &["for-each-ref", "--format=%(refname)", &prefix]).await?;
+        for reference in refs.lines() {
+            if !reference.starts_with(&prefix) {
+                return Err(error("Unexpected archive checkpoint reference."));
+            }
+            text(repo, &["update-ref", "-d", reference]).await?;
+        }
+        let root = self.root.clone();
+        let managed = self.managed.join(format!("{}.json", key(physical)));
+        let physical = physical.to_path_buf();
+        tokio::task::spawn_blocking(move || -> Result<(), EngineError> {
+            let aliases = root.join("aliases");
+            match std::fs::read_dir(&aliases) {
+                Ok(entries) => {
+                    for entry in entries {
+                        let path = entry?.path();
+                        if path.extension() == Some(OsStr::new("json"))
+                            && std::fs::read(&path)
+                                .ok()
+                                .and_then(|bytes| serde_json::from_slice::<PathBuf>(&bytes).ok())
+                                .as_ref()
+                                == Some(&physical)
+                        {
+                            std::fs::remove_file(path)?;
+                        }
+                    }
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => return Err(err.into()),
+            }
+            for result in [
+                std::fs::remove_dir_all(root.join(key(&physical))),
+                std::fs::remove_file(managed),
+            ] {
+                if let Err(err) = result {
+                    if err.kind() != std::io::ErrorKind::NotFound {
+                        return Err(err.into());
+                    }
+                }
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|err| error(err.to_string()))??;
+        self.notify_change();
+        Ok(())
+    }
     async fn save(&self, record: &CheckoutArchive) -> Result<(), EngineError> {
         let record = record.clone();
         let path = self.record_path(&record.checkout);
@@ -1132,6 +1195,186 @@ mod tests {
             "newer edits"
         );
     }
+    #[tokio::test]
+    async fn force_delete_discards_prepared_archive_and_simulator_state() {
+        use serde_json::json;
+        use zuse_rpc::{RpcService, methods};
+        let f = Fixture::new().await;
+        f.edit();
+        let mut record = f.archives.prepare(&f.repo, &f.checkout).await.unwrap();
+        let alias = f._temp.path().join("archive-alias");
+        f.archives.remember_path(&alias, &f.checkout).await.unwrap();
+        std::fs::write(f.checkout.join("tracked.txt"), "changed after preparation").unwrap();
+        assert!(f.archives.remove(&mut record).await.is_err());
+        assert!(f.archives.retained_root(&record).exists());
+        assert!(f.archives.discard(&f.repo, &f.checkout).await.is_err());
+        let mut core = crate::EngineCore::assemble_with_profile(
+            crate::EngineProfile::local(&f.data).unwrap(),
+            std::sync::Arc::new(crate::HarnessRegistry::new()),
+            zuse_protocol::HarnessId::Mock,
+            None,
+        )
+        .unwrap();
+        core.workspace
+            .create_space(
+                "project",
+                &core.device_id,
+                &f.repo.to_string_lossy(),
+                None,
+                true,
+            )
+            .unwrap();
+        core.simulators = zuse_simulator::Simulators::default();
+        let rpc = core.rpc_service();
+        rpc.handle(methods::MUTATE, json!({"op":"createChat","chatId":"prepared","spaceId":"project","cwd":f.checkout,"config":{"harness":"mock","sandbox":"workspace-write"}})).await.unwrap();
+        core.simulators.configure("prepared", true, false).await;
+        assert_eq!(core.simulators.preferences("prepared"), (true, false));
+        rpc.handle(
+            methods::MUTATE,
+            json!({"op":"forceDeleteChat","chatId":"prepared"}),
+        )
+        .await
+        .unwrap();
+        assert!(!f.checkout.exists());
+        assert!(f.archives.record(&f.checkout).unwrap().is_none());
+        assert!(!f.archives.root.join(key(&f.checkout)).exists());
+        assert!(
+            !f.archives
+                .root
+                .join("aliases")
+                .join(format!("{}.json", key(&alias)))
+                .exists()
+        );
+        assert!(
+            text(&f.repo, &["show-ref", "--verify", &record.reference])
+                .await
+                .is_err()
+        );
+        assert_eq!(core.simulators.preferences("prepared"), (false, false));
+        // A missing, already archived checkout keeps its checkpoint until the
+        // last sharing conversation is permanently deleted.
+        let repos = crate::Repos::with_worktrees_root(
+            &f.data,
+            "host",
+            f._temp.path().join("saved-worktrees"),
+        );
+        let saved = PathBuf::from(repos.create_worktree(&f.repo, "HEAD").await.unwrap().path);
+        let mut archived = f.archives.prepare(&f.repo, &saved).await.unwrap();
+        f.archives.remove(&mut archived).await.unwrap();
+        for id in ["saved", "saved-shared"] {
+            rpc.handle(methods::MUTATE, json!({"op":"createChat","chatId":id,"spaceId":"project","cwd":saved,"config":{"harness":"mock","sandbox":"workspace-write"}})).await.unwrap();
+        }
+        rpc.handle(
+            methods::MUTATE,
+            json!({"op":"forceDeleteChat","chatId":"saved"}),
+        )
+        .await
+        .unwrap();
+        assert!(f.archives.record(&saved).unwrap().is_some());
+        rpc.handle(
+            methods::MUTATE,
+            json!({"op":"forceDeleteChat","chatId":"saved-shared"}),
+        )
+        .await
+        .unwrap();
+        assert!(f.archives.record(&saved).unwrap().is_none());
+        core.sessions.shutdown().await;
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn force_delete_rpc_removes_socket_worktree_but_preserves_shared_and_main_folders() {
+        use serde_json::json;
+        use zuse_rpc::{RpcService, methods};
+        let f = Fixture::new().await;
+        f.edit();
+        let _socket = std::os::unix::net::UnixListener::bind(
+            f.checkout.join(".context/appshot-activation.sock"),
+        )
+        .unwrap();
+        let core = crate::EngineCore::assemble_with_profile(
+            crate::EngineProfile::local(&f.data).unwrap(),
+            std::sync::Arc::new(crate::HarnessRegistry::new()),
+            zuse_protocol::HarnessId::Mock,
+            None,
+        )
+        .unwrap();
+        core.workspace
+            .create_space(
+                "project",
+                &core.device_id,
+                &f.repo.to_string_lossy(),
+                None,
+                true,
+            )
+            .unwrap();
+        let rpc = core.rpc_service();
+        for (id, cwd) in [
+            ("first", &f.checkout),
+            ("shared", &f.checkout),
+            ("main", &f.repo),
+        ] {
+            rpc.handle(methods::MUTATE, json!({"op":"createChat","chatId":id,"spaceId":"project","cwd":cwd,"config":{"harness":"mock","sandbox":"workspace-write"}})).await.unwrap();
+        }
+        assert!(
+            rpc.handle(
+                methods::MUTATE,
+                json!({"op":"forceDeleteChat","chatId":"first","targetDeviceId":"wrong-host"})
+            )
+            .await
+            .is_err()
+        );
+        rpc.handle(
+            methods::MUTATE,
+            json!({"op":"forceDeleteChat","chatId":"shared"}),
+        )
+        .await
+        .unwrap();
+        assert!(f.checkout.exists());
+        assert!(core.workspace.chat("first").unwrap().is_some());
+        assert!(core.workspace.chat("shared").unwrap().is_none());
+        let error = rpc
+            .handle(
+                methods::MUTATE,
+                json!({"op":"setChatArchived","chatId":"first","archived":true}),
+            )
+            .await
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains("Cannot preserve special file"));
+        // Deleting a side chat keeps its parent's worktree; deleting the parent
+        // also removes any remaining child conversations.
+        for id in ["side", "agent"] {
+            rpc.handle(methods::MUTATE, json!({"op":"createChat","chatId":id,"spaceId":"project","cwd":f.checkout,"parentChatId":"first","config":{"harness":"mock","sandbox":"workspace-write"}})).await.unwrap();
+        }
+        rpc.handle(
+            methods::MUTATE,
+            json!({"op":"forceDeleteChat","chatId":"side"}),
+        )
+        .await
+        .unwrap();
+        assert!(f.checkout.exists());
+        assert!(core.workspace.chat("side").unwrap().is_none());
+        rpc.handle(
+            methods::MUTATE,
+            json!({"op":"forceDeleteChat","chatId":"first"}),
+        )
+        .await
+        .unwrap();
+        assert!(!f.checkout.exists());
+        assert!(core.workspace.chat("first").unwrap().is_none());
+        assert!(core.workspace.chat("agent").unwrap().is_none());
+        assert!(f.archives.record(&f.checkout).unwrap().is_none());
+        rpc.handle(
+            methods::MUTATE,
+            json!({"op":"forceDeleteChat","chatId":"main"}),
+        )
+        .await
+        .unwrap();
+        assert!(f.repo.join("tracked.txt").exists());
+        assert!(core.workspace.chat("main").unwrap().is_none());
+        core.sessions.shutdown().await;
+    }
+
     #[tokio::test]
     async fn archive_rpc_reclaims_only_after_last_shared_thread_and_restores_before_activation() {
         use serde_json::json;

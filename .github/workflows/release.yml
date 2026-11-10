@@ -36,9 +36,11 @@ jobs:
   verify:
     if: inputs.formats_only != true
     runs-on: ubuntu-24.04
+    timeout-minutes: 130
     outputs:
       version: ${{ steps.version.outputs.version }}
       prerelease: ${{ steps.version.outputs.prerelease }}
+      prebuilt_run_id: ${{ steps.prebuilt.outputs.run_id }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -53,6 +55,7 @@ jobs:
           sparse-checkout: |
             scripts/release_notes.py
             scripts/distribution.py
+            scripts/release_prebuild.py
           sparse-checkout-cone-mode: false
       - id: version
         name: Match the tag to the workspace version and changelog
@@ -71,153 +74,187 @@ jobs:
           python3 release-tools/scripts/release_notes.py "$TAG" > /dev/null
           echo "version=$version" >> "$GITHUB_OUTPUT"
           if [ "$version" != "$base" ]; then echo "prerelease=true" >> "$GITHUB_OUTPUT"; else echo "prerelease=false" >> "$GITHUB_OUTPUT"; fi
+      - id: prebuilt
+        name: Find binaries main already built for this exact commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 release-tools/scripts/release_prebuild.py --commit "$(git rev-parse HEAD)"
 
-  build:
+  web:
     needs: verify
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-24.04
-            platform: linux
-            arch: x86_64
-          - os: macos-latest
-            platform: macos
-            arch: aarch64
-          # Unsigned portable zip; Windows code signing is not set up yet.
-          - os: windows-latest
-            platform: windows
-            arch: x86_64
-    runs-on: ${{ matrix.os }}
-    # Git Bash on Windows, so build-web.sh and the steps below run unchanged.
-    defaults:
-      run:
-        shell: bash
-    env:
+    if: needs.verify.outputs.prebuilt_run_id == ''
+    uses: ./.github/workflows/release-web.yml
+    with:
+      ref: ${{ inputs.tag || github.ref_name }}
+    secrets:
       HUGEICONS_LICENSE_KEY: ${{ secrets.HUGEICONS_LICENSE_KEY }}
-      HUGEICONS_SOLID_VERSION: ${{ vars.HUGEICONS_SOLID_VERSION }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.TAG }}
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - uses: dtolnay/rust-toolchain@stable
-      # The browser client rebuilds std for wasm threads.
-      - uses: dtolnay/rust-toolchain@nightly
-        with:
-          components: rust-src
-          targets: wasm32-unknown-unknown
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: trunk@0.21.14
-      - if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y build-essential cmake clang libclang-dev pkg-config libssl-dev libfontconfig-dev libfreetype-dev libxcb1-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libvulkan-dev libasound2-dev libwebkit2gtk-4.1-dev libjson-glib-dev
-      - run: cargo fetch --locked
-      # Dependency build scripts run on this runner, so it never receives the
-      # signing certificate or Apple credentials.
-      - name: Build
-        run: python scripts/package.py --platform ${{ matrix.platform }} --arch ${{ matrix.arch }} --build-only
-      - name: Package
-        if: runner.os != 'macOS'
-        run: python scripts/package.py --platform ${{ matrix.platform }} --arch ${{ matrix.arch }} --version "${{ needs.verify.outputs.version }}" --skip-build --output dist/release
-      - if: runner.os != 'macOS'
-        uses: actions/upload-artifact@v4
-        with:
-          name: zuse-${{ matrix.platform }}-${{ matrix.arch }}
-          path: dist/release/zuse-*
-          if-no-files-found: error
-      # The macOS build is signed on a fresh runner by the sign-macos job.
-      - if: runner.os == 'macOS'
-        uses: actions/upload-artifact@v4
-        with:
-          name: unsigned-${{ matrix.platform }}-${{ matrix.arch }}
-          path: |
-            target/release/zuse
-            target/release/zuse-server
-            target/release/zuse-relay
-            dist/web
-          if-no-files-found: error
-          retention-days: 1
 
-  # Signs on a runner that has never run dependency build code, so nothing a
-  # build script left behind can use the identity or read the credentials.
-  sign-macos:
-    needs: [verify, build]
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.TAG }}
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - uses: actions/download-artifact@v4
-        with:
-          name: unsigned-macos-aarch64
-      # Downloads the pinned toolkit for its licence files; runs no dependency code.
-      - run: cargo fetch --locked
-      # Tagged releases must be signed; local packaging can still be unsigned.
-      - name: Load the macOS signing certificate
-        env:
-          CSC_LINK: ${{ secrets.CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-        run: |
-          if [ -z "$CSC_LINK" ]; then
-            echo "::error::CSC_LINK is required for macOS releases"
-            exit 1
-          fi
-          keychain="$RUNNER_TEMP/zuse-signing.keychain-db"
-          keychain_password=$(uuidgen)
-          echo "$CSC_LINK" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
-          security create-keychain -p "$keychain_password" "$keychain"
-          security set-keychain-settings -lut 21600 "$keychain"
-          security unlock-keychain -p "$keychain_password" "$keychain"
-          security import "$RUNNER_TEMP/certificate.p12" -k "$keychain" -P "$CSC_KEY_PASSWORD" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain" >/dev/null
-          keychains=()
-          while IFS= read -r line; do
-            line="${line#"${line%%[![:space:]]*}"}"; line="${line#\"}"; line="${line%\"}"
-            [ -n "$line" ] && keychains+=("$line")
-          done < <(security list-keychains -d user)
-          security list-keychains -d user -s "$keychain" "${keychains[@]}"
-          rm "$RUNNER_TEMP/certificate.p12"
-          identity=$(security find-identity -v -p codesigning "$keychain" | grep -o '"Developer ID Application: [^"]*"' | head -1 | tr -d '"')
-          if [ -z "$identity" ]; then
-            echo "::error::The certificate in CSC_LINK has no Developer ID Application identity"
-            exit 1
-          fi
-          echo "ZUSE_MACOS_SIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
-          echo "ZUSE_MACOS_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
-      - name: Package, sign and notarize
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          : "${APPLE_ID:?Set the APPLE_ID repository secret for notarization}"
-          : "${APPLE_APP_SPECIFIC_PASSWORD:?Set the APPLE_APP_SPECIFIC_PASSWORD repository secret}"
-          : "${APPLE_TEAM_ID:?Set the APPLE_TEAM_ID repository secret}"
-          python scripts/package.py --platform macos --arch aarch64 --version "${{ needs.verify.outputs.version }}" --skip-build --output dist/release
-      # Runs even when setup failed part-way, before the keychain was exported.
-      - name: Remove the signing credentials
-        if: always()
-        run: |
-          rm -f "$RUNNER_TEMP/certificate.p12"
-          keychain="$RUNNER_TEMP/zuse-signing.keychain-db"
-          if [ -e "$keychain" ]; then security delete-keychain "$keychain"; fi
-      - uses: actions/upload-artifact@v4
-        with:
-          name: zuse-macos-aarch64
-          path: dist/release/*.tar.gz
-          if-no-files-found: error
+  build-linux-x64:
+    needs: verify
+    if: needs.verify.outputs.prebuilt_run_id == ''
+    uses: ./.github/workflows/native-compile.yml
+    with:
+      ref: ${{ inputs.tag || github.ref_name }}
+      os: ubuntu-24.04
+      platform: linux
+      arch: x86_64
+      target: x86_64-unknown-linux-gnu
+    secrets:
+      HUGEICONS_LICENSE_KEY: ${{ secrets.HUGEICONS_LICENSE_KEY }}
 
+  package-linux-x64:
+    needs: [verify, web, build-linux-x64]
+    if: >-
+      ${{ !cancelled() && needs.verify.result == 'success' &&
+        (needs.verify.outputs.prebuilt_run_id != '' ||
+        (needs.web.result == 'success' && needs.build-linux-x64.result == 'success')) }}
+    uses: ./.github/workflows/native-package.yml
+    with:
+      ref: ${{ inputs.tag || github.ref_name }}
+      os: ubuntu-24.04
+      platform: linux
+      arch: x86_64
+      version: ${{ needs.verify.outputs.version }}
+      artifact_run_id: ${{ needs.verify.outputs.prebuilt_run_id || github.run_id }}
+
+  build-linux-arm64:
+    needs: verify
+    if: needs.verify.outputs.prebuilt_run_id == ''
+    uses: ./.github/workflows/native-compile.yml
+    with:
+      ref: ${{ inputs.tag || github.ref_name }}
+      os: ubuntu-24.04-arm
+      platform: linux
+      arch: aarch64
+      target: aarch64-unknown-linux-gnu
+    secrets:
+      HUGEICONS_LICENSE_KEY: ${{ secrets.HUGEICONS_LICENSE_KEY }}
+
+  package-linux-arm64:
+    needs: [verify, web, build-linux-arm64]
+    if: >-
+      ${{ !cancelled() && needs.verify.result == 'success' &&
+        (needs.verify.outputs.prebuilt_run_id != '' ||
+        (needs.web.result == 'success' && needs.build-linux-arm64.result == 'success')) }}
+    uses: ./.github/workflows/native-package.yml
+    with:
+      ref: ${{ inputs.tag || github.ref_name }}
+      os: ubuntu-24.04-arm
+      platform: linux
+      arch: aarch64
+      version: ${{ needs.verify.outputs.version }}
+      artifact_run_id: ${{ needs.verify.outputs.prebuilt_run_id || github.run_id }}
+
+  build-macos-arm64:
+    needs: verify
+    if: needs.verify.outputs.prebuilt_run_id == ''
+    uses: ./.github/workflows/native-compile.yml
+    with:
+      ref: ${{ inputs.tag || github.ref_name }}
+      os: macos-latest
+      platform: macos
+      arch: aarch64
+      target: aarch64-apple-darwin
+    secrets:
+      HUGEICONS_LICENSE_KEY: ${{ secrets.HUGEICONS_LICENSE_KEY }}
+
+  package-macos-arm64:
+    needs: [verify, web, build-macos-arm64]
+    if: >-
+      ${{ !cancelled() && needs.verify.result == 'success' &&
+        (needs.verify.outputs.prebuilt_run_id != '' ||
+        (needs.web.result == 'success' && needs.build-macos-arm64.result == 'success')) }}
+    uses: ./.github/workflows/native-package.yml
+    with:
+      ref: ${{ inputs.tag || github.ref_name }}
+      os: macos-latest
+      platform: macos
+      arch: aarch64
+      version: ${{ needs.verify.outputs.version }}
+      artifact_run_id: ${{ needs.verify.outputs.prebuilt_run_id || github.run_id }}
+    secrets:
+      CSC_LINK: ${{ secrets.CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+  build-macos-x64:
+    needs: verify
+    if: needs.verify.outputs.prebuilt_run_id == ''
+    uses: ./.github/workflows/native-compile.yml
+    with:
+      ref: ${{ inputs.tag || github.ref_name }}
+      os: macos-latest
+      platform: macos
+      arch: x86_64
+      target: x86_64-apple-darwin
+    secrets:
+      HUGEICONS_LICENSE_KEY: ${{ secrets.HUGEICONS_LICENSE_KEY }}
+
+  package-macos-x64:
+    needs: [verify, web, build-macos-x64]
+    if: >-
+      ${{ !cancelled() && needs.verify.result == 'success' &&
+        (needs.verify.outputs.prebuilt_run_id != '' ||
+        (needs.web.result == 'success' && needs.build-macos-x64.result == 'success')) }}
+    uses: ./.github/workflows/native-package.yml
+    with:
+      ref: ${{ inputs.tag || github.ref_name }}
+      os: macos-15-intel
+      platform: macos
+      arch: x86_64
+      version: ${{ needs.verify.outputs.version }}
+      artifact_run_id: ${{ needs.verify.outputs.prebuilt_run_id || github.run_id }}
+    secrets:
+      CSC_LINK: ${{ secrets.CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+  build-windows-x64:
+    needs: verify
+    if: needs.verify.outputs.prebuilt_run_id == ''
+    uses: ./.github/workflows/native-compile.yml
+    with:
+      ref: ${{ inputs.tag || github.ref_name }}
+      os: windows-latest
+      platform: windows
+      arch: x86_64
+      target: x86_64-pc-windows-msvc
+    secrets:
+      HUGEICONS_LICENSE_KEY: ${{ secrets.HUGEICONS_LICENSE_KEY }}
+
+  package-windows-x64:
+    needs: [verify, web, build-windows-x64]
+    if: >-
+      ${{ !cancelled() && needs.verify.result == 'success' &&
+        (needs.verify.outputs.prebuilt_run_id != '' ||
+        (needs.web.result == 'success' && needs.build-windows-x64.result == 'success')) }}
+    uses: ./.github/workflows/native-package.yml
+    with:
+      ref: ${{ inputs.tag || github.ref_name }}
+      os: windows-latest
+      platform: windows
+      arch: x86_64
+      version: ${{ needs.verify.outputs.version }}
+      artifact_run_id: ${{ needs.verify.outputs.prebuilt_run_id || github.run_id }}
+
+  # Runs only once every archive and installer exists, so a release is never
+  # visible with some formats missing.
   publish:
-    needs: [verify, build, sign-macos]
+    needs: [verify, package-linux-x64, package-linux-arm64, package-macos-arm64, package-macos-x64, package-windows-x64, distributions]
+    # Build jobs are intentionally skipped when reusing prebuilt inputs.
+    if: >-
+      ${{ !cancelled() && needs.verify.result == 'success' &&
+        needs.package-linux-x64.result == 'success' &&
+        needs.package-linux-arm64.result == 'success' &&
+        needs.package-macos-arm64.result == 'success' &&
+        needs.package-macos-x64.result == 'success' &&
+        needs.package-windows-x64.result == 'success' &&
+        needs.distributions.result == 'success' }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -231,20 +268,31 @@ jobs:
           sparse-checkout: |
             scripts/release_notes.py
             scripts/distribution.py
+            scripts/distribution-notes.py
+            scripts/publish_distributions.py
+            scripts/install.sh
           sparse-checkout-cone-mode: false
       - uses: actions/download-artifact@v4
         with:
           pattern: zuse-*
           path: dist/release
           merge-multiple: true
-      - name: Checksums and notes
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: distribution-output-*
+          path: dist/release
+          merge-multiple: true
+      - name: Require every format, then write checksums and notes
         run: |
+          cp release-tools/scripts/install.sh dist/release/install.sh
+          python3 release-tools/scripts/publish_distributions.py --check-only "$TAG" dist/release
           cd dist/release
-          sha256sum zuse-* > SHA256SUMS
+          sha256sum zuse-* install.sh > SHA256SUMS
           cat SHA256SUMS
           cd ../..
-          python3 release-tools/scripts/release_notes.py "$TAG" > dist/notes.md
-          test -s dist/notes.md
+          python3 release-tools/scripts/release_notes.py "$TAG" > dist/changelog.md
+          test -s dist/changelog.md
+          python3 release-tools/scripts/distribution-notes.py "$TAG" dist/changelog.md > dist/notes.md
       - name: Publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -261,10 +309,11 @@ jobs:
           fi
 
   distributions:
-    needs: publish
-    if: ${{ !cancelled() && (needs.publish.result == 'success' || inputs.formats_only == true) }}
+    needs: [package-linux-x64, package-linux-arm64, package-macos-arm64, package-macos-x64, package-windows-x64]
+    if: ${{ !cancelled() && (inputs.formats_only == true || (needs.package-linux-x64.result == 'success' && needs.package-linux-arm64.result == 'success' && needs.package-macos-arm64.result == 'success' && needs.package-macos-x64.result == 'success' && needs.package-windows-x64.result == 'success')) }}
     uses: ./.github/workflows/distributions.yml
     with:
       tag: ${{ inputs.tag || github.ref_name }}
-      archive_run_id: ${{ inputs.archive_run_id || '' }}
+      archive_run_id: ${{ inputs.formats_only == true && inputs.archive_run_id || '' }}
+      staged: ${{ inputs.formats_only != true }}
     secrets: inherit

@@ -98,6 +98,10 @@ impl Host for Fixture {
     }
     async fn model(&self, input: ModelInput) -> Result<ModelOutput, Error> {
         lock(&self.models).push((input.model.clone(), input.reasoning.clone()));
+        if self.mode.load(Ordering::Relaxed) == 14 {
+            (input.thinking)("Visible reasoning".into());
+            (input.text)("Answer".into());
+        }
         if self.mode.load(Ordering::Relaxed) == 4 && input.tools.is_empty() {
             return Ok(output(
                 "Preserve the original request and unfinished work.",
@@ -137,6 +141,34 @@ async fn engine(f: Arc<Fixture>) -> Engine {
     Engine::open("root", Options::new("model"), f)
         .await
         .unwrap()
+}
+
+#[tokio::test]
+async fn thinking_and_answer_events_share_the_assistant_segment() {
+    let fixture = Fixture::new(vec![output("Answer", vec![])]);
+    fixture.mode.store(14, Ordering::Relaxed);
+    let engine = engine(fixture.clone()).await;
+    engine.send("Task".into(), vec![]).await.unwrap();
+    let events = lock(&fixture.events);
+    let thinking = events
+        .iter()
+        .find_map(|event| match event {
+            Event::Thinking {
+                agent_id,
+                item_id,
+                text,
+            } => {
+                assert_eq!(agent_id, "root");
+                assert_eq!(text, "Visible reasoning");
+                Some(item_id)
+            }
+            _ => None,
+        })
+        .expect("thinking must be forwarded");
+    assert!(events.iter().any(|event| matches!(event, Event::Text { item_id, text, .. } if item_id == thinking && text == "Answer")));
+    assert!(events.iter().any(
+        |event| matches!(event, Event::ModelCompleted { item_id, .. } if item_id == thinking)
+    ));
 }
 
 #[tokio::test]

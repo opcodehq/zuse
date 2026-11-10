@@ -61,6 +61,8 @@ enum Action {
 }
 pub struct UsageDashboard {
     properties: Properties,
+    /// Inside Settings: the page supplies the title, so the bar is omitted.
+    embedded: bool,
     visible: bool,
     project_scope: bool,
     period: i64,
@@ -119,6 +121,7 @@ impl UsageDashboard {
             cx.notify();
         });
         Self {
+            embedded: false,
             properties: Properties {
                 available: false,
                 owner: String::new(),
@@ -161,6 +164,12 @@ impl UsageDashboard {
             focus: Default::default(),
             root_focus: cx.focus_handle(),
             _query: observe,
+        }
+    }
+    pub fn set_embedded(&mut self, embedded: bool, cx: &mut Context<Self>) {
+        if self.embedded != embedded {
+            self.embedded = embedded;
+            cx.notify();
         }
     }
     pub fn set_properties(&mut self, properties: Properties, cx: &mut Context<Self>) {

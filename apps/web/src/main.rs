@@ -17,6 +17,8 @@ mod drafts;
 #[cfg(target_family = "wasm")]
 mod environment;
 #[cfg(target_family = "wasm")]
+mod history_cache;
+#[cfg(target_family = "wasm")]
 mod socket;
 #[cfg(target_family = "wasm")]
 mod voice_media;

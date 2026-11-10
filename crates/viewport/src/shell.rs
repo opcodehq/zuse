@@ -309,9 +309,10 @@ impl WorkspaceView {
                 self.selected.is_none() && !self.cloud.guest && !starting,
                 |view| view.child(self.cloud_toolbar(cx)),
             )
-            .when(!self.queue.is_empty(), |view| {
-                view.child(self.queue_view(cx))
-            })
+            .when(
+                !self.queue.is_empty() || (self.queue_paused && self.cloud_server_commands()),
+                |view| view.child(self.queue_view(cx)),
+            )
             .when(self.queue_edit.is_some(), |view| {
                 view.child(self.queue_edit_bar(cx))
             })
@@ -607,12 +608,96 @@ impl WorkspaceView {
             .into_any_element()
     }
 
+    /// Earlier history above the first message, from the host or a cloud
+    /// snapshot: `Some(loading)` while there is more to fetch.
+    fn history_paging(&self) -> Option<bool> {
+        if self.transcript_state.has_more {
+            Some(self.transcript_state.loading_earlier)
+        } else {
+            self.cloud.older_before.map(|_| self.cloud.older_loading)
+        }
+    }
+
+    pub(super) fn load_older_history(&mut self, cx: &mut Context<Self>) {
+        if self.transcript_state.has_more {
+            self.load_earlier_messages(cx);
+        } else if self.cloud.older_before.is_some() && !self.cloud.older_loading {
+            self.cloud.older_loading = true;
+            let _ = self
+                .requests
+                .unbounded_send(json!({"ui":"cloudHistoryOlder"}));
+            cx.notify();
+        }
+    }
+
+    fn auto_load_older_history(&mut self, cx: &mut Context<Self>) {
+        let first = self.messages.first().map(|entry| entry.id.clone());
+        if self.history_paging() != Some(false)
+            || first.is_none()
+            || first == self.history_auto_from
+        {
+            return;
+        }
+        self.history_auto_from = first;
+        self.load_older_history(cx);
+    }
+
+    /// The strip above the first message while older history exists. Drawn
+    /// within a screen of the top, it fetches the next page by itself; a
+    /// click is needed only when the previous page added nothing.
+    fn history_loader(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let loading = self.history_paging()?;
+        let stalled =
+            self.messages.first().map(|entry| &entry.id) == self.history_auto_from.as_ref();
+        let strip = row()
+            .id("load-earlier-messages")
+            .relative()
+            .w_full()
+            .h(px(36.))
+            .justify_center()
+            .gap_2()
+            .text_size(px(12.))
+            .text_color(rgb(FAINT));
+        if loading || !stalled {
+            let scroll = self.transcript_scroll.clone();
+            let view = cx.entity().downgrade();
+            let near_top = gpui::canvas(
+                move |bounds, _, cx| {
+                    if bounds.bottom() > scroll.bounds().top() - px(320.) {
+                        cx.defer(move |cx| {
+                            let _ = view.update(cx, |this, cx| this.auto_load_older_history(cx));
+                        });
+                    }
+                },
+                |_, _, _, _| (),
+            )
+            .absolute()
+            .size_0();
+            return Some(
+                strip
+                    .child(crate::acp_catalog::spinner("history-loader-spinner", 12.))
+                    .child(tr(cx, msg::chat::cloud_history_loading))
+                    .child(near_top)
+                    .into_any_element(),
+            );
+        }
+        Some(
+            strip
+                .cursor_pointer()
+                .hover(|style| style.text_color(rgb(TEXT)))
+                .child(tr(cx, msg::chat::cloud_history_load_earlier))
+                .on_click(cx.listener(|this, _, _, cx| this.load_older_history(cx)))
+                .into_any_element(),
+        )
+    }
+
     pub(super) fn transcript(&self, cx: &mut Context<Self>) -> AnyElement {
         let archived = self
             .selected
             .as_ref()
             .is_some_and(|chat| chat["archived"] == true);
         if !self.messages.is_empty()
+            && self.history_growth.is_none()
             && self.transcript_scroll.max_offset().y + self.transcript_scroll.offset().y <= px(24.)
         {
             self.transcript_scroll.scroll_to_bottom();
@@ -627,6 +712,29 @@ impl WorkspaceView {
             .pt_6()
             .pb_8()
             .gap_8()
+            .children(self.history_loader(cx))
+            .children(self.history_growth.map(|(height, offset)| {
+                // Older host history landed above the reader: once it is laid
+                // out, hold the same distance from the bottom, as cloud pages do.
+                let scroll = self.transcript_scroll.clone();
+                let view = cx.entity().downgrade();
+                gpui::canvas(
+                    move |_, window, _| {
+                        window.on_next_frame(move |_, cx| {
+                            let _ = view.update(cx, |this, cx| {
+                                if this.history_growth.take().is_some() {
+                                    let grown = scroll.max_offset().y - height;
+                                    scroll.set_offset(gpui::point(offset.x, offset.y - grown));
+                                    cx.notify();
+                                }
+                            });
+                        });
+                    },
+                    |_, _, _, _| (),
+                )
+                .absolute()
+                .size_0()
+            }))
             .when(self.messages.is_empty() && archived, |d| {
                 d.child(column().flex_1().justify_center().items_center().gap_3()
                     .child(icon("archive-minimalistic").size(px(24.)).text_color(rgb(MUTED)))
@@ -636,7 +744,7 @@ impl WorkspaceView {
                 let title = self.creation_project_name().map(|name|tr(cx, |l10n| msg::native::what_build_in(l10n, name))).unwrap_or_else(||tr(cx,msg::native::what_build_today));
                 d.px(px(if self.viewport_width <= 800. { 16. } else { 24. })).pt(px(32.)).child(column().flex_1().justify_center().items_center().w_full().max_w(px(768.)).self_center().gap_2()
                     .child(div().relative().top(px(3.)).text_size(px(24.)).line_height(px(32.)).font_weight(FontWeight::MEDIUM).child(title))
-                    .when(self.project.is_some() || self.cloud.mode, |view| view.child(control("welcome-without-project", tr(cx, msg::chat::start_without_project))
+                    .when(!self.cloud_controller && (self.project.is_some() || self.cloud.mode), |view| view.child(control("welcome-without-project", tr(cx, msg::chat::start_without_project))
                         .text_color(rgb(MUTED)).text_size(px(12.))
                         .on_click(cx.listener(|this, _, _, cx| { this.project = None; this.set_creation_destination(false, cx); cx.notify(); })))))
             })
@@ -644,7 +752,7 @@ impl WorkspaceView {
                 let message = serde_json::to_value(entry).unwrap_or(Value::Null);
                 let user = message["role"] == "user";
                 column()
-                    .id(("message", i))
+                    .id(SharedString::from(format!("message-{}",entry.id)))
                     .group("message")
                     .relative()
                     .w_full().max_w(px(796.)).self_center()
@@ -740,7 +848,7 @@ impl WorkspaceView {
                             }),
                     )
                     .child(row().absolute().left_0().right_0().bottom(px(-25.)).h(px(22.)).when(user,|d|d.justify_end()).child(
-                        icon_button(("copy-message",i),"copy",crate::localization::text("chat-assistant_message_actions_copy_message", cx))
+                        icon_button(SharedString::from(format!("copy-message-{}",entry.id)),"copy",crate::localization::text("chat-assistant_message_actions_copy_message", cx))
                             .opacity(0.).group_hover("message",|d|d.opacity(1.))
                             .on_click({let text=entry.parts.iter().filter_map(|p|serde_json::to_value(p).ok()).filter_map(|p|p["text"].as_str().map(str::to_owned)).collect::<Vec<_>>().join("\n");move|_,_,cx|cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))})
                     ))
@@ -1142,7 +1250,7 @@ impl Render for WorkspaceView {
                 .child(self.transcript(cx))
                 .into_any_element();
         }
-        if self.cloud.target.is_some() && !self.cloud_startup_pending() {
+        if self.cloud.target.is_some() && !self.settings {
             return self.cloud_workspace(window, cx);
         }
         if self.connected
@@ -1187,7 +1295,10 @@ impl Render for WorkspaceView {
             panel.set_target(target, cx);
         });
 
-        let panel_width = if !self.right_open || self.settings || self.project_picker {
+        let panel_width = if self.selected_zot().is_some() && !self.settings && !self.project_picker
+        {
+            320.
+        } else if !self.right_open || self.settings || self.project_picker {
             0.
         } else if self.right_tab == "browser" {
             (f32::from(window.viewport_size().width)
@@ -1437,8 +1548,13 @@ impl Render for WorkspaceView {
                     && !self.settings
                     && !self.project_picker
                     && self.project_archive.project.is_none()
-                    && !self.usage_open,
+                    && !self.usage_open
+                    && self.selected_zot().is_none(),
                 |d| d.child(self.workspace_panel(panel_width, cx)),
+            )
+            .when(
+                self.selected_zot().is_some() && !self.settings && !self.project_picker,
+                |d| d.child(self.zot_panel(cx)),
             )
             .when(self.preview_open.is_some() && !self.settings, |d| {
                 d.child(self.preview_overlay(window, cx))
@@ -1447,6 +1563,7 @@ impl Render for WorkspaceView {
             .when(self.thread_dialog.is_some(), |d| {
                 d.child(self.thread_dialog_view(cx))
             })
+            .when(self.zots.form.is_some(), |d| d.child(self.zot_form(cx)))
             .into_any_element()
     }
 }

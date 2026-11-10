@@ -85,6 +85,19 @@ fn folder_name(path: &str) -> &str {
 
 impl WorkspaceView {
     pub(super) fn open_project_setup(&mut self, cx: &mut Context<Self>) {
+        // A cloud controller has no host folders; projects come from Cloud settings.
+        if self.cloud_controller {
+            self.project_picker = false;
+            self.settings = true;
+            let section = if self.cloud.account.is_some() {
+                crate::settings_view::Section::Cloud
+            } else {
+                crate::settings_view::Section::General
+            };
+            self.select_settings_section(section, cx);
+            cx.notify();
+            return;
+        }
         if !self.project_setup.busy() {
             self.project_setup.mode = SetupMode::Choose;
             self.project_error = None;

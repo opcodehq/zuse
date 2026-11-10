@@ -4,6 +4,7 @@ use crate::localization::message as tr;
 use crate::shell::{column, control, label, row};
 use zuse_i18n::messages as msg;
 use zuse_protocol::browser_link::InterruptedRequest;
+const HOSTED_CONTROLLER_BUSY: &str = "Zuse is busy. Close an unused browser tab and retry shortly.";
 
 impl WorkspaceView {
     pub(super) fn require_connection(&mut self, cx: &mut Context<Self>) -> bool {
@@ -26,7 +27,32 @@ impl WorkspaceView {
         }
     }
     pub(super) fn receive_connection(&mut self, frame: &Value, cx: &mut Context<Self>) {
+        if frame["controllerBusy"] == true {
+            self.error = Some(HOSTED_CONTROLLER_BUSY.into());
+        }
+        if frame["hostedSessionRevoked"] == true {
+            // A new anonymous cloud controller cannot inherit the previous
+            // actor's protected history, drafts, or public controller identity.
+            self.receive_cloud(&json!({"cacheRevoked":true}), cx);
+            self.cloud = Default::default();
+            self.cloud.mode = self.cloud_controller;
+            self.cloud_account = Value::Null;
+            self.drafts.clear();
+            self.device_id = None;
+            self.attachments.clear();
+            self.send_draft.clear();
+            self.uncertain_drafts.clear();
+            self.input
+                .update(cx, |input, cx| input.set_value(String::new(), cx));
+            self.error = Some("Sign in to Zuse to continue.".into());
+            let _ = self
+                .requests
+                .unbounded_send(json!({"ui":"hostedSessionRevoked"}));
+        }
         if frame["connection"] == "connected" {
+            if self.error.as_deref() == Some(HOSTED_CONTROLLER_BUSY) {
+                self.error = None;
+            }
             self.connection_epoch = frame["epoch"].as_u64().unwrap_or(0);
             self.connected = false;
             self.reset_browser(cx);
@@ -113,11 +139,18 @@ impl WorkspaceView {
             self.provider_error=Some("Connection interrupted. Refresh provider status and check linked accounts before trying the action again.".into());
             self.provider_actions.clear();
         }
+        if let Some((_, chat)) = self.queue_pause_request.take() {
+            self.queue_unconfirmed.insert(chat);
+        }
+        if let Some((_, chat, _)) = self.unknown_review_request.take() {
+            self.queue_unconfirmed.insert(chat);
+        }
         for (_, action) in self.queue_actions.drain() {
             self.queue_unconfirmed.insert(action.chat);
         }
         self.interrupt_cloud_archive();
         self.interrupt_ui_block_replies(cx);
+        self.interrupt_cloud_transport(cx);
         self.pending.clear();
         self.stop_transcript();
         // This card is read-only: keep it usable while retrying the same host.
@@ -169,6 +202,20 @@ impl WorkspaceView {
             self.status = "Engine identity unavailable".into();
             return;
         };
+        let cloud_controller = value["capabilities"]
+            .as_array()
+            .is_some_and(|caps| caps.iter().any(|v| v == "cloud-controller-v1"));
+        if self
+            .device_id
+            .as_deref()
+            .is_some_and(|previous| previous != device)
+            && cloud_controller
+        {
+            self.receive_connection(
+                &json!({"connection":"authRequired","hostedSessionRevoked":true}),
+                cx,
+            );
+        }
         if self
             .device_id
             .as_deref()
@@ -182,6 +229,10 @@ impl WorkspaceView {
             self.disconnect_browser_voice(cx);
             return;
         }
+        self.cloud_controller = cloud_controller;
+        if cloud_controller {
+            self.cloud.mode = true;
+        }
         let first_identity = self.device_id.is_none();
         self.device_id = Some(device.into());
         if first_identity {
@@ -192,6 +243,8 @@ impl WorkspaceView {
         self.connected = true;
         self.status = if self.cloud.guest {
             "Cloud workspace connected"
+        } else if cloud_controller {
+            "Connected to Zuse"
         } else if self.account_remote {
             "Account computer connected"
         } else if self.paired {
@@ -200,6 +253,9 @@ impl WorkspaceView {
             "Local engine connected"
         }
         .into();
+        self.zots.watches.clear();
+        self.watch_zot_home(device.to_owned());
+        self.call(methods::ENGINE_INFO, json!({}));
         for method in [
             methods::AUTH_STATUS,
             methods::CLOUD_ACCOUNT_STATUS,
@@ -210,7 +266,14 @@ impl WorkspaceView {
             methods::WATCH_DEVICES,
             methods::LIST_REPOS,
         ] {
-            self.call(method, json!({}));
+            self.call(
+                method,
+                if matches!(method, methods::WATCH_CHATS | methods::WATCH_SESSIONS) {
+                    json!({"delta":true})
+                } else {
+                    json!({})
+                },
+            );
         }
         self.prefetch_model_catalogs();
         self.refresh_model_config_watch();
@@ -256,6 +319,7 @@ impl WorkspaceView {
             ));
         }
         self.sync_previews(true, cx);
+        self.restore_cloud_transport();
     }
     pub(super) fn receive_file_reconcile(
         &mut self,
@@ -470,5 +534,135 @@ impl WorkspaceView {
             );
         }
         view.into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod hosted_session_tests {
+    use super::*;
+    use std::prelude::v1::test;
+
+    #[gpui::test]
+    fn hosted_session_replacement_revokes_actor_state_but_transport_retry_preserves_it(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(initialize);
+        let (requests, mut outgoing) = futures::channel::mpsc::unbounded();
+        let (_events, events) = futures::channel::mpsc::unbounded();
+        let window = cx.add_window(|window, cx| {
+            WorkspaceView::new(Transport { requests, events }, window, cx)
+        });
+        window
+            .update(cx, |view, _, cx| {
+                view.connected = true;
+                view.device_id = Some("old-cloud-controller".into());
+                view.cloud.account = Some("previous-actor".into());
+                view.cloud.target = Some(json!({"workspaceId":"protected-workspace"}));
+                view.cloud.projects = vec![json!({"projectId":"private-project"})];
+                view.attachments = vec![json!({"path":"private-attachment"})];
+                view.input.update(cx, |input, cx| {
+                    input.set_value("Private unsent draft".into(), cx)
+                });
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |view, _, cx| {
+                assert_eq!(view.input.read(cx).value(cx), "Private unsent draft");
+                view.receive_connection(&json!({"connection":"retrying","interrupted":[]}), cx);
+                assert_eq!(view.cloud.account.as_deref(), Some("previous-actor"));
+                assert!(view.cloud.target.is_some());
+                assert_eq!(view.attachments.len(), 1);
+                assert_eq!(view.input.read(cx).value(cx), "Private unsent draft");
+                view.receive_connection(
+                    &json!({"connection":"retrying","controllerBusy":true}),
+                    cx,
+                );
+                assert_eq!(view.error.as_deref(), Some(HOSTED_CONTROLLER_BUSY));
+                assert_eq!(view.cloud.account.as_deref(), Some("previous-actor"));
+                assert_eq!(view.input.read(cx).value(cx), "Private unsent draft");
+                while outgoing.try_recv().is_ok() {}
+                view.receive_connection(
+                    &json!({"connection":"authRequired","hostedSessionRevoked":true}),
+                    cx,
+                );
+                assert!(view.device_id.is_none());
+                assert!(view.cloud.account.is_none());
+                assert!(view.cloud.target.is_none());
+                assert!(view.cloud.projects.is_empty());
+                assert!(view.attachments.is_empty());
+                assert!(view.send_draft.is_empty());
+                assert!(view.uncertain_drafts.is_empty());
+                while let Ok(frame) = outgoing.try_recv() {
+                    if let Some(method) = frame["method"].as_str() {
+                        assert!(
+                            methods::retryable_read(method, &frame["params"]),
+                            "session replacement must not replay a mutation"
+                        );
+                    }
+                }
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |view, _, cx| {
+                assert!(view.input.read(cx).value(cx).is_empty());
+            })
+            .unwrap();
+    }
+    #[gpui::test]
+    fn hosted_controller_uuid_change_revokes_peer_tab_but_native_identity_change_preserves_draft(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(initialize);
+        for hosted in [false, true] {
+            let (requests, mut outgoing) = futures::channel::mpsc::unbounded();
+            let (_events, events) = futures::channel::mpsc::unbounded();
+            let window = cx.add_window(|window, cx| {
+                WorkspaceView::new(Transport { requests, events }, window, cx)
+            });
+            window
+                .update(cx, |view, _, cx| {
+                    view.device_id = Some("00000000-0000-4000-8000-000000000001".into());
+                    view.cloud.account = Some("previous-actor".into());
+                    view.cloud.target = Some(json!({"workspaceId":"protected-workspace"}));
+                    view.input
+                        .update(cx, |input, cx| input.set_value("Private draft".into(), cx));
+                })
+                .unwrap();
+            cx.run_until_parked();
+            window.update(cx,|view,_,cx|{
+                assert_eq!(view.input.read(cx).value(cx),"Private draft");while outgoing.try_recv().is_ok(){}
+                view.verify_engine(&json!({"deviceId":"00000000-0000-4000-8000-000000000002","capabilities":if hosted{vec!["cloud-controller-v1"]}else{vec![]}}),cx);
+                if hosted {
+                    assert!(view.cloud.account.is_none());assert!(view.cloud.target.is_none());
+                    assert_eq!(view.device_id.as_deref(),Some("00000000-0000-4000-8000-000000000002"));
+                    assert_eq!(view.status,"Connected to Zuse");
+                    let mut revoked=false;
+                    while let Ok(frame)=outgoing.try_recv(){
+                        revoked |= frame["ui"]=="hostedSessionRevoked";
+                        if let Some(method)=frame["method"].as_str(){
+                            // Retry classification is deliberately more conservative
+                            // than read-only startup metadata (e.g. WatchDevices).
+                            let bootstrap = matches!(method,methods::WATCH_DEVICES|methods::WATCH_HARNESS_UPDATES|methods::LIST_PAIRINGS|methods::BROWSER_ACCESS_STATUS|methods::RELAY_ACCESS_STATUS|methods::GET_TITLE_SETTINGS|methods::GET_WORKTREE_SETTINGS|methods::PLUGINS);
+                            assert!(methods::retryable_read(method,&frame["params"])||bootstrap,"unexpected startup RPC: {method}");
+                        }
+                    }
+                    assert!(revoked,"peer cookie replacement must revoke IndexedDB authority too");
+                }else{
+                    assert_eq!(view.cloud.account.as_deref(),Some("previous-actor"));assert!(view.cloud.target.is_some());
+                    assert_eq!(view.device_id.as_deref(),Some("00000000-0000-4000-8000-000000000001"));
+                }
+            }).unwrap();
+            cx.run_until_parked();
+            window
+                .update(cx, |view, _, cx| {
+                    assert_eq!(
+                        view.input.read(cx).value(cx),
+                        if hosted { "" } else { "Private draft" }
+                    )
+                })
+                .unwrap();
+        }
     }
 }

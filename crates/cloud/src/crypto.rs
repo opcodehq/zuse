@@ -260,6 +260,35 @@ pub fn seal_runtime_secret(public_jwk: &str, secret: &str) -> Result<String, Cry
     ))
 }
 
+/// Seal a grant against its authenticated account/runtime metadata.
+pub fn seal_provider_grant(
+    public_jwk: &str,
+    grant: &mut zuse_protocol::cloud_auth::SealedProviderGrant,
+    plaintext: &str,
+) -> Result<(), CryptoError> {
+    if plaintext.len() > 32768 {
+        return Err(CryptoError::InvalidEnvelope);
+    }
+    let (_, key) = public_key(public_jwk)?;
+    let mut cek = Zeroizing::new([0u8; 32]);
+    OsRng.fill_bytes(cek.as_mut());
+    let wrapped = key
+        .encrypt(&mut OsRng, Oaep::new::<Sha256>(), cek.as_slice())
+        .map_err(|_| CryptoError::EncryptionFailed)?;
+    let envelope = encrypt(
+        cek.as_slice(),
+        &grant.additional_data(),
+        plaintext.as_bytes(),
+    )?;
+    let ciphertext = decode(&envelope.ciphertext)?;
+    let (body, tag) = ciphertext.split_at(ciphertext.len() - 16);
+    grant.wrapped_key = URL_SAFE_NO_PAD.encode(wrapped);
+    grant.iv = envelope.iv;
+    grant.ciphertext = URL_SAFE_NO_PAD.encode(body);
+    grant.tag = URL_SAFE_NO_PAD.encode(tag);
+    Ok(())
+}
+
 /// RFC 7638 canonical RSA identity used by bootstrap receipts.
 pub fn credential_thumbprint(public_jwk: &str) -> Result<String, CryptoError> {
     let (jwk, _) = public_key(public_jwk)?;
@@ -272,6 +301,65 @@ pub fn credential_thumbprint(public_jwk: &str) -> Result<String, CryptoError> {
 mod tests {
     use super::*;
     use rsa::{RsaPrivateKey, pkcs8::DecodePrivateKey};
+
+    #[test]
+    fn provider_grants_authenticate_recipient_and_authority_metadata() {
+        use zuse_protocol::cloud_auth::{CloudAuthProvider, SealedProviderGrant};
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/cloud-crypto.json")).unwrap();
+        let public = fixture["runtimePublicJwk"].to_string();
+        let private = RsaPrivateKey::from_pkcs8_der(
+            &decode(fixture["runtimePrivatePkcs8"].as_str().unwrap()).unwrap(),
+        )
+        .unwrap();
+        let mut grant = SealedProviderGrant {
+            protocol_version: 1,
+            provider_id: Some(CloudAuthProvider::Grok),
+            request_id: "request-test".into(),
+            key_thumbprint: credential_thumbprint(&public).unwrap(),
+            authority_incarnation_id: "connection-test".into(),
+            authority_epoch: 7,
+            wrapped_key: String::new(),
+            iv: String::new(),
+            ciphertext: String::new(),
+            tag: String::new(),
+        };
+        seal_provider_grant(&public, &mut grant, "execution-token-only").unwrap();
+        let key = Zeroizing::new(
+            private
+                .decrypt(Oaep::new::<Sha256>(), &decode(&grant.wrapped_key).unwrap())
+                .unwrap(),
+        );
+        let open = |metadata: &SealedProviderGrant| {
+            let mut bytes = decode(&grant.ciphertext).unwrap();
+            bytes.extend(decode(&grant.tag).unwrap());
+            decrypt(
+                &key,
+                &metadata.additional_data(),
+                Envelope {
+                    version: 1,
+                    key_id: None,
+                    iv: grant.iv.clone(),
+                    ciphertext: URL_SAFE_NO_PAD.encode(bytes),
+                },
+            )
+        };
+        assert_eq!(open(&grant).unwrap().as_slice(), b"execution-token-only");
+        for field in ["request", "provider", "key", "incarnation", "epoch"] {
+            let mut changed = grant.clone();
+            match field {
+                "request" => changed.request_id.push('x'),
+                "provider" => changed.provider_id = Some(CloudAuthProvider::Codex),
+                "key" => changed.key_thumbprint.push('x'),
+                "incarnation" => changed.authority_incarnation_id.push('x'),
+                _ => changed.authority_epoch += 1,
+            }
+            assert_eq!(
+                open(&changed).unwrap_err(),
+                CryptoError::AuthenticationFailed
+            );
+        }
+    }
 
     #[test]
     fn existing_webcrypto_envelopes_digests_and_runtime_jwe_are_compatible() {

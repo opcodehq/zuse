@@ -14,13 +14,38 @@ use zuse_protocol::{
     cloud_projects::{CloudProject, GithubCatalog, GithubRepository, ProjectList},
     methods,
 };
+mod agent_login_binding;
+mod agent_recovery;
+mod agents;
+mod environment;
+mod form;
+mod github;
+mod guide;
 mod images;
+mod machine;
+mod overview;
 mod presentation;
+mod secrets;
 gpui::actions!(
     cloud_setup_overlay,
     [CloseRepositoryPicker, CloseImageHistory]
 );
 pub type Owner = (String, Option<String>);
+/// Which part of Cloud setup the panel renders. `All` stacks every group, as
+/// the browser's single Cloud page does; the desktop gives each its own page.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CloudPage {
+    #[default]
+    All,
+    Overview,
+    Repositories,
+    Environments,
+    Machine,
+    Agents,
+}
+/// Asks the host to show another Cloud page (Overview rows link to them).
+#[derive(Clone, Copy, Debug)]
+pub struct OpenPage(pub CloudPage);
 #[derive(Clone)]
 pub enum Request {
     Call {
@@ -37,13 +62,23 @@ struct Pending {
     owner: Owner,
 }
 pub struct RepositoryPanel {
+    agents: agents::AgentView,
+    environment: environment::EnvironmentView,
+    machine: machine::MachineView,
+    secrets: secrets::SecretsView,
     image: images::ImageView,
     owner: Option<Owner>,
+    account_feed_live: bool,
     next: u64,
     pending: BTreeMap<u64, Pending>,
     loaded: bool,
     projects: Vec<CloudProject>,
     github: Option<GithubCatalog>,
+    github_operation: Option<Value>,
+    github_native: bool,
+    github_connection_state: String,
+    github_disconnect_confirm: bool,
+    github_poll: Option<Task<()>>,
     error: Option<String>,
     notice: Option<String>,
     picker: bool,
@@ -53,13 +88,18 @@ pub struct RepositoryPanel {
     picker_trigger: FocusHandle,
     picker_refresh: FocusHandle,
     picker_add: FocusHandle,
+    picker_manage: FocusHandle,
+    picker_install: FocusHandle,
     choice_focus: BTreeMap<String, FocusHandle>,
     search: Entity<TextInput>,
     selected: BTreeSet<String>,
     queue: Vec<GithubRepository>,
     keys: BTreeMap<String, String>,
+    guide: guide::GuideState,
+    page: CloudPage,
 }
 impl EventEmitter<Request> for RepositoryPanel {}
+impl EventEmitter<OpenPage> for RepositoryPanel {}
 impl RepositoryPanel {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         images::bind_keys(cx);
@@ -74,13 +114,23 @@ impl RepositoryPanel {
         let search = cx.new(|cx| TextInput::new("Search repositories…", window, cx));
         cx.observe(&search, |_, _, cx| cx.notify()).detach();
         Self {
+            agents: agents::AgentView::new(window, cx),
+            environment: environment::EnvironmentView::new(window, cx),
+            machine: machine::MachineView::new(window, cx),
+            secrets: secrets::SecretsView::new(window, cx),
             image: Default::default(),
             owner: None,
+            account_feed_live: false,
             next: 0,
             pending: BTreeMap::new(),
             loaded: false,
             projects: vec![],
             github: None,
+            github_operation: None,
+            github_native: false,
+            github_connection_state: String::new(),
+            github_disconnect_confirm: false,
+            github_poll: None,
             error: None,
             notice: None,
             picker: false,
@@ -90,11 +140,22 @@ impl RepositoryPanel {
             picker_trigger: cx.focus_handle(),
             picker_refresh: cx.focus_handle(),
             picker_add: cx.focus_handle(),
+            picker_manage: cx.focus_handle(),
+            picker_install: cx.focus_handle(),
             choice_focus: BTreeMap::new(),
             search,
             selected: BTreeSet::new(),
             queue: vec![],
             keys: BTreeMap::new(),
+            guide: Default::default(),
+            page: CloudPage::All,
+        }
+    }
+    pub fn set_page(&mut self, page: CloudPage, cx: &mut Context<Self>) {
+        if self.page != page {
+            self.page = page;
+            self.picker = false;
+            cx.notify();
         }
     }
     pub fn bind_owner(&mut self, owner: Option<Owner>, cx: &mut Context<Self>) {
@@ -106,11 +167,20 @@ impl RepositoryPanel {
         }
         self.pending.clear();
         self.image = Default::default();
+        self.agents.reset(cx);
+        self.environment.reset(cx);
+        self.machine.reset(cx);
+        self.secrets.reset(cx);
         self.storage_usage = None;
         self.owner = owner;
         self.loaded = false;
         self.projects.clear();
         self.github = None;
+        self.github_operation = None;
+        self.github_native = false;
+        self.github_connection_state.clear();
+        self.github_disconnect_confirm = false;
+        self.github_poll = None;
         self.error = None;
         self.notice = None;
         self.picker = false;
@@ -164,6 +234,8 @@ impl RepositoryPanel {
         self.error = None;
         self.call("list", methods::CLOUD_PROJECTS, json!({}), cx);
         self.call("github", methods::CLOUD_GITHUB, json!({}), cx);
+        self.call("agents", methods::CLOUD_AGENT_CONNECTIONS, json!({}), cx);
+        self.load_machine(cx);
         self.refresh_image(cx);
         cx.notify();
     }
@@ -181,6 +253,27 @@ impl RepositoryPanel {
         let value = match result {
             Ok(v) => v,
             Err(e) => {
+                if pending.kind.starts_with("secret-") {
+                    self.secrets.error = Some(e);
+                    cx.notify();
+                    return;
+                }
+                if pending.kind.starts_with("environment") {
+                    self.environment.error = Some(e);
+                    cx.notify();
+                    return;
+                }
+                if pending.kind.starts_with("machine") {
+                    self.machine.error = Some(e);
+                    cx.notify();
+                    return;
+                }
+                if pending.kind.starts_with("agent") {
+                    self.agents.error = Some(e);
+                    self.agents.poll = None;
+                    cx.notify();
+                    return;
+                }
                 self.error = Some(e);
                 self.queue.clear();
                 cx.notify();
@@ -196,21 +289,64 @@ impl RepositoryPanel {
             return;
         }
         let data = value["data"].clone();
+        if pending.kind.starts_with("secret-") {
+            self.receive_workload_secrets(pending.kind, data, cx);
+            return;
+        }
+        if pending.kind.starts_with("environment") {
+            self.receive_environment(data, cx);
+            return;
+        }
+        if pending.kind.starts_with("machine") {
+            self.receive_machine(data, cx);
+            return;
+        }
+        if pending.kind.starts_with("agent") {
+            self.receive_agents(pending.kind, data, cx);
+            return;
+        }
         match pending.kind {
+            "github-install" => self.github_started(data, cx),
+            "github-status" => self.github_status(data, cx),
+            "github-select" | "github-cancel" | "github-disconnect" => {
+                self.github_operation = None;
+                self.github_poll = None;
+                self.notice = Some(
+                    if pending.kind == "github-select" {
+                        "GitHub connected. Choose your repositories below."
+                    } else if pending.kind == "github-disconnect" {
+                        "GitHub disconnected."
+                    } else {
+                        "GitHub connection cancelled."
+                    }
+                    .into(),
+                );
+                self.refresh(cx);
+            }
             "list" => match serde_json::from_value::<ProjectList>(data) {
-                Ok(list) => self.projects = list.projects,
+                Ok(list) => {
+                    self.projects = list.projects;
+                    self.bind_environment(cx);
+                }
                 Err(_) => {
                     self.error =
                         Some("Repository list is unavailable. Refresh and try again.".into())
                 }
             },
-            "github" => match serde_json::from_value::<GithubCatalog>(data) {
-                Ok(github) => self.github = Some(github),
-                Err(_) => {
-                    self.error =
-                        Some("GitHub repository list is unavailable. Refresh and try again.".into())
+            "github" => {
+                self.github_native = data["nativeAuthority"] == true;
+                self.github_connection_state =
+                    data["connectionState"].as_str().unwrap_or("").to_owned();
+                self.github_disconnect_confirm = false;
+                match serde_json::from_value::<GithubCatalog>(data) {
+                    Ok(github) => self.github = Some(github),
+                    Err(_) => {
+                        self.error = Some(
+                            "GitHub repository list is unavailable. Refresh and try again.".into(),
+                        )
+                    }
                 }
-            },
+            }
             "connect" | "remove" => match serde_json::from_value::<CloudProject>(data) {
                 Ok(project) => {
                     self.refresh_image(cx);
@@ -230,6 +366,7 @@ impl RepositoryPanel {
                         self.notice = Some("Repository added.".into());
                         self.connect_next(cx);
                     }
+                    self.bind_environment(cx);
                 }
                 Err(_) => {
                     self.error = Some(
@@ -252,9 +389,19 @@ impl RepositoryPanel {
         cx.notify();
     }
     fn repository_busy(&self) -> bool {
-        self.pending
-            .values()
-            .any(|p| !matches!(p.kind, "image" | "image-build" | "image-delete"))
+        self.pending.values().any(|p| {
+            matches!(
+                p.kind,
+                "list"
+                    | "github"
+                    | "github-install"
+                    | "github-select"
+                    | "github-cancel"
+                    | "github-disconnect"
+                    | "connect"
+                    | "remove"
+            )
+        })
     }
     fn can_manage(&self) -> bool {
         self.owner.as_ref().is_some_and(|(_, org)| {

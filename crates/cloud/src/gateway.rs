@@ -42,11 +42,23 @@ pub struct Hub {
 }
 impl Default for Hub {
     fn default() -> Self {
-        Self {
-            rooms: Default::default(),
-            bytes: Arc::new(Semaphore::new(32 * 1024 * 1024)),
-            sockets: Arc::new(Semaphore::new(256)),
+        Self::with_capacity(256, 32 * 1024 * 1024).expect("valid default gateway capacity")
+    }
+}
+impl Hub {
+    /// Queued bytes are a global routing budget, not a bound on total process RSS.
+    pub fn with_capacity(sockets: usize, queued_bytes: usize) -> Result<Self, ApiError> {
+        if !(1..=16_384).contains(&sockets)
+            || !(zuse_protocol::cloud_gateway::MAX_PAYLOAD + 1..=1024 * 1024 * 1024)
+                .contains(&queued_bytes)
+        {
+            return Err(ApiError::bad_request("invalid_gateway_capacity"));
         }
+        Ok(Self {
+            rooms: Default::default(),
+            bytes: Arc::new(Semaphore::new(queued_bytes)),
+            sockets: Arc::new(Semaphore::new(sockets)),
+        })
     }
 }
 struct Buffered {
@@ -67,6 +79,8 @@ struct State {
     closed: bool,
 }
 struct Room {
+    control: Option<Arc<RuntimeControl>>,
+    activity: tokio::sync::Mutex<Option<Instant>>,
     workspace: String,
     token: String,
     fence: (i64, i64),
@@ -80,6 +94,45 @@ fn now() -> i64 {
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
+// Keep the database lease contract narrow so cancellation at an uncertain
+// commit can be exercised without weakening gateway authentication.
+#[async_trait::async_trait]
+trait LeaseControl: Send + Sync + 'static {
+    async fn gateway_lease(
+        &self,
+        workspace: &str,
+        token: &str,
+        fence: (i64, i64),
+    ) -> Result<(), ApiError>;
+    async fn release_gateway(&self, workspace: &str, token: &str);
+    async fn revalidate_gateway_peer(&self, _grant: &Grant) -> Result<(), ApiError> {
+        Ok(())
+    }
+    fn runtime_control(self: &Arc<Self>) -> Option<Arc<RuntimeControl>> {
+        None
+    }
+}
+#[async_trait::async_trait]
+impl LeaseControl for RuntimeControl {
+    async fn gateway_lease(
+        &self,
+        workspace: &str,
+        token: &str,
+        fence: (i64, i64),
+    ) -> Result<(), ApiError> {
+        RuntimeControl::gateway_lease(self, workspace, token, fence).await
+    }
+    async fn release_gateway(&self, workspace: &str, token: &str) {
+        RuntimeControl::release_gateway(self, workspace, token).await
+    }
+    async fn revalidate_gateway_peer(&self, grant: &Grant) -> Result<(), ApiError> {
+        RuntimeControl::revalidate_gateway_peer(self, grant).await
+    }
+    fn runtime_control(self: &Arc<Self>) -> Option<Arc<RuntimeControl>> {
+        Some(self.clone())
+    }
+}
+
 impl Hub {
     pub fn permit(&self) -> Result<OwnedSemaphorePermit, ApiError> {
         self.sockets
@@ -92,6 +145,13 @@ impl Hub {
         control: Arc<RuntimeControl>,
         grant: &Grant,
     ) -> Result<Arc<SessionRoom>, ApiError> {
+        self.room_with_control(control, grant).await
+    }
+    async fn room_with_control<C: LeaseControl>(
+        &self,
+        control: Arc<C>,
+        grant: &Grant,
+    ) -> Result<Arc<SessionRoom>, ApiError> {
         let entry = {
             let mut rooms = lock(&self.rooms);
             rooms.retain(|_, entry| {
@@ -100,70 +160,390 @@ impl Hub {
             });
             rooms.entry(grant.workspace.clone()).or_default().clone()
         };
-        let mut slot = entry.lock().await;
+        let mut slot = entry.lock_owned().await;
         if let Some(room) = slot.upgrade() {
             if room.fence != (grant.generation, grant.epoch) || lock(&room.state).closed {
                 return Err(ApiError::conflict("workspace_gateway_reconnecting"));
             }
             return Ok(Arc::new(SessionRoom(room)));
         }
-        let token = uuid::Uuid::new_v4().to_string();
-        let lease_requested_at = Instant::now();
-        control
-            .gateway_lease(&grant.workspace, &token, (grant.generation, grant.epoch))
-            .await?;
+        let workspace = grant.workspace.clone();
+        let fence = (grant.generation, grant.epoch);
+        let bytes = self.bytes.clone();
+        // A disconnected upgrade must not cancel a possibly committed lease.
+        // The owned task finishes registration and starts its release owner;
+        // an unused room is then reclaimed by the existing supervisor.
+        tokio::spawn(async move {
+            let token = uuid::Uuid::new_v4().to_string();
+            let lease_requested_at = Instant::now();
+            control.gateway_lease(&workspace, &token, fence).await?;
+            let room = Arc::new(Room {
+                control: control.runtime_control(),
+                activity: tokio::sync::Mutex::new(None),
+                workspace,
+                token,
+                fence,
+                lease_valid_until: Mutex::new(lease_requested_at + Duration::from_secs(9)),
+                bytes,
+                state: Mutex::new(State {
+                    peers: HashMap::new(),
+                    runtime: None,
+                    closed: false,
+                }),
+            });
+            *slot = Arc::downgrade(&room);
+            let supervisor = room.clone();
+            tokio::spawn(async move {
+                let mut tick = tokio::time::interval(Duration::from_secs(2));
+                tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                tick.tick().await;
+                loop {
+                    tick.tick().await;
+                    let room = &supervisor;
+                    {
+                        let mut state = lock(&room.state);
+                        if state.peers.is_empty() {
+                            state.closed = true;
+                            break;
+                        }
+                    }
+                    room.expire();
+                    let peers: Vec<_> = {
+                        lock(&room.state)
+                            .peers
+                            .iter()
+                            .map(|(id, peer)| (id.clone(), peer.grant.clone()))
+                            .collect()
+                    };
+                    let checks = futures::stream::iter(peers.into_iter().map(|(id, grant)| {
+                        let control = control.clone();
+                        async move { (id, control.revalidate_gateway_peer(&grant).await) }
+                    }))
+                    .buffer_unordered(16)
+                    .collect::<Vec<_>>();
+                    match tokio::time::timeout(Duration::from_secs(3), checks).await {
+                        Ok(results) => {
+                            for (id, result) in results {
+                                if result.is_err() {
+                                    if let Some(peer) = lock(&room.state).peers.get(&id) {
+                                        let _ = peer.close.send(Some(EXPIRED));
+                                    }
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            room.close_all(EXPIRED);
+                            break;
+                        }
+                    }
+                    let requested_at = Instant::now();
+                    let lease = tokio::time::timeout(
+                        Duration::from_secs(3),
+                        control.gateway_lease(&room.workspace, &room.token, room.fence),
+                    )
+                    .await;
+                    match lease {
+                        Ok(Ok(())) => {
+                            *lock(&room.lease_valid_until) = requested_at + Duration::from_secs(9);
+                        }
+                        failure => {
+                            let transient = match &failure {
+                                Err(_) => true,
+                                Ok(Err(error)) => error.code == "cloud_database_unavailable",
+                                _ => false,
+                            };
+                            if !retain_lease(
+                                transient,
+                                *lock(&room.lease_valid_until),
+                                Instant::now(),
+                            ) {
+                                room.close_all(FENCED);
+                                break;
+                            }
+                            // Never extend a lease on an ambiguous database response. Forwarding
+                            // also checks this deadline, independently of the renewal task.
+                            tracing::warn!(
+                                "Gateway lease renewal deferred within confirmed validity"
+                            );
+                        }
+                    }
+                }
+                supervisor.close_all(FENCED);
+                control
+                    .release_gateway(&supervisor.workspace, &supervisor.token)
+                    .await;
+            });
+            Ok(Arc::new(SessionRoom(room)))
+        })
+        .await
+        .map_err(|_| ApiError::unavailable("workspace_gateway_setup_failed"))?
+    }
+}
+fn retain_lease(transient: bool, confirmed_until: Instant, now: Instant) -> bool {
+    transient && now < confirmed_until
+}
+
+#[cfg(test)]
+mod capacity_tests {
+    use super::*;
+
+    #[test]
+    fn configured_capacity_rejects_invalid_budgets_and_sheds_excess_sockets() {
+        assert!(Hub::with_capacity(0, 32 * 1024 * 1024).is_err());
+        assert!(Hub::with_capacity(16_385, 32 * 1024 * 1024).is_err());
+        assert!(Hub::with_capacity(1, 1).is_err());
+        let hub = Hub::with_capacity(1, 32 * 1024 * 1024).unwrap();
+        let permit = hub.permit().unwrap();
+        assert!(hub.permit().is_err());
+        drop(permit);
+        assert!(hub.permit().is_ok());
+    }
+
+    #[tokio::test]
+    async fn two_hundred_machine_sockets_share_the_bounded_gateway() {
+        use axum::response::IntoResponse;
+        use tokio_tungstenite::tungstenite::Message as ClientMessage;
+        let hub = Arc::new(Hub::default());
+        let rooms = Arc::new(
+            (0..200)
+                .map(|i| {
+                    Arc::new(SessionRoom(Arc::new(Room {
+                        control: None,
+                        activity: tokio::sync::Mutex::new(None),
+                        workspace: format!("machine-{i}"),
+                        token: "test".into(),
+                        fence: (1, 1),
+                        lease_valid_until: Mutex::new(Instant::now() + Duration::from_secs(60)),
+                        state: Mutex::new(State {
+                            peers: HashMap::new(),
+                            runtime: None,
+                            closed: false,
+                        }),
+                        bytes: hub.bytes.clone(),
+                    })))
+                })
+                .collect::<Vec<_>>(),
+        );
+        let serving = hub.clone();
+        let app = axum::Router::new().route(
+            "/ws/{id}",
+            axum::routing::get(
+                move |axum::extract::Path(id): axum::extract::Path<usize>,
+                      upgrade: axum::extract::WebSocketUpgrade| {
+                    let hub = serving.clone();
+                    let session = rooms.get(id).cloned();
+                    async move {
+                        let Some(session) = session else {
+                            return axum::http::StatusCode::NOT_FOUND.into_response();
+                        };
+                        let Ok(permit) = hub.permit() else {
+                            return axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response();
+                        };
+                        upgrade.on_upgrade(move |socket| async move {
+                            session
+                                .serve(
+                                    Grant {
+                                        workspace: format!("machine-{id}"),
+                                        generation: 1,
+                                        epoch: 1,
+                                        runtime: true,
+                                        protocol: LEGACY_PROTOCOL.into(),
+                                        actor: "test".into(),
+                                        permission: "write".into(),
+                                        expires_at: now() + 60_000,
+                                    },
+                                    socket,
+                                    permit,
+                                )
+                                .await;
+                        })
+                    }
+                },
+            ),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let sockets = futures::future::join_all((0..200).map(|i| async move {
+            let (mut socket, _) =
+                tokio_tungstenite::connect_async(format!("ws://{address}/ws/{i}"))
+                    .await
+                    .unwrap();
+            socket
+                .send(ClientMessage::Ping(vec![1, 2, 3]))
+                .await
+                .unwrap();
+            let reply = tokio::time::timeout(Duration::from_secs(5), socket.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            assert_eq!(reply, ClientMessage::Pong(vec![1, 2, 3]));
+            socket
+        }))
+        .await;
+        assert_eq!(hub.sockets.available_permits(), 56);
+        assert_eq!(sockets.len(), 200);
+        drop(sockets);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while hub.sockets.available_permits() != 256 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(hub.bytes.available_permits(), 32 * 1024 * 1024);
+        server.abort();
+    }
+
+    #[test]
+    fn transient_failure_cannot_extend_ownership_or_mask_fencing() {
+        let now = Instant::now();
+        let deadline = now + Duration::from_secs(9);
+        assert!(retain_lease(true, deadline, now));
+        assert!(!retain_lease(false, deadline, now));
+        assert!(!retain_lease(true, deadline, deadline));
+        assert!(!retain_lease(
+            true,
+            deadline,
+            deadline + Duration::from_millis(1)
+        ));
+    }
+
+    #[tokio::test]
+    async fn socket_writer_answers_ping_and_delivers_confirmed_fencing() {
         let room = Arc::new(Room {
-            workspace: grant.workspace.clone(),
-            token,
-            fence: (grant.generation, grant.epoch),
-            lease_valid_until: Mutex::new(lease_requested_at + Duration::from_secs(9)),
-            bytes: self.bytes.clone(),
+            control: None,
+            activity: tokio::sync::Mutex::new(None),
+            workspace: "test".into(),
+            token: "test".into(),
+            fence: (1, 1),
+            lease_valid_until: Mutex::new(Instant::now() + Duration::from_secs(60)),
             state: Mutex::new(State {
                 peers: HashMap::new(),
                 runtime: None,
                 closed: false,
             }),
+            bytes: Arc::new(Semaphore::new(1024 * 1024)),
         });
-        *slot = Arc::downgrade(&room);
-        let supervisor = room.clone();
-        tokio::spawn(async move {
-            let mut tick = tokio::time::interval(Duration::from_secs(2));
-            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            tick.tick().await;
-            loop {
-                tick.tick().await;
-                let room = &supervisor;
-                {
-                    let mut state = lock(&room.state);
-                    if state.peers.is_empty() {
-                        state.closed = true;
-                        break;
-                    }
+        let session = Arc::new(SessionRoom(room.clone()));
+        let app = axum::Router::new().route(
+            "/ws",
+            axum::routing::get(move |upgrade: axum::extract::WebSocketUpgrade| {
+                let session = session.clone();
+                async move {
+                    upgrade.on_upgrade(move |socket| async move {
+                        let permit = Arc::new(Semaphore::new(1)).acquire_owned().await.unwrap();
+                        session
+                            .serve(
+                                Grant {
+                                    workspace: "test".into(),
+                                    generation: 1,
+                                    epoch: 1,
+                                    runtime: true,
+                                    protocol: LEGACY_PROTOCOL.into(),
+                                    actor: "test".into(),
+                                    permission: "write".into(),
+                                    expires_at: now() + 60_000,
+                                },
+                                socket,
+                                permit,
+                            )
+                            .await;
+                    })
                 }
-                room.expire();
-                let requested_at = Instant::now();
-                let lease = tokio::time::timeout(
-                    Duration::from_secs(3),
-                    control.gateway_lease(&room.workspace, &room.token, room.fence),
-                )
-                .await;
-                if !matches!(lease, Ok(Ok(()))) {
-                    room.close_all(FENCED);
-                    break;
-                }
-                *lock(&room.lease_valid_until) = requested_at + Duration::from_secs(9);
-            }
-            supervisor.close_all(FENCED);
-            control
-                .release_gateway(&supervisor.workspace, &supervisor.token)
-                .await;
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
         });
-        Ok(Arc::new(SessionRoom(room)))
+        let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/ws"))
+            .await
+            .unwrap();
+        use tokio_tungstenite::tungstenite::Message as ClientMessage;
+        socket
+            .send(ClientMessage::Ping(b"alive".to_vec()))
+            .await
+            .unwrap();
+        let reply = tokio::time::timeout(Duration::from_secs(2), socket.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(reply, ClientMessage::Pong(b"alive".to_vec()));
+        room.close_all(FENCED);
+        let reply = tokio::time::timeout(Duration::from_secs(2), socket.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(reply, ClientMessage::Close(Some(frame)) if u16::from(frame.code) == FENCED.0)
+        );
+        server.abort();
     }
 }
 // Public wrapper prevents access to routing state outside the socket owner.
 pub struct SessionRoom(Arc<Room>);
 impl SessionRoom {
+    async fn forward_received(&self, id: &str, payload: Payload) {
+        let grant = {
+            let state = lock(&self.0.state);
+            state
+                .peers
+                .get(id)
+                .filter(|peer| {
+                    !state.closed
+                        && state.runtime.is_some()
+                        && peer.ready
+                        && !peer.detached
+                        && !peer.grant.runtime
+                        && peer.grant.permission == "edit"
+                        && peer.grant.protocol == zuse_protocol::cloud_gateway::RUST_PROTOCOL
+                })
+                .map(|peer| peer.grant.clone())
+        };
+        // Runtime output and passive transports remain opaque. Only a client
+        // editing this Rust task has request method metadata inspected.
+        if let (Some(grant), Some(control)) = (grant, &self.0.control) {
+            if crate::runtime::activity::meaningful_rpc(&payload) {
+                // Serialize the first write after quiet so concurrent clients
+                // cannot forward around an uncommitted inactivity update.
+                let mut last = self.0.activity.lock().await;
+                if last.is_none_or(|at| {
+                    at.elapsed()
+                        >= Duration::from_millis(crate::runtime::activity::COALESCE_MS as u64)
+                }) {
+                    let recorded = tokio::time::timeout(
+                        Duration::from_secs(2),
+                        control.record_gateway_activity(&grant, now()),
+                    )
+                    .await;
+                    match recorded {
+                        Ok(Ok(true)) => *last = Some(Instant::now()),
+                        // Viewers, other protocols and machines that are not
+                        // ready carry no idle deadline. Forward unchanged.
+                        Ok(Ok(false)) => {}
+                        _ => {
+                            // The request was never forwarded. Close rather than
+                            // silently discard it; mutation retry policy stays at
+                            // the existing client layer, never blind server replay.
+                            if let Some(peer) = lock(&self.0.state).peers.get(id) {
+                                let _ = peer.close.send(Some(UNAVAILABLE));
+                            }
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+        self.0.forward(id, payload);
+    }
+
     pub async fn serve(
         self: Arc<Self>,
         grant: Grant,
@@ -190,27 +570,89 @@ impl SessionRoom {
             id: id.clone(),
         };
         let (mut sink, mut source) = socket.split();
+        let (controls, mut control_rx) = mpsc::channel(8);
+        let mut writer_closed = closed.clone();
+        let mut writer = SocketWriter(tokio::spawn(async move {
+            loop {
+                let message = tokio::select! {
+                    biased;
+                    changed = writer_closed.changed() => {
+                        if changed.is_ok() {
+                            let value = *writer_closed.borrow();
+                            if let Some((code, reason)) = value {
+                                let _ = tokio::time::timeout(Duration::from_secs(1), sink.send(
+                                    Message::Close(Some(CloseFrame { code, reason: reason.into() }))
+                                )).await;
+                            }
+                        }
+                        return;
+                    }
+                    control = control_rx.recv() => {
+                        let Some(control) = control else { return; };
+                        control
+                    }
+                    out = rx.recv() => {
+                        let Some(out) = out else { return; };
+                        // Keep the byte-budget permit alive until the write completes.
+                        if !matches!(tokio::time::timeout(Duration::from_secs(10), sink.send(out.message)).await, Ok(Ok(()))) {
+                            tracing::debug!(reason = "write_timeout_or_error", "Gateway socket closed");
+                            return;
+                        }
+                        continue;
+                    }
+                };
+                if !matches!(
+                    tokio::time::timeout(Duration::from_secs(2), sink.send(message)).await,
+                    Ok(Ok(()))
+                ) {
+                    tracing::debug!(
+                        reason = "control_write_timeout_or_error",
+                        "Gateway socket closed"
+                    );
+                    return;
+                }
+            }
+        }));
+        let mut heartbeat = tokio::time::interval(Duration::from_secs(15));
+        heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        heartbeat.tick().await;
+        let mut last_received = Instant::now();
         loop {
             tokio::select! {
-                changed=closed.changed()=> {
-                    if changed.is_ok() {
-                        let value=*closed.borrow();
-                        if let Some((code,reason))=value { let _=tokio::time::timeout(Duration::from_secs(1),sink.send(Message::Close(Some(CloseFrame{code,reason:reason.into()})))).await; }
+                _ = &mut writer.0 => break,
+                changed = closed.changed() => { if changed.is_err() { break; } },
+                _ = heartbeat.tick() => {
+                    if last_received.elapsed() >= Duration::from_secs(45) {
+                        tracing::debug!(reason = "heartbeat_timeout", "Gateway socket closed");
+                        break;
                     }
-                    break;
+                    if controls.try_send(Message::Ping(Vec::new().into())).is_err() { break; }
                 }
-                incoming=source.next()=>match incoming {
-                    Some(Ok(Message::Text(text)))=>self.0.forward(&id,Payload::Text(text.to_string())),
-                    Some(Ok(Message::Binary(bytes)))=>self.0.forward(&id,Payload::Binary(bytes.to_vec())),
-                    Some(Ok(Message::Ping(bytes)))=> { if tokio::time::timeout(Duration::from_secs(2),sink.send(Message::Pong(bytes))).await.is_err() {break;} },
-                    Some(Ok(Message::Pong(_)))=>{}, _=>break,
-                },
-                out=rx.recv()=> {
-                    let Some(out)=out else {break;};
-                    if !matches!(tokio::time::timeout(Duration::from_secs(2),sink.send(out.message)).await,Ok(Ok(()))) { break; }
+                incoming = source.next() => {
+                    last_received = Instant::now();
+                    match incoming {
+                        Some(Ok(Message::Text(text))) => self.forward_received(&id, Payload::Text(text.to_string())).await,
+                        Some(Ok(Message::Binary(bytes))) => self.forward_received(&id, Payload::Binary(bytes.to_vec())).await,
+                        // Axum/tungstenite automatically queues the matching Pong.
+                        // Sending another from the independent writer duplicates it.
+                        Some(Ok(Message::Ping(_))) => {},
+                        Some(Ok(Message::Pong(_))) => {},
+                        Some(Ok(Message::Close(_))) => break,
+                        _ => {
+                            tracing::debug!(reason = "read_error_or_eof", "Gateway socket closed");
+                            break;
+                        }
+                    }
                 }
             }
         }
+    }
+}
+// Canceling a request must retire its writer rather than detach a socket task.
+struct SocketWriter(tokio::task::JoinHandle<()>);
+impl Drop for SocketWriter {
+    fn drop(&mut self) {
+        self.0.abort();
     }
 }
 struct ConnectionGuard {
@@ -467,4 +909,87 @@ fn decode_legacy(payload: Payload) -> Option<Frame> {
         connection_id: connection.into(),
         payload,
     })
+}
+
+#[cfg(test)]
+mod lease_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    #[derive(Default)]
+    struct Lease {
+        owner: Mutex<Option<String>>,
+        claims: AtomicUsize,
+        committed: tokio::sync::Notify,
+        reply: tokio::sync::Notify,
+        released: tokio::sync::Notify,
+    }
+    #[async_trait::async_trait]
+    impl LeaseControl for Lease {
+        async fn gateway_lease(&self, _: &str, token: &str, _: (i64, i64)) -> Result<(), ApiError> {
+            {
+                let mut owner = lock(&self.owner);
+                if let Some(held) = owner.as_deref() {
+                    return if held == token {
+                        Ok(())
+                    } else {
+                        Err(ApiError::unavailable("workspace_gateway_owned_elsewhere"))
+                    };
+                }
+                *owner = Some(token.to_owned());
+                self.claims.fetch_add(1, Ordering::SeqCst);
+            }
+            // Database committed; its response has not reached the caller.
+            self.committed.notify_one();
+            self.reply.notified().await;
+            Ok(())
+        }
+        async fn release_gateway(&self, _: &str, token: &str) {
+            let mut owner = lock(&self.owner);
+            assert_eq!(owner.as_deref(), Some(token));
+            *owner = None;
+            self.released.notify_one();
+        }
+    }
+    #[tokio::test]
+    async fn canceled_upgrade_finishes_uncertain_lease_and_reuses_then_releases_it() {
+        let hub = Arc::new(Hub::default());
+        let lease = Arc::new(Lease::default());
+        let grant = Grant {
+            workspace: "test-workspace".into(),
+            generation: 1,
+            epoch: 1,
+            runtime: false,
+            protocol: zuse_protocol::cloud_gateway::RUST_PROTOCOL.into(),
+            actor: "test-user".into(),
+            permission: "edit".into(),
+            expires_at: now() + 60_000,
+        };
+        let pending = tokio::spawn({
+            let hub = hub.clone();
+            let lease = lease.clone();
+            let grant = grant.clone();
+            async move { hub.room_with_control(lease, &grant).await }
+        });
+        lease.committed.notified().await;
+        pending.abort();
+        assert!(matches!(pending.await,Err(error) if error.is_cancelled()));
+        lease.reply.notify_one();
+        let room = tokio::time::timeout(
+            Duration::from_secs(3),
+            hub.room_with_control(lease.clone(), &grant),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            lease.claims.load(Ordering::SeqCst),
+            1,
+            "a canceled upgrade must not orphan a lease and force a competing owner"
+        );
+        drop(room);
+        tokio::time::timeout(Duration::from_secs(3), lease.released.notified())
+            .await
+            .expect("unused room must release its lease");
+        assert!(lock(&lease.owner).is_none());
+    }
 }

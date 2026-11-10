@@ -13,6 +13,8 @@ pub struct Config {
     pub organizations_enabled: bool,
     pub organization_ids: Vec<String>,
     pub allowed_origins: Vec<String>,
+    pub gateway_max_sockets: usize,
+    pub gateway_queued_bytes: usize,
 }
 
 impl Config {
@@ -49,6 +51,14 @@ impl Config {
             );
         }
         Ok(Self {
+            gateway_max_sockets: env::var("ZUSE_CLOUD_GATEWAY_MAX_SOCKETS")
+                .unwrap_or_else(|_| "256".into())
+                .parse()
+                .context("Invalid ZUSE_CLOUD_GATEWAY_MAX_SOCKETS")?,
+            gateway_queued_bytes: env::var("ZUSE_CLOUD_GATEWAY_QUEUED_BYTES")
+                .unwrap_or_else(|_| "33554432".into())
+                .parse()
+                .context("Invalid ZUSE_CLOUD_GATEWAY_QUEUED_BYTES")?,
             listen: env::var("ZUSE_CLOUD_LISTEN")
                 .unwrap_or_else(|_| "127.0.0.1:8080".into())
                 .parse()?,

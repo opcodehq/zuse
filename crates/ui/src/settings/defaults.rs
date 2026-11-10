@@ -123,21 +123,5 @@ impl Render for DefaultsPage {
     }
 }
 fn details(theme: &Theme, title: &str, description: &str) -> Div {
-    div()
-        .flex_1()
-        .min_w_0()
-        .flex()
-        .flex_col()
-        .gap(px(2.))
-        .child(widgets::row_title(
-            theme,
-            SharedString::from(title.to_owned()),
-        ))
-        .child(
-            div()
-                .text_size(px(11.))
-                .line_height(px(16.))
-                .text_color(theme.text_muted)
-                .child(SharedString::from(description.to_owned())),
-        )
+    widgets::row_copy(theme, title, description)
 }
