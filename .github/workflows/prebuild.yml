@@ -6,6 +6,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      intel_only:
+        description: Validate only the Intel macOS build and Rosetta startup
+        type: boolean
+        default: false
 
 concurrency:
   group: prebuild-${{ github.ref }}
@@ -16,9 +21,23 @@ permissions:
 
 jobs:
   binaries:
+    if: inputs.intel_only != true
     uses: ./.github/workflows/native-binaries.yml
     with:
       ref: ${{ github.sha }}
+      retention_days: 14
+    secrets:
+      HUGEICONS_LICENSE_KEY: ${{ secrets.HUGEICONS_LICENSE_KEY }}
+
+  intel:
+    if: inputs.intel_only == true
+    uses: ./.github/workflows/native-compile.yml
+    with:
+      ref: ${{ github.sha }}
+      os: macos-latest
+      platform: macos
+      arch: x86_64
+      target: x86_64-apple-darwin
       retention_days: 14
     secrets:
       HUGEICONS_LICENSE_KEY: ${{ secrets.HUGEICONS_LICENSE_KEY }}
