@@ -211,6 +211,7 @@ icon_assets![
     (ACTION_DEBUG, "action-debug"),
     (STAR, "star"),
     (STAR_BOLD, "star-bold"),
+    (MODEL_FAVORITE_FILLED, "model-favorite-filled"),
     (ZUSE_LOGO, "zuse-logo"),
     (CLAUDE_MARK, "claude-mark"),
     (OPENAI_MARK, "openai-mark"),

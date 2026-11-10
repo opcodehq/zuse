@@ -13623,12 +13623,10 @@ impl Render for Composer {
                 )
             });
         let beneath_voice = 1.0 - voice_t.clamp(0.0, 1.0);
-        // The model selector sits between the microphone and Send. While
-        // dictating it fades and folds to zero width, so the microphone
-        // slides in beside Send and the track takes the row.
+        // While dictating, the context and model controls fold away so the
+        // voice track expands toward the microphone beside Send.
         let model_picker = model_picker
             .opacity(beneath_voice)
-            .ml(px(ACTION_PRIMARY_GAP * beneath_voice))
             .when(voice_t > 0.0, |el| {
                 el.max_w(px(surface_width * 0.45 * beneath_voice))
                     .overflow_hidden()
@@ -13734,7 +13732,7 @@ impl Render for Composer {
             .child(stash_count.to_string());
         // Editor on top (`px-4 pb-1 pt-4`); the toolbar row (2px top + 32px
         // controls + 8px bottom) is ABSOLUTE at the pill's stationary bottom,
-        // `[+][access][plugins] … [mic][model][send]`. The editor viewport
+        // `[+][access][plugins] … [usage][model][mic][send]`. The editor viewport
         // follows the animated height so it cannot paint over the controls;
         // its width stays fixed (no tween rewraps).
         let body = pill
@@ -13792,18 +13790,26 @@ impl Render for Composer {
                             .items_center()
                             .pl(px(ACTION_PRIMARY_GAP))
                             .when(stash_count > 0, |el| el.child(stash.mr(px(8.))))
-                            .children(microphone)
-                            .child(model_picker),
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .opacity(beneath_voice)
+                                    .when(voice_t > 0.0, |el| {
+                                        el.max_w(px(36.0 * beneath_voice)).overflow_hidden()
+                                    })
+                                    .child(self.account_usage.clone()),
+                            )
+                            .child(model_picker)
+                            .children(microphone.map(|mic| {
+                                div().flex_none().ml(px(ACTION_PRIMARY_GAP)).child(mic)
+                            })),
                     )
-                    // `[model][usage ring][send]`: the ring renders nothing
-                    // until the harness reports context or plan usage.
                     .child(
                         div()
                             .flex_none()
                             .flex()
                             .items_center()
                             .pl(px(ACTION_PRIMARY_GAP))
-                            .child(self.account_usage.clone())
                             .child(send_button),
                     ),
             )
@@ -14134,7 +14140,7 @@ mod tests {
                         assert!((f32::from(origin.y - surface.top()) - (1.0 + TEXT_TOP_PAD)).abs() <= 1.0,
                             "editor jumped: docked={docked}, amount={amount}, origin={origin:?}, surface={surface:?}");
                         let model = composer.model_bounds.get().unwrap();
-                        let expected_right = surface.right() - px(1.0 + ACTION_INSET + 28.0 + ACTION_PRIMARY_GAP);
+                        let expected_right = surface.right() - px(1.0 + ACTION_INSET + 56.0 + 2.0 * ACTION_PRIMARY_GAP);
                         assert!((f32::from(model.right() - expected_right)).abs() <= 1.0,
                             "model must stay right aligned: compact_picker={compact_picker}, docked={docked}, amount={amount}, actual={model:?}, expected={expected_right:?}");
                         // Only the empty editor floor changes between routes;
@@ -14337,7 +14343,7 @@ mod tests {
                     let surface = composer.surface_bounds.get().unwrap();
                     let model = composer.model_bounds.get().unwrap();
                     let right =
-                        surface.right() - px(1.0 + ACTION_INSET + 28.0 + ACTION_PRIMARY_GAP);
+                        surface.right() - px(1.0 + ACTION_INSET + 56.0 + 2.0 * ACTION_PRIMARY_GAP);
                     assert!(
                         (f32::from(model.right() - right)).abs() <= 1.0,
                         "controls must remain on the right at {width}px"
