@@ -18,6 +18,10 @@ pub(super) struct ZotUi {
     /// Threads just archived here. The engine applies it on its next pass, a
     /// few seconds later; until then the row should already be gone.
     archiving: HashMap<String, std::time::Instant>,
+    /// Right-click menu of a sidebar Zapper row: its id and where it opened.
+    pub(super) menu: popover::Popup<(String, Point<Pixels>)>,
+    /// The Zapper waiting on "Delete Zapper?" confirmation.
+    pub(super) delete_confirm: Option<String>,
     pub(super) loaded: Option<(String, u32, u32)>,
     events: Vec<ZotEvent>,
     loading: bool,
@@ -392,7 +396,15 @@ impl Shell {
                                 ),
                         )
                     })
-                    .on_click(cx.listener(move |this, _, _, cx| this.open_chat(id.clone(), cx))),
+                    .on_click(cx.listener(move |this, _, _, cx| this.open_chat(id.clone(), cx)))
+                    .on_mouse_down(MouseButton::Right, {
+                        let zot_id = zot.id.clone();
+                        cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                            this.zot_ui.menu.open((zot_id.clone(), event.position));
+                            cx.stop_propagation();
+                            cx.notify();
+                        })
+                    }),
             );
             // A Zot's threads live under it instead of under their projects.
             let count = threads.len();
@@ -483,6 +495,19 @@ impl Shell {
                                 .group_hover(row_group, |d| d.visible())
                                 .child(archive),
                         )
+                        .on_mouse_down(MouseButton::Right, {
+                            let chat = chat.clone();
+                            cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                                this.chat_menu.open(super::ChatMenuState {
+                                    tab: None,
+                                    chat_id: chat.clone(),
+                                    position: event.position,
+                                    page: super::ChatMenuPage::Root,
+                                });
+                                cx.stop_propagation();
+                                cx.notify();
+                            })
+                        })
                         .on_click(
                             cx.listener(move |this, _, _, cx| this.open_chat(chat.clone(), cx)),
                         ),
@@ -501,7 +526,198 @@ impl Shell {
                 .is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(10))
     }
 
-    fn archive_zot_thread(&mut self, zot: &Zot, chat_id: String, cx: &mut Context<Self>) {
+    /// The Zapper a thread works for, if any.
+    pub(super) fn zot_of_thread(&self, chat_id: &str, cx: &App) -> Option<Zot> {
+        self.state
+            .read(cx)
+            .zots
+            .iter()
+            .find(|z| z.workers.iter().any(|w| w.chat_id == chat_id))
+            .cloned()
+    }
+
+    fn close_zot_menu(&mut self, cx: &mut Context<Self>) {
+        if self.zot_ui.menu.begin_close() {
+            popover::reap_popup(cx, |shell: &mut Self| &mut shell.zot_ui.menu);
+            cx.notify();
+        }
+    }
+
+    /// Escape closes the Zapper menu, then its delete confirmation.
+    pub(super) fn dismiss_zot_overlay(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.zot_ui.menu.is_open() {
+            self.close_zot_menu(cx);
+            return true;
+        }
+        if self.zot_ui.delete_confirm.take().is_some() {
+            cx.notify();
+            return true;
+        }
+        false
+    }
+
+    pub(super) fn zot_overlay_open(&self) -> bool {
+        self.zot_ui.menu.get().is_some() || self.zot_ui.delete_confirm.is_some()
+    }
+
+    /// The settings page of `zot` closes when the Zapper itself goes away.
+    fn after_removing(&self, zot: &Zot) -> ZotAfter {
+        if self
+            .zot_ui
+            .page
+            .as_ref()
+            .is_some_and(|page| page.id == zot.id)
+        {
+            ZotAfter::LeavePage
+        } else {
+            ZotAfter::Stay
+        }
+    }
+
+    pub(super) fn render_zot_overlays(
+        &mut self,
+        viewport: gpui::Size<Pixels>,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        let theme = Theme::of(cx).for_popup();
+        let zots = self.state.read(cx).zots.clone();
+        let mut overlays = Vec::new();
+        if let Some((zot_id, position)) = self.zot_ui.menu.get().cloned() {
+            match zots.iter().find(|z| z.id == zot_id).cloned() {
+                Some(zot) => {
+                    let row = |key: &str, glyph: &'static str, label: &str, danger: bool| {
+                        let tone = if danger {
+                            theme.danger
+                        } else {
+                            theme.text_muted
+                        };
+                        popover::menu_row(&theme, false, format!("zot-menu-{key}-{zot_id}"))
+                            .id(SharedString::from(format!("zot-menu-{key}")))
+                            .when(danger, |d| d.text_color(theme.danger))
+                            .child(icon(glyph).size(px(16.0)).text_color(tone))
+                            .child(SharedString::from(label.to_owned()))
+                    };
+                    let z = zot.clone();
+                    let new_thread = row("thread", icons::PLUS, "New thread", false).on_click(
+                        cx.listener(move |this, _, _, cx| {
+                            this.close_zot_menu(cx);
+                            this.open_zot_dialog(z.clone(), Kind::Thread(None), cx);
+                        }),
+                    );
+                    let z = zot.clone();
+                    let settings = row("settings", icons::SETTINGS, "Settings", false).on_click(
+                        cx.listener(move |this, _, _, cx| {
+                            this.close_zot_menu(cx);
+                            this.open_zot_editor(z.clone(), cx);
+                        }),
+                    );
+                    let z = zot.clone();
+                    let archive = row(
+                        "archive",
+                        icons::ARCHIVE_MINIMALISTIC,
+                        "Archive with threads",
+                        false,
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.close_zot_menu(cx);
+                        let after = this.after_removing(&z);
+                        this.send_zot_command(
+                            z.id.clone(),
+                            Some(z.revision),
+                            ZotAction::SetStatus {
+                                status: ZotStatus::Archived,
+                            },
+                            after,
+                            cx,
+                        );
+                    }));
+                    let z = zot.clone();
+                    let delete = row("delete", icons::TRASH_BIN_MINIMALISTIC, "Delete…", true)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.close_zot_menu(cx);
+                            this.zot_ui.delete_confirm = Some(z.id.clone());
+                            cx.notify();
+                        }));
+                    let menu = popover::popover_card(&theme)
+                        .w(px(216.0))
+                        .flex()
+                        .flex_col()
+                        .on_mouse_down_out(cx.listener(|this, _, _, cx| this.close_zot_menu(cx)))
+                        .child(new_thread)
+                        .child(settings)
+                        .when(zot.status != ZotStatus::Archived, |menu| {
+                            menu.child(archive)
+                        })
+                        .child(popover::menu_separator())
+                        .child(delete)
+                        .into_any_element();
+                    overlays.push(popover::menu_at(
+                        "zot-context-menu",
+                        position,
+                        menu,
+                        self.zot_ui.menu.closing_since(),
+                    ));
+                }
+                // The Zapper vanished under the open menu.
+                None => self.close_zot_menu(cx),
+            }
+        }
+        if let Some(zot_id) = self.zot_ui.delete_confirm.clone() {
+            let Some(zot) = zots.into_iter().find(|z| z.id == zot_id) else {
+                self.zot_ui.delete_confirm = None;
+                return overlays;
+            };
+            let name = crate::transcript::single_line(&zot.config.name);
+            let card = popover::dialog_card(&theme)
+                .child(popover::dialog_title(&theme, "Delete Zapper?"))
+                .child(div().mt(px(6.0)).child(popover::dialog_body(
+                    &theme,
+                    format!(
+                        "\u{201C}{name}\u{201D} stops and is removed. Its threads, documents and repository files are kept."
+                    ),
+                )))
+                .child(
+                    popover::dialog_footer(&theme)
+                        .child(
+                            popover::btn_ghost(
+                                &theme,
+                                &tr(cx, msg::common::cancel),
+                                "delete-zot-cancel",
+                            )
+                            .id("delete-zot-cancel")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.zot_ui.delete_confirm = None;
+                                cx.notify();
+                            })),
+                        )
+                        .child(
+                            popover::btn_danger(&theme, "Delete")
+                                .id("delete-zot-confirm")
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.zot_ui.delete_confirm = None;
+                                    let after = this.after_removing(&zot);
+                                    this.send_zot_command(
+                                        zot.id.clone(),
+                                        Some(zot.revision),
+                                        ZotAction::Delete,
+                                        after,
+                                        cx,
+                                    );
+                                })),
+                        ),
+                )
+                .into_any_element();
+            overlays.push(popover::modal("delete-zot-dialog", viewport, card));
+        }
+        overlays
+    }
+
+    pub(super) fn archive_zot_thread(
+        &mut self,
+        zot: &Zot,
+        chat_id: String,
+        cx: &mut Context<Self>,
+    ) {
         if self.zot_ui.pending {
             return;
         }

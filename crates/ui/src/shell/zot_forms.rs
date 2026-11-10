@@ -1004,7 +1004,11 @@ impl Shell {
                 "A Zapper is your captain: it runs work across your repositories, asks when it needs a decision and keeps its notes between conversations.",
             ));
         let fields = self.zot_form_fields(false, window, cx);
-        let submit = if saving { "Creating…" } else { "Create Zapper" };
+        let submit = if saving {
+            "Creating…"
+        } else {
+            "Create Zapper"
+        };
         div()
             .id("zot-page")
             .debug_selector(|| "zot-page".into())

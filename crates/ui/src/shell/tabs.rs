@@ -157,6 +157,7 @@ impl Shell {
             || self.sync_flow.has_visible_overlay()
             || self.delete_confirm.is_some()
             || self.zot_ui.dialog.is_some()
+            || self.zot_overlay_open()
             || self.delete_space_confirm.is_some()
             || self.chat_rename.is_some()
             || self.rename_space_dialog.is_some()
