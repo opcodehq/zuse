@@ -1,0 +1,66 @@
+# Machine certification checks, run inside a managed-base computer by the
+# certification runner. Usage: bash checks.sh fresh|before|resume
+# Each mode prints exactly one JSON line. State lives under $HOME because Boat
+# keeps only home directories on a cold restore.
+set -u
+mode="${1:?mode required}"
+now() { date +%s%3N; }
+as_task() {
+  if id zuse >/dev/null 2>&1 && [ "$(id -un)" != zuse ]; then
+    sudo -n -u zuse env HOME=/home/zuse PATH=/usr/local/bin:/usr/bin:/bin "$@"
+  else
+    "$@"
+  fi
+}
+ok() { if "$@" >/dev/null 2>&1; then echo true; else echo false; fi; }
+CODEX=$(find /opt/zuse/harnesses/releases -maxdepth 5 -type f -name codex -perm -u+x 2>/dev/null | head -1)
+CLAUDE=$(find /opt/zuse/harnesses/releases -maxdepth 5 -type f -name claude -perm -u+x 2>/dev/null | head -1)
+STATE="$HOME/.zuse-certification"
+
+# Spawn the Codex app-server and time until it answers initialize; -1 if it never does.
+codex_start() {
+  [ -n "$CODEX" ] || { echo -1; return; }
+  local t line=""
+  t=$(now)
+  coproc CX { as_task "$CODEX" app-server 2>/dev/null; }
+  printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"zuse-certification","version":"1"},"capabilities":{"experimentalApi":true}}}' >&"${CX[1]}"
+  read -t 60 -r line <&"${CX[0]}"
+  local ms=$(( $(now) - t ))
+  kill "$CX_PID" 2>/dev/null
+  wait "$CX_PID" 2>/dev/null
+  case "$line" in *'"id":1'*) echo "$ms" ;; *) echo -1 ;; esac
+}
+
+case "$mode" in
+fresh)
+  runtime_sha=$(sha256sum /usr/local/bin/zuse-cloud-runtime 2>/dev/null | cut -d' ' -f1)
+  runtime_version=$(as_task /usr/local/bin/zuse-cloud-runtime --version 2>/dev/null)
+  claude_ok=$(ok as_task "$CLAUDE" --version)
+  codex_ms=$(codex_start)
+  mkdir -p "$STATE"
+  echo retained > "$STATE/disk-marker" && sync
+  printf '{"runtimeSha256":"%s","runtimeVersion":"%s","claudeAnswers":%s,"codexInitializeMs":%s,"git":%s,"sudo":%s,"sshd":%s,"taskUser":%s,"cpus":%s}\n' \
+    "$runtime_sha" "$runtime_version" "$claude_ok" "$codex_ms" \
+    "$(ok git --version)" "$(ok sudo -n true)" "$(ok test -x /usr/sbin/sshd)" "$(ok id zuse)" "$(nproc)"
+  ;;
+before)
+  mkdir -p "$STATE"
+  cat /proc/sys/kernel/random/boot_id > "$STATE/boot-id"
+  # A resident agent, as the runtime keeps one between turns.
+  as_task setsid bash -c "sleep 1000000 | $CODEX app-server >/dev/null 2>&1" </dev/null >/dev/null 2>&1 &
+  sleep 2
+  pgrep -u zuse -f 'codex app-server' | head -1 > "$STATE/agent-pid"
+  printf '{"agentRunning":%s}\n' "$( [ -s "$STATE/agent-pid" ] && echo true || echo false )"
+  ;;
+resume)
+  [ "$(cat /proc/sys/kernel/random/boot_id)" = "$(cat "$STATE/boot-id" 2>/dev/null)" ] && same_boot=true || same_boot=false
+  pid=$(cat "$STATE/agent-pid" 2>/dev/null)
+  [ -n "$pid" ] && [ -d "/proc/$pid" ] && survived=true || survived=false
+  restart=0
+  [ "$survived" = false ] && restart=$(codex_start)
+  [ "$(cat "$STATE/disk-marker" 2>/dev/null)" = retained ] && disk=true || disk=false
+  as_task pkill -f 'codex app-server' >/dev/null 2>&1
+  printf '{"sameBoot":%s,"agentSurvived":%s,"agentRestartMs":%s,"diskKept":%s}\n' "$same_boot" "$survived" "$restart" "$disk"
+  ;;
+*) echo '{"error":"unknown mode"}'; exit 2 ;;
+esac
