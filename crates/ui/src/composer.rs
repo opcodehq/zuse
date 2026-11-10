@@ -8053,6 +8053,39 @@ impl Composer {
         cx.notify();
     }
 
+    /// Browser notes are staged without stealing focus from the page editor.
+    pub(crate) fn stage_browser_annotation(
+        &mut self,
+        key: String,
+        context: crate::context_items::ContextItem,
+        cx: &mut Context<Self>,
+    ) {
+        self.state.update(cx, |state, cx| {
+            state.add_context_item(&key, context);
+            cx.notify();
+        });
+        cx.notify();
+    }
+
+    pub(crate) fn remove_browser_annotation(
+        &mut self,
+        key: String,
+        id: &str,
+        cx: &mut Context<Self>,
+    ) {
+        self.state.update(cx, |state, cx| {
+            if state
+                .context_items(&key)
+                .iter()
+                .any(|item| item.id == id && item.browser_annotation.is_some())
+            {
+                state.remove_context_item(&key, id);
+                cx.notify();
+            }
+        });
+        cx.notify();
+    }
+
     fn render_appshot_strip(
         &self,
         theme: &Theme,
@@ -13309,8 +13342,9 @@ impl Render for Composer {
         } else {
             composer_total_height(content_height)
         };
-        let target_height = base_height + appshot_strip_height(appshot_count);
-        dock_layout.extra_height = appshot_strip_height(appshot_count);
+        let extra_height = appshot_strip_height(appshot_count);
+        let target_height = base_height + extra_height;
+        dock_layout.extra_height = extra_height;
         let dock_owns_layout = self.dock_frame.is_some_and(|frame| frame.active)
             || dock_height_changed
             || self.dock_reflow.active();
@@ -15076,7 +15110,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn composer_picker_escape_restores_focus_but_click_away_does_not(
+    fn composer_picker_dismissal_returns_focus_when_nothing_else_takes_it(
         cx: &mut gpui::TestAppContext,
     ) {
         let (_dir, handle) = composer_focus_window(cx);
@@ -15114,7 +15148,9 @@ mod tests {
             }
             cx.update_window(handle.into(), |_, window, cx| {
                 window.draw(cx).clear();
-                assert_eq!(input.read(cx).focus_handle.is_focused(window), escape);
+                // Dismissing the menu hands focus back to the composer whether by
+                // Escape or by clicking empty space: nothing else claimed it.
+                assert!(input.read(cx).focus_handle.is_focused(window));
             })
             .unwrap();
         }
@@ -18620,13 +18656,15 @@ mod tests {
     fn new_thread_route_changes_use_the_coordinated_timeline() {
         let m = FlipMorph::new_thread_transition(124.0, 0.0);
         assert_eq!(m.spec, motion::NEW_THREAD_TRANSITION);
+        let end = motion::NEW_THREAD_TRANSITION.duration_ms as f32;
+        let mid = end * 0.6;
         assert_eq!(m.height(49.0, 0.0), 124.0);
-        assert!(m.height(49.0, 250.0) < 124.0);
-        assert!(m.height(49.0, 250.0) > 49.0);
-        assert_eq!(m.height(49.0, 420.0), 49.0);
+        assert!(m.height(49.0, mid) < 124.0);
+        assert!(m.height(49.0, mid) > 49.0);
+        assert_eq!(m.height(49.0, end), 49.0);
         let reverse = FlipMorph::new_thread_transition(49.0, 0.0);
         assert_eq!(reverse.height(124.0, 0.0), 49.0);
-        assert_eq!(reverse.height(124.0, 420.0), 124.0);
+        assert_eq!(reverse.height(124.0, end), 124.0);
     }
 
     #[test]

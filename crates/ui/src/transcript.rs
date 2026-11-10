@@ -1460,11 +1460,11 @@ pub fn rows_for_entry(
         // Markdown never lands in the bubble.
         let (body, badges) = crate::badges::split(&parsed.text);
         let body = agent_message_display(&body);
-        // Chips stand in for their attachments: those leave the strip, and a
-        // chip carries its upload's path for its progress and, for an image,
-        // a click opening it.
+        // Draft chips become attachment references above the sent bubble.
+        // Resolve uploads before lifting their spans so ordinary text and links
+        // keep their original meaning; the draft editor is unaffected.
         let chips = zuse_protocol::attachment_mentions::attachment_mentions(&body);
-        let mut attachments = parsed.attachments;
+        let attachments = parsed.attachments;
         let (text, mut mentions) = match crate::composer::sent_mention_display(&body) {
             Some((display, spans)) => (display, spans),
             None => (body, Vec::new()),
@@ -1481,12 +1481,6 @@ pub fn rows_for_entry(
                 .find(|att| crate::attachments::chip_names_attachment(chip, &att.path))
                 .map(|att| att.path.clone().into());
         }
-        attachments.retain(|att| {
-            att.appshot.is_some()
-                || !chips
-                    .iter()
-                    .any(|chip| crate::attachments::chip_names_attachment(chip, &att.path))
-        });
         let copy_text = (!text.trim().is_empty())
             .then(|| SharedString::from(crate::composer::display_with_link_urls(&text, &mentions)));
         let (text, mentions, files) = lift_file_mentions(&text, mentions);
@@ -7957,11 +7951,30 @@ impl Transcript {
         }
         for (aix, att) in atts.iter().enumerate() {
             if !crate::attachments::is_image_path(&att.path) {
-                strip = strip.child(user_file_pill(
-                    SharedString::from(format!("{row_id}#file{aix}")),
-                    &att.name,
-                    Theme::of(cx),
-                ));
+                let (sending, progress) = self.upload_status(&att.path, cx);
+                let mut file = div()
+                    .flex()
+                    .items_center()
+                    .gap(px(4.0))
+                    .child(user_file_pill(
+                        SharedString::from(format!("{row_id}#file{aix}")),
+                        &att.name,
+                        Theme::of(cx),
+                    ));
+                if sending {
+                    file = file.child(match progress {
+                        Some(percent) => crate::loaders::upload_progress_ring(percent, 16.0),
+                        None => crate::loaders::mini_glyph_spinner(
+                            format!("file-sending-{row_id}-{aix}"),
+                            2.0,
+                            glyph,
+                            cx.entity_id(),
+                            cx,
+                        )
+                        .into_any_element(),
+                    });
+                }
+                strip = strip.child(file);
                 continue;
             }
             let state = self.attachment_state(&device_ids, &att.path, None, cx);
@@ -10326,7 +10339,8 @@ fn lift_file_mentions(
     Vec<SharedString>,
 ) {
     let lifted = |span: &crate::composer::SentMentionSpan| {
-        span.kind == crate::composer::ChipKind::File && span.attachment.is_none()
+        (span.kind == crate::composer::ChipKind::File && span.attachment.is_none())
+            || span.upload.is_some()
     };
     if !spans.iter().any(lifted) {
         return (text.to_owned(), spans, Vec::new());
@@ -10347,7 +10361,7 @@ fn lift_file_mentions(
         out.push_str(&text[at..span.range.start]);
         at = span.range.end;
         if lifted(&span) {
-            if !files.contains(&span.path) {
+            if span.attachment.is_none() && !files.contains(&span.path) {
                 files.push(span.path.clone());
             }
             while out.ends_with(' ') {
@@ -17225,15 +17239,11 @@ mod tests {
         assert_eq!(pads, expected);
     }
 
-    /// A sent prompt's file mentions render as chips in the transcript: the
-    /// row carries the projected display text plus spans, while ordinary
-    /// prompts keep the empty-spans fast path. The row version derives from
-    /// the RAW text either way, so projection never perturbs the diff key.
-    /// A chip whose upload is still crossing to the host shows its progress
-    /// in place of its icon, as the strip's thumbnail did; once the bytes
-    /// land (the ref is rewritten to a local path) the icon comes back.
+    /// Sent attachment references move above the bubble and retain upload status.
     #[gpui::test]
-    fn sent_chips_show_upload_progress_until_their_bytes_land(cx: &mut gpui::TestAppContext) {
+    fn sent_attachments_retain_upload_progress_until_their_bytes_land(
+        cx: &mut gpui::TestAppContext,
+    ) {
         use zuse_protocol::attachment_mentions::attachment_mention_link;
         let dir = tempfile::tempdir().unwrap();
         cx.update(|cx| {
@@ -17278,22 +17288,9 @@ mod tests {
         else {
             panic!("expected a user row");
         };
-        assert!(attachments.is_empty());
-        let mentions = mentions.clone();
+        assert_eq!(attachments.len(), 3);
+        assert!(mentions.is_empty());
         transcript.update(cx, |transcript, cx| {
-            let overlays = transcript.chip_overlays(&"u5".into(), &mentions, &Theme::dark(), cx);
-            // The image (43% across) and the file still crossing show a
-            // status; the landed file shows its icon.
-            assert_eq!(
-                overlays
-                    .iter()
-                    .map(|overlay| (overlay.range.clone(), overlay.status.is_some()))
-                    .collect::<Vec<_>>(),
-                [
-                    (mentions[0].range.clone(), true),
-                    (mentions[1].range.clone(), true)
-                ]
-            );
             assert_eq!(
                 transcript.upload_status("pending://att-1/Image 1.png", cx),
                 (true, Some(43))
@@ -17305,12 +17302,10 @@ mod tests {
         });
     }
 
-    /// A sent message with image, file-attachment and workspace-file chips
-    /// reads as chips in the bubble; only attachments without a chip stay in
-    /// the strip above.
+    /// Every sent attachment renders above the bubble, including references
+    /// that were inserted inline while composing.
     #[test]
-    fn user_bubbles_project_attachment_chips_in_place_of_the_strip() {
-        use crate::composer::ChipKind;
+    fn sent_attachment_references_move_above_the_message() {
         use zuse_protocol::attachment_mentions::attachment_mention_link;
         let body = format!(
             "compare {} with {} and {}",
@@ -17342,38 +17337,18 @@ mod tests {
             panic!("expected a user row");
         };
         assert!(!text.contains("zuse-") && !text.contains("Attached images"));
-        assert_eq!(
-            mentions.iter().map(|m| m.kind).collect::<Vec<_>>(),
-            [ChipKind::Image, ChipKind::File]
-        );
-        // A workspace file is not an upload: it lifts out of the bubble.
+        assert!(mentions.is_empty());
+        assert!(!text.contains("Image 1") && !text.contains("notes.md"));
         assert_eq!(files.as_slice(), ["crates/ui/src/composer.rs"]);
-        let labels: Vec<String> = mentions
-            .iter()
-            .map(|m| {
-                text[m.range.clone()]
-                    .trim_matches(|c: char| !c.is_alphanumeric())
-                    .replace('\u{a0}', " ")
-            })
-            .collect();
-        assert_eq!(labels, ["Image 1", "notes.md"]);
-        // Chips stand in for their attachments: only the unchipped image is
-        // left in the strip, and each attachment chip carries its upload.
         assert_eq!(
             attachments
                 .iter()
                 .map(|a| a.path.as_str())
                 .collect::<Vec<_>>(),
-            ["/uploads/0a1b2c3d-Image_3.png"]
-        );
-        assert_eq!(
-            mentions
-                .iter()
-                .map(|m| m.upload.as_deref())
-                .collect::<Vec<_>>(),
             [
-                Some("/uploads/ab12cd34-Image_1.png"),
-                Some("/uploads/ef56ab78-notes.md"),
+                "/uploads/ab12cd34-Image_1.png",
+                "/uploads/ef56ab78-notes.md",
+                "/uploads/0a1b2c3d-Image_3.png"
             ]
         );
 

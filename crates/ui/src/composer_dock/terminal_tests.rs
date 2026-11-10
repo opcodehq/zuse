@@ -139,7 +139,11 @@ fn terminal_clearance_preserves_composer_motion_and_same_frame_layout(
             (f32::from(actual.top() - baseline.top())).abs() < 0.1,
             "terminal budgeting must not alter the composer's trajectory: {actual:?} vs {baseline:?}"
         );
-        if geometry.get().height > 0.1 {
+        // Only a docked composer rides above the terminal. The floating hero
+        // composer stays on its own bottom-anchored path, which the terminal
+        // does not displace.
+        let docked = handle.read_with(cx, |fixture, _| fixture.docked).unwrap();
+        if geometry.get().height > 0.1 && docked {
             assert!(
                 actual.bottom() <= terminal.top() + px(0.1),
                 "composer {actual:?} overlaps terminal {terminal:?}"

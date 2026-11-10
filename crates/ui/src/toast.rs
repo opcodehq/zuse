@@ -365,9 +365,25 @@ fn schedule_wake(window: &Window, cx: &mut App) {
 }
 
 fn kind_icon(kind: ToastKind, theme: &Theme) -> AnyElement {
+    if kind == ToastKind::Success {
+        return div()
+            .size(px(16.0))
+            .flex_none()
+            .rounded_full()
+            .bg(theme.success)
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(
+                crate::icons::icon(crate::icons::CHECK)
+                    .size(px(11.0))
+                    .text_color(gpui::white()),
+            )
+            .into_any_element();
+    }
     let (path, color) = match kind {
         ToastKind::Error => (crate::icons::DANGER_TRIANGLE, theme.danger),
-        ToastKind::Success => (crate::icons::CHECK, theme.success),
+        ToastKind::Success => unreachable!(),
         ToastKind::Info => (crate::icons::INFO_CIRCLE, theme.text_muted),
     };
     crate::icons::icon(path)
@@ -554,6 +570,31 @@ pub fn render_toaster(window: &mut Window, cx: &mut App) -> Option<AnyElement> {
                             ),
                         )
                     }),
+            )
+            .child(
+                div()
+                    .id(("toast-dismiss", id as usize))
+                    .debug_selector(move || format!("toast-dismiss-{id}").into())
+                    .size(px(22.0))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(5.0))
+                    .cursor_pointer()
+                    .role(gpui::Role::Button)
+                    .aria_label("Dismiss notification")
+                    .hover(|style| style.bg(crate::theme::wash(0.10)))
+                    .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(move |_, _, cx| {
+                        cx.stop_propagation();
+                        dismiss(id, cx);
+                    })
+                    .child(
+                        crate::icons::icon(crate::icons::CLOSE)
+                            .size(px(13.0))
+                            .text_color(theme.text_muted),
+                    ),
             )
             .child(
                 // Measure the natural height for the stack's layout.
@@ -784,6 +825,20 @@ mod tests {
         let id = cx.update(|_, cx| cx.global::<ToastStore>().toasts[1].id);
         cx.update(|_, cx| dismiss(id, cx));
         cx.update(|_, cx| assert_eq!(messages(cx), ["Couldn't save"]));
+    }
+
+    #[gpui::test]
+    fn close_button_dismisses_notification(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| cx.set_global(Theme::dark()));
+        let (_, cx) = cx.add_window_view(|_, _| Host);
+        cx.update(|_, cx| {
+            success(cx, "URL copied");
+            cx.global_mut::<ToastStore>().toasts[0].created = Instant::now() - MOVE;
+        });
+        cx.update(|window, cx| window.draw(cx).clear());
+        let close = cx.debug_bounds("toast-dismiss-1").unwrap().center();
+        cx.simulate_click(close, gpui::Modifiers::default());
+        cx.update(|_, cx| assert!(messages(cx).is_empty()));
     }
 
     #[test]

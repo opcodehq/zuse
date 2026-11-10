@@ -76,12 +76,48 @@ distinguishes verified hosting from the remaining real-agent launch work.
 - `crates/protocol`, `crates/rpc`, `crates/client`: shared types, transports and client logic.
 - Focused crates own documents, synchronization, themes, Markdown, audio and previews.
 
-Rust dependencies and versions are managed in the root Cargo workspace. JavaScript is limited to provider SDK bridges, the public npm client and generated browser bindings.
+Rust dependencies and versions are managed in the root Cargo workspace. JavaScript is used for provider SDK bridges, the public npm client, generated browser bindings, and the native browser’s element-selection helper.
 
 Persistent coordinators and the application control surface are documented in
 [Zots and application control](internal-docs/zots.md). The standalone
 `zuse-control` client and [`@zuse/sdk`](packages/sdk/README.md) share the engine's
 versioned operations across local and paired cloud environments.
+
+## Native browser panel
+
+The desktop browser panel can open local previews and HTTP(S) websites. Enter a
+website address or a search term in its address bar; search terms open
+DuckDuckGo. Recent pages appear on the browser home page. Use the toolbar to
+navigate, reload, or open the current page in your default browser.
+
+On Linux, the browser requires WebKitGTK 2.40 or later using the 4.1 API.
+
+On macOS, Linux and Windows, **Take screenshot** in the options menu freezes the page in
+an editor: drag to select a region, then mark it up with a pen, boxes, or
+arrows in one of three colours. Press Esc to cancel, Enter to save, and
+⌘Z (Ctrl+Z on Linux and Windows) to undo. Saved screenshots go to
+`~/Downloads/Zuse Screenshots`, and the notice that follows can copy the image
+or its path.
+
+On macOS, Linux and Windows, the browser toolbar also supports selecting a page
+element for an annotation and opening the platform’s developer tools. The options menu can copy the
+URL, capture a screenshot, choose the page appearance, and clear browser cookies
+or cached data. Screenshots are saved to `~/Downloads/Zuse Screenshots`.
+Appearance **System** follows Zuse’s current theme; individual websites must
+support the chosen appearance. macOS uses the docked WebKit inspector; Linux
+opens the WebKitGTK inspector in a separate window, and Windows opens WebView2
+DevTools. Cookies and cache are cleared for the current browser profile.
+
+Choose **Annotate page** and use **Select**, **Region**, or **Draw** to mark the
+page. Select picks elements; Region drags a rectangle; Draw adds freehand marks.
+**Erase** removes targets, **Undo** restores the last change, and **Clear** removes
+all current targets. Each mark has a numbered pin and its own comment box below
+it. **Add to composer** stages that note; other comment drafts remain available.
+Click a pin to return to its comment. **Done** exits annotation mode. Browser and code notes share the
+**Annotations** tray above the composer, where you can review, edit or remove
+each note. Press the composer’s Send button to send the collected notes together.
+Sent images and files appear as compact attachment chips above the message
+bubble. Draft attachments keep their regular thumbnails and inline references.
 
 ## Development
 

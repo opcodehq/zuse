@@ -1124,6 +1124,7 @@ mod tests {
             .unwrap();
         window.update(cx,|view,window,cx|{
             let plugin=serde_json::from_value(serde_json::json!({"id":"key-tools","name":"Key tools","description":"Fixture","apiKeyHeader":"Authorization"})).unwrap();
+            view.settings=false;
             view.plugins_browse=true;
             view.plugin_detail=Some("key-tools".into());
             view.plugin_state.snapshot["catalog"]=serde_json::to_value([&plugin]).unwrap();
