@@ -95,13 +95,14 @@ arrows in one of three colours. Press Esc to cancel, Enter to save, and
 `~/Downloads/Zuse Screenshots`, and the notice that follows can copy the image
 or its path.
 
-On macOS, the browser toolbar also supports selecting a page element for chat
-context and opening WebKit’s developer inspector. The options menu can also
-copy the URL, choose the page appearance, and clear browser cookies or cached
-data.
+On macOS and Linux, the browser toolbar also supports selecting a page element
+for chat context and opening WebKit’s developer inspector. The options menu can
+also copy the URL, choose the page appearance, and clear browser cookies or
+cached data. On Linux the inspector opens in its own window, and the browser
+needs WebKitGTK 2.40 or newer.
 Appearance **System** follows Zuse’s current theme; individual websites must
 support the chosen appearance. The developer inspector is WebKit’s, not Chrome
-DevTools. Some browser controls are currently macOS-only.
+DevTools. These browser controls are not yet available on Windows.
 
 ## Development
 

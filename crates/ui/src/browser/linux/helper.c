@@ -305,6 +305,60 @@ static void free_page(gpointer data) {
     g_free(p->context_link);
     g_free(p);
 }
+static gboolean keep_detached(WebKitWebInspector *inspector, gpointer unused) { return TRUE; }
+// Async replies outlive the command; they carry the page id and request data.
+typedef struct {
+    guint id;
+    gint64 generation;
+    gchar *page;
+    gboolean cookies;
+} Reply;
+static Reply *reply_new(guint id, JsonObject *o) {
+    Reply *r = g_new0(Reply, 1);
+    r->id = id;
+    r->generation = json_object_has_member(o, "generation")
+                        ? json_object_get_int_member(o, "generation")
+                        : 0;
+    r->page = g_strdup(json_object_has_member(o, "page") ? json_object_get_string_member(o, "page")
+                                                         : "");
+    r->cookies = json_object_has_member(o, "cookies") && json_object_get_boolean_member(o, "cookies");
+    return r;
+}
+static void reply_free(Reply *r) {
+    g_free(r->page);
+    g_free(r);
+}
+static void picked(GObject *web, GAsyncResult *result, gpointer data) {
+    Reply *r = data;
+    GError *error = NULL;
+    JSCValue *v =
+        webkit_web_view_call_async_javascript_function_finish(WEBKIT_WEB_VIEW(web), result, &error);
+    JsonBuilder *b = json_builder_new();
+    json_builder_begin_object(b);
+    json_builder_set_member_name(b, "generation");
+    json_builder_add_int_value(b, r->generation);
+    member_string(b, "page", r->page);
+    gchar *value = v && jsc_value_is_string(v) ? jsc_value_to_string(v) : NULL;
+    member_string(b, "value", value);
+    member_string(b, "error", error ? error->message : NULL);
+    json_builder_end_object(b);
+    send_json('P', r->id, b);
+    g_free(value);
+    g_clear_object(&v);
+    g_clear_error(&error);
+    reply_free(r);
+}
+static void cleared(GObject *manager, GAsyncResult *result, gpointer data) {
+    Reply *r = data;
+    GError *error = NULL;
+    if (webkit_website_data_manager_clear_finish(WEBKIT_WEBSITE_DATA_MANAGER(manager), result,
+                                                 &error)) {
+        const char *what = r->cookies ? "cookies" : "cache";
+        send_packet('D', r->id, what, strlen(what));
+    }
+    g_clear_error(&error);
+    reply_free(r);
+}
 static Page *new_page(guint id) {
     Page *p = g_new0(Page, 1);
     p->id = id;
@@ -318,7 +372,10 @@ static Page *new_page(guint id) {
     im->id = id;
     webkit_web_view_set_input_method_context(p->web, WEBKIT_INPUT_METHOD_CONTEXT(im));
     g_object_unref(im);
-    webkit_settings_set_enable_developer_extras(webkit_web_view_get_settings(p->web), FALSE);
+    // The page renders offscreen, so the inspector must stay in its own window.
+    webkit_settings_set_enable_developer_extras(webkit_web_view_get_settings(p->web), TRUE);
+    g_signal_connect(webkit_web_view_get_inspector(p->web), "attach", G_CALLBACK(keep_detached),
+                     NULL);
     gtk_container_add(GTK_CONTAINER(p->window), GTK_WIDGET(p->web));
     gtk_window_set_default_size(GTK_WINDOW(p->window), p->width, p->height);
     g_signal_connect(p->window, "damage-event", G_CALLBACK(damaged), p);
@@ -504,6 +561,14 @@ static void command(JsonObject *o) {
     }
     if (shutting_down)
         return;
+    if (!strcmp(cmd, "appearance")) {
+        // WebKitGTK derives prefers-color-scheme from these GTK settings. The
+        // stock theme keeps a user's dark system theme from forcing dark mode.
+        gboolean dark = json_object_has_member(o, "dark") && json_object_get_boolean_member(o, "dark");
+        g_object_set(gtk_settings_get_default(), "gtk-theme-name", "Adwaita",
+                     "gtk-application-prefer-dark-theme", dark, NULL);
+        return;
+    }
     Page *p = g_hash_table_lookup(pages, GUINT_TO_POINTER(id));
     if (!strcmp(cmd, "create")) {
         if (!p)
@@ -600,6 +665,28 @@ static void command(JsonObject *o) {
             p->dirty = TRUE;
         } else
             gtk_widget_hide(p->window);
+    } else if (!strcmp(cmd, "select-element"))
+        // An isolated world, like macOS: page scripts cannot reach the picker.
+        webkit_web_view_call_async_javascript_function(p->web, string(o, "script"), -1, NULL,
+                                                       "zuse", NULL, NULL, picked,
+                                                       reply_new(id, o));
+    else if (!strcmp(cmd, "cancel-selection"))
+        webkit_web_view_evaluate_javascript(
+            p->web, "if (globalThis.zuseCancelSelection) globalThis.zuseCancelSelection();", -1,
+            "zuse", NULL, NULL, NULL, NULL);
+    else if (!strcmp(cmd, "inspector")) {
+        WebKitWebInspector *inspector = webkit_web_view_get_inspector(p->web);
+        if (webkit_web_inspector_get_web_view(inspector))
+            webkit_web_inspector_close(inspector);
+        else
+            webkit_web_inspector_show(inspector);
+    } else if (!strcmp(cmd, "clear-data")) {
+        Reply *r = reply_new(id, o);
+        WebKitWebsiteDataTypes types =
+            r->cookies ? WEBKIT_WEBSITE_DATA_COOKIES
+                       : WEBKIT_WEBSITE_DATA_DISK_CACHE | WEBKIT_WEBSITE_DATA_MEMORY_CACHE;
+        webkit_website_data_manager_clear(webkit_web_context_get_website_data_manager(context),
+                                          types, 0, NULL, cleared, r);
     } else if (!strcmp(cmd, "eval"))
         webkit_web_view_evaluate_javascript(p->web, string(o, "script"), -1, NULL, NULL, NULL,
                                             evaluated, GUINT_TO_POINTER(id));

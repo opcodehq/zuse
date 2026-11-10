@@ -121,6 +121,16 @@ pub(super) fn action_button(
     }
 }
 
+/// The page's colour scheme: System follows Zuse's theme.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn page_dark(theme: &Theme, cx: &gpui::App) -> bool {
+    match crate::settings::current(cx).browser_appearance {
+        crate::appearance::AppearanceMode::System => theme.appearance.is_dark(),
+        crate::appearance::AppearanceMode::Light => false,
+        crate::appearance::AppearanceMode::Dark => true,
+    }
+}
+
 const REVEAL: &str = if cfg!(target_os = "macos") {
     "Reveal in Finder"
 } else {
@@ -943,7 +953,7 @@ impl Render for BrowserSurface {
         .when(has_page, |el| {
             el.on_click(cx.listener(|this, _, _, cx| this.open_external(cx)))
         });
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         let select = button(
             "browser-select-element",
             "Select element",
@@ -957,7 +967,7 @@ impl Render for BrowserSurface {
         .when(has_page, |el| {
             el.on_click(cx.listener(|this, _, _, cx| this.toggle_select_element(cx)))
         });
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         let devtools = button(
             "browser-developer-tools",
             "Developer tools",
@@ -1011,14 +1021,14 @@ impl Render for BrowserSurface {
             let menu = crate::popover::popover_card(&theme.for_popup())
                 .w(px(184.0))
                 .on_mouse_down_out(cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
-                    #[cfg(target_os = "macos")]
+                    #[cfg(any(target_os = "macos", target_os = "linux"))]
                     if this
                         .appearance_menu_bounds
                         .is_some_and(|bounds| bounds.contains(&event.position))
                     {
                         return;
                     }
-                    #[cfg(not(target_os = "macos"))]
+                    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
                     let _ = event;
                     this.close_toolbar_menu(cx);
                 }));
@@ -1036,7 +1046,7 @@ impl Render for BrowserSurface {
                 .when(!has_page, |el| el.opacity(0.4).cursor_default()),
             );
             let menu = menu.child(copy);
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
             let menu = {
                 use crate::appearance::AppearanceMode;
                 let current = crate::settings::current(cx).browser_appearance;
@@ -1158,9 +1168,9 @@ impl Render for BrowserSurface {
                         ),
                 )
             };
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
             let menu = menu.child(div().h(px(1.0)).my(px(4.0)).bg(theme.border));
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
             let menu = menu
                 .child(
                     browser_menu_row(
@@ -1297,7 +1307,7 @@ impl Render for BrowserSurface {
         let toolbar = surface_chrome::toolbar(&theme)
             .when(!external, |el| el.child(back).child(forward).child(reload))
             .child(address);
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         let toolbar = toolbar.child(select).child(devtools);
         let toolbar = toolbar.child(open).child(menu_trigger);
 
@@ -1376,11 +1386,7 @@ impl BrowserSurface {
             } else {
                 let native = native.handle();
                 let resize_inset = self.resize_inset;
-                let dark = match crate::settings::current(cx).browser_appearance {
-                    crate::appearance::AppearanceMode::System => theme.appearance.is_dark(),
-                    crate::appearance::AppearanceMode::Light => false,
-                    crate::appearance::AppearanceMode::Dark => true,
-                };
+                let dark = page_dark(theme, cx);
                 let right_occlusion = self.right_occlusion;
                 body.child(
                     gpui::canvas(
@@ -1419,6 +1425,7 @@ impl BrowserSurface {
             } else {
                 let image = native.image.clone();
                 let image_scale = native.image_scale;
+                let dark = page_dark(theme, cx);
                 let entity = cx.entity().downgrade();
                 body.child(gpui::canvas(|_,_,_| (), move |bounds,_,window,cx| {
                     let scale = window.scale_factor();
@@ -1427,7 +1434,7 @@ impl BrowserSurface {
                         window.handle_input(&focus,gpui::ElementInputHandler::new(bounds,view),cx);
                     }
                     let _ = entity.update(cx, |this,_| {
-                        if let Some(native)=&mut this.native { native.sync(bounds,scale); }
+                        if let Some(native)=&mut this.native { native.sync(bounds,scale); native.set_dark(dark); }
                     });
                     let capture=entity.clone();
                     window.on_mouse_event(move |event: &gpui::MouseMoveEvent,phase,_,cx| {
