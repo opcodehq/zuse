@@ -340,6 +340,12 @@ impl Shell {
             } else {
                 format!("{needs} decisions waiting for you")
             };
+            // Stays lit while its right-click menu is open.
+            let menu_open = self
+                .zot_ui
+                .menu
+                .get()
+                .is_some_and(|(menu_zot, _)| menu_zot == &zot.id);
             list = list.child(
                 div()
                     .id(SharedString::from(format!("zot-{}", zot.id)))
@@ -359,6 +365,7 @@ impl Shell {
                         theme.text
                     })
                     .when(active, |d| d.bg(theme.bg_selected))
+                    .when(!active && menu_open, |d| d.bg(theme.element_hover))
                     .when(!active, |d| d.hover(|d| d.bg(theme.element_hover)))
                     .child(zot_mascot(&zot_avatar(&zot), 1.0))
                     .child(
@@ -451,6 +458,9 @@ impl Shell {
                             theme.text_muted
                         })
                         .when(current, |d| d.bg(theme.bg_selected))
+                        .when(!current && self.chat_menu_targets(&chat), |d| {
+                            d.bg(theme.element_hover).text_color(theme.text)
+                        })
                         .when(!current, |d| {
                             d.hover(|d| d.bg(theme.element_hover).text_color(theme.text))
                         })

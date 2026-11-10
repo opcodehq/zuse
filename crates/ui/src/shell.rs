@@ -5328,6 +5328,13 @@ impl Shell {
     }
 
     /// Close the session-row context menu through the exit animation.
+    /// Whether the open chat menu belongs to `chat_id`'s row (not a tab).
+    pub(super) fn chat_menu_targets(&self, chat_id: &str) -> bool {
+        self.chat_menu
+            .get()
+            .is_some_and(|menu| menu.tab.is_none() && menu.chat_id == chat_id)
+    }
+
     fn close_chat_menu(&mut self, cx: &mut Context<Self>) {
         self.chat_copy_intent.reset();
         if self.chat_menu.begin_close() {
@@ -8939,6 +8946,9 @@ impl Shell {
         // below its near-opaque selected fill, and blending toward it visibly
         // dimmed the active row under the pointer (user report).
         let hover_bg = if selected { selected_wash } else { hover };
+        // The row a context menu was opened on stays lit while the menu is
+        // up; the pointer leaving it for the menu must not drop the wash.
+        let menu_target = !preview && self.chat_menu_targets(&id);
         // Brightness is the read state: titles rest gray and an unseen finish
         // stands out in full white, with no status mark beside it.
         let finished_unseen =
@@ -8971,8 +8981,16 @@ impl Shell {
             .px(px(Theme::SPACE_SM))
             .when(sidebar, |el| el.justify_center())
             .when(!sidebar, |el| el.py(px(6.0)))
-            .text_color(motion::hover_blend(&fade_key, rest_text, theme.text_strong))
-            .bg(motion::hover_blend(&fade_key, rest_bg, hover_bg))
+            .text_color(if menu_target {
+                theme.text_strong
+            } else {
+                motion::hover_blend(&fade_key, rest_text, theme.text_strong)
+            })
+            .bg(if menu_target {
+                hover_bg
+            } else {
+                motion::hover_blend(&fade_key, rest_bg, hover_bg)
+            })
             // No selection ring (user request) — the wash alone marks the
             // active row.
             // Row hover drives BOTH the wash blend and the corner's
