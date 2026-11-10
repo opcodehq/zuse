@@ -114,7 +114,10 @@ pub(super) async fn account_tx(
                 "project_cache_resource_identity_changed",
             ));
         }
-        sqlx::query("INSERT INTO zuse_rust_project_cache_resources(operation_id,owner_id,project_id,provider,resource_kind,resource_id,first_observed_at,last_observed_at,absent_observed_at) VALUES($1,$2,$3,$4,$5,$6,$7,$7,$8) ON CONFLICT(operation_id,resource_kind) DO UPDATE SET last_observed_at=greatest(zuse_rust_project_cache_resources.last_observed_at,EXCLUDED.last_observed_at),absent_observed_at=coalesce(zuse_rust_project_cache_resources.absent_observed_at,EXCLUDED.absent_observed_at)").bind(row["operation_id"].as_str()).bind(row["owner_id"].as_str()).bind(row["project_id"].as_str()).bind(row["provider"].as_str()).bind(kind).bind(id).bind(now).bind((resources[absence]==true).then_some(now)).execute(&mut **tx).await?;
+        // A worker's supplied clock may precede an earlier observation. Keep
+        // the first absence receipt ordered after discovery, and never infer
+        // absence from an update which contains no absence observation.
+        sqlx::query("INSERT INTO zuse_rust_project_cache_resources(operation_id,owner_id,project_id,provider,resource_kind,resource_id,first_observed_at,last_observed_at,absent_observed_at) VALUES($1,$2,$3,$4,$5,$6,$7,$7,$8) ON CONFLICT(operation_id,resource_kind) DO UPDATE SET last_observed_at=greatest(zuse_rust_project_cache_resources.last_observed_at,EXCLUDED.last_observed_at),absent_observed_at=coalesce(zuse_rust_project_cache_resources.absent_observed_at,CASE WHEN EXCLUDED.absent_observed_at IS NOT NULL THEN greatest(zuse_rust_project_cache_resources.first_observed_at,EXCLUDED.absent_observed_at) END)").bind(row["operation_id"].as_str()).bind(row["owner_id"].as_str()).bind(row["project_id"].as_str()).bind(row["provider"].as_str()).bind(kind).bind(id).bind(now).bind((resources[absence]==true).then_some(now)).execute(&mut **tx).await?;
     }
     Ok(())
 }
