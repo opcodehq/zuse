@@ -3,6 +3,7 @@
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
+mod markup;
 #[cfg(target_os = "linux")]
 use linux as native;
 #[cfg(target_os = "macos")]
@@ -172,8 +173,10 @@ pub struct BrowserSurface {
     #[cfg(target_os = "macos")]
     appearance_hover: crate::popover::HoverIntent<()>,
     hovered_toolbar_button: Option<&'static str>,
-    #[cfg(target_os = "macos")]
+    /// The last saved screenshot, offered by the notice card.
     screenshot: Option<(std::path::PathBuf, Vec<u8>)>,
+    /// The screenshot editor; while open it covers (and hides) the page.
+    markup: Option<markup::Markup>,
     #[cfg(target_os = "macos")]
     selecting_element: bool,
     #[cfg(target_os = "macos")]
@@ -275,8 +278,8 @@ impl BrowserSurface {
             #[cfg(target_os = "macos")]
             appearance_hover: Default::default(),
             hovered_toolbar_button: None,
-            #[cfg(target_os = "macos")]
             screenshot: None,
+            markup: None,
             #[cfg(target_os = "macos")]
             selecting_element: false,
             #[cfg(target_os = "macos")]
@@ -361,11 +364,27 @@ impl BrowserSurface {
         if presentation != Presentation::Live {
             self.cancel_selection();
         }
-        #[cfg(any(target_os = "macos", target_os = "linux", windows))]
-        if let Some(native) = &mut self.native {
-            native.present(presentation);
-        }
+        self.apply_presentation();
         cx.notify();
+    }
+
+    /// What the native page shows: the markup editor hides it while open.
+    fn shown(&self) -> Presentation {
+        if self.markup.is_some() {
+            Presentation::Hidden
+        } else {
+            self.presentation
+        }
+    }
+
+    fn apply_presentation(&mut self) {
+        #[cfg(any(target_os = "macos", target_os = "linux", windows))]
+        {
+            let shown = self.shown();
+            if let Some(native) = &mut self.native {
+                native.present(shown);
+            }
+        }
     }
 
     #[cfg(feature = "browser-fixture")]
@@ -462,6 +481,7 @@ impl BrowserSurface {
                 self.favicon_generation += 1;
                 self.favicon_task = None;
             }
+            let shown = self.shown();
             let result = if let Some(native) = &self.native {
                 native.load(&url)
             } else {
@@ -469,7 +489,7 @@ impl BrowserSurface {
                 {
                     native::NativePage::new(window, &self.context.data, self.native_tx.clone())
                         .map(|mut native| {
-                            native.present(self.presentation);
+                            native.present(shown);
                             self.native = Some(native);
                         })
                         .and_then(|_| self.native.as_ref().unwrap().load(&url))
@@ -550,12 +570,80 @@ impl BrowserSurface {
         }
     }
 
-    #[cfg(target_os = "macos")]
-    fn save_screenshot(&mut self, cx: &mut Context<Self>) {
+    /// Freeze the page and open the markup editor over it.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    fn take_screenshot(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.close_toolbar_menu(cx);
+        // macOS captures asynchronously; `Captured` opens the editor.
+        #[cfg(target_os = "macos")]
         if let Some(native) = &self.native {
-            native.save_screenshot(self.native_tx.clone());
+            let _ = window;
+            native.capture(self.native_tx.clone());
         }
+        // Linux already composites WebKit's frames; freeze the current one.
+        #[cfg(target_os = "linux")]
+        match (self.native.as_ref())
+            .and_then(|native| native.image.as_deref())
+            .map(markup::freeze)
+        {
+            Some(Some(image)) => self.open_markup(image, window, cx),
+            Some(None) => crate::toast::error(cx, "Could not capture the page"),
+            None => crate::toast::error(cx, "The page has not finished drawing yet"),
+        }
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    fn open_markup(
+        &mut self,
+        image: std::sync::Arc<gpui::RenderImage>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        #[cfg(target_os = "macos")]
+        self.cancel_selection();
+        self.screenshot = None;
+        if let Some(old) = self.markup.replace(markup::Markup::new(image)) {
+            let _ = window.drop_image(old.image());
+        }
+        self.apply_presentation();
+        // The page is hidden, so keys (Esc, Enter, undo) must reach the editor.
+        window.focus(&self.focus, cx);
+        cx.notify();
+    }
+
+    fn close_markup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(markup) = self.markup.take() {
+            let _ = window.drop_image(markup.image());
+            self.apply_presentation();
+            cx.notify();
+        }
+    }
+
+    /// Export off the main thread; the notice card appears once it is on disk.
+    fn save_markup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(job) = self.markup.as_ref().map(markup::Markup::export_job) else {
+            return;
+        };
+        self.close_markup(window, cx);
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    let bytes = job()?;
+                    markup::write(&bytes).map(|path| (path, bytes))
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| match result {
+                Ok(screenshot) => {
+                    this.screenshot = Some(screenshot);
+                    cx.notify();
+                }
+                Err(error) => {
+                    crate::toast::error(cx, format!("Could not save screenshot: {error}"))
+                }
+            });
+        })
+        .detach();
     }
 
     #[cfg(target_os = "macos")]
@@ -634,6 +722,10 @@ impl BrowserSurface {
     }
 
     pub fn close(&mut self, cx: &mut Context<Self>) {
+        if let Some(markup) = self.markup.take() {
+            let image = markup.image();
+            cx.defer(move |cx| gpui::ImageSource::Render(image).evict(None, cx));
+        }
         self.set_presentation(Presentation::Hidden, cx);
         self.clear_favicon(cx);
         #[cfg(target_os = "linux")]
@@ -669,6 +761,7 @@ impl BrowserSurface {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let shown = self.shown();
         let Some(native) = &mut self.native else {
             return;
         };
@@ -699,7 +792,7 @@ impl BrowserSurface {
                     }
                     self.address_edited = false;
                 }
-                native.present(self.presentation);
+                native.present(shown);
                 if finished && let Some(url) = &page.url {
                     native.discover_favicon(url.clone());
                     if page.error.is_none() {
@@ -775,13 +868,10 @@ impl BrowserSurface {
             #[cfg(target_os = "macos")]
             native::NativeEvent::DataCleared(message) => crate::toast::success(cx, message),
             #[cfg(target_os = "macos")]
-            native::NativeEvent::ScreenshotSaved(result) => match result {
-                Ok(screenshot) => {
-                    self.screenshot = Some(screenshot);
-                    cx.notify();
-                }
+            native::NativeEvent::Captured(result) => match result {
+                Ok(image) => self.open_markup(image, window, cx),
                 Err(error) => {
-                    crate::toast::error(cx, format!("Could not save screenshot: {error}"))
+                    crate::toast::error(cx, format!("Could not capture the page: {error}"))
                 }
             },
             native::NativeEvent::NewTab(url) => {

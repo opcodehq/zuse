@@ -88,10 +88,17 @@ website address or a search term in its address bar; search terms open
 DuckDuckGo. Recent pages appear on the browser home page. Use the toolbar to
 navigate, reload, or open the current page in your default browser.
 
+On macOS and Linux, **Take screenshot** in the options menu freezes the page in
+an editor: drag to select a region, then mark it up with a pen, boxes, or
+arrows in one of three colours. Press Esc to cancel, Enter to save, and
+⌘Z (Ctrl+Z on Linux) to undo. Saved screenshots go to
+`~/Downloads/Zuse Screenshots`, and the notice that follows can copy the image
+or its path.
+
 On macOS, the browser toolbar also supports selecting a page element for chat
-context and opening WebKit’s developer inspector. The options menu can copy the
-URL, capture a screenshot, choose the page appearance, and clear browser cookies
-or cached data. Screenshots are saved to `~/Downloads/Zuse Screenshots`.
+context and opening WebKit’s developer inspector. The options menu can also
+copy the URL, choose the page appearance, and clear browser cookies or cached
+data.
 Appearance **System** follows Zuse’s current theme; individual websites must
 support the chosen appearance. The developer inspector is WebKit’s, not Chrome
 DevTools. Some browser controls are currently macOS-only.

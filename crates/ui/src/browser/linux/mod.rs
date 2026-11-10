@@ -478,7 +478,7 @@ impl super::BrowserSurface {
             let _ = this.update_in(cx, |this, _, cx| {
                 this.native_startup = None;
                 let result = result.and_then(|mut native| {
-                    native.present(this.presentation);
+                    native.present(this.shown());
                     let result = this
                         .page
                         .url

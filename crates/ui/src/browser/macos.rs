@@ -230,7 +230,7 @@ pub(super) enum NativeEvent {
     },
     DataCleared(&'static str),
     InspectorUnavailable,
-    ScreenshotSaved(Result<(std::path::PathBuf, Vec<u8>), String>),
+    Captured(Result<std::sync::Arc<gpui::RenderImage>, String>),
     ElementSelected {
         page: String,
         generation: u64,
@@ -700,52 +700,26 @@ impl NativePage {
         Ok(())
     }
 
-    pub(super) fn save_screenshot(&self, tx: Sender) {
+    /// Snapshot the visible page; the markup editor opens on the result.
+    pub(super) fn capture(&self, tx: Sender) {
         let completion = block2::RcBlock::new(
             move |image: *mut objc2_app_kit::NSImage, error: *mut NSError| {
-                let result = unsafe {
+                let tiff = unsafe {
                     if !error.is_null() {
                         Err((&*error).localizedDescription().to_string())
                     } else {
                         image
                             .as_ref()
                             .and_then(|image| image.TIFFRepresentation())
-                            .and_then(|data| {
-                                objc2_app_kit::NSBitmapImageRep::imageRepWithData(&data)
-                            })
-                            .and_then(|image| {
-                                image.representationUsingType_properties(
-                                    objc2_app_kit::NSBitmapImageFileType::PNG,
-                                    &NSDictionary::new(),
-                                )
-                            })
-                            .map(|data| data.as_bytes_unchecked().to_vec())
+                            .map(|data| data.to_vec())
                             .ok_or_else(|| "Could not capture the page".to_string())
                     }
                 };
+                // Decoding a Retina capture takes a moment; keep it off the main thread.
                 let tx = tx.clone();
                 std::thread::spawn(move || {
-                    let result = result.and_then(|bytes| {
-                        use std::io::Write;
-                        let home = std::env::var_os("HOME").ok_or("Home directory unavailable")?;
-                        let dir = std::path::PathBuf::from(home)
-                            .join("Downloads")
-                            .join("Zuse Screenshots");
-                        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-                        let now = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .map_err(|e| e.to_string())?
-                            .as_nanos();
-                        let path = dir.join(format!("screenshot-{now}.png"));
-                        let mut file = std::fs::OpenOptions::new()
-                            .write(true)
-                            .create_new(true)
-                            .open(&path)
-                            .map_err(|e| e.to_string())?;
-                        file.write_all(&bytes).map_err(|e| e.to_string())?;
-                        Ok((path, bytes))
-                    });
-                    let _ = tx.try_send(NativeEvent::ScreenshotSaved(result));
+                    let result = tiff.and_then(|bytes| super::markup::decode(&bytes));
+                    let _ = tx.try_send(NativeEvent::Captured(result));
                 });
             },
         );

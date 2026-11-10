@@ -88,6 +88,45 @@ fn button(
         })
 }
 
+/// A text button: outlined when secondary, accent-filled when primary.
+pub(super) fn action_button(
+    theme: &Theme,
+    id: &'static str,
+    text: &'static str,
+    primary: bool,
+) -> gpui::Stateful<gpui::Div> {
+    let base = div()
+        .id(id)
+        .h(px(30.0))
+        .px(px(12.0))
+        .rounded(px(8.0))
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .whitespace_nowrap()
+        .text_size(px(12.0))
+        .font_weight(gpui::FontWeight::MEDIUM)
+        .cursor_pointer()
+        .child(text);
+    if primary {
+        base.bg(theme.accent_strong)
+            .text_color(theme.on_accent)
+            .hover(|el| el.opacity(0.9))
+    } else {
+        base.border_1()
+            .border_color(theme.border_strong)
+            .bg(crate::theme::wash(0.04))
+            .hover(|el| el.bg(crate::theme::wash(0.1)))
+    }
+}
+
+const REVEAL: &str = if cfg!(target_os = "macos") {
+    "Reveal in Finder"
+} else {
+    "Show in folder"
+};
+
 fn browser_menu_row(
     theme: &Theme,
     id: &'static str,
@@ -119,6 +158,23 @@ impl BrowserSurface {
     ) {
         #[cfg(target_os = "linux")]
         if self.linux_menu_key(&event.keystroke.key, cx) {
+            cx.stop_propagation();
+            return;
+        }
+        if self.markup.is_some() && !self.address.focus_handle(cx).is_focused(window) {
+            let keystroke = &event.keystroke;
+            match keystroke.key.as_str() {
+                "escape" => self.close_markup(window, cx),
+                "enter" => self.save_markup(window, cx),
+                "z" if keystroke.modifiers.secondary() => {
+                    if let Some(markup) = &mut self.markup {
+                        markup.undo();
+                        cx.notify();
+                    }
+                }
+                _ => {}
+            }
+            // The page is frozen: nothing else should reach it.
             cx.stop_propagation();
             return;
         }
@@ -935,10 +991,7 @@ impl Render for BrowserSurface {
                 this.close_toolbar_menu(cx);
             } else {
                 this.toolbar_menu.open(());
-                #[cfg(target_os = "macos")]
-                {
-                    this.screenshot = None;
-                }
+                this.screenshot = None;
                 cx.notify();
             }
         }));
@@ -969,7 +1022,7 @@ impl Render for BrowserSurface {
                     let _ = event;
                     this.close_toolbar_menu(cx);
                 }));
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
             let menu = menu.child(
                 browser_menu_row(
                     &theme,
@@ -978,7 +1031,7 @@ impl Render for BrowserSurface {
                     "Take screenshot",
                 )
                 .when(has_page, |el| {
-                    el.on_click(cx.listener(|this, _, _, cx| this.save_screenshot(cx)))
+                    el.on_click(cx.listener(|this, _, window, cx| this.take_screenshot(window, cx)))
                 })
                 .when(!has_page, |el| el.opacity(0.4).cursor_default()),
             );
@@ -1147,38 +1200,11 @@ impl Render for BrowserSurface {
         } else {
             menu_trigger
         };
-        #[cfg(target_os = "macos")]
         let menu_trigger = if let Some((path, bytes)) = &self.screenshot {
             let path_copy = path.to_string_lossy().into_owned();
             let path_reveal = path.clone();
             let bytes = bytes.clone();
-            // Secondary actions are outlined; the primary one takes the accent.
-            let action = |id: &'static str, text: &'static str, primary: bool| {
-                let base = div()
-                    .id(id)
-                    .h(px(30.0))
-                    .px(px(12.0))
-                    .rounded(px(8.0))
-                    .flex()
-                    .flex_none()
-                    .items_center()
-                    .justify_center()
-                    .whitespace_nowrap()
-                    .text_size(px(12.0))
-                    .font_weight(gpui::FontWeight::MEDIUM)
-                    .cursor_pointer()
-                    .child(text);
-                if primary {
-                    base.bg(theme.accent_strong)
-                        .text_color(theme.on_accent)
-                        .hover(|el| el.opacity(0.9))
-                } else {
-                    base.border_1()
-                        .border_color(theme.border_strong)
-                        .bg(crate::theme::wash(0.04))
-                        .hover(|el| el.bg(crate::theme::wash(0.1)))
-                }
-            };
+            let action = |id, text, primary| action_button(&theme, id, text, primary);
             // Sized by its actions: the row of buttons sets the card's width, the
             // header spans it, and padding is even on every side.
             let notice = crate::popover::popover_card(&theme.for_popup())
@@ -1242,7 +1268,7 @@ impl Render for BrowserSurface {
                             ),
                         )
                         .child(
-                            action("browser-screenshot-reveal", "Reveal in Finder", false)
+                            action("browser-screenshot-reveal", REVEAL, false)
                                 .on_click(move |_, _, cx| cx.reveal_path(&path_reveal)),
                         )
                         .child(
@@ -1284,10 +1310,69 @@ impl Render for BrowserSurface {
             // Empty tabs share the shell's glass, like the sidebar tab picker.
             // Keep an opaque backing while native web content is loading.
             .when(has_page, |body| body.bg(theme.bg));
+        // The markup editor stands in for the page while it is open.
+        let body = if self.markup.is_some() {
+            body.child(self.markup_editor(&theme, cx))
+        } else {
+            self.page_body(body, &theme, cx)
+        };
+
+        let remote_loopback = self.remote
+            && self
+                .page
+                .url
+                .as_deref()
+                .and_then(|s| url::Url::parse(s).ok())
+                .is_some_and(|u| {
+                    super::model::loopback(&u)
+                        && !(u.port() == Some(zuse_protocol::PREVIEW_PROXY_PORT)
+                            && u.host_str()
+                                .is_some_and(|host| host.ends_with(".localhost")))
+                });
+        div().id("browser-surface").size_full().flex().flex_col().track_focus(&self.focus)
+            .key_context("Browser").on_key_down(cx.listener(Self::key_down))
+            .on_key_up(cx.listener(|this,event: &gpui::KeyUpEvent,w,cx| {
+                #[cfg(target_os = "linux")]
+                if this.focus.is_focused(w) {this.linux_key(&event.keystroke,false);cx.stop_propagation();}
+                #[cfg(not(target_os = "linux"))]
+                let _=(this,event,w,cx);
+            }))
+            .on_action(cx.listener(|this, _: &super::Reload, _, cx| this.reload(cx)))
+            .on_action(cx.listener(|this, _: &super::FocusAddress, w, cx| this.focus_address(w, cx)))
+            .on_action(cx.listener(|_, _: &super::NewTab, _, cx| cx.emit(BrowserEvent::NewTab(None))))
+            .on_action(cx.listener(|_, _: &super::CloseTab, _, cx| cx.emit(BrowserEvent::Close)))
+            .on_action(cx.listener(|this, _: &super::Back, _, _| this.history(false)))
+            .on_action(cx.listener(|this, _: &super::Forward, _, _| this.history(true)))
+            // Mouse side buttons drive the shell's route history everywhere
+            // else; over the browser they are inert.
+            .on_mouse_down(MouseButton::Navigate(gpui::NavigationDirection::Back), |_, _, cx| cx.stop_propagation())
+            .on_mouse_down(MouseButton::Navigate(gpui::NavigationDirection::Forward), |_, _, cx| cx.stop_propagation())
+            .child(toolbar)
+            .when_some(persistence_notice, |el, message| el.child(div().px(px(12.0)).py(px(8.0))
+                .text_size(crate::typography::text_xs()).text_color(theme.text_muted).child(message.to_owned())))
+            .when_some(self.validation.clone(), |el, message| el.child(div().px(px(12.0)).py(px(8.0)).text_size(crate::typography::text_xs()).text_color(theme.danger).child(message)))
+            .when(remote_loopback, |el| el.child(div().px(px(12.0)).py(px(8.0)).border_b_1().border_color(theme.border)
+                .text_size(crate::typography::text_xs()).text_color(theme.text_muted)
+                .child(tr(cx, msg::native::localhost_opens_on_this_device_open_a_detected_preview_from_a_new_tab_to_reach_y_6c40a9dc))))
+            .child(body)
+            .when(external, |el| el.child(div().h(px(26.0)).px(px(10.0)).flex().items_center().gap(px(5.0)).border_t_1().border_color(theme.border)
+                .text_size(crate::typography::text_xs()).text_color(theme.text_faint)
+                .child(icons::icon(icons::ARROW_UP_RIGHT).size(px(11.0))).child(tr(cx, msg::native::opens_in_your_default_browser))))
+    }
+}
+
+impl BrowserSurface {
+    /// The live page for this platform, or the empty state.
+    fn page_body(
+        &self,
+        body: gpui::Stateful<gpui::Div>,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
         #[cfg(target_os = "macos")]
         let body = if let Some(native) = &self.native {
             if self.page.error.is_some() {
-                body.child(self.empty_body(&theme, cx))
+                body.child(self.empty_body(theme, cx))
             } else {
                 let native = native.handle();
                 let resize_inset = self.resize_inset;
@@ -1325,12 +1410,12 @@ impl Render for BrowserSurface {
                 )
             }
         } else {
-            body.child(self.empty_body(&theme, cx))
+            body.child(self.empty_body(theme, cx))
         };
         #[cfg(target_os = "linux")]
         let body = if let Some(native) = &self.native {
             if self.page.error.is_some() {
-                body.child(self.empty_body(&theme, cx))
+                body.child(self.empty_body(theme, cx))
             } else {
                 let image = native.image.clone();
                 let image_scale = native.image_scale;
@@ -1387,64 +1472,23 @@ impl Render for BrowserSurface {
                 }))
             }
         } else {
-            body.child(self.empty_body(&theme, cx))
+            body.child(self.empty_body(theme, cx))
         };
         #[cfg(windows)]
         let body = if let Some(native) = &self.native {
             if self.page.error.is_some() {
-                body.child(self.empty_body(&theme, cx))
+                body.child(self.empty_body(theme, cx))
             } else {
                 self.windows_page(body, native.handle(), cx)
             }
         } else {
-            body.child(self.empty_body(&theme, cx))
+            body.child(self.empty_body(theme, cx))
         };
         #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
-        let body = body.child(self.empty_body(&theme, cx));
+        let body = body.child(self.empty_body(theme, cx));
 
         #[cfg(target_os = "linux")]
-        let body = body.when_some(self.linux_menu(&theme, cx), |el, menu| el.child(menu));
-
-        let remote_loopback = self.remote
-            && self
-                .page
-                .url
-                .as_deref()
-                .and_then(|s| url::Url::parse(s).ok())
-                .is_some_and(|u| {
-                    super::model::loopback(&u)
-                        && !(u.port() == Some(zuse_protocol::PREVIEW_PROXY_PORT)
-                            && u.host_str()
-                                .is_some_and(|host| host.ends_with(".localhost")))
-                });
-        div().id("browser-surface").size_full().flex().flex_col().track_focus(&self.focus)
-            .key_context("Browser").on_key_down(cx.listener(Self::key_down))
-            .on_key_up(cx.listener(|this,event: &gpui::KeyUpEvent,w,cx| {
-                #[cfg(target_os = "linux")]
-                if this.focus.is_focused(w) {this.linux_key(&event.keystroke,false);cx.stop_propagation();}
-                #[cfg(not(target_os = "linux"))]
-                let _=(this,event,w,cx);
-            }))
-            .on_action(cx.listener(|this, _: &super::Reload, _, cx| this.reload(cx)))
-            .on_action(cx.listener(|this, _: &super::FocusAddress, w, cx| this.focus_address(w, cx)))
-            .on_action(cx.listener(|_, _: &super::NewTab, _, cx| cx.emit(BrowserEvent::NewTab(None))))
-            .on_action(cx.listener(|_, _: &super::CloseTab, _, cx| cx.emit(BrowserEvent::Close)))
-            .on_action(cx.listener(|this, _: &super::Back, _, _| this.history(false)))
-            .on_action(cx.listener(|this, _: &super::Forward, _, _| this.history(true)))
-            // Mouse side buttons drive the shell's route history everywhere
-            // else; over the browser they are inert.
-            .on_mouse_down(MouseButton::Navigate(gpui::NavigationDirection::Back), |_, _, cx| cx.stop_propagation())
-            .on_mouse_down(MouseButton::Navigate(gpui::NavigationDirection::Forward), |_, _, cx| cx.stop_propagation())
-            .child(toolbar)
-            .when_some(persistence_notice, |el, message| el.child(div().px(px(12.0)).py(px(8.0))
-                .text_size(crate::typography::text_xs()).text_color(theme.text_muted).child(message.to_owned())))
-            .when_some(self.validation.clone(), |el, message| el.child(div().px(px(12.0)).py(px(8.0)).text_size(crate::typography::text_xs()).text_color(theme.danger).child(message)))
-            .when(remote_loopback, |el| el.child(div().px(px(12.0)).py(px(8.0)).border_b_1().border_color(theme.border)
-                .text_size(crate::typography::text_xs()).text_color(theme.text_muted)
-                .child(tr(cx, msg::native::localhost_opens_on_this_device_open_a_detected_preview_from_a_new_tab_to_reach_y_6c40a9dc))))
-            .child(body)
-            .when(external, |el| el.child(div().h(px(26.0)).px(px(10.0)).flex().items_center().gap(px(5.0)).border_t_1().border_color(theme.border)
-                .text_size(crate::typography::text_xs()).text_color(theme.text_faint)
-                .child(icons::icon(icons::ARROW_UP_RIGHT).size(px(11.0))).child(tr(cx, msg::native::opens_in_your_default_browser))))
+        let body = body.when_some(self.linux_menu(theme, cx), |el, menu| el.child(menu));
+        body
     }
 }
