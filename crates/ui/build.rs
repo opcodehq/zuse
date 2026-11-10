@@ -9,6 +9,9 @@ fn main() {
         let object = out.join("voice-permission.o");
         assert!(
             Command::new("clang")
+                // Build scripts run on the host. clang otherwise emits a host
+                // object even when Cargo is cross-compiling the Rust crate.
+                .args(["-target", &env::var("TARGET").expect("Cargo sets TARGET")])
                 .args(["-fobjc-arc", "-c", "src/dictation/permission.m", "-o"])
                 .arg(&object)
                 .status()

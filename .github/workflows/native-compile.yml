@@ -54,6 +54,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ inputs.target }}
+      - if: runner.os == 'macOS'
+        name: Set the supported macOS deployment target and verify native helpers
+        run: |
+          echo 'MACOSX_DEPLOYMENT_TARGET=12.0' >> "$GITHUB_ENV"
+          python -m unittest discover -s scripts -p test_macos_permission.py -v
       - run: python scripts/cargo_dev.py --github-env
       # shared-key omits the caller job name: main prebuilds and tagged releases
       # restore the same default-branch cache, isolated by target and toolchain.

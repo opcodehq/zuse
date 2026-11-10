@@ -51,6 +51,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - if: runner.os == 'macOS'
+        name: Check microphone helper cross-compilation
+        run: python3 -m unittest discover -s scripts -p test_macos_permission.py -v
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
