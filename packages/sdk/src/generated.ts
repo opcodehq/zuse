@@ -3,7 +3,7 @@
 export type ZotRepository = { deviceId: string, spaceId: string, };
 export type ZotAvatar = { mascot: string, color: string, };
 export type ZotModel = { harness: string, model: string | null, };
-export type ZotConfig = { name: string, purpose: string, homeDeviceId: string, repositories: Array<ZotRepository>, coordinatorModel: ZotModel, workerDeviceId: string, maxConcurrentWorkers: number, maxFollowups: number, 
+export type ZotConfig = { name: string, purpose: string, homeDeviceId: string, repositories: Array<ZotRepository>, coordinatorModel: ZotModel, workerDeviceId: string, maxConcurrentWorkers: number, maxFollowups: number,
 /**
  * Saved pixel character; absent uses one derived from the Zot's id.
  */
@@ -11,9 +11,35 @@ avatar?: ZotAvatar, };
 export type ZotStatus = "active" | "paused" | "stopped" | "archived";
 export type ZotWorker = { chatId: string, deviceId: string, spaceId: string, objective: string, followups: number, };
 export type ZotDecision = { id: string, workerChatId: string | null, question: string, answer: string | null, };
-export type Zot = { id: string, revision: number, activityRevision: number, config: ZotConfig, status: ZotStatus, coordinatorChatId: string, previousCoordinatorChats: Array<string>, workers: Array<ZotWorker>, decisions: Array<ZotDecision>, };
+export type ZotIssueStatus = "backlog" | "todo" | "inProgress" | "blocked" | "inReview" | "done" | "canceled";
+export type ZotIssuePriority = "urgent" | "high" | "normal" | "low";
+export type ZotIssueDetails = { title: string, description: string, status: ZotIssueStatus, priority: ZotIssuePriority,
+/**
+ * Assigned to the owning Zot. Unassigned issues remain visible in its backlog.
+ */
+assigned: boolean,
+/**
+ * ISO calendar date, or absent.
+ */
+dueDate: string | null, labels: Array<string>,
+/**
+ * Other issue ids in the same Zot.
+ */
+relations: Array<string>, };
+export type ZotIssuePullRequest = { url: string, title: string, };
+export type ZotIssueActivity = { actor: string | null, id: string, createdAt: number, kind: string, text: string, replyTo?: string, };
+export type ZotIssue = { id: string, number: number, details: ZotIssueDetails, createdAt: number, updatedAt: number, threads: Array<string>, pullRequests: Array<ZotIssuePullRequest>, activity: Array<ZotIssueActivity>, };
+export type Zot = { id: string, revision: number, activityRevision: number, config: ZotConfig, status: ZotStatus, coordinatorChatId: string, previousCoordinatorChats: Array<string>, workers: Array<ZotWorker>, decisions: Array<ZotDecision>, issues: Array<ZotIssue>, };
 export type ZotFile = { path: string, version: number, content: string, };
-export type ZotAction = { "type": "create", config: ZotConfig, } | { "type": "configure", config: ZotConfig, } | { "type": "setStatus", status: ZotStatus, } | { "type": "adoptWorker", worker: ZotWorker, } | { "type": "delegate", worker: ZotWorker, model: ZotModel, base: string, } | { "type": "messageWorker", chatId: string, text: string, automatic: boolean, } | { "type": "stopWorker", chatId: string, } | { "type": "archiveWorker", chatId: string, } | { "type": "releaseWorker", chatId: string, } | { "type": "decide", decision: ZotDecision, } | { "type": "writeFile", path: string, content: string, expectedVersion: number, } | { "type": "restoreFile", path: string, version: number, expectedVersion: number, } | { "type": "freshConversation" } | { "type": "delete" };
+export type ZotAction = { "type": "create", config: ZotConfig, } | { "type": "configure", config: ZotConfig, } | { "type": "setStatus", status: ZotStatus, } | { "type": "adoptWorker", worker: ZotWorker, } | { "type": "delegate",
+/**
+ * Atomically link the new thread and mark this issue in progress.
+ */
+issueId?: string, worker: ZotWorker, model: ZotModel, base: string, } | { "type": "messageWorker", chatId: string, text: string, automatic: boolean, } | { "type": "stopWorker", chatId: string, } | { "type": "archiveWorker", chatId: string, } | { "type": "releaseWorker", chatId: string, } | { "type": "decide", decision: ZotDecision, } | { "type": "writeFile", path: string, content: string, expectedVersion: number, } | { "type": "restoreFile", path: string, version: number, expectedVersion: number, } | { "type": "createIssue", issueId: string, details: ZotIssueDetails, } | { "type": "editIssue", issueId: string, details: ZotIssueDetails, } | { "type": "linkIssueThread", issueId: string, chatId: string, } | { "type": "linkIssuePullRequest", issueId: string, url: string, title: string, } | { "type": "unlinkIssueThread", issueId: string, chatId: string, } | { "type": "unlinkIssuePullRequest", issueId: string, url: string, } | { "type": "commentIssue", issueId: string, text: string,
+/**
+ * Activity entry this comment answers; shown nested under it.
+ */
+replyTo?: string, } | { "type": "freshConversation" } | { "type": "delete" };
 export type ZotCommand = { commandId: string, zotId: string, expectedRevision: number | null, action: ZotAction, };
 export type ZotEvent = { id: string, zotId: string, workerChatId: string, kind: string, summary: string, acknowledged: boolean, };
 export type ControlInfo = { apiVersion: number, appVersion: string, capabilities: Array<string>, methods: Array<string>, schemas: Record<string, unknown>, };

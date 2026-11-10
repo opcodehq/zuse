@@ -2759,43 +2759,69 @@ impl EngineRpc {
                 if !self.sessions.turn_in_flight(&chat) {
                     return Err(denied());
                 }
-                let zot = zots
+                let coordinator = zots
                     .coordinator(&chat)
-                    .map_err(|e| RpcError::Failed(e.to_string()))?
-                    .ok_or_else(denied)?;
-                let args = operation_params.clone();
-                if operation != zuse_protocol::control::API_INFO
-                    && args.get("zotId").and_then(|v| v.as_str()) != Some(zot.id.as_str())
-                {
-                    return Err(denied());
-                }
-                if operation == zuse_protocol::control::ZOT_COMMAND {
-                    let mut command: zuse_protocol::zots::ZotCommand = parse_params(args)?;
-                    if matches!(
-                        command.action,
-                        zuse_protocol::zots::ZotAction::Create { .. }
-                            | zuse_protocol::zots::ZotAction::Configure { .. }
-                            | zuse_protocol::zots::ZotAction::Delete
-                            | zuse_protocol::zots::ZotAction::SetStatus { .. }
-                            | zuse_protocol::zots::ZotAction::AdoptWorker { .. }
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                if let Some(zot) = coordinator {
+                    let args = operation_params.clone();
+                    if operation != zuse_protocol::control::API_INFO
+                        && args.get("zotId").and_then(|v| v.as_str()) != Some(zot.id.as_str())
+                    {
+                        return Err(denied());
+                    }
+                    if operation == zuse_protocol::control::ZOT_COMMAND {
+                        let mut command: zuse_protocol::zots::ZotCommand = parse_params(args)?;
+                        if matches!(
+                            command.action,
+                            zuse_protocol::zots::ZotAction::Create { .. }
+                                | zuse_protocol::zots::ZotAction::Configure { .. }
+                                | zuse_protocol::zots::ZotAction::Delete
+                                | zuse_protocol::zots::ZotAction::SetStatus { .. }
+                                | zuse_protocol::zots::ZotAction::AdoptWorker { .. }
+                        ) {
+                            return Err(denied());
+                        }
+                        if let zuse_protocol::zots::ZotAction::MessageWorker { automatic, .. } =
+                            &mut command.action
+                        {
+                            *automatic = true;
+                        }
+                        operation_params = serde_json::to_value(command)
+                            .map_err(|e| RpcError::BadParams(e.to_string()))?;
+                        operation_params["_zotActor"] = serde_json::json!(zot.coordinator_chat_id);
+                    } else if !matches!(
+                        operation,
+                        zuse_protocol::control::API_INFO
+                            | zuse_protocol::control::ZOT_FILES
+                            | zuse_protocol::control::ZOT_EVENTS
+                            | zuse_protocol::control::ACK_ZOT_EVENTS
                     ) {
                         return Err(denied());
                     }
-                    if let zuse_protocol::zots::ZotAction::MessageWorker { automatic, .. } =
-                        &mut command.action
+                } else {
+                    let (zot, home) = zots
+                        .worker_home(&chat)
+                        .map_err(|e| RpcError::Failed(e.to_string()))?
+                        .ok_or_else(denied)?;
+                    if operation != zuse_protocol::control::ZOT_COMMAND {
+                        return Err(denied());
+                    }
+                    let command: zuse_protocol::zots::ZotCommand =
+                        parse_params(operation_params.clone())?;
+                    if command.zot_id != zot
+                        || !matches!(
+                            command.action,
+                            zuse_protocol::zots::ZotAction::CommentIssue { .. }
+                                | zuse_protocol::zots::ZotAction::LinkIssuePullRequest { .. }
+                        )
                     {
-                        *automatic = true;
+                        return Err(denied());
                     }
                     operation_params = serde_json::to_value(command)
                         .map_err(|e| RpcError::BadParams(e.to_string()))?;
-                } else if !matches!(
-                    operation,
-                    zuse_protocol::control::API_INFO
-                        | zuse_protocol::control::ZOT_FILES
-                        | zuse_protocol::control::ZOT_EVENTS
-                        | zuse_protocol::control::ACK_ZOT_EVENTS
-                ) {
-                    return Err(denied());
+                    operation_params["targetDeviceId"] = serde_json::json!(home);
+                    operation_params["_zotWorkerChatId"] = serde_json::json!(chat);
+                    operation_params["_zotActor"] = serde_json::json!(chat);
                 }
             }
             if !zuse_protocol::control::METHODS.contains(&operation) {

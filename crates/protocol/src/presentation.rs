@@ -620,3 +620,5 @@ pub fn masked_email(email: &str) -> String {
         None => "•••".to_owned(),
     }
 }
+
+pub mod zot_message;

@@ -107,6 +107,7 @@ pub enum TurnOutcome {
 pub struct Zuse {
     control_token: Option<String>,
     coordinator: bool,
+    worker: bool,
     url: String,
     origin: Origin,
     rpc: Mutex<Option<Arc<RpcClient>>>,
@@ -119,6 +120,7 @@ impl Zuse {
         Self {
             control_token: std::env::var("ZUSE_CONTROL_TOKEN").ok(),
             coordinator: std::env::var("ZUSE_ZOT_ID").is_ok_and(|id| !id.is_empty()),
+            worker: std::env::var("ZUSE_ZOT_WORKER_ID").is_ok_and(|id| !id.is_empty()),
             url,
             origin,
             rpc: Mutex::new(None),
@@ -130,6 +132,7 @@ impl Zuse {
         Self {
             control_token: None,
             coordinator: false,
+            worker: false,
             url: String::new(),
             origin,
             rpc: Mutex::new(Some(Arc::new(client))),
@@ -144,6 +147,13 @@ impl Zuse {
         self.control_token = token;
         self.coordinator = coordinator;
         self
+    }
+    pub fn with_worker_context(mut self, worker: bool) -> Self {
+        self.worker = worker;
+        self
+    }
+    pub fn is_zot_worker(&self) -> bool {
+        self.worker
     }
     pub fn is_coordinator(&self) -> bool {
         self.coordinator

@@ -755,7 +755,7 @@ impl Tools {
         for (name, description) in [
             (
                 "zot_command",
-                "Apply a scoped Zot command. Supply commandId, zotId, expectedRevision and action. Reuse the commandId on retry. Actions include delegate (worker, model, base), messageWorker, stopWorker, archiveWorker, releaseWorker, decide, writeFile, restoreFile and freshConversation.",
+                "Apply a scoped Zot command. Supply commandId, zotId, expectedRevision and action. Reuse the commandId on retry. Actions include createIssue/editIssue (issueId, details), commentIssue (issueId, text), linkIssueThread (issueId, chatId), linkIssuePullRequest (issueId, url, title), delegate (optional issueId, worker, model, base), messageWorker, stopWorker, archiveWorker, releaseWorker, decide, writeFile, restoreFile and freshConversation.",
             ),
             (
                 "zot_files",
@@ -785,7 +785,9 @@ impl Tools {
                         && !tool.name.starts_with("plugins_")
                         && !tool.name.starts_with("device_")))
                     && (!self.zuse.is_coordinator() || coordinator_tool(tool.name))
-                    && (!tool.name.starts_with("zot_") || self.zuse.is_coordinator())
+                    && (!tool.name.starts_with("zot_")
+                        || self.zuse.is_coordinator()
+                        || (self.zuse.is_zot_worker() && tool.name == "zot_command"))
             })
             .collect()
     }
@@ -1742,6 +1744,27 @@ fn default_harness(harnesses: &[HarnessInfo]) -> anyhow::Result<HarnessId> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn workers_get_issue_reporting_without_coordinator_management_tools() {
+        let zuse = crate::Zuse::new(
+            "ws://127.0.0.1:1".into(),
+            crate::Origin {
+                chat_id: Some("worker".into()),
+                device_id: Some("local".into()),
+            },
+        )
+        .with_control_context(None, false)
+        .with_worker_context(true);
+        let tools = super::Tools::new(std::sync::Arc::new(zuse)).list();
+        assert!(tools.iter().any(|t| t.name == "zot_command"));
+        assert!(
+            !tools
+                .iter()
+                .any(|t| matches!(t.name, "zot_events" | "zot_files" | "zot_acknowledge"))
+        );
+        assert!(tools.iter().any(|t| t.name == "list_projects"));
+    }
+
     use super::*;
     use crate::zuse::Origin;
     use async_trait::async_trait;
