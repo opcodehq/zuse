@@ -1,0 +1,105 @@
+name: Compile native release
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        required: true
+      os:
+        type: string
+        required: true
+      platform:
+        type: string
+        required: true
+      arch:
+        type: string
+        required: true
+      target:
+        type: string
+        required: true
+      retention_days:
+        type: number
+        default: 2
+    secrets:
+      HUGEICONS_LICENSE_KEY:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ${{ inputs.os }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      HUGEICONS_LICENSE_KEY: ${{ secrets.HUGEICONS_LICENSE_KEY }}
+      HUGEICONS_SOLID_VERSION: ${{ vars.HUGEICONS_SOLID_VERSION }}
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+      RELEASE_TARGET: ${{ inputs.target }}
+      RELEASE_PLATFORM: ${{ inputs.platform }}
+      RELEASE_ARCH: ${{ inputs.arch }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ inputs.target }}
+      - run: python scripts/cargo_dev.py --github-env
+      # shared-key omits the caller job name: main prebuilds and tagged releases
+      # restore the same default-branch cache, isolated by target and toolchain.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-native-${{ inputs.target }}
+          env-vars: HUGEICONS_BUILD_KEY HUGEICONS_SOLID_VERSION
+          cache-on-failure: true
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake clang libclang-dev pkg-config libssl-dev libfontconfig-dev libfreetype-dev libxcb1-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libvulkan-dev libasound2-dev libwebkit2gtk-4.1-dev libjson-glib-dev
+      - if: inputs.target == 'x86_64-apple-darwin'
+        name: Enable Intel executable smoke checks on Apple Silicon
+        run: /usr/sbin/softwareupdate --install-rosetta --agree-to-license || arch -x86_64 /usr/bin/true
+      - name: Build native executables
+        run: cargo build --locked --release --timings --target "$RELEASE_TARGET" -p zuse -p zuse-cli -p zuse-relay --bins
+      - name: Verify architecture and stage portable build artifacts
+        run: |
+          python - <<'PY'
+          import os, shutil, subprocess, sys
+          from pathlib import Path
+          sys.path.insert(0, 'scripts')
+          from package import BINS, binary_target
+          source = Path(os.environ['CARGO_TARGET_DIR']) / os.environ['RELEASE_TARGET'] / 'release'
+          destination = Path('unsigned/target/release')
+          destination.mkdir(parents=True)
+          expected = (os.environ['RELEASE_PLATFORM'], os.environ['RELEASE_ARCH'])
+          for name in BINS:
+              binary = source / (name + ('.exe' if expected[0] == 'windows' else ''))
+              if binary_target(binary) != expected:
+                  raise SystemExit(f'Unexpected executable architecture: {binary}')
+              shutil.copy2(binary, destination / binary.name)
+          # Exercise the cross-compiled binary before any signing credentials
+          # are loaded. Distribution checks also run it on an actual Intel host.
+          if os.environ['RELEASE_TARGET'] == 'x86_64-apple-darwin':
+              subprocess.run([str(source / 'zuse'), '--noop-browser'], check=True, timeout=30)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-${{ inputs.platform }}-${{ inputs.arch }}
+          path: unsigned/
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention_days }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: compile-timings-${{ inputs.platform }}-${{ inputs.arch }}
+          path: target/cargo-timings/
+          if-no-files-found: ignore
+          retention-days: ${{ inputs.retention_days }}

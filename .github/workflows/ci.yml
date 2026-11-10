@@ -68,6 +68,7 @@ jobs:
           ref: 14d9b82fb65d86f63b6332cb3d616f1ab0ada103
           path: vendor/zkit
       - run: python3 -m unittest discover -s scripts -p test_package.py -v
+      - run: python3 -m unittest discover -s scripts -p test_release_prebuild.py -v
       - run: python3 -m unittest discover -s scripts -p test_distribution.py -v
       - run: python3 -m unittest discover -s scripts -p test_release_notes.py -v
       - run: python3 -m unittest discover -s scripts -p test_cargo_dev.py -v
