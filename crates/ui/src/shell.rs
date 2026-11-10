@@ -2624,9 +2624,8 @@ impl Shell {
         )
         .detach();
 
-        let onboarding = cx.new(|cx| {
-            crate::onboarding::Wizard::new(state.clone(), desktop_import.clone(), cx)
-        });
+        let onboarding =
+            cx.new(|cx| crate::onboarding::Wizard::new(state.clone(), desktop_import.clone(), cx));
         cx.subscribe(
             &onboarding,
             |this: &mut Self, _, event: &crate::onboarding::Finished, cx| {

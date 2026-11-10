@@ -173,7 +173,7 @@ onboarding-flow_agents_more =
        *[other] あと { $count } 個のエージェントを後から設定 → プロバイダーでインストールできます。
     }
 onboarding-flow_signin_title = Zuse にログイン
-onboarding-flow_signin_body = アカウントは任意です。ログインすると、セットアップでツールも引き継げます。
+onboarding-flow_signin_body = アカウントは任意です。ログインすると、セットアップでツールも引き継ぐことができます。
 onboarding-flow_signin_point_mcp = MCP サーバーをまとめて移行
 onboarding-flow_signin_point_cloud = クラウドのワークスペースでも同じプラグインを使用
 onboarding-flow_signin_point_phone = スマートフォンからチャットを確認してアクションを承認

@@ -218,7 +218,7 @@ onboarding-flow_chats_import =
 onboarding-flow_chats_importing = { $total }개 중 { $done }개 가져오는 중…
 onboarding-flow_chats_imported =
     { $count ->
-       *[other] 채팅 { $count }개를 가져왔습니다
+       *[other] 채팅 { $count }개 가져오기 완료
     }
 onboarding-flow_chats_failed =
     { $count ->
@@ -233,8 +233,8 @@ onboarding-flow_access_ask_body = 에이전트가 파일을 편집하거나 명�
 onboarding-flow_access_auto = 자동 승인
 onboarding-flow_access_auto_body = 자동 검토자가 일상적인 작업은 승인하고 나머지는 묻습니다.
 onboarding-flow_access_full = 전체 액세스
-onboarding-flow_access_full_body = 에이전트가 묻지 않고 실행합니다. 작업 트리나 클라우드 컴퓨터와 함께 사용하는 것이 좋습니다.
-onboarding-flow_launch_title = 준비가 끝났습니다
+onboarding-flow_access_full_body = 에이전트가 묻지 않고 실행합니다. 작업 트리나 클라우드 컴퓨터와 함께 사용하는 것을 권장합니다.
+onboarding-flow_launch_title = 모두 준비되었습니다
 onboarding-flow_launch_body = 프로젝트를 추가해 에이전트가 작업할 폴더를 지정하거나, 바로 채팅을 시작하세요.
 onboarding-flow_launch_chats =
     { $count ->

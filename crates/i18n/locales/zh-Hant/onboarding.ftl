@@ -154,7 +154,7 @@ onboarding-flow_system_language = 系統語言
 onboarding-flow_welcome_title = 歡迎使用 Zuse
 onboarding-flow_welcome_back_title = 歡迎回來
 onboarding-flow_welcome_body = 在這台電腦或雲端並行執行程式設計代理程式，所有聊天集中在一處。
-onboarding-flow_welcome_back_body = 這台電腦上有你在舊版 Zuse 中的聊天。只需幾個步驟即可將它們移轉過來。
+onboarding-flow_welcome_back_body = 這台電腦上有你在舊版 Zuse 中的聊天。設定過程中即可將它們移轉過來。
 onboarding-flow_welcome_point_agents = 支援你已在使用的代理程式
 onboarding-flow_welcome_point_parallel = 同時進行多個聊天，各自擁有獨立的簽出副本
 onboarding-flow_welcome_point_phone = 在手機上查看進度並核准操作
@@ -186,7 +186,7 @@ onboarding-flow_mcp_body = 這些伺服器已在這台電腦上的代理程式�
 onboarding-flow_mcp_loading = 正在尋找 MCP 伺服器…
 onboarding-flow_mcp_waiting = 正在準備你的外掛…
 onboarding-flow_mcp_none = 找不到 MCP 伺服器
-onboarding-flow_mcp_none_body = 這台電腦上的代理程式應用程式皆未設定 MCP 伺服器。你可以稍後在「設定 → 外掛」中新增。
+onboarding-flow_mcp_none_body = 這台電腦上的代理程式應用程式都未設定 MCP 伺服器。你可以稍後在「設定 → 外掛」中新增。
 onboarding-flow_mcp_env =
     { $count ->
        *[other] { $count } 個環境變數
@@ -205,7 +205,7 @@ onboarding-flow_mcp_skipped =
        *[other] { $count } 個伺服器無法匯入。
     }
 onboarding-flow_chats_title = 移轉你的聊天
-onboarding-flow_chats_body = 從上次中斷的地方繼續。匯入的聊天會保留歷史紀錄，並繼續使用同一個代理程式。
+onboarding-flow_chats_body = 從上次中斷的地方繼續。匯入的聊天會保留歷史記錄，並繼續使用同一個代理程式。
 onboarding-flow_previous_title = 舊版 Zuse
 onboarding-flow_previous_summary = { $chats } 個聊天 · { $projects } 個專案
 onboarding-flow_previous_settings = 同時移轉支援的設定
@@ -231,9 +231,9 @@ onboarding-flow_access = 新聊天預設
 onboarding-flow_access_ask = 操作前詢問
 onboarding-flow_access_ask_body = 代理程式在編輯檔案或執行命令前會先詢問。
 onboarding-flow_access_auto = 替我核准
-onboarding-flow_access_auto_body = 自動審查器會核准例行操作，其餘操作仍會詢問你。
+onboarding-flow_access_auto_body = 自動檢查器會核准例行操作，其餘操作仍會詢問你。
 onboarding-flow_access_full = 完整存取
-onboarding-flow_access_full_body = 代理程式無需詢問即可操作。最適合搭配工作樹或雲端電腦使用。
+onboarding-flow_access_full_body = 代理程式無需詢問即可操作。最適合與工作樹或雲端電腦一起使用。
 onboarding-flow_launch_title = 一切就緒
 onboarding-flow_launch_body = 新增專案，為代理程式提供工作資料夾，或立即開始聊天。
 onboarding-flow_launch_chats =

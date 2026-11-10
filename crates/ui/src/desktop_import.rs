@@ -189,7 +189,11 @@ impl Onboarding {
     /// Import the detected previous-version profile without the review dialog.
     pub fn import_previous(&mut self, cx: &mut Context<Self>) {
         if self.request_id.is_none() {
-            if let Some(index) = self.sources.iter().position(|s| s["importedBefore"] != true) {
+            if let Some(index) = self
+                .sources
+                .iter()
+                .position(|s| s["importedBefore"] != true)
+            {
                 self.selected = index;
             }
         }
