@@ -4,21 +4,21 @@ Rust desktop and browser control plane for coding agents. The native application
 
 ## Install
 
-Download **[v0.26.0-preview.4](https://github.com/opcodehq/zuse/releases/tag/v0.26.0-preview.4)**:
+Download **[v0.26.0-preview.5](https://github.com/opcodehq/zuse/releases/tag/v0.26.0-preview.5)**:
 
 | Platform | Downloads |
 | --- | --- |
-| macOS Apple silicon | [DMG](https://github.com/opcodehq/zuse/releases/download/v0.26.0-preview.4/zuse-0.26.0-preview.4-macos-aarch64.dmg) · [tar.gz](https://github.com/opcodehq/zuse/releases/download/v0.26.0-preview.4/zuse-0.26.0-preview.4-macos-aarch64.tar.gz) |
-| macOS Intel | [DMG](https://github.com/opcodehq/zuse/releases/download/v0.26.0-preview.4/zuse-0.26.0-preview.4-macos-x86_64.dmg) · [tar.gz](https://github.com/opcodehq/zuse/releases/download/v0.26.0-preview.4/zuse-0.26.0-preview.4-macos-x86_64.tar.gz) |
-| Windows x64 | [Setup EXE](https://github.com/opcodehq/zuse/releases/download/v0.26.0-preview.4/zuse-0.26.0-preview.4-windows-x86_64-setup.exe) · [Portable ZIP](https://github.com/opcodehq/zuse/releases/download/v0.26.0-preview.4/zuse-0.26.0-preview.4-windows-x86_64.zip) |
-| Linux x64 | [DEB](https://github.com/opcodehq/zuse/releases/download/v0.26.0-preview.4/zuse-0.26.0-preview.4-linux-x86_64.deb) · [RPM](https://github.com/opcodehq/zuse/releases/download/v0.26.0-preview.4/zuse-0.26.0-preview.4-linux-x86_64.rpm) · [tar.gz](https://github.com/opcodehq/zuse/releases/download/v0.26.0-preview.4/zuse-0.26.0-preview.4-linux-x86_64.tar.gz) |
-| Linux ARM64 | [DEB](https://github.com/opcodehq/zuse/releases/download/v0.26.0-preview.4/zuse-0.26.0-preview.4-linux-aarch64.deb) · [RPM](https://github.com/opcodehq/zuse/releases/download/v0.26.0-preview.4/zuse-0.26.0-preview.4-linux-aarch64.rpm) · [tar.gz](https://github.com/opcodehq/zuse/releases/download/v0.26.0-preview.4/zuse-0.26.0-preview.4-linux-aarch64.tar.gz) |
+| macOS Apple silicon | [DMG](https://github.com/opcodehq/zuse/releases/download/v0.26.0-preview.5/zuse-0.26.0-preview.5-macos-aarch64.dmg) · [tar.gz](https://github.com/opcodehq/zuse/releases/download/v0.26.0-preview.5/zuse-0.26.0-preview.5-macos-aarch64.tar.gz) |
+| macOS Intel | [DMG](https://github.com/opcodehq/zuse/releases/download/v0.26.0-preview.5/zuse-0.26.0-preview.5-macos-x86_64.dmg) · [tar.gz](https://github.com/opcodehq/zuse/releases/download/v0.26.0-preview.5/zuse-0.26.0-preview.5-macos-x86_64.tar.gz) |
+| Windows x64 | [Setup EXE](https://github.com/opcodehq/zuse/releases/download/v0.26.0-preview.5/zuse-0.26.0-preview.5-windows-x86_64-setup.exe) · [Portable ZIP](https://github.com/opcodehq/zuse/releases/download/v0.26.0-preview.5/zuse-0.26.0-preview.5-windows-x86_64.zip) |
+| Linux x64 | [DEB](https://github.com/opcodehq/zuse/releases/download/v0.26.0-preview.5/zuse-0.26.0-preview.5-linux-x86_64.deb) · [RPM](https://github.com/opcodehq/zuse/releases/download/v0.26.0-preview.5/zuse-0.26.0-preview.5-linux-x86_64.rpm) · [tar.gz](https://github.com/opcodehq/zuse/releases/download/v0.26.0-preview.5/zuse-0.26.0-preview.5-linux-x86_64.tar.gz) |
+| Linux ARM64 | [DEB](https://github.com/opcodehq/zuse/releases/download/v0.26.0-preview.5/zuse-0.26.0-preview.5-linux-aarch64.deb) · [RPM](https://github.com/opcodehq/zuse/releases/download/v0.26.0-preview.5/zuse-0.26.0-preview.5-linux-aarch64.rpm) · [tar.gz](https://github.com/opcodehq/zuse/releases/download/v0.26.0-preview.5/zuse-0.26.0-preview.5-linux-aarch64.tar.gz) |
 
 - **macOS:** open the signed, notarized DMG and drag **Zuse** into **Applications**.
 - **Windows:** run Setup for a per-user installation, or extract the portable ZIP. Windows downloads are unsigned.
 - **Linux:** install the DEB/RPM with apt/dnf, or use the terminal installer below.
 
-Verify downloads against [SHA256SUMS](https://github.com/opcodehq/zuse/releases/download/v0.26.0-preview.4/SHA256SUMS).
+Verify downloads against [SHA256SUMS](https://github.com/opcodehq/zuse/releases/download/v0.26.0-preview.5/SHA256SUMS).
 
 Install the preview from a Linux terminal:
 
@@ -27,8 +27,8 @@ Install the preview from a Linux terminal:
   set -e
   installer=$(mktemp)
   trap 'rm -f "$installer"' EXIT
-  curl -fsSL https://github.com/opcodehq/zuse/releases/download/v0.26.0-preview.4/install.sh -o "$installer"
-  sh "$installer" --version 0.26.0-preview.4
+  curl -fsSL https://github.com/opcodehq/zuse/releases/download/v0.26.0-preview.5/install.sh -o "$installer"
+  sh "$installer" --version 0.26.0-preview.5
 )
 ```
 

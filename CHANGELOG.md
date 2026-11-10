@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.26.0-preview.5 - 2026-11-11
+
+### Added
+
+- Search from the browser address bar, see local previews and recent pages on the browser home page, and mark up screenshots with a pen, boxes and arrows on macOS and Linux.
+- Mermaid diagrams in pull request descriptions and comments.
+- A Favorites view in the model picker, with reasoning, Fast mode and context options in a separate menu.
+- Force delete for sessions whose archive fails, with a confirmation that explains what is removed.
+- Codex chats can ask question cards outside Plan mode.
+- Opt-in setup and compatibility checks for a separately installed Opcode computer-use runtime.
+- A small runner game in the status strip while an agent works.
+
+### Changed
+
+- Zots are now called Zappers, with redrawn avatars, clearer thread status in the sidebar and archiving from thread rows.
+- Workflow runs show as a compact summary in the transcript, and their agents open in the right pane.
+- The pull request panel has a new header, a clearer checks list, and a merge menu with auto-merge and force merge.
+- Earlier messages load inline as you scroll up, replacing the Load earlier messages button.
+- The sidebar uses terminal-style loaders for running chats and projects.
+- Cloud computers (beta) start faster, support SSH and local sync, and use browser-only sign-in.
+- Release builds are cached and run in parallel, with Intel macOS cross-compiled on Apple silicon.
+
+### Fixed
+
+- Check for Updates no longer fails with connection refused; it reads the latest GitHub release.
+- The pull request panel works with Ubuntu's packaged GitHub CLI.
+- Native harness models use their real context windows instead of a 32K fallback, stream thinking separately, and no longer get single-character titles.
+- Intel macOS release builds link the microphone permission helper correctly.
+
 ## 0.26.0-preview.4 - 2026-11-09
 
 ### Added
