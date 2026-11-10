@@ -14,7 +14,7 @@ pub(super) enum Kind {
 }
 
 pub(super) struct Form {
-    id: String,
+    pub(super) id: String,
     zot: Option<Zot>,
     kind: Kind,
     inputs: Vec<Entity<ComposerInput>>,

@@ -17,7 +17,7 @@ pub(super) struct ZotUi {
     files_zot: Option<String>,
     /// Threads just archived here. The engine applies it on its next pass, a
     /// few seconds later; until then the row should already be gone.
-    archiving: HashMap<String, std::time::Instant>,
+    archiving: std::collections::HashMap<String, std::time::Instant>,
     /// Right-click menu of a sidebar Zapper row: its id and where it opened.
     pub(super) menu: popover::Popup<(String, Point<Pixels>)>,
     /// The Zapper waiting on "Delete Zapper?" confirmation.
