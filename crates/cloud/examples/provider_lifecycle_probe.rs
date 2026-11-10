@@ -17,6 +17,11 @@ use zuse_cloud::providers::{
 use zuse_protocol::cloud_computers::ProviderId;
 
 const RUNTIME: &str = "/usr/local/bin/zuse-cloud-runtime --version";
+/// PROBE_READY_COMMAND overrides the readiness check for an image without the
+/// managed runtime (a provider's stock template).
+fn ready_command() -> String {
+    std::env::var("PROBE_READY_COMMAND").unwrap_or_else(|_| RUNTIME.into())
+}
 // Under the home directory: Boat keeps only home directories on a cold restore.
 const MARKER: &str = "$HOME/.zuse-lifecycle-probe-marker";
 
@@ -140,9 +145,10 @@ async fn lifecycle(
 ) -> Result<()> {
     // The fresh-start work runs while the provider may still be materializing
     // the disk, as a boot would if it didn't wait for provider readiness.
+    let ready = ready_command();
     let watch = Instant::now();
     let fresh = async {
-        let (ms, version) = command(provider, machine, RUNTIME, Duration::from_secs(120)).await?;
+        let (ms, version) = command(provider, machine, &ready, Duration::from_secs(120)).await?;
         let mut fresh = None;
         if let Some(dir) = scripts {
             provider
@@ -289,9 +295,10 @@ async fn lifecycle(
     let settled_ms = settle(provider, &resume, Duration::from_secs(180))
         .await
         .context("resume")?;
+    let ready = ready_command();
     let (ready_ms, first) = tokio::join!(
         provider_ready(provider, machine),
-        command(provider, machine, RUNTIME, Duration::from_secs(120))
+        command(provider, machine, &ready, Duration::from_secs(120))
     );
     let (ms, _) = first.context("runtime after resume")?;
     receipt.record("providerReadyAfterResumeMs", ready_ms)?;
@@ -336,6 +343,7 @@ async fn main() -> Result<()> {
         Some("boxd") => ProviderId::Boxd,
         Some("e2b") => ProviderId::E2b,
         Some("daytona") => ProviderId::Daytona,
+        Some("prized") => ProviderId::Prized,
         _ => bail!("--provider must be boat, boxd, e2b or daytona"),
     };
     let artifact = value("--artifact").context("--artifact required")?;
