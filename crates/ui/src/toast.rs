@@ -226,6 +226,7 @@ pub fn error(cx: &mut App, message: impl Into<SharedString>) {
 
 /// An error with a recovery action below its message. The action opens a
 /// confirmation; it must never perform a destructive operation immediately.
+/// The key must identify the action target. Matching messages and keys are merged.
 pub fn error_with_action(
     cx: &mut App,
     message: impl Into<SharedString>,

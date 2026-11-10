@@ -2330,6 +2330,7 @@ pub struct Shell {
     /// Chat id awaiting delete confirmation.
     delete_confirm: Option<String>,
     deleting_chat: bool,
+    cloud_delete_commands: std::collections::HashMap<String, String>,
     /// Global confirmation/error dialog for the Changes-pane trash action. The
     /// RPC task is retained separately so rerenders do not cancel it.
     discard_working_tree: Option<DiscardWorkingTreeFlow>,
@@ -2955,6 +2956,7 @@ impl Shell {
             chat_rename: None,
             delete_confirm: None,
             deleting_chat: false,
+            cloud_delete_commands: std::collections::HashMap::new(),
             discard_working_tree: None,
             discard_working_tree_task: None,
             space_menu: popover::Popup::default(),
@@ -7122,19 +7124,40 @@ impl Shell {
             .iter()
             .find(|chat| chat.id == chat_id)
             .map(|chat| chat.device_id.clone());
+        let cloud_request = engine.cloud_target().map(|target| {
+            let command_id = self
+                .cloud_delete_commands
+                .entry(chat_id.clone())
+                .or_insert_with(|| uuid::Uuid::new_v4().to_string())
+                .clone();
+            (target, command_id)
+        });
         self.deleting_chat = true;
         cx.spawn(async move |this, cx| {
-            let result = engine
-                .client()
-                .call(
-                    methods::MUTATE,
-                    serde_json::json!({
-                        "op": "forceDeleteChat", "chatId": chat_id, "targetDeviceId": owner,
-                    }),
-                )
-                .await;
+            let result = if let Some((target, command_id)) = cloud_request {
+                target.delete_session(&chat_id, &command_id).await
+            } else {
+                engine
+                    .client()
+                    .call(
+                        methods::MUTATE,
+                        serde_json::json!({
+                            "op": "forceDeleteChat", "chatId": chat_id, "targetDeviceId": owner,
+                        }),
+                    )
+                    .await
+            };
             let _ = this.update(cx, |this, cx| {
                 this.deleting_chat = false;
+                if !this
+                    .state
+                    .read(cx)
+                    .engine()
+                    .is_some_and(|current| current.same_connection(&engine))
+                {
+                    cx.notify();
+                    return;
+                }
                 match result {
                     Ok(_) => this.finish_delete_chat(chat_id, cx),
                     Err(error) => {
@@ -7149,6 +7172,7 @@ impl Shell {
     }
 
     fn finish_delete_chat(&mut self, chat_id: String, cx: &mut Context<Self>) {
+        self.cloud_delete_commands.remove(&chat_id);
         if self.delete_confirm.as_deref() == Some(chat_id.as_str()) {
             self.delete_confirm = None;
         }
@@ -12082,8 +12106,11 @@ impl Shell {
         // Modals and context menus sit above the rest of the shell. Preserve
         // their existing behavior: only surfaces that already have a Cancel
         // path close here; the others remain explicit blockers.
+        if self.delete_confirm.take().is_some() {
+            cx.notify();
+            return true;
+        }
         if self.sync_flow.has_visible_overlay()
-            || self.delete_confirm.is_some()
             || self.delete_space_confirm.is_some()
             || self.chat_menu.get().is_some()
             || self.space_menu.get().is_some()
@@ -12508,6 +12535,11 @@ impl Shell {
                     .and_then(|c| c.title.clone())
                     .unwrap_or_else(|| "New session".into()),
             );
+            let cloud = self
+                .state
+                .read(cx)
+                .engine()
+                .is_some_and(|engine| engine.cloud_target().is_some());
             let card = popover::dialog_card(&theme)
                 .w(px(440.))
                 .overflow_hidden()
@@ -12517,7 +12549,11 @@ impl Shell {
                         .child(popover::dialog_body(&theme,
                             format!("“{title}” and its conversations and agents will be permanently deleted.")))
                         .child(popover::dialog_body(&theme,
-                            "Its private worktree and unsaved files will also be removed. Shared worktrees and your main project folder are kept.")),
+                            if cloud {
+                                "Its cloud computer, disk, stored history and recovery data will be permanently deleted."
+                            } else {
+                                "Its private worktree and unsaved files will also be removed. Shared worktrees and your main project folder are kept."
+                            })),
                 )
                 .child(
                     popover::dialog_footer(&theme)
@@ -12525,11 +12561,7 @@ impl Shell {
                         .child(
                             popover::btn_ghost(&theme, &tr(cx, msg::common::cancel), "delete-chat-cancel")
                                 .id("delete-chat-cancel")
-                                .opacity(if self.deleting_chat { 0.5 } else { 1. })
                                 .on_click(cx.listener(|this, _, _, cx| {
-                                    if this.deleting_chat {
-                                        return;
-                                    }
                                     this.delete_confirm = None;
                                     cx.notify();
                                 })),

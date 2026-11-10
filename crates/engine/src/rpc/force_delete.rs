@@ -108,13 +108,50 @@ impl EngineRpc {
                     if checkout.exists() {
                         return Err(RpcError::Failed("Could not remove the worktree. The session was kept; check file permissions and retry.".into()));
                     }
+                    self.archives
+                        .discard(repo, &checkout)
+                        .await
+                        .map_err(failed)?;
                 }
+            }
+        }
+        // Already archived worktrees may be absent; their saved recovery data
+        // still belongs to any other conversation sharing the checkout.
+        if chat.parent_chat_id.is_none()
+            && chat.thread_id.is_none()
+            && let Some(cwd) = chat
+                .cwd
+                .as_deref()
+                .map(Path::new)
+                .filter(|cwd| !cwd.exists())
+            && let Some(record) = self.archives.record(cwd).map_err(failed)?
+        {
+            let mut shared = false;
+            for row in &chats {
+                if row.device_id == chat.device_id
+                    && !family.contains(&row.id)
+                    && let Some(path) = row.cwd.as_deref().map(Path::new)
+                {
+                    shared |= path == record.checkout
+                        || self
+                            .archives
+                            .record(path)
+                            .map_err(failed)?
+                            .is_some_and(|other| other.checkout == record.checkout);
+                }
+            }
+            if !shared {
+                self.archives
+                    .discard(&record.repo, &record.checkout)
+                    .await
+                    .map_err(failed)?;
             }
         }
         for id in &family {
             self.sessions.end_for_archive(id).await.map_err(failed)?;
             self.voice.retire_chat(id);
             self.workspace.delete_chat(id).map_err(failed)?;
+            self.simulators.forget_chat(id);
             self.doc_host.purge_chat(id);
         }
         self.archives.notify_change();
