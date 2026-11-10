@@ -346,7 +346,8 @@ async fn run_repair_fixture(real: bool, stage: &str) {
                 "ws-bob",
                 "runtime-fixture",
                 zuse_protocol::cloud_lifecycle::RuntimeRequest::Resumed {
-                    operation_id: retained_operation.clone()
+                    operation_id: retained_operation.clone(),
+                    wake: None,
                 },
                 now + 1
             )

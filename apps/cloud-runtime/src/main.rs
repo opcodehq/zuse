@@ -1221,6 +1221,8 @@ async fn run() -> Result<()> {
                     &bootstrap,
                     zuse_protocol::cloud_lifecycle::RuntimeRequest::Resumed {
                         operation_id: d.operation_id,
+                        // This process started fresh: memory was not kept.
+                        wake: Some(zuse_protocol::cloud_lifecycle::Wake { from_memory: false }),
                     },
                 )
                 .await?;

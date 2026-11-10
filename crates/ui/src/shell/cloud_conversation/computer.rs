@@ -88,6 +88,23 @@ pub(in crate::shell) struct ComputerSummary {
     pub branch: Option<String>,
     pub created: Option<String>,
     pub size: Option<String>,
+    /// How it last woke: from memory, or restarted on a provider that does
+    /// not keep memory across sleep.
+    pub last_wake: Option<String>,
+}
+
+/// "Woke from memory · 1.2 s" or "Restarted on wake · 6.4 s". Absent until the
+/// computer has woken once under a runtime that reports it.
+pub(in crate::shell) fn last_wake_label(row: &serde_json::Value) -> Option<String> {
+    let wake = &row["lastWake"];
+    let kind = match wake["fromMemory"].as_bool()? {
+        true => "Woke from memory",
+        false => "Restarted on wake",
+    };
+    Some(match wake["ms"].as_i64() {
+        Some(ms) if ms >= 0 => format!("{kind} · {:.1} s", ms as f64 / 1000.0),
+        _ => kind.to_owned(),
+    })
 }
 /// The computer menu's pages.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -659,6 +676,7 @@ impl CloudConversation {
                         .map(|first| first.to_uppercase().collect::<String>() + chars.as_str())
                         .unwrap_or_default()
                 }),
+            last_wake: last_wake_label(row),
             created: row["createdAt"]
                 .as_i64()
                 .and_then(chrono::DateTime::from_timestamp_millis)
@@ -1023,6 +1041,9 @@ impl CloudConversation {
                 text(summary.provider.clone().unwrap_or_else(|| "Cloud".into())),
             ))
             .child(detail("Status", icons::MONITOR, status))
+            .when_some(summary.last_wake.clone(), |menu, wake| {
+                menu.child(detail("Last wake", icons::CLOCK_CIRCLE, text(wake)))
+            })
             .when_some(summary.created.clone(), |menu, created| {
                 menu.child(detail("Created", icons::CALENDAR, text(created)))
             });
@@ -1777,5 +1798,27 @@ mod tests {
                 .1
                 .contains("setup output")
         );
+    }
+}
+
+#[cfg(test)]
+mod wake_label_tests {
+    use serde_json::json;
+    #[test]
+    fn last_wake_says_whether_memory_was_kept() {
+        assert_eq!(
+            super::last_wake_label(&json!({"lastWake":{"fromMemory":true,"at":1,"ms":1234}})),
+            Some("Woke from memory · 1.2 s".into())
+        );
+        assert_eq!(
+            super::last_wake_label(&json!({"lastWake":{"fromMemory":false,"at":1,"ms":6400}})),
+            Some("Restarted on wake · 6.4 s".into())
+        );
+        // An older runtime reports no wake kind; say nothing rather than guess.
+        assert_eq!(
+            super::last_wake_label(&json!({"lastWake":{"fromMemory":null,"at":1,"ms":900}})),
+            None
+        );
+        assert_eq!(super::last_wake_label(&json!({})), None);
     }
 }
