@@ -189,6 +189,7 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
         .allow_methods(
             if state.runtime.is_some()
                 || state.store.devices.is_some()
+                || crate::models_gateway::ModelsGateway::shared().is_some()
                 || state.store.billing_writes_enabled()
                 || state.store.project_writes_enabled()
                 || state.store.image_writes_enabled()
@@ -389,6 +390,11 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
         .route(
             "/v1/cloud/projects/{id}",
             axum::routing::delete(project_remove),
+        )
+        .route("/v1/models/catalog", get(hosted_models_catalog))
+        .route(
+            "/v1/models/chat/completions",
+            post(hosted_models_complete).layer(DefaultBodyLimit::max(32 * 1024 * 1024)),
         )
         .route("/v1/billing/entitlements", get(entitlements))
         .route("/v1/billing/portal", post(billing_portal))
@@ -2229,6 +2235,25 @@ async fn prepaid_balance(
 ) -> Result<Json<zuse_protocol::cloud_billing::PrepaidBalance>, ApiError> {
     let access = state.access(&headers, AccessKind::Billing).await?;
     Ok(Json(state.store.prepaid_balance(&access.owner_id).await?))
+}
+async fn hosted_models_catalog(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    let gateway = crate::models_gateway::ModelsGateway::shared()
+        .ok_or_else(|| ApiError::not_found("hosted_models_unavailable"))?;
+    let access = state.access(&headers, AccessKind::Billing).await?;
+    Ok(Json(gateway.catalog(&access)?))
+}
+async fn hosted_models_complete(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, ApiError> {
+    let gateway = crate::models_gateway::ModelsGateway::shared()
+        .ok_or_else(|| ApiError::not_found("hosted_models_unavailable"))?;
+    let access = state.access(&headers, AccessKind::Billing).await?;
+    gateway.complete(&state.store, &access, body).await
 }
 async fn prepaid_checkout(
     State(state): State<AppState>,

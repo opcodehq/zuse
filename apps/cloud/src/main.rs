@@ -463,7 +463,8 @@ async fn main() -> Result<()> {
             let settings = zuse_cloud::billing::MeterExportConfig::from_env()?;
             let settlement = zuse_cloud::billing::BoxdSettlementConfig::from_env()?;
             let storage = zuse_cloud::billing::SnapshotSettlementConfig::from_env()?;
-            if !settings.enabled() && settlement.is_none() && storage.is_none() {
+            let hosted = zuse_cloud::billing::Wallet::enabled();
+            if !settings.enabled() && settlement.is_none() && storage.is_none() && !hosted {
                 println!(
                     "{}",
                     serde_json::to_string(&zuse_cloud::billing::ExportReport::default())?
@@ -518,6 +519,9 @@ async fn main() -> Result<()> {
             if let Some(providers) = providers {
                 control = control.with_payment_providers(providers);
             }
+            if let Some(wallet) = zuse_cloud::billing::Wallet::from_env(&url).await? {
+                control = control.with_wallet(wallet);
+            }
             loop {
                 if let Some(config) = storage {
                     match control.settle_snapshot_storage_once(config, now_ms()).await {
@@ -537,6 +541,15 @@ async fn main() -> Result<()> {
                             code = error.code,
                             "Provider settlement maintenance failed"
                         ),
+                    }
+                }
+                if hosted {
+                    match control.maintain_wallet_once(now_ms()).await {
+                        Ok(report) => println!("{}", serde_json::to_string(&report)?),
+                        Err(error) if once => anyhow::bail!("{}", error.code),
+                        Err(error) => {
+                            tracing::warn!(code = error.code, "Wallet maintenance failed")
+                        }
                     }
                 }
                 match control.export_once(now_ms(), 25).await {
@@ -1004,6 +1017,11 @@ async fn main() -> Result<()> {
                 };
                 if let Some(providers) = zuse_cloud::billing::PaymentProviders::from_env()? {
                     billing = billing.with_payment_providers(providers);
+                }
+                if let Some(wallet) =
+                    zuse_cloud::billing::Wallet::from_env(&config.database_url).await?
+                {
+                    billing = billing.with_wallet(wallet);
                 }
                 store = store.with_billing_control(billing);
             }

@@ -432,6 +432,14 @@ impl BillingControl {
         providers.providers.get(id).cloned().ok_or_else(unavailable)
     }
     async fn prepaid_balance(&self, owner: &str) -> Result<PrepaidBalance, ApiError> {
+        if let Some(wallet) = &self.wallet {
+            return Ok(PrepaidBalance {
+                available: self.payments.as_ref().is_some_and(|p| p.checkout.is_some()),
+                credit_cents: wallet.spendable_micros(owner).await? / 10_000,
+                debit_cents: 0,
+                currency: "usd".into(),
+            });
+        }
         let provider = self.credit_provider(owner).await?;
         let customer: Option<String> = if provider.provider_id() == "stripe" {
             sqlx::query_scalar("SELECT customer_id FROM api_stripe_customers WHERE account_id=$1")
@@ -466,12 +474,19 @@ impl BillingControl {
             .execute(&mut *tx)
             .await?;
         let provider = self.credit_provider(owner).await?;
-        if !provider.prepaid_available() {
+        if self.wallet.is_none() && !provider.prepaid_available() {
             return Err(ApiError::unavailable("billing_approval_pending"));
         }
         let customer =
             checkout::stripe_customer(&self.effects_pool, provider.as_ref(), owner, now).await?;
         let success = format!("{}/v1/billing/prepaid/complete", settings.signer.issuer());
+        if let Some(wallet) = &self.wallet {
+            // The wallet has its own pool, so nothing may wait on this lock.
+            tx.commit().await?;
+            let url = wallet.checkout(owner, &customer, amount, &success).await?;
+            secure_url(&url)?;
+            return Ok(url);
+        }
         let url = provider
             .prepaid_checkout(owner, &customer, amount, &success)
             .await?;

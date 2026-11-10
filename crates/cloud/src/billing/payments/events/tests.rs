@@ -46,21 +46,8 @@ fn stripe_headers(body: &str, now: i64) -> HeaderMap {
     );
     h
 }
-fn polar_headers(body: &str, now: i64) -> HeaderMap {
-    let timestamp = (now / 1000).to_string();
-    let id = "polar-delivery-original";
-    let sig = sign("polar_whs_fixture", &format!("{id}.{timestamp}."), body);
-    let mut h = HeaderMap::new();
-    h.insert("webhook-id", id.parse().unwrap());
-    h.insert("webhook-timestamp", timestamp.parse().unwrap());
-    h.insert(
-        "webhook-signature",
-        format!("v1,{}", STANDARD.encode(sig)).parse().unwrap(),
-    );
-    h
-}
 #[test]
-fn signatures_bind_exact_bytes_timestamps_and_polar_delivery_id() {
+fn signatures_bind_exact_bytes_and_timestamps() {
     let now = 1_800_000_000_000;
     let body = r#"{"id":"evt_original","type":"customer.subscription.updated","data":{"object":{"id":"sub_original"}}}"#;
     let stripe = config("whsec_fixture", "price_cloud");
@@ -89,39 +76,6 @@ fn signatures_bind_exact_bytes_timestamps_and_polar_delivery_id() {
             .stripe_event(&headers, body.as_bytes(), now - 301000)
             .is_err()
     );
-    let body = r#"{"type":"subscription.updated","data":{"id":"polar_original"}}"#;
-    let polar = config("polar_whs_fixture", "product_cloud");
-    let mut headers = polar_headers(body, now);
-    assert_eq!(
-        polar
-            .polar_event(&headers, body.as_bytes(), now)
-            .unwrap()
-            .unwrap()
-            .event_id(),
-        "polar-delivery-original"
-    );
-    let standard = config(
-        &format!("whsec_{}", STANDARD.encode("new-fixture-key")),
-        "product_cloud",
-    );
-    let sig = sign(
-        "new-fixture-key",
-        &format!("polar-delivery-original.{}.", now / 1000),
-        body,
-    );
-    let mut standard_headers = headers.clone();
-    standard_headers.insert(
-        "webhook-signature",
-        format!("v1,{}", STANDARD.encode(sig)).parse().unwrap(),
-    );
-    assert!(
-        standard
-            .polar_event(&standard_headers, body.as_bytes(), now)
-            .unwrap()
-            .is_some()
-    );
-    headers.insert("webhook-id", "foreign-delivery".parse().unwrap());
-    assert!(polar.polar_event(&headers, body.as_bytes(), now).is_err());
 }
 struct Fixture {
     subscriptions: Mutex<HashMap<String, Value>>,
@@ -160,16 +114,12 @@ impl Identity for AccountIdentity {
 fn stripe_subscription(id: &str, status: &str, start: i64, end: i64) -> Value {
     json!({"id":id,"status":status,"customer":{"id":"cus_original","metadata":{"account_id":"user-alice"}},"metadata":{"account_id":"user-alice","offer_id":"cloud-workspace-standard-v1"},"items":{"data":[{"price":{"id":"price_cloud"},"current_period_start":start/1000,"current_period_end":end/1000}]}})
 }
-async fn deliver(app: &Router, provider: &str, body: Value, now: i64) -> (StatusCode, Value) {
+async fn deliver(app: &Router, body: Value, now: i64) -> (StatusCode, Value) {
     let body = body.to_string();
-    let h = if provider == "stripe" {
-        stripe_headers(&body, now)
-    } else {
-        polar_headers(&body, now)
-    };
+    let h = stripe_headers(&body, now);
     let mut request = Request::builder()
         .method("POST")
-        .uri(format!("/v1/billing/webhook/{provider}"));
+        .uri("/v1/billing/webhook/stripe");
     *request.headers_mut().unwrap() = h;
     let response = app
         .clone()
@@ -263,22 +213,15 @@ async fn signed_provider_delivery_preserves_subscriptions_periods_and_money() {
     };
     let providers = PaymentProviders::new(
         "stripe".into(),
-        vec![
-            Arc::new(StripePortal {
-                meter_price: None,
-                credit_price: None,
-                checkout: None,
-                http: http(),
-                events: Some(config("whsec_fixture", "price_cloud")),
-                return_url: "https://api-rust.zuse.sh".into(),
-                configuration: None,
-            }),
-            Arc::new(PolarPortal {
-                checkout: None,
-                http: http(),
-                events: Some(config("polar_whs_fixture", "product_cloud")),
-            }),
-        ],
+        vec![Arc::new(StripePortal {
+            meter_price: None,
+            credit_price: None,
+            checkout: None,
+            http: http(),
+            events: Some(config("whsec_fixture", "price_cloud")),
+            return_url: "https://api-rust.zuse.sh".into(),
+            configuration: None,
+        })],
     )
     .unwrap();
     let store = Store::from_pool(pool.clone()).with_billing_control(
@@ -297,21 +240,14 @@ async fn signed_provider_delivery_preserves_subscriptions_periods_and_money() {
         vec![],
     );
     assert_eq!(
-        deliver(
-            &app,
-            "stripe",
-            event("stale", "sub-preserved"),
-            now - 301000
-        )
-        .await
-        .0,
+        deliver(&app, event("stale", "sub-preserved"), now - 301000)
+            .await
+            .0,
         StatusCode::UNAUTHORIZED
     );
     assert_eq!(fixture.reads.load(Ordering::SeqCst), 0);
     assert_eq!(
-        deliver(&app, "stripe", event("active", "sub-preserved"), now)
-            .await
-            .0,
+        deliver(&app, event("active", "sub-preserved"), now).await.0,
         StatusCode::OK
     );
     assert_eq!(
@@ -323,14 +259,12 @@ async fn signed_provider_delivery_preserves_subscriptions_periods_and_money() {
         "active"
     );
     assert_eq!(
-        deliver(&app, "stripe", event("active", "sub-preserved"), now)
-            .await
-            .1["duplicate"],
+        deliver(&app, event("active", "sub-preserved"), now).await.1["duplicate"],
         true
     );
     let (a, b) = tokio::join!(
-        deliver(&app, "stripe", event("concurrent", "sub-preserved"), now),
-        deliver(&app, "stripe", event("concurrent", "sub-preserved"), now)
+        deliver(&app, event("concurrent", "sub-preserved"), now),
+        deliver(&app, event("concurrent", "sub-preserved"), now)
     );
     assert_eq!(a.0, StatusCode::OK);
     assert_eq!(b.0, StatusCode::OK);
@@ -340,7 +274,7 @@ async fn signed_provider_delivery_preserves_subscriptions_periods_and_money() {
         stripe_subscription("sub-preserved", "past_due", start, end),
     );
     let failed = json!({"id":"payment-failed","type":"invoice.payment_failed","data":{"object":{"parent":{"subscription_details":{"subscription":"sub-preserved"}}}}});
-    assert_eq!(deliver(&app, "stripe", failed, now).await.0, StatusCode::OK);
+    assert_eq!(deliver(&app, failed, now).await.0, StatusCode::OK);
     assert_eq!(
         query_text(
             &pool,
@@ -354,14 +288,9 @@ async fn signed_provider_delivery_preserves_subscriptions_periods_and_money() {
         stripe_subscription("sub-preserved", "active", start, end),
     );
     assert_eq!(
-        deliver(
-            &app,
-            "stripe",
-            event("old-notification", "sub-preserved"),
-            now
-        )
-        .await
-        .0,
+        deliver(&app, event("old-notification", "sub-preserved"), now)
+            .await
+            .0,
         StatusCode::OK
     );
     assert_eq!(
@@ -377,7 +306,7 @@ async fn signed_provider_delivery_preserves_subscriptions_periods_and_money() {
         stripe_subscription("sub-preserved", "canceled", start, end),
     );
     assert_eq!(
-        deliver(&app, "stripe", event("cancel-future", "sub-preserved"), now)
+        deliver(&app, event("cancel-future", "sub-preserved"), now)
             .await
             .0,
         StatusCode::OK
@@ -395,14 +324,9 @@ async fn signed_provider_delivery_preserves_subscriptions_periods_and_money() {
         stripe_subscription("sub-preserved", "canceled", start, now - 1000),
     );
     assert_eq!(
-        deliver(
-            &app,
-            "stripe",
-            event("cancel-expired", "sub-preserved"),
-            now
-        )
-        .await
-        .0,
+        deliver(&app, event("cancel-expired", "sub-preserved"), now)
+            .await
+            .0,
         StatusCode::OK
     );
     assert_eq!(
@@ -418,9 +342,7 @@ async fn signed_provider_delivery_preserves_subscriptions_periods_and_money() {
         stripe_subscription("sub-preserved", "active", end, end + 30 * 86400000),
     );
     assert_eq!(
-        deliver(&app, "stripe", event("renew", "sub-preserved"), now)
-            .await
-            .0,
+        deliver(&app, event("renew", "sub-preserved"), now).await.0,
         StatusCode::OK
     );
     let cap:i64=sqlx::query_scalar("SELECT overage_cap_micros FROM api_cloud_billing_periods WHERE period_start=$1 AND account_id='user-alice'").bind(end).fetch_one(&pool).await.unwrap();
@@ -431,7 +353,7 @@ async fn signed_provider_delivery_preserves_subscriptions_periods_and_money() {
         stripe_subscription("sub-competing", "active", end, end + 30 * 86400000),
     );
     assert_eq!(
-        deliver(&app, "stripe", event("competing", "sub-competing"), now)
+        deliver(&app, event("competing", "sub-competing"), now)
             .await
             .1["error"],
         "billing_period_owner_conflict"
@@ -457,9 +379,7 @@ async fn signed_provider_delivery_preserves_subscriptions_periods_and_money() {
     .await
     .unwrap();
     assert_eq!(
-        deliver(&app, "stripe", event("fenced", "sub-preserved"), now)
-            .await
-            .1["error"],
+        deliver(&app, event("fenced", "sub-preserved"), now).await.1["error"],
         "cloud_billing_owner_not_rust"
     );
     sqlx::query(
@@ -475,7 +395,7 @@ async fn signed_provider_delivery_preserves_subscriptions_periods_and_money() {
         .get_mut("sub-preserved")
         .unwrap()["metadata"]["account_id"] = json!("user-bob");
     assert_eq!(
-        deliver(&app, "stripe", event("wrong-owner", "sub-preserved"), now)
+        deliver(&app, event("wrong-owner", "sub-preserved"), now)
             .await
             .0,
         StatusCode::SERVICE_UNAVAILABLE
@@ -493,14 +413,9 @@ async fn signed_provider_delivery_preserves_subscriptions_periods_and_money() {
     .await
     .unwrap();
     assert_eq!(
-        deliver(
-            &app,
-            "stripe",
-            event("wrong-customer", "sub-preserved"),
-            now
-        )
-        .await
-        .0,
+        deliver(&app, event("wrong-customer", "sub-preserved"), now)
+            .await
+            .0,
         StatusCode::SERVICE_UNAVAILABLE
     );
     sqlx::query("DELETE FROM api_stripe_customers WHERE account_id='user-alice'")
@@ -508,35 +423,10 @@ async fn signed_provider_delivery_preserves_subscriptions_periods_and_money() {
         .await
         .unwrap();
     assert_eq!(
-        deliver(&app, "stripe", event("unlinked", "sub-preserved"), now)
+        deliver(&app, event("unlinked", "sub-preserved"), now)
             .await
             .1["deferred"],
         "subscription-unlinked"
-    );
-    let polar = json!({"id":"legacy-sub","status":"past_due","customer":{"external_id":"user-bob"},"product_id":"product_cloud","current_period_start":chrono::DateTime::from_timestamp_millis(start).unwrap().to_rfc3339(),"current_period_end":chrono::DateTime::from_timestamp_millis(end).unwrap().to_rfc3339(),"metadata":{}});
-    fixture
-        .subscriptions
-        .lock()
-        .unwrap()
-        .insert("legacy-sub".into(), polar);
-    assert_eq!(
-        deliver(
-            &app,
-            "polar",
-            json!({"type":"subscription.updated","data":{"id":"legacy-sub"}}),
-            now
-        )
-        .await
-        .0,
-        StatusCode::OK
-    );
-    assert_eq!(
-        query_text(
-            &pool,
-            "SELECT status FROM api_entitlements WHERE entitlement_id='ent-bob'"
-        )
-        .await,
-        "grace"
     );
     let count:i64=sqlx::query_scalar("SELECT count(*) FROM api_entitlements WHERE entitlement_id IN ('ent-alice','ent-bob') AND created_at=100").fetch_one(&pool).await.unwrap();
     assert_eq!(count, 2);

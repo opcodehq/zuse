@@ -59,14 +59,9 @@ impl MeterExportConfig {
         let financial = std::env::var("CLOUD_BILLING_EXPORT_ENABLED").as_deref() == Ok("true");
         let telemetry = std::env::var("CLOUD_USAGE_EXPORT_ENABLED").as_deref() == Ok("true");
         let mut meters = BTreeMap::new();
-        for (provider, key) in [
-            ("stripe", "STRIPE_CLOUD_OVERAGE_METER_ID"),
-            ("polar", "POLAR_CLOUD_OVERAGE_METER_ID"),
-        ] {
-            if let Ok(id) = std::env::var(key) {
-                if !id.trim().is_empty() {
-                    meters.insert(provider.into(), id);
-                }
+        if let Ok(id) = std::env::var("STRIPE_CLOUD_OVERAGE_METER_ID") {
+            if !id.trim().is_empty() {
+                meters.insert("stripe".into(), id);
             }
         }
         anyhow::ensure!(
@@ -216,7 +211,7 @@ impl BillingControl {
             if event.event_name == "zuse_cloud_overage_cent" || event.idempotency_key != id {
                 return Err(invalid());
             }
-            let provider = v["billingProvider"].as_str().unwrap_or("polar");
+            let provider = v["billingProvider"].as_str().ok_or_else(invalid)?;
             self.send_meter(&mut tx, provider, &event, now).await
         }
         .await;

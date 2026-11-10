@@ -1,4 +1,4 @@
-//! Original Stripe/Polar meter contracts. Only canonical billable periods admit Stripe charges.
+//! Original Stripe meter contracts. Only canonical billable periods admit Stripe charges.
 use super::*;
 use crate::billing::MeterEvent;
 use serde::Serialize;
@@ -238,49 +238,5 @@ impl StripePortal {
         Ok(total)
     }
 }
-impl PolarPortal {
-    pub(super) async fn report_usage(&self, event: &MeterEvent) -> Result<(), ApiError> {
-        event.validate()?;
-        let date = chrono::DateTime::from_timestamp_millis(event.occurred_at_ms)
-            .ok_or_else(reconcile)?
-            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-        let mut metadata = serde_json::Map::new();
-        for (k, v) in &event.metadata {
-            metadata.insert(k.clone(), json!(v));
-        }
-        metadata.insert("idempotency_key".into(), json!(event.idempotency_key));
-        metadata.insert("units".into(), json!(event.units));
-        ProviderHttp::json(self.http.request(reqwest::Method::POST,&["events","ingest"])?.json(&json!({"events":[{"name":event.event_name,"timestamp":date,"external_id":event.idempotency_key,"external_customer_id":event.account_id,"metadata":metadata}]}))).await?;
-        Ok(())
-    }
-    pub(super) async fn usage_total(&self, owner: &str, meter: &str) -> Result<i64, ApiError> {
-        let v = ProviderHttp::json(
-            self.http
-                .request(reqwest::Method::GET, &["customer-meters", ""])?
-                .query(&[
-                    ("external_customer_id", owner),
-                    ("meter_id", meter),
-                    ("limit", "1"),
-                ]),
-        )
-        .await?;
-        let items = v["items"].as_array().ok_or_else(unavailable)?;
-        if items.len() > 1 {
-            return Err(unavailable());
-        }
-        let Some(item) = items.first() else {
-            return Ok(0);
-        };
-        if item["meter_id"].as_str().is_some_and(|v| v != meter)
-            || item["customer"]["external_id"]
-                .as_str()
-                .is_some_and(|v| v != owner)
-        {
-            return Err(unavailable());
-        }
-        whole(&item["consumed_units"])
-    }
-}
-
 #[cfg(test)]
 mod tests;

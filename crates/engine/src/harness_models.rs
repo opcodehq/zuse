@@ -215,6 +215,7 @@ struct CacheSlot {
 }
 struct Transport {
     api: crate::harness_api::ApiModels,
+    hosted: crate::harness_hosted::HostedModels,
     accounts: Arc<dyn Accounts>,
     wire: Arc<dyn Wire>,
     http: reqwest::Client,
@@ -233,10 +234,15 @@ pub struct HarnessModels {
     broker: Arc<AccountBroker>,
 }
 impl HarnessModels {
-    pub fn new(accounts: ModelConnections, directory: PathBuf) -> Result<Self, Error> {
+    pub fn new(
+        accounts: ModelConnections,
+        account: crate::account::Account,
+        directory: PathBuf,
+    ) -> Result<Self, Error> {
         let transport = NativeTransport::new()?;
         Self::configured_api(
             crate::harness_api::ApiModels::load(&directory.join("providers.json"))?,
+            crate::harness_hosted::HostedModels::new(Some(account)),
             Arc::new(accounts),
             Arc::new(transport),
             [
@@ -251,10 +257,17 @@ impl HarnessModels {
         wire: Arc<dyn Wire>,
         endpoints: [String; 2],
     ) -> Result<Self, Error> {
-        Self::configured_api(Default::default(), accounts, wire, endpoints)
+        Self::configured_api(
+            Default::default(),
+            crate::harness_hosted::HostedModels::disabled(),
+            accounts,
+            wire,
+            endpoints,
+        )
     }
     fn configured_api(
         api: crate::harness_api::ApiModels,
+        hosted: crate::harness_hosted::HostedModels,
         accounts: Arc<dyn Accounts>,
         wire: Arc<dyn Wire>,
         endpoints: [String; 2],
@@ -267,6 +280,7 @@ impl HarnessModels {
             .map_err(|_| failure("model_inventory_unavailable", None))?;
         let transport = Arc::new(Transport {
             api,
+            hosted,
             accounts,
             wire,
             http,
@@ -313,10 +327,13 @@ impl HarnessModels {
                 Some(local) => local.models(force).await,
                 None => vec![],
             };
-            let rows = self.transport.sync().await?;
+            let (rows, hosted) =
+                tokio::join!(self.transport.sync(), self.transport.hosted.models());
+            let rows = rows?;
             let candidates = rows.iter().filter(|c| c.authorized).collect::<Vec<_>>();
             if candidates.is_empty() {
-                let mut models = self.transport.api.models();
+                let mut models = hosted;
+                models.extend(self.transport.api.models());
                 models.extend(local);
                 models.sort_by(|a, b| a.id.cmp(&b.id));
                 return Ok(models);
@@ -337,10 +354,18 @@ impl HarnessModels {
                     }
                 }
             }
-            if !succeeded && local.is_empty() && self.transport.api.models().is_empty() {
+            if !succeeded
+                && local.is_empty()
+                && self.transport.api.models().is_empty()
+                && hosted.is_empty()
+            {
                 return Err(failure("model_inventory_unavailable", None));
             }
-            for model in local.into_iter().chain(self.transport.api.models()) {
+            for model in hosted
+                .into_iter()
+                .chain(local)
+                .chain(self.transport.api.models())
+            {
                 result.insert(model.id.clone(), model);
             }
             Ok(result.into_values().collect())
@@ -502,6 +527,14 @@ impl BrokerHost for Transport {
                 preferred: true,
             }]);
         }
+        if input.model.starts_with(crate::harness_hosted::PREFIX) {
+            let id = self.hosted.connection().await?;
+            return Ok(vec![BrokerConnection {
+                id,
+                authorized: true,
+                preferred: true,
+            }]);
+        }
         if input.model.starts_with("api/") {
             let id = self.api.connection(&input.model)?;
             return Ok(vec![BrokerConnection {
@@ -556,6 +589,26 @@ impl BrokerHost for Transport {
                         access_token: credential.access_token,
                         authorization_generation: credential.authorization_generation,
                         route: Some(credential.route),
+                    },
+                )
+                .await;
+        }
+        if input.model.starts_with(crate::harness_hosted::PREFIX) {
+            let (model, credential) = self.hosted.credential(&input.model).await?;
+            if credential.connection_id != connection_id {
+                return Err(Error::AccountsUnavailable);
+            }
+            input.model = model;
+            return self
+                .wire
+                .request(
+                    input,
+                    AccountCredential {
+                        connection_id: credential.connection_id,
+                        provider: "zuse".into(),
+                        access_token: credential.access_token,
+                        route: Some(credential.route),
+                        authorization_generation: credential.authorization_generation,
                     },
                 )
                 .await;
@@ -1180,6 +1233,7 @@ mod local_tests {
         }]}).to_string()).unwrap();
         let models = HarnessModels::configured_api(
             crate::harness_api::ApiModels::load(&api_path).unwrap(),
+            crate::harness_hosted::HostedModels::disabled(),
             Arc::new(EmptyAccounts),
             Arc::new(LocalWire),
             ["unused".into(), "unused".into()],

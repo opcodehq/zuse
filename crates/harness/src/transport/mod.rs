@@ -49,6 +49,18 @@ pub struct Credential {
     pub authorization_generation: u64,
     pub route: Route,
 }
+impl Credential {
+    /// Zuse-hosted routes are billed by the cloud against prepaid credits.
+    pub fn billing_route(&self) -> &'static str {
+        if self.route.subscription {
+            "subscription"
+        } else if self.connection_id.starts_with("zuse/") {
+            "zuse"
+        } else {
+            "api"
+        }
+    }
+}
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Route {
@@ -452,6 +464,7 @@ pub fn model_name(model: &str) -> &str {
         model
             .strip_prefix("chatgpt/")
             .or_else(|| model.strip_prefix("supergrok/"))
+            .or_else(|| model.strip_prefix("zuse/"))
             .unwrap_or(model)
     }
 }
@@ -503,12 +516,7 @@ impl AttemptGuard {
                 connection_id: credential.connection_id.clone(),
                 purpose: input.purpose,
                 retry_index: input.retry_index,
-                billing_route: if credential.route.subscription {
-                    "subscription"
-                } else {
-                    "api"
-                }
-                .into(),
+                billing_route: credential.billing_route().into(),
                 dispatched: false,
                 elapsed_ms: 0.,
                 usage: None,

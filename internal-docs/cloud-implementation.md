@@ -119,7 +119,7 @@ completed UI images in the final user-facing report.
 | --- | --- | --- |
 | A: inventory/service | Pinned inventory; Axum service, WorkOS verifier, personal/org read authorization, existing catalog/entitlements, additive job/ownership schema, read-only inspection | Signed-JWT and PostgreSQL/HTTP acceptance passed; existing-account live verification pending |
 | B: real cloud chat | Authenticated initial creation and Boxd prepared-image allocation worker; encrypted enrollment/renewal; leased Rust RPC gateway; protected guest storage; canonical launch, encrypted text/native-command recovery, retained queue/model/Stop recovery and native steering/input and brokered Claude delivery through the existing account authority. Retained-machine pause/archive/unarchive/resume, durable native transcript publication and an engine-free cached reader with rendered archive views added; remaining: complete image selection/builds, remaining provider adapters and Rust authority migration, app captures/context delivery, remaining creation variants and UI flows. Browser attached destination menu, create/stream/cached reopen and shared guest RPC transport added; native create/stream/explicit reconnect, cached reopening with conversation selection, encrypted first-message file delivery, and attached Pause/explicit retained-machine resume added | Deterministic-provider and real PostgreSQL/HTTP/WebSocket/guest-process acceptance passed; live-provider acceptance pending |
-| C: billing/admin | Ledger summary, usage pagination, owned/idempotent cap updates, existing Stripe/Polar portals and checkout, signed cloud subscription lifecycle processing, signed return receipts, prepaid credit purchase/funding/refund/dispute processing, owned financial/telemetry exports with meter reconciliation, completed Boxd report settlement, retained-image storage settlement, owned repository catalog connect/list/remove, shared native/browser repository picker and image readiness/build/rebuild/history panel, guest image preparation, owned account-image build/status/delete APIs, durable Boxd capture/read-back/promotion/retirement/cleanup worker and shared image deletion confirmation, and native/browser Cloud billing controls added. Existing capacity reads and compatible Claude credential delivery ported; remaining: Rust account-authority/login/refresh ownership, other provider adapters, checkout session recovery/persistent subscription writes, remaining provider usage sources, provider credentials, image lifecycle/administration, machine administration | PostgreSQL/HTTP, native Linux and browser usage/cap workflows pass; live subscription/payment acceptance pending |
+| C: billing/admin | Ledger summary, usage pagination, owned/idempotent cap updates, existing Stripe portals and checkout, signed cloud subscription lifecycle processing, signed return receipts, prepaid credit purchase/funding/refund/dispute processing, owned financial/telemetry exports with meter reconciliation, completed Boxd report settlement, retained-image storage settlement, owned repository catalog connect/list/remove, shared native/browser repository picker and image readiness/build/rebuild/history panel, guest image preparation, owned account-image build/status/delete APIs, durable Boxd capture/read-back/promotion/retirement/cleanup worker and shared image deletion confirmation, and native/browser Cloud billing controls added. Existing capacity reads and compatible Claude credential delivery ported; remaining: Rust account-authority/login/refresh ownership, other provider adapters, checkout session recovery/persistent subscription writes, remaining provider usage sources, provider credentials, image lifecycle/administration, machine administration | PostgreSQL/HTTP, native Linux and browser usage/cap workflows pass; live subscription/payment acceptance pending |
 | D: tools/integrations | Shared hosted RPC, scoped browser uploads, chat-owned retained-terminal discovery and verified Git-aware mirror transfer/publication added; browser file/edit/Git and native terminal keyboard/reopen acceptance added; persisted background sync controller added; native/browser sync controls added; remaining tools, local-mirror terminal/editor selection, device bridge/org automation pending | Guest text/PNG bytes, image reads, browser file/edit/Git, terminal catalog/detach/reopen, native keyboard input, background sync and native/browser sync controls pass with fixture runtime; remaining tool flows pending |
 | E: archive lifecycle | Local reclamation; same-machine pause and ten-day retention; asleep unarchive; encrypted cached transcript views; full-state recovery helper; scoped object transport; durable verified retirement; replacement allocation, journaled restoration and fresh-generation enrollment implemented. Permanent deletion, 30-day tombstones and native/browser confirmation, progress and retry controls added. Default-tree mirror cleanup and native/browser retry controls added; registered default/custom-path sync cleanup added; remaining: legacy custom-path import, archived files and existing-workspace/archive migration | Retained-machine, browser archive/delete and packaged capture/retirement/replacement-continuation acceptance pass with isolated PostgreSQL and a deterministic machine provider; live-provider and SDK continuation acceptance pending |
 | F: complete GPUI parity | Attached browser/native composer destination menu, native startup tray, archived cloud transcript screens, shared Cloud repositories/image controls, top-bar cloud details/sync controls, conditional paused composer notices and cached draft restoration added; full reference comparison and remaining cloud screens pending | Compiled native/browser views and rendered browser archive/deletion workflows pass; native visual and full-screen audits pending |
@@ -343,7 +343,7 @@ Usage cursors retain reference entry-ID ordering and bounded page sizes.
 Cap changes validate exact safe integer USD micros, reject a limit below incurred
 overage, lock the current period, and reuse the original cap-command table for
 idempotency. Repeating an old request returns current state without rewinding a
-newer cap. Conflicting concurrent retries cannot both apply. No Stripe/Polar
+newer cap. Conflicting concurrent retries cannot both apply. No Stripe
 customer or subscription identity, ledger entry or invoice is rewritten.
 
 Writes are disabled by default. `ZUSE_CLOUD_BILLING_WRITE_ACCOUNTS` creates a
@@ -388,7 +388,7 @@ Verified:
 This closes the usage/cap workflow only. Period creation/renewal, checkout/portal,
 subscription/payment-failure processing, prepaid credits, provider settlement,
 webhook deduplication, metered exports and the rest of cloud administration still
-require implementation. Live Stripe/Polar, original-account and Mac acceptance are
+require implementation. Live Stripe, original-account and Mac acceptance are
 not established by these fixture tests. No production writes were enabled.
 
 
@@ -1745,16 +1745,15 @@ remaining native routing/cached reopen using the shared transport, then cloud ad
 Full live sync and migration remain open; the verified browser create/stream/reopen
 workflow and default mirror cleanup do not close those requirements.
 
-### Existing Stripe and Polar billing portals
+### Existing Stripe billing portals
 
 The Rust `POST /v1/billing/portal` contract selects the account's original provider
 from non-ended subscriptions. Multiple providers return `billing_provider_ambiguous`;
 accounts without a subscription use `BILLING_DEFAULT_PROVIDER`. Stripe retrieves the
 stored `api_stripe_customers.customer_id`, verifies its original `account_id` metadata
 and creates a portal session for that same customer. It never creates or relinks a
-customer. Polar uses the original external owner identity, including organization
-owners. Both adapters validate HTTPS session links, bound response size/time and
-sanitize provider failures. Session links and reusable provider keys are not logged.
+customer. The adapter validates HTTPS session links, bounds response size/time and
+sanitizes provider failures. Session links and reusable provider keys are not logged.
 
 Portal admission requires billing-role authorization and the same separate billing
 writer allowlist/ownership lock as cap changes. This does not transfer writer,
@@ -1766,18 +1765,15 @@ Configuration is loaded only when `ZUSE_CLOUD_BILLING_WRITE_ACCOUNTS` enables th
 billing writer. Stripe uses `STRIPE_SECRET_KEY`, optional `STRIPE_ENVIRONMENT`
 (`sandbox`/`production`, checked against the key), optional
 `STRIPE_PORTAL_CONFIGURATION_ID` and `API_ISSUER` as the portal return URL.
-Polar uses `POLAR_ACCESS_TOKEN` and `POLAR_ENVIRONMENT` (`sandbox`/`production`).
 `BILLING_DEFAULT_PROVIDER` selects the default; existing subscriptions override it.
 Missing provider configuration returns an actionable unavailable response; no
-production account or ownership marker is enabled by this change. The adapters use
-[Stripe's portal session contract](https://docs.stripe.com/api/customer_portal/sessions/create)
-and [Polar's customer sessions contract](https://github.com/polarsource/agent-toolkit/blob/main/skills/polar-integration/SKILL.md).
+production account or ownership marker is enabled by this change. The adapter uses
+[Stripe's portal session contract](https://docs.stripe.com/api/customer_portal/sessions/create).
 
 PostgreSQL/HTTP acceptance passes for personal isolation, organization billing-role
-authorization, original Stripe/Polar selection and customer IDs, ownership fencing,
+authorization, original Stripe customer IDs, ownership fencing,
 ambiguous providers, ended subscriptions and unchanged original subscription IDs.
-The Stripe transport test verifies the original customer before session creation;
-the Polar transport test verifies external identity and rejects unsafe links.
+The Stripe transport test verifies the original customer before session creation.
 Receipts: `.context/cloud-portal-postgres.log` and
 `.context/cloud-portal-provider-tests.log`. UI acceptance is recorded separately.
 
@@ -1787,7 +1783,7 @@ account verification remain required before billing ownership cutover.
 
 Native Linux and the compiled browser both opened the selected provider portal
 through the actual host/API/PostgreSQL workflow. External URL launch was intercepted
-only for the fixture provider host; no live Stripe/Polar session or subscription was
+only for the fixture provider host; no live Stripe session or subscription was
 modified. Browser observation confirms one click creates one portal session and no
 `CloudEnvironment` compute wake. Native launch reached the system URL opener.
 Receipts: `.context/cloud-portal-native-acceptance.json`,
@@ -1799,15 +1795,14 @@ Native/browser builds and the mutation retry-classification test pass. Screensho
 
 Rust now serves the original `/v1/billing/webhook` and provider-specific
 `/v1/billing/webhook/{provider}` contracts. Stripe signs the exact raw request body
-and timestamp; Polar binds the delivery ID, timestamp and raw body. Verification
-rejects stale/future signatures, accepts rotated v1 signatures and preserves the
-reference Polar literal-secret format alongside Standard Webhooks encoded keys.
+and timestamp. Verification rejects stale/future signatures and accepts rotated v1
+signatures.
 Raw delivery bodies and reusable keys are never stored in event receipts.
 
 Signed payloads only identify the subscription. The adapter fetches current
 provider state before changing entitlements. Stripe requires one recognized base
 price, matching customer/account metadata and the original local customer link.
-Polar uses its original customer external identity and product mapping. Unlinked
+Unlinked
 subscriptions remain deferred without consuming the event. Unknown events are
 ignored without starting workspace compute.
 
@@ -1829,24 +1824,20 @@ exports and checkout remain open. This change does not activate production write
 transfer webhook ownership or replace original-account/live-provider acceptance.
 
 Verification uses an isolated PostgreSQL schema, the actual Axum routes and real
-Stripe/Polar HTTP adapters against a local provider server. Signed API delivery
+Stripe HTTP adapters against a local provider server. Signed API delivery
 covers redelivery/concurrency, current-state reconciliation of delayed events,
-renewal, payment failure, cancellation before/after paid-through, legacy Polar
-subscriptions, wrong customer/account metadata, ownership fencing, deferred
+renewal, payment failure, cancellation before/after paid-through, wrong customer/account metadata, ownership fencing, deferred
 unlinked subscriptions and atomic rollback on period-owner conflict. The provider
 fixture exposes only subscription GETs; no charge or customer-creation operations
 occur. Financial ledger totals and existing pricing/caps/identities are checked
 after processing. Receipt: `.context/cloud-events-acceptance.log`.
 
-The verifier follows [Stripe's signing implementation](https://github.com/stripe/stripe-node/blob/master/src/Webhooks.ts)
-and the [reference Polar SDK verifier](https://github.com/polarsource/polar-js/blob/main/src/webhooks.ts).
+The verifier follows [Stripe's signing implementation](https://github.com/stripe/stripe-node/blob/master/src/Webhooks.ts).
 No new UI is introduced by this backend workflow.
 
 Webhook configuration uses the original `STRIPE_WEBHOOK_SECRET`,
-`STRIPE_PRICE_CLOUD_WORKSPACE_STANDARD_V1`, `STRIPE_PRICE_PERSISTENT_STANDARD_V1`,
-`POLAR_WEBHOOK_SECRET`, `POLAR_PRODUCT_CLOUD_WORKSPACE_STANDARD_V1` and
-`POLAR_PRODUCT_PERSISTENT_STANDARD_V1` variables. The deprecated
-`POLAR_PRODUCT_SANDBOX_STANDARD_V1` cloud-product fallback remains supported.
+`STRIPE_PRICE_CLOUD_WORKSPACE_STANDARD_V1` and `STRIPE_PRICE_PERSISTENT_STANDARD_V1`
+variables.
 A configured webhook requires at least one offer mapping; duplicate product/price
 mappings fail configuration. The billing allowlist and explicit ownership marker
 remain required for processing an account's events.
@@ -1879,8 +1870,7 @@ errors; they cannot create another customer. Each retry advances saved recovery.
 Stripe checkout retains the reference subscription/base and optional metered
 price lines, account/offer metadata, promotion codes, tax/address collection and
 customer update settings. Subscription-only mode omits the metered line. Missing
-meter configuration cannot sell a metered cloud plan. Polar checkout preserves
-external customer identity, product mapping, metadata and disabled trials.
+meter configuration cannot sell a metered cloud plan.
 
 Success URLs carry an original-format Ed25519 `checkout-receipt+jwt` ticket for the
 account/offer, valid for 24 hours. The unauthenticated return page only looks up an
@@ -1901,15 +1891,15 @@ requires the original `RELAY_MINT_PRIVATE_JWK`; it does not bypass billing write
 ownership. Provider webhook/offer configuration must also exist. Stripe retains
 `STRIPE_CLOUD_BILLING_MODE`, `STRIPE_CLOUD_OVERAGE_PRICE_ID`,
 `STRIPE_CLOUD_OVERAGE_METER_ID` and `STRIPE_AUTOMATIC_TAX_ENABLED`. Existing provider
-price/product configuration and the legacy Polar cloud-product fallback remain.
+price/product configuration remains.
 No production flags or ownership markers are changed by this implementation.
 
 Backend acceptance uses the real API, PostgreSQL and provider HTTP adapters. It
 covers existing customer/subscription preservation, organization authorization,
 checkout receipt authorization, lost customer-create responses, paginated recovery,
 verified remote absence, ambiguous remote customers, signed subscription activation
-and duplicate-subscription rejection. Separate transport acceptance covers Polar
-checkout and Stripe subscription-only/tax-disabled parameters. Receipt:
+and duplicate-subscription rejection. Separate transport acceptance covers Stripe
+subscription-only/tax-disabled parameters. Receipt:
 `.context/cloud-checkout-acceptance.log`.
 
 Live paid-provider acceptance, automatic customer-recovery scheduling, reconciliation
@@ -1935,7 +1925,7 @@ in `.context/cloud-checkout-regression.log` and `.context/cloud-checkout-retry-t
 
 Rust now serves the original `/v1/billing/prepaid`, `/prepaid/checkout` and
 `/prepaid/complete` contracts. Provider selection retains existing non-ended
-Stripe/Polar ownership. Stripe reads the verified original customer's USD invoice
+Stripe ownership. Stripe reads the verified original customer's USD invoice
 balance; positive debt and available credit remain separate. Unsupported providers
 report unavailable purchases, while existing Stripe balances remain readable when
 purchases are disabled. Checkout accepts the reference $10/$25/$50/$100 amounts,
@@ -2000,7 +1990,7 @@ metered exports, persistent-machine billing, image administration or the rest of
 ### Owned billing and telemetry export worker
 
 `zuse-cloud-api billing-worker [--once]` now drains the existing financial and
-telemetry outboxes through real Stripe/Polar HTTP adapters. The optional Compose
+telemetry outboxes through real Stripe HTTP adapters. The optional Compose
 `billing` profile runs it independently of API viewers and allocation/recovery.
 `CLOUD_BILLING_EXPORT_ENABLED` and `CLOUD_USAGE_EXPORT_ENABLED` are separate,
 default-off flags. Disabled once-mode returns before database/provider setup.
@@ -2033,19 +2023,18 @@ without a meter write. Timestamp validation retains the reference 35-day/five-mi
 window. Stripe requests explicitly use `2026-09-30.endive`, matching the reference's
 [stripe-node 23.0.0 API version](https://github.com/stripe/stripe-node/blob/v23.0.0/src/apiVersion.ts).
 
-Polar retains original external customer/event IDs, timestamps, metadata and signed
-unit values. Telemetry only accepts the two reference observation/cost event names
+Telemetry only accepts the two reference observation/cost event names
 and `billable=false`; it cannot inject invoice units through the usage queue. The
 worker never obtains a workspace execution connection.
 
 Reconciliation waits for settled outboxes, records attempts fairly (including
 missing meters and failed requests), prevents duplicate concurrent polls, and
 persists authoritative expected/observed totals. Stripe reads all summary pages
-using the reference minute-aligned bounds; Polar reads its original customer meter.
+using the reference minute-aligned bounds.
 A mismatch is recorded without automatically emitting corrective financial events.
 
 Twelve billing library checks pass, including isolated PostgreSQL and actual
-Stripe/Polar HTTP adapters. Export acceptance covers lost accepted responses,
+Stripe HTTP adapters. Export acceptance covers lost accepted responses,
 concurrent reconciliation, missing/failing meters, original keys, an independently
 generated JavaScript receipt fixture, draft/finalized invoice handling, old uncertain
 delivery refusal, telemetry separation and ownership fencing. Existing credit,
@@ -2091,7 +2080,7 @@ Settlement is default-off and independent of export. Enable only after fencing
 the old billing writer and assigning the original account's Rust billing marker:
 `BOXD_BILLING_ENABLED=true`, `BOXD_ADAPTER_ENABLED=true`, a positive whole-second
 RFC3339 `BOXD_BILLING_CUTOVER_AT`, `BOXD_API_KEY`, optional `BOXD_ORG`, and explicit
-`ZUSE_CLOUD_BILLING_WRITE_ACCOUNTS`. Cost-only runs do not require Stripe/Polar
+`ZUSE_CLOUD_BILLING_WRITE_ACCOUNTS`. Cost-only runs do not require Stripe
 credentials or export ownership. Export still requires its separate marker and
 flags. `BOXD_BASE_URL` accepts an HTTPS cluster and derives token exchange using
 the SDK's console-host rules; provider credentials do not follow redirects.
@@ -2854,3 +2843,24 @@ idempotence, rollback, environment separation and verified-TLS handling.
 See [database operations](../infra/cloud/DATABASE.md). This has not been applied to
 Supabase and does not complete scoped-role provisioning, customer data import,
 credential authority migration or the Postgres hot-history redesign.
+
+### Prepaid wallet on brokeboy
+
+`BROKEBOY_ENABLED=true` moves prepaid credit and hosted-model spending to the embedded
+brokeboy ledger, which one wallet feature holds with one credit equal to one US dollar.
+It requires `STRIPE_SECRET_KEY` (a `sk_` key) and `STRIPE_WEBHOOK_SECRET`. Apply
+`0032_hosted_models.sql` and `0033_brokeboy.sql` first; startup does not migrate. Without
+the flag, prepaid routes keep using the Stripe customer balance and hosted models are
+unavailable. The flag does not move existing Stripe balances.
+
+The API and `billing-worker` both open the wallet with an independent SQLx pool. Each
+hosted request holds credit for its input estimate plus its longest allowed reply,
+capped at the spendable balance. `zuse_rust_model_usage` records the real cost first and
+remains the per-request spend history; settlement replays a stable key, so a lost
+acknowledgement never spends twice. Lost streams bill their input estimate after an
+hour, and the worker settles them before the two-hour hold lapses.
+
+Stripe delivery stays on the existing webhook route. Wallet purchases, refunds and
+disputes are also forwarded to the ledger, so the endpoint must subscribe to
+`refund.failed` and the `charge.dispute` events. Prepaid credit does not pay
+subscription or overage invoices. Legacy purchases keep their existing handling.

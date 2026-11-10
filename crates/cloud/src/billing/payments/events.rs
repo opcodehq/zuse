@@ -1,7 +1,6 @@
 //! Signed delivery is a notification. Canonical provider state authorizes subscription changes.
 use super::*;
 use axum::http::HeaderMap;
-use base64::{Engine as _, engine::general_purpose::STANDARD};
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
 use sqlx::Row;
@@ -101,8 +100,8 @@ impl EventConfig {
         }
     }
 
-    pub(super) fn from_env(prefix: &str, kind: &str) -> anyhow::Result<Option<Self>> {
-        let secret = std::env::var(format!("{prefix}_WEBHOOK_SECRET")).unwrap_or_default();
+    pub(super) fn from_env() -> anyhow::Result<Option<Self>> {
+        let secret = std::env::var("STRIPE_WEBHOOK_SECRET").unwrap_or_default();
         if secret.trim().is_empty() {
             return Ok(None);
         }
@@ -111,15 +110,7 @@ impl EventConfig {
             ("CLOUD_WORKSPACE_STANDARD_V1", "cloud-workspace-standard-v1"),
             ("PERSISTENT_STANDARD_V1", "persistent-standard-v1"),
         ] {
-            let configured = std::env::var(format!("{prefix}_{kind}_{suffix}"))
-                .ok()
-                .or_else(|| {
-                    if prefix == "POLAR" && suffix == "CLOUD_WORKSPACE_STANDARD_V1" {
-                        std::env::var("POLAR_PRODUCT_SANDBOX_STANDARD_V1").ok()
-                    } else {
-                        None
-                    }
-                });
+            let configured = std::env::var(format!("STRIPE_PRICE_{suffix}")).ok();
             if let Some(id) = configured {
                 if !id.trim().is_empty() {
                     anyhow::ensure!(
@@ -188,70 +179,6 @@ impl EventConfig {
             subscription_id: id.into(),
         }))
     }
-    pub(super) fn polar_event(
-        &self,
-        h: &HeaderMap,
-        body: &[u8],
-        now: i64,
-    ) -> Result<Option<PaymentEvent>, ApiError> {
-        let event_id = header(h, "webhook-id")?;
-        let ts = header(h, "webhook-timestamp")?;
-        recent(ts, now)?;
-        if event_id.is_empty() || event_id.len() > 1024 {
-            return Err(invalid());
-        }
-        // Original Polar SDK signs with literal UTF-8 secret bytes, including its prefix.
-        let valid = header(h, "webhook-signature")?
-            .split_whitespace()
-            .filter_map(|v| v.strip_prefix("v1,"))
-            .filter_map(|v| STANDARD.decode(v).ok())
-            .any(|expected| {
-                signature(
-                    self.secret.as_bytes(),
-                    &format!("{event_id}.{ts}."),
-                    body,
-                    &expected,
-                )
-            });
-        // New Standard Webhooks secrets encode their key after whsec_. Preserve
-        // literal-key verification for existing Polar endpoints at the pinned reference.
-        let standard_key = self
-            .secret
-            .strip_prefix("whsec_")
-            .and_then(|s| STANDARD.decode(s).ok())
-            .map(Zeroizing::new);
-        let valid = valid
-            || standard_key.as_ref().is_some_and(|key| {
-                header(h, "webhook-signature").is_ok_and(|value| {
-                    value
-                        .split_whitespace()
-                        .filter_map(|v| v.strip_prefix("v1,"))
-                        .filter_map(|v| STANDARD.decode(v).ok())
-                        .any(|expected| {
-                            signature(key, &format!("{event_id}.{ts}."), body, &expected)
-                        })
-                })
-            });
-        if !valid {
-            return Err(invalid());
-        }
-        let v: Value = serde_json::from_slice(body).map_err(|_| invalid())?;
-        match v["type"].as_str() {
-            Some(
-                "subscription.active"
-                | "subscription.canceled"
-                | "subscription.created"
-                | "subscription.past_due"
-                | "subscription.revoked"
-                | "subscription.uncanceled"
-                | "subscription.updated",
-            ) => Ok(Some(PaymentEvent::Subscription {
-                event_id: event_id.into(),
-                subscription_id: text(&v["data"], "id").map_err(|_| invalid())?.into(),
-            })),
-            _ => Ok(None),
-        }
-    }
     pub(super) fn stripe_subscription(
         &self,
         id: &str,
@@ -308,42 +235,6 @@ impl EventConfig {
         sub.validate()?;
         Ok(sub)
     }
-    pub(super) fn polar_subscription(&self, id: &str, v: &Value) -> Result<Subscription, ApiError> {
-        if v["id"] != id {
-            return Err(unavailable());
-        }
-        let owner = v["customer"]["external_id"]
-            .as_str()
-            .or_else(|| v["metadata"]["account_id"].as_str())
-            .filter(|v| !v.trim().is_empty())
-            .ok_or_else(|| ApiError::conflict("subscription_unlinked"))?;
-        let offer = self
-            .offers
-            .get(text(v, "product_id")?)
-            .ok_or_else(unavailable)?;
-        if v["metadata"]["offer_id"]
-            .as_str()
-            .is_some_and(|v| v != offer)
-        {
-            return Err(unavailable());
-        }
-        let date = |key| {
-            chrono::DateTime::parse_from_rfc3339(text(v, key)?)
-                .map(|d| d.timestamp_millis())
-                .map_err(|_| unavailable())
-        };
-        let sub = Subscription {
-            owner: owner.into(),
-            id: id.into(),
-            offer: offer.clone(),
-            status: status(text(v, "status")?),
-            period_start: date("current_period_start")?,
-            paid_through: date("current_period_end")?,
-            customer: None,
-        };
-        sub.validate()?;
-        Ok(sub)
-    }
 }
 impl Subscription {
     fn validate(&self) -> Result<(), ApiError> {
@@ -379,7 +270,11 @@ impl BillingControl {
             None => return Err(ApiError::bad_request("billing_provider_required")),
         };
         let provider = providers.providers.get(id).ok_or_else(unavailable)?;
-        let Some(event) = provider.verify_event(headers, body, now)? else {
+        let event = provider.verify_event(headers, body, now)?;
+        if let (Some(wallet), "stripe") = (&self.wallet, id) {
+            wallet.webhook(headers, body).await?;
+        }
+        let Some(event) = event else {
             return Ok(json!({"ok":true,"ignored":true}));
         };
         let (event_id, subscription_id) = match event {

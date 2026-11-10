@@ -2,8 +2,10 @@
 use super::BillingControl;
 mod checkout;
 mod credits;
+mod hosted;
 mod meter;
 pub use credits::{CreditDispute, CreditEvent, CreditPurchase};
+pub use hosted::{HostedUsageReport, MIGRATION as HOSTED_MODELS_MIGRATION};
 pub mod events;
 use crate::{error::ApiError, store::Store};
 use async_trait::async_trait;
@@ -168,8 +170,8 @@ impl PaymentProviders {
                 providers.push(Arc::new(StripePortal {
                     http: ProviderHttp::new("https://api.stripe.com/v1/", secret)?,
                     return_url,
-                    events: events::EventConfig::from_env("STRIPE", "PRICE")?,
-                    checkout: checkout::ProviderCheckout::from_env("STRIPE", "PRICE")?,
+                    events: events::EventConfig::from_env()?,
+                    checkout: checkout::ProviderCheckout::from_env()?,
                     meter_price: std::env::var("STRIPE_CLOUD_OVERAGE_PRICE_ID")
                         .ok()
                         .filter(|v| !v.trim().is_empty()),
@@ -179,22 +181,6 @@ impl PaymentProviders {
                     configuration: std::env::var("STRIPE_PORTAL_CONFIGURATION_ID")
                         .ok()
                         .filter(|s| !s.is_empty()),
-                }));
-            }
-        }
-        if let Ok(secret) = std::env::var("POLAR_ACCESS_TOKEN") {
-            if !secret.trim().is_empty() {
-                let environment =
-                    std::env::var("POLAR_ENVIRONMENT").unwrap_or_else(|_| "production".into());
-                let origin = match environment.as_str() {
-                    "production" => "https://api.polar.sh/v1/",
-                    "sandbox" => "https://sandbox-api.polar.sh/v1/",
-                    _ => anyhow::bail!("Invalid Polar environment"),
-                };
-                providers.push(Arc::new(PolarPortal {
-                    events: events::EventConfig::from_env("POLAR", "PRODUCT")?,
-                    checkout: checkout::ProviderCheckout::from_env("POLAR", "PRODUCT")?,
-                    http: ProviderHttp::new(origin, secret)?,
                 }));
             }
         }
@@ -556,117 +542,13 @@ impl PortalProvider for StripePortal {
         Ok(url.into())
     }
 }
-struct PolarPortal {
-    checkout: Option<checkout::ProviderCheckout>,
-    events: Option<events::EventConfig>,
-    http: ProviderHttp,
-}
-#[async_trait]
-impl PortalProvider for PolarPortal {
-    async fn report_meter(
-        &self,
-        event: &super::MeterEvent,
-        _customer: Option<&str>,
-    ) -> Result<(), ApiError> {
-        self.report_usage(event).await
-    }
-    async fn meter_total(
-        &self,
-        owner: &str,
-        _customer: Option<&str>,
-        meter: &str,
-        _start: i64,
-        _end: i64,
-    ) -> Result<i64, ApiError> {
-        self.usage_total(owner, meter).await
-    }
-
-    fn supports_checkout(&self, offer: &str) -> bool {
-        self.events.is_some()
-            && self
-                .checkout
-                .as_ref()
-                .is_some_and(|c| c.offers.contains_key(offer))
-    }
-    async fn checkout(
-        &self,
-        owner: &str,
-        _customer: Option<&str>,
-        offer: &str,
-        success: &str,
-    ) -> Result<String, ApiError> {
-        let product = self
-            .checkout
-            .as_ref()
-            .and_then(|c| c.offers.get(offer))
-            .ok_or_else(unavailable)?;
-        let value=ProviderHttp::json(self.http.request(reqwest::Method::POST,&["checkouts",""])?.json(&json!({"products":[product],"external_customer_id":owner,"success_url":success,"metadata":{"account_id":owner,"offer_id":offer},"allow_trial":false}))).await?;
-        let url = checkout::required(&value, "url")?;
-        secure_url(url)?;
-        Ok(url.into())
-    }
-    async fn checkout_summary(
-        &self,
-        owner: &str,
-        id: &str,
-    ) -> Result<Option<CheckoutSummary>, ApiError> {
-        let value = ProviderHttp::json(
-            self.http
-                .request(reqwest::Method::GET, &["checkouts", id])?,
-        )
-        .await?;
-        if value["id"] != id
-            || value["external_customer_id"]
-                .as_str()
-                .or_else(|| value["customer"]["external_id"].as_str())
-                != Some(owner)
-        {
-            return Ok(None);
-        }
-        checkout::CheckoutSummary::polar(&value).map(Some)
-    }
-    fn provider_id(&self) -> &'static str {
-        "polar"
-    }
-    fn verify_event(
-        &self,
-        headers: &axum::http::HeaderMap,
-        body: &[u8],
-        now: i64,
-    ) -> Result<Option<PaymentEvent>, ApiError> {
-        self.events
-            .as_ref()
-            .ok_or_else(unavailable)?
-            .polar_event(headers, body, now)
-    }
-    async fn subscription(&self, id: &str) -> Result<Subscription, ApiError> {
-        let value = ProviderHttp::json(
-            self.http
-                .request(reqwest::Method::GET, &["subscriptions", id])?,
-        )
-        .await?;
-        self.events
-            .as_ref()
-            .ok_or_else(unavailable)?
-            .polar_subscription(id, &value)
-    }
-    async fn portal(&self, owner: &str, _customer: Option<&str>) -> Result<String, ApiError> {
-        let session = ProviderHttp::json(
-            self.http
-                .request(reqwest::Method::POST, &["customer-sessions", ""])?
-                .json(&json!({"external_customer_id":owner})),
-        )
-        .await?;
-        let url = session["customer_portal_url"]
-            .as_str()
-            .ok_or_else(unavailable)?;
-        secure_url(url)?;
-        Ok(url.into())
-    }
-}
 impl BillingControl {
     pub fn with_payment_providers(mut self, providers: PaymentProviders) -> Self {
         self.payments = Some(Arc::new(providers));
+        self
+    }
+    pub fn with_wallet(mut self, wallet: crate::billing::Wallet) -> Self {
+        self.wallet = Some(Arc::new(wallet));
         self
     }
     async fn portal(&self, owner: &str) -> Result<String, ApiError> {

@@ -148,7 +148,7 @@ Source: `packages/utils/src/cloud-transcript-crypto.ts`, [archive schema](https:
 
 ## Service prerequisites, native status and acceptance
 
-- Services: WorkOS AuthKit/JWKS/API, Cloudflare Worker/Durable Objects/R2/Hyperdrive, Postgres, configured sandbox providers, GitHub app/user auth and Stripe (Polar compatibility for existing subscribers).
+- Services: WorkOS AuthKit/JWKS/API, Cloudflare Worker/Durable Objects/R2/Hyperdrive, Postgres, configured sandbox providers, GitHub app/user auth and Stripe.
 - Required bindings include `CLOUD_TRANSCRIPTS`, `HYPERDRIVE`, `WORKSPACE_GATEWAY`, `WORKSPACE_MAILBOX`, `WORKSPACE_STARTUP`, `CLOUD_AUTH_EXECUTOR`, `DEVICE_BRIDGE_GATEWAY`, `PLUGIN_VAULT`; Slack queue when enabled.
 - Guest requires exact compatible signed runtime artifact/template, runtime/provider credentials and Git/toolchain; recovery additionally needs Node `node:sqlite`, Python 3 and temporary disk.
 - Secrets remain in Worker configuration/account authority/native credential vault; client never receives Stripe, WorkOS or provider administrative secrets.

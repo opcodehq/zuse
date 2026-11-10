@@ -5,7 +5,7 @@
   const proof=window.__portalProof={methods:[],portals:[],opened:[],errors:[]};
   const open=window.open.bind(window);
   window.open=(url,...args)=>{
-    try { const parsed=new URL(url,location.href); if(parsed.hostname==='stripe.example.test'||parsed.hostname==='polar.example.test') {proof.opened.push(parsed.hostname);return null;} } catch {}
+    try { const parsed=new URL(url,location.href); if(parsed.hostname==='stripe.example.test') {proof.opened.push(parsed.hostname);return null;} } catch {}
     return open(url,...args);
   };
   window.WebSocket=class extends Native {
