@@ -748,6 +748,13 @@ pub async fn download_release_file(
     let url = release_file_url(edge_url, &manifest.version, file)?;
     let expected = manifest.files.get(file).and_then(|m| m.sha256.as_deref());
     if expected.is_none() {
+        // Only pre-manifest feeds publish no checksums at all. Once a release
+        // lists checksums, an unlisted artifact must not install unverified.
+        anyhow::ensure!(
+            manifest.files.is_empty(),
+            "release {} does not list {file} in its checksums",
+            manifest.version
+        );
         tracing::warn!(
             file,
             "no checksum in release metadata; skipping verification"
@@ -2303,5 +2310,41 @@ mod tests {
         server.abort();
         assert_eq!(staged, app_root.join("9.9.9"));
         assert!(staged.join("zuse").is_file());
+    }
+
+    #[tokio::test]
+    async fn download_refuses_an_artifact_missing_from_published_checksums() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (base, server) = serve_forever(b"payload".to_vec()).await;
+        let listed = Manifest {
+            version: "9.9.9".into(),
+            files: [(
+                "zuse-9.9.9-linux-x86_64.tar.gz".to_owned(),
+                FileMeta {
+                    sha256: Some(format!("{:x}", Sha256::digest(b"payload"))),
+                },
+            )]
+            .into(),
+        };
+        let dest = tmp.path().join("unlisted.tar.gz");
+        let error = download_release_file(&base, &listed, "zuse-9.9.9-linux-aarch64.tar.gz", &dest)
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("does not list zuse-9.9.9-linux-aarch64.tar.gz"),
+            "unexpected error: {error:#}"
+        );
+        assert!(!dest.exists());
+
+        // Pre-manifest feeds publish no checksums and still download.
+        let unlisted = Manifest {
+            version: "9.9.9".into(),
+            files: BTreeMap::new(),
+        };
+        download_release_file(&base, &unlisted, "zuse-9.9.9-linux-aarch64.tar.gz", &dest)
+            .await
+            .unwrap();
+        server.abort();
+        assert_eq!(std::fs::read(&dest).unwrap(), b"payload");
     }
 }
