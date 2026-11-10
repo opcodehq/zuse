@@ -449,6 +449,7 @@ pub(crate) fn seed(
             doc.upsert_session(&Session {
                 last_completed_turn: None,
                 running_subagents: 0,
+                awaiting_input: None,
                 background_tasks: Vec::new(),
                 chat_id: demo.id.into(),
                 device_id: demo.device.into(),
@@ -459,6 +460,7 @@ pub(crate) fn seed(
         }
         if let (Some((number, state, title)), Some(source)) = (demo.pr, &source_context) {
             change_requests.push(CheckoutChangeRequestStatus {
+                error: None,
                 checkout_id: source.checkout_id.clone(),
                 device_id: demo.device.into(),
                 cwd: source.repo_root.clone(),
@@ -471,6 +473,8 @@ pub(crate) fn seed(
                     state,
                     base_ref: "main".into(),
                     head_ref: source.branch.clone(),
+                    is_draft: false,
+                    review_decision: Default::default(),
                 }),
                 updated_at: Utc::now(),
             });

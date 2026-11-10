@@ -10,13 +10,33 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
+/// Worker stack for engine runtimes. RPC dispatch is one deep async call
+/// chain, and unoptimized builds overflow Tokio's 2 MiB default.
+pub const RUNTIME_STACK_SIZE: usize = 16 * 1024 * 1024;
+
 pub use zuse_protocol::{EngineInfo, HarnessId, WorkspaceScope};
+
+/// Stack for every engine worker thread. Tokio's 2 MiB default is too small
+/// for unoptimized builds: one RPC into cloud settings nests several large
+/// async frames (the engine and cloud dispatchers alone take ~0.6 MiB on x86,
+/// more on arm64), which overflowed and aborted the engine. Stacks are
+/// reserved address space, so this costs no memory until it is used.
+pub const WORKER_STACK_BYTES: usize = RUNTIME_STACK_SIZE;
+
+/// The multi-threaded runtime the engine runs on, headless or embedded.
+pub fn runtime() -> std::io::Result<tokio::runtime::Runtime> {
+    tokio::runtime::Builder::new_multi_thread()
+        .thread_stack_size(WORKER_STACK_BYTES)
+        .enable_all()
+        .build()
+}
 use zuse_rpc::{RpcError, RpcReply, RpcService, methods};
 
 use zuse_sync::DocsStore;
 
 pub mod account;
 pub mod agent_accounts;
+mod api_origins;
 pub mod archives;
 pub mod auth;
 mod branch_graph;
@@ -27,9 +47,19 @@ pub mod chat2_host;
 mod chat_persistence;
 pub mod desktop_import;
 pub mod diff_sync;
+pub mod direct_access;
 pub mod doc_host;
+pub mod execution;
+pub mod execution_progress;
+pub mod local_mcp;
+pub mod machine_resources;
+pub mod ssh_access;
+pub use cloud::hosted as hosted_cloud;
+mod parking;
+pub use parking::ParkedExecution;
 mod external_chats;
 mod fs_watch;
+mod git_fetch;
 mod git_workspace;
 pub mod harness_updates;
 pub(crate) mod home_index;
@@ -41,6 +71,7 @@ pub mod relay_access;
 pub use zuse_harness::processes::supervisor as command_host;
 mod acp_catalog;
 mod harness_api;
+mod harness_local;
 pub mod harness_models;
 mod model_catalogs;
 pub mod model_connections;
@@ -61,6 +92,7 @@ pub mod run_journal;
 mod secret_broker;
 pub mod sessions;
 pub mod source_control;
+mod source_control_refresh;
 pub mod spaces;
 pub mod terminals;
 pub mod titles;
@@ -73,6 +105,7 @@ pub mod workspace_files;
 pub mod workspace_host;
 pub mod workspace_search;
 mod worktree_settings;
+pub mod zots;
 
 pub use agent_accounts::{AgentAccounts, AgentAccountsConfig};
 pub use auth::{Auth, AuthConfig, AuthState, AuthUser, OrgMembership, TerminalSignIn};
@@ -161,6 +194,9 @@ pub struct EngineCore {
     pub pairings: zuse_remote::authority::Authority,
     pub browser_access: browser_access::Owner,
     pub relay_access: relay_access::Owner,
+    pub direct_access: direct_access::Owner,
+    pub zots: zots::Zots,
+    _zot_supervisor: Option<zots::ZotSupervisor>,
     pub account: account::Account,
     pub managed_access: managed_access::AccountClient,
     pub managed_host: managed_access::host::Owner,
@@ -180,6 +216,7 @@ pub struct EngineCore {
     pub project_creation: project_creation::ProjectCreationService,
     pub previews: zuse_preview::PreviewService,
     pub change_requests: CheckoutChangeRequests,
+    github_launcher: source_control::GitHubCommandLauncher,
     pub diff_sync: CheckoutDiffSync,
     pub spaces_sync: SpacesSync,
     pub uploads: Uploads,
@@ -275,9 +312,15 @@ impl EngineCore {
         } else {
             DocsStore::open(profile.store_root())?
         });
+        let zots = zots::Zots::open(profile.store_root(), &device_id)
+            .map_err(|e| EngineError::Other(e.to_string()))?;
         let store_for_import = store.clone();
         let journal = Arc::new(RunJournal::open(profile.store_root().join("journals"))?);
         let sessions = SessionsEngine::new(device_id.clone(), journal, registry.clone());
+        if profile.preparation_pending() {
+            sessions.require_preparation();
+        }
+        sessions.set_zots(zots.clone());
         let doc_host = DocHost::new(
             store.clone(),
             DocHostConfig {
@@ -286,6 +329,11 @@ impl EngineCore {
                 edge: edge.clone(),
             },
         );
+        if profile.managed_recovery() {
+            sessions.set_managed_recovery();
+            doc_host.set_managed_recovery();
+            doc_host.disable_native_provider_import();
+        }
         let workspace = WorkspaceHost::open(
             store,
             WorkspaceHostConfig {
@@ -310,7 +358,18 @@ impl EngineCore {
         let repos = Repos::new(data_dir, &device_id);
         sessions.set_scratch_root(repos.scratch_root());
         doc_host.set_repos(repos.clone());
-        let change_requests = CheckoutChangeRequests::start(repos.clone(), &device_id);
+        let github_launcher = source_control::GitHubCommandLauncher::default();
+        let change_requests = CheckoutChangeRequests::new(
+            repos.clone(),
+            &device_id,
+            Arc::new(
+                source_control::ChangeRequestResolver::new().with_github(
+                    source_control::GitHubCli::new()
+                        .with_store(&data_dir)
+                        .with_launcher(github_launcher.clone()),
+                ),
+            ),
+        );
         let workspace_files =
             WorkspaceFiles::new(repos.clone(), workspace.clone(), device_id.clone());
         let terminals = Terminals::new();
@@ -395,6 +454,7 @@ impl EngineCore {
             model_connections::ModelConnections::new(data_dir.to_path_buf(), account.clone());
         let harness_models =
             harness_models::HarnessModels::new(model_connections.clone(), data_dir.join("harness"))
+                .map(|models| models.with_local(agent_accounts.clone(), Arc::downgrade(&registry)))
                 .map_err(|error| EngineError::Other(error.to_string()))?;
         #[cfg(unix)]
         registry.register(Arc::new(
@@ -422,17 +482,43 @@ impl EngineCore {
             device_id.clone(),
             pairings.clone(),
             browser_access.control().pairing_slots(),
+        )
+        .with_paired_state(
+            browser_access.control().paired_sessions(),
+            browser_access.control().advertised_routes(),
         );
+        let direct_access = direct_access::Owner::new(
+            profile.store_root().into(),
+            device_id.clone(),
+            pairings.clone(),
+            &browser_access.control(),
+        );
+        direct_access
+            .control()
+            .set_other_routes(direct_access::OtherRoutes {
+                relay: Some(relay_access.control()),
+                browser: Some(browser_access.control()),
+                managed: Some(managed_host.control()),
+            });
         let usage = usage::Usage::local(profile.store_root().join("journals"));
         let pr_watches =
             pr_watch::PrWatches::open(profile.store_root(), workspace.clone(), doc_host.clone())?;
         pr_watches.start();
+        let zot_supervisor = zots::ZotSupervisor::start(
+            zots.clone(),
+            sessions.clone(),
+            workspace.clone(),
+            doc_host.clone(),
+        );
         Ok(Self {
             pr_watches,
             usage,
             relay_access,
+            direct_access,
             browser_access,
             pairings,
+            _zot_supervisor: zot_supervisor,
+            zots,
             harness_models,
             model_connections,
             account,
@@ -450,6 +536,7 @@ impl EngineCore {
             project_creation,
             previews,
             change_requests,
+            github_launcher,
             diff_sync,
             spaces_sync,
             uploads,
@@ -519,6 +606,7 @@ impl EngineCore {
     /// Attach the peer link cache — enables `targetDeviceId` routing,
     /// [`Self::dial_device`], and the doc host's queued-attachment transfers.
     pub fn set_links(&self, links: Arc<zuse_rpc::LinkCache>) {
+        self.zots.set_peers(links.clone());
         self.doc_host.set_links(links.clone());
         *self
             .links
@@ -590,6 +678,16 @@ impl EngineCore {
         zuse_rpc::HostRelay::spawn(config, self.rpc_service(), on_nudge)
     }
 
+    /// Managed tasks cannot borrow a configured desktop/guest GitHub account.
+    pub fn require_github_launcher(&self) {
+        self.github_launcher.require();
+    }
+    pub fn install_github_launcher(
+        &self,
+        path: PathBuf,
+    ) -> Result<(), source_control::ChangeRequestError> {
+        self.github_launcher.install(path)
+    }
     pub fn rpc_service(&self) -> Arc<EngineRpc> {
         let mut rpc = EngineRpc::new(
             self.sessions.clone(),
@@ -608,6 +706,7 @@ impl EngineCore {
         )
         .with_pr_watches(self.pr_watches.clone())
         .with_project_creation(self.project_creation.clone())
+        .with_github_launcher(self.github_launcher.clone())
         .with_usage(self.usage.clone())
         .with_desktop_import(self.desktop_import_profile.clone())
         .with_visuals(self.visuals.clone())
@@ -615,6 +714,8 @@ impl EngineCore {
         .with_pairings(self.pairings.clone())
         .with_browser_access(self.browser_access.control())
         .with_relay_access(self.relay_access.control())
+        .with_direct_access(self.direct_access.control())
+        .with_zots(self.zots.clone())
         .with_model_connections(self.model_connections.clone())
         .with_account(self.account.clone(), self.plugins.clone())
         .with_managed_access(self.managed_access.clone())
@@ -650,11 +751,15 @@ impl EngineCore {
     /// kill live PTYs, stamp our workspace `lastSeenAt`, and flush every open doc
     /// snapshot.
     pub async fn shutdown(&self) {
+        self.direct_access.begin_close();
         self.pr_watches.shutdown();
         self.managed_host.begin_close();
         self.browser_access.begin_close();
         self.relay_access.begin_close();
         self.pairings.close();
+        if let Some(supervisor) = &self._zot_supervisor {
+            supervisor.stop();
+        }
         // Freeze admission before any awaited cleanup: an Idle transition must
         // not release another queued command while credentials are draining.
         self.doc_host.pause_all_queues();
@@ -672,6 +777,7 @@ impl EngineCore {
         self.managed_host.close().await;
         self.browser_access.close().await;
         self.relay_access.close().await;
+        self.direct_access.close().await;
         self.sessions.shutdown().await;
         self.harness_models.shutdown().await;
         self.model_connections.retire().await;
@@ -998,6 +1104,11 @@ impl Engine {
             Arc::new(move || !sessions.any_active() && !terminals.any_open())
         };
         let updater = zuse_update::Updater::spawn(config.edge_url.clone(), Some(quiescent));
+        tokio::spawn(async {
+            if let Err(error) = zuse_update::control::synchronize_bundled().await {
+                tracing::warn!(%error,"bundled control update failed");
+            }
+        });
         if let Some(mut token_changes) = edge.as_ref().and_then(EdgeConfig::token_changes) {
             let updater_for_tokens = updater.clone();
             let wake = tokio::spawn(async move {
@@ -1035,6 +1146,10 @@ impl Engine {
         });
 
         core.relay_access
+            .control()
+            .restore_on_startup(core.rpc_service())
+            .await;
+        core.direct_access
             .control()
             .restore_on_startup(core.rpc_service())
             .await;

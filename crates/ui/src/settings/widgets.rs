@@ -795,6 +795,27 @@ pub fn row_title(theme: &Theme, title: impl Into<SharedString>) -> gpui::Div {
         .child(title.into())
 }
 
+/// A settings row's left side: title over one muted description, using the
+/// design system's row type sizes. Every page's rows share this one helper.
+pub fn row_copy(theme: &Theme, title: &str, description: &str) -> gpui::Div {
+    div()
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .flex_col()
+        .gap(px(2.))
+        .child(row_title(theme, title.to_owned()))
+        .when(!description.is_empty(), |copy| {
+            copy.child(
+                div()
+                    .text_size(crate::typography::ui_rems(ROW_DESCRIPTION_SIZE))
+                    .line_height(crate::typography::ui_rems(16.))
+                    .text_color(theme.text_muted)
+                    .child(description.to_owned()),
+            )
+        })
+}
+
 /// The quiet meta line under a row title: `text-[12px]
 /// text-muted-foreground/65` fragments joined by dots.
 pub fn meta_line(theme: &Theme, fragments: Vec<AnyElement>) -> gpui::Div {
@@ -925,13 +946,6 @@ impl RenderOnce for SwitchVisual {
         if (position - target).abs() > 0.001 {
             window.request_animation_frame();
         }
-        let track = if self.on {
-            self.theme.accent
-        } else if self.theme.appearance.is_dark() {
-            self.theme.surface_raised
-        } else {
-            self.theme.surface_raised
-        };
         let thumb = if self.theme.appearance.is_dark() {
             self.theme.text
         } else {
@@ -943,12 +957,15 @@ impl RenderOnce for SwitchVisual {
             .w(px(SWITCH_WIDTH))
             .h(px(SWITCH_HEIGHT))
             .rounded_full()
-            .bg(track)
+            .when(!self.on, |track| track.bg(self.theme.surface_raised))
             .border_1()
             .border_color(if self.on {
                 self.theme.accent.opacity(0.6)
             } else {
                 self.theme.border
+            })
+            .when(self.on, |track| {
+                track.child(zuse_viewport::dither::fill_color(self.theme.accent, 10.0))
             })
             .child(
                 div()
@@ -1616,16 +1633,16 @@ pub fn action_button(theme: &Theme, tone: ActionTone) -> gpui::Div {
                 .text_color(theme.text)
                 .hover(move |s| s.bg(lifted))
         }
-        ActionTone::Solid => button
-            .bg(theme.solid)
-            .font_weight(gpui::FontWeight::MEDIUM)
-            .text_color(theme.on_solid)
-            .hover(|s| s.opacity(0.9)),
-        // The dialogs' destructive fill (`popover::btn_danger`).
-        ActionTone::Danger => button
-            .bg(theme.danger_strong)
-            .text_color(gpui::white())
-            .hover(|s| s.opacity(0.9)),
+        ActionTone::Solid => {
+            crate::popover::dither_key(button, theme, crate::popover::DitherKey::Primary, 7.0)
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .hover(|s| s.opacity(0.9))
+        }
+        // The dialogs' destructive face (`popover::btn_danger`).
+        ActionTone::Danger => {
+            crate::popover::dither_key(button, theme, crate::popover::DitherKey::Danger, 7.0)
+                .hover(|s| s.opacity(0.9))
+        }
     }
 }
 

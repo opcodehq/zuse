@@ -22,6 +22,7 @@
 //! Fast recursive watches on the process-wide [`FsWatchHub`] (one watcher thread
 //! for every checkout; debounced [`WATCH_DEBOUNCE`]) are backed by a slow
 //! 2-minute repair tick because native watchers may coalesce or drop events.
+//! Unwatched worktrees also poll every five seconds, including watch failures.
 //! Snapshots carry a sha256 checksum; an unchanged checksum publishes nothing.
 //!
 //! Reconcile is deliberately damped, because it runs on *every* workspace chat
@@ -73,8 +74,13 @@ pub const MAX_PATCH_BYTES: usize = 3 * 1024 * 1024;
 pub const MAX_DIFF_SOURCE_BYTES: usize = 2 * 1024 * 1024;
 /// Trailing debounce after a filesystem event burst.
 const WATCH_DEBOUNCE: Duration = Duration::from_millis(500);
+/// Quiet time after an edit when captures are cheap; large checkouts earn
+/// more, up to [`WATCH_DEBOUNCE`], so a capture cannot run back to back.
+const WATCH_DEBOUNCE_MIN: Duration = Duration::from_millis(150);
 /// Slow repair pass: re-reconcile + re-sync every checkout.
 const REPAIR_INTERVAL: Duration = Duration::from_secs(120);
+/// Keep edits visible when native watches fail or the worktree exceeds the budget.
+const UNWATCHED_POLL_INTERVAL: Duration = Duration::from_secs(5);
 /// How long an archived chat stays tracked after its last viewer leaves —
 /// flicking between chats must not tear down and rebuild (full capture) its
 /// checkout every time.
@@ -84,7 +90,7 @@ const INTEREST_LINGER: Duration = Duration::from_secs(30);
 /// costs more than instant diffs are worth). A normal source tree is well
 /// under this; a node_modules/vendored tree blows past it. The repair tick
 /// still covers skipped checkouts.
-const MAX_WATCH_DIRS: usize = 8_000;
+const MAX_WATCH_DIRS: usize = crate::fs_watch::MAX_WATCH_DIRS;
 /// `git hash-object -t tree /dev/null` — diff base for repos with no commits yet.
 const EMPTY_TREE_SHA: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
@@ -154,7 +160,21 @@ struct CheckoutEntry {
     /// dropped on entry close. Filled asynchronously — watcher setup (budget
     /// walk + FSEvents registration) can block for seconds, so [`add_entry`]
     /// does it off the runtime and attaches the result here once ready.
-    watchers: Mutex<Vec<FsWatch>>,
+    watchers: Mutex<Vec<CheckoutWatch>>,
+}
+
+struct CheckoutWatch {
+    path: PathBuf,
+    handle: FsWatch,
+}
+
+/// A git-dir-only watch misses raw edits; any failed watch can miss changes too.
+fn needs_polling(identity: &CheckoutIdentity, watchers: &[CheckoutWatch]) -> bool {
+    [&identity.root, &identity.git_dir].iter().any(|path| {
+        !watchers
+            .iter()
+            .any(|watch| path.starts_with(&watch.path) && watch.handle.is_live())
+    })
 }
 
 /// Working-tree snapshot recorded when a chat's turn dispatches — the diff
@@ -411,7 +431,10 @@ impl CheckoutDiffSync {
         let mut tracked: Vec<(PathBuf, usize)> = lock(&self.inner.entries)
             .values()
             .map(|entry| {
-                let live = lock(&entry.watchers).iter().filter(|w| w.is_live()).count();
+                let live = lock(&entry.watchers)
+                    .iter()
+                    .filter(|w| w.handle.is_live())
+                    .count();
                 (entry.identity.root.clone(), live)
             })
             .collect();
@@ -744,26 +767,7 @@ async fn reconcile(inner: &Arc<DiffSyncInner>, chats: Vec<Chat>, fresh: bool) {
 /// unreadable dirs as leaves. `.git` internal churn is real diff signal, so it
 /// counts toward the budget rather than being skipped.
 fn exceeds_watch_budget(root: &Path) -> bool {
-    let mut queue = std::collections::VecDeque::from([root.to_path_buf()]);
-    let mut seen = 0usize;
-    while let Some(dir) = queue.pop_front() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            // `file_type()` on the dirent does NOT follow symlinks — a symlinked
-            // directory reports as a symlink and is skipped, so cyclic deps
-            // (pnpm/npm) can't blow up the walk.
-            if entry.file_type().is_ok_and(|t| t.is_dir()) {
-                seen += 1;
-                if seen > MAX_WATCH_DIRS {
-                    return true;
-                }
-                queue.push_back(entry.path());
-            }
-        }
-    }
-    false
+    crate::fs_watch::exceeds_watch_budget(root, MAX_WATCH_DIRS)
 }
 
 /// Which paths a checkout's entry live-watches.
@@ -779,20 +783,18 @@ fn exceeds_watch_budget(root: &Path) -> bool {
 ///
 /// An over-budget root still gets its GIT DIR watched (a bounded tree —
 /// objects fanout + refs): commits, index moves, and branch switches then
-/// refresh the diff instantly, and only raw working-tree edits wait for the
-/// repair tick. Without this, a commit right after an edit left the pane
-/// showing the pre-commit diff for up to two minutes (user report — the
-/// dev checkout's target/ alone blows the budget). Linked worktrees keep
+/// refresh the diff instantly, and raw working-tree edits use polling.
+/// Linked worktrees keep
 /// their git dir outside the root, so it rides along whenever the root's
 /// watch doesn't already cover it.
-fn watch_targets(identity: &CheckoutIdentity) -> Vec<PathBuf> {
+pub(crate) fn watch_targets(identity: &CheckoutIdentity) -> Vec<PathBuf> {
     let mut targets = Vec::new();
     let root_fits = !exceeds_watch_budget(&identity.root);
     if root_fits {
         targets.push(identity.root.clone());
     } else {
         tracing::info!(path = %identity.root.display(),
-            "diff-sync: tree too large to watch live; watching the git dir, edits ride the repair tick");
+            "diff-sync: tree too large to watch live; watching the git dir, edits use polling");
     }
     let git_covered = root_fits && identity.git_dir.starts_with(&identity.root);
     if !git_covered && !exceeds_watch_budget(&identity.git_dir) {
@@ -848,17 +850,18 @@ fn build_watchers(
     hub: &Arc<FsWatchHub>,
     identity: &CheckoutIdentity,
     kick_tx: &mpsc::UnboundedSender<()>,
-) -> Vec<FsWatch> {
+) -> Vec<CheckoutWatch> {
     let mut watchers = Vec::new();
     for target in watch_targets(identity) {
         let tx = kick_tx.clone();
-        watchers.push(
-            hub.watch(&target, notify::RecursiveMode::Recursive, move |event| {
+        watchers.push(CheckoutWatch {
+            path: target.clone(),
+            handle: hub.watch(&target, notify::RecursiveMode::Recursive, move |event| {
                 if is_checkout_change(event) {
                     let _ = tx.send(());
                 }
             }),
-        );
+        });
     }
     watchers
 }
@@ -879,13 +882,38 @@ async fn entry_task(
     mut kick_rx: mpsc::UnboundedReceiver<()>,
     cancel: CancellationToken,
 ) {
-    while kick_rx.recv().await.is_some() {
-        // Trailing debounce: wait for the burst to settle.
-        loop {
-            match tokio::time::timeout(WATCH_DEBOUNCE, kick_rx.recv()).await {
-                Ok(Some(())) => continue,
-                Ok(None) => return, // entry closed mid-burst
-                Err(_) => break,
+    let mut last_capture = Duration::ZERO;
+    let mut poll = tokio::time::interval(UNWATCHED_POLL_INTERVAL);
+    poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    poll.tick().await;
+    loop {
+        tokio::select! {
+            _ = cancel.cancelled() => return,
+            kick = kick_rx.recv() => {
+                if kick.is_none() {
+                    return;
+                }
+                // Bound trailing debounce so continuous build activity cannot
+                // indefinitely postpone the initial snapshot or later updates.
+                let debounce = (last_capture * 2).clamp(WATCH_DEBOUNCE_MIN, WATCH_DEBOUNCE);
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+                loop {
+                    let quiet = (tokio::time::Instant::now() + debounce).min(deadline);
+                    tokio::select! {
+                        _ = cancel.cancelled() => return,
+                        _ = tokio::time::sleep_until(quiet) => break,
+                        kick = kick_rx.recv() => {
+                            if kick.is_none() { return; }
+                            if tokio::time::Instant::now() >= deadline { break; }
+                        }
+                    }
+                }
+            }
+            _ = poll.tick() => {
+                let Some(entry) = entry.upgrade() else { return };
+                if !needs_polling(&entry.identity, &lock(&entry.watchers)) {
+                    continue;
+                }
             }
         }
         let (Some(inner), Some(entry)) = (inner.upgrade(), entry.upgrade()) else {
@@ -900,10 +928,14 @@ async fn entry_task(
         }
         // The upgraded Arc would let a sync outlive shutdown — race the token
         // so an in-flight sidecar POST is dropped, not completed.
+        let started = Instant::now();
         tokio::select! {
             _ = cancel.cancelled() => return,
             _ = sync_entry(&inner, &entry) => {}
         }
+        last_capture = started.elapsed();
+        // Give expensive captures a full idle interval before polling again.
+        poll.reset();
     }
 }
 
@@ -912,15 +944,37 @@ async fn entry_task(
 // ---------------------------------------------------------------------------
 
 async fn sync_entry(inner: &Arc<DiffSyncInner>, entry: &Arc<CheckoutEntry>) {
-    let snapshot = match capture_diff(&inner.repos, &entry.identity.root).await {
-        Ok(snapshot) => snapshot,
-        Err(err) => {
-            tracing::debug!(checkout = %entry.identity.root.display(), error = %err,
+    // File badges must not wait for patch generation or untracked file reads.
+    let status = capture_git(
+        &entry.identity.root,
+        &[
+            "--no-optional-locks",
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+        ],
+        2 * 1024 * 1024,
+    )
+    .await;
+    let status_available = status.is_ok();
+    if let Ok(status) = &status {
+        let (files, complete) = git_status::parse(&status.stdout, status.truncated);
+        git_status::publish(inner, entry, files, complete);
+    }
+    let snapshot =
+        match capture_diff_with_status(&inner.repos, &entry.identity.root, None, status.ok()).await
+        {
+            Ok(snapshot) => snapshot,
+            Err(err) => {
+                tracing::debug!(checkout = %entry.identity.root.display(), error = %err,
                 "diff-sync: capture failed");
-            git_status::publish(inner, entry, Vec::new(), false);
-            return;
-        }
-    };
+                if !status_available {
+                    git_status::publish(inner, entry, Vec::new(), false);
+                }
+                return;
+            }
+        };
 
     if let Some((files, complete)) = &snapshot.git_status {
         git_status::publish(inner, entry, files.clone(), *complete);
@@ -1492,6 +1546,36 @@ pub async fn capture_diff_against(
     root: &Path,
     base_override: Option<&str>,
 ) -> Result<DiffSnapshot, EngineError> {
+    capture_diff_with_status(repos, root, base_override, None).await
+}
+
+/// Explicit index/worktree scopes used by native mobile review tabs.
+pub async fn capture_scoped_diff(
+    repos: &Repos,
+    root: &Path,
+    base_override: Option<&str>,
+    scope: &str,
+) -> Result<DiffSnapshot, EngineError> {
+    capture_scoped_diff_with_status(repos, root, base_override, scope, None).await
+}
+
+/// The working-tree capture, reusing a status the caller already read.
+async fn capture_diff_with_status(
+    repos: &Repos,
+    root: &Path,
+    base_override: Option<&str>,
+    status: Option<Capture>,
+) -> Result<DiffSnapshot, EngineError> {
+    capture_scoped_diff_with_status(repos, root, base_override, "working", status).await
+}
+
+async fn capture_scoped_diff_with_status(
+    repos: &Repos,
+    root: &Path,
+    base_override: Option<&str>,
+    scope: &str,
+    status: Option<Capture>,
+) -> Result<DiffSnapshot, EngineError> {
     let head = capture_git(root, &["rev-parse", "--verify", "HEAD"], 256)
         .await
         .map(|c| String::from_utf8_lossy(&c.stdout).trim().to_string())
@@ -1506,46 +1590,57 @@ pub async fn capture_diff_against(
         .await
         .unwrap_or_else(|_| "HEAD".into());
 
-    let names = capture_git(
-        root,
-        &["diff", "--name-status", "-z", "--find-renames", base, "--"],
-        2 * 1024 * 1024,
-    )
-    .await?;
-    let nums = capture_git(
-        root,
-        &["diff", "--numstat", "-z", "--find-renames", base, "--"],
-        2 * 1024 * 1024,
-    )
-    .await?;
-    let tracked = capture_git(
-        root,
-        &[
+    let scope_args: Vec<&str> = match scope {
+        "staged" => vec!["--cached", base],
+        "unstaged" => vec![],
+        _ => vec![base],
+    };
+    let names_args = [
+        vec!["diff", "--name-status", "-z", "--find-renames"],
+        scope_args.clone(),
+        vec!["--"],
+    ]
+    .concat();
+    let nums_args = [
+        vec!["diff", "--numstat", "-z", "--find-renames"],
+        scope_args.clone(),
+        vec!["--"],
+    ]
+    .concat();
+    let patch_args = [
+        vec![
             "diff",
             "--no-ext-diff",
             "--no-color",
             "--find-renames",
             "--unified=3",
-            base,
-            "--",
         ],
-        MAX_PATCH_BYTES,
-    )
-    .await?;
+        scope_args,
+        vec!["--"],
+    ]
+    .concat();
+    let names = capture_git(root, &names_args, 2 * 1024 * 1024).await?;
+    let nums = capture_git(root, &nums_args, 2 * 1024 * 1024).await?;
+    let tracked = capture_git(root, &patch_args, MAX_PATCH_BYTES).await?;
     // Untracked listing via porcelain status; `--no-optional-locks` keeps this
     // read-only (a status-triggered index refresh would re-kick our own watcher).
-    let status = capture_git(
-        root,
-        &[
-            "--no-optional-locks",
-            "status",
-            "--porcelain=v1",
-            "-z",
-            "--untracked-files=all",
-        ],
-        2 * 1024 * 1024,
-    )
-    .await?;
+    let status = match status {
+        Some(status) => status,
+        None => {
+            capture_git(
+                root,
+                &[
+                    "--no-optional-locks",
+                    "status",
+                    "--porcelain=v1",
+                    "-z",
+                    "--untracked-files=all",
+                ],
+                2 * 1024 * 1024,
+            )
+            .await?
+        }
+    };
 
     let mut files = parse_name_status(&names.stdout);
     apply_numstat(&mut files, &nums.stdout);
@@ -1575,7 +1670,7 @@ pub async fn capture_diff_against(
         if code.starts_with('R') || code.starts_with('C') {
             i += 1; // skip the origin-path field
         }
-        if code == "??" {
+        if code == "??" && scope != "staged" {
             untracked.push(path.trim_start().to_string());
         }
     }
@@ -2153,7 +2248,7 @@ mod watch_budget_tests {
         // attach rescan's kick; then let registration settle and drop
         // anything it raised.
         hub.apply();
-        assert!(watchers.iter().all(super::FsWatch::is_live));
+        assert!(watchers.iter().all(|watch| watch.handle.is_live()));
         rx.try_recv().expect("going live kicks a sync");
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
         while rx.try_recv().is_ok() {}
@@ -2167,6 +2262,35 @@ mod watch_budget_tests {
             .await
             .expect("a write kicks a sync")
             .expect("kick channel open");
+    }
+
+    #[test]
+    fn polling_tracks_worktree_coverage_and_watch_failures() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(tmp.path()).unwrap();
+        let git_dir = root.join(".git");
+        std::fs::create_dir(&git_dir).unwrap();
+        let hub = crate::fs_watch::FsWatchHub::new();
+        let watch = |path: &std::path::Path| super::CheckoutWatch {
+            path: path.to_path_buf(),
+            handle: hub.watch(path, notify::RecursiveMode::Recursive, |_| {}),
+        };
+        assert!(super::needs_polling(&identity(&root, &git_dir), &[]));
+        let git_only = vec![watch(&git_dir)];
+        hub.apply();
+        assert!(git_only[0].handle.is_live());
+        assert!(super::needs_polling(&identity(&root, &git_dir), &git_only));
+        let covered = vec![watch(&root)];
+        hub.apply();
+        assert!(!super::needs_polling(&identity(&root, &git_dir), &covered));
+        // A failed external git-dir watch requires polling even with a live root.
+        let external = tempfile::tempdir().unwrap();
+        let missing = external.path().join("missing");
+        let partial = vec![watch(&root), watch(&missing)];
+        hub.apply();
+        assert!(!partial[1].handle.is_live());
+        assert!(super::needs_polling(&identity(&root, &missing), &partial));
+        assert!(super::needs_polling(&identity(&root, &missing), &covered));
     }
 
     #[test]
@@ -2292,5 +2416,56 @@ mod watch_budget_tests {
         // A self-referential symlink cycle must not send the walk into a spin.
         std::os::unix::fs::symlink(root.join("real"), root.join("real/inner/loop")).unwrap();
         assert!(!exceeds_watch_budget(root)); // terminates, under budget
+    }
+}
+
+#[cfg(test)]
+mod mobile_scope_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn staged_and_unstaged_scopes_do_not_mix_changes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let git = |args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .current_dir(root)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        git(&["init", "-q"]);
+        git(&["config", "user.name", "Mobile test"]);
+        git(&["config", "user.email", "mobile@example.test"]);
+        std::fs::write(root.join("tracked.txt"), "base\n").unwrap();
+        git(&["add", "tracked.txt"]);
+        git(&["commit", "-qm", "base"]);
+        std::fs::write(root.join("tracked.txt"), "indexed\n").unwrap();
+        git(&["add", "tracked.txt"]);
+        std::fs::write(root.join("tracked.txt"), "working\n").unwrap();
+        std::fs::write(root.join("untracked.txt"), "new\n").unwrap();
+        let repos = Repos::new(&root.join("data"), "mobile-test");
+        let staged = capture_scoped_diff(&repos, root, None, "staged")
+            .await
+            .unwrap();
+        assert!(staged.patch.contains("+indexed"));
+        assert!(!staged.patch.contains("+working"));
+        assert!(!staged.files.iter().any(|file| file.path == "untracked.txt"));
+        let unstaged = capture_scoped_diff(&repos, root, None, "unstaged")
+            .await
+            .unwrap();
+        assert!(unstaged.patch.contains("-indexed"));
+        assert!(unstaged.patch.contains("+working"));
+        assert!(
+            unstaged
+                .files
+                .iter()
+                .any(|file| file.path == "untracked.txt")
+        );
     }
 }

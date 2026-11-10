@@ -76,6 +76,7 @@ impl axum::serve::Listener for Listener {
                 accepted = self.tcp.accept(), if self.handshakes.len() < 64 => {
                     match accepted {
                         Ok((stream, address)) => {
+                            let _ = stream.set_nodelay(true);
                             let acceptor = self.acceptor.clone();
                             self.handshakes.push(async move {
                                 match tokio::time::timeout(Duration::from_secs(10), acceptor.accept(stream)).await {

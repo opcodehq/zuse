@@ -1020,7 +1020,6 @@ async fn account_browser_sign_in_redeems_the_loopback_redirect_without_a_device_
     assert_eq!(param("provider"), "authkit");
     assert_eq!(param("code_challenge_method"), "S256");
     // No code to confirm: views fall back to "continue in your browser".
-    assert!(progress.user_code.is_empty());
     let wire = serde_json::to_value(&progress).expect("json");
     assert!(wire.get("userCode").is_none(), "{wire}");
     assert_eq!(
@@ -1141,7 +1140,7 @@ async fn identity_rejecting_loopback(
 }
 
 #[tokio::test]
-async fn account_browser_redirect_rejection_returns_device_authorization() {
+async fn account_browser_redirect_rejection_fails_loudly_without_device_codes() {
     let (identity, devices, _, _) = identity_rejecting_loopback(false).await;
     let dir = tempfile::tempdir().unwrap();
     let account = zuse_engine::account::Account::configured(
@@ -1151,12 +1150,24 @@ async fn account_browser_redirect_rejection_returns_device_authorization() {
         identity,
     )
     .unwrap();
-    let progress = account.sign_in_in_browser().await.unwrap();
-    assert_eq!(progress.user_code, "FALLBACK");
-    assert_eq!(progress.url, "https://verify.example/device");
-    assert_eq!(devices.load(Ordering::SeqCst), 1);
-    assert_eq!(account.status().login.unwrap().user_code, "FALLBACK");
-    account.sign_out().unwrap();
+    let error = account
+        .sign_in_in_browser()
+        .await
+        .err()
+        .expect("rejected redirect is an error");
+    assert!(matches!(
+        error,
+        zuse_engine::account::AccountError::RedirectRejected
+    ));
+    assert_eq!(
+        devices.load(Ordering::SeqCst),
+        0,
+        "never falls back to device authorization"
+    );
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let status = account.status();
+    assert!(status.login.is_none());
+    assert!(status.error.unwrap().contains("127.0.0.1"));
 }
 
 #[tokio::test]

@@ -1,0 +1,15 @@
+[Unit]
+Description=Private bounded staging verification scratch and staging app pair
+Requires=docker.service
+After=local-fs.target docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Install a reviewed unit replacing @TOOL_ROOT@ with the immutable private closure.
+ExecStart=/usr/bin/python3 @TOOL_ROOT@/verification-scratch-service.py
+TimeoutStartSec=120
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

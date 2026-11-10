@@ -56,10 +56,13 @@ mod desktop_import;
 mod dictation;
 mod external_chats;
 mod git_workspace;
+mod list_watch;
 mod simulators;
+mod transcript_window;
 mod visuals;
 mod voice_chat;
 mod voice_remote;
+mod zots;
 use async_trait::async_trait;
 use base64::Engine as _;
 use futures::StreamExt;
@@ -337,6 +340,13 @@ struct ListFoldersParams {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct CreateFolderParams {
+    parent: String,
+    name: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct FileSearchParams {
     query: String,
     #[serde(default)]
@@ -530,6 +540,20 @@ struct PublishVisualParams {
     assets: std::collections::BTreeMap<String, String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PublishUiBlockParams {
+    chat_id: String,
+    spec: String,
+}
+
+fn no_turn_for_ui_block() -> RpcError {
+    RpcError::Failed(
+        "This chat has no running turn on this device; show_ui only works from inside a turn."
+            .into(),
+    )
+}
+
 fn no_turn_for_visual() -> RpcError {
     RpcError::Failed(
         "This chat has no running turn on this device; show_visual only works from inside a turn."
@@ -715,6 +739,8 @@ pub struct EngineRpc {
     pairings: Option<zuse_remote::authority::Authority>,
     browser_access: Option<crate::browser_access::BrowserAccess>,
     relay_access: Option<crate::relay_access::RelayAccess>,
+    direct_access: Option<crate::direct_access::DirectAccess>,
+    zots: Option<crate::zots::Zots>,
     model_connections: Option<crate::model_connections::ModelConnections>,
     account: Option<crate::account::Account>,
     managed_access: Option<crate::managed_access::AccountClient>,
@@ -735,6 +761,7 @@ pub struct EngineRpc {
     previews: Option<zuse_preview::PreviewService>,
     change_requests: CheckoutChangeRequests,
     github: GitHubCli,
+    source_control_refresh: crate::source_control_refresh::RefreshHub,
     pr_watches: Option<crate::pr_watch::PrWatches>,
     diff_sync: CheckoutDiffSync,
     uploads: Uploads,
@@ -779,6 +806,8 @@ impl EngineRpc {
             pairings: None,
             browser_access: None,
             relay_access: None,
+            direct_access: None,
+            zots: None,
             model_connections: None,
             account: None,
             managed_access: None,
@@ -799,6 +828,7 @@ impl EngineRpc {
             previews: None,
             change_requests,
             github,
+            source_control_refresh: Default::default(),
             pr_watches: None,
             diff_sync,
             uploads,
@@ -841,6 +871,11 @@ impl EngineRpc {
         self
     }
 
+    pub fn with_zots(mut self, zots: crate::zots::Zots) -> Self {
+        self.zots = Some(zots);
+        self
+    }
+
     pub fn with_model_connections(
         mut self,
         connections: crate::model_connections::ModelConnections,
@@ -877,6 +912,11 @@ impl EngineRpc {
     /// Attach the auth service (AuthStatus + AuthRpc mutations).
     pub fn with_auth(mut self, auth: Auth) -> Self {
         self.auth = Some(auth);
+        self
+    }
+
+    pub fn with_direct_access(mut self, access: crate::direct_access::DirectAccess) -> Self {
+        self.direct_access = Some(access);
         self
     }
 
@@ -920,10 +960,20 @@ impl EngineRpc {
     }
 
     pub fn with_pr_watches(mut self, watches: crate::pr_watch::PrWatches) -> Self {
+        if let Some(github) = watches.github() {
+            self.github = github.with_store(self.repos.data_dir());
+        }
         self.pr_watches = Some(watches);
         self
     }
 
+    pub(crate) fn with_github_launcher(
+        mut self,
+        launcher: crate::source_control::GitHubCommandLauncher,
+    ) -> Self {
+        self.github = self.github.with_launcher(launcher);
+        self
+    }
     #[cfg(test)]
     pub(crate) fn with_github(mut self, github: GitHubCli) -> Self {
         self.github = github;
@@ -1250,6 +1300,8 @@ impl EngineRpc {
                     | methods::SIMULATOR_FRAMES
                     | methods::WATCH_CHECKOUT_CHANGE_REQUEST
                     | methods::WATCH_WORKSPACE_GIT_STATUS
+                    | methods::WATCH_GIT_WORKSPACE
+                    | methods::WATCH_CHANGE_REQUEST
                     | methods::WATCH_HARNESS_UPDATES
                     | methods::WATCH_CHAT_CONFIG
             ) {
@@ -1456,9 +1508,17 @@ impl EngineRpc {
             }
             MutateParams::SetChatConfig {
                 chat_id,
-                config,
+                mut config,
                 expected_config,
             } => {
+                if self
+                    .zots
+                    .as_ref()
+                    .is_some_and(|zots| zots.coordinator(&chat_id).ok().flatten().is_some())
+                {
+                    config.sandbox = zuse_protocol::SandboxLevel::WorkspaceWrite;
+                    config.plan = true;
+                }
                 if let Some(expected) = expected_config {
                     if expected.device_id != self.doc_host.device_id()
                         || !self
@@ -1478,11 +1538,39 @@ impl EngineRpc {
                     }
                 } else {
                     self.voice.retire_chat(&chat_id);
-                    return self
-                        .workspace
+                    self.workspace
                         .set_chat_config(&chat_id, &config)
                         .map_err(failed)
-                        .map(drop);
+                        .map(drop)?;
+                }
+                if let Some(zots) = &self.zots {
+                    if let Some(mut zot) = zots
+                        .coordinator(&chat_id)
+                        .map_err(|e| RpcError::Failed(e.to_string()))?
+                    {
+                        let harness = serde_json::to_value(config.harness)
+                            .map_err(|e| RpcError::BadParams(e.to_string()))?
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_owned();
+                        if zot.config.coordinator_model.harness != harness
+                            || zot.config.coordinator_model.model != config.model
+                        {
+                            zot.config.coordinator_model = zuse_protocol::zots::ZotModel {
+                                harness,
+                                model: config.model.clone(),
+                            };
+                            zots.command(zuse_protocol::zots::ZotCommand {
+                                command_id: uuid::Uuid::new_v4().to_string(),
+                                zot_id: zot.id,
+                                expected_revision: Some(zot.revision),
+                                action: zuse_protocol::zots::ZotAction::Configure {
+                                    config: zot.config,
+                                },
+                            })
+                            .map_err(|e| RpcError::Failed(e.to_string()))?;
+                        }
+                    }
                 }
                 self.voice.retire_chat(&chat_id);
                 Ok(())
@@ -1617,6 +1705,19 @@ where
     Ok(registry.descriptors())
 }
 
+fn strip_diff_patches(mut frame: serde_json::Value) -> serde_json::Value {
+    match &mut frame {
+        serde_json::Value::Array(diffs) => {
+            for diff in diffs {
+                diff["patch"] = "".into();
+            }
+        }
+        diff @ serde_json::Value::Object(_) => diff["patch"] = "".into(),
+        _ => {}
+    }
+    frame
+}
+
 fn forward_deadline(method: &str) -> std::time::Duration {
     // Hub cold boots and the first agent XCTest preparation need room for
     // discovery, native readiness checks and an already admitted operation.
@@ -1668,6 +1769,20 @@ fn forwardable_request(method: &str, params: &serde_json::Value) -> bool {
 }
 
 fn forwardable(method: &str) -> bool {
+    if method == "BindZotWorker" {
+        return true;
+    }
+    if matches!(
+        method,
+        zuse_protocol::control::API_INFO
+            | zuse_protocol::control::ZOT_COMMAND
+            | zuse_protocol::control::WATCH_ZOTS
+            | zuse_protocol::control::ZOT_FILES
+            | zuse_protocol::control::ZOT_EVENTS
+            | zuse_protocol::control::ACK_ZOT_EVENTS
+    ) {
+        return true;
+    }
     if simulators::handles(method) || voice_remote::handles(method) {
         return true;
     }
@@ -1742,6 +1857,7 @@ fn forwardable(method: &str) -> bool {
             | methods::GET_WORKTREE_SETTINGS
             | methods::SET_WORKTREE_SETTINGS
             | methods::LIST_DRIVES
+            | methods::CREATE_FOLDER
             | methods::SEARCH_HOME_FOLDERS
             | methods::RELEASE_HOME_FOLDER_SEARCH
             | methods::SEARCH_FILES
@@ -1766,6 +1882,8 @@ fn forwardable(method: &str) -> bool {
             // Checkout diffs are produced on the device holding the checkout.
             | methods::WATCH_CHECKOUT_DIFFS
             | methods::WATCH_WORKSPACE_GIT_STATUS
+                    | methods::WATCH_GIT_WORKSPACE
+                    | methods::WATCH_CHANGE_REQUEST
             | methods::WATCH_CHECKOUT_CHANGE_REQUEST
             | methods::LIST_CHANGE_REQUEST_PAGE
             | methods::GET_CHANGE_REQUEST_REPOSITORY
@@ -1776,6 +1894,7 @@ fn forwardable(method: &str) -> bool {
             | methods::GET_CHANGE_REQUEST_DIFF
             | methods::POST_CHANGE_REQUEST_COMMENT
             | methods::UPDATE_CHANGE_REQUEST
+            | methods::UPDATE_CHANGE_REQUEST_AT_HEAD
             | methods::GET_CHECKOUT_DIFF
             | methods::DISCARD_WORKING_TREE
             | methods::GET_CHECKOUT_FILE_DIFF_TEXT
@@ -1815,6 +1934,9 @@ fn forwardable(method: &str) -> bool {
 
 /// Forwardable methods whose reply is a stream (proxied item-by-item).
 fn is_stream_method(method: &str) -> bool {
+    if method == zuse_protocol::control::WATCH_ZOTS {
+        return true;
+    }
     if method == methods::SIMULATOR_FRAMES || method == methods::OWN_VOICE_V2 {
         return true;
     }
@@ -1828,6 +1950,8 @@ fn is_stream_method(method: &str) -> bool {
             | methods::WORKSPACE_SYNC_SNAPSHOT
             | methods::WATCH_CHECKOUT_DIFFS
             | methods::WATCH_WORKSPACE_GIT_STATUS
+            | methods::WATCH_GIT_WORKSPACE
+            | methods::WATCH_CHANGE_REQUEST
             | methods::WATCH_CHECKOUT_CHANGE_REQUEST
             | methods::WATCH_WORKSPACE_FILES
             | methods::UPDATE_STATUS
@@ -1892,10 +2016,11 @@ fn chat_config_stream(
 /// The transcript watch as delta frames (`zuse_doc::transcript_delta`): a
 /// full `reset` first, then only changed entries per commit — the whole-Vec
 /// serialization here was the per-tick cost that scaled with transcript size.
-fn doc_message_updates(
+fn doc_message_envelopes(
     rx: watch::Receiver<crate::doc_host::TranscriptSnapshot>,
     doc: std::sync::Arc<zuse_doc::SessionDoc>,
-) -> BoxStream<'static, zuse_doc::TranscriptUpdate> {
+    window: Option<transcript_window::Window>,
+) -> BoxStream<'static, transcript_window::Envelope> {
     use zuse_doc::transcript_delta::{TranscriptFrame, diff_transcript};
     futures::stream::unfold(
         (
@@ -1904,8 +2029,18 @@ fn doc_message_updates(
             doc,
             None,
             zuse_doc::TranscriptBaseline::default(),
+            window,
+            None,
         ),
-        |(mut rx, mut prev, doc, mut previous_usage, mut opening_baseline)| async move {
+        |(
+            mut rx,
+            mut prev,
+            doc,
+            mut previous_usage,
+            mut opening_baseline,
+            mut window,
+            mut previous_history,
+        )| async move {
             loop {
                 if prev.is_some() {
                     rx.changed().await.ok()?;
@@ -1913,10 +2048,25 @@ fn doc_message_updates(
                 // Watchers retain the immutable published snapshot. Each
                 // connection used to deep-copy the entire transcript here.
                 let current = rx.borrow_and_update().clone();
+                let (current, history) = match &mut window {
+                    Some(window) => {
+                        let (current, history) = window.project(current);
+                        (current, Some(history))
+                    }
+                    None => (current, None),
+                };
+                let resumed = if prev.is_none() {
+                    window
+                        .as_mut()
+                        .and_then(|window| window.resume_frame(&current.entries))
+                } else {
+                    None
+                };
+                let history_resumed = resumed.is_some();
                 let frame = match prev.as_ref() {
-                    None => TranscriptFrame::Reset {
+                    None => resumed.unwrap_or_else(|| TranscriptFrame::Reset {
                         reset: current.entries.clone(),
-                    },
+                    }),
                     Some(prev) => diff_transcript(&prev.entries, &current.entries),
                 };
                 let replay_baseline = match prev.as_ref() {
@@ -1935,13 +2085,39 @@ fn doc_message_updates(
                         // subscription's opening cutoff without capturing live
                         // appends or sharing another viewer's later cutoff.
                         // Ordinary live updates never rebuild this metadata.
-                        let mut baseline = (*current.replay_baseline).clone();
+                        let mut baseline = if window.is_some() {
+                            zuse_doc::TranscriptBaseline {
+                                entries: current
+                                    .entries
+                                    .iter()
+                                    .filter_map(|entry| {
+                                        current
+                                            .replay_baseline
+                                            .entries
+                                            .get(&entry.id)
+                                            .map(|parts| (entry.id.clone(), parts.clone()))
+                                    })
+                                    .collect(),
+                            }
+                        } else {
+                            (*current.replay_baseline).clone()
+                        };
                         for (entry, parts) in &opening_baseline.entries {
                             let merged = baseline.entries.entry(entry.clone()).or_default();
                             for (part, &len) in parts {
                                 let cutoff = merged.entry(part.clone()).or_default();
                                 *cutoff = (*cutoff).max(len);
                             }
+                        }
+                        if window.is_some() {
+                            let visible = current
+                                .entries
+                                .iter()
+                                .map(|entry| entry.id.as_str())
+                                .collect::<std::collections::HashSet<_>>();
+                            baseline
+                                .entries
+                                .retain(|id, _| visible.contains(id.as_str()));
                         }
                         Some(baseline)
                     }
@@ -1951,20 +2127,54 @@ fn doc_message_updates(
                 // No-op commits (a second watcher attaching, command-only
                 // changes) produce empty deltas — skip the frame entirely.
                 let usage = doc.context_usage();
-                if frame.is_empty_delta() && usage == previous_usage && replay_baseline.is_none() {
+                if frame.is_empty_delta()
+                    && usage == previous_usage
+                    && replay_baseline.is_none()
+                    && history == previous_history
+                {
                     continue;
                 }
                 previous_usage = usage;
+                let outgoing_history = if history == previous_history {
+                    None
+                } else {
+                    history.clone()
+                };
+                previous_history = history;
                 let value = zuse_doc::TranscriptUpdate {
                     frame,
                     context_usage: usage,
                     replay_baseline,
                 };
-                return Some((value, (rx, prev, doc, previous_usage, opening_baseline)));
+                return Some((
+                    transcript_window::Envelope {
+                        update: value,
+                        history: outgoing_history,
+                        history_resumed,
+                    },
+                    (
+                        rx,
+                        prev,
+                        doc,
+                        previous_usage,
+                        opening_baseline,
+                        window,
+                        previous_history,
+                    ),
+                ));
             }
         },
     )
     .boxed()
+}
+
+fn doc_message_updates(
+    rx: watch::Receiver<crate::doc_host::TranscriptSnapshot>,
+    doc: std::sync::Arc<zuse_doc::SessionDoc>,
+) -> BoxStream<'static, zuse_doc::TranscriptUpdate> {
+    doc_message_envelopes(rx, doc, None)
+        .map(|envelope| envelope.update)
+        .boxed()
 }
 
 fn doc_messages_typed_stream(
@@ -2105,6 +2315,12 @@ impl AuthRpc {
 #[async_trait]
 impl RpcService for AuthRpc {
     async fn handle(&self, method: &str, params: serde_json::Value) -> Result<RpcReply, RpcError> {
+        if crate::cloud::beta_gated(method) && !crate::cloud::beta_enabled() {
+            return Err(RpcError::Failed(crate::cloud::BETA_MESSAGE.into()));
+        }
+        if method == methods::CLOUD_EVENTS {
+            return crate::cloud::events::handle(&self.cloud, params).await;
+        }
         if matches!(method, methods::CLOUD_ENVIRONMENT | methods::CLOUD_RPC) {
             return crate::cloud::environment::handle(&self.cloud, method, params).await;
         }
@@ -2164,7 +2380,7 @@ impl RpcService for AuthRpc {
         if crate::cloud::handles(method) {
             let result = crate::cloud::handle(&self.cloud, method, params)
                 .await
-                .map_err(|error| RpcError::Failed(error.to_string()))?;
+                .map_err(crate::cloud::rpc_error)?;
             return RpcReply::value(&result);
         }
         match method {
@@ -2238,7 +2454,74 @@ impl RpcService for AuthRpc {
 #[async_trait]
 impl RpcService for EngineRpc {
     async fn handle(&self, method: &str, params: serde_json::Value) -> Result<RpcReply, RpcError> {
+        if methods::retryable_read(method, &params) {
+            return self.handle_admitted(method, params).await;
+        }
+        let permit = self
+            .sessions
+            .execution_admission()
+            .enter()
+            .map_err(|error| RpcError::Failed(error.to_string()))?;
+        permit.scope(self.handle_admitted(method, params)).await
+    }
+}
+impl EngineRpc {
+    async fn handle_admitted(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<RpcReply, RpcError> {
         let failed = |error: crate::EngineError| RpcError::Failed(error.to_string());
+        if matches!(
+            method,
+            methods::DIRECT_ACCESS_STATUS
+                | methods::START_DIRECT_ACCESS
+                | methods::STOP_DIRECT_ACCESS
+        ) {
+            if params
+                .get("targetDeviceId")
+                .filter(|v| !v.is_null())
+                .is_some_and(|v| v.as_str() != Some(self.doc_host.device_id()))
+            {
+                return Err(RpcError::BadParams(
+                    "Network access belongs to the connected profile".into(),
+                ));
+            }
+            let access = self
+                .direct_access
+                .clone()
+                .ok_or_else(|| RpcError::Failed("Network access is unavailable".into()))?;
+            if method == methods::DIRECT_ACCESS_STATUS {
+                return RpcReply::value(&access.status().await);
+            }
+            let mut params = params;
+            if let Some(object) = params.as_object_mut() {
+                object.remove("targetDeviceId");
+            }
+            let service: std::sync::Arc<dyn RpcService> = std::sync::Arc::new(self.clone());
+            let start = (method == methods::START_DIRECT_ACCESS)
+                .then(|| parse_params::<crate::direct_access::Start>(params))
+                .transpose()?;
+            // Admitted control operations finish even if their caller disconnects.
+            return tokio::spawn(async move {
+                match start {
+                    Some(start) => {
+                        let status = access.start(start, service).await.map_err(|_| {
+                            RpcError::Failed("Could not turn on network access.".into())
+                        })?;
+                        RpcReply::value(&status)
+                    }
+                    None => RpcReply::value(&access.stop().await),
+                }
+            })
+            .await
+            .map_err(|_| {
+                RpcError::Failed(
+                    "Network control stopped unexpectedly. Refresh its status before trying again."
+                        .into(),
+                )
+            })?;
+        }
         if matches!(
             method,
             methods::RELAY_ACCESS_STATUS
@@ -2268,38 +2551,38 @@ impl RpcService for EngineRpc {
             let method = method.to_owned();
             // Admitted control operations finish even if their caller disconnects.
             return tokio::spawn(async move { match method.as_str() {
-                methods::RELAY_ACCESS_STATUS => RpcReply::value(&access.status().await),
-                methods::STOP_RELAY_ACCESS => RpcReply::value(&access.stop().await),
-                methods::RESUME_RELAY_ACCESS => {
-                    let status = access.resume(service.clone()).await
-                        .map_err(|_| RpcError::Failed("Could not resume relay access. Check the saved configuration and private credential file.".into()))?;
-                    RpcReply::value(&status)
+            methods::RELAY_ACCESS_STATUS => RpcReply::value(&access.status().await),
+            methods::STOP_RELAY_ACCESS => RpcReply::value(&access.stop().await),
+            methods::RESUME_RELAY_ACCESS => {
+                let status = access.resume(service.clone()).await
+                    .map_err(|_| RpcError::Failed("Could not resume relay access. Check the saved configuration and private credential file.".into()))?;
+                RpcReply::value(&status)
+            }
+            methods::SET_RELAY_AUTO_START => {
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct P {
+                    enabled: bool,
                 }
-                methods::SET_RELAY_AUTO_START => {
-                    #[derive(Deserialize)]
-                    #[serde(deny_unknown_fields)]
-                    struct P {
-                        enabled: bool,
-                    }
-                    let mut params = params;
-                    if let Some(object) = params.as_object_mut() {
-                        object.remove("targetDeviceId");
-                    }
-                    let p: P = parse_params(params)?;
-                    let status = access.set_auto_start(p.enabled).await
-                        .map_err(|_|RpcError::Failed("Could not save relay startup. Configure relay access and check its private credential file.".into()))?;
-                    RpcReply::value(&status)
+                let mut params = params;
+                if let Some(object) = params.as_object_mut() {
+                    object.remove("targetDeviceId");
                 }
-                _ => {
-                    let mut params = params;
-                    if let Some(object) = params.as_object_mut() {
-                        object.remove("targetDeviceId");
-                    }
-                    let status = access.start(parse_params(params)?, service.clone()).await
-                        .map_err(|_| RpcError::Failed("Could not start relay access. Check the relay URL and private host credential file.".into()))?;
-                    RpcReply::value(&status)
+                let p: P = parse_params(params)?;
+                let status = access.set_auto_start(p.enabled).await
+                    .map_err(|_|RpcError::Failed("Could not save relay startup. Configure relay access and check its private credential file.".into()))?;
+                RpcReply::value(&status)
+            }
+            _ => {
+                let mut params = params;
+                if let Some(object) = params.as_object_mut() {
+                    object.remove("targetDeviceId");
                 }
-            }}).await.map_err(|_|RpcError::Failed("Relay control stopped unexpectedly. Refresh its status before trying again.".into()))?;
+                let status = access.start(parse_params(params)?, service.clone()).await
+                    .map_err(|_| RpcError::Failed("Could not start relay access. Check the relay URL and private host credential file.".into()))?;
+                RpcReply::value(&status)
+            }
+        }}).await.map_err(|_|RpcError::Failed("Relay control stopped unexpectedly. Refresh its status before trying again.".into()))?;
         }
         if matches!(
             method,
@@ -2383,6 +2666,18 @@ impl RpcService for EngineRpc {
                             Some(access) => access.status().await.origin,
                             None => None,
                         });
+                    let origin = match (origin, &self.direct_access) {
+                        // A loopback address cannot be opened from another device.
+                        (origin, Some(direct))
+                            if origin.as_deref().is_none_or(|origin| {
+                                zuse_remote::routes::classify_origin(origin)
+                                    == zuse_remote::RouteKind::Loopback
+                            }) =>
+                        {
+                            direct.invitation_origin().await.or(origin)
+                        }
+                        (origin, _) => origin,
+                    };
                     RpcReply::value(
                         &serde_json::json!({"peer":peer,"fragment":fragment,"origin":origin}),
                     )
@@ -2424,6 +2719,73 @@ impl RpcService for EngineRpc {
 
         // Device-addressed routing: forward calls that target another device over its
         // relay. The target compares the id to its own, so forwards cannot loop.
+        if method == zuse_protocol::control::CALL {
+            let zots = self
+                .zots
+                .as_ref()
+                .ok_or_else(|| RpcError::Capability("control.v1".into()))?;
+            let token = params
+                .get("token")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let operation = params
+                .get("method")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let mut operation_params = params
+                .get("params")
+                .cloned()
+                .unwrap_or(serde_json::json!({}));
+            if !zots.authorize(token) {
+                let denied = || RpcError::Capability("control.unauthorized".into());
+                let chat = zots.grant_owner(token).ok_or_else(denied)?;
+                if !self.sessions.turn_in_flight(&chat) {
+                    return Err(denied());
+                }
+                let zot = zots
+                    .coordinator(&chat)
+                    .map_err(|e| RpcError::Failed(e.to_string()))?
+                    .ok_or_else(denied)?;
+                let args = operation_params.clone();
+                if operation != zuse_protocol::control::API_INFO
+                    && args.get("zotId").and_then(|v| v.as_str()) != Some(zot.id.as_str())
+                {
+                    return Err(denied());
+                }
+                if operation == zuse_protocol::control::ZOT_COMMAND {
+                    let mut command: zuse_protocol::zots::ZotCommand = parse_params(args)?;
+                    if matches!(
+                        command.action,
+                        zuse_protocol::zots::ZotAction::Create { .. }
+                            | zuse_protocol::zots::ZotAction::Configure { .. }
+                            | zuse_protocol::zots::ZotAction::Delete
+                            | zuse_protocol::zots::ZotAction::SetStatus { .. }
+                            | zuse_protocol::zots::ZotAction::AdoptWorker { .. }
+                    ) {
+                        return Err(denied());
+                    }
+                    if let zuse_protocol::zots::ZotAction::MessageWorker { automatic, .. } =
+                        &mut command.action
+                    {
+                        *automatic = true;
+                    }
+                    operation_params = serde_json::to_value(command)
+                        .map_err(|e| RpcError::BadParams(e.to_string()))?;
+                } else if !matches!(
+                    operation,
+                    zuse_protocol::control::API_INFO
+                        | zuse_protocol::control::ZOT_FILES
+                        | zuse_protocol::control::ZOT_EVENTS
+                        | zuse_protocol::control::ACK_ZOT_EVENTS
+                ) {
+                    return Err(denied());
+                }
+            }
+            if !zuse_protocol::control::METHODS.contains(&operation) {
+                return Err(RpcError::Capability("control.unsupported_operation".into()));
+            }
+            return Box::pin(self.handle(operation, operation_params)).await;
+        }
         if forwardable_request(method, &params)
             && let Some(target) = params.get("targetDeviceId").and_then(|v| v.as_str())
             && target != self.doc_host.device_id()
@@ -2469,7 +2831,9 @@ impl RpcService for EngineRpc {
         }
         if matches!(
             method,
-            methods::GET_GIT_WORKSPACE | methods::GIT_WORKSPACE_ACTION
+            methods::GET_GIT_WORKSPACE
+                | methods::GIT_WORKSPACE_ACTION
+                | methods::WATCH_GIT_WORKSPACE
         ) {
             return self.git_workspace(method, params).await;
         }
@@ -2631,6 +2995,97 @@ impl RpcService for EngineRpc {
                 usage
                     .handle(method, request, &spaces, self.doc_host.device_id())
                     .await
+            }
+            zuse_protocol::control::API_INFO => {
+                RpcReply::value(&zuse_protocol::control::ControlInfo {
+                    api_version: zuse_protocol::control::API_VERSION,
+                    app_version: env!("CARGO_PKG_VERSION").into(),
+                    schemas: serde_json::json!({"ZotCommand":zuse_protocol::zots::command_schema()}),
+                    capabilities: if self.zots.is_some() {
+                        vec![zuse_protocol::zots::CAPABILITY.into()]
+                    } else {
+                        vec![]
+                    },
+                    methods: zuse_protocol::control::METHODS
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect(),
+                })
+            }
+            "ControlUpdateStatus" => RpcReply::value(
+                &zuse_update::control::status().map_err(|e| RpcError::Failed(e.to_string()))?,
+            ),
+            "RetryControlUpdate" => RpcReply::value(
+                &zuse_update::control::synchronize_bundled()
+                    .await
+                    .map_err(|e| RpcError::Failed(e.to_string()))?,
+            ),
+            "BindZotWorker" => {
+                let binding: crate::zots::WorkerBinding = parse_params(params)?;
+                self.zots
+                    .as_ref()
+                    .ok_or_else(|| RpcError::Capability("zots.v1".into()))?
+                    .bind_worker(&binding)
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(&serde_json::json!({"ok":true}))
+            }
+            zuse_protocol::control::WATCH_ZOTS => {
+                let zots = self
+                    .zots
+                    .clone()
+                    .ok_or_else(|| RpcError::Capability("zots.v1".into()))?;
+                let rx = zots.watch();
+                let stream =
+                    futures::stream::unfold((zots, rx, true), |(zots, mut rx, first)| async move {
+                        if !first {
+                            rx.changed().await.ok()?;
+                        }
+                        rx.borrow_and_update();
+                        let value = serde_json::to_value(zots.list().ok()?).ok()?;
+                        Some((value, (zots, rx, false)))
+                    });
+                Ok(RpcReply::Stream(stream.boxed()))
+            }
+            zuse_protocol::control::ZOT_COMMAND => self.zot_command(params).await,
+            zuse_protocol::control::ZOT_FILES
+            | zuse_protocol::control::ZOT_EVENTS
+            | zuse_protocol::control::ACK_ZOT_EVENTS => {
+                let zots = self
+                    .zots
+                    .as_ref()
+                    .ok_or_else(|| RpcError::Capability("zots.v1".into()))?;
+                let id = params
+                    .get("zotId")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| RpcError::BadParams("zotId is required".into()))?;
+                let failure = |e: anyhow::Error| RpcError::Failed(e.to_string());
+                match method {
+                    zuse_protocol::control::ZOT_FILES => RpcReply::value(
+                        &zots
+                            .files(
+                                id,
+                                params
+                                    .get("history")
+                                    .and_then(|v| v.as_bool())
+                                    .unwrap_or(false),
+                            )
+                            .map_err(failure)?,
+                    ),
+                    zuse_protocol::control::ZOT_EVENTS => {
+                        RpcReply::value(&zots.events(id).map_err(failure)?)
+                    }
+                    _ => {
+                        let ids: Vec<String> = serde_json::from_value(
+                            params
+                                .get("eventIds")
+                                .cloned()
+                                .unwrap_or(serde_json::json!([])),
+                        )
+                        .map_err(|e| RpcError::BadParams(e.to_string()))?;
+                        zots.acknowledge(id, &ids).map_err(failure)?;
+                        RpcReply::value(&serde_json::json!({"ok":true}))
+                    }
+                }
             }
             methods::INSPECT_RECOVERY | methods::RESOLVE_RECOVERY => {
                 let profile = self.repos.data_dir().to_path_buf();
@@ -2943,11 +3398,11 @@ impl RpcService for EngineRpc {
                                 .map_err(|e| RpcError::Failed(e.to_string()))?;
                         }
                         let listen = browser.listen
-                            .filter(|address| browser.running && browser.local_http
-                                && address.ip() == std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST))
-                            .ok_or_else(|| RpcError::Failed(
-                                "Start an HTTP browser listener on 127.0.0.1 before linking this computer".into()
-                            ))?;
+                        .filter(|address| browser.running && browser.local_http
+                            && address.ip() == std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST))
+                        .ok_or_else(|| RpcError::Failed(
+                            "Start an HTTP browser listener on 127.0.0.1 before linking this computer".into()
+                        ))?;
                         host.link(label, listen.port())
                             .await
                             .map_err(|e| RpcError::Failed(e.to_string()))?
@@ -2977,12 +3432,12 @@ impl RpcService for EngineRpc {
                     .account
                     .as_ref()
                     .ok_or_else(|| RpcError::Failed("Account service is unavailable.".into()))?;
-                // Only a client on this machine can follow a loopback redirect;
-                // remote browsers confirm a device code instead.
+                // Browser sign-in only: the loopback callback lives on this
+                // machine, so a client elsewhere must sign in from here.
                 let progress = if params["browser"] == true {
                     account.sign_in_in_browser().await
                 } else {
-                    account.sign_in().await
+                    Err(crate::account::AccountError::BrowserRequired)
                 }
                 .map_err(|e| RpcError::Failed(e.to_string()))?;
                 RpcReply::value(&progress)
@@ -3039,6 +3494,37 @@ impl RpcService for EngineRpc {
                 RpcReply::value(&response)
             }
             methods::ENGINE_INFO => RpcReply::value(&self.engine_info),
+            methods::SSH_PREPARE => {
+                let key = params["publicKey"].as_str().unwrap_or_default();
+                let prepared = crate::ssh_access::prepare(key, None)
+                    .await
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(&prepared)
+            }
+            methods::SSH_TUNNEL => {
+                let stream = crate::ssh_access::open_tunnel()
+                    .await
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                Ok(RpcReply::Stream(stream))
+            }
+            methods::SSH_TUNNEL_WRITE => {
+                crate::ssh_access::write_tunnel(
+                    params["tunnel"].as_str().unwrap_or_default(),
+                    params["data"].as_str().unwrap_or_default(),
+                )
+                .await
+                .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(&serde_json::json!({"ok": true}))
+            }
+            methods::SSH_TUNNEL_CLOSE => {
+                crate::ssh_access::close_tunnel(params["tunnel"].as_str().unwrap_or_default())
+                    .await;
+                RpcReply::value(&serde_json::json!({"ok": true}))
+            }
+            methods::MACHINE_RESOURCES => {
+                let root = std::env::current_dir().unwrap_or_else(|_| "/".into());
+                RpcReply::value(&crate::machine_resources::snapshot(&root).await)
+            }
             methods::ENGINE_READY => RpcReply::value(&serde_json::json!({ "ready": true })),
             methods::LIST_HARNESSES => RpcReply::value(&self.registry.descriptors()),
             methods::INSTALL_HARNESS => {
@@ -3076,10 +3562,10 @@ impl RpcService for EngineRpc {
                     .flatten();
                 RpcReply::value(
                     &serde_json::json!({"chatId":chat.id,"archived":chat.archived,
-                    "phase":record.as_ref().map(|record|&record.phase),
-                    "storageReclaimed":record.as_ref().is_some_and(|record|!record.checkout.exists() && record.phase!=crate::archives::Phase::Restored),
-                    "checkpoint":record.as_ref().map(|record|&record.checkpoint),
-                    "changedPaths":record.as_ref().map(|record|&record.changed_paths).cloned().unwrap_or_default()}),
+                "phase":record.as_ref().map(|record|&record.phase),
+                "storageReclaimed":record.as_ref().is_some_and(|record|!record.checkout.exists() && record.phase!=crate::archives::Phase::Restored),
+                "checkpoint":record.as_ref().map(|record|&record.checkpoint),
+                "changedPaths":record.as_ref().map(|record|&record.changed_paths).cloned().unwrap_or_default()}),
                 )
             }
             zuse_protocol::custom_acp::catalog::GET => {
@@ -3165,6 +3651,7 @@ impl RpcService for EngineRpc {
                     harness,
                     p.force,
                     Some(lease),
+                    self.registry.pinned_models(p.harness),
                 )
                 .await
                 .map_err(|e| RpcError::Failed(e.to_string()))?;
@@ -3263,7 +3750,12 @@ impl RpcService for EngineRpc {
                         "setupAction": outcome.setup_action,
                         "setupError": outcome.setup_error,
                     })),
-                    None => RpcReply::value(&serde_json::json!({ "ready": false })),
+                    None => RpcReply::value(&serde_json::json!({
+                        "ready": false,
+                        "progress": self
+                            .project_actions
+                            .worktree_progress(&p.command_id, &p.chat_id),
+                    })),
                 }
             }
             methods::RETRY_DELIVERY => {
@@ -3509,12 +4001,49 @@ impl RpcService for EngineRpc {
                     .get("openingTail")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
+                let window = params
+                    .get("tailLimit")
+                    .and_then(|v| v.as_u64())
+                    .map(|rows| {
+                        transcript_window::Window::new(
+                            rows.min(usize::MAX as u64) as usize,
+                            params
+                                .get("tailBytes")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(64 * 1024)
+                                .min(usize::MAX as u64) as usize,
+                        )
+                        .with_anchor(
+                            params
+                                .get("tailAnchor")
+                                .and_then(|value| value.as_str())
+                                .map(str::to_owned),
+                        )
+                        .with_resume(
+                            params
+                                .get("resume")
+                                .and_then(|value| serde_json::from_value(value.clone()).ok()),
+                        )
+                    });
                 let p: ChatParams = parse_params(params)?;
                 // An open transcript keeps its chat's checkout diff live (and
                 // discardable) even when the chat is archived; the guard lives
                 // exactly as long as the stream.
                 let interest = self.diff_sync.retain_chat(&p.chat_id);
-                let stream = if opening_tail {
+                let stream = if let Some(window) = window {
+                    let host = self.doc_host.clone();
+                    let chat_id = p.chat_id;
+                    let (rx, doc) = tokio::task::spawn_blocking(move || {
+                        let handle = host.open(&chat_id)?;
+                        Ok::<_, crate::EngineError>((handle.watch_messages(), handle.doc_arc()))
+                    })
+                    .await
+                    .map_err(|e| RpcError::Failed(e.to_string()))?
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                    doc_message_envelopes(rx, doc, Some(window))
+                        .map(zuse_rpc::RpcStreamItem::new)
+                        .boxed()
+                } else if opening_tail {
                     opening_doc_messages_typed_stream(self.doc_host.clone(), p.chat_id).await?
                 } else {
                     let handle = self
@@ -3821,7 +4350,12 @@ impl RpcService for EngineRpc {
                 )))
             }
             methods::WATCH_CHATS => {
-                Ok(RpcReply::Stream(watch_stream(self.workspace.watch_chats())))
+                let rx = self.workspace.watch_chats();
+                if params["delta"] == true {
+                    Ok(RpcReply::TypedStream(list_watch::stream(rx, |row| &row.id)))
+                } else {
+                    Ok(RpcReply::Stream(watch_stream(rx)))
+                }
             }
             methods::WATCH_SIDEBAR_PREFERENCES => Ok(RpcReply::Stream(watch_stream(
                 self.workspace.watch_sidebar_preferences(),
@@ -3837,10 +4371,26 @@ impl RpcService for EngineRpc {
                 let merged = self
                     .workspace
                     .merged_sessions_watch(self.sessions.watch_sessions());
-                Ok(RpcReply::Stream(watch_stream(merged)))
+                if params["delta"] == true {
+                    Ok(RpcReply::TypedStream(list_watch::stream(merged, |row| {
+                        &row.chat_id
+                    })))
+                } else {
+                    Ok(RpcReply::Stream(watch_stream(merged)))
+                }
             }
             methods::LOCAL_DEVICE => {
                 RpcReply::value(&serde_json::json!({ "deviceId": self.doc_host.device_id() }))
+            }
+            methods::DISCOVER_LOCAL_MCP_SERVERS => {
+                let home = std::env::var_os("HOME")
+                    .map(std::path::PathBuf::from)
+                    .ok_or_else(|| RpcError::Failed("home directory unavailable".into()))?;
+                let servers =
+                    tokio::task::spawn_blocking(move || crate::local_mcp::discover(&home))
+                        .await
+                        .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(&serde_json::json!({ "servers": servers }))
             }
             methods::LOCAL_IMPORT_STATUS => {
                 let importer = self.local_importer()?.clone();
@@ -3960,7 +4510,12 @@ impl RpcService for EngineRpc {
                 if let Some(id) = params["chatId"].as_str() {
                     return Ok(self.watch_archive_review(id.to_owned()));
                 }
-                Ok(RpcReply::Stream(watch_stream(self.diff_sync.watch_diffs())))
+                let stream = watch_stream(self.diff_sync.watch_diffs());
+                if params["summaryOnly"].as_bool().unwrap_or(false) {
+                    // Sidebars need sizes, never megabytes of patch per frame.
+                    return Ok(RpcReply::Stream(stream.map(strip_diff_patches).boxed()));
+                }
+                Ok(RpcReply::Stream(stream))
             }
             methods::WATCH_WORKSPACE_GIT_STATUS => {
                 let request: zuse_protocol::WatchWorkspaceFilesRequest = parse_params(params)?;
@@ -4018,7 +4573,8 @@ impl RpcService for EngineRpc {
                 // never probes arbitrary directories for their remotes.
                 let cwd = self.change_request_root(&p.cwd).await?;
                 let cwd = cwd.as_path();
-                let resolver = crate::source_control::ChangeRequestResolver::new();
+                let resolver = crate::source_control::ChangeRequestResolver::new()
+                    .with_github(self.github.clone());
                 let repository = match p.repository {
                     Some(repository) => {
                         resolver
@@ -4085,16 +4641,23 @@ impl RpcService for EngineRpc {
                     .map_err(change_request_rpc_error)?;
                 RpcReply::value(&comment)
             }
-            methods::UPDATE_CHANGE_REQUEST => {
+            methods::UPDATE_CHANGE_REQUEST | methods::UPDATE_CHANGE_REQUEST_AT_HEAD => {
                 #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
                 struct P {
                     url: String,
                     update: zuse_protocol::ChangeRequestUpdate,
+                    head_ref_oid: Option<String>,
                 }
                 let p: P = parse_params(params)?;
+                if method == methods::UPDATE_CHANGE_REQUEST_AT_HEAD && p.head_ref_oid.is_none() {
+                    return Err(RpcError::Failed(
+                        "Refresh the pull request before merging.".into(),
+                    ));
+                }
                 let refusal = self
                     .github
-                    .update_pull_request(&p.url, p.update)
+                    .update_pull_request_at_head(&p.url, p.update, p.head_ref_oid.as_deref())
                     .await
                     .map_err(change_request_rpc_error)?;
                 RpcReply::value(&serde_json::json!({ "refusal": refusal }))
@@ -4130,11 +4693,27 @@ impl RpcService for EngineRpc {
                     .ok_or_else(|| RpcError::Failed("CI watcher unavailable".into()))?;
                 Ok(RpcReply::Stream(watch_stream(watches.subscribe())))
             }
+            methods::WATCH_CHANGE_REQUEST => {
+                #[derive(Deserialize)]
+                struct P {
+                    url: String,
+                }
+                let p: P = parse_params(params)?;
+                self.change_requests.invalidate();
+                let rx = self
+                    .github
+                    .watch_detail(&p.url)
+                    .await
+                    .map_err(change_request_rpc_error)?;
+                Ok(RpcReply::Stream(watch_stream(rx)))
+            }
             methods::GET_CHANGE_REQUEST | methods::GET_CHANGE_REQUEST_DIFF => {
                 #[derive(Deserialize)]
                 #[serde(rename_all = "camelCase")]
                 struct P {
                     url: String,
+                    #[serde(default)]
+                    summary: bool,
                     #[serde(default)]
                     refresh: bool,
                     #[serde(default)]
@@ -4143,17 +4722,26 @@ impl RpcService for EngineRpc {
                     base_ref_oid: Option<String>,
                 }
                 let p: P = parse_params(params)?;
-                let value = self
-                    .github
-                    .detail_request(
-                        &p.url,
-                        method == methods::GET_CHANGE_REQUEST_DIFF,
-                        p.refresh,
-                        p.head_ref_oid.as_deref(),
-                        p.base_ref_oid.as_deref(),
-                    )
-                    .await
-                    .map_err(change_request_rpc_error)?;
+                if p.refresh {
+                    self.github.invalidate_watches();
+                }
+                let value = if p.summary && method == methods::GET_CHANGE_REQUEST {
+                    self.github
+                        .summary_request(&p.url, p.refresh)
+                        .await
+                        .map_err(change_request_rpc_error)?
+                } else {
+                    self.github
+                        .detail_request(
+                            &p.url,
+                            method == methods::GET_CHANGE_REQUEST_DIFF,
+                            p.refresh,
+                            p.head_ref_oid.as_deref(),
+                            p.base_ref_oid.as_deref(),
+                        )
+                        .await
+                        .map_err(change_request_rpc_error)?
+                };
                 RpcReply::value(&value)
             }
             // One-shot scoped capture for the Changes pane: `branch` diffs the
@@ -4235,6 +4823,10 @@ impl RpcService for EngineRpc {
                                 .filter(|s| s.root == identity.root)
                                 .ok_or_else(|| RpcError::Failed("no turn recorded".into()))?;
                             crate::diff_sync::capture_turn_diff(&self.repos, root, &snapshot.tree)
+                                .await
+                        }
+                        "staged" | "unstaged" => {
+                            crate::diff_sync::capture_scoped_diff(&self.repos, root, None, &p.mode)
                                 .await
                         }
                         _ => crate::diff_sync::capture_diff(&self.repos, root).await,
@@ -4610,7 +5202,23 @@ impl RpcService for EngineRpc {
                 RpcReply::value(&history)
             }
             methods::GET_BRANCH_GRAPH => {
-                let p: zuse_protocol::branch_graph::BranchGraphRequest = parse_params(params)?;
+                let mut p: zuse_protocol::branch_graph::BranchGraphRequest = parse_params(params)?;
+                if p.fetch {
+                    // Compatibility for explicit older callers; cards use local
+                    // graphs and repository subscription owns automatic fetches.
+                    // Best effort: the local graph is correct without it.
+                    let fetched = tokio::time::timeout(
+                        std::time::Duration::from_secs(20),
+                        self.repos.fetch_all(std::path::Path::new(&p.cwd)),
+                    )
+                    .await;
+                    if !matches!(fetched, Ok(Ok(()))) {
+                        tracing::debug!("branch graph continues without a fresh fetch");
+                    }
+                    self.source_control_refresh.invalidate("worktree:");
+                    self.diff_sync.sync_all();
+                    p.fetch = false;
+                }
                 let graph = crate::branch_graph::branch_graph(std::path::Path::new(&p.cwd), &p)
                     .await
                     .map_err(|e| RpcError::Failed(e.to_string()))?;
@@ -4706,6 +5314,8 @@ impl RpcService for EngineRpc {
                 // Remote refs are repository state too. Force the checkout
                 // watchers to publish a fresh snapshot instead of waiting for
                 // the repair tick (some platforms do not report packed-refs).
+                self.source_control_refresh.invalidate("worktree:");
+                self.change_requests.invalidate();
                 self.diff_sync.sync_all();
                 RpcReply::value(&serde_json::json!({ "ok": true }))
             }
@@ -4716,6 +5326,9 @@ impl RpcService for EngineRpc {
                     .switch_ref(std::path::Path::new(&p.repo_path), &p.ref_name)
                     .await
                     .map_err(|e| RpcError::Failed(e.to_string()))?;
+                self.source_control_refresh.invalidate("worktree:");
+                self.change_requests.invalidate();
+                self.diff_sync.sync_all();
                 RpcReply::value(&serde_json::json!({ "branch": branch }))
             }
             methods::GET_WORKTREE_SETTINGS => RpcReply::value(&self.repos.worktree_settings()),
@@ -4828,6 +5441,15 @@ impl RpcService for EngineRpc {
             methods::RELEASE_HOME_FOLDER_SEARCH => {
                 self.repos.release_home_folder_search();
                 RpcReply::value(&serde_json::json!({}))
+            }
+            methods::CREATE_FOLDER => {
+                let p: CreateFolderParams = parse_params(params)?;
+                let path = self
+                    .repos
+                    .create_folder(p.parent, p.name)
+                    .await
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(&serde_json::json!({ "path": path }))
             }
             methods::LIST_DRIVES => {
                 let drives = self
@@ -5471,6 +6093,24 @@ impl RpcService for EngineRpc {
                     "checkedInteractions": report.interactions,
                     "printed": report.logs,
                 }))
+            }
+            methods::PUBLISH_UI_BLOCK => {
+                let p: PublishUiBlockParams = parse_params(params)?;
+                if p.spec.len() > zuse_protocol::UI_BLOCK_MAX_BYTES {
+                    return Err(RpcError::BadParams("spec is too long".into()));
+                }
+                // Validated before anyone sees it; readers validate again.
+                let spec = zuse_ui_block::parse(&p.spec)
+                    .map_err(|e| RpcError::BadParams(format!("invalid UI block: {e}")))?;
+                let id = format!("ui:{}", crate::new_id());
+                let event = AgentEvent::UiBlock {
+                    id: id.clone(),
+                    spec: spec.source,
+                };
+                if !self.sessions.inject_event(&p.chat_id, event) {
+                    return Err(no_turn_for_ui_block());
+                }
+                RpcReply::value(&serde_json::json!({ "id": id }))
             }
             methods::FETCH_TOOL_BLOB => {
                 let p: FetchToolBlobParams = parse_params(params)?;
@@ -6135,6 +6775,10 @@ mod tests {
         assert!(forwardable(methods::SEARCH_FILES));
         assert!(forwardable(methods::SEARCH_GIT_HISTORY));
         assert!(forwardable(methods::GET_BRANCH_GRAPH));
+        assert!(forwardable(methods::WATCH_GIT_WORKSPACE));
+        assert!(forwardable(methods::WATCH_CHANGE_REQUEST));
+        assert!(is_stream_method(methods::WATCH_GIT_WORKSPACE));
+        assert!(is_stream_method(methods::WATCH_CHANGE_REQUEST));
         assert!(forwardable(methods::FETCH_ALL));
         assert!(forwardable(methods::RESOLVE_GIT_AVATARS));
         assert!(forwardable(methods::WATCH_CHECKOUT_CHANGE_REQUEST));
@@ -6179,6 +6823,8 @@ mod tests {
         assert!(forwardable(methods::POST_CHANGE_REQUEST_COMMENT));
         assert!(forwardable(methods::UPDATE_CHANGE_REQUEST));
         assert!(!is_stream_method(methods::UPDATE_CHANGE_REQUEST));
+        assert!(forwardable(methods::UPDATE_CHANGE_REQUEST_AT_HEAD));
+        assert!(!is_stream_method(methods::UPDATE_CHANGE_REQUEST_AT_HEAD));
         assert!(!is_stream_method(methods::POST_CHANGE_REQUEST_COMMENT));
         assert!(!is_stream_method(methods::GET_CHANGE_REQUEST));
         assert!(!is_stream_method(methods::GET_CHANGE_REQUEST_DIFF));
@@ -6910,14 +7556,7 @@ impl EngineRpc {
             }
         }
         for id in &family {
-            if self.sessions.archive_busy(id) {
-                return Err(RpcError::Failed(
-                    "Stop the thread and its active agents before archiving their worktree.".into(),
-                ));
-            }
-        }
-        for id in &family {
-            self.sessions.terminate(id).await.map_err(failed)?;
+            self.sessions.end_for_archive(id).await.map_err(failed)?;
         }
         let mark_archived = || -> Result<(), RpcError> {
             for id in &family {
@@ -7000,18 +7639,14 @@ impl EngineRpc {
                 "Another active thread uses this checkout, so its files were kept.",
             ));
         }
-        for row in &sharing {
-            if self.sessions.archive_busy(&row.id) {
-                return Err(RpcError::Failed(
-                    "Another agent is still using this worktree. Stop it before archiving.".into(),
-                ));
-            }
-        }
         if self.terminals.has_live_checkout(&checkout) {
             return Err(RpcError::Failed("Close the worktree’s terminals before archiving it. Running processes have not been stopped.".into()));
         }
         for row in &sharing {
-            self.sessions.terminate(&row.id).await.map_err(failed)?;
+            self.sessions
+                .end_for_archive(&row.id)
+                .await
+                .map_err(failed)?;
         }
         for row in &sharing {
             if let Some(path) = row.cwd.as_deref() {

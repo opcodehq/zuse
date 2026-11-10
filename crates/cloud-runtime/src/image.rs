@@ -1,4 +1,5 @@
 //! Prepare an isolated image's repository caches. Never runs against enrolled runtime storage.
+pub use crate::capabilities::CommandAdmissionReceipt;
 use crate::{DataLock, identity::atomic_write};
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
@@ -12,6 +13,10 @@ use zeroize::Zeroizing;
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ImagePlan {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub managed_base: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rust_runtime_supervisor_version: Option<u32>,
     pub build_id: String,
     pub template_version: String,
     pub configuration_digest: String,
@@ -43,7 +48,47 @@ pub struct PreparedRepository {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GithubCliReceipt {
+    pub version: String,
+    pub sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wrapper_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub login_shell_resolved_managed: Option<bool>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ImageManifest {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub managed_base: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rust_memory_sleep_version: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rust_tool_output_version: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rust_workload_secrets_version: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rust_repository_fetch_version: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rust_github_credentials_version: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rust_github_cli_version: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub github_cli: Option<GithubCliReceipt>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rust_organization_execution_version: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rust_runtime_supervisor_version: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rust_runtime_repair_version: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rust_recreation_version: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rust_command_admission_version: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_admission: Option<CommandAdmissionReceipt>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rust_environment_recipe_version: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rust_launch_model_config_version: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -113,12 +158,14 @@ fn owned_directory(path: &Path) -> Result<()> {
     );
     Ok(())
 }
-fn clean_home(home: &Path) -> Result<()> {
+pub(crate) fn clean_home(home: &Path, supervisor: bool) -> Result<(Option<u32>, Option<u32>)> {
+    let mut capabilities = (None, None);
     for name in [
         ".codex/auth.json",
         ".claude/.credentials.json",
         ".grok/auth.json",
         ".config/gh",
+        ".zuse-github-cli",
         ".git-credentials",
         ".netrc",
         ".zuse/cloud-auth",
@@ -134,9 +181,19 @@ fn clean_home(home: &Path) -> Result<()> {
     }
     let data = home.join(".zuse-data");
     if data.exists() {
+        for entry in fs::read_dir(&data)? {
+            let entry = entry?;
+            ensure!(
+                supervisor && entry.file_name() == ".runtime-supervision",
+                "image_contains_runtime_data"
+            );
+            capabilities = clean_supervisor(&data, &entry.path())?;
+        }
+    }
+    if supervisor {
         ensure!(
-            fs::read_dir(data)?.next().is_none(),
-            "image_contains_runtime_data"
+            data.join(".runtime-supervision").exists(),
+            "image_supervisor_missing"
         );
     }
     let ssh = home.join(".ssh");
@@ -146,8 +203,69 @@ fn clean_home(home: &Path) -> Result<()> {
             "image_contains_ssh_identity"
         );
     }
-    Ok(())
+    Ok(capabilities)
 }
+#[cfg(unix)]
+fn clean_supervisor(data: &Path, directory: &Path) -> Result<(Option<u32>, Option<u32>)> {
+    use std::io::{Read, Write};
+    use std::os::unix::{
+        fs::{FileTypeExt, MetadataExt},
+        net::UnixStream,
+    };
+    use std::time::Duration;
+    let parent = fs::symlink_metadata(data)?;
+    let meta = fs::symlink_metadata(directory)?;
+    ensure!(
+        meta.is_dir()
+            && !meta.file_type().is_symlink()
+            && meta.uid() == parent.uid()
+            && meta.mode() & 0o077 == 0,
+        "image_supervisor_directory_invalid"
+    );
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        let meta = fs::symlink_metadata(entry.path())?;
+        let name = entry.file_name();
+        ensure!(
+            meta.uid() == parent.uid()
+                && meta.mode() & 0o077 == 0
+                && !meta.file_type().is_symlink(),
+            "image_supervisor_entry_invalid"
+        );
+        ensure!(
+            if name == "control.sock" {
+                meta.file_type().is_socket()
+            } else {
+                (name == "supervisor.lock" || name == "supervisor.json") && meta.is_file()
+            },
+            "image_supervisor_entry_invalid"
+        );
+    }
+    let mut socket = UnixStream::connect(directory.join("control.sock"))?;
+    socket.set_read_timeout(Some(Duration::from_secs(3)))?;
+    socket.set_write_timeout(Some(Duration::from_secs(3)))?;
+    socket.write_all(b"{\"version\":1,\"action\":\"ping\"}\n")?;
+    let mut bytes = Vec::new();
+    (&mut socket).take(4097).read_to_end(&mut bytes)?;
+    ensure!(bytes.len() <= 4096, "image_supervisor_response_invalid");
+    let response: serde_json::Value = serde_json::from_slice(&bytes)?;
+    ensure!(
+        response["version"] == 1
+            && response["bound"] == false
+            && response["childAlive"] == false
+            && response["recoveryAlive"] == false,
+        "image_supervisor_not_idle"
+    );
+    Ok((
+        (response["repairVersion"] == 1).then_some(1),
+        (response["recreationVersion"] == 1).then_some(1),
+    ))
+}
+#[cfg(not(unix))]
+fn clean_supervisor(_: &Path, _: &Path) -> Result<(Option<u32>, Option<u32>)> {
+    anyhow::bail!("image_supervisor_platform_unsupported")
+}
+
 fn validate_repo(repo: &ImageRepository) -> Result<()> {
     ensure!(
         !repo.project_id.is_empty()
@@ -277,14 +395,22 @@ pub fn prepare(plan: &ImagePlan) -> Result<ImageManifest> {
         !plan.template_version.is_empty()
             && !plan.configuration_digest.is_empty()
             && plan.max_cache_bytes > 0
-            && !plan.repositories.is_empty(),
+            && if plan.managed_base {
+                plan.repositories.is_empty()
+            } else {
+                !plan.repositories.is_empty()
+            },
         "image_plan_invalid"
     );
     for repo in &plan.repositories {
         validate_repo(repo)?;
     }
     owned_directory(&plan.home)?;
-    clean_home(&plan.home)?;
+    ensure!(
+        plan.rust_runtime_supervisor_version.is_none_or(|v| v == 1),
+        "image_supervisor_version_invalid"
+    );
+    let _ = clean_home(&plan.home, plan.rust_runtime_supervisor_version == Some(1))?;
     let workspace = plan.home.join("workspace");
     owned_directory(&workspace)?;
     ensure!(
@@ -301,6 +427,14 @@ pub fn prepare(plan: &ImagePlan) -> Result<ImageManifest> {
         "image_cache_secrets_overlap"
     );
     let _lock = DataLock::acquire(&cache, None)?;
+    if plan.managed_base {
+        crate::project_cache::assert_empty(Path::new(crate::project_cache::ROOT))?;
+        ensure!(
+            fs::read_dir(&cache)?
+                .all(|entry| entry.is_ok_and(|e| e.file_name() == ".workspace-runtime.lock")),
+            "managed_base_contains_repository_cache"
+        );
+    }
     let digest = format!("{:x}", Sha256::digest(serde_json::to_vec(plan)?));
     let ready = plan.status_directory.join("manifest.json");
     if ready.exists() {
@@ -317,6 +451,7 @@ pub fn prepare(plan: &ImagePlan) -> Result<ImageManifest> {
         );
         ensure!(
             prior.version == 1
+                && prior.managed_base == plan.managed_base
                 && prior.template_version == plan.template_version
                 && prior.configuration_digest == plan.configuration_digest
                 && prior.runtime_rpc_protocol == zuse_protocol::cloud_gateway::RUST_RPC
@@ -555,12 +690,44 @@ pub fn prepare(plan: &ImagePlan) -> Result<ImageManifest> {
         }
         progress(plan, "sanitizing", None)?;
         drop(tokens);
-        clean_home(&plan.home)?;
+        ensure!(
+            plan.rust_runtime_supervisor_version.is_none_or(|v| v == 1),
+            "image_supervisor_version_invalid"
+        );
+        let (rust_runtime_repair_version, rust_recreation_version) =
+            clean_home(&plan.home, plan.rust_runtime_supervisor_version == Some(1))?;
         ensure!(
             fs::read_dir(&secrets)?.next().is_none(),
             "image_contains_unconsumed_secrets"
         );
+        #[cfg(unix)]
+        let github_cli = crate::github::managed_cli_receipt().ok();
+        #[cfg(not(unix))]
+        let github_cli: Option<GithubCliReceipt> = None;
+        let command_admission =
+            if plan.managed_base && plan.rust_runtime_supervisor_version == Some(1) {
+                crate::capabilities::probe_current()
+            } else {
+                None
+            };
         let manifest = ImageManifest {
+            managed_base: plan.managed_base,
+            rust_memory_sleep_version: Some(1),
+            rust_tool_output_version: Some(1),
+            rust_workload_secrets_version: None,
+            rust_repository_fetch_version: Some(1),
+            rust_github_credentials_version: Some(1),
+            rust_github_cli_version: github_cli.as_ref().map(|_| 1),
+            github_cli,
+            rust_organization_execution_version: Some(1),
+            rust_runtime_supervisor_version: plan.rust_runtime_supervisor_version,
+            rust_runtime_repair_version,
+            rust_recreation_version,
+            rust_command_admission_version: command_admission
+                .as_ref()
+                .map(|receipt| receipt.command_admission_version),
+            command_admission,
+            rust_environment_recipe_version: Some(1),
             rust_launch_assets_version: Some(1),
             rust_launch_model_config_version: Some(1),
             version: 1,

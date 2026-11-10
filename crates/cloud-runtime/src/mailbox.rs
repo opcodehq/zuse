@@ -1,4 +1,5 @@
 //! Encrypted command delivery into the existing engine queue and SQLite receipts.
+pub mod cold_recovery;
 use crate::{Authority, authority::Failure, now_ms};
 use aes_gcm::{
     Aes256Gcm, KeyInit, Nonce,
@@ -98,6 +99,12 @@ impl DecodedCommand {
 }
 #[async_trait]
 pub trait Executor: Send + Sync {
+    /// Prevent a missing terminal receipt from being executed anew. An already
+    /// active engine action may finish; its identity is never redispatched.
+    async fn quarantine(&self, _session: &str, _command: &str, _fingerprint: &str) -> Result<()> {
+        Ok(())
+    }
+
     /// Read proof only. A missing proof must never execute work without a fresh lease.
     async fn admitted(&self, payload: &MessageSend, fingerprint: &str) -> Result<bool>;
     async fn native_admitted(
@@ -215,6 +222,16 @@ impl Receipts {
                 && row.3 == lease.command.fingerprint,
             "runtime-receipt-invalid"
         );
+        let saved: String = db.query_row(
+            "SELECT envelope FROM zuse_cloud_command_receipts WHERE command_id=?1",
+            [&lease.command.command_id],
+            |row| row.get(0),
+        )?;
+        let saved: CommandEnvelope = serde_json::from_str(&saved)?;
+        ensure!(
+            saved.actor == lease.command.actor,
+            "runtime-receipt-author-mismatch"
+        );
         db.execute(
             "UPDATE zuse_cloud_command_receipts SET lease_json=?2 WHERE command_id=?1",
             params![lease.command.command_id, serde_json::to_string(lease)?],
@@ -267,6 +284,8 @@ pub struct Mailbox {
     incarnation: String,
     sandbox: String,
     generation: i64,
+    organization: Option<String>,
+    canonical: bool,
 }
 impl Mailbox {
     pub fn new(
@@ -276,6 +295,9 @@ impl Mailbox {
         executor: Arc<dyn Executor>,
     ) -> Result<Self> {
         Ok(Self {
+            canonical: bootstrap.extra.get("commandAdmissionVersion") == Some(&json!(2))
+                && bootstrap.extra.get("commandDeliveryMode")
+                    == Some(&json!(zuse_protocol::cloud_task_commands::MODE)),
             key,
             receipts: Receipts::open(path)?,
             executor,
@@ -293,15 +315,11 @@ impl Mailbox {
                 .ok_or_else(|| anyhow::anyhow!("runtime-provider-sandbox-missing"))?
                 .into(),
             generation: bootstrap.runtime_generation,
+            organization: bootstrap
+                .zuse_account_id
+                .strip_prefix("organization:")
+                .map(str::to_owned),
         })
-    }
-    async fn admitted(&self, command: &DecodedCommand, fingerprint: &str) -> Result<bool> {
-        match command {
-            DecodedCommand::Message(command) => self.executor.admitted(command, fingerprint).await,
-            DecodedCommand::Session(command) => {
-                self.executor.native_admitted(command, fingerprint).await
-            }
-        }
     }
     async fn admit(
         &self,
@@ -327,23 +345,24 @@ impl Mailbox {
                     && lease.storage_incarnation_id == self.incarnation,
                 "runtime-receipt-invalid"
             );
-            if let Ok(payload) = self.decode(&lease.command)
-                && self.admitted(&payload, &lease.command.fingerprint).await?
-            {
-                let result = json!({"commandId":lease.command.command_id,"result":null});
-                let (iv, ciphertext) = self
-                    .key
-                    .encrypt(&lease.command, result.to_string().as_bytes())?;
-                self.receipts.save(&RuntimeAcknowledgment {
-                    command_id: lease.command.command_id,
-                    lease_token: lease.lease_token,
-                    fingerprint: lease.command.fingerprint,
-                    state: AcknowledgmentState::Applied,
-                    category: None,
-                    result_iv: Some(iv),
-                    result_ciphertext: Some(ciphertext),
-                })?;
+            if let Ok(_payload) = self.decode(&lease.command) {
+                self.executor
+                    .quarantine(
+                        &lease.command.session_id,
+                        &lease.command.command_id,
+                        &execution_identity(&lease.command, self.organization.as_deref())?,
+                    )
+                    .await?;
             }
+            self.receipts.save(&RuntimeAcknowledgment {
+                command_id: lease.command.command_id,
+                lease_token: lease.lease_token,
+                fingerprint: lease.command.fingerprint,
+                state: AcknowledgmentState::OutcomeUnknown,
+                category: Some("runtime-process-lost-before-terminal-ack".into()),
+                result_iv: None,
+                result_ciphertext: None,
+            })?;
         }
         Ok(())
     }
@@ -389,14 +408,25 @@ impl Mailbox {
                 if now_ms() >= lease.lease_deadline {
                     return Ok(None);
                 }
-                match self
-                    .admit(
-                        &payload,
-                        &lease.command.fingerprint,
-                        lease.command.created_at,
+                let identity = execution_identity(&lease.command, self.organization.as_deref())?;
+                let admission = self.admit(&payload, &identity, lease.command.created_at);
+                let result = if self.canonical {
+                    // Inputs may require object I/O. A stale delivery lease must
+                    // not silently admit new work after that wait. Timeout keeps
+                    // the persisted receipt uncertain, never eligible for replay.
+                    tokio::time::timeout(
+                        Duration::from_millis(
+                            lease.lease_deadline.saturating_sub(now_ms()).max(0) as u64
+                        ),
+                        admission,
                     )
                     .await
-                {
+                    .map_err(|_| anyhow::anyhow!("runtime_admission_lease_expired"))
+                    .and_then(|result| result)
+                } else {
+                    admission.await
+                };
+                match result {
                     Ok(()) => {
                         ack.state = AcknowledgmentState::Applied;
                         ack.result_iv = Some(iv);
@@ -417,9 +447,8 @@ impl Mailbox {
         &self,
         envelope: &CommandEnvelope,
     ) -> std::result::Result<DecodedCommand, &'static str> {
-        if envelope.actor.is_some() {
-            return Err("command-author-access-unavailable");
-        }
+        execution_identity(envelope, self.organization.as_deref())
+            .map_err(|_| "command-author-access-unavailable")?;
         let bytes = self
             .key
             .decrypt(envelope)
@@ -467,6 +496,10 @@ impl Mailbox {
         cancel: CancellationToken,
     ) -> Result<()> {
         self.recover().await?;
+        if self.canonical {
+            return self.run_concurrent(authority, bootstrap, cancel).await;
+        }
+
         loop {
             if cancel.is_cancelled() {
                 return Ok(());
@@ -516,6 +549,224 @@ impl Mailbox {
             }
         }
     }
+    async fn interrupt_admission(&self, lease: &RuntimeLease) -> Result<RuntimeAcknowledgment> {
+        // Reuse a committed receipt if admission won the race. Otherwise the
+        // boundary may have crossed: quarantine rather than claim cancellation.
+        if let Some(mut receipt) = self.receipts.bind(lease)? {
+            receipt.lease_token = lease.lease_token.clone();
+            self.receipts.save(&receipt)?;
+            return Ok(receipt);
+        }
+        self.executor
+            .quarantine(
+                &lease.command.session_id,
+                &lease.command.command_id,
+                &execution_identity(&lease.command, self.organization.as_deref())?,
+            )
+            .await?;
+        let receipt = RuntimeAcknowledgment {
+            command_id: lease.command.command_id.clone(),
+            lease_token: lease.lease_token.clone(),
+            fingerprint: lease.command.fingerprint.clone(),
+            state: AcknowledgmentState::OutcomeUnknown,
+            category: Some("stopped-during-input-preparation".into()),
+            result_iv: None,
+            result_ciphertext: None,
+        };
+        self.receipts.save(&receipt)?;
+        Ok(receipt)
+    }
+
+    /// Only canonical execution has the private policy/receipt fences required
+    /// for independent admission. Four slots prepare inputs; four additional
+    /// slots remain available exclusively for control commands.
+    async fn run_concurrent(
+        &self,
+        authority: Authority,
+        bootstrap: watch::Receiver<CloudRuntimeBootstrap>,
+        cancel: CancellationToken,
+    ) -> Result<()> {
+        use futures::{FutureExt, StreamExt, future::BoxFuture, stream::FuturesUnordered};
+        let mut pending: FuturesUnordered<BoxFuture<'_, Result<String>>> = FuturesUnordered::new();
+        let mut preparing: BTreeMap<String, (String, CancellationToken)> = BTreeMap::new();
+        loop {
+            while let Some(Some(done)) = pending.next().now_or_never() {
+                preparing.remove(&done?);
+            }
+            if cancel.is_cancelled() {
+                return Ok(());
+            }
+            let boot = bootstrap.borrow().clone();
+            for ack in self.receipts.pending()? {
+                match authority
+                    .post(
+                        &self.workspace,
+                        &["runtime", "commands", "ack"],
+                        &boot.runtime_credential,
+                        &serde_json::to_value(&ack)?,
+                    )
+                    .await
+                {
+                    Ok(_) => self.receipts.delivered(&ack)?,
+                    Err(error) if code(&error) == Some("stale-runtime-lease") => {
+                        self.receipts.delivered(&ack)?
+                    }
+                    Err(error) if retry(&error) => {}
+                    Err(error) => return Err(error),
+                }
+            }
+            if pending.len() >= 8 {
+                tokio::select! { _=cancel.cancelled()=>return Ok(()), done=pending.next()=> { if let Some(done)=done {preparing.remove(&done?);} } }
+                continue;
+            }
+            let control_only = pending.len() >= 4;
+            let available = if control_only {
+                8 - pending.len()
+            } else {
+                4 - pending.len()
+            };
+            let request = json!({"storageIncarnationId":self.incarnation,"waitMs":5000,"controlOnly":control_only,"maxItems":available});
+            // Keep the same lease HTTP future alive while preparing earlier
+            // commands: dropping its response could lose a committed lease.
+            let page = authority.post(
+                &self.workspace,
+                &["runtime", "commands", "lease"],
+                &boot.runtime_credential,
+                &request,
+            );
+            tokio::pin!(page);
+            let response = loop {
+                tokio::select! {
+                    _=cancel.cancelled()=>return Ok(()),
+                    done=pending.next(), if !pending.is_empty()=>{if let Some(done)=done {preparing.remove(&done?);}},
+                    response=&mut page=>break response,
+                }
+            };
+            let page: LeasePage = match response {
+                Ok(page) => serde_json::from_value(page)
+                    .map_err(|_| anyhow::anyhow!("runtime-mailbox-page-invalid"))?,
+                Err(error) if retry(&error) => {
+                    crate::supervisor::wait(&cancel, 1).await;
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+            ensure!(
+                page.leases.len() <= available,
+                "runtime_mailbox_page_unbounded"
+            );
+            if page.fence_required {
+                bail!("runtime_mailbox_fence_required");
+            }
+            for lease in page.leases {
+                if control_only {
+                    ensure!(
+                        matches!(
+                            lease.command.kind.as_str(),
+                            "zuse.session.interrupt"
+                                | "zuse.session.respond-input"
+                                | "zuse.session.stop-background-task"
+                        ),
+                        "runtime_mailbox_control_lane_invalid"
+                    );
+                }
+                if let Ok(DecodedCommand::Session(command)) = self.decode(&lease.command)
+                    && matches!(
+                        command.payload,
+                        zuse_protocol::session_commands::SessionCommandPayload::Interrupt {}
+                    )
+                    && let Some(target) = command
+                        .runtime_binding
+                        .as_ref()
+                        .and_then(|binding| binding.interrupt_command_id.as_ref())
+                    && let Some((session, token)) = preparing.get(target)
+                    && session == &lease.command.session_id
+                {
+                    token.cancel();
+                }
+                let admission_cancel = CancellationToken::new();
+                if lease.command.kind == "zuse.session.run" {
+                    preparing.insert(
+                        lease.command.command_id.clone(),
+                        (lease.command.session_id.clone(), admission_cancel.clone()),
+                    );
+                }
+                let authority = authority.clone();
+                let updates = bootstrap.clone();
+                pending.push(
+                    async move {
+                        let mut applying = Box::pin(self.apply(&lease));
+                        let admitted = tokio::select! {biased;
+                            _=admission_cancel.cancelled()=>None,
+                            result=&mut applying=>Some(result),
+                        };
+                        drop(applying);
+                        let acknowledgment = match admitted {
+                            Some(result) => result?,
+                            None => Some(self.interrupt_admission(&lease).await?),
+                        };
+                        if let Some(ack) = acknowledgment {
+                            let boot = updates.borrow().clone();
+                            match authority
+                                .post(
+                                    &self.workspace,
+                                    &["runtime", "commands", "ack"],
+                                    &boot.runtime_credential,
+                                    &serde_json::to_value(&ack)?,
+                                )
+                                .await
+                            {
+                                Ok(_) => self.receipts.delivered(&ack)?,
+                                Err(error) if code(&error) == Some("stale-runtime-lease") => {
+                                    self.receipts.delivered(&ack)?
+                                }
+                                Err(error) if retry(&error) => {}
+                                Err(error) => return Err(error),
+                            }
+                        }
+                        Ok(lease.command.command_id)
+                    }
+                    .boxed(),
+                );
+            }
+        }
+    }
+}
+/// Actor metadata is attached by the authority after authentication, not supplied
+/// by the encrypted command author. Retain it in the canonical queue receipt so
+/// recovery cannot attribute a collaborator's command to the computer owner.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CommandActor {
+    subject: String,
+    membership_id: String,
+    organization_id: String,
+    role: String,
+}
+fn execution_identity(envelope: &CommandEnvelope, organization: Option<&str>) -> Result<String> {
+    match (organization, &envelope.actor) {
+        (None, None) => Ok(envelope.fingerprint.clone()),
+        (Some(organization), Some(value)) => {
+            let actor: CommandActor = serde_json::from_value(value.clone())
+                .map_err(|_| anyhow::anyhow!("command-author-invalid"))?;
+            ensure!(
+                actor.organization_id == organization
+                    && matches!(actor.role.as_str(), "member" | "admin")
+                    && [&actor.subject, &actor.membership_id, &actor.organization_id]
+                        .iter()
+                        .all(|s| !s.is_empty()
+                            && s.len() <= 512
+                            && !s.chars().any(char::is_control)),
+                "command-author-invalid"
+            );
+            Ok(format!(
+                "{}:actor-v1:{}",
+                envelope.fingerprint,
+                B64.encode(serde_json::to_vec(&actor)?)
+            ))
+        }
+        _ => bail!("command-author-scope-mismatch"),
+    }
 }
 fn code(error: &anyhow::Error) -> Option<&'static str> {
     error.downcast_ref::<Failure>().map(|v| v.code)
@@ -536,6 +787,32 @@ fn retry(error: &anyhow::Error) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn organization_author_is_scoped_and_retained_in_exact_execution_identity() {
+        let mut envelope: CommandEnvelope = serde_json::from_value(json!({"protocolVersion":3,"workspaceId":"ws","sessionId":"session","commandId":"command","kind":"messages.send","fingerprint":"hmac-sha256:fixture","schemaVersion":1,"keyVersion":1,"destructionFence":0,"createdAt":0,"iv":"iv","ciphertext":"sealed","dependencies":[]})).unwrap();
+        assert_eq!(
+            execution_identity(&envelope, None).unwrap(),
+            envelope.fingerprint
+        );
+        assert!(execution_identity(&envelope, Some("org-a")).is_err());
+        envelope.actor = Some(
+            json!({"subject":"member-a","membershipId":"membership-a","organizationId":"org-a","role":"member"}),
+        );
+        assert!(execution_identity(&envelope, None).is_err());
+        assert!(execution_identity(&envelope, Some("org-b")).is_err());
+        let original = execution_identity(&envelope, Some("org-a")).unwrap();
+        assert!(original.starts_with("hmac-sha256:fixture:actor-v1:"));
+        envelope.actor.as_mut().unwrap()["subject"] = json!("member-b");
+        assert_ne!(
+            original,
+            execution_identity(&envelope, Some("org-a")).unwrap()
+        );
+        envelope.actor.as_mut().unwrap()["role"] = json!("owner");
+        assert!(execution_identity(&envelope, Some("org-a")).is_err());
+        envelope.actor.as_mut().unwrap()["role"] = json!("admin");
+        envelope.actor.as_mut().unwrap()["untrusted"] = json!(true);
+        assert!(execution_identity(&envelope, Some("org-a")).is_err());
+    }
     fn webcrypto(input: Value) -> Value {
         use std::{
             io::Write,
@@ -607,3 +884,9 @@ mod tests {
         );
     }
 }
+
+#[cfg(all(test, feature = "engine", unix))]
+mod cold_recovery_tests;
+
+#[cfg(test)]
+mod control_tests;

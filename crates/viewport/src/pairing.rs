@@ -30,6 +30,25 @@ impl WorkspaceView {
         if self.receive_network_access(id, frame, cx) {
             return true;
         }
+        if self.direct_fetch == Some(id) || self.direct_action == Some(id) {
+            // An older host has no direct access, which is not an error here.
+            if self.direct_action == Some(id)
+                && let Some(error) = frame["err"].as_str()
+            {
+                self.error = Some(error.into());
+            }
+            if let Some(value) = frame.get("ok") {
+                self.direct_status = value.clone();
+            }
+            self.pending.remove(&id);
+            if self.direct_action == Some(id) {
+                self.pairing_fragment = None;
+            }
+            self.direct_action = None;
+            self.direct_fetch = None;
+            cx.notify();
+            return true;
+        }
         if self.relay_fetch == Some(id) || self.relay_action == Some(id) {
             let action = self.relay_action == Some(id);
             if let Some(error) = frame["err"].as_str() {
@@ -93,6 +112,18 @@ impl WorkspaceView {
         if self.connected && self.relay_fetch.is_none() && self.relay_action.is_none() {
             self.relay_fetch = Some(self.call(methods::RELAY_ACCESS_STATUS, json!({})));
         }
+        if self.connected && self.direct_fetch.is_none() && self.direct_action.is_none() {
+            self.direct_fetch = Some(self.call(methods::DIRECT_ACCESS_STATUS, json!({})));
+        }
+    }
+    fn send_direct_action(&mut self, method: &'static str, params: Value) {
+        if !self.connected || self.direct_action.is_some() {
+            return;
+        }
+        if let Some(id) = self.direct_fetch.take() {
+            self.cancel(id);
+        }
+        self.direct_action = Some(self.call(method, params));
     }
     fn send_relay_action(&mut self, method: &'static str, params: Value) {
         if !self.connected || self.relay_action.is_some() {
@@ -448,7 +479,8 @@ impl WorkspaceView {
                 ),
             )
             .when(self.remote_ui.advanced, |view| {
-                view.child(self.relay_settings(cx))
+                view.child(self.direct_settings(cx))
+                    .child(self.relay_settings(cx))
             })
             .when(self.account_remote, |view| {
                 view.child(
@@ -508,6 +540,76 @@ impl WorkspaceView {
             })
             .children(self.remote_access_dialog(cx))
             .into_any_element()
+    }
+    fn direct_settings(&self, cx: &mut Context<Self>) -> AnyElement {
+        use crate::remote_access_style as r;
+        let running = self.direct_status["running"] == true;
+        let serve = self.direct_status["tailscaleServe"] == true;
+        let summary = r::route_summary(&self.direct_status);
+        let connected_through = self.link_route.get("kind").map(|_| {
+            let label = self.link_route["label"].as_str().unwrap_or("Connected");
+            match self.link_route["rttMs"].as_u64() {
+                Some(ms) => format!("Connected through {label} · {ms} ms"),
+                None => format!("Connected through {label}"),
+            }
+        });
+        r::frame(
+            "Direct connections",
+            "Let paired devices reach this computer over your local network or Tailscale. Zuse uses whichever route is fastest and stays end-to-end encrypted.",
+            None,
+        )
+        .child(
+            s::card()
+                .when_some(connected_through, |v, line| {
+                    v.child(s::setting_row(true).child(s::details("This tab", line)))
+                })
+                .child(
+                    s::setting_row(true)
+                        .child(s::details(
+                            "Local network and Tailscale",
+                            if running { summary } else { "Off".to_owned() },
+                        ))
+                        .child(
+                            s::toggle("browser-direct-access", running, "Allow local network and Tailscale connections")
+                                .tab_index(0)
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    if running {
+                                        this.send_direct_action(methods::STOP_DIRECT_ACCESS, json!({}));
+                                    } else {
+                                        this.send_direct_action(
+                                            methods::START_DIRECT_ACCESS,
+                                            json!({"tailscaleServe":serve}),
+                                        );
+                                    }
+                                    cx.notify();
+                                })),
+                        ),
+                )
+                .when(running && self.direct_status["tailscaleAvailable"] == true, |v| {
+                    v.child(
+                        s::setting_row(false)
+                            .child(s::details(
+                                "Tailscale HTTPS",
+                                "Also publish on your tailnet with a trusted certificate, so browsers can use it.",
+                            ))
+                            .child(
+                                s::toggle("browser-tailscale-serve", serve, "Publish over Tailscale HTTPS")
+                                    .tab_index(0)
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.send_direct_action(
+                                            methods::START_DIRECT_ACCESS,
+                                            json!({"tailscaleServe":!serve}),
+                                        );
+                                        cx.notify();
+                                    })),
+                            ),
+                    )
+                })
+                .when_some(self.direct_status["error"].as_str(), |v, error| {
+                    v.child(s::description_text(error.to_owned()))
+                }),
+        )
+        .into_any_element()
     }
     fn relay_settings(&self, cx: &mut Context<Self>) -> AnyElement {
         use crate::remote_access_style as r;

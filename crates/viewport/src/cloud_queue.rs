@@ -13,6 +13,16 @@ pub struct Prompt {
 }
 
 impl Prompt {
+    pub(crate) fn display_text(&self) -> String {
+        if self.attachments.is_empty() {
+            return self.text.clone();
+        }
+        format!(
+            "{}\n\nAttachments: {}",
+            self.text,
+            self.attachments.join(", ")
+        )
+    }
     pub fn from_request(request: &Value) -> Self {
         Self {
             text: request["firstMessage"].as_str().unwrap_or_default().into(),

@@ -1,6 +1,8 @@
 # Chat permissions
 
-A new chat starts with the saved permission default. Its composer can select Ask for approval, Approve for me, Full access, or Read only. An existing chat retains its own configuration when the default changes. Read only remains selectable for existing restrictive workflows; it is not an automatic approval-judging mode.
+A new chat starts with the saved permission default. Choosing Ask for approval, Approve for me, or Full access in the composer also saves that choice as the global default for future chats across projects and app restarts. An existing chat retains its own configuration when the default changes. The temporary plan-mode toggle does not change the saved default.
+
+Read only is a retired access level, not a composer selection. Stored `read-only` values load as Ask for approval; current plan mode is carried separately by `RunRequest.plan`. References to Read only below describe the historical adapter contract.
 
 The canonical run contract is `RunRequest.sandbox` plus `autoApprove`. Approval bypass requires **both** `danger-full-access` and `autoApprove: true`, expressed by `RunRequest::auto_approves_tools()`. A stale auto-approval flag cannot authorize bypass for a restricted run. The native composer and browser persist existing-chat changes through `setChatConfig`, so later queued turns use the saved posture. Unconfirmed saves fence new sends until the current mode has been read again.
 
@@ -9,7 +11,7 @@ The canonical run contract is `RunRequest.sandbox` plus `autoApprove`. Approval 
 | Ask for approval | Workspace-write sandbox, network restricted, on-request approvals | Default CLI permission mode; permission callbacks ask through Zuse's input bridge | Approval-required tool policy |
 | Approve for me | Workspace-write sandbox with the native `auto_review` reviewer | Native CLI `auto` permission mode | Not advertised; choose Ask instead |
 | Full access | Danger-full-access sandbox and no wire approvals when explicitly opted in | Bypass permission mode when explicitly opted in | Full-access tool policy when explicitly opted in; sensitive-path checks still apply |
-| Read only | Read-only sandbox; escalation approval requests declined | Plan permission mode; permission callbacks for tools are denied | Plan tool policy |
+| Read only (legacy) | Read-only sandbox; escalation approval requests declined | Plan permission mode; permission callbacks for tools are denied | Plan tool policy |
 
 Claude's ordinary permission rules still apply before its callback. Its plan mode and permission callback are provider controls, rather than a uniform OS sandbox supplied by Zuse. The CLI sends write requests through the callback in plan mode; Zuse denies those requests. The adapter targets CLI 2.1.228, which is newer than the documented shell-write callback change in 2.1.212. See [Claude's permission evaluation and plan-mode documentation](https://code.claude.com/docs/en/agent-sdk/permissions).
 

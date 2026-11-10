@@ -19,6 +19,7 @@ uuid.workspace = true
 chrono.workspace = true
 async-trait.workspace = true
 futures.workspace = true
+zuse-ui-block.workspace = true
 
 [dev-dependencies]
 zuse-visual.workspace = true

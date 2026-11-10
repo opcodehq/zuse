@@ -44,11 +44,17 @@ impl WorkspaceView {
                     .target
                     .as_ref()
                     .is_some_and(|t| t["workspaceId"] == request["workspaceId"])
-                && self
+                && ((self
                     .cloud
-                    .connected_epoch
-                    .is_some_and(|epoch| request["epoch"].as_u64() == Some(epoch))
-                && self.cloud.status["state"] == "ready"
+                    .target
+                    .as_ref()
+                    .is_some_and(|t| t["commandDeliveryMode"] == "server-admitted-v2")
+                    && self.cloud.command_api_ready)
+                    || (self
+                        .cloud
+                        .connected_epoch
+                        .is_some_and(|epoch| request["epoch"].as_u64() == Some(epoch))
+                        && self.cloud.status["state"] == "ready"))
                 && matches!(
                     request["method"].as_str(),
                     Some(methods::UPLOAD_CHUNK | methods::UPLOAD_COMMIT)
@@ -63,14 +69,19 @@ impl WorkspaceView {
                     ),
                 );
             } else {
-                let id=self.call(methods::CLOUD_RPC,json!({"workspaceId":request["workspaceId"],"method":request["method"],"params":request["params"],"requestId":0}));
+                let id=self.call(methods::CLOUD_RPC,json!({"workspaceId":request["workspaceId"],"expectedAccountId":self.cloud.account,"expectedOrganizationId":self.cloud.organization,"method":request["method"],"params":request["params"],"requestId":0}));
                 self.cloud.uploads.insert(id, callback);
             }
             return true;
         }
         if frame.get("cloudViewport").is_some() {
             if frame["cloudViewport"] == self.cloud.viewport {
-                if let Some(events) = &self.cloud.events {
+                if let Some(events) = self
+                    .cloud
+                    .events
+                    .as_ref()
+                    .or(self.cloud.cached_events.as_ref())
+                {
                     let mut delivery = frame.clone();
                     delivery.as_object_mut().unwrap().remove("cloudViewport");
                     let _ = events.unbounded_send(delivery);

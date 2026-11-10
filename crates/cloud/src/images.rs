@@ -249,6 +249,8 @@ impl ImageControl {
         }
         let digest = configuration_digest(mode, &self.config.template_version, &rows)?;
         let plan = ImagePlan {
+            managed_base: false,
+            rust_runtime_supervisor_version: None,
             build_id: build.clone(),
             template_version: self.config.template_version.clone(),
             configuration_digest: digest.clone(),

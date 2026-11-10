@@ -59,6 +59,10 @@ struct DocPartJson {
     /// transcripts; on this field they degrade to an invisible empty part.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     reasoning: Option<String>,
+    /// UI block source for `kind: "uiBlock"` (additive), off `text` for the
+    /// same reason as `reasoning`: old readers show an empty part, not code.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    spec: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     call: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -138,6 +142,12 @@ fn to_doc_part(part: &MessagePart) -> Result<DocPartJson, DocError> {
             kind: "visual".into(),
             path: Some(path.clone()),
             name: Some(title.clone()),
+            ..Default::default()
+        },
+        MessagePart::UiBlock { id, spec } => DocPartJson {
+            id: id.clone(),
+            kind: "uiBlock".into(),
+            spec: Some(spec.clone()),
             ..Default::default()
         },
         MessagePart::Text { id, text } => DocPartJson {
@@ -247,6 +257,13 @@ fn from_doc_part(p: DocPartJson) -> MessagePart {
             None => MessagePart::Error {
                 id: p.id,
                 message: "Visual unavailable".into(),
+            },
+        },
+        "uiBlock" => match p.spec.filter(|spec| !spec.trim().is_empty()) {
+            Some(spec) => MessagePart::UiBlock { id: p.id, spec },
+            None => MessagePart::Error {
+                id: p.id,
+                message: "UI block unavailable".into(),
             },
         },
         "tool" => match p.call.and_then(|c| serde_json::from_value(c).ok()) {
@@ -440,6 +457,18 @@ impl SessionDoc {
     /// peer on a newer schema must degrade to a missing row, never blank the
     /// whole transcript — one bad entry took down every publish for the chat
     /// (2026-07-31, "missing field `id`" during a multi-update import).
+    /// Command admission needs only the latest valid row, not the entire
+    /// conversation. Keep the same malformed-row fallback as read_entries.
+    pub fn last_entry_id(&self) -> Option<String> {
+        let messages = self.doc.get_list("messages");
+        (0..messages.len()).rev().find_map(|index| {
+            let value = messages.get(index)?;
+            entry_from_json(value.get_deep_value().to_json_value())
+                .ok()
+                .map(|entry| entry.id)
+        })
+    }
+
     pub fn read_entries(&self) -> Result<Vec<SessionMessageEntry>, DocError> {
         // Decode one row at a time: expanding the full list first keeps a
         // second JSON transcript alive while the typed entries are collected.
@@ -1517,6 +1546,34 @@ pub fn materialize_tail(
 mod tests {
     use super::*;
     use crate::parts::fold_event_into_parts;
+
+    #[test]
+    fn command_tail_matches_full_history_and_skips_malformed_trailing_rows() {
+        let doc = SessionDoc::init("tail").unwrap();
+        assert_eq!(doc.last_entry_id(), None);
+        for i in 0..100 {
+            doc.push_message(&SessionMessageEntry {
+                id: format!("message-{i}"),
+                role: MessageRole::User,
+                parts: vec![],
+                created_at: i,
+                device_id: "host".into(),
+                status: Some(MessageStatus::Complete),
+                continuation_of: None,
+                duration_ms: None,
+            })
+            .unwrap();
+        }
+        doc.doc
+            .get_list("messages")
+            .push("invalid future row")
+            .unwrap();
+        assert_eq!(
+            doc.last_entry_id(),
+            doc.read_entries().unwrap().last().map(|row| row.id.clone())
+        );
+        assert_eq!(doc.last_entry_id().as_deref(), Some("message-99"));
+    }
 
     #[test]
     fn agent_context_round_trips_and_append_is_idempotent() {

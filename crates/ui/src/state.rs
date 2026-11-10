@@ -51,6 +51,7 @@ struct CachedTranscript {
     entries: Vec<SessionMessageEntry>,
     context_usage: Option<zuse_protocol::ContextUsage>,
     bytes: usize,
+    history: NativeHistory,
 }
 
 // A cancelled GPUI watch may own a whale's mirror between updates. Its
@@ -60,12 +61,6 @@ struct WatchPreparation {
     executor: gpui::BackgroundExecutor,
 }
 impl WatchPreparation {
-    fn new(executor: gpui::BackgroundExecutor) -> Self {
-        Self {
-            worker: Some(Default::default()),
-            executor,
-        }
-    }
     fn prepare(
         &mut self,
         update: &zuse_doc::TranscriptUpdate,
@@ -88,8 +83,12 @@ impl Drop for WatchPreparation {
 // Engine handle
 // ---------------------------------------------------------------------------
 
+mod history_window;
+use history_window::{HistoryFrame, NativeHistory, WatchSeed};
+
 mod account_connection;
 mod cloud_connection;
+mod cloud_sidebar;
 pub use cloud_connection::CloudTarget;
 mod remote_connection;
 pub use account_connection::{AccountTarget, RemoteTarget};
@@ -148,6 +147,9 @@ trait EngineBackend: Send + Sync {
     fn remote_status(&self) -> Option<tokio::sync::watch::Receiver<remote_connection::Status>> {
         None
     }
+    fn link_status(&self) -> Option<remote_connection::LinkWatch> {
+        None
+    }
     fn retry_connection(&self) -> bool {
         false
     }
@@ -156,6 +158,15 @@ trait EngineBackend: Send + Sync {
     }
     async fn media_client(&self) -> Result<RpcClient, RpcError> {
         Err(RpcError::Failed("voice media unavailable".into()))
+    }
+    fn prepare_update_restart(&self) -> Result<(), String> {
+        Ok(())
+    }
+    fn cancel_update_restart(&self) {}
+    /// Agent turns an app restart would interrupt. A remote engine outlives
+    /// this app, so none of its turns are.
+    fn interrupted_by_restart(&self) -> usize {
+        0
     }
     /// Graceful teardown (drains runs / flushes docs for the in-process engine).
     async fn shutdown(&self);
@@ -186,6 +197,36 @@ impl EngineBackend for InProcessEngine {
     }
     fn signs_in_on_this_machine(&self) -> bool {
         true
+    }
+    fn prepare_update_restart(&self) -> Result<(), String> {
+        let runtime = self
+            .runtime
+            .try_lock()
+            .map_err(|_| "The engine is busy. Try restarting again in a moment.".to_owned())?;
+        if let Some(runtime) = runtime.as_ref() {
+            let sessions = &runtime.core().sessions;
+            if let Err(error) = sessions.checkpoint_for_update() {
+                sessions.cancel_update_restart();
+                return Err(error.to_string());
+            }
+        }
+        Ok(())
+    }
+    fn interrupted_by_restart(&self) -> usize {
+        match self.runtime.try_lock() {
+            Ok(runtime) => runtime
+                .as_ref()
+                .map_or(0, |runtime| runtime.core().sessions.active_turn_count()),
+            // Busy for a moment: count as active so a restart re-checks.
+            Err(_) => 1,
+        }
+    }
+    fn cancel_update_restart(&self) {
+        if let Ok(runtime) = self.runtime.try_lock()
+            && let Some(runtime) = runtime.as_ref()
+        {
+            runtime.core().sessions.cancel_update_restart();
+        }
     }
     async fn shutdown(&self) {
         self.boot_task.abort();
@@ -345,7 +386,9 @@ impl EngineHandle {
             return match target {
                 RemoteTarget::Cloud(target) => cloud_connection::bootstrap(target).await,
                 RemoteTarget::Account(target) => account_connection::bootstrap(target).await,
-                RemoteTarget::Paired(target) => remote_connection::paired(target).await,
+                RemoteTarget::Paired(target) => {
+                    remote_connection::paired(target, &config.data_dir).await
+                }
             };
         }
         // Invariant: at most one bootstrap in this process runs probe+embed at
@@ -587,7 +630,7 @@ impl EngineHandle {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "appshots-fixture"))]
     pub(crate) fn from_test_client(client: RpcClient) -> Self {
         Self {
             inner: Arc::new(RemoteEngine {
@@ -633,12 +676,29 @@ impl EngineHandle {
         self.inner.media_client().await
     }
 
+    /// The route and latency of a paired connection, when this is one.
+    pub fn link_status(&self) -> Option<zuse_rpc::paired_link::LinkStatus> {
+        self.inner.link_status()?.borrow().clone()
+    }
+
     pub fn engine_info(&self) -> &EngineInfo {
         &self.engine_info
     }
 
     fn deferred_state(&self) -> Option<tokio::sync::watch::Receiver<DeferredEngineState>> {
         self.deferred_state.clone()
+    }
+
+    pub fn prepare_update_restart(&self) -> Result<(), String> {
+        self.inner.prepare_update_restart()
+    }
+
+    pub fn cancel_update_restart(&self) {
+        self.inner.cancel_update_restart();
+    }
+
+    pub fn interrupted_by_restart(&self) -> usize {
+        self.inner.interrupted_by_restart()
     }
 
     pub async fn shutdown(&self) {
@@ -833,10 +893,21 @@ pub(crate) struct CanvasTarget {
     device: Option<String>,
 }
 
+/// Local archive intent stays visible until both the RPC and registry agree.
+struct PendingChatArchive {
+    request_id: u64,
+    archived: bool,
+    authoritative: bool,
+    observed: bool,
+    accepted: bool,
+}
+
 /// Root application state. Reducer methods (`apply_*`, [`Self::session_for`], …)
 /// are plain `&mut self` functions so tests construct the struct directly; gpui
 /// glue ([`Self::bootstrap`], [`Self::select_chat`]) layers subscriptions on top.
 pub struct AppState {
+    pub zots: Vec<zuse_protocol::zots::Zot>,
+    zot_watches: HashMap<String, Task<()>>,
     pub connection: ConnectionStatus,
     /// Fixed data boundary of the attached engine. Authentication may change
     /// in place, but changing this scope requires assembling a new runtime.
@@ -845,6 +916,7 @@ pub struct AppState {
     pub auth: Option<AuthState>,
     /// Account identity for cloud features, independent of device/workspace auth.
     pub cloud_account: Option<serde_json::Value>,
+    cloud_sidebar: cloud_sidebar::Catalog,
     pub devices: Vec<Device>,
     pub project_creations: HashMap<String, Vec<zuse_protocol::project_creation::ProjectCreation>>,
     project_creation_watches: HashMap<String, Task<()>>,
@@ -865,6 +937,8 @@ pub struct AppState {
     pub spaces: Vec<Space>,
     /// Sorted (see [`sort_chats`]); includes archived rows — views filter.
     pub chats: Vec<Chat>,
+    pending_chat_archives: HashMap<String, PendingChatArchive>,
+    next_archive_request_id: u64,
     pub(crate) chat_configuration: crate::chat_configuration::ChatConfiguration,
     /// Fork RPC may arrive ahead of its registry row on a remote device.
     pending_side_chat: Option<Chat>,
@@ -912,12 +986,14 @@ pub struct AppState {
     /// agent was busy, in the order it will be sent. Device-agnostic: the
     /// chat's doc holds them (every device sees the same queue).
     pub queue: Vec<zuse_doc::QueuedMessage>,
+    pub(crate) cloud_queue_revisions: HashMap<(String, String), i64>,
     pub context_usage: Option<zuse_protocol::ContextUsage>,
     /// The selected chat has a transcript from a `WatchDocMessages` reset
     /// (including a retained reset from an earlier visit). An
     /// empty transcript is otherwise indistinguishable from the pre-replay
     /// gap after selection, where optimistic echoes may already be visible.
     pub transcript_replayed: bool,
+    transcript_history: NativeHistory,
     transcript_baselines: HashMap<String, Arc<zuse_doc::TranscriptBaseline>>,
     transcript_cache: std::collections::VecDeque<CachedTranscript>,
     pub(crate) prepared_transcripts: HashMap<String, Arc<crate::transcript::PreparedTranscript>>,
@@ -945,6 +1021,8 @@ pub struct AppState {
     /// revision that has not reached disk yet. A chat remains blocked until
     /// every surface waiting on a workspace write has finished or cancelled.
     review_comment_flushes: HashMap<String, HashSet<u64>>,
+    /// Context items staged per composer draft key, sent ahead of the text.
+    context_items: HashMap<String, Vec<crate::context_items::ContextItem>>,
     /// This engine's device id (best-effort `LocalDevice` probe; `None` until
     /// the engine serves it — views degrade gracefully).
     pub local_device_id: Option<String>,
@@ -964,12 +1042,14 @@ pub struct AppState {
     /// without their patches so sidebar rows can show a session's size.
     pub checkout_diff_stats: Vec<CheckoutDiffStat>,
     change_request_tasks: HashMap<ChangeRequestWatchKey, Task<()>>,
+    diff_stat_tasks: HashMap<Option<String>, Task<()>>,
     queue_task: Option<Task<()>>,
     change_requests_visible: bool,
     /// SUBAGENT transcripts keyed by subagent doc id (the right pane's
     /// subagent tabs read these). Independent of `selected_chat`: a tab's
     /// feed must survive chat switches — the tab itself is what scopes it.
     sub_transcripts: HashMap<String, Vec<SessionMessageEntry>>,
+    sub_history: HashMap<String, NativeHistory>,
     /// One watch task per live subagent doc (single-flight per key).
     /// Dropping a task cancels the engine-side watch and unpins the doc from
     /// the engine LRU — closing a tab MUST go through
@@ -985,6 +1065,20 @@ pub(crate) struct TranscriptTextChanged {
 }
 
 impl gpui::EventEmitter<TranscriptTextChanged> for AppState {}
+
+/// The status a thread row shows when its conversations disagree: whichever
+/// asks more of the user (input, then live work, then a failure, then an
+/// unseen finish).
+fn louder_indicator(a: ChatIndicator, b: ChatIndicator) -> ChatIndicator {
+    let rank = |status| match status {
+        ChatIndicator::AwaitingInput => 4,
+        ChatIndicator::Working => 3,
+        ChatIndicator::Errored => 2,
+        ChatIndicator::Completed => 1,
+        ChatIndicator::Idle => 0,
+    };
+    if rank(b) > rank(a) { b } else { a }
+}
 
 fn is_text_append(frame: &TranscriptFrame) -> bool {
     matches!(frame, TranscriptFrame::Delta { upsert, append, remove, .. }
@@ -1025,10 +1119,13 @@ impl Default for AppState {
 impl AppState {
     pub fn new() -> Self {
         Self {
+            zots: Vec::new(),
+            zot_watches: HashMap::new(),
             connection: ConnectionStatus::Connecting,
             workspace_scope: None,
             auth: None,
             cloud_account: None,
+            cloud_sidebar: Default::default(),
             devices: Vec::new(),
             project_creations: HashMap::new(),
             project_creation_watches: HashMap::new(),
@@ -1038,6 +1135,8 @@ impl AppState {
             connectivity_observed: false,
             spaces: Vec::new(),
             chats: Vec::new(),
+            pending_chat_archives: HashMap::new(),
+            next_archive_request_id: 0,
             chat_configuration: Default::default(),
             pending_side_chat: None,
             unsaved_side_chat: false,
@@ -1054,8 +1153,10 @@ impl AppState {
             pending_cloud_resume: None,
             transcript: Vec::new(),
             queue: Vec::new(),
+            cloud_queue_revisions: HashMap::new(),
             context_usage: None,
             transcript_replayed: false,
+            transcript_history: NativeHistory::default(),
             transcript_baselines: HashMap::new(),
             transcript_cache: Default::default(),
             prepared_transcripts: HashMap::new(),
@@ -1067,6 +1168,7 @@ impl AppState {
             transfers: HashMap::new(),
             review_comments: HashMap::new(),
             review_comment_flushes: HashMap::new(),
+            context_items: HashMap::new(),
             local_device_id: None,
             harness_updates: Vec::new(),
             data_dir: None,
@@ -1077,9 +1179,11 @@ impl AppState {
             change_requests: ChangeRequestClientState::default(),
             checkout_diff_stats: Vec::new(),
             change_request_tasks: HashMap::new(),
+            diff_stat_tasks: HashMap::new(),
             queue_task: None,
             change_requests_visible: true,
             sub_transcripts: HashMap::new(),
+            sub_history: HashMap::new(),
             sub_watch_tasks: HashMap::new(),
             auto_selected: false,
             chats_synced: false,
@@ -1293,9 +1397,36 @@ impl AppState {
         self.review_comments.remove(key).unwrap_or_default()
     }
 
+    pub fn context_items(&self, key: &str) -> &[crate::context_items::ContextItem] {
+        self.context_items
+            .get(key)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// Stage `item` on `key`'s draft; an item from the same source replaces
+    /// the earlier one in place.
+    pub fn add_context_item(&mut self, key: &str, item: crate::context_items::ContextItem) {
+        crate::context_items::upsert(self.context_items.entry(key.to_string()).or_default(), item);
+    }
+
+    pub fn remove_context_item(&mut self, key: &str, id: &str) {
+        if let Some(list) = self.context_items.get_mut(key) {
+            list.retain(|item| item.id != id);
+            if list.is_empty() {
+                self.context_items.remove(key);
+            }
+        }
+    }
+
+    pub fn take_context_items(&mut self, key: &str) -> Vec<crate::context_items::ContextItem> {
+        self.context_items.remove(key).unwrap_or_default()
+    }
+
     pub fn purge_review_comments(&mut self, key: &str) {
         self.review_comment_flushes.remove(key);
         self.review_comments.remove(key);
+        self.context_items.remove(key);
     }
 
     pub fn begin_review_comment_flush(&mut self, key: &str, source: u64) {
@@ -1332,6 +1463,81 @@ impl AppState {
         true
     }
 
+    /// Apply intent synchronously. One worker per chat serializes rapid toggles;
+    /// archiving different chats never cancels an earlier request.
+    pub(crate) fn begin_chat_archive(&mut self, chat_id: &str, archived: bool) -> Option<u64> {
+        let chat = self.chats.iter_mut().find(|chat| chat.id == chat_id)?;
+        if chat.archived == archived {
+            return None;
+        }
+        let previous = chat.archived;
+        chat.archived = archived;
+        self.next_archive_request_id = self.next_archive_request_id.wrapping_add(1);
+        let request_id = self.next_archive_request_id;
+        if let Some(pending) = self.pending_chat_archives.get_mut(chat_id) {
+            pending.archived = archived;
+            pending.observed = false;
+            // An accepted write has no running worker; start another one.
+            if !std::mem::replace(&mut pending.accepted, false) {
+                return None;
+            }
+            pending.request_id = request_id;
+        } else {
+            self.pending_chat_archives.insert(
+                chat_id.to_owned(),
+                PendingChatArchive {
+                    request_id,
+                    archived,
+                    authoritative: previous,
+                    observed: false,
+                    accepted: false,
+                },
+            );
+        }
+        Some(request_id)
+    }
+
+    /// A restore on another surface supersedes this projection. Its own RPC
+    /// and watch updates now own the row, including any failure recovery.
+    pub(crate) fn clear_chat_archive_intent(&mut self, chat_id: &str) {
+        if let Some(pending) = self.pending_chat_archives.remove(chat_id)
+            && let Some(chat) = self.chats.iter_mut().find(|chat| chat.id == chat_id)
+        {
+            chat.archived = pending.authoritative;
+        }
+    }
+
+    /// Finish a write, returning newer intent for the same worker to send next.
+    pub(crate) fn finish_chat_archive(
+        &mut self,
+        chat_id: &str,
+        request_id: u64,
+        sent: bool,
+        succeeded: bool,
+    ) -> Option<bool> {
+        let pending = self.pending_chat_archives.get_mut(chat_id)?;
+        if pending.request_id != request_id {
+            return None;
+        }
+        if pending.archived != sent {
+            if succeeded {
+                pending.authoritative = sent;
+            }
+            pending.observed = false;
+            return Some(pending.archived);
+        }
+        if succeeded {
+            pending.accepted = true;
+            if !pending.observed {
+                return None;
+            }
+        } else if let Some(chat) = self.chats.iter_mut().find(|chat| chat.id == chat_id) {
+            chat.archived = pending.authoritative;
+        }
+        self.pending_chat_archives.remove(chat_id);
+        None
+    }
+
     /// Returns whether anything observable changed. The engine re-publishes
     /// identical lists (presence and sync churn elsewhere in the doc), and
     /// each notify re-renders the whole shell.
@@ -1345,6 +1551,18 @@ impl AppState {
                 chats.push(pending.clone());
             }
         }
+        self.pending_chat_archives.retain(|id, pending| {
+            let Some(chat) = chats.iter_mut().find(|chat| &chat.id == id) else {
+                return false;
+            };
+            pending.authoritative = chat.archived;
+            pending.observed = chat.archived == pending.archived;
+            if pending.accepted && pending.observed {
+                return false;
+            }
+            chat.archived = pending.archived;
+            true
+        });
         self.overlay_chat_configuration(&mut chats);
         sort_chats(&mut chats);
         if !self.chats_synced || self.chats != chats {
@@ -1368,6 +1586,7 @@ impl AppState {
             self.context_usage = None;
             self.transcript_revision = self.transcript_revision.wrapping_add(1);
             self.transcript_replayed = false;
+            self.transcript_history = NativeHistory::default();
             self.transcript_task = None;
             self.queue.clear();
             self.queue_task = None;
@@ -1412,6 +1631,94 @@ impl AppState {
         }
         self.heal_space_selection();
         changed || self.selected_space != previous_selection
+    }
+
+    /// Whether the selected chat is a Zot's coordinator, current or earlier.
+    /// These run in the Zot's own folder, with no repository or checkout.
+    pub fn selected_chat_is_zot_coordinator(&self) -> bool {
+        self.selected_chat.as_ref().is_some_and(|chat| {
+            self.zots.iter().any(|z| {
+                &z.coordinator_chat_id == chat || z.previous_coordinator_chats.contains(chat)
+            })
+        })
+    }
+
+    pub fn apply_zots(&mut self, zots: Vec<zuse_protocol::zots::Zot>) -> bool {
+        if self.zots == zots {
+            return false;
+        }
+        self.zots = zots;
+        true
+    }
+
+    fn reconcile_zot_watches(&mut self, cx: &mut Context<Self>) {
+        let Some(handle) = self.engine.clone() else {
+            return;
+        };
+        if !handle
+            .engine_info()
+            .supports(zuse_protocol::zots::CAPABILITY)
+        {
+            return;
+        }
+        let local = handle.engine_info().device_id.clone();
+        let mut devices: Vec<String> = self.devices.iter().map(|d| d.id.clone()).collect();
+        if !devices.contains(&local) {
+            devices.push(local);
+        }
+        self.zot_watches.retain(|id, _| devices.contains(id));
+        for device in devices {
+            if self.zot_watches.contains_key(&device) {
+                continue;
+            }
+            let engine = handle.clone();
+            let target = device.clone();
+            let task = cx.spawn(async move |this, cx| {
+                loop {
+                    let mut stream = match engine
+                        .client()
+                        .subscribe_scoped(
+                            zuse_protocol::control::WATCH_ZOTS,
+                            serde_json::json!({"targetDeviceId":target}),
+                        )
+                        .await
+                    {
+                        Ok(stream) => stream,
+                        Err(_) => {
+                            cx.background_executor()
+                                .timer(std::time::Duration::from_secs(3))
+                                .await;
+                            continue;
+                        }
+                    };
+                    while let Some(value) = stream.recv().await {
+                        let Ok(zots) =
+                            serde_json::from_value::<Vec<zuse_protocol::zots::Zot>>(value)
+                        else {
+                            continue;
+                        };
+                        if this
+                            .update(cx, |state, cx| {
+                                state.zots.retain(|z| z.config.home_device_id != target);
+                                state.zots.extend(zots);
+                                state.zots.sort_by(|a, b| a.config.name.cmp(&b.config.name));
+                                cx.notify();
+                            })
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                    if this.update(cx, |_, _| {}).is_err() {
+                        return;
+                    }
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_secs(3))
+                        .await;
+                }
+            });
+            self.zot_watches.insert(device, task);
+        }
     }
 
     fn heal_space_selection(&mut self) {
@@ -1704,12 +2011,24 @@ impl AppState {
         if self.cloud_account.as_ref() == Some(&value) {
             return false;
         }
+        let scope_changed = self
+            .cloud_account
+            .as_ref()
+            .map(|old| (&old["user"]["id"], &old["orgId"]))
+            != Some((&value["user"]["id"], &value["orgId"]));
+        if scope_changed {
+            self.clear_cloud_sidebar();
+        }
         self.cloud_account = Some(value);
         true
     }
 
     pub fn cloud_user_id(&self) -> Option<&str> {
         self.cloud_account.as_ref()?["user"]["id"].as_str()
+    }
+
+    pub fn cloud_organization_id(&self) -> Option<&str> {
+        self.cloud_account.as_ref()?["orgId"].as_str()
     }
 
     /// The signed-in user, if the engine reports one.
@@ -1861,7 +2180,9 @@ impl AppState {
             return;
         };
         self.sub_transcripts.entry(doc_id.clone()).or_default();
-        let task = spawn_subagent_watch(cx, handle, doc_id.clone());
+        let history = self.sub_history.entry(doc_id.clone()).or_default();
+        history.generation = uuid::Uuid::new_v4();
+        let task = spawn_subagent_watch(cx, handle, doc_id.clone(), history.generation);
         self.sub_watch_tasks.insert(doc_id, task);
     }
 
@@ -1871,6 +2192,7 @@ impl AppState {
         self.transcript_revision = self.transcript_revision.wrapping_add(1);
         self.sub_watch_tasks.remove(doc_id);
         self.sub_transcripts.remove(doc_id);
+        self.sub_history.remove(doc_id);
         self.prepared_transcripts.remove(doc_id);
         self.transcript_baselines.remove(doc_id);
     }
@@ -1881,6 +2203,7 @@ impl AppState {
         self.prepared_transcripts.remove(&doc_id);
         self.transcript_revision = self.transcript_revision.wrapping_add(1);
         self.sub_watch_tasks.remove(&doc_id);
+        self.sub_history.remove(&doc_id);
         self.transcript_baselines.insert(
             doc_id.clone(),
             Arc::new(zuse_doc::TranscriptBaseline::capture(&entries)),
@@ -1896,6 +2219,7 @@ impl AppState {
     ) {
         self.transcript_revision = self.transcript_revision.wrapping_add(1);
         self.sub_watch_tasks.remove(&doc_id);
+        self.sub_history.remove(&doc_id);
         self.transcript_baselines
             .insert(doc_id.clone(), prepared.navigation_baseline.clone());
         self.prepared_transcripts.insert(doc_id.clone(), prepared);
@@ -2253,6 +2577,7 @@ impl AppState {
         let mut chats: Vec<&Chat> = self
             .visible_chats()
             .filter(|c| c.space_id.as_deref() == Some(space_id))
+            .filter(|c| !zuse_protocol::presentation::zot_panel::zot_owns_chat(&self.zots, &c.id))
             .collect();
         sort_tabs(&mut chats);
         chats
@@ -2334,9 +2659,31 @@ impl AppState {
         space_filter: Option<&str>,
     ) -> Vec<(ChatIndicator, &Chat)> {
         let in_filter = self.project_filter(space_filter);
-        self.overview_chats(now)
-            .into_iter()
+        let rows = self.overview_chats(now);
+        // A row stands for its whole thread: a sibling conversation working
+        // (or waiting on input) in another tab lights the row too.
+        let mut thread_status: HashMap<&str, ChatIndicator> = HashMap::new();
+        for (status, chat) in &rows {
+            thread_status
+                .entry(chat.thread_id())
+                .and_modify(|rolled| *rolled = louder_indicator(*rolled, *status))
+                .or_insert(*status);
+        }
+        rows.into_iter()
             .filter(|(_, chat)| chat.thread_id.is_none() && in_filter(chat))
+            // Zots list their own threads; projects don't repeat them.
+            .filter(|(_, chat)| {
+                !zuse_protocol::presentation::zot_panel::zot_owns_chat(&self.zots, &chat.id)
+            })
+            .map(|(status, chat)| {
+                (
+                    thread_status
+                        .get(chat.id.as_str())
+                        .copied()
+                        .unwrap_or(status),
+                    chat,
+                )
+            })
             .collect()
     }
 
@@ -2556,6 +2903,10 @@ impl AppState {
             .change_request_for_chat(chat, &self.spaces)
     }
 
+    pub(crate) fn change_request_error_for_chat(&self, chat: &Chat) -> Option<&str> {
+        self.change_requests.error_for_chat(chat, &self.spaces)
+    }
+
     /// A chat's last known diff size as (additions, deletions), resolved
     /// like the Changes pane: checkout id first, then device + cwd, then cwd.
     /// `None` until a diff for its checkout has been watched, or when clean.
@@ -2634,6 +2985,8 @@ impl AppState {
     /// stopped. The next bootstrap must never render rows from the previous
     /// account while the local profile is opening.
     pub fn prepare_runtime_replacement(&mut self, cx: &mut Context<Self>) {
+        self.zots.clear();
+        self.zot_watches.clear();
         self.engine = None;
         self.chat_configuration = Default::default();
         self.watch_tasks.clear();
@@ -2641,6 +2994,7 @@ impl AppState {
         self.project_creations.clear();
         self.transcript_task = None;
         self.change_request_tasks.clear();
+        self.diff_stat_tasks.clear();
         self.change_requests = ChangeRequestClientState::default();
         self.connection = ConnectionStatus::Connecting;
         self.workspace_scope = None;
@@ -2650,6 +3004,7 @@ impl AppState {
         self.session_presence_presentation.clear();
         self.spaces.clear();
         self.chats.clear();
+        self.pending_chat_archives.clear();
         self.pending_side_chat = None;
         self.unsaved_side_chat = false;
         self.sessions.clear();
@@ -2670,6 +3025,10 @@ impl AppState {
         self.context_usage = None;
         self.transcript_revision = self.transcript_revision.wrapping_add(1);
         self.transcript_replayed = false;
+        self.transcript_history = NativeHistory::default();
+        self.sub_watch_tasks.clear();
+        self.sub_transcripts.clear();
+        self.sub_history.clear();
         self.echoes.clear();
         self.pending_sends.clear();
         self.upload_progress = None;
@@ -2774,7 +3133,13 @@ impl AppState {
         let Some(handle) = self.engine.clone() else {
             return;
         };
-        self.transcript_task = Some(spawn_transcript_watch(cx, handle.clone(), chat_id.clone()));
+        self.transcript_history.generation = uuid::Uuid::new_v4();
+        self.transcript_task = Some(spawn_transcript_watch(
+            cx,
+            handle.clone(),
+            chat_id.clone(),
+            self.transcript_history.generation,
+        ));
         if handle
             .engine_info()
             .supports(zuse_protocol::capabilities::MESSAGE_QUEUE_V1)
@@ -2853,6 +3218,33 @@ impl AppState {
         true
     }
 
+    /// Retire a cloud computer's execution subscriptions without clearing its
+    /// account-owned conversation, transcript, queue or current selection.
+    pub(crate) fn detach_cloud_conversation_execution(&mut self, cx: &mut Context<Self>) {
+        self.engine = None;
+        self.watch_tasks.clear();
+        self.transcript_task = None;
+        self.change_request_tasks.clear();
+        self.change_requests = ChangeRequestClientState::default();
+        self.reset_configuration_transport();
+        self.workspace_scope = None;
+        self.connection = ConnectionStatus::Connecting;
+        cx.notify();
+    }
+
+    /// Install execution only in an already-selected native cloud conversation.
+    /// The controller/navigation state must never call this method.
+    pub(crate) fn attach_cloud_conversation(
+        &mut self,
+        handle: EngineHandle,
+        session: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.attach_engine(handle, cx);
+        self.select_chat(Some(session), cx);
+        cx.notify();
+    }
+
     /// Wire the connected engine: mark Ready and start the standing watches.
     /// Methods the engine doesn't serve yet (chats/devices/auth land with the
     /// workspace doc in M4) fail their subscribe and are skipped gracefully.
@@ -2861,6 +3253,7 @@ impl AppState {
         self.project_creations.clear();
         self.reset_configuration_transport();
         self.cloud_account = None;
+        self.clear_cloud_sidebar();
         // The attachment notification precedes the first connectivity frame.
         // Make that bootstrap gap explicit so the shell resets its alert
         // baseline instead of comparing the new runtime with the old one.
@@ -2958,6 +3351,7 @@ impl AppState {
                 AppState::apply_cloud_account,
             ),
             spawn_local_device_probe(cx, handle.clone()),
+            cloud_sidebar::spawn(cx, handle.controller()),
         ]);
         if supports_harness_updates {
             watch_tasks.push(spawn_watch(
@@ -2968,6 +3362,7 @@ impl AppState {
             ));
         }
         self.watch_tasks = watch_tasks;
+        self.reconcile_zot_watches(cx);
         self.reconcile_change_request_watches(cx);
         // EngineInfo is part of the attachment boundary: views must know which
         // data profile they reached before they are allowed to render Ready.
@@ -2975,8 +3370,13 @@ impl AppState {
         self.reconcile_configuration_watch(cx);
         // Re-subscribe the transcript if a chat was already selected (reconnect path).
         if let Some(chat_id) = self.selected_chat.clone() {
-            self.transcript_task =
-                Some(spawn_transcript_watch(cx, handle.clone(), chat_id.clone()));
+            self.transcript_history.generation = uuid::Uuid::new_v4();
+            self.transcript_task = Some(spawn_transcript_watch(
+                cx,
+                handle.clone(),
+                chat_id.clone(),
+                self.transcript_history.generation,
+            ));
             if handle
                 .engine_info()
                 .supports(zuse_protocol::capabilities::MESSAGE_QUEUE_V1)
@@ -2987,7 +3387,33 @@ impl AppState {
         cx.notify();
     }
 
+    /// Keep sidebar diff sizes live on every device with chats, whichever
+    /// panes happen to be open.
+    fn reconcile_diff_stat_watches(&mut self, cx: &mut Context<Self>) {
+        let Some(handle) = self.engine.clone() else {
+            self.diff_stat_tasks.clear();
+            return;
+        };
+        let local = self.local_device_id.clone();
+        let mut targets: HashSet<Option<String>> = self
+            .chats
+            .iter()
+            .filter(|chat| !chat.archived && local.as_deref() != Some(chat.device_id.as_str()))
+            .map(|chat| Some(chat.device_id.clone()))
+            .collect();
+        targets.insert(None);
+        self.diff_stat_tasks
+            .retain(|target, _| targets.contains(target));
+        for target in targets {
+            if !self.diff_stat_tasks.contains_key(&target) {
+                let task = spawn_diff_stat_watch(cx, handle.clone(), target.clone());
+                self.diff_stat_tasks.insert(target, task);
+            }
+        }
+    }
+
     fn reconcile_change_request_watches(&mut self, cx: &mut Context<Self>) {
+        self.reconcile_diff_stat_watches(cx);
         let Some(handle) = self.engine.clone() else {
             self.change_request_tasks.clear();
             return;
@@ -3144,6 +3570,7 @@ impl AppState {
                     chat_id: previous.clone(),
                     entries,
                     context_usage: self.context_usage,
+                    history: self.transcript_history.clone(),
                     bytes,
                 });
                 while self.transcript_cache.len() > TRANSCRIPT_CACHE_CAP
@@ -3169,6 +3596,7 @@ impl AppState {
         self.context_usage = None;
         self.transcript_revision = self.transcript_revision.wrapping_add(1);
         self.transcript_replayed = false;
+        self.transcript_history = NativeHistory::default();
         if let Some(cached) = cached {
             self.transcript_baselines.insert(
                 cached.chat_id.clone(),
@@ -3183,6 +3611,8 @@ impl AppState {
             if let Some(prepared) = cached.prepared {
                 self.prepared_transcripts.insert(cached.chat_id, prepared);
             }
+            self.transcript_history = cached.history;
+            self.transcript_history.loading = false;
             self.transcript = cached.entries;
             self.context_usage = cached.context_usage;
             self.transcript_replayed = true;
@@ -3380,7 +3810,7 @@ fn spawn_chats_watch(cx: &mut Context<AppState>, handle: EngineHandle) -> Task<(
         loop {
             let mut rx = match handle
                 .client()
-                .subscribe_scoped(methods::WATCH_CHATS, serde_json::json!({}))
+                .subscribe_scoped(methods::WATCH_CHATS, serde_json::json!({"delta":true}))
                 .await
             {
                 Ok(rx) => rx,
@@ -3393,14 +3823,20 @@ fn spawn_chats_watch(cx: &mut Context<AppState>, handle: EngineHandle) -> Task<(
                     continue;
                 }
             };
+            let mut retained = Vec::new();
             while let Some(value) = rx.recv().await {
-                let parsed: Vec<Chat> = match serde_json::from_value(value) {
-                    Ok(parsed) => parsed,
-                    Err(err) => {
-                        tracing::warn!(error = %err, "dropping malformed chats frame");
-                        continue;
-                    }
-                };
+                if let Err(error) = zuse_protocol::list_delta::apply(&mut retained, &value, "id") {
+                    tracing::warn!(error, "chat list delta desync; resubscribing");
+                    break;
+                }
+                let parsed: Vec<Chat> =
+                    match serde_json::from_value(serde_json::Value::Array(retained.clone())) {
+                        Ok(parsed) => parsed,
+                        Err(err) => {
+                            tracing::warn!(error = %err, "dropping malformed chats frame");
+                            continue;
+                        }
+                    };
                 let alive = this.update(cx, |state, cx| {
                     // Identical re-published lists skip the re-sort fan-out:
                     // watch reconciliation and a whole-shell re-render.
@@ -3434,6 +3870,50 @@ fn spawn_chats_watch(cx: &mut Context<AppState>, handle: EngineHandle) -> Task<(
 }
 
 pub use zuse_protocol::version_triple;
+
+fn spawn_diff_stat_watch(
+    cx: &mut Context<AppState>,
+    handle: EngineHandle,
+    target: Option<String>,
+) -> Task<()> {
+    cx.spawn(async move |this, cx| {
+        let params = match &target {
+            Some(device) => serde_json::json!({ "summaryOnly": true, "targetDeviceId": device }),
+            None => serde_json::json!({ "summaryOnly": true }),
+        };
+        loop {
+            let mut stream = match handle
+                .client()
+                .subscribe_checked(methods::WATCH_CHECKOUT_DIFFS, params.clone())
+                .await
+            {
+                Ok(stream) => Some(stream),
+                Err(RpcError::UnknownMethod(_)) => return,
+                Err(_) => None,
+            };
+            let mut diffs = Vec::new();
+            while let Some(value) = match stream.as_mut() {
+                Some(stream) => stream.recv().await,
+                None => None,
+            } {
+                if !crate::changes::apply_diff_frame(&mut diffs, value) {
+                    continue;
+                }
+                let published = this.update(cx, |state, cx| {
+                    if state.publish_checkout_diff_stats(&diffs) {
+                        cx.notify();
+                    }
+                });
+                if published.is_err() {
+                    return;
+                }
+            }
+            cx.background_executor()
+                .timer(std::time::Duration::from_secs(2))
+                .await;
+        }
+    })
+}
 
 fn spawn_change_request_watch(
     cx: &mut Context<AppState>,
@@ -3539,9 +4019,17 @@ fn spawn_watch<T: DeserializeOwned + 'static>(
         // devices never arrived again — "the session never completes").
         const RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
         loop {
+            let delta = method == methods::WATCH_SESSIONS;
             let mut rx = match handle
                 .client()
-                .subscribe_scoped(method, serde_json::json!({}))
+                .subscribe_scoped(
+                    method,
+                    if delta {
+                        serde_json::json!({"delta":true})
+                    } else {
+                        serde_json::json!({})
+                    },
+                )
                 .await
             {
                 Ok(rx) => rx,
@@ -3554,7 +4042,19 @@ fn spawn_watch<T: DeserializeOwned + 'static>(
                     continue;
                 }
             };
+            let mut retained = Vec::new();
             while let Some(value) = rx.recv().await {
+                let value = if delta {
+                    if let Err(error) =
+                        zuse_protocol::list_delta::apply(&mut retained, &value, "chatId")
+                    {
+                        tracing::warn!(error, "session list delta desync; resubscribing");
+                        break;
+                    }
+                    serde_json::Value::Array(retained.clone())
+                } else {
+                    value
+                };
                 let parsed: T = match serde_json::from_value(value) {
                     Ok(parsed) => parsed,
                     Err(err) => {
@@ -3567,6 +4067,7 @@ fn spawn_watch<T: DeserializeOwned + 'static>(
                     let linked = state.apply_pending_deep_link(cx);
                     if changed && matches!(method, methods::WATCH_SPACES | methods::WATCH_DEVICES) {
                         state.reconcile_change_request_watches(cx);
+                        state.reconcile_zot_watches(cx);
                     }
                     if changed || linked {
                         cx.notify();
@@ -3610,6 +4111,7 @@ fn spawn_local_device_probe(cx: &mut Context<AppState>, handle: EngineHandle) ->
                 // Watches opened before this probe conservatively route through
                 // targetDeviceId. Recreate them now that local routing is known.
                 state.change_request_tasks.clear();
+                state.diff_stat_tasks.clear();
                 state.reconcile_change_request_watches(cx);
                 cx.notify();
             })
@@ -3622,6 +4124,7 @@ fn spawn_transcript_watch(
     cx: &mut Context<AppState>,
     handle: EngineHandle,
     chat_id: String,
+    generation: uuid::Uuid,
 ) -> Task<()> {
     // The scoped subscription cancels even a silent server stream on drop;
     // otherwise a deselected chat would retain its protected sync slot.
@@ -3636,7 +4139,29 @@ fn spawn_transcript_watch(
         // deselected or deleted, so retrying can't outlive relevance.
         const RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
         'resubscribe: loop {
-            let params = serde_json::json!({ "chatId": chat_id, "openingTail": true });
+            let Ok(Some(seed)) = this.update(cx, |state, _| {
+                (state.selected_chat.as_deref() == Some(chat_id.as_str())
+                    && state.transcript_history.generation == generation)
+                    .then(|| {
+                        WatchSeed::capture(
+                            &state.transcript_history,
+                            &state.transcript,
+                            state.prepared_transcripts.get(&chat_id).cloned(),
+                        )
+                    })
+            }) else {
+                return;
+            };
+            let request_chat = chat_id.clone();
+            let (params, worker, resume_requested) = cx
+                .background_executor()
+                .spawn(async move { seed.prepare(&request_chat) })
+                .await;
+            let mut preparation = WatchPreparation {
+                worker: Some(worker),
+                executor: cx.background_executor().clone(),
+            };
+            let mut opening = true;
             let mut rx = match handle
                 .client()
                 .subscribe_checked(methods::WATCH_DOC_MESSAGES, params)
@@ -3652,17 +4177,19 @@ fn spawn_transcript_watch(
                     continue 'resubscribe;
                 }
             };
-            let mut preparation = WatchPreparation::new(cx.background_executor().clone());
             while let Some(value) = rx.recv().await {
+                let history = HistoryFrame::parse(&value, resume_requested);
                 let history_pending = value
                     .get("historyPending")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
+                let validation = history.clone();
                 let decoded = cx
                     .background_executor()
                     .spawn(async move {
                         let update: zuse_doc::TranscriptUpdate =
                             serde_json::from_value(value).map_err(|e| e.to_string())?;
+                        validation.validate_opening(opening, &update.frame)?;
                         let prepared = preparation.prepare(&update).map_err(|e| e.to_string())?;
                         Ok::<_, String>((update, prepared, preparation))
                     })
@@ -3680,10 +4207,14 @@ fn spawn_transcript_watch(
                     }
                 };
                 preparation = next_preparation;
+                let was_opening = opening;
+                opening = false;
                 let mut desync = false;
                 let alive = this.update(cx, |state, cx| {
                     // Guard against a stale pump racing a newer selection.
-                    if state.selected_chat.as_deref() == Some(chat_id.as_str()) {
+                    if state.selected_chat.as_deref() == Some(chat_id.as_str())
+                        && state.transcript_history.generation == generation
+                    {
                         if history_pending && state.transcript_replayed {
                             return;
                         }
@@ -3693,7 +4224,15 @@ fn spawn_transcript_watch(
                             tracing::warn!(%chat_id, error = %err, "resubscribing transcript");
                             desync = true;
                         } else {
+                            let history_changed =
+                                state.transcript_history.receive(&history, was_opening);
+                            if history.resumed {
+                                state.transcript_replayed = true;
+                            }
                             state.prepared_transcripts.insert(chat_id.clone(), prepared);
+                            if history_changed || history.resumed {
+                                cx.notify();
+                            }
                         }
                     }
                 });
@@ -3749,6 +4288,16 @@ fn spawn_queue_watch(
                 }
             };
             while let Some(value) = rx.recv().await {
+                let revisions = value["items"]
+                    .as_array()
+                    .map(|rows| {
+                        rows.iter()
+                            .filter_map(|r| {
+                                Some((r["id"].as_str()?.to_owned(), r["revision"].as_i64()?))
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
                 let frame: QueueFrame = match serde_json::from_value(value) {
                     Ok(frame) => frame,
                     Err(err) => {
@@ -3759,6 +4308,14 @@ fn spawn_queue_watch(
                 let alive = this.update(cx, |state, cx| {
                     // Guard against a stale pump racing a newer selection.
                     if state.selected_chat.as_deref() == Some(chat_id.as_str()) {
+                        state
+                            .cloud_queue_revisions
+                            .retain(|(chat, _), _| chat != &chat_id);
+                        for (id, revision) in revisions {
+                            state
+                                .cloud_queue_revisions
+                                .insert((chat_id.clone(), id), revision);
+                        }
                         state.apply_queue(frame.items);
                         cx.notify();
                     }
@@ -3782,11 +4339,36 @@ fn spawn_subagent_watch(
     cx: &mut Context<AppState>,
     handle: EngineHandle,
     doc_id: String,
+    generation: uuid::Uuid,
 ) -> Task<()> {
     cx.spawn(async move |this, cx| {
         const RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
         'resubscribe: loop {
-            let params = serde_json::json!({ "chatId": doc_id });
+            let Ok(Some(seed)) = this.update(cx, |state, _| {
+                state
+                    .sub_history
+                    .get(&doc_id)
+                    .filter(|history| history.generation == generation)
+                    .map(|history| {
+                        WatchSeed::capture(
+                            history,
+                            state.sub_transcript(&doc_id),
+                            state.prepared_transcripts.get(&doc_id).cloned(),
+                        )
+                    })
+            }) else {
+                return;
+            };
+            let request_doc = doc_id.clone();
+            let (params, worker, resume_requested) = cx
+                .background_executor()
+                .spawn(async move { seed.prepare(&request_doc) })
+                .await;
+            let mut preparation = WatchPreparation {
+                worker: Some(worker),
+                executor: cx.background_executor().clone(),
+            };
+            let mut opening = true;
             let mut rx = match handle
                 .client()
                 .subscribe_checked(methods::WATCH_DOC_MESSAGES, params)
@@ -3802,13 +4384,15 @@ fn spawn_subagent_watch(
                     continue 'resubscribe;
                 }
             };
-            let mut preparation = WatchPreparation::new(cx.background_executor().clone());
             while let Some(value) = rx.recv().await {
+                let history = HistoryFrame::parse(&value, resume_requested);
+                let validation = history.clone();
                 let decoded = cx
                     .background_executor()
                     .spawn(async move {
                         let update: zuse_doc::TranscriptUpdate =
                             serde_json::from_value(value).map_err(|e| e.to_string())?;
+                        validation.validate_opening(opening, &update.frame)?;
                         let prepared = preparation.prepare(&update).map_err(|e| e.to_string())?;
                         Ok::<_, String>((update, prepared, preparation))
                     })
@@ -3822,9 +4406,18 @@ fn spawn_subagent_watch(
                     }
                 };
                 preparation = next_preparation;
+                let was_opening = opening;
+                opening = false;
                 let mut desync = false;
                 let alive = this.update(cx, |state, cx| {
-                    // A stale pump racing a snapshot/unwatch finds no key.
+                    // Same-doc pagination and frozen snapshots invalidate old pumps too.
+                    if !state
+                        .sub_history
+                        .get(&doc_id)
+                        .is_some_and(|h| h.generation == generation)
+                    {
+                        return;
+                    }
                     if let Some(rows) = state.sub_transcripts.get_mut(&doc_id) {
                         let frame = update.frame;
                         let text_only = is_text_append(&frame);
@@ -3834,6 +4427,11 @@ fn spawn_subagent_watch(
                             desync = true;
                         }
                         if !desync {
+                            state
+                                .sub_history
+                                .get_mut(&doc_id)
+                                .unwrap()
+                                .receive(&history, was_opening);
                             state.prepared_transcripts.insert(doc_id.clone(), prepared);
                         }
                         if !desync && let Some(baseline) = update.replay_baseline {
@@ -4454,6 +5052,7 @@ mod tests {
         Session {
             last_completed_turn: None,
             running_subagents: 0,
+            awaiting_input: None,
             background_tasks: Vec::new(),
             chat_id: chat_id.into(),
             device_id: "dev".into(),
@@ -4634,6 +5233,38 @@ mod tests {
     }
 
     #[test]
+    fn staged_context_items_replace_by_source_and_stay_per_draft() {
+        use crate::context_items::ContextItem;
+        let mut state = AppState::new();
+        state.add_context_item(
+            "c",
+            ContextItem::new("pr:checks", "PR #1 · Failing checks", "old"),
+        );
+        state.add_context_item(
+            "c",
+            ContextItem::new("pr:comments", "PR #1 · Comments", "b"),
+        );
+        state.add_context_item(
+            "c",
+            ContextItem::new("pr:checks", "PR #1 · Failing checks", "new"),
+        );
+        state.add_context_item(
+            "",
+            ContextItem::new("pr:checks", "PR #1 · Failing checks", "x"),
+        );
+        let staged = state.context_items("c");
+        assert_eq!(staged.len(), 2);
+        assert_eq!(staged[0].body, "new");
+        let comments_id = staged[1].id.clone();
+        state.remove_context_item("c", &comments_id);
+        assert_eq!(state.context_items("c").len(), 1);
+        let taken = state.take_context_items("c");
+        assert_eq!(taken.len(), 1);
+        assert!(state.context_items("c").is_empty());
+        assert_eq!(state.context_items("").len(), 1);
+    }
+
+    #[test]
     fn transcript_revision_tracks_replay_echoes_and_subagent_content() {
         let mut state = AppState::new();
         state.selected_chat = Some("c".into());
@@ -4702,6 +5333,7 @@ mod tests {
         let mut row = Session {
             last_completed_turn: None,
             running_subagents: 0,
+            awaiting_input: None,
             background_tasks: Vec::new(),
             chat_id: "chat".into(),
             device_id: "host".into(),
@@ -4735,6 +5367,7 @@ mod tests {
         state.sessions = vec![Session {
             last_completed_turn: None,
             running_subagents: 0,
+            awaiting_input: None,
             background_tasks: Vec::new(),
             chat_id: "chat".into(),
             device_id: "host".into(),
@@ -5770,6 +6403,150 @@ mod tests {
     }
 
     #[test]
+    fn archive_is_immediate_and_stale_frames_cannot_restore_the_row() {
+        let mut state = AppState::new();
+        state.apply_chats(vec![chat("a", 0, None), chat("b", 1, None)]);
+        state.selected_chat = Some("a".into());
+        let request = state.begin_chat_archive("a", true).unwrap();
+        assert_eq!(
+            state
+                .visible_chats()
+                .map(|c| c.id.as_str())
+                .collect::<Vec<_>>(),
+            ["b"]
+        );
+        assert!(state.selected_chat_row().unwrap().archived);
+        assert_eq!(state.archivable_selected_chat(), None);
+        state.apply_chats(vec![chat("a", 0, None), chat("b", 1, None)]);
+        assert!(state.selected_chat_row().unwrap().archived);
+        assert_eq!(state.finish_chat_archive("a", request, true, true), None);
+        // RPC success alone does not retire the overlay.
+        state.apply_chats(vec![chat("a", 0, None), chat("b", 1, None)]);
+        assert!(state.selected_chat_row().unwrap().archived);
+        let mut confirmed = chat("a", 0, None);
+        confirmed.archived = true;
+        state.apply_chats(vec![confirmed, chat("b", 1, None)]);
+        assert!(state.pending_chat_archives.is_empty());
+        // Once confirmed, edits from another device remain authoritative.
+        state.apply_chats(vec![chat("a", 0, None), chat("b", 1, None)]);
+        assert!(!state.selected_chat_row().unwrap().archived);
+    }
+
+    #[test]
+    fn archive_confirmation_can_arrive_before_the_rpc_reply() {
+        let mut state = AppState::new();
+        state.apply_chats(vec![chat("a", 0, None)]);
+        let request = state.begin_chat_archive("a", true).unwrap();
+        let mut confirmed = chat("a", 0, None);
+        confirmed.archived = true;
+        state.apply_chats(vec![confirmed]);
+        assert_eq!(state.pending_chat_archives.len(), 1);
+        assert_eq!(state.finish_chat_archive("a", request, true, true), None);
+        assert!(state.pending_chat_archives.is_empty());
+    }
+
+    #[test]
+    fn archive_failure_restores_only_the_archive_flag() {
+        let mut state = AppState::new();
+        state.apply_chats(vec![chat("a", 0, None), chat("b", 1, None)]);
+        let request = state.begin_chat_archive("a", true).unwrap();
+        assert!(state.begin_chat_archive("b", true).is_some());
+        let mut renamed = chat("a", 0, None);
+        renamed.title = Some("Updated title".into());
+        state.apply_chats(vec![renamed, chat("b", 1, None)]);
+        assert_eq!(state.finish_chat_archive("a", request, true, false), None);
+        let restored = state.chats.iter().find(|c| c.id == "a").unwrap();
+        assert!(!restored.archived);
+        assert_eq!(restored.title.as_deref(), Some("Updated title"));
+        assert!(state.chats.iter().find(|c| c.id == "b").unwrap().archived);
+        assert_eq!(state.pending_chat_archives.len(), 1);
+    }
+
+    #[test]
+    fn archive_rapid_toggles_share_one_worker_and_send_latest_intent() {
+        let mut state = AppState::new();
+        state.apply_chats(vec![chat("a", 0, None)]);
+        let request = state.begin_chat_archive("a", true).unwrap();
+        assert!(state.begin_chat_archive("a", false).is_none());
+        assert!(!state.chats[0].archived);
+        assert_eq!(
+            state.finish_chat_archive("a", request, true, true),
+            Some(false)
+        );
+        assert_eq!(state.finish_chat_archive("a", request, false, true), None);
+        state.apply_chats(vec![chat("a", 0, None)]);
+        assert!(state.pending_chat_archives.is_empty());
+    }
+
+    #[test]
+    fn archive_new_write_waits_for_its_own_watch_confirmation() {
+        let mut state = AppState::new();
+        state.apply_chats(vec![chat("a", 0, None)]);
+        let archive = state.begin_chat_archive("a", true).unwrap();
+        assert_eq!(state.finish_chat_archive("a", archive, true, true), None);
+        let restore = state.begin_chat_archive("a", false).unwrap();
+        assert_ne!(archive, restore);
+        assert_eq!(state.finish_chat_archive("a", restore, false, true), None);
+        assert!(!state.pending_chat_archives.is_empty());
+        let mut stale = chat("a", 0, None);
+        stale.archived = true;
+        state.apply_chats(vec![stale]);
+        assert!(!state.chats[0].archived);
+        state.apply_chats(vec![chat("a", 0, None)]);
+        assert!(state.pending_chat_archives.is_empty());
+    }
+
+    #[test]
+    fn archive_followup_failure_rolls_back_to_the_successful_write() {
+        let mut state = AppState::new();
+        state.apply_chats(vec![chat("a", 0, None)]);
+        let request = state.begin_chat_archive("a", true).unwrap();
+        assert!(state.begin_chat_archive("a", false).is_none());
+        assert_eq!(
+            state.finish_chat_archive("a", request, true, true),
+            Some(false)
+        );
+        assert_eq!(state.finish_chat_archive("a", request, false, false), None);
+        assert!(state.chats[0].archived);
+    }
+
+    #[test]
+    fn archive_superseded_reply_cannot_roll_back_a_newer_write() {
+        let mut state = AppState::new();
+        state.apply_chats(vec![chat("a", 0, None)]);
+        let old_request = state.begin_chat_archive("a", true).unwrap();
+        state.clear_chat_archive_intent("a");
+        assert!(!state.chats[0].archived);
+        let new_request = state.begin_chat_archive("a", true).unwrap();
+        assert_eq!(
+            state.finish_chat_archive("a", old_request, true, false),
+            None
+        );
+        assert!(state.chats[0].archived);
+        assert_eq!(
+            state.finish_chat_archive("a", new_request, true, false),
+            None
+        );
+        assert!(!state.chats[0].archived);
+    }
+
+    #[test]
+    fn sidebar_row_shows_a_sibling_conversation_working() {
+        let now = Utc::now();
+        let mut state = AppState::new();
+        let mut sibling = chat("sibling", 1, None);
+        sibling.thread_id = Some("root".into());
+        state.apply_chats(vec![chat("root", 0, None), sibling]);
+        let status = |state: &AppState| state.sidebar_chats(now, None)[0].0;
+        assert_eq!(status(&state), ChatIndicator::Idle);
+        state.begin_pending_send("sibling", "m1", now);
+        let rows = state.sidebar_chats(now, None);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].1.id, "root");
+        assert_eq!(status(&state), ChatIndicator::Working);
+    }
+
+    #[test]
     fn visible_chats_hide_spawned_children() {
         let now = Utc::now();
         let mut state = AppState::new();
@@ -6440,6 +7217,15 @@ mod tests {
 #[cfg(any(feature = "appshots-fixture", feature = "pull-request-fixture"))]
 impl AppState {
     /// Keep fixture documents deterministic while using the real attachment RPC.
+    pub fn fixture_cloud_sidebar_catalog(
+        &mut self,
+        client: RpcClient,
+        context: &serde_json::Value,
+        list: &serde_json::Value,
+    ) -> bool {
+        self.engine = Some(EngineHandle::from_test_client(client));
+        self.apply_cloud_sidebar_catalog(context, list)
+    }
     pub fn fixture_attachment_engine(&mut self, engine: EngineHandle) {
         self.engine = Some(engine);
     }
@@ -6478,5 +7264,46 @@ impl AppState {
 impl AppState {
     pub fn fixture_simulator_engine(&mut self, engine: EngineHandle) {
         self.engine = Some(engine);
+    }
+}
+
+#[cfg(test)]
+mod sidebar_diff_stat_tests {
+    use super::*;
+    use crate::pull_request_test_support::{self as fixture, ScriptedRpc};
+    use futures::StreamExt;
+
+    #[gpui::test]
+    fn sidebar_sizes_arrive_without_any_changes_view_open(cx: &mut gpui::TestAppContext) {
+        let runtime = fixture::runtime();
+        let _runtime = runtime.enter();
+        fixture::init(cx);
+        let rpc = ScriptedRpc::new(|method, params| async move {
+            assert_eq!(method, methods::WATCH_CHECKOUT_DIFFS);
+            assert_eq!(
+                params["summaryOnly"], true,
+                "the sidebar never asks for patches"
+            );
+            let frame = serde_json::json!([{
+                "checkoutId": "checkout", "deviceId": "local", "cwd": "/repo", "patch": "",
+                "files": [], "additions": 12, "deletions": 3, "truncated": false,
+                "checksum": "sum", "updatedAt": "2026-11-08T00:00:00Z",
+            }]);
+            Ok(zuse_rpc::RpcReply::Stream(
+                futures::stream::once(async move { frame })
+                    .chain(futures::stream::pending())
+                    .boxed(),
+            ))
+        });
+        let state = cx.update(|cx| fixture::state(cx, Some(rpc.client())));
+        state.update(cx, |state, cx| state.reconcile_diff_stat_watches(cx));
+        rpc.settle(cx, &runtime, |cx| {
+            state.read_with(cx, |state, _| {
+                state
+                    .checkout_diff_stats
+                    .iter()
+                    .any(|stat| stat.checkout_id == "checkout" && stat.additions == 12)
+            })
+        });
     }
 }

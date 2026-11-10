@@ -17,6 +17,7 @@ pub mod app_menus;
 pub mod app_update;
 pub mod appearance;
 pub mod appshots;
+pub mod arcade;
 mod asset_http;
 pub mod attachments;
 pub mod badges;
@@ -30,6 +31,7 @@ pub mod comments;
 pub mod composer;
 mod composer_dock;
 mod composer_markdown;
+pub mod context_items;
 mod context_usage;
 pub mod desktop_import;
 mod dictation;
@@ -63,6 +65,7 @@ mod project_archive;
 pub mod pull_request_card;
 pub mod pull_request_detail;
 mod pull_request_media;
+mod pull_request_review_hunk;
 mod pull_request_skeleton;
 #[cfg(test)]
 mod pull_request_test_support;
@@ -160,10 +163,21 @@ pub fn fixture_http_client(
 /// Run the headed app: tokio bridge up, engine bootstrap kicked off (probe →
 /// connect-or-embed), 1320×880 window (min 900×600) with [`shell::Shell`] as the
 /// root view, boot splash overlaid until the engine reports ready.
+/// Whether cloud computers are offered here: a beta, off in production
+/// (see `zuse_engine::cloud::beta_enabled`). Tests exercise the cloud UI.
+pub(crate) fn cloud_beta() -> bool {
+    if cfg!(test) {
+        return true;
+    }
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(zuse_engine::cloud::beta_enabled)
+}
+
 pub fn run_app(config: UiConfig) {
     // Retain ownership for the whole application lifetime. The bridge's
     // default runtime has only two workers, insufficient for a desktop engine.
-    let runtime = tokio::runtime::Runtime::new().expect("desktop Tokio runtime");
+    // The embedded engine runs here too, so it needs the engine's stacks.
+    let runtime = zuse_engine::runtime().expect("desktop Tokio runtime");
     let runtime_handle = runtime.handle().clone();
     let app = gpui_platform::application()
         .with_assets(icons::Assets)
@@ -267,11 +281,12 @@ pub fn run_app(config: UiConfig) {
         let quit_state = state.clone();
         cx.on_app_quit(move |cx| {
             settings::flush(cx);
+            let engine = quit_state.read(cx).engine().cloned();
+            // Quit means stop: agents come back only from a restart the user
+            // asked for, however long until Zuse is next opened.
             app_update::install_on_quit(cx);
-            let shutdown =
-                quit_state.read(cx).engine().cloned().map(|handle| {
-                    gpui_tokio::Tokio::spawn(cx, async move { handle.shutdown().await })
-                });
+            let shutdown = engine
+                .map(|handle| gpui_tokio::Tokio::spawn(cx, async move { handle.shutdown().await }));
             async move {
                 if let Some(task) = shutdown {
                     let _ = task.await;
@@ -567,7 +582,10 @@ fn start_appshot_service(activation_dir: std::path::PathBuf, cx: &mut App) {
             if !appshots::capture_allowed() {
                 continue;
             }
-            let Some(capture) = cx.update(start_appshot_capture) else {
+            let Some((capture, identity)) = cx.update(|cx| {
+                let capture = start_appshot_capture(cx)?;
+                Some((capture, current_appshot_identity(cx)))
+            }) else {
                 continue;
             };
             let capture = capture.await;
@@ -575,10 +593,34 @@ fn start_appshot_service(activation_dir: std::path::PathBuf, cx: &mut App) {
             // focuses Zuse; replaying old activations would capture the wrong
             // app or show a misleading self-capture error after success.
             while matches!(shortcuts.next().now_or_never(), Some(Some(()))) {}
-            cx.update(|cx| deliver_appshot(capture, cx));
+            cx.update(|cx| deliver_appshot(capture, identity, cx));
         }
     })
     .detach();
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn current_appshot_identity(cx: &mut App) -> shell::AppshotDeliveryIdentity {
+    if let Some(handle) = cx
+        .window_stack()
+        .unwrap_or_else(|| cx.windows())
+        .into_iter()
+        .find_map(|handle| handle.downcast::<shell::Shell>())
+    {
+        if let Ok(identity) = handle.update(cx, |shell, _, cx| shell.appshot_capture_identity(cx)) {
+            return identity;
+        }
+    }
+    cx.try_global::<ReopenState>()
+        .map(|reopen| {
+            let state = reopen.state.read(cx);
+            shell::AppshotDeliveryIdentity {
+                account: state.cloud_user_id().map(str::to_owned),
+                organization: state.cloud_organization_id().map(str::to_owned),
+                canvas: None,
+            }
+        })
+        .unwrap_or_default()
 }
 
 /// Check viewer focus on the UI thread before any native capture or portal
@@ -633,13 +675,17 @@ mod appshot_activation_tests {
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 fn deliver_appshot(
     result: Result<appshots::CapturedAppshot, appshots::CaptureError>,
+    identity: shell::AppshotDeliveryIdentity,
     cx: &mut App,
 ) {
     use std::collections::VecDeque;
     use std::sync::{Mutex, OnceLock};
 
-    fn pending() -> &'static Mutex<VecDeque<appshots::CapturedAppshot>> {
-        static PENDING: OnceLock<Mutex<VecDeque<appshots::CapturedAppshot>>> = OnceLock::new();
+    fn pending()
+    -> &'static Mutex<VecDeque<(shell::AppshotDeliveryIdentity, appshots::CapturedAppshot)>> {
+        static PENDING: OnceLock<
+            Mutex<VecDeque<(shell::AppshotDeliveryIdentity, appshots::CapturedAppshot)>>,
+        > = OnceLock::new();
         PENDING.get_or_init(|| Mutex::new(VecDeque::new()))
     }
 
@@ -655,7 +701,7 @@ fn deliver_appshot(
         .unwrap_or_default();
     let error = match result {
         Ok(appshot) => {
-            captures.push_back(appshot);
+            captures.push_back((identity.clone(), appshot));
             None
         }
         Err(error) => Some(error),
@@ -664,9 +710,25 @@ fn deliver_appshot(
         .window_stack()
         .unwrap_or_else(|| cx.windows())
         .into_iter()
-        .find_map(|handle| handle.downcast::<shell::Shell>())
+        .filter_map(|handle| handle.downcast::<shell::Shell>())
+        .find(|handle| {
+            handle
+                .read_with(cx, |shell, cx| {
+                    shell.accepts_appshot_identity(&identity, cx)
+                })
+                .unwrap_or(false)
+        })
         .or_else(|| {
+            if identity.canvas.is_some() {
+                return None;
+            }
             let reopen = cx.try_global::<ReopenState>()?;
+            let state = reopen.state.read(cx);
+            if state.cloud_user_id() != identity.account.as_deref()
+                || state.cloud_organization_id() != identity.organization.as_deref()
+            {
+                return None;
+            }
             Some(open_main_window(
                 reopen.state.clone(),
                 reopen.boot.clone(),
@@ -674,6 +736,12 @@ fn deliver_appshot(
             ))
         });
     let Some(handle) = handle else {
+        let current = current_appshot_identity(cx);
+        captures.retain(|(scope, _)| {
+            scope.canvas.is_none()
+                && scope.account == current.account
+                && scope.organization == current.organization
+        });
         if !captures.is_empty() {
             let count = captures.len();
             if let Ok(mut queue) = pending().lock() {
@@ -690,11 +758,13 @@ fn deliver_appshot(
     cx.activate(true);
     let _ = handle.update(cx, |shell, window, cx| {
         window.activate_window();
-        for appshot in captures {
-            shell.receive_appshot(appshot, window, cx);
+        for (scope, appshot) in captures {
+            shell.receive_scoped_appshot(scope, appshot, window, cx);
         }
         if let Some(error) = error {
-            shell.show_appshot_error(error.to_string(), window, cx);
+            if shell.accepts_appshot_identity(&identity, cx) {
+                shell.show_appshot_error(error.to_string(), window, cx);
+            }
         }
     });
     if captured {
@@ -705,3 +775,21 @@ fn deliver_appshot(
 mod cloud_history;
 
 pub mod simulator;
+/// Render the real native Cloud adapter against an isolated scripted controller.
+#[cfg(feature = "appshots-fixture")]
+pub fn cloud_computer_fixture(
+    client: zuse_rpc::RpcClient,
+    seed: serde_json::Value,
+    cx: &mut gpui::App,
+) -> gpui::AnyWindowHandle {
+    cloud_history::fixture(client, seed, cx)
+}
+
+/// Scripted cached-first native history fixture; never attaches guest execution.
+#[cfg(feature = "appshots-fixture")]
+pub fn cloud_saved_history_fixture(
+    client: zuse_rpc::RpcClient,
+    cx: &mut gpui::App,
+) -> gpui::AnyWindowHandle {
+    cloud_history::saved_fixture(client, cx)
+}

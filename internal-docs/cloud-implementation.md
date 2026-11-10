@@ -1,5 +1,112 @@
 # Rust cloud implementation
 
+## Browser authentication and harness releases
+
+[Current authentication/update guidance](cloud-auth-and-harness-updates.md)
+qualifies the prior Codex broker recommendation against official OpenAI docs:
+hosted commercial execution requires the appropriate SIWC integration/access;
+browser login and database storage do not eliminate token renewal. The proposed
+backend owns encrypted token persistence and serialized refresh. Harness releases
+use tested immutable bundles, staged promotion and safe process boundaries rather
+than per-launch `latest` installs or repo-wide rebuilds. None of this new OAuth
+or release-management pipeline has been deployed.
+
+## Credentials and computer setup review
+
+The [delivery checklist](cloud-computers-delivery.md) records credential authority,
+bootstrap ordering, image sanitation and authenticated acceptance. Computer setup
+selects repositories, connected agent accounts and optional environment recipes.
+Prepared artifacts accelerate that recipe; their availability and live verification
+are tracked separately from implementation.
+
+## Live deployment status
+
+[Hetzner deployment verification](hetzner-deployment.md) records the current live
+state. Production and staging Rust APIs, their integrated WebSocket gateways and
+separate background workers are running on the existing host. Caddy serves both
+provided API domains with publicly valid TLS; HTTP 200 readiness was verified from
+the owner's Mac with normal DNS. The existing Node service and tunnel are intact.
+Supabase holds private staging/production schemas with eleven checksummed migrations,
+separate restricted logins and independent keys. No customer records were imported.
+The admin password stayed on Hetzner and is not used by the deployed services.
+
+Six isolated PostgreSQL bootstrap/role tests and five Compose/deployment tests pass.
+Source scripts and the [operations runbook](../infra/cloud/single-host/README.md)
+cover memory limits, private credentials, shared-database isolation and rollback.
+Both workers use a configurable 1,000 ms idle scan rather than the old 250 ms loop.
+This remains polling and does not introduce database notifications.
+
+[Provider verification](cloud-provider-verification.md) and
+[repeated timing measurements](cloud-timing-results.md) describe isolated Boxd/Boat
+infrastructure tests. Those machines were deleted. The full Rust Boat adapter is
+still missing. Authenticated workspace creation, standalone model onboarding,
+GitHub credentials, prepared guest/harness images, history/object configuration and
+real first-agent acceptance remain pending. The new production-named environment
+is a fresh test deployment; creation is disabled until these gates pass.
+
+## 2026-10-29 performance work and revised architecture
+
+The owner has selected an independently deployable Rust database and a migration of
+all retained data, superseding the earlier permanent shared-schema constraint.
+[Architecture decisions](cloud-performance-architecture.md) record the no-warm-pool
+requirement, unchanged-checkout resume semantics, target connection topology, host
+recommendation and incomplete work. [Live provider measurements](cloud-provider-measurements.md)
+include current Boxd/Boat documentation, raw receipts and a reproducible opt-in harness.
+No production database, authority ownership, deployment or existing machine was changed.
+
+Implemented:
+
+- Ciphertext-only native SQLite page caching, isolated by origin/account/scope and
+  runtime generation/cursor. A fresh authorized head supplies an in-memory key;
+  ciphertext reads skip repeated older-page HTTP requests. Corruption falls back
+  to verified network data. No access token, transcript key or plaintext is stored.
+- Non-pinning dirty-document notifications, dirty-only projection capture, burst
+  coalescing, capped full-checkpoint publication and a 30-second repair scan.
+  This is an in-process feed, **not PostgreSQL notifications**. Incremental durable
+  event publication and the client account feed remain pending.
+- Independent gateway reads/writes, heartbeat handling, cancellation-owned writer
+  tasks, configurable socket/global queue limits, and transient lease failure
+  tolerance bounded by the last confirmed monotonic deadline. Confirmed fencing
+  still closes connections immediately.
+- Removal of the fixed two-second allocation-to-launch delay after successful
+  machine creation. Runtime-not-ready retries remain bounded.
+- Read-only Rust Boxd wire-adapter probe plus isolated SDK/HTTP lifecycle benchmarks.
+
+Verified so far:
+
+- Projection tests: authorized reopening avoids repeated page requests; restarted
+  readers have no key until a fresh head; different accounts/tokens/origins/scopes/
+  cursors/generations cannot reuse cached entries; damaged ciphertext repairs from
+  the API. Existing Node ciphertext compatibility and paging tests pass.
+- Engine dirty-feed test: commits emit identities, lag is explicit, and subscriptions
+  do not prevent old conversations from being evicted.
+- Gateway tests: 200 concurrent machine sockets exchange ping/pong and release all
+  socket/global queue permits; invalid capacity and excess sockets are rejected;
+  transient lease failures cannot extend ownership; confirmed fencing delivers its
+  close reason. The real PostgreSQL/TCP WebSocket ownership/multiplexing regression
+  passes. This is not a sustained streaming or production capacity benchmark.
+- Provider harness: three tests pass for non-mutating defaults, uncertain-create
+  reconciliation, failure cleanup and secret redaction. All live test machines were
+  deleted and absence confirmed. Rust Boxd authentication/lookup passed without
+  mutation. App runtime enrollment, credentials, Git and first agent token were not
+  included in the provider lifecycle timings.
+- Full cloud unit suite: 33 passed, eight opt-in tests ignored. API and guest compile
+  checks passed. Focused Rust formatting and whitespace checks passed.
+
+Evidence: `.context/cloud-speed-cache-boundaries.log`,
+`.context/cloud-speed-dirty-feed-test.log`, `.context/cloud-speed-gateway-verified.log`,
+`.context/cloud-speed-gateway-pg-final.log`, `.context/cloud-speed-rust-provider-probe.log`.
+Additional checks: `.context/cloud-speed-cloud-unit-suite.log` and
+`.context/cloud-speed-api-guest-check.log`.
+
+The database-notification worker experiment was removed following owner feedback.
+Worker dispatch/broker selection is still open; existing worker polling is unchanged.
+The current saved-history RPC still materializes all pages, and its fresh head requires
+the API. Browser IndexedDB, instant offline reopening, full cache-first rendering,
+startup dependency parallelization, provider-neutral lifecycle adapters, standalone
+schema/importer, production load validation and cutover remain incomplete. No cloud
+milestone is closed by these changes.
+
 Reference: original Zuse `2016cf4f0cc240e6797916dd5cab1d8bebab89ae`.
 Target origin: `https://api-rust.zuse.sh`. Work takes place on `swarajbachu/rust-cloud-parity`;
 do not publish to `main`. The [feature inventory](cloud-parity-inventory.md) defines parity.
@@ -2703,3 +2810,47 @@ Verified behavior and evidence:
 Reproduction: `scripts/acceptance/cloud-composer-parity.mjs` exercises the rendered
 browser lifecycle against the isolated cloud launch fixture. The broader launch
 script's Pause/Resume locations follow the corrected controls.
+
+
+## Device credential and harness release implementation (October 29, 2026)
+
+Rust cloud guests now register the Codex broker adapter. Legacy device access-token
+and generic API-key grants remain encrypted to the enrolled guest; OAuth refresh
+ownership stays at the existing account authority. The resolver separates onboarding
+from execution so browser integration can be added later. Renewal callbacks are
+bounded and asynchronous to streaming/Stop; rejected cached credentials cannot be
+used after renewal failure. Runtime/account fencing also applies to cached grants.
+
+Managed release tooling now stages exact native executables, checks their digests,
+requires release-bound compatibility/provider evidence to promote a channel, pins
+workspace releases across resume, and supports rollback without deleting retained
+versions. Guest launch is offline and skips CLI installation. An hourly workflow
+reports upstream candidates without changing stable. See
+[the release runbook](../infra/cloud/HARNESS_RELEASES.md).
+
+This is code and local synthetic verification, not a deployed auth/fleet cutover.
+Standalone Supabase auth/schema migration, hosted browser registration, live
+model credential acceptance, automated verified downloads and fleet distribution
+remain outstanding. Existing device onboarding stays unchanged.
+
+Verification for the credential/release implementation: 3 Codex auth unit tests,
+3 encrypted-grant/broker tests, 38 Codex subprocess integration tests (4 existing
+ignored), and 4 release-manager tests passed. The integration suite includes a
+slow authority renewal while text continues streaming and Stop interrupts the
+turn. `cargo check --locked -p zuse-cloud-api -p zuse-cloud-guest`, targeted rustfmt,
+launcher shell syntax, Python syntax and `git diff --check` passed. Upstream
+candidate discovery successfully read package metadata without installing it.
+No model inference, account login, production release promotion or server/database
+mutation was part of this verification.
+
+
+## Standalone database bootstrap tooling (October 29, 2026)
+
+Added `infra/cloud/database.py` and a canonical application schema baseline to
+initialize empty private staging/production schemas without test fixtures. Eleven
+checksummed migrations run in one transaction with an advisory lock, existing-schema
+protection and drift detection. Five isolated PostgreSQL tests pass, including
+idempotence, rollback, environment separation and verified-TLS handling.
+See [database operations](../infra/cloud/DATABASE.md). This has not been applied to
+Supabase and does not complete scoped-role provisioning, customer data import,
+credential authority migration or the Postgres hot-history redesign.

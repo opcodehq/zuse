@@ -730,6 +730,7 @@ async fn legacy_workspace_doc_migrates_instantly_on_first_boot() {
             .upsert_session(&Session {
                 last_completed_turn: None,
                 running_subagents: 0,
+                awaiting_input: None,
                 background_tasks: Vec::new(),
                 chat_id: "chat-legacy".into(),
                 device_id: "dev-a".into(),

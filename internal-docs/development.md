@@ -7,6 +7,57 @@ The next send uses the saved provider/model choice and the engine's context
 handoff, retaining the same chat history. Each conversation tab shows its own
 provider icon. Pending first sends keep their original configuration snapshot.
 
+## Build speed and disk usage
+
+Use the Cargo launcher for local work:
+
+```sh
+python3 scripts/cargo_dev.py check -p zuse-engine
+python3 scripts/cargo_dev.py run -p zuse
+python3 scripts/cargo_dev.py test -p zuse-protocol --lib
+python3 scripts/cargo_dev.py --print-target-dir
+```
+
+Native and browser development launchers select the same cache automatically.
+Each repository gets one directory under `${XDG_CACHE_HOME:-~/.cache}/zuse/cargo`,
+identified by its common Git directory; linked worktrees reuse it. Browser output
+uses its `browser` subdirectory to isolate nightly/build-std artifacts. Set
+`CARGO_TARGET_DIR` to an absolute path to override the location. CI continues to
+use checkout-local `target` directories for Actions caching.
+
+Cargo locks the shared output during builds, so simultaneous worktree builds
+wait for one another. Switching branches may still rebuild changed crates;
+sharing avoids maintaining a full dependency tree for every worktree. Bare
+`cargo` uses the usual checkout-local target and does not get this sharing.
+
+Development builds omit debug symbols and incremental output to reduce disk
+usage, while retaining optimized dependencies for GPUI. For workspace debugging,
+set `CARGO_PROFILE_DEV_DEBUG=2`; dependency debugging additionally requires
+an override of `[profile.dev.package."*"].debug`. Set `CARGO_INCREMENTAL=1` to
+opt into faster incremental edits at the cost of more disk space.
+
+Cargo and native/browser development launchers check the development cache
+before builds and stop if it exceeds 20 GiB, printing a cleanup command. Stop
+concurrent builds, then run `python3 scripts/build_cache.py --clean` to remove
+oversized development artifacts from the shared cache (or pass `--target-dir`
+for an old checkout-local cache). Cargo clean does not lock out concurrent
+builds, so cleanup is explicit. Release outputs and source files remain.
+This is a pre-build retention budget, not a filesystem quota: one build can
+exceed it. Bare `cargo` bypasses the guard and cache sharing. Changing profile
+settings does not remove old artifacts.
+
+The launcher also supplies a hash of the icon license configuration. This lets
+Cargo reuse unchanged icons and their UI dependents without writing the license
+key into Cargo fingerprints. Key changes are picked up on the next invocation;
+restart a running native watcher after changing its environment. Bare Cargo
+retains automatic license detection but must rerun the icon selector every time.
+
+Existing checkout-local `target` directories are not moved or deleted. After
+stopping builds that use an old directory, `cargo clean --target-dir /path/to/old/target`
+reclaims it; the next build using that directory must compile again. To clear
+the shared cache, use `python3 scripts/cargo_dev.py clean`. Avoid cleaning as
+part of ordinary development, since that removes the output that speeds up builds.
+
 ## Native development reload
 
 Run `python3 scripts/dev-native.py` on macOS or Linux. It builds the app, starts
@@ -17,14 +68,72 @@ next edit. No watcher package is required.
 
 This is automatic rebuild/relaunch, not Rust code replacement inside a running
 process. Unsaved editor buffers and UI-only drafts do not survive a relaunch.
-Engine or protocol changes require restarting the command so both processes use
-the new engine code. Ctrl+C stops the UI and its development engine.
+Changes outside the UI crates (`crates/ui`, `crates/viewport`) also restart the
+development engine, so both processes run the new code. Ctrl+C stops the UI and
+its development engine.
 
 The default profile is `.context/native-profile`, with IPC on `127.0.0.1:27664`.
 Use `--data-dir /path/to/profile` and `--ipc-port 27665` to override them;
 `ZUSE_DATA_DIR` and `ZUSE_IPC_PORT` also work. An occupied port fails startup
 rather than connecting to a different engine. Existing provider CLI logins work;
 cloud sync is opt-in through `ZUSE_WORKOS_CLIENT_ID` or `ZUSE_EDGE_TOKEN`.
+
+### Staging cloud account sign-in
+
+General settings signs in through the browser (WorkOS AuthKit with a loopback
+`http://127.0.0.1` callback); there is no device-code fallback. This is separate
+from the optional workspace/device/relay identity using `ZUSE_EDGE_URL` and
+`/auth/*`. The cloud REST API is not an auth-edge replacement.
+
+For the owner-only staging pilot, stop the previous development runner with
+Ctrl+C before starting the engine with the staging environment:
+
+```bash
+ZUSE_API_URL=https://api-rust-stag.zuse.sh \
+ZUSE_CLOUD_API_URL=https://api-rust-stag.zuse.sh \
+ZUSE_WORKOS_CLIENT_ID=client_01KW6ZEZKVMZ0G429A89XZD83Q \
+python3 scripts/dev-native.py --data-dir .context/native-staging-profile
+```
+
+The explicit staging profile leaves the existing development/production profile
+untouched and avoids loading its saved workspace identity. Then use
+**Settings → General → Sign in**. Restarting only the UI does not update
+an already running engine's environment. For an installed daemon, run its install
+command with the same environment before restarting it; installation captures
+both API overrides and the public client. No private WorkOS key belongs on the Mac.
+
+`ZUSE_API_URL` selects General account services, model connections and managed
+access; `ZUSE_CLOUD_API_URL` selects cloud task operations. If only one is set,
+both use that origin. Setting both preserves each explicit choice. With neither,
+the existing production API default remains unchanged. Optional workspace sync
+keeps its separate edge configuration and local default. This command/configuration
+is covered by local tests; interactive Mac sign-in still needs device acceptance.
+
+### Optional hosted cloud browser (source integration)
+
+The API's optional `hosted-browser` feature serves the existing shared client at
+`/app/` and scoped controller sessions at `/api/session/check` and `/api/rpc`.
+It is disabled by default. Build its static client with the explicit hosted base:
+
+```sh
+bash scripts/build-web.sh --public-url /app/
+```
+
+An enabled deployment must provide `ZUSE_CLOUD_BROWSER_ORIGIN` and
+`ZUSE_CLOUD_BROWSER_ASSETS` together, plus an explicit `CLOUD_PUBLIC_API_URL`
+matching that same HTTPS origin and the deployment's public `WORKOS_CLIENT_ID`.
+The assets path points to the resulting compiled directory. The API binary must
+be built with `cargo build -p zuse-cloud-api --features hosted-browser`.
+These are source configuration instructions, not evidence that staging has
+this feature deployed or that a real browser login has been approved.
+
+Each browser receives an opaque HttpOnly/Secure cookie and its own in-memory
+General account and cloud controller. General uses the existing public device
+sign-in flow. No running Mac or host-local workspace/terminal controller is used.
+Sessions expire after eight hours; anonymous sessions expire after ten minutes.
+**An API restart requires browser sign-in again.** Durable hosted login and
+restart recovery remain a release gate. Native persisted account sessions are
+unchanged. History reads remain separate from foreground compute actions.
 
 ## Linux native dependencies
 
@@ -81,6 +190,55 @@ both DOM events and trusted Chromium input commands. Physical IME candidate
 windows, OS clipboard menus and macOS/Linux hardware input remain separate
 acceptance gates. Build the ordinary browser application with
 `bash scripts/build-web.sh`.
+
+Release browser builds use the `web-release` size profile and Binaryen 123 with
+shared-memory features enabled. Build with `bash scripts/build-web.sh --release`.
+The Node.js post-build hook writes deterministic Brotli and gzip sidecars and a
+`network-budget.json` report. Release builds fail if compressed assets exceed
+9 MiB in total (override explicitly with `ZUSE_WEB_MAX_BROTLI_BYTES`). This cap
+is based on the November 9, 2026 build with offline CJK fonts and localization,
+when CI measured 8,354,245 Brotli bytes. Use the generated `network-budget.json`
+for the current size. The earlier 5 MiB target and startup timings came from a
+pre-localization build. The report's
+400 kbps estimate is transfer time only, excluding compilation and latency.
+
+Both the direct engine and relay negotiate sidecars; builds without them use
+streaming gzip. Fingerprinted assets are cached for one year. HTML and SPA
+fallbacks revalidate to discover deployments. Startup shows download progress and
+a Retry button on failure. Asset compression and caching exclude authenticated
+RPC, session and attachment endpoints. Outgoing RPC queues hold eight frames;
+direct browser reads continue during a blocked write.
+
+Direct browser RPC defaults to `rpcCompression=deflate-stream-v1` on capable browsers (described below); `rpcCompression=gzip-v1` remains a compatibility mode. Responses of at
+least 256 bytes are gzipped on a blocking worker and sent as binary frames only
+when compression saves bytes; other responses stay text. The browser uses native
+`DecompressionStream` with strict UTF-8 validation and a 16 MiB decoded limit.
+Browsers without that API and old clients keep plain-text delivery; old engines
+can ignore the query and return text. An in-flight decode belongs to the socket
+so concurrent outgoing requests cannot cancel and lose an incoming frame. Paired,
+account and relay links retain their existing framing. RPC responses are not
+cached by this feature.
+
+Run `cargo test -p zuse-serve` for transport, upload, authorization and asset
+delivery regressions, and `node --test apps/web/tests/initializer.mjs` for startup
+progress and recovery. For real browser acceptance, build the matching engine
+with `cargo build -p zuse-cli --bin zuse-server`, then use Node.js 22+:
+
+```sh
+CHROME_BIN=/path/to/chromium node scripts/acceptance/slow-network.mjs
+```
+
+This runner owns a disposable profile, browser and local provider fixture; it
+makes no paid provider calls. It tests the compiled UI through the real engine
+with 400 ms latency, 400 kbps download and 200 kbps upload: cold start, history,
+composer send, streaming text appends, Stop, attachment byte integrity, reconnect
+without repeating a run, and a cached WASM reload. It saves measurements and
+screenshots under `.context/slow-network-*`. A display and WebGPU-capable Chromium
+are required; `ZUSE_NETWORK_HEADLESS=1` can be used on configured headless hosts.
+Custom test profiles use `ZUSE_NETWORK_LATENCY_MS`, `ZUSE_NETWORK_DOWNLOAD_BPS`
+and `ZUSE_NETWORK_UPLOAD_BPS`; the measured profile is included in the report.
+These emulated checks do not establish physical mobile-radio or cloud-deployment
+performance.
 
 The shared editors and plugin forms provide Cut, Copy, Paste and Select all
 menus with mouse/keyboard navigation. Explicit browser Paste actions use an
@@ -144,7 +302,16 @@ Workspace review loads the shared checkout summary, then reads a selected file a
 
 The browser transports requests with a local connection generation. A socket loss retires that generation and reports its unanswered requests. After reconnect, the workspace verifies the same device identity and reopens read subscriptions. Requests from an older generation cannot reach the new socket. Sends, saves, terminal writes, queue changes and other actions are never automatically replayed. Messages whose acknowledgements were lost remain recoverable until their exact durable message ID appears in the selected transcript; ambiguous queued messages require explicit review and restoration.
 
-Invalid transcript deltas preserve the entire last valid transcript, including text parts. The browser cancels a failed history read and requests a fresh initial snapshot, with at most three retries (200ms, 600ms, 1800ms) before showing Retry. Initial snapshots have a 15-second deadline. Sends, queue changes and approval submissions wait for a valid snapshot; recovery never replays mutations or confirms delivery from rejected rows. Drafts and unrelated alerts remain intact. Navigation, host changes and disconnection cancel old recovery tasks. The last context measurement stays marked as unconfirmed until a valid frame arrives; an exhausted retry budget shows that a refresh is needed.
+Invalid transcript deltas preserve the entire last valid transcript, including text parts. The browser cancels a failed history read and requests a fresh initial snapshot, with at most three retries (200ms, 600ms, 1800ms) before showing Retry. Initial snapshots have a 60-second deadline so a slow download of an intact large message does not cause repeated restarts. Sends, queue changes and approval submissions wait for a valid snapshot; recovery never replays mutations or confirms delivery from rejected rows. Drafts and unrelated alerts remain intact. Navigation, host changes and disconnection cancel old recovery tasks. The last context measurement stays marked as unconfirmed until a valid frame arrives; an exhausted retry budget shows that a refresh is needed.
+
+Chat opening requests the latest 32 transcript entries within a 64 KiB entry budget, retaining at least one whole message even when it exceeds that budget. Replay watermarks include only visible entries. Older history stays durable on the host; the transcript's Load earlier messages control expands the visible suffix on demand. That read retains the displayed transcript and keeps the composer usable. Live replies and reconnects keep the first loaded entry anchored, so new turns do not push previously loaded history out of view. Explicit expansion verifies a cached-history SHA256 hint and sends only missing rows when the retained suffix matches; changed cached rows trigger a complete authoritative reset. Legacy `WatchDocMessages` requests without `tailLimit` retain complete-history behavior.
+
+Unchanged history pagination metadata is omitted from live deltas. Readers retain
+the last confirmed flags and anchor when those fields are absent; authoritative
+resets replace them. This avoids repeating the same cursor and counts on each
+text append without losing the Load earlier messages control.
+
+Direct browser links send a read-only `EngineInfo` probe every 20 seconds, with a 60-second response deadline. A blackholed link triggers the existing reconnect flow without replaying agent commands. Probe deadlines survive canceled receive futures and cannot be postponed indefinitely by unrelated traffic. Paired and account connections retain their own heartbeat controls.
 
 Composer drafts, editor text, recovery notes and loaded output stay in memory during a connection interruption. An open file is reread before further writes or navigation. A lost save acknowledgement is reconciled against the submitted text, checkout and current disk hash; later editor changes are retained. This does not persist unsaved file buffers through a full page reload. Terminal subscriptions resume after the last sequence number; reconnect does not launch a terminal or resend a command.
 
@@ -157,7 +324,7 @@ Session navigation searches titles, projects, branches and previews locally. Ctr
 
 Threads shows conversations by recency; Projects groups them by stable repository identity, including worktrees, with a separate projectless group. The native selector reuses the existing saved sidebar organization. The browser saves its view, collapsed groups, default provider/models and recent selections in same-origin local storage (`zuse.workspace.preferences.v1`). These preferences contain no account credentials and do not persist unsaved editor buffers or drafts across page reloads.
 
-The combined browser picker includes a provider rail, search, recent models, default stars, keyboard selection and provider-specific catalog errors. Catalog request ownership prevents superseded or disconnected replies from replacing another provider's models. The browser prefetches enabled agents’ models when their catalog arrives, before the picker opens, and also discovers a committed chat’s agent when it is disabled. Conversations on another execution host load both agent descriptors and models from that host; local defaults and provider settings keep using the connected engine’s catalogs. Host changes retire old reads and clear the previous remote catalog. Reconnect revalidates retained catalogs once, and failed probes preserve the last valid rows until explicit refresh. Agent identity follows the saved chat configuration when refreshed local rows arrive. Sending cannot fall back to a local provider when the configured remote agent is absent; the composer keeps its draft and reports the missing host setup. Reasoning uses the Zkit stepped slider with pointer and arrow/Home/End controls; model options come from the selected provider's actual catalog. A run carries its selected model, reasoning, options and access mode. Existing chat metadata stores its initial configuration, so it is not an oracle for later per-run overrides.
+The combined browser picker includes a provider rail, search, recent models, default stars, keyboard selection and provider-specific catalog errors. Catalog request ownership prevents superseded or disconnected replies from replacing another provider's models. The browser initially discovers only the active agent's models, including a committed chat's disabled agent; opening the picker loads other enabled agents on demand. Conversations on another execution host load both agent descriptors and models from that host without prefetching unrelated local models; local defaults and provider settings keep using the connected engine's catalogs. Host changes retire old reads and clear the previous remote catalog. Reconnect revalidates retained catalogs once, and failed probes preserve the last valid rows until explicit refresh. Agent identity follows the saved chat configuration when refreshed local rows arrive. Sending cannot fall back to a local provider when the configured remote agent is absent; the composer keeps its draft and reports the missing host setup. Reasoning uses the Zkit stepped slider with pointer and arrow/Home/End controls; model options come from the selected provider's actual catalog. A run carries its selected model, reasoning, options and access mode. Existing chat metadata stores its initial configuration, so it is not an oracle for later per-run overrides.
 
 Composer notices attach above the input and expose expansion, copy, dismissal and explicit message restoration. Restoring an errored message preserves durable attachment references and refuses to overwrite a draft. Native and browser send controls share the ordered dither GPU painter; browser restoration and question submission use the same action treatment. It allocates no bitmap and schedules no continuous animation. Full platform interaction and visual parity remain tracked separately.
 
@@ -205,3 +372,28 @@ a temporary prefix, verifies the agent CLI, reads a real loopback hub catalog,
 and prepares/stops a supervised agent daemon without sending device commands:
 `cargo test -p zuse-simulator --lib setup::smoke::pinned_helpers_install_verify_and_start_on_linux -- --ignored --nocapture`.
 It requires Node.js 22.12+, npm, and network; it is ignored in the normal suite.
+
+### Browser transport compression and history reuse
+
+Direct browsers now request `rpcCompression=deflate-stream-v1`. Rust's zlib-rs
+encoder retains its dictionary for that connection and sync-flushes each binary
+frame: `ZD`, a little-endian u32 decoded length, then zlib stream bytes. The native
+browser `DecompressionStream("deflate")` is connection-owned and bounds each
+frame by the declared decoded length and 16 MiB message cap. Text frames can
+interleave without changing the dictionary. `gzip-v1` and plain clients remain
+supported. Compression state is retired on disconnect; it never spans viewers.
+Already-ready envelopes batch as NDJSON without a timer.
+
+Transcript watches can send a `resume` hint (first ID, count and SHA256 of the
+locally retained rows). The host verifies the corresponding unchanged segment
+before returning a `historyResumed` delta containing only missing rows. The
+client accepts that opening delta only after requesting resume. Any mismatch
+uses the original authoritative reset. This also supports idle reconnects;
+provider execution is never resumed by replaying a mutation.
+
+`WatchChats` and `WatchSessions` accept `delta:true` for keyed reset/upsert/remove
+frames with an optional ordering vector and count validation. Legacy array
+watchers retain their contract. Browser response queues hold byte admission
+through the actual write, so dequeue alone cannot free an 8 MiB traffic budget.
+An intact larger response acquires the budget exclusively. These bounds apply
+to direct, paired and account browser sessions and the paired relay path.

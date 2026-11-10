@@ -41,6 +41,16 @@ struct Args {
     /// Operator-issued relay routing credential, independent of pairing keys.
     #[arg(long, requires = "relay_origin")]
     relay_host_token_file: Option<PathBuf>,
+    /// Let paired devices on this computer's local network and tailnet connect
+    /// directly. Traffic stays end-to-end encrypted; no certificate is needed.
+    #[arg(long)]
+    lan: bool,
+    /// Port for --lan connections.
+    #[arg(long, requires = "lan")]
+    lan_port: Option<u16>,
+    /// Also publish --lan over Tailscale HTTPS, reachable from browsers.
+    #[arg(long, requires = "lan")]
+    tailscale_serve: bool,
 }
 
 #[derive(Subcommand)]
@@ -55,6 +65,7 @@ fn main() -> anyhow::Result<()> {
         return Ok(());
     }
     tokio::runtime::Builder::new_multi_thread()
+        .thread_stack_size(zuse_engine::RUNTIME_STACK_SIZE)
         .enable_all()
         .build()?
         .block_on(run())
@@ -236,6 +247,15 @@ async fn run() -> anyhow::Result<()> {
                 runtime.core().device_id.clone(),
             )
             .with_pairing_slots(runtime.core().browser_access.control().pairing_slots())
+            .with_paired_sessions(runtime.core().browser_access.control().paired_sessions())
+            .with_advertised_routes(
+                runtime
+                    .core()
+                    .browser_access
+                    .control()
+                    .advertised_routes()
+                    .subscribe(),
+            )
             .with_shutdown_token(shutdown.clone()),
         Err(error) => {
             runtime.shutdown().await;
@@ -267,6 +287,32 @@ async fn run() -> anyhow::Result<()> {
         "{}",
         m::open(&l10n, format!("{origin}/#token={token}")).replace(['\u{2068}', '\u{2069}'], "")
     );
+    if args.lan {
+        match runtime
+            .core()
+            .direct_access
+            .control()
+            .start(
+                zuse_engine::direct_access::Start {
+                    port: args.lan_port,
+                    tailscale_serve: args.tailscale_serve,
+                },
+                runtime.core().rpc_service(),
+            )
+            .await
+        {
+            Ok(status) => {
+                for route in status.routes {
+                    println!("{}: {}", route.kind.label(), route.origin);
+                }
+            }
+            Err(error) => {
+                ipc_task.abort();
+                runtime.shutdown().await;
+                return Err(error);
+            }
+        }
+    }
     if let Some((origin, host_token_file)) = relay {
         // Explicit command-line configuration replaces saved startup settings.
         runtime.core().relay_access.control().stop().await;

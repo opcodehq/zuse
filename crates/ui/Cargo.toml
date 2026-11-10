@@ -16,6 +16,7 @@ compact-picker-fixture = ["gpui_platform/test-support"]
 browser-fixture = ["gpui/bench"]
 windows-render-fixture = []
 appshots-fixture = ["gpui_platform/test-support"]
+cloud-computer-fixture = ["appshots-fixture", "gpui/bench"]
 pull-request-fixture = ["gpui_platform/test-support"]
 resource-profile = ["gpui/bench", "gpui_platform/test-support"]
 
@@ -42,6 +43,18 @@ required-features = ["windows-render-fixture"]
 [[example]]
 name = "appshots-fixture"
 required-features = ["appshots-fixture"]
+
+[[example]]
+name = "ui-block-fixture"
+required-features = ["appshots-fixture"]
+
+[[example]]
+name = "cloud-computer-fixture"
+required-features = ["cloud-computer-fixture"]
+
+[[example]]
+name = "settings-cloud-fixture"
+required-features = ["cloud-computer-fixture"]
 
 [[example]]
 name = "tool-images-fixture"
@@ -98,6 +111,7 @@ gpui_platform.workspace = true
 gpui_tokio.workspace = true
 tokio-util.workspace = true
 gpui-base.workspace = true
+zkit-dither.workspace = true
 zuse-viewport.workspace = true
 tokio.workspace = true
 futures.workspace = true

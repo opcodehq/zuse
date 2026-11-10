@@ -62,6 +62,16 @@ async fn authenticated_fixture(
     authentication: Authentication,
     betas: Vec<String>,
 ) -> (Credential, oneshot::Receiver<Value>) {
+    encoded_fixture(protocol, events, end, authentication, betas, false).await
+}
+async fn encoded_fixture(
+    protocol: Protocol,
+    events: Vec<Value>,
+    end: bool,
+    authentication: Authentication,
+    betas: Vec<String>,
+    gzip: bool,
+) -> (Credential, oneshot::Receiver<Value>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}/", listener.local_addr().unwrap());
     let (tx, rx) = oneshot::channel();
@@ -76,6 +86,14 @@ async fn authenticated_fixture(
     } else {
         betas.join(",")
     };
+    let token = if authentication == Authentication::CodexOauth {
+        use base64::Engine as _;
+        format!("header.{}.signature", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(
+            serde_json::to_vec(&json!({"https://api.openai.com/auth":{"chatgpt_account_id":"workspace-fixture"}})).unwrap()))
+    } else {
+        "fixture-token".into()
+    };
+    let expected_token = token.to_ascii_lowercase();
     tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.unwrap();
         let mut bytes = Vec::new();
@@ -90,10 +108,21 @@ async fn authenticated_fixture(
         };
         let headers = String::from_utf8(bytes[..boundary].to_vec()).unwrap();
         let lower = headers.to_ascii_lowercase();
+        if gzip {
+            assert!(
+                lower
+                    .lines()
+                    .any(|line| line.starts_with("accept-encoding:") && line.contains("gzip"))
+            );
+        }
         if authentication != Authentication::ProtocolDefault
             || matches!(protocol, Protocol::Responses | Protocol::ChatCompletions)
         {
-            assert!(lower.contains("authorization: bearer fixture-token\r\n"));
+            assert!(lower.contains(&format!("authorization: bearer {expected_token}\r\n")));
+            if authentication == Authentication::CodexOauth {
+                assert!(lower.contains("chatgpt-account-id: workspace-fixture\r\n"));
+                assert!(lower.contains("originator: zuse\r\n"));
+            }
             assert!(!lower.contains("x-api-key:"));
             assert!(!lower.contains("x-goog-api-key:"));
         } else if protocol == Protocol::Messages {
@@ -104,6 +133,10 @@ async fn authenticated_fixture(
         }
         if !expected_betas.is_empty() {
             assert!(lower.contains(&format!("anthropic-beta: {expected_betas}\r\n")));
+        }
+        if authentication == Authentication::GrokOauth {
+            assert!(lower.contains("x-xai-token-auth: xai-grok-cli\r\n"));
+            assert!(lower.contains("x-grok-model-override: fixture\r\n"));
         }
         let length = headers
             .lines()
@@ -129,9 +162,33 @@ async fn authenticated_fixture(
         if end {
             body.push_str("data: [DONE]\r\n\r\n");
         }
-        socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",body.len()+usize::from(hold)).as_bytes()).await.unwrap();
-        // Fragment inside JSON, delimiters and multi-byte text.
-        for part in body.as_bytes().chunks(7) {
+        let encoded = if gzip {
+            use std::io::Write;
+            let mut encoder =
+                flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+            encoder.write_all(body.as_bytes()).unwrap();
+            if hold {
+                // Deliver a real incremental gzip stream without EOF/trailer.
+                // First text and cancellation must work before it finishes.
+                encoder.flush().unwrap();
+                encoder.get_ref().clone()
+            } else {
+                encoder.finish().unwrap()
+            }
+        } else {
+            body.as_bytes().to_vec()
+        };
+        if gzip && body.len() > 1024 {
+            assert!(encoded.len() < body.len() / 2);
+        }
+        let encoding = if gzip {
+            "Content-Encoding: gzip\r\n"
+        } else {
+            ""
+        };
+        socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n{encoding}Content-Length: {}\r\nConnection: close\r\n\r\n",encoded.len()+usize::from(hold)).as_bytes()).await.unwrap();
+        // Fragment inside compressed blocks, JSON, delimiters and UTF-8.
+        for part in encoded.chunks(7) {
             if socket.write_all(part).await.is_err() {
                 break;
             }
@@ -147,12 +204,15 @@ async fn authenticated_fixture(
     (
         Credential {
             connection_id: "account".into(),
-            access_token: "fixture-token".into(),
+            access_token: token,
             authorization_generation: 0,
             route: Route {
                 endpoint,
                 protocol,
-                subscription: false,
+                subscription: matches!(
+                    authentication,
+                    Authentication::CodexOauth | Authentication::GrokOauth
+                ),
                 authentication,
                 betas,
                 capabilities: Capabilities {
@@ -751,4 +811,83 @@ async fn mixed_tool_text_and_images_survive_supported_provider_translations() {
             matches!(super::request::body(&request,&credential),Err(Error::Model{code,..}) if code=="unsupported_images")
         );
     }
+}
+
+#[tokio::test]
+async fn local_codex_subscription_sends_workspace_header_and_omits_api_output_limit() {
+    let (credential, body) = authenticated_fixture(Protocol::Responses,
+        vec![json!({"type":"response.output_text.delta","delta":"hello"}),json!({"type":"response.completed","response":{"usage":{"input_tokens":1,"output_tokens":1}}})],
+        false, Authentication::CodexOauth, vec![]).await;
+    NativeTransport::new()
+        .unwrap()
+        .request(input(), credential)
+        .await
+        .unwrap();
+    let body = body.await.unwrap();
+    assert!(body.get("max_output_tokens").is_none());
+    assert_eq!(body["store"], false);
+    assert_eq!(model_name("local/codex/gpt-test"), "gpt-test");
+    assert_eq!(model_name("local/claude/claude-test"), "claude-test");
+}
+
+#[tokio::test]
+async fn local_grok_uses_cli_proxy_authentication() {
+    let (credential, body) = authenticated_fixture(
+        Protocol::ChatCompletions,
+        vec![json!({"choices":[{"delta":{"content":"hello"},"finish_reason":"stop"}]})],
+        true,
+        Authentication::GrokOauth,
+        vec![],
+    )
+    .await;
+    let output = NativeTransport::new()
+        .unwrap()
+        .request(input(), credential)
+        .await
+        .unwrap();
+    assert_eq!(output.text, "hello");
+    assert_eq!(body.await.unwrap()["model"], "fixture");
+}
+
+#[tokio::test]
+async fn native_gzip_provider_stream_preserves_text_and_cancels_before_eof() {
+    let text = "héllo 🦀 streamed provider text ".repeat(400);
+    let (credential, body) = encoded_fixture(Protocol::Responses, vec![
+        json!({"type":"response.output_text.delta","delta":text}),
+        json!({"type":"response.completed","response":{"usage":{"input_tokens":1,"output_tokens":1}}})
+    ], false, Authentication::ProtocolDefault, Vec::new(), true).await;
+    let transport = NativeTransport::new().unwrap();
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        transport.request(input(), credential),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(output.text, text);
+    body.await.unwrap();
+    let (credential, body) = encoded_fixture(
+        Protocol::Responses,
+        vec![
+            json!({"type":"response.output_text.delta","delta":text}),
+            json!({"fixtureHold":true}),
+        ],
+        false,
+        Authentication::ProtocolDefault,
+        Vec::new(),
+        true,
+    )
+    .await;
+    let started = Arc::new(tokio::sync::Notify::new());
+    let notice = started.clone();
+    let mut request = input();
+    request.text = Arc::new(move |_| notice.notify_one());
+    let cancel = request.cancel.clone();
+    let task = tokio::spawn(async move { transport.request(request, credential).await });
+    tokio::time::timeout(std::time::Duration::from_secs(1), started.notified())
+        .await
+        .expect("first text must arrive before gzip EOF");
+    cancel.cancel();
+    assert!(matches!(task.await.unwrap(), Err(Error::Interrupted)));
+    body.await.unwrap();
 }

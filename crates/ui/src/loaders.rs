@@ -249,25 +249,38 @@ fn mini_spinner_cells(
     const RING: [[usize; COLS]; ROWS] = [[0, 1], [5, 2], [4, 3]];
     const RING_LEN: f32 = (COLS * ROWS) as f32;
     let pulse = motion::activity_pulse(view, cx);
-    div()
-        .flex()
-        .flex_col()
-        .gap(px(cell_px / 2.0))
-        .children((0..ROWS).map(move |row| {
-            let tint = row_tints[row];
-            div()
-                .flex()
-                .flex_row()
-                .gap(px(cell_px / 2.0))
-                .children((0..COLS).map(move |col| {
-                    let phase = RING[row][col] as f32 / RING_LEN;
-                    div()
-                        .size(px(cell_px))
-                        .rounded(px(cell_px / 2.0))
-                        .bg(tint)
-                        .opacity(pulse.opacity(phase, GSPIN_DIM))
-                }))
-        }))
+    gpui::canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            // Each block is a few device pixels thresholded by its brightness,
+            // so the chase dissolves through the dither instead of fading.
+            let scale = window.scale_factor();
+            let dots = (cell_px * scale).round().max(1.0) as usize;
+            let dot = px(cell_px / dots as f32);
+            for (row, cells) in RING.iter().enumerate() {
+                for (col, ring) in cells.iter().enumerate() {
+                    let level = pulse.opacity(*ring as f32 / RING_LEN, GSPIN_DIM);
+                    let block = bounds.origin
+                        + gpui::point(
+                            px(col as f32 * cell_px * 1.5),
+                            px(row as f32 * cell_px * 1.5),
+                        );
+                    for y in 0..dots {
+                        for x in 0..dots {
+                            if level > zuse_viewport::dither::threshold(x, y) {
+                                let at = block + gpui::point(dot * x as f32, dot * y as f32);
+                                window.paint_quad(gpui::fill(
+                                    gpui::Bounds::new(at, gpui::size(dot, dot)),
+                                    row_tints[row],
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        },
+    )
+    .size_full()
 }
 
 /// The working mark: the Zuse silhouette as a faint outline with a bright
@@ -466,24 +479,112 @@ fn progress_arc(
     arc_canvas(0.0, frac, diameter, RING_STROKE, track, arc)
 }
 
-/// An indeterminate ring: a quarter arc circling its faint track once per
-/// 900ms — the running badge on a sidebar avatar.
-pub fn ring_spinner(
-    id: impl Into<gpui::ElementId>,
-    diameter: f32,
-    stroke: f32,
-    track: gpui::Hsla,
-    arc: gpui::Hsla,
-) -> AnyElement {
+/// The dithered ring: a bright tail sweeping a faint dotted track, on one
+/// logical pixel cells. Repaints from its own cached view, like the mini
+/// spinner; reduced motion holds a still frame.
+pub fn dither_ring(key: impl Into<SharedString>, size: f32, tint: gpui::Hsla) -> AnyElement {
+    DitherRing {
+        key: key.into(),
+        size,
+        tint,
+    }
+    .into_any_element()
+}
+
+#[derive(IntoElement)]
+struct DitherRing {
+    key: SharedString,
+    size: f32,
+    tint: gpui::Hsla,
+}
+
+impl RenderOnce for DitherRing {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let view = window.with_global_id(self.key.into(), |id, window| {
+            window.with_element_state(id, |previous: Option<Entity<DitherRingView>>, _| {
+                let view = previous.unwrap_or_else(|| {
+                    cx.new(|_| DitherRingView {
+                        size: self.size,
+                        tint: self.tint,
+                    })
+                });
+                view.update(cx, |view, cx| {
+                    if view.size != self.size || view.tint != self.tint {
+                        view.size = self.size;
+                        view.tint = self.tint;
+                        cx.notify();
+                    }
+                });
+                (view.clone(), view)
+            })
+        });
+        view.cached(
+            gpui::StyleRefinement::default()
+                .size(px(self.size))
+                .flex_none(),
+        )
+    }
+}
+
+struct DitherRingView {
+    size: f32,
+    tint: gpui::Hsla,
+}
+
+impl Render for DitherRingView {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        use zkit_dither::{LoaderVariant::Ring, Matrix};
+        let (size, tint) = (self.size, self.tint);
+        let t = motion::pulse_seconds(cx.entity_id(), cx).unwrap_or(Ring.still_time());
+        gpui::canvas(
+            |_, _, _| {},
+            move |bounds, _, window, _| {
+                let (cols, rows) = Ring.grid(size.round() as usize);
+                for y in 0..rows {
+                    for x in 0..cols {
+                        if Ring.tone(cols, rows, x, y, t) > Matrix::Bayer4.threshold(x, y) {
+                            let at = bounds.origin + gpui::point(px(x as f32), px(y as f32));
+                            window.paint_quad(gpui::fill(
+                                gpui::Bounds::new(at, gpui::size(px(1.0), px(1.0))),
+                                tint,
+                            ));
+                        }
+                    }
+                }
+            },
+        )
+        .size_full()
+    }
+}
+
+/// Braille frames of the classic terminal "dots" spinner.
+const TERMINAL_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+/// One full lap of [`TERMINAL_FRAMES`]: 80ms a frame, as in the terminal.
+const TERMINAL_LAP_MS: u64 = 800;
+
+/// An indeterminate terminal-style spinner: a braille glyph stepping through
+/// the "dots" frames, centered in a fixed `size` box so the frames never
+/// nudge the layout — the running mark on sidebar session rows.
+pub fn terminal_spinner(id: impl Into<gpui::ElementId>, size: f32, tint: gpui::Hsla) -> AnyElement {
     use gpui::AnimationExt as _;
     div()
-        .relative()
-        .size(px(diameter))
+        .size(px(size))
         .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .font_family("Menlo")
+        .text_size(px(size))
+        .line_height(px(size))
+        .text_color(tint)
         .with_animation(
             id,
-            gpui::Animation::new(std::time::Duration::from_millis(900)).repeat(),
-            move |el, t| el.child(arc_canvas(t, 0.28, diameter, stroke, track, arc)),
+            gpui::Animation::new(std::time::Duration::from_millis(TERMINAL_LAP_MS)).repeat(),
+            |el, t| {
+                let frame =
+                    ((t * TERMINAL_FRAMES.len() as f32) as usize).min(TERMINAL_FRAMES.len() - 1);
+                el.child(TERMINAL_FRAMES[frame])
+            },
         )
         .into_any_element()
 }

@@ -9,6 +9,7 @@ use axum::{
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
     routing::get,
+    serve::ListenerExt,
 };
 use futures::StreamExt;
 use std::{
@@ -22,10 +23,7 @@ use tokio::{
     sync::{Notify, Semaphore, oneshot},
 };
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
-use tower_http::{
-    services::{ServeDir, ServeFile},
-    set_header::SetResponseHeaderLayer,
-};
+use tower_http::set_header::SetResponseHeaderLayer;
 use zuse_remote::{MAX_RECORD_BYTES, PairId};
 struct Waiting {
     id: uuid::Uuid,
@@ -88,9 +86,7 @@ impl RelayBroker {
             .route("/health", get(|| async { "Zuse relay" }))
             .route("/api/paired-host/{pair_id}", get(host))
             .route("/api/paired-rpc/{pair_id}", get(client))
-            .fallback_service(
-                ServeDir::new(&assets).not_found_service(ServeFile::new(assets.join("index.html"))),
-            )
+            .fallback_service(crate::assets::router(assets))
             .with_state(self)
             .layer(SetResponseHeaderLayer::overriding(
                 header::X_CONTENT_TYPE_OPTIONS,
@@ -134,7 +130,7 @@ impl RelayBroker {
                     .await?
             }
             None => {
-                axum::serve(listener, router)
+                axum::serve(listener.tap_io(crate::no_delay), router)
                     .with_graceful_shutdown(signal)
                     .await?
             }

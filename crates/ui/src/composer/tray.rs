@@ -42,6 +42,14 @@ pub(crate) const ICON_ACTION: f32 = 24.0;
 const TEXT_ACTION_HEIGHT: f32 = 28.0;
 /// Compact staged-image tiles in the attachment row.
 const THUMB: f32 = 40.0;
+
+fn is_configuration_notice(
+    message: &str,
+    key: Option<&str>,
+    notice: Option<&(String, String)>,
+) -> bool {
+    notice.is_some_and(|(chat, text)| key == Some(chat.as_str()) && message == text)
+}
 const THUMB_RADIUS: f32 = 7.0;
 /// `ContextPill` hover intent: open after a short dwell, close after a grace
 /// that carries the pointer across the gap to the preview card.
@@ -559,69 +567,39 @@ impl Composer {
     ) -> Option<AnyElement> {
         let theme = Theme::of(cx).clone();
         let mut rows = Vec::new();
-        if let Some(request) = self
-            .cloud
-            .request
-            .as_ref()
-            .filter(|_| self.state.read(cx).selected_chat.is_none())
-        {
-            rows.push(TrayRow::Element(
-                zuse_viewport::cloud_queue::queue(
-                    zuse_viewport::cloud_queue::Prompt::from_request(request),
-                    self.cloud.message.clone().unwrap_or_else(|| {
-                        if self.cloud.task.is_some() {
-                            "Preparing cloud workspace…".into()
-                        } else {
-                            "Cloud startup needs attention. Your message is still queued.".into()
-                        }
-                    }),
-                    self.cloud.task.is_some(),
-                    !crate::motion::reduced_motion(cx),
-                    theme.text,
-                    theme.text_muted,
-                    theme.border.opacity(0.4),
-                )
-                .into_any_element(),
-            ));
-            if self.cloud.task.is_none() && self.visible_failure().is_none() {
-                rows.push(TrayRow::Element(
-                    div()
-                        .w_full()
-                        .flex()
-                        .justify_end()
-                        .px(px(12.))
-                        .py(px(4.))
-                        .child(
-                            tray_text_action("retry-cloud-launch", "Retry", None, &theme).on_click(
-                                cx.listener(|this, _, _, cx| {
-                                    let text = this.input.read(cx).text().to_owned();
-                                    this.send_cloud(text, cx);
-                                }),
-                            ),
-                        )
-                        .into_any_element(),
-                ));
-            }
-        } else if let Some((message, retry)) = self.pickers.read(cx).cloud_model_notice(cx) {
-            let row =
-                TrayPill::new("native-cloud-models", message).glyph(crate::icons::DITHER_CLOUD);
+        // The prompt itself is already in the transcript; the tray only says
+        // what the cloud computer is doing.
+        if let Some(row) = self.cloud_status_row(&theme, cx) {
+            let retry = self.cloud_launch_pending(cx)
+                && self.cloud.task.is_none()
+                && self.visible_failure().is_none();
             rows.push(TrayRow::Pill(if retry {
                 row.action(
-                    tray_text_action("retry-cloud-models", "Retry", None, &theme).on_click(
+                    tray_text_action("retry-cloud-launch", "Retry", None, &theme).on_click(
                         cx.listener(|this, _, _, cx| {
-                            this.pickers
-                                .update(cx, |picker, cx| picker.refresh_cloud_models(cx));
+                            let text = this.input.read(cx).text().to_owned();
+                            this.send_cloud(text, cx);
                         }),
                     ),
                 )
             } else {
                 row
             }));
+            if self.cloud_launch_pending(cx) {
+                // Nothing else in the tray while the launch owns it.
+            } else if let Some(notice) = self.cloud_model_notice_row(&theme, cx) {
+                rows.push(TrayRow::Pill(notice));
+            }
+        } else if let Some(notice) = self.cloud_model_notice_row(&theme, cx) {
+            rows.push(TrayRow::Pill(notice));
         }
         rows.extend(self.live_cloud_row(&theme, cx).map(TrayRow::Pill));
         rows.extend(self.connection_row(cx).map(TrayRow::Pill));
         rows.extend(self.project_creation_row(&theme, cx).map(TrayRow::Pill));
-        rows.extend(self.attachment_row(&theme, cx).map(TrayRow::Element));
+        rows.extend(
+            self.attachment_row(&theme, window, cx)
+                .map(TrayRow::Element),
+        );
         let (sign_in, error) = self.provider_rows(&theme, cx);
         rows.extend(sign_in.map(TrayRow::Pill));
         rows.extend(error.map(TrayRow::Pill));
@@ -659,14 +637,28 @@ impl Composer {
             );
         }
         let surface = tray_surface(&theme, cx.has_active_drag())
-            .when(self.cloud_launch_pending(cx), |surface| {
-                surface.bg(zuse_viewport::cloud_queue::background())
-            })
             .debug_selector(|| "composer-tray".into())
             .children(rows);
         Some(
             crate::frost::frosted(TRAY_RADIUS, crate::frost::MENU_BLUR, surface).into_any_element(),
         )
+    }
+
+    fn cloud_model_notice_row(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<TrayPill> {
+        let (message, retry) = self.pickers.read(cx).cloud_model_notice(cx)?;
+        let row = TrayPill::new("native-cloud-models", message).glyph(crate::icons::DITHER_CLOUD);
+        Some(if retry {
+            row.action(
+                tray_text_action("retry-cloud-models", "Retry", None, theme).on_click(cx.listener(
+                    |this, _, _, cx| {
+                        this.pickers
+                            .update(cx, |picker, cx| picker.refresh_cloud_models(cx));
+                    },
+                )),
+            )
+        } else {
+            row
+        })
     }
 
     /// "No connection" while offline; a quiet reconnecting row while only the
@@ -706,7 +698,12 @@ impl Composer {
 
     /// Staged annotations (one pill) and attachments without a chip in the
     /// draft (compact thumbnails), wrapping in one row.
-    fn attachment_row(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
+    fn attachment_row(
+        &mut self,
+        theme: &Theme,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         let comments = self.staged_comments(cx);
         let tiles: Vec<StagedTile> = self
             .tiled_attachments(cx)
@@ -720,9 +717,15 @@ impl Composer {
         if comments.is_empty() {
             self.tray.annotations = AnnotationPreview::default();
         }
-        if comments.is_empty() && tiles.is_empty() {
+        let contexts = self.staged_contexts(cx);
+        if comments.is_empty() && tiles.is_empty() && contexts.is_empty() {
             return None;
         }
+        let context_pills: Vec<AnyElement> = contexts
+            .iter()
+            .enumerate()
+            .map(|(ix, context)| self.context_pill(ix, context, theme, window, cx))
+            .collect();
         let pill = (!comments.is_empty()).then(|| self.annotation_pill(&comments, theme, cx));
         Some(
             div()
@@ -733,6 +736,7 @@ impl Composer {
                 .gap(px(6.0))
                 .px(px(8.0))
                 .py(px(6.0))
+                .children(context_pills)
                 .children(pill)
                 .children(
                     tiles
@@ -835,6 +839,62 @@ impl Composer {
                     ),
             ))
             .into_any_element()
+    }
+
+    /// One staged context item: the message badge it will become (hover or
+    /// click shows its Markdown), with a remove ×.
+    fn context_pill(
+        &mut self,
+        ix: usize,
+        context: &crate::context_items::ContextItem,
+        theme: &Theme,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let badge = crate::badges::MessageBadge {
+            icon: icons::CHAT_ROUND_LINE,
+            label: context.label.clone().into(),
+            details: Vec::new(),
+            markdown: Some(context.body.clone().into()),
+        };
+        let hover = theme.element_hover;
+        let id = context.id.clone();
+        let label = context.label.clone();
+        let remove = div()
+            .id(("tray-context-remove", ix))
+            .size(px(20.0))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded_full()
+            .cursor_pointer()
+            .hover(move |s| s.bg(hover))
+            .role(gpui::Role::Button)
+            .aria_label(format!("Remove {label}"))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                cx.stop_propagation();
+                let key = this.current_key.clone();
+                this.state.update(cx, |state, cx| {
+                    state.remove_context_item(&key, &id);
+                    cx.notify();
+                });
+                cx.notify();
+            }))
+            .child(
+                icon(icons::CLOSE)
+                    .size(px(12.0))
+                    .text_color(theme.text_muted),
+            )
+            .into_any_element();
+        crate::badges::render_with(
+            format!("tray-context-{}", context.id),
+            &badge,
+            theme,
+            Some(remove),
+            window,
+            cx,
+        )
     }
 
     /// `ContextPill`: "{n} Annotations" with a clear-all ×; hovering opens
@@ -1210,13 +1270,29 @@ impl Composer {
         // A failed send in this composer outranks the transcript's error.
         if let Some(message) = self.visible_failure() {
             let offline = message.as_ref() == "Engine not connected";
+            let configuration = is_configuration_notice(
+                message.as_ref(),
+                self.failure_key.as_deref(),
+                self.state.read(cx).configuration_notice().as_ref(),
+            );
             let cloud_launch = self.cloud.request.is_some();
             let sign_in = if cloud_launch {
                 None
             } else {
                 self.sign_in_row(None, harness, label, theme, cx)
             };
-            let actions = if cloud_launch {
+            let actions = if configuration {
+                vec![
+                    tray_text_action("refresh-chat-choices", "Refresh access", None, theme)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.state
+                                .update(cx, |state, cx| state.refresh_selected_configuration(cx));
+                            this.permission_open = false;
+                            cx.notify();
+                        }))
+                        .into_any_element(),
+                ]
+            } else if cloud_launch {
                 vec![
                     tray_text_action("retry-cloud-launch", "Retry", None, theme)
                         .on_click(cx.listener(|this, _, _, cx| {
@@ -1230,6 +1306,8 @@ impl Composer {
             };
             let (title, subtitle) = if offline {
                 ("Engine not connected", None)
+            } else if configuration {
+                ("Chat choices unavailable", Some(message.to_string()))
             } else {
                 ("Couldn't send", Some(message.to_string()))
             };
@@ -1291,7 +1369,7 @@ impl Composer {
         let draft_empty = !composer_has_content(
             self.input.read(cx).text(),
             self.staged().len() + self.staged_appshots().len(),
-            self.staged_comments(cx).len(),
+            self.staged_note_count(cx),
         );
         if let Some(prompt) =
             entries_prompt.filter(|_| draft_empty && kind != ProviderErrorKind::Reconnecting)
@@ -1305,7 +1383,7 @@ impl Composer {
                             .dismissed_errors
                             .insert(retry_chat.clone(), retry_id.clone());
                         let queue = this.run_live(cx);
-                        this.send(prompt.clone(), queue, false, cx);
+                        this.send(prompt.clone(), queue, false, false, cx);
                     }))
                     .into_any_element(),
             );
@@ -2003,6 +2081,36 @@ impl Composer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn configuration_notice_title_never_relabels_an_actual_or_foreign_send_failure() {
+        let notice = ("chat".to_owned(), "Read configuration failed".to_owned());
+        assert!(is_configuration_notice(
+            "Read configuration failed",
+            Some("chat"),
+            Some(&notice)
+        ));
+        assert!(!is_configuration_notice(
+            "Actual send failed",
+            Some("chat"),
+            Some(&notice)
+        ));
+        assert!(!is_configuration_notice(
+            "Read configuration failed",
+            Some("different-chat"),
+            Some(&notice)
+        ));
+        assert!(!is_configuration_notice(
+            "Read configuration failed",
+            None,
+            Some(&notice)
+        ));
+        assert!(!is_configuration_notice(
+            "Actual send failed",
+            Some("chat"),
+            None
+        ));
+    }
 
     fn entry(id: &str, role: MessageRole, parts: Vec<MessagePart>) -> SessionMessageEntry {
         SessionMessageEntry {

@@ -4,6 +4,7 @@ exclude = ["vendor/zkit"]
 members = [
     "crates/i18n",
     "crates/simulator",
+    "crates/mobile-bridge",
     "apps/cloud",
     "apps/cloud-runtime",
     "crates/cloud-runtime",
@@ -34,9 +35,11 @@ members = [
     "crates/text",
     "crates/visual",
     "crates/visual-gpu",
+    "crates/ui-block",
     "apps/desktop",
     "apps/cli",
     "apps/relay",
+    "apps/control",
     "apps/web",
     "crates/viewport",
     "crates/model",
@@ -85,6 +88,7 @@ zuse-mcp = { path = "crates/mcp" }
 zuse-text = { path = "crates/text" }
 zuse-visual = { path = "crates/visual" }
 zuse-visual-gpu = { path = "crates/visual-gpu" }
+zuse-ui-block = { path = "crates/ui-block" }
 zuse-serve = { path = "crates/serve" }
 zuse-viewport = { path = "crates/viewport" }
 zuse-model = { path = "crates/model" }
@@ -110,6 +114,7 @@ gpui_platform = { git = "https://github.com/opcodehq/zkit", rev = "14d9b82fb65d8
 ] }
 gpui_tokio = { git = "https://github.com/opcodehq/zkit", rev = "14d9b82fb65d86f63b6332cb3d616f1ab0ada103" }
 gpui-base = { git = "https://github.com/opcodehq/zkit", rev = "14d9b82fb65d86f63b6332cb3d616f1ab0ada103" }
+zkit-dither = { git = "https://github.com/opcodehq/zkit", rev = "14d9b82fb65d86f63b6332cb3d616f1ab0ada103" }
 
 # diffs
 similar = "2"
@@ -154,7 +159,7 @@ clap = { version = "4", features = ["derive"] }
 chrono = { version = "0.4", features = ["serde"] }
 sha2 = "0.10"
 zip = { version = "7.2", default-features = false, features = ["deflate-flate2-zlib-rs"] }
-notify = "7"
+notify = "8.2"
 portable-pty = "0.8"
 alacritty_terminal = "0.26"
 pulldown-cmark = "0.12"
@@ -164,7 +169,8 @@ fontdb = "0.23"
 ttf-parser = "0.25.1"
 # Packaged GUI apps do not inherit shell proxy variables; honor the macOS and
 # Windows system proxy for provider usage probes and other HTTP clients.
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream", "system-proxy"] }
+# Negotiate incremental gzip responses for provider/catalog traffic on slow links.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream", "system-proxy", "gzip"] }
 ignore = "0.4"
 # Workspace file/content search index (@ mentions, file tree, cmd+K).
 # Pinned exactly: crates.io also carries `0.11.1-nightly.*` prereleases.
@@ -176,12 +182,25 @@ fff-search = "=0.11.0"
 lto = "thin"
 strip = "symbols"
 
+# Browser downloads pay for every byte on mobile connections. Keep the native
+# release profile independent from the size-oriented browser distribution.
+[profile.web-release]
+inherits = "release"
+opt-level = "s"
+codegen-units = 1
+panic = "abort"
+
 [profile.dev]
 # gpui is slow unoptimized; match zed's approach for deps
 opt-level = 0
+# Keep agent worktrees small: debug symbols and incremental state otherwise
+# accumulate tens of GB. Opt in per build when debugging compiler output.
+debug = 0
+incremental = false
 
 [profile.dev.package."*"]
 opt-level = 2
+debug = 0
 
 # Scenes rasterize in software every frame the camera moves.
 [profile.dev.package.zuse-visual]

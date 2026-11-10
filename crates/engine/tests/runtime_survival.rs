@@ -40,6 +40,7 @@ struct Ledger {
     reconfigured: Mutex<Vec<Option<String>>>,
     /// The model each process was spawned with.
     spawned_models: Mutex<Vec<Option<String>>>,
+    spawned_resumes: Mutex<Vec<Option<String>>>,
     /// Ends a turn whose prompt contains `wait`.
     release: tokio::sync::Notify,
 }
@@ -106,6 +107,11 @@ impl Harness for ProcessHarness {
     ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
         let ledger = self.ledger.clone();
         ledger.spawns.fetch_add(1, Ordering::SeqCst);
+        ledger
+            .spawned_resumes
+            .lock()
+            .unwrap()
+            .push(request.resume.clone());
         ledger
             .spawned_models
             .lock()
@@ -957,6 +963,53 @@ async fn a_steer_sent_before_stop_is_cancelled_with_it() {
     rig.core.sessions.shutdown().await;
 }
 
+/// An idle thread can still hold a background shell. Archive ends it rather
+/// than refusing with nothing on screen to stop.
+#[tokio::test]
+async fn archive_ends_a_parked_runtime_holding_background_work() {
+    let rig = rig();
+    let client = zuse_rpc::memory_client(rig.core.rpc_service());
+    client
+        .call(
+            zuse_rpc::methods::MUTATE,
+            serde_json::json!({"op":"createChat","chatId":CHAT,"deviceId":rig.core.device_id}),
+        )
+        .await
+        .expect("createChat");
+    rig.core
+        .workspace
+        .rename_chat(CHAT, "Pre-titled")
+        .expect("rename chat");
+    rig.core
+        .sessions
+        .dispatch(
+            CHAT,
+            HarnessId::Mock,
+            request("launch a background scout"),
+            None,
+        )
+        .await
+        .unwrap();
+    settle(&rig, 1).await;
+    let turn = rig.ledger.turn.lock().unwrap().clone().unwrap();
+    turn.set_background(1);
+    assert_eq!(status(&rig.core), Some(SessionStatus::Idle));
+    assert!(rig.core.sessions.holds_background_work(CHAT));
+
+    client
+        .call(
+            zuse_rpc::methods::MUTATE,
+            serde_json::json!({"op":"setChatArchived","chatId":CHAT,"archived":true}),
+        )
+        .await
+        .expect("archive ends the background work and succeeds");
+
+    assert!(rig.core.workspace.chat(CHAT).unwrap().unwrap().archived);
+    assert_eq!(rig.ledger.kills.load(Ordering::SeqCst), 1);
+    assert!(!rig.core.sessions.has_run(CHAT));
+    rig.core.sessions.shutdown().await;
+}
+
 /// The idle reaper spares a parked runtime holding background work, so the
 /// user's Stop must reach it and end that work.
 #[tokio::test]
@@ -981,8 +1034,13 @@ async fn stop_ends_a_parked_runtime_holding_background_work() {
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(rig.ledger.kills.load(Ordering::SeqCst), 0);
 
+    assert!(!rig.core.sessions.any_active());
     let turn = rig.ledger.turn.lock().unwrap().clone().unwrap();
     turn.set_background(1);
+    assert!(
+        !rig.core.sessions.any_active(),
+        "background work must not hold off automatic updates"
+    );
     rig.core
         .doc_host
         .queue_command(CHAT, SessionCommandPayload::Interrupt {})
@@ -993,6 +1051,7 @@ async fn stop_ends_a_parked_runtime_holding_background_work() {
     )
     .await;
     assert!(!rig.core.sessions.live_run_steerable(CHAT));
+    assert!(!rig.core.sessions.any_active());
     rig.core.sessions.shutdown().await;
 }
 
@@ -1013,9 +1072,9 @@ async fn the_idle_reaper_spares_a_runtime_holding_background_work() {
     let turn = rig.ledger.turn.lock().unwrap().clone().unwrap();
     turn.set_background(1);
 
-    // Far past the 30-minute idle window: the scout is still running. (The
-    // odd 20 minutes put its end mid-way through a deferred window.)
-    tokio::time::sleep(Duration::from_secs(3 * 60 * 60 + 20 * 60)).await;
+    // Far past the five-minute idle window: the scout is still running.
+    // Put its end mid-way through a deferred window.
+    tokio::time::sleep(Duration::from_secs(3 * 60 * 60 + 22 * 60)).await;
     assert!(
         rig.core.sessions.live_run_steerable(CHAT),
         "the reaper killed a runtime holding live background work"
@@ -1026,7 +1085,7 @@ async fn the_idle_reaper_spares_a_runtime_holding_background_work() {
     // but not before a full idle window has passed since: the completion's
     // wake turn starts a moment after the agent reports the work drained.
     turn.set_background(0);
-    tokio::time::sleep(Duration::from_secs(29 * 60)).await;
+    tokio::time::sleep(Duration::from_secs(4 * 60)).await;
     assert!(
         rig.core.sessions.live_run_steerable(CHAT),
         "the reaper killed the runtime as its background work ended"
@@ -1037,5 +1096,70 @@ async fn the_idle_reaper_spares_a_runtime_holding_background_work() {
         "the idle runtime to be reaped",
     )
     .await;
+    rig.core.sessions.shutdown().await;
+}
+
+/// Completed runtimes release their process promptly, and the durable chat
+/// still accepts another turn after the process is gone.
+#[tokio::test(start_paused = true)]
+async fn idle_runtime_releases_after_five_minutes_and_reopens() {
+    let rig = rig();
+    rig.core
+        .sessions
+        .dispatch(CHAT, HarnessId::Mock, request("first turn"), None)
+        .await
+        .unwrap();
+    settle(&rig, 1).await;
+    tokio::time::sleep(Duration::from_secs(4 * 60)).await;
+    assert!(rig.core.sessions.live_run_steerable(CHAT));
+    assert_eq!(rig.ledger.kills.load(Ordering::SeqCst), 0);
+
+    tokio::time::sleep(Duration::from_secs(61)).await;
+    wait_for(
+        || rig.ledger.kills.load(Ordering::SeqCst) == 1,
+        "idle process release",
+    )
+    .await;
+    wait_for(|| !rig.core.sessions.has_run(CHAT), "idle run cleanup").await;
+    assert_eq!(status(&rig.core), Some(SessionStatus::Idle));
+
+    rig.core
+        .sessions
+        .dispatch(CHAT, HarnessId::Mock, request("next turn"), None)
+        .await
+        .unwrap();
+    settle(&rig, 2).await;
+    assert_eq!(rig.ledger.spawns.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        rig.ledger
+            .spawned_resumes
+            .lock()
+            .unwrap()
+            .last()
+            .cloned()
+            .flatten()
+            .as_deref(),
+        Some("provider-session"),
+        "reopening must resume the provider conversation"
+    );
+    rig.core.sessions.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn active_turn_survives_the_shorter_idle_window() {
+    let rig = rig();
+    rig.core
+        .sessions
+        .dispatch(CHAT, HarnessId::Mock, request("hold this turn"), None)
+        .await
+        .unwrap();
+    wait_for(
+        || rig.ledger.prompts.lock().unwrap().len() == 1,
+        "active turn",
+    )
+    .await;
+    tokio::time::sleep(Duration::from_secs(10 * 60)).await;
+    assert!(rig.core.sessions.has_run(CHAT));
+    assert_eq!(rig.ledger.kills.load(Ordering::SeqCst), 0);
     rig.core.sessions.shutdown().await;
 }

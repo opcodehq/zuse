@@ -359,9 +359,27 @@ async fn remote_cancel_before_prepare_and_owner_drop_preserve_other_calls() {
 #[path = "support/voice_relay.rs"]
 mod voice_relay;
 
+// Two engines on one test thread nest deep, unoptimized RPC futures; run them
+// on a stack the size the engine's own workers get.
 #[cfg(unix)]
-#[tokio::test]
-async fn remote_voice_crosses_two_engines_and_owner_drop_releases_host() {
+#[test]
+fn remote_voice_crosses_two_engines_and_owner_drop_releases_host() {
+    std::thread::Builder::new()
+        .stack_size(zuse_engine::WORKER_STACK_BYTES)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(remote_voice_crosses_two_engines_and_owner_drop_releases_host_body())
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+#[cfg(unix)]
+async fn remote_voice_crosses_two_engines_and_owner_drop_releases_host_body() {
     use std::{sync::Arc, time::Duration};
     use zuse_protocol::voice::{VoiceEvent, remote as wire};
     use zuse_rpc::{HostRelay, HostRelayConfig, LinkCache, LinkCacheConfig, StaticToken};

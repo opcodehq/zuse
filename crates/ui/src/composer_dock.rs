@@ -503,7 +503,7 @@ impl DockState {
 }
 
 fn duration(docked: bool) -> f32 {
-    (if docked { 0.420 } else { 0.470 }) * crate::motion::speed_scale()
+    (if docked { 0.240 } else { 0.260 }) * crate::motion::speed_scale()
 }
 
 pub(crate) type SharedDock = Rc<RefCell<DockState>>;
@@ -518,7 +518,6 @@ pub(crate) struct DockedComposer {
     reduced: bool,
     now: Instant,
     terminal: Option<crate::terminal::dock::SharedGeometry>,
-    shift_x: f32,
 }
 
 pub(crate) fn docked_composer(
@@ -536,7 +535,6 @@ pub(crate) fn docked_composer(
         reduced,
         now,
         terminal: None,
-        shift_x: 0.0,
     }
 }
 
@@ -547,16 +545,6 @@ impl DockedComposer {
     }
     pub fn reserve_terminal(mut self, geometry: crate::terminal::dock::SharedGeometry) -> Self {
         self.terminal = Some(geometry);
-        self
-    }
-
-    /// Move the composer `x` px off its centered slot (left of center when
-    /// negative), e.g. to stay centered on a transcript that keeps room free
-    /// on its right. Applied where the composer is positioned, so it holds
-    /// whether or not a terminal reservation re-roots the child's layout —
-    /// a style inset on the child is dropped once it is laid out as a root.
-    pub fn shift_x(mut self, x: f32) -> Self {
-        self.shift_x = x;
         self
     }
 }
@@ -653,7 +641,7 @@ impl Element for DockedComposer {
     ) {
         let mut state = self.state.borrow_mut();
         let docked = state.frame.docked;
-        let x = f32::from(bounds.left()) + self.shift_x;
+        let x = f32::from(bounds.left());
         // Anchor by the top of the input surface, not its shrinking bottom.
         let y = if docked {
             f32::from(bounds.top())

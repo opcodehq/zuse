@@ -30,6 +30,14 @@ impl PanelChoice {
         }
     }
 
+    fn label_for_conversation(self, cloud: bool) -> &'static str {
+        if self == Self::Terminal && cloud {
+            "Cloud terminal"
+        } else {
+            self.label()
+        }
+    }
+
     fn icon(self) -> &'static str {
         match self {
             Self::Files => icons::FOLDER,
@@ -55,9 +63,9 @@ impl PanelChoice {
     }
 }
 
-/// The entries in display order: Files, PR, Changes, Terminal, Browser (and
-/// History in the menu). Singletons already open are left out, as is PR
-/// without a pull request and the git entries outside a repository.
+/// Browser and Terminal lead the list, followed by project and review tools.
+/// Singletons already open are left out, as is PR without a pull request and
+/// the git entries outside a repository. History is available in the menu.
 pub(super) fn panel_choices(
     files_open: bool,
     pull_request: Option<bool>,
@@ -65,18 +73,16 @@ pub(super) fn panel_choices(
     review_open: bool,
     menu: bool,
 ) -> Vec<PanelChoice> {
-    let mut choices = Vec::new();
+    let mut choices = vec![PanelChoice::Browser, PanelChoice::Terminal];
     if !files_open {
         choices.push(PanelChoice::Files);
-    }
-    if pull_request == Some(false) {
-        choices.push(PanelChoice::PullRequest);
     }
     if git && !review_open {
         choices.push(PanelChoice::Changes);
     }
-    choices.push(PanelChoice::Terminal);
-    choices.push(PanelChoice::Browser);
+    if pull_request == Some(false) {
+        choices.push(PanelChoice::PullRequest);
+    }
     choices.push(PanelChoice::Simulator);
     if git && menu {
         choices.push(PanelChoice::History);
@@ -156,7 +162,7 @@ impl Shell {
         }
     }
 
-    /// The empty pane: a centred column of card rows (icon, label, shortcut).
+    /// The empty pane: a compact, centred launcher (icon, label, shortcut).
     pub(super) fn render_surface_picker(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::of(cx).clone();
         let rows = self
@@ -165,17 +171,17 @@ impl Shell {
             .map(|choice| {
                 let fade = format!("surface-card-{}", choice.id());
                 let shortcut = self.panel_choice_shortcut(choice);
+                let label = choice.label_for_conversation(self.cloud_conversation.is_some());
                 div()
                     .id(SharedString::from(fade.clone()))
                     .debug_selector(move || fade.clone())
                     .role(gpui::Role::Button)
-                    .aria_label(choice.label())
+                    .aria_label(label)
                     .w_full()
-                    .px(px(12.0))
-                    .py(px(12.0))
-                    .rounded(px(8.0))
-                    .bg(theme.surface_card.opacity(0.8))
-                    .hover(|style| style.bg(theme.surface_card.opacity(0.6)))
+                    .h(px(36.0))
+                    .px(px(10.0))
+                    .rounded(px(6.0))
+                    .hover(|style| style.bg(theme.element_hover))
                     .flex()
                     .flex_row()
                     .items_center()
@@ -192,9 +198,9 @@ impl Shell {
                             .flex_1()
                             .min_w_0()
                             .truncate()
-                            .text_size(crate::typography::text_md())
+                            .text_size(crate::typography::text_sm())
                             .text_color(theme.text)
-                            .child(SharedString::from(choice.label())),
+                            .child(SharedString::from(label)),
                     )
                     .children(shortcut.map(|shortcut| {
                         div()
@@ -218,10 +224,9 @@ impl Shell {
             .child(
                 div()
                     .w_full()
-                    .max_w(px(448.0))
+                    .max_w(px(280.0))
                     .flex()
                     .flex_col()
-                    .gap(px(6.0))
                     .children(rows),
             )
             .into_any_element()
@@ -240,11 +245,12 @@ impl Shell {
             .map(|choice| {
                 let fade = format!("right-plus-{}", choice.id());
                 let shortcut = self.panel_choice_shortcut(choice);
+                let label = choice.label_for_conversation(self.cloud_conversation.is_some());
                 popover::menu_row(&theme, false, fade.clone())
                     .id(SharedString::from(format!("{fade}-row")))
                     .debug_selector(move || format!("{fade}-row"))
                     .role(gpui::Role::MenuItem)
-                    .aria_label(choice.label())
+                    .aria_label(label)
                     .gap(px(10.0))
                     .text_size(crate::typography::text_md())
                     .child(
@@ -258,7 +264,7 @@ impl Shell {
                             .flex_1()
                             .min_w_0()
                             .truncate()
-                            .child(SharedString::from(choice.label())),
+                            .child(SharedString::from(label)),
                     )
                     .children(shortcut.map(|shortcut| popover::kbd_hint(&theme, &shortcut)))
                     .on_click(cx.listener(move |this, _, window, cx| {
@@ -283,18 +289,18 @@ mod tests {
         use PanelChoice::*;
         assert_eq!(
             panel_choices(false, Some(false), true, false, false),
-            [Files, PullRequest, Changes, Terminal, Browser, Simulator]
+            [Browser, Terminal, Files, Changes, PullRequest, Simulator]
         );
         // Each entry appears once, Files included.
         let menu = panel_choices(false, Some(false), true, false, true);
         assert_eq!(
             menu,
             [
-                Files,
-                PullRequest,
-                Changes,
-                Terminal,
                 Browser,
+                Terminal,
+                Files,
+                Changes,
+                PullRequest,
                 Simulator,
                 History
             ]
@@ -302,12 +308,12 @@ mod tests {
         // An open tree, PR or review is not offered again.
         assert_eq!(
             panel_choices(true, Some(true), true, true, true),
-            [Terminal, Browser, Simulator, History]
+            [Browser, Terminal, Simulator, History]
         );
         // No pull request, no repository: no PR or git entries.
         assert_eq!(
             panel_choices(false, None, false, false, true),
-            [Files, Terminal, Browser, Simulator]
+            [Browser, Terminal, Files, Simulator]
         );
     }
 }

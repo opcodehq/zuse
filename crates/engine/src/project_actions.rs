@@ -60,6 +60,9 @@ struct ProjectActionsStoreInner {
     path: PathBuf,
     state: Mutex<ProjectActionsFile>,
     setup_handoffs: Mutex<HashMap<String, StoredSetupHandoff>>,
+    /// Worktree preparation phase per in-flight Run command, until its setup
+    /// handoff completes. Same non-durable contract as the handoffs.
+    worktree_progress: Mutex<HashMap<String, (String, zuse_protocol::WorktreeProgress)>>,
 }
 
 /// Account-scoped storage for executable project Actions.
@@ -100,6 +103,7 @@ impl ProjectActionsStore {
                 path,
                 state: Mutex::new(state),
                 setup_handoffs: Mutex::new(HashMap::new()),
+                worktree_progress: Mutex::new(HashMap::new()),
             }),
         })
     }
@@ -251,6 +255,7 @@ impl ProjectActionsStore {
         chat_id: &str,
         outcome: ProjectActionSetupHandoff,
     ) {
+        self.clear_worktree_progress(command_id);
         let mut handoffs = lock(&self.inner.setup_handoffs);
         prune_setup_handoffs(&mut handoffs);
         handoffs.insert(
@@ -274,6 +279,53 @@ impl ProjectActionsStore {
             return None;
         }
         handoffs.remove(command_id).map(|stored| stored.outcome)
+    }
+}
+
+impl ProjectActionsStore {
+    /// Publish where the host is in materializing a Run's worktree.
+    pub fn set_worktree_progress(
+        &self,
+        command_id: &str,
+        chat_id: &str,
+        progress: zuse_protocol::WorktreeProgress,
+    ) {
+        lock(&self.inner.worktree_progress)
+            .insert(command_id.to_string(), (chat_id.to_string(), progress));
+    }
+
+    pub fn clear_worktree_progress(&self, command_id: &str) {
+        lock(&self.inner.worktree_progress).remove(command_id);
+    }
+
+    /// Clears `command_id`'s worktree progress when dropped.
+    pub fn worktree_progress_scope(&self, command_id: &str) -> WorktreeProgressScope {
+        WorktreeProgressScope {
+            store: self.clone(),
+            command_id: command_id.to_string(),
+        }
+    }
+
+    pub fn worktree_progress(
+        &self,
+        command_id: &str,
+        chat_id: &str,
+    ) -> Option<zuse_protocol::WorktreeProgress> {
+        lock(&self.inner.worktree_progress)
+            .get(command_id)
+            .filter(|(owner, _)| owner == chat_id)
+            .map(|(_, progress)| progress.clone())
+    }
+}
+
+pub struct WorktreeProgressScope {
+    store: ProjectActionsStore,
+    command_id: String,
+}
+
+impl Drop for WorktreeProgressScope {
+    fn drop(&mut self) {
+        self.store.clear_worktree_progress(&self.command_id);
     }
 }
 

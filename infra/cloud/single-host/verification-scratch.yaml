@@ -1,0 +1,21 @@
+# Optional staging-only SSD scratch. API and worker share the SAME effects-lock
+# and verification paths; auth-worker/production keep their existing mounts.
+services:
+  api:
+    environment:
+      TMPDIR: /var/lib/zuse/verification-scratch
+    volumes:
+      - type: bind
+        source: ${VERIFICATION_SCRATCH_DIR:?}
+        target: /var/lib/zuse/verification-scratch
+        bind:
+          create_host_path: false
+  worker:
+    environment:
+      TMPDIR: /var/lib/zuse/verification-scratch
+    volumes:
+      - type: bind
+        source: ${VERIFICATION_SCRATCH_DIR:?}
+        target: /var/lib/zuse/verification-scratch
+        bind:
+          create_host_path: false

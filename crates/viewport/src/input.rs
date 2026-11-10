@@ -36,6 +36,8 @@ pub struct TextInput {
     window: AnyWindowHandle,
     light_style: bool,
     single_line_metrics: (f32, f32),
+    /// Shell scripts: monospace, and Enter inserts a newline.
+    mono: bool,
     clipboard_error: Option<&'static str>,
     menu: Option<edit_menu::EditMenu>,
     _events: Subscription,
@@ -72,6 +74,7 @@ impl TextInput {
             window: window.window_handle(),
             light_style: crate::palette::is_light(),
             single_line_metrics: (12., 16.),
+            mono: false,
             clipboard_error: None,
             menu: None,
             _events: events,
@@ -102,6 +105,40 @@ impl TextInput {
             window: window.window_handle(),
             light_style: crate::palette::is_light(),
             single_line_metrics: (12., 16.),
+            mono: false,
+            clipboard_error: None,
+            menu: None,
+            _events: events,
+        }
+    }
+
+    /// A multi-line shell script: monospace, grows with its content, and
+    /// Enter inserts a newline instead of submitting.
+    pub fn script(placeholder: &str, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let owner = cx.weak_entity();
+        let editor = cx.new(|cx| {
+            let mut state = TextareaState::new(window, cx)
+                .placeholder(placeholder.to_owned())
+                .auto_grow(3, 18)
+                .submit_on_enter(false);
+            state.set_editor_paddings(Edges {
+                top: px(2.),
+                bottom: px(2.),
+                left: px(0.),
+                right: px(0.),
+            });
+            state.set_editor_style(editor_style());
+            state.on_context_menu(edit_menu::handler(owner, state.focus_handle(cx)));
+            state
+        });
+        let events = cx.subscribe(&editor, |this, _, event, cx| this.on_input_event(event, cx));
+        Self {
+            editor: Editor::Multi(editor),
+            placeholder: placeholder.to_owned(),
+            window: window.window_handle(),
+            light_style: crate::palette::is_light(),
+            single_line_metrics: (12., 16.),
+            mono: true,
             clipboard_error: None,
             menu: None,
             _events: events,
@@ -126,10 +163,17 @@ impl TextInput {
             window: window.window_handle(),
             light_style: crate::palette::is_light(),
             single_line_metrics: (12., 16.),
+            mono: false,
             clipboard_error: None,
             menu: None,
             _events: events,
         }
+    }
+
+    /// A [`Self::script`] for prose: same editing, proportional type.
+    pub fn proportional(mut self) -> Self {
+        self.mono = false;
+        self
     }
 
     pub fn with_single_line_metrics(mut self, size: f32, line_height: f32) -> Self {
@@ -299,12 +343,15 @@ impl Render for TextInput {
                 matches!(self.editor, Editor::Code(_)) && self.clipboard_error.is_some(),
                 |d| d.pb(px(18.)),
             )
+            .when(self.mono, |d| d.font_family("Geist Mono"))
             .text_size(px(match self.editor {
+                Editor::Multi(_) if self.mono => 12.,
                 Editor::Single(_) => self.single_line_metrics.0,
                 Editor::Multi(_) => crate::composer_style::TEXT_SIZE,
                 Editor::Code(_) => 13.,
             }))
             .line_height(px(match self.editor {
+                Editor::Multi(_) if self.mono => 19.,
                 Editor::Single(_) => self.single_line_metrics.1,
                 Editor::Multi(_) => crate::composer_style::LINE_HEIGHT,
                 Editor::Code(_) => 22.,

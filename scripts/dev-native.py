@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """Rebuild and relaunch the native UI while its development engine stays alive."""
 import argparse
-import json
 import os
 from pathlib import Path
 import signal
 import socket
 import subprocess
 import time
+
+from cargo_dev import build_environment
+from build_cache import prepare
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -26,6 +28,32 @@ def snapshot():
         except FileNotFoundError:
             pass
     return result
+
+
+# Inputs only the windowed UI compiles in; the engine never runs them.
+UI_ONLY_PACKAGES = ("crates/ui/", "crates/viewport/")
+
+
+def ui_only_input(path):
+    relative = Path(path).resolve().as_posix()
+    root = ROOT.resolve().as_posix() + "/"
+    relative = relative[len(root):] if relative.startswith(root) else relative
+    return relative.startswith(UI_ONLY_PACKAGES)
+
+
+def start_engine(binary, env, port):
+    process = subprocess.Popen([binary, "headless"], cwd=ROOT, env=env, start_new_session=True)
+    deadline = time.monotonic() + 30
+    while True:
+        if process.poll() is not None:
+            raise RuntimeError("Development engine exited before opening IPC")
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+                return process
+        except OSError:
+            if time.monotonic() > deadline:
+                raise RuntimeError("Development engine did not open IPC within 30 seconds")
+            time.sleep(0.1)
 
 
 def stop(process):
@@ -49,7 +77,7 @@ def main():
     args = parser.parse_args()
     if not 0 < args.ipc_port < 65536:
         parser.error("--ipc-port must be between 1 and 65535")
-    env = dict(os.environ, ZUSE_DATA_DIR=str(Path(args.data_dir).resolve()), ZUSE_IPC_PORT=str(args.ipc_port))
+    env = dict(build_environment(), ZUSE_DATA_DIR=str(Path(args.data_dir).resolve()), ZUSE_IPC_PORT=str(args.ipc_port))
     # Use a separate local development profile unless the caller opts into sync.
     env.setdefault("ZUSE_WORKOS_CLIENT_ID", "")
     engine = ui = None
@@ -61,25 +89,13 @@ def main():
         with socket.socket() as probe:
             probe.bind(("127.0.0.1", args.ipc_port))
         seen = snapshot()
+        target = prepare(env=env)
         if subprocess.call(build, cwd=ROOT, env=env):
             return 1
-        metadata = json.loads(subprocess.check_output(
-            ["cargo", "metadata", "--locked", "--no-deps", "--format-version=1"], cwd=ROOT, env=env))
-        binary = str(Path(metadata["target_directory"]) / "debug/zuse")
-        engine = subprocess.Popen([binary, "headless"], cwd=ROOT, env=env, start_new_session=True)
-        deadline = time.monotonic() + 30
-        while True:
-            if engine.poll() is not None:
-                raise RuntimeError("Development engine exited before opening IPC")
-            try:
-                with socket.create_connection(("127.0.0.1", args.ipc_port), timeout=0.2):
-                    break
-            except OSError:
-                if time.monotonic() > deadline:
-                    raise RuntimeError("Development engine did not open IPC within 30 seconds")
-                time.sleep(0.1)
+        binary = str(target / "debug/zuse")
+        engine = start_engine(binary, env, args.ipc_port)
         ui = subprocess.Popen([binary], cwd=ROOT, env=env, start_new_session=True)
-        print("Watching native sources and assets. UI reloads keep the engine running. Ctrl+C stops both.", flush=True)
+        print("Watching native sources and assets. UI-only changes keep the engine running; engine changes restart it. Ctrl+C stops both.", flush=True)
         while engine.poll() is None:
             time.sleep(0.5)
             current = snapshot()
@@ -87,12 +103,24 @@ def main():
                 continue
             # Coalesce editor saves; preserve later edits made during a build.
             time.sleep(0.25)
-            seen = snapshot()
+            previous, seen = seen, snapshot()
+            changed = {path for path in set(previous) | set(seen) if previous.get(path) != seen.get(path)}
             print("Rebuilding native UI…", flush=True)
+            try:
+                prepare(env=env, target=target)
+            except RuntimeError as error:
+                print(f"{error} Keeping the current UI and engine running.", flush=True)
+                continue
             if subprocess.call(build, cwd=ROOT, env=env):
                 print("Build failed; keeping the current UI. Save a fix to retry.", flush=True)
                 continue
             stop(ui)
+            if any(not ui_only_input(path) for path in changed):
+                # Engine code changed: a UI reload alone would keep running
+                # the old engine.
+                print("Restarting the development engine for engine changes…", flush=True)
+                stop(engine)
+                engine = start_engine(binary, env, args.ipc_port)
             ui = subprocess.Popen([binary], cwd=ROOT, env=env, start_new_session=True)
         raise RuntimeError("Development engine exited")
     except KeyboardInterrupt:

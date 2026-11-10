@@ -368,6 +368,8 @@ impl ProjectArchive {
             cx.notify();
             return;
         };
+        self.state
+            .update(cx, |state, _| state.clear_chat_archive_intent(&id));
         self.busy = Some(id.clone());
         self.restore_error = None;
         let selection = self.selected.clone();

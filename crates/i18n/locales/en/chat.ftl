@@ -2878,6 +2878,18 @@ chat-tool_group_notes =
        [one] Wrote a note
        *[other] Wrote { $count } notes
     }
+# Variables: count
+chat-tool_group_tool_calls =
+    { $count ->
+       [one] { $count } tool call
+       *[other] { $count } tool calls
+    }
+# Variables: count
+chat-tool_group_messages =
+    { $count ->
+       [one] { $count } message
+       *[other] { $count } messages
+    }
 
 chat-find_in_chat_placeholder = Find in chat
 chat-find_in_chat_count = { $current } of { $total }
@@ -2899,3 +2911,9 @@ chat-history_search_use = use
 chat-history_search_cancel = cancel
 chat-stash_saved_notice = Draft stashed · <part0>{ $shortcut }</part0> to view
 chat-chat_composer_press_esc_again_to_clear = Press <part0>Esc</part0> again to clear
+chat-worktree_fetching = Fetching latest { $branch }…
+chat-worktree_creating = Creating worktree from { $branch }…
+chat-worktree_offline = Couldn't reach the remote · using local { $branch }
+
+# Native and browser history pagination; translations remain draft.
+chat-cloud_history_load_earlier = Load earlier messages

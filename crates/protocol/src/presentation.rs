@@ -1,8 +1,12 @@
 //! Client presentation state shared without filesystem or rendering dependencies.
+mod cloud_projects;
 mod effort;
+pub use cloud_projects::{CloudProjectGroup, cloud_project_group};
 pub mod git_history;
 mod model_config;
 pub mod motion;
+pub mod zot_mascots;
+pub mod zot_panel;
 pub use model_config::RememberedModelConfig;
 mod queue;
 pub use effort::{EffortSetting, EffortStop, ModelEffort, model_effort, model_effort_option};
@@ -62,6 +66,14 @@ pub enum PermissionMode {
 }
 impl PermissionMode {
     pub const ALL: [Self; 3] = [Self::ApprovalRequired, Self::Auto, Self::FullAccess];
+    /// Convert a composer access selection into its persisted new-chat default.
+    pub fn from_sandbox(level: crate::SandboxLevel) -> Self {
+        match level {
+            crate::SandboxLevel::WorkspaceWrite => Self::ApprovalRequired,
+            crate::SandboxLevel::Auto => Self::Auto,
+            crate::SandboxLevel::DangerFullAccess => Self::FullAccess,
+        }
+    }
     pub fn label(self) -> &'static str {
         access_details(self.sandbox()).label
     }
@@ -150,6 +162,8 @@ pub struct WorkspacePreferences {
     pub collapsed_projects: Vec<String>,
     pub workspace_by_project: BTreeMap<String, WorkspaceMode>,
     pub default_provider: Option<String>,
+    pub cloud_provider: Option<String>,
+    pub cloud_sizes: BTreeMap<String, String>,
     pub default_models: BTreeMap<String, String>,
     pub recent_models: Vec<ModelSelection>,
     pub model_config_history: Vec<RememberedModelConfig>,
@@ -196,6 +210,26 @@ impl WorkspacePreferences {
     }
     pub fn normalize(&mut self) {
         self.sidebar_width = self.sidebar_width.map(|width| width.clamp(200, 300));
+        let provider = |id: &str| {
+            crate::cloud_computers::ProviderId::ALL
+                .iter()
+                .any(|p| p.as_str() == id)
+        };
+        if self
+            .cloud_provider
+            .as_deref()
+            .is_some_and(|id| !provider(id))
+        {
+            self.cloud_provider = None;
+        }
+        self.cloud_sizes.retain(|id, size| {
+            provider(id)
+                && !size.is_empty()
+                && size.len() <= 64
+                && size
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
+        });
         self.recent_models.truncate(8);
         model_config::normalize_history(&mut self.model_config_history);
         self.collapsed_projects.truncate(512);
@@ -515,6 +549,16 @@ mod binary_switch_tests {
 mod permission_tests {
     use super::*;
     use crate::SandboxLevel;
+    #[test]
+    fn every_access_choice_round_trips_as_a_new_chat_default() {
+        for level in ACCESS_LEVELS {
+            let mode = PermissionMode::from_sandbox(level);
+            let stored = serde_json::to_value(mode).unwrap();
+            let loaded: PermissionMode = serde_json::from_value(stored).unwrap();
+            assert_eq!(loaded.for_chat(None), level);
+            assert!(PermissionMode::ALL.contains(&loaded));
+        }
+    }
     #[test]
     fn new_defaults_never_rewrite_existing_or_legacy_chat_permissions() {
         let mut chat: crate::Chat = serde_json::from_value(serde_json::json!({"id":"c","deviceId":"d","archived":false,"createdAt":"2026-01-01T00:00:00Z","config":{"harness":"codex","sandbox":"read-only"}})).unwrap();

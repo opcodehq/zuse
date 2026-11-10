@@ -1,6 +1,10 @@
 //! Cloud contracts shared by the hosted API and native/browser clients.
 use serde::{Deserialize, Serialize};
 
+/// Negotiates storage preparation in bootstrap and commitment on gateway bind.
+pub const STARTUP_BIND_CAPABILITY: &str = "rust-startup-bind-v2";
+pub const STARTUP_BIND_HEADER: &str = "x-zuse-runtime-storage";
+
 pub const ARCHIVE_RETENTION_MS: i64 = 10 * 24 * 60 * 60 * 1000;
 pub const DELETION_TOMBSTONE_RETENTION_MS: i64 = 30 * 24 * 60 * 60 * 1000;
 
@@ -331,6 +335,10 @@ pub struct CloudStorageEnrollment {
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CloudWorkspaceCreateRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_connection_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment_revision: Option<i64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<crate::cloud_assets::Asset>,
     pub project_id: String,

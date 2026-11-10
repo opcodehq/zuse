@@ -123,6 +123,11 @@ fn seed(layout: &Layout) -> rusqlite::Connection {
     );
     for name in [
         "cloud-runtime-identity.json",
+        "cloud-runtime-supervision.json",
+        "cloud-runtime-supervisor-recovery.json",
+        "cloud-runtime-supervisor-repairs.json",
+        "cloud-runtime-supervisor-recreation.json",
+        ".runtime-recreation/environment.json",
         "session.json",
         "model-accounts/key",
         "rust-runtime-storage.json",
@@ -156,6 +161,17 @@ fn seed(layout: &Layout) -> rusqlite::Connection {
         &layout.home.join(".codex/auth.json"),
         b"REUSABLE_PROVIDER_CREDENTIAL",
     );
+    std::fs::create_dir_all(layout.data.join(".runtime-memory")).unwrap();
+    let socket =
+        std::os::unix::net::UnixListener::bind(layout.data.join(".runtime-memory/wake.sock"))
+            .unwrap();
+    drop(socket); // Retained stale socket after a process-loss recovery.
+    std::fs::create_dir_all(layout.data.join(".runtime-supervision")).unwrap();
+    let socket = std::os::unix::net::UnixListener::bind(
+        layout.data.join(".runtime-supervision/control.sock"),
+    )
+    .unwrap();
+    drop(socket);
     db
 }
 fn session(data: &Path) -> zuse_doc::SessionDoc {
@@ -254,7 +270,14 @@ async fn full_native_wal_round_trip_retains_history_journals_work_and_fresh_iden
         .unwrap()
         .map(|e| e.unwrap().path().unwrap().to_string_lossy().into_owned())
         .collect();
-    assert!(!names.iter().any(|p| p.contains("cloud-runtime-identity")
+    assert!(!names.iter().any(|p| p.contains(".runtime-memory")
+        || p.contains(".runtime-supervision")
+        || p.contains("cloud-runtime-supervision")
+        || p.contains("cloud-runtime-supervisor-recovery")
+        || p.contains("cloud-runtime-supervisor-repairs")
+        || p.contains("cloud-runtime-supervisor-recreation")
+        || p.contains(".runtime-recreation")
+        || p.contains("cloud-runtime-identity")
         || p.contains("model-accounts")
         || p == "codex/auth.json"
         || p.contains("/managed-access/")

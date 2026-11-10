@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::Duration;
 
@@ -20,8 +20,8 @@ use crate::source_control::{
     CheckoutSourceContext, parse_git_remote,
 };
 
-const WITH_CHANGE_REQUEST_TTL: Duration = Duration::from_secs(2 * 60);
-const WITHOUT_CHANGE_REQUEST_TTL: Duration = Duration::from_secs(45);
+const WITH_CHANGE_REQUEST_TTL: Duration = Duration::from_secs(60);
+const WITHOUT_CHANGE_REQUEST_TTL: Duration = Duration::from_secs(300);
 const FAILURE_INITIAL_BACKOFF: Duration = Duration::from_secs(20);
 const FAILURE_MAX_BACKOFF: Duration = Duration::from_secs(15 * 60);
 const CONTEXT_POLL_INTERVAL: Duration = Duration::from_secs(15);
@@ -32,6 +32,7 @@ pub struct ChangeRequestCacheKey {
     pub branch: String,
     pub upstream_ref: String,
     pub remote: String,
+    pub credential_scope: String,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -65,7 +66,11 @@ struct CacheState {
     next_refresh: Instant,
     failures: u32,
     last_error: Option<ChangeRequestError>,
+    epoch: u64,
+    hydrated: bool,
 }
+
+type ContextEntry = Arc<AsyncMutex<Option<(Instant, u64, CheckoutSourceContext)>>>;
 
 struct Inner {
     repos: Repos,
@@ -74,6 +79,10 @@ struct Inner {
     entries: Mutex<HashMap<ChangeRequestCacheKey, Arc<CacheEntry>>>,
     timing: Timing,
     shutdown: CancellationToken,
+    epoch: AtomicU64,
+    refreshes: tokio::sync::watch::Sender<u64>,
+    store: crate::change_request_store::ChangeRequestStore,
+    contexts: Mutex<HashMap<PathBuf, ContextEntry>>,
 }
 
 /// Shared host-side cache. It owns no polling task: a stream drives refreshes only
@@ -104,6 +113,10 @@ impl CheckoutChangeRequests {
     ) -> Self {
         Self {
             inner: Arc::new(Inner {
+                store: crate::change_request_store::ChangeRequestStore::new(repos.data_dir()),
+                contexts: Mutex::new(HashMap::new()),
+                epoch: AtomicU64::new(0),
+                refreshes: tokio::sync::watch::channel(0).0,
                 repos,
                 device_id: device_id.to_owned(),
                 lookup,
@@ -112,6 +125,34 @@ impl CheckoutChangeRequests {
                 shutdown: CancellationToken::new(),
             }),
         }
+    }
+
+    async fn inspect(&self, cwd: &Path) -> Result<CheckoutSourceContext, ChangeRequestError> {
+        if !self.inner.lookup.share_checkout_inspection() {
+            return self.inner.lookup.inspect_checkout(cwd).await;
+        }
+        let entry = {
+            let mut contexts = self.inner.contexts.lock().unwrap();
+            if contexts.len() >= 256 {
+                contexts.retain(|_, entry| Arc::strong_count(entry) > 1);
+            }
+            contexts.entry(cwd.to_owned()).or_default().clone()
+        };
+        let mut cached = entry.lock().await;
+        let epoch = self.inner.epoch.load(Ordering::Acquire);
+        if let Some((at, observed, source)) = &*cached {
+            if *observed == epoch && at.elapsed() < Duration::from_secs(1) {
+                return Ok(source.clone());
+            }
+        }
+        let source = self.inner.lookup.inspect_checkout(cwd).await?;
+        *cached = Some((Instant::now(), epoch, source.clone()));
+        Ok(source)
+    }
+
+    pub(crate) fn invalidate(&self) {
+        let epoch = self.inner.epoch.fetch_add(1, Ordering::AcqRel) + 1;
+        self.inner.refreshes.send_replace(epoch);
     }
 
     pub async fn watch(
@@ -160,19 +201,14 @@ impl CheckoutChangeRequests {
             requested_branch,
             lease: None,
             last_emitted: None,
+            refreshes: self.inner.refreshes.subscribe(),
         };
         futures::stream::unfold(state, |mut state| async move {
             loop {
                 if state.service.inner.shutdown.is_cancelled() {
                     return None;
                 }
-                let mut source = match state
-                    .service
-                    .inner
-                    .lookup
-                    .inspect_checkout(&state.cwd)
-                    .await
-                {
+                let mut source = match state.service.inspect(&state.cwd).await {
                     Ok(source) => source,
                     Err(error) => {
                         tracing::debug!(%error, "change request checkout inspection unavailable");
@@ -195,7 +231,8 @@ impl CheckoutChangeRequests {
                         source.branch.remote_url.as_deref(),
                     );
                 }
-                let key = cache_key(&state.identity.id, &source);
+                let mut key = cache_key(&state.identity.id, &source);
+                key.credential_scope = state.service.inner.lookup.credential_scope().await;
                 if state.lease.as_ref().map(|lease| &lease.key) != Some(&key) {
                     state.lease = Some(state.service.acquire(key.clone()));
                 }
@@ -234,6 +271,8 @@ impl CheckoutChangeRequests {
                             next_refresh: Instant::now(),
                             failures: 0,
                             last_error: None,
+                            epoch: 0,
+                            hydrated: false,
                         }),
                         demand: AtomicUsize::new(0),
                     })
@@ -267,11 +306,42 @@ impl CheckoutChangeRequests {
         };
         let mut state = entry.state.lock().await;
         let now = Instant::now();
-        if now < state.next_refresh {
+        let epoch = self.inner.epoch.load(Ordering::Acquire);
+
+        let persistent_key = serde_json::to_string(&(
+            &key.checkout_id,
+            &key.branch,
+            &key.upstream_ref,
+            &key.remote,
+        ))
+        .unwrap();
+        if !state.hydrated {
+            state.hydrated = true;
+            if let Some(account) = &self.inner.lookup.persistence_scope().await {
+                if let Some(snapshot) = self
+                    .inner
+                    .store
+                    .branch_link(account.clone(), persistent_key.clone())
+                    .await
+                {
+                    state.last_success = Some(snapshot.clone());
+                    return (Some(snapshot), now);
+                }
+            }
+        }
+        if now < state.next_refresh && state.epoch == epoch {
             return (state.last_success.clone(), state.next_refresh);
         }
 
-        match self.inner.lookup.resolve_github_source(source).await {
+        let result = self.inner.lookup.resolve_github_source(source).await;
+        if epoch != self.inner.epoch.load(Ordering::Acquire)
+            || key.credential_scope != self.inner.lookup.credential_scope().await
+        {
+            state.next_refresh = Instant::now();
+            return (state.last_success.clone(), state.next_refresh);
+        }
+        state.epoch = epoch;
+        match result {
             Ok(change_request) => {
                 let ttl = if change_request.is_some() {
                     self.inner.timing.with_change_request_ttl
@@ -279,6 +349,7 @@ impl CheckoutChangeRequests {
                     self.inner.timing.without_change_request_ttl
                 };
                 let snapshot = CheckoutChangeRequestStatus {
+                    error: None,
                     checkout_id: key.checkout_id.clone(),
                     device_id: self.inner.device_id.clone(),
                     cwd: source.checkout_root.to_string_lossy().into_owned(),
@@ -286,6 +357,12 @@ impl CheckoutChangeRequests {
                     change_request,
                     updated_at: chrono::Utc::now(),
                 };
+                if let Some(account) = self.inner.lookup.persistence_scope().await {
+                    self.inner
+                        .store
+                        .save_branch_link(account, persistent_key, &snapshot)
+                        .await;
+                }
                 state.last_success = Some(snapshot.clone());
                 state.next_refresh = Instant::now() + ttl;
                 state.failures = 0;
@@ -299,12 +376,37 @@ impl CheckoutChangeRequests {
                     self.inner.timing.failure_max_backoff,
                     state.failures,
                 );
+                let delay = if matches!(
+                    error,
+                    ChangeRequestError::Authentication
+                        | ChangeRequestError::CliUnavailable
+                        | ChangeRequestError::RateLimited
+                ) {
+                    self.inner.timing.failure_max_backoff
+                } else {
+                    delay
+                };
                 state.next_refresh = Instant::now() + delay;
                 if state.last_error != Some(error) {
                     tracing::warn!(%error, "change request refresh failed; retaining last success");
                     state.last_error = Some(error);
                 }
-                (state.last_success.clone(), state.next_refresh)
+                let mut failed =
+                    state
+                        .last_success
+                        .clone()
+                        .unwrap_or_else(|| CheckoutChangeRequestStatus {
+                            error: None,
+                            checkout_id: key.checkout_id.clone(),
+                            device_id: self.inner.device_id.clone(),
+                            cwd: source.checkout_root.to_string_lossy().into_owned(),
+                            branch: source.branch.local_branch.clone(),
+                            change_request: None,
+                            updated_at: chrono::DateTime::UNIX_EPOCH,
+                        });
+                failed.error = Some(error.to_string());
+                state.last_success = Some(failed.clone());
+                (Some(failed), state.next_refresh)
             }
         }
     }
@@ -345,19 +447,22 @@ struct SubscriptionState {
     requested_branch: Option<String>,
     lease: Option<DemandLease>,
     last_emitted: Option<SemanticStatus>,
+    refreshes: tokio::sync::watch::Receiver<u64>,
 }
 
 impl SubscriptionState {
-    async fn sleep(&self, duration: Duration) -> bool {
+    async fn sleep(&mut self, duration: Duration) -> bool {
         tokio::select! {
             _ = self.service.inner.shutdown.cancelled() => false,
             _ = tokio::time::sleep(duration) => true,
+            _ = self.refreshes.changed() => true,
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SemanticStatus {
+    error: Option<String>,
     checkout_id: String,
     device_id: String,
     cwd: String,
@@ -368,6 +473,7 @@ struct SemanticStatus {
 impl From<&CheckoutChangeRequestStatus> for SemanticStatus {
     fn from(status: &CheckoutChangeRequestStatus) -> Self {
         Self {
+            error: status.error.clone(),
             checkout_id: status.checkout_id.clone(),
             device_id: status.device_id.clone(),
             cwd: status.cwd.clone(),
@@ -397,6 +503,7 @@ fn cache_key(checkout_id: &str, source: &CheckoutSourceContext) -> ChangeRequest
         branch: source.branch.local_branch.clone(),
         upstream_ref: source.branch.upstream_ref.clone().unwrap_or_default(),
         remote,
+        credential_scope: String::new(),
     }
 }
 
@@ -488,6 +595,8 @@ mod tests {
             state: ChangeRequestState::Open,
             base_ref: "main".into(),
             head_ref: "feature/status".into(),
+            is_draft: false,
+            review_decision: Default::default(),
         }
     }
 
@@ -625,17 +734,38 @@ mod tests {
         let mut stream = service.watch_checkout(PathBuf::from("/checkout"), identity());
         let first = stream.next().await.unwrap();
 
-        assert!(
-            tokio::time::timeout(Duration::from_millis(50), stream.next())
-                .await
-                .is_err()
-        );
+        let failed = tokio::time::timeout(Duration::from_millis(50), stream.next())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(failed.change_request, first.change_request);
+        assert_eq!(failed.updated_at, first.updated_at);
+        assert!(failed.error.is_some());
         assert_eq!(lookup.resolve_count(), 2);
 
         let mut later = service.watch_checkout(PathBuf::from("/checkout"), identity());
         let cached = later.next().await.unwrap();
         assert_eq!(cached.change_request, first.change_request);
         assert_eq!(lookup.resolve_count(), 2);
+    }
+
+    #[tokio::test]
+    async fn initial_authentication_failure_is_not_a_successful_no_match() {
+        let lookup = FakeLookup::new(
+            source("feature/status"),
+            [Err(ChangeRequestError::Authentication)],
+        );
+        let service = service(lookup, fast_timing());
+        let mut stream = service.watch_checkout(PathBuf::from("/checkout"), identity());
+        let frame = stream.next().await.unwrap();
+        assert!(frame.change_request.is_none());
+        assert!(
+            frame
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("authenticated"))
+        );
+        assert_eq!(frame.updated_at, chrono::DateTime::UNIX_EPOCH);
     }
 
     #[tokio::test]
@@ -666,8 +796,12 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(2)).await;
         let (after_rate_limit, _) = service.refresh(&key, &source).await;
 
-        assert_eq!(after_auth, first);
-        assert_eq!(after_rate_limit, first);
+        let first = first.unwrap();
+        for failed in [after_auth.unwrap(), after_rate_limit.unwrap()] {
+            assert_eq!(failed.change_request, first.change_request);
+            assert_eq!(failed.updated_at, first.updated_at);
+            assert!(failed.error.is_some());
+        }
         assert_eq!(lookup.resolve_count(), 3);
     }
 

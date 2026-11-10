@@ -161,12 +161,7 @@ impl WorkspaceView {
             view = view.child(
                 row()
                     .gap_2()
-                    .child(s::description_text(format!(
-                        "Authorization code: {}",
-                        self.cloud_account["login"]["userCode"]
-                            .as_str()
-                            .unwrap_or_default()
-                    )))
+                    .child(s::description_text("Finish signing in in your browser."))
                     .child(
                         s::button(
                             "authorize-account",

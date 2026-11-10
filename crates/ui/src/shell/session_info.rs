@@ -3,36 +3,20 @@
 //! project's run actions, in one toggleable card. Its
 //! rows follow the environment summary's idiom: 28px icon rows, 12px text,
 //! a glass card with no dividers.
-//! While the column has room, the card shows at its right on its own (until
-//! the user hides it), the transcript and composer shifting left as needed
-//! to clear it. Once clearing it would narrow the transcript, the card hides,
-//! and opening it floats it over the transcript instead.
+//! The card is a popover: its titlebar toggle opens it over the transcript,
+//! and a press elsewhere or choosing one of its rows dismisses it. It never
+//! takes room from the transcript or the composer.
 use super::*;
 use crate::localization::message as tr;
 use zuse_i18n::messages as msg;
 
 use crate::project_actions::{ProjectActionsStatus, action_icon};
 
-/// The card's width, its inset from the column's right edge, and the
-/// least gap the reading column keeps from it.
-pub(super) const SESSION_CARD_WIDTH: f32 = 288.0;
+/// The card's width, its inset from the column's right edge, and its drop
+/// below the titlebar that holds its toggle.
+const SESSION_CARD_WIDTH: f32 = 288.0;
 const SESSION_CARD_INSET: f32 = 12.0;
-const SESSION_CARD_GAP: f32 = 24.0;
-/// The transcript's own side gutters (its rows pad 48px each side).
-const TRANSCRIPT_GUTTER: f32 = 48.0;
-
-/// The room the transcript holds free on its right for the card docked in a
-/// main column `main` wide, for a configured reading width `transcript`: none
-/// while the centered column already clears the card, else just enough to
-/// shift it left. `None` once that would narrow the column: the card no
-/// longer fits beside it.
-pub(super) fn session_card_reserve(main: f32, transcript: f32) -> Option<f32> {
-    let card_left = main - SESSION_CARD_WIDTH - SESSION_CARD_INSET;
-    // Centered in `main - reserve`, the column's right edge is
-    // (main - reserve) / 2 + transcript / 2; keep it at `card_left - gap`.
-    let reserve = (main + transcript - 2.0 * (card_left - SESSION_CARD_GAP)).max(0.0);
-    (main - reserve - 2.0 * TRANSCRIPT_GUTTER >= transcript - 0.5).then_some(reserve)
-}
+const SESSION_CARD_DROP: f32 = 4.0;
 
 /// The card's row height, padding and corner radius.
 const SUMMARY_ROW_HEIGHT: f32 = 28.0;
@@ -225,31 +209,9 @@ fn agent_status_glyph(status: zuse_doc::SubagentStatus, theme: &Theme) -> AnyEle
 }
 
 impl Shell {
-    /// The card's reserve at the main column's LIVE width (see
-    /// [`session_card_reserve`]): while the sidebar or a pane animates, the
-    /// settled width would move or hide the card ahead of the column.
-    fn session_info_reserve(&self, cx: &App) -> Option<f32> {
-        let main = (self.viewport_width
-            - self.sidebar_now()
-            - self.right_visible_width(cx)
-            - self.files_visible_width(cx))
-        .max(0.0);
-        session_card_reserve(main, crate::settings::transcript_width(cx))
-    }
-
-    /// Whether the card fits beside the transcript without narrowing it.
-    pub(super) fn session_info_fits(&self, cx: &App) -> bool {
-        self.session_info_reserve(cx).is_some()
-    }
-
-    /// Beside the transcript it shows unless hidden; over it, only while
-    /// opened.
-    pub(super) fn session_info_visible(&self, cx: &App) -> bool {
-        if self.session_info_fits(cx) {
-            !self.settings.session_info_hidden
-        } else {
-            self.session_info_overlay
-        }
+    /// Whether the card is open over the transcript.
+    pub(super) fn session_info_visible(&self) -> bool {
+        self.session_info_overlay
     }
 
     /// The toggle's mouse-down: note whether the card showed, so the click
@@ -261,21 +223,14 @@ impl Shell {
     }
 
     pub(super) fn toggle_session_info(&mut self, cx: &mut Context<Self>) {
-        let show = !self
+        self.session_info_overlay = !self
             .session_info_pressed_open
             .take()
             .unwrap_or(self.session_info_shown);
-        if self.session_info_fits(cx) {
-            self.settings.session_info_hidden = !show;
-            self.schedule_save(cx);
-        } else {
-            self.session_info_overlay = show;
-        }
         cx.notify();
     }
 
-    /// Dismiss the card floating over the transcript; one shown beside it
-    /// stays put.
+    /// Dismiss the card.
     pub(super) fn close_session_info_overlay(&mut self, cx: &mut Context<Self>) {
         if self.session_info_overlay {
             self.session_info_overlay = false;
@@ -283,50 +238,28 @@ impl Shell {
         }
     }
 
-    /// This frame's card: docked beside the transcript (else floating over
-    /// it), its reveal, 0 (hidden) → 1 (shown), and the room the transcript
-    /// holds free for it. The reveal eases on the shell's resize clock
-    /// whenever the card shows or hides, by toggle or by the column crossing
-    /// the fit, and the reserve eases with it.
-    pub(super) fn session_info_frame(&mut self, has_selection: bool, cx: &App) -> (bool, f32, f32) {
-        let reserve = self.session_info_reserve(cx);
-        if let Some(reserve) = reserve {
-            // An overlay opened on a tighter column ends once the card fits.
-            self.session_info_overlay = false;
-            self.session_info_last_reserve = reserve;
-        }
-        let shown = has_selection && self.session_info_visible(cx);
-        if shown {
-            self.session_info_docked = reserve.is_some();
-        }
+    /// This frame's reveal of the card, 0 (hidden) → 1 (shown), eased on the
+    /// shell's resize clock whenever it opens or closes.
+    pub(super) fn session_info_reveal(&mut self, has_selection: bool) -> f32 {
+        let shown = has_selection && self.session_info_visible();
         let target = if shown { 1.0 } else { 0.0 };
         if shown != self.session_info_shown {
             let from = self.eval_tween(self.session_info_tween, 1.0 - target);
             self.session_info_tween = Some(WidthTween::new(from, target));
             self.session_info_shown = shown;
         }
-        let reveal = self.eval_tween(self.session_info_tween, target);
-        // Hiding as the column stops fitting, the card keeps its docked look
-        // and the transcript eases back from the last room it held.
-        let docked = self.session_info_docked;
-        let reserve = if docked {
-            reserve.unwrap_or(self.session_info_last_reserve) * reveal
-        } else {
-            0.0
-        };
-        (docked, reveal, reserve)
+        self.eval_tween(self.session_info_tween, target)
     }
 
     /// The card, positioned within the main column; `None` while closed or
     /// with no chat selected.
     pub(super) fn render_session_info(
         &mut self,
-        docked: bool,
         reveal: f32,
         max_height: f32,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        if reveal <= 0.001 {
+        if reveal <= 0.001 || self.state.read(cx).selected_chat_is_zot_coordinator() {
             return None;
         }
         let theme = Theme::of(cx).for_popup();
@@ -525,15 +458,7 @@ impl Shell {
             .child(fade_rule(&theme))
             .child(side_chat)
             .children(actions)
-            .child(
-                // Its text lines up with the rows' labels.
-                div()
-                    .pt(px(6.0))
-                    .pl(px(SUMMARY_LABEL_INSET - 16.0))
-                    .pr(px(4.0))
-                    .pb(px(2.0))
-                    .child(self.recovery.clone()),
-            );
+            .child(self.recovery.clone());
 
         let card = div()
             .w(px(SESSION_CARD_WIDTH))
@@ -542,38 +467,281 @@ impl Shell {
             .border_1()
             .border_color(theme.border)
             .bg(popover::surface_bg(&theme))
-            .when(!docked && !theme.is_frost(), |card| card.shadow_lg())
+            .when(!theme.is_frost(), |card| card.shadow_lg())
             .child(body);
 
-        // Docked, the card slides in from the right beside the column;
-        // floating, it drops in from just above. Either way it is placed from
-        // the column's right edge, so it rides that edge while panes animate.
+        // It drops in from just under its toggle, placed from the column's
+        // right edge so it rides that edge while panes animate.
         let ease = crate::motion::RESIZE.progress(reveal.clamp(0.0, 1.0));
-        let (dx, dy) = if docked {
-            (12.0 * (1.0 - ease), 0.0)
-        } else {
-            (0.0, -6.0 * (1.0 - ease))
-        };
+        let dy = -6.0 * (1.0 - ease);
         Some(
             div()
                 .id("session-info")
                 .debug_selector(|| "session-info".into())
                 .absolute()
-                .top(px(Theme::TITLEBAR_HEIGHT + 12.0 + dy))
-                .right(px(SESSION_CARD_INSET - dx))
+                .top(px(Theme::TITLEBAR_HEIGHT + SESSION_CARD_DROP + dy))
+                .right(px(SESSION_CARD_INSET))
                 .opacity(ease)
                 .occlude()
-                // Over the transcript it is a popover: a press elsewhere, or
-                // choosing one of its rows, dismisses it.
-                .when(!docked, |card| {
-                    card.on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                        // The pull request menu floats beside the card and
-                        // dismisses itself first.
-                        if !this.summary_pr.menu_open {
-                            this.close_session_info_overlay(cx);
-                        }
-                    }))
-                })
+                // A press elsewhere, or choosing one of its rows, dismisses it.
+                .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                    // The pull request menu floats beside the card and
+                    // dismisses itself first.
+                    if !this.summary_pr.menu_open {
+                        this.close_session_info_overlay(cx);
+                    }
+                }))
+                .child(crate::frost::frosted(
+                    SUMMARY_CARD_RADIUS,
+                    crate::frost::MENU_BLUR,
+                    card,
+                ))
+                .into_any_element(),
+        )
+    }
+
+    /// The environment summary for a cloud conversation: the computer and
+    /// its state, the repository and branch it works on, and the actions a
+    /// computer has (sleep or wake, its details, the synced folder).
+    pub(super) fn render_cloud_session_info(
+        &mut self,
+        conversation: &Entity<super::cloud_conversation::CloudConversation>,
+        reveal: f32,
+        max_height: f32,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        if reveal <= 0.001 {
+            return None;
+        }
+        let theme = Theme::of(cx).for_popup();
+        let (summary, synced, resources) = {
+            let view = conversation.read(cx);
+            (
+                view.computer_summary(),
+                view.synced_folder(),
+                view.resources().clone(),
+            )
+        };
+        let running = matches!(summary.tone, super::cloud_conversation::Tone::Running);
+        if running {
+            conversation.update(cx, |view, cx| view.want_resources(cx));
+        }
+        let computer = summary
+            .provider
+            .clone()
+            .map(|provider| format!("{provider} computer"))
+            .unwrap_or_else(|| "Cloud computer".into());
+        let computer_row = info_row(
+            &theme,
+            row_glyph(icons::DITHER_CLOUD, &theme),
+            computer.into(),
+        )
+        .id("cloud-session-info-computer")
+        .child(
+            row_meta(&theme)
+                .child(
+                    div()
+                        .size(px(6.0))
+                        .rounded_full()
+                        .bg(summary.tone.color(&theme)),
+                )
+                .child(summary.label),
+        );
+        let repository_row = summary.repository.clone().map(|repository| {
+            info_row(&theme, row_glyph(icons::FOLDER, &theme), repository.into())
+                .id("cloud-session-info-repository")
+        });
+        let branch_row = summary.branch.clone().map(|branch| {
+            info_row(&theme, row_glyph(icons::GIT_BRANCH, &theme), branch.into())
+                .id("cloud-session-info-branch")
+        });
+        // Its size, and when it sleeps on its own.
+        let size_row = info_row(
+            &theme,
+            row_glyph(icons::CLOCK_CIRCLE, &theme),
+            if summary.sleeping {
+                "Wakes when you send a message".into()
+            } else {
+                "Sleeps after 10 min idle".into()
+            },
+        )
+        .id("cloud-session-info-idle")
+        .when_some(summary.size.clone(), |row, size| {
+            row.child(row_meta(&theme).child(size))
+        });
+        // Performance: one row with CPU at a glance, unfolding to the bars.
+        let cpu = resources["cpuPercent"].as_f64();
+        let (performance_header, performance_open) = self.session_info_section(
+            "cloud-performance",
+            false,
+            row_glyph(icons::MONITOR, &theme),
+            "Performance",
+            Some(SharedString::from(match (running, cpu) {
+                (false, _) => "Not running".to_owned(),
+                (true, Some(cpu)) => format!("{cpu:.0}% CPU"),
+                (true, None) => "Measuring…".to_owned(),
+            })),
+            &theme,
+            cx,
+        );
+        let mut performance = vec![performance_header];
+        if performance_open && running {
+            let bytes = |value: &serde_json::Value| value.as_u64().map(|v| v as f64 / 1e9);
+            let meter = |label: &'static str, fraction: Option<f64>, detail: String| {
+                let fraction = fraction.unwrap_or(0.0).clamp(0.0, 1.0) as f32;
+                let tone = if fraction > 0.9 {
+                    theme.danger
+                } else if fraction > 0.7 {
+                    theme.warning
+                } else {
+                    theme.success
+                };
+                sub_row(&theme)
+                    .flex_col()
+                    .items_start()
+                    .gap(px(4.0))
+                    .py(px(4.0))
+                    .child(
+                        div()
+                            .w_full()
+                            .flex()
+                            .justify_between()
+                            .child(label)
+                            .child(div().text_color(theme.text_muted).child(detail)),
+                    )
+                    .child(
+                        div()
+                            .w_full()
+                            .h(px(4.0))
+                            .rounded_full()
+                            .bg(theme.text.opacity(0.08))
+                            .child(
+                                div()
+                                    .h_full()
+                                    .w(gpui::relative(fraction))
+                                    .rounded_full()
+                                    .bg(tone),
+                            ),
+                    )
+                    .into_any_element()
+            };
+            let cores = resources["cores"].as_u64();
+            performance.push(meter(
+                "CPU",
+                cpu.map(|cpu| cpu / 100.0),
+                match (cpu, cores) {
+                    (Some(cpu), Some(cores)) => format!("{cpu:.0}% of {cores} cores"),
+                    (Some(cpu), None) => format!("{cpu:.0}%"),
+                    _ => "—".into(),
+                },
+            ));
+            for (label, used, total) in [
+                ("Memory", "memoryUsedBytes", "memoryTotalBytes"),
+                ("Disk", "diskUsedBytes", "diskTotalBytes"),
+            ] {
+                let (used, total) = (bytes(&resources[used]), bytes(&resources[total]));
+                performance.push(meter(
+                    label,
+                    used.zip(total)
+                        .filter(|(_, t)| *t > 0.0)
+                        .map(|(u, t)| u / t),
+                    match (used, total) {
+                        (Some(used), Some(total)) => format!("{used:.1} of {total:.1} GB"),
+                        _ => "—".into(),
+                    },
+                ));
+            }
+        }
+        let sleep = {
+            let conversation = conversation.clone();
+            action_row(&theme, "cloud-session-info-sleep")
+                .debug_selector(|| "cloud-session-info-sleep".into())
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.close_session_info_overlay(cx);
+                    conversation.update(cx, |view, cx| view.toggle_sleep(cx));
+                }))
+                .child(popover::picker_icon_slot(row_glyph(
+                    if summary.sleeping {
+                        icons::ACTION_PLAY
+                    } else {
+                        icons::MOON
+                    },
+                    &theme,
+                )))
+                .child(div().flex_1().child(if summary.sleeping {
+                    "Wake computer"
+                } else {
+                    "Put computer to sleep"
+                }))
+        };
+        let details = {
+            let conversation = conversation.clone();
+            action_row(&theme, "cloud-session-info-details")
+                .debug_selector(|| "cloud-session-info-details".into())
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.close_session_info_overlay(cx);
+                    conversation.update(cx, |view, cx| view.open_computer(cx));
+                }))
+                .child(popover::picker_icon_slot(row_glyph(
+                    icons::SETTINGS,
+                    &theme,
+                )))
+                .child(div().flex_1().child("Computer details and sync"))
+        };
+        let folder = synced.map(|path| {
+            let reveal_path = path.clone();
+            action_row(&theme, "cloud-session-info-folder")
+                .tooltip(crate::settings::widgets::text_tooltip(path))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.close_session_info_overlay(cx);
+                    cx.reveal_path(std::path::Path::new(&reveal_path));
+                }))
+                .child(popover::picker_icon_slot(row_glyph(
+                    icons::FOLDER_OPEN,
+                    &theme,
+                )))
+                .child(div().flex_1().child("Open synced folder"))
+        });
+        let body = div()
+            .id("cloud-session-info-body")
+            .max_h(px(max_height.max(120.0)))
+            .overflow_y_scroll()
+            .p(px(SUMMARY_CARD_PADDING))
+            .flex()
+            .flex_col()
+            .child(computer_row)
+            .children(repository_row)
+            .children(branch_row)
+            .child(size_row)
+            .child(fade_rule(&theme))
+            .children(performance)
+            .child(fade_rule(&theme))
+            .child(sleep)
+            .children(folder)
+            .child(details);
+        let card = div()
+            .w(px(SESSION_CARD_WIDTH))
+            .rounded(px(SUMMARY_CARD_RADIUS))
+            .overflow_hidden()
+            .border_1()
+            .border_color(theme.border)
+            .bg(popover::surface_bg(&theme))
+            .when(!theme.is_frost(), |card| card.shadow_lg())
+            .child(body);
+        let ease = crate::motion::RESIZE.progress(reveal.clamp(0.0, 1.0));
+        let dy = -6.0 * (1.0 - ease);
+        Some(
+            div()
+                .id("session-info")
+                .debug_selector(|| "session-info".into())
+                .absolute()
+                .top(px(Theme::TITLEBAR_HEIGHT + SESSION_CARD_DROP + dy))
+                .right(px(SESSION_CARD_INSET))
+                .opacity(ease)
+                .occlude()
+                .on_mouse_down_out(
+                    cx.listener(|this, _, _, cx| this.close_session_info_overlay(cx)),
+                )
                 .child(crate::frost::frosted(
                     SUMMARY_CARD_RADIUS,
                     crate::frost::MENU_BLUR,
@@ -671,11 +839,9 @@ impl Shell {
         for task in &running {
             let stopping = self.background_stops.contains(&task.id);
             let control: AnyElement = if stopping {
-                crate::loaders::ring_spinner(
+                crate::loaders::dither_ring(
                     SharedString::from(format!("session-info-background-stopping-{}", task.id)),
                     12.0,
-                    1.5,
-                    theme.text_muted.opacity(0.25),
                     theme.text_muted,
                 )
             } else if task.stoppable {
@@ -852,7 +1018,7 @@ impl Shell {
         let (header, open) = self.session_info_section(
             "agents",
             true,
-            row_glyph(icons::SUMMARY_AGENTS, theme),
+            row_glyph(icons::TOOL_AGENT, theme),
             "Agents",
             Some(meta.into()),
             theme,
@@ -1137,38 +1303,5 @@ mod tests {
         let unnamed = task("u", " ", Some("make serve"), false);
         assert_eq!(background_label(&unnamed).as_ref(), "Background process");
         assert_eq!(background_command(&unnamed).as_deref(), Some("make serve"));
-    }
-
-    #[test]
-    fn a_wide_column_keeps_the_transcript_centered_beside_the_card() {
-        assert_eq!(session_card_reserve(1600.0, 736.0), Some(0.0));
-        // The centered column's right edge clears the card by the gap.
-        let main = 1600.0;
-        let card_left = main - SESSION_CARD_WIDTH - SESSION_CARD_INSET;
-        assert!(main / 2.0 + 736.0 / 2.0 <= card_left - SESSION_CARD_GAP);
-    }
-
-    #[test]
-    fn a_tighter_column_shifts_the_transcript_just_enough() {
-        let main = 1200.0;
-        let reserve = session_card_reserve(main, 736.0).expect("it still fits");
-        assert!(reserve > 0.0);
-        let card_left = main - SESSION_CARD_WIDTH - SESSION_CARD_INSET;
-        let right = (main - reserve) / 2.0 + 736.0 / 2.0;
-        assert!((right - (card_left - SESSION_CARD_GAP)).abs() < 0.01);
-        // At full width: the column keeps its configured width.
-        assert!(main - reserve - 2.0 * TRANSCRIPT_GUTTER >= 736.0);
-    }
-
-    #[test]
-    fn the_card_stops_fitting_where_the_transcript_would_narrow() {
-        // Gutter, column, gap, card, inset.
-        let least =
-            TRANSCRIPT_GUTTER + 736.0 + SESSION_CARD_GAP + SESSION_CARD_WIDTH + SESSION_CARD_INSET;
-        assert!(session_card_reserve(least, 736.0).is_some());
-        assert!(session_card_reserve(least - 1.0, 736.0).is_none());
-        assert!(session_card_reserve(700.0, 736.0).is_none());
-        // A narrower reading column leaves room sooner.
-        assert!(session_card_reserve(least - 1.0, 560.0).is_some());
     }
 }

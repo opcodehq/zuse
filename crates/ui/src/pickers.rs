@@ -14,6 +14,7 @@
 use crate::localization::message as tr;
 use zuse_i18n::messages as msg;
 mod cloud;
+pub(crate) use cloud::CloudCanvasChoices;
 mod cloud_models;
 mod compact;
 mod creation_sources;
@@ -25,6 +26,30 @@ pub(crate) use creation_sources::CreationIssueTitle;
 
 use crate::roll_text::{roll_text, rolling};
 use std::collections::{HashMap, HashSet};
+
+thread_local! {
+    /// Labels of every model a catalog has shown in this app, by id. A picker
+    /// whose own catalog hasn't arrived yet (a cloud chat just opened) names
+    /// its model as the catalog will, instead of showing the raw id first.
+    /// Pickers live on the UI thread, so one table per thread is one per app
+    /// (and keeps tests, which each run on their own thread, independent).
+    static KNOWN_MODEL_LABELS: std::cell::RefCell<HashMap<String, String>> =
+        Default::default();
+}
+
+pub(crate) fn remember_model_labels<'a>(models: impl IntoIterator<Item = &'a Model>) {
+    KNOWN_MODEL_LABELS.with_borrow_mut(|known| {
+        for model in models {
+            if !model.label.trim().is_empty() {
+                known.insert(model.id.clone(), model.label.clone());
+            }
+        }
+    });
+}
+
+fn known_model_label(id: &str) -> Option<String> {
+    KNOWN_MODEL_LABELS.with_borrow(|known| known.get(id).cloned())
+}
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -1207,6 +1232,7 @@ impl Pickers {
     /// Whether the current agent offers plan mode at all.
     pub fn plan_mode_available(&self, cx: &App) -> bool {
         !self.cloud_launch_frozen()
+            && !self.state.read(cx).selected_chat_is_zot_coordinator()
             && !matches!(
                 self.resolved(cx).harness,
                 Some(HarnessId::Pi | HarnessId::Muse)
@@ -1253,6 +1279,9 @@ impl Pickers {
 
     /// Keep a first-send snapshot stable while it is being submitted.
     fn harness_locked(&self, cx: &App) -> bool {
+        if self.cloud.task_binding.is_some() {
+            return false;
+        }
         let state = self.state.read(cx);
         !self.is_settings_model()
             && state.selected_chat.is_some()
@@ -1291,6 +1320,14 @@ impl Pickers {
 
     /// Effective harness: picked, or the chat's config, or the first listed.
     fn effective_harness(&self, cx: &App) -> Option<HarnessId> {
+        if let Some(choice) = self
+            .cloud
+            .task_binding
+            .as_ref()
+            .and_then(|binding| binding.choice.as_ref())
+        {
+            return Some(choice.harness);
+        }
         if self.cloud_models_active(cx) {
             return self.cloud.catalog.as_ref().and_then(|catalog| {
                 catalog
@@ -1378,6 +1415,15 @@ impl Pickers {
     /// Effective model id: the draft pick, the selected chat's config, or (on
     /// the new-chat canvas) the remembered last-used model for the harness.
     fn effective_model_id<'a>(&'a self, cx: &'a App) -> Option<&'a str> {
+        if let Some(choice) = self
+            .cloud
+            .task_binding
+            .as_ref()
+            .and_then(|binding| binding.choice.as_ref())
+        {
+            return choice.model.as_deref();
+        }
+
         if self.cloud_models_active(cx) {
             let provider = self
                 .cloud
@@ -1436,6 +1482,14 @@ impl Pickers {
     /// The reasoning level picked, configured or remembered — before any
     /// clamping to the selected model's ladder.
     fn explicit_reasoning(&self, cx: &App) -> Option<ReasoningLevel> {
+        if let Some(choice) = self
+            .cloud
+            .task_binding
+            .as_ref()
+            .and_then(|binding| binding.choice.as_ref())
+        {
+            return choice.reasoning;
+        }
         self.config.reasoning.or_else(|| {
             match self.state.read(cx).selected_chat_row() {
                 Some(chat) => chat.config.as_ref().and_then(|c| c.reasoning),
@@ -1525,6 +1579,7 @@ impl Pickers {
                                     .map(|model| model.label.clone())
                             })
                             .or_else(|| self.defaults.label_for(id).map(str::to_owned))
+                            .or_else(|| known_model_label(id))
                             .unwrap_or_else(|| id.to_owned()),
                     ),
                     None => remembered.map(|m| m.label.clone()),
@@ -1536,6 +1591,15 @@ impl Pickers {
     /// selections for existing chats, the remembered picks for the model the
     /// new-chat canvas resolves to (same id [`Self::resolved`] sends).
     fn explicit_options(&self, cx: &App) -> serde_json::Map<String, serde_json::Value> {
+        if let Some(choice) = self
+            .cloud
+            .task_binding
+            .as_ref()
+            .and_then(|binding| binding.choice.as_ref())
+        {
+            return choice.model_options.clone();
+        }
+
         if !self.model_configuration_available(cx) {
             return Default::default();
         }
@@ -1602,6 +1666,9 @@ impl Pickers {
     /// `Mutate createChat`: concrete model + reasoning whenever the catalog is
     /// loaded (no "engine picks a default" passthrough).
     pub fn resolved(&self, cx: &App) -> ResolvedRunConfig {
+        if let Some(choice) = self.cloud_task_choice() {
+            return choice;
+        }
         let (sandbox, plan) = if self.state.read(cx).selected_chat.is_none() {
             (
                 self.config
@@ -1807,13 +1874,7 @@ impl Pickers {
             },
             PickerKind::Branch => self.selected_ref_index(cx),
             PickerKind::HarnessModel => self.selected_model_index(cx),
-            PickerKind::Space => {
-                if self.state.read(cx).no_project {
-                    0
-                } else {
-                    self.selected_project_index(cx) + 1
-                }
-            }
+            PickerKind::Space => self.selected_space_menu_index(cx),
             PickerKind::Device => self.selected_device_index(cx),
         };
         if kind == PickerKind::Checkout {
@@ -1880,8 +1941,12 @@ impl Pickers {
                 // timeout/fallback result until the application restarts.
                 self.prefetch_models(true, cx);
             }
-            // Projects and devices are already synced state — nothing to load.
-            PickerKind::Space | PickerKind::Device => {}
+            // Reopening retries stale Cloud metadata without clearing visible rows.
+            // A failed earlier read must not stay latched until app restart.
+            PickerKind::Space | PickerKind::Device => {
+                self.cloud.refresh();
+                self.ensure_cloud(cx);
+            }
         }
         cx.notify();
     }
@@ -1962,26 +2027,25 @@ impl Pickers {
         }));
     }
 
-    /// Kick a model load for the effective harness AND every offered one, in
-    /// parallel — by the time the user opens the picker (or switches rail
-    /// tabs) the lists are already there, instead of a per-selection
-    /// "Loading models…" round-trip. Each `ensure_models` call is guarded by
-    /// its slot state, so re-running this every catalog load/render is free.
+    /// Resolve the active agent first. Other agents are discovered when the
+    /// picker is opened, so startup doesn't compete with chat history on 3G.
     fn prefetch_models(&mut self, force: bool, cx: &mut Context<Self>) {
         if self.cloud_models_active(cx) {
             self.ensure_cloud(cx);
             return;
         }
-        let mut targets: Vec<HarnessId> = match self.harnesses.ready() {
-            Some(list) => self.offered(list).iter().map(|d| d.id).collect(),
-            None => Vec::new(),
+        let mut targets: Vec<HarnessId> = if self.open_kind() == Some(PickerKind::HarnessModel) {
+            self.harnesses
+                .ready()
+                .map(|list| self.offered(list).iter().map(|d| d.id).collect())
+                .unwrap_or_default()
+        } else {
+            Vec::new()
         };
-        // The committed chat's harness may be outside the offered set (e.g.
-        // disabled after the chat was created) — its models still matter.
         if let Some(effective) = self.effective_harness(cx)
             && !targets.contains(&effective)
         {
-            targets.push(effective);
+            targets.insert(0, effective);
         }
         for harness in targets {
             self.ensure_models(harness, force, cx);
@@ -2115,6 +2179,7 @@ impl Pickers {
             return;
         }
         if let Loadable::Ready(models) = &loaded {
+            remember_model_labels(models.iter());
             let fresh = self
                 .defaults
                 .remember_labels(models.iter().map(|m| (m.id.as_str(), m.label.as_str())));
@@ -2479,6 +2544,19 @@ impl Pickers {
     /// Stage model, reasoning and option fields with the shared coordinator.
     /// Reasoning and options are clamped to the chosen model's catalog.
     fn update_chat_config(&mut self, cx: &mut Context<Self>, change: impl FnOnce(&mut ChatConfig)) {
+        if self.cloud.task_binding.is_some() {
+            if let Some(mut choice) = self
+                .cloud
+                .task_binding
+                .as_ref()
+                .and_then(|binding| binding.choice.clone())
+                .or_else(|| self.resolved(cx).chat_config())
+            {
+                change(&mut choice);
+                self.set_cloud_task_choice(choice, cx);
+            }
+            return;
+        }
         if self.state.read(cx).selected_chat.is_none() {
             return;
         }
@@ -2901,6 +2979,29 @@ impl Pickers {
 
     /// Current project row on an unsearched open, or the final opt-out row.
     /// An implicit empty selection has no highlight until the user navigates.
+    fn selected_space_menu_index(&self, cx: &App) -> usize {
+        let state = self.state.read(cx);
+        if let Some(project) = &state.cloud_project {
+            let Some(id) = project["projectId"].as_str() else {
+                return NO_ACTIVE_ROW;
+            };
+            return self
+                .filtered_cloud_projects(cx)
+                .iter()
+                .position(|row| row["projectId"].as_str() == Some(id))
+                .map(|index| self.filtered_project_rows(cx).len() + index + 1)
+                .unwrap_or(NO_ACTIVE_ROW);
+        }
+        if state.no_project {
+            0
+        } else {
+            // The missing-selection sentinel is not a project row ordinal.
+            self.selected_project_index(cx)
+                .checked_add(1)
+                .unwrap_or(NO_ACTIVE_ROW)
+        }
+    }
+
     fn selected_project_index(&self, cx: &App) -> usize {
         if self.state.read(cx).no_project {
             return self.project_rows(cx).len();
@@ -3155,7 +3256,8 @@ impl Pickers {
         let no_project = state.no_project && state.cloud_project.is_none();
         let mut choices = div()
             .id("creation-native-projects")
-            .max_h(px(192.))
+            .max_h(px(240.))
+            .gap(px(1.))
             .overflow_y_scroll()
             .track_scroll(&self.menu_scroll)
             .flex()
@@ -3203,9 +3305,9 @@ impl Pickers {
             .flex()
             .flex_col()
             .child(
-                div().px(px(4.)).pb(px(6.)).child(
+                div().pb(px(6.)).child(
                     div()
-                        .h(px(28.))
+                        .h(px(32.))
                         .flex()
                         .items_center()
                         .gap(px(8.))
@@ -3213,7 +3315,7 @@ impl Pickers {
                         .rounded(px(7.))
                         .border_1()
                         .border_color(theme.border)
-                        .bg(theme.bg.opacity(0.5))
+                        .bg(theme.bg)
                         .child(
                             crate::icons::icon(crate::icons::MAGNIFER)
                                 .size(px(14.))
@@ -3801,11 +3903,11 @@ impl Pickers {
         let mut overlay: Option<(PickerKind, AnyElement)> = match self.mounted_kind() {
             Some(PickerKind::Space) => {
                 let content = self.render_space_popover(cx);
-                Some((PickerKind::Space, self.popover_frame(256.0, content, cx)))
+                Some((PickerKind::Space, self.popover_frame(280.0, content, cx)))
             }
             Some(PickerKind::Device) => {
                 let content = self.render_device_popover(cx);
-                Some((PickerKind::Device, self.popover_frame(256.0, content, cx)))
+                Some((PickerKind::Device, self.popover_frame(280.0, content, cx)))
             }
             _ => None,
         };
@@ -3848,7 +3950,7 @@ impl Pickers {
                 if self.state.read(cx).cloud_project.is_some() {
                     crate::icons::DITHER_CLOUD
                 } else {
-                    crate::icons::MONITOR
+                    crate::icons::DITHER_MONITOR
                 },
                 device_label,
                 &theme,
@@ -3858,7 +3960,7 @@ impl Pickers {
         let project_chip = self.tray_chip(
             PickerKind::Space,
             "picker-project",
-            crate::icons::FOLDER,
+            crate::icons::DITHER_FOLDER,
             project_label,
             &theme,
             cx,
@@ -6225,9 +6327,8 @@ impl Render for Pickers {
             });
         }
 
-        // Eager-load the harness catalog + every offered harness's models so
-        // the chip reads "Fable 5" (a concrete pick) before any popover
-        // opens, and rail switches inside the picker are instant.
+        // Resolve the selected model before opening a picker. Unselected
+        // agents wait until the picker is actually needed.
         self.ensure_harnesses(false, cx);
         self.prefetch_models(false, cx);
         // A popover opened data-side (ZUSE_OPEN_PICKER) never went through
@@ -7271,6 +7372,51 @@ mod tests {
     }
 
     #[gpui::test]
+    fn project_selector_opens_without_a_local_selection(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| cx.set_global(Theme::dark()));
+        for (cloud, no_project, expected) in [
+            (false, false, NO_ACTIVE_ROW),
+            (true, false, 1),
+            (false, true, 0),
+        ] {
+            let handle = cx.add_window(move |_, cx| {
+                let state = cx.new(move |_| {
+                    let mut state = AppState::new();
+                    state.no_project = no_project;
+                    state.cloud_project = cloud.then(|| {
+                        serde_json::json!({
+                            "projectId":"cloud-only", "displayName":"Cloud repository"
+                        })
+                    });
+                    state
+                });
+                let mut pickers = Pickers::new(state, cx);
+                pickers
+                    .cloud
+                    .set_project_rows_for_test(vec![serde_json::json!({
+                        "projectId":"cloud-only", "displayName":"Cloud repository"
+                    })]);
+                pickers
+            });
+            handle
+                .update(cx, |pickers, window, cx| {
+                    pickers.toggle(PickerKind::Space, window, cx);
+                    assert_eq!(pickers.open_kind(), Some(PickerKind::Space));
+                    assert_eq!(
+                        pickers.active, expected,
+                        "cloud={cloud}, no_project={no_project}"
+                    );
+                })
+                .unwrap();
+            cx.run_until_parked();
+            handle
+                .update(cx, |_, window, _| window.remove_window())
+                .unwrap();
+            cx.run_until_parked();
+        }
+    }
+
+    #[gpui::test]
     fn projectless_picker_clears_checkout_and_supports_keyboard_selection(
         cx: &mut gpui::TestAppContext,
     ) {
@@ -7296,7 +7442,7 @@ mod tests {
             pickers.config.branch = Some("old-branch".into());
             pickers.config.checkout = CheckoutKind::NewWorktree;
             pickers.open.open(PickerKind::Space);
-            pickers.active = 1; // project row followed by the projectless row
+            pickers.active = 0; // The explicit No project row precedes project choices.
             pickers.on_search_submit(cx);
         });
         cx.run_until_parked();
@@ -8492,6 +8638,44 @@ mod tests {
             supports_steering: false,
         }
     }
+    #[gpui::test]
+    fn native_model_discovery_defers_other_agents_until_picker_open(cx: &mut gpui::TestAppContext) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = runtime.enter();
+        let (out, _requests) = tokio::sync::mpsc::channel::<String>(16);
+        let (_replies, inbound) = tokio::sync::mpsc::channel::<String>(16);
+        let state = cx.new(|_| AppState::new());
+        state.update(cx, |state, _| {
+            state.set_test_engine(EngineHandle::from_test_client(zuse_rpc::RpcClient::new(
+                out, inbound,
+            )))
+        });
+        let pickers = cx.new(|cx| Pickers::new(state, cx));
+        pickers.update(cx, |pickers, cx| {
+            pickers.harnesses = Loadable::Ready(vec![
+                descriptor(HarnessId::Codex, "Codex"),
+                descriptor(HarnessId::ClaudeCode, "Claude"),
+            ]);
+            pickers.config.harness = Some(HarnessId::Codex);
+            pickers.models.clear();
+            pickers.prefetch_models(false, cx);
+            assert!(matches!(
+                pickers.models.get(&HarnessId::Codex),
+                Some(Loadable::Loading)
+            ));
+            assert!(!pickers.models.contains_key(&HarnessId::ClaudeCode));
+            pickers.open.open(PickerKind::HarnessModel);
+            pickers.prefetch_models(false, cx);
+            assert!(matches!(
+                pickers.models.get(&HarnessId::ClaudeCode),
+                Some(Loadable::Loading)
+            ));
+        });
+    }
+
     #[gpui::test]
     fn model_name_never_reads_select_model_while_anything_can_still_name_it(
         cx: &mut gpui::TestAppContext,

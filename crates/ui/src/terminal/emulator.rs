@@ -434,6 +434,25 @@ mod tests {
     }
 
     #[test]
+    fn zsh_partial_line_marker_is_erased_at_start_and_retained_after_output() {
+        // Captured from an interactive zsh with an 80-column PTY. At startup,
+        // zsh writes its marker and erases it with carriage returns; after an
+        // incomplete output line, the same sequence preserves the marker.
+        let mut prompt = b"\x1b[1m\x1b[7m%\x1b[27m\x1b[1m\x1b[0m".to_vec();
+        prompt.extend(std::iter::repeat_n(b' ', 79));
+        prompt.extend_from_slice(b"\r \r\r\x1b[0m\x1b[27m\x1b[24m\x1b[JPROMPT> \x1b[K\x1b[?2004h");
+
+        let mut e = emu(80, 5);
+        e.feed(&prompt);
+        assert_eq!(e.row_text(0), "PROMPT>");
+        assert_eq!(e.cursor(), Some(CursorSnapshot { row: 0, col: 8 }));
+        e.feed(b"\r\nhello");
+        e.feed(&prompt);
+        assert_eq!(e.row_text(1), "hello%");
+        assert_eq!(e.row_text(2), "PROMPT>");
+    }
+
+    #[test]
     fn crlf_moves_lines_and_cr_returns_to_column_zero() {
         let mut e = emu(20, 5);
         e.feed(b"one\r\ntwo\r\nthree");

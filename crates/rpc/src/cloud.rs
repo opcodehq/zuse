@@ -24,6 +24,54 @@ pub struct Grant {
     pub generation: i64,
     pub gateway_epoch: i64,
     pub expires_at: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage_binding: Option<serde_json::Value>,
+}
+/// How often the guest checks its gateway socket. The gateway pings every 15s
+/// and drops a runtime it has not heard from in 45s; the guest mirrors that so
+/// neither side keeps a half-open socket.
+const HEARTBEAT_TICK: Duration = Duration::from_secs(5);
+const PING_AFTER: Duration = Duration::from_secs(15);
+const SILENCE_LIMIT: Duration = Duration::from_secs(45);
+/// A tick arriving this late means the machine itself was paused (or starved):
+/// the gateway has certainly closed this socket, so don't wait for silence.
+const PAUSE_GAP: Duration = Duration::from_secs(20);
+
+#[derive(Debug, PartialEq, Eq)]
+enum Heartbeat {
+    Idle,
+    Ping,
+    Reconnect,
+}
+/// Pure liveness bookkeeping for the guest's gateway socket.
+struct Liveness {
+    received: std::time::Instant,
+    pinged: std::time::Instant,
+    ticked: std::time::Instant,
+}
+impl Liveness {
+    fn new(now: std::time::Instant) -> Self {
+        Self {
+            received: now,
+            pinged: now,
+            ticked: now,
+        }
+    }
+    fn received(&mut self, now: std::time::Instant) {
+        self.received = now;
+    }
+    fn tick(&mut self, now: std::time::Instant) -> Heartbeat {
+        let gap = now.saturating_duration_since(self.ticked);
+        self.ticked = now;
+        if gap >= PAUSE_GAP || now.saturating_duration_since(self.received) >= SILENCE_LIMIT {
+            return Heartbeat::Reconnect;
+        }
+        if now.saturating_duration_since(self.pinged) >= PING_AFTER {
+            self.pinged = now;
+            return Heartbeat::Ping;
+        }
+        Heartbeat::Idle
+    }
 }
 fn rejected() -> RpcError {
     RpcError::Transport("Cloud workspace connection authorization failed".into())
@@ -71,7 +119,26 @@ fn request(
             .parse()
             .map_err(|_| rejected())?,
     );
+    if let Some(binding) = &grant.storage_binding {
+        let encoded = binding.to_string();
+        if encoded.len() > 4096 {
+            return Err(rejected());
+        }
+        request.headers_mut().insert(
+            zuse_protocol::cloud::STARTUP_BIND_HEADER,
+            encoded.parse().map_err(|_| rejected())?,
+        );
+    }
     Ok(request)
+}
+fn handshake_error(error: &tokio_tungstenite::tungstenite::Error) -> RpcError {
+    if let tokio_tungstenite::tungstenite::Error::Http(response) = error {
+        let status = response.status();
+        if status.is_server_error() || status.as_u16() == 429 || status.as_u16() == 409 {
+            return RpcError::Transport("Cloud gateway is temporarily unavailable".into());
+        }
+    }
+    rejected()
 }
 async fn dial(
     grant: &Grant,
@@ -92,7 +159,7 @@ async fn dial(
     )
     .await
     .map_err(|_| RpcError::Transport("Cloud gateway connection timed out".into()))?
-    .map_err(|_| rejected())?;
+    .map_err(|error| handshake_error(&error))?;
     if response
         .headers()
         .get("sec-websocket-protocol")
@@ -164,6 +231,7 @@ pub async fn connect_channel(
         outgoing,
         incoming,
         closed,
+        engine_info: None,
     })
 }
 pub struct Connection {
@@ -208,18 +276,44 @@ pub async fn serve_guest(
     owner: &str,
     cancel: CancellationToken,
 ) -> Result<(), RpcError> {
+    serve_guest_connected(service, grant, workspace, owner, cancel, None).await
+}
+
+/// Signals only after the authenticated WebSocket upgrade has succeeded.
+pub async fn serve_guest_connected(
+    service: Arc<dyn RpcService>,
+    grant: Grant,
+    workspace: &str,
+    owner: &str,
+    cancel: CancellationToken,
+    connected: Option<tokio::sync::oneshot::Sender<()>>,
+) -> Result<(), RpcError> {
     if owner.starts_with("organization:") {
         return Err(RpcError::Capability(
             "cloud.organization_access_unavailable".into(),
         ));
     }
     let mut socket = tokio::select! {biased; _=cancel.cancelled()=>return Ok(()),socket=dial(&grant,workspace)=>socket?};
+    if let Some(connected) = connected {
+        let _ = connected.send(());
+    }
     let mut peers = HashMap::<String, Peer>::new();
     let (output, mut outgoing) = mpsc::channel::<(String, String)>(16);
+    let mut liveness = Liveness::new(std::time::Instant::now());
+    let mut heartbeat = tokio::time::interval(HEARTBEAT_TICK);
+    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    heartbeat.tick().await;
     loop {
         tokio::select! {biased;
             _=cancel.cancelled()=>break,
-            incoming=socket.next()=>match incoming {
+            _=heartbeat.tick()=>match liveness.tick(std::time::Instant::now()) {
+                Heartbeat::Idle=>{},
+                Heartbeat::Ping=>{tokio::time::timeout(Duration::from_secs(2),socket.send(Message::Ping(Vec::new().into()))).await.map_err(|_|RpcError::Closed)?.map_err(|_|RpcError::Closed)?;}
+                // A machine woken from a pause, or a peer that stopped answering,
+                // holds a socket the gateway has already dropped. Reconnect now.
+                Heartbeat::Reconnect=>return Err(RpcError::Closed),
+            },
+            incoming=socket.next()=>{liveness.received(std::time::Instant::now());match incoming {
                 Some(Ok(Message::Text(text)))=> {
                     let message:Control=serde_json::from_str(&text).map_err(|_|RpcError::Transport("Invalid cloud gateway control message".into()))?;
                     match message {
@@ -257,7 +351,7 @@ pub async fn serve_guest(
                 Some(Ok(Message::Pong(_)))=>{},
                 Some(Ok(Message::Close(Some(frame)))) if u16::from(frame.code)==4101=>return Err(RpcError::Capability("cloud.runtime_fenced".into())),
                 _=>return Err(RpcError::Closed),
-            },
+            }},
             reply=outgoing.recv()=> {
                 let Some((id,payload))=reply else {return Err(RpcError::Closed);};
                 if !peers.contains_key(&id) {continue;}
@@ -269,4 +363,64 @@ pub async fn serve_guest(
     peers.clear();
     let _ = tokio::time::timeout(Duration::from_secs(1), socket.close(None)).await;
     Ok(())
+}
+
+#[cfg(test)]
+mod liveness_tests {
+    use super::*;
+    #[test]
+    fn heartbeat_pings_quiet_sockets_and_reconnects_after_silence_or_a_pause() {
+        let start = std::time::Instant::now();
+        let at = |s: u64| start + Duration::from_secs(s);
+        let mut l = Liveness::new(start);
+        assert_eq!(l.tick(at(5)), Heartbeat::Idle);
+        assert_eq!(l.tick(at(10)), Heartbeat::Idle);
+        assert_eq!(l.tick(at(15)), Heartbeat::Ping);
+        l.received(at(16));
+        assert_eq!(l.tick(at(20)), Heartbeat::Idle);
+        // Silence: nothing received for 45s while ticking normally.
+        let mut quiet = Liveness::new(start);
+        for s in (5..45).step_by(5) {
+            assert_ne!(quiet.tick(at(s)), Heartbeat::Reconnect, "{s}");
+        }
+        assert_eq!(quiet.tick(at(45)), Heartbeat::Reconnect);
+        // A paused machine: the next tick arrives 30 minutes late.
+        let mut paused = Liveness::new(start);
+        paused.received(at(4));
+        assert_eq!(paused.tick(at(5)), Heartbeat::Idle);
+        assert_eq!(paused.tick(at(5 + 1800)), Heartbeat::Reconnect);
+    }
+}
+#[cfg(test)]
+mod handshake_tests {
+    use super::*;
+    #[test]
+    fn temporary_gateway_statuses_do_not_claim_credentials_were_rejected() {
+        for status in [409, 429, 500, 503, 504] {
+            let error = tokio_tungstenite::tungstenite::Error::Http(
+                tokio_tungstenite::tungstenite::http::Response::builder()
+                    .status(status)
+                    .body(None)
+                    .unwrap(),
+            );
+            assert!(
+                handshake_error(&error)
+                    .to_string()
+                    .contains("temporarily unavailable")
+            );
+        }
+        for status in [401, 403] {
+            let error = tokio_tungstenite::tungstenite::Error::Http(
+                tokio_tungstenite::tungstenite::http::Response::builder()
+                    .status(status)
+                    .body(None)
+                    .unwrap(),
+            );
+            assert!(
+                handshake_error(&error)
+                    .to_string()
+                    .contains("authorization failed")
+            );
+        }
+    }
 }

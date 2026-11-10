@@ -1841,6 +1841,10 @@ chat-tool_group_failed = { $count } 個失敗
 chat-tool_group_agents_done = { $count } 個已完成
 # Variables: count
 chat-tool_group_notes = 寫了 { $count } 則筆記
+# Variables: count
+chat-tool_group_tool_calls = { $count } 次工具呼叫
+# Variables: count
+chat-tool_group_messages = { $count } 則訊息
 
 chat-find_in_chat_placeholder = 在對話中尋找
 chat-find_in_chat_count = 第 { $current } 個，共 { $total } 個
@@ -1862,3 +1866,9 @@ chat-history_search_use = 使用
 chat-history_search_cancel = 取消
 chat-stash_saved_notice = 草稿已暫存 · 按 <part0>{ $shortcut }</part0> 檢視
 chat-chat_composer_press_esc_again_to_clear = 再按一次 <part0>Esc</part0> 即可清除
+chat-worktree_fetching = 正在擷取最新的 { $branch }…
+chat-worktree_creating = 正在從 { $branch } 建立工作樹…
+chat-worktree_offline = 無法連線遠端儲存庫 · 使用本機 { $branch }
+
+# Native and browser history pagination; translations remain draft.
+chat-cloud_history_load_earlier = 載入較早的訊息

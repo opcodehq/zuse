@@ -2,7 +2,7 @@
 //! decoding, error-code mapping).
 
 use serde_json::Value;
-use zuse_protocol::{AgentEvent, DoneStatus, HarnessId, TodoItem, TodoStatus, ToolCall};
+use zuse_protocol::{AgentEvent, DoneStatus, HarnessId, TodoItem, TodoStatus, ToolCall, ToolDiff};
 
 use super::wire::{ContentBlock, Frame, SystemFrame};
 
@@ -65,6 +65,33 @@ fn str_field(input: &Value, key: &str) -> String {
 
 fn opt_str_field(input: &Value, key: &str) -> Option<String> {
     input.get(key).and_then(Value::as_str).map(str::to_owned)
+}
+
+/// The diff a Write/Edit call's input describes: a Write is the whole new
+/// file, an Edit its replaced span. Capped like the other harnesses' diffs.
+fn file_diff(name: &str, input: &Value) -> Option<ToolDiff> {
+    const LIMIT: usize = 64 * 1024;
+    let cap = |text: &str| match text.char_indices().nth(LIMIT) {
+        Some((at, _)) => text[..at].to_owned(),
+        None => text.to_owned(),
+    };
+    let path = str_field(input, "file_path");
+    if path.is_empty() {
+        return None;
+    }
+    match name {
+        "Write" => Some(ToolDiff {
+            path,
+            old_text: None,
+            new_text: cap(input.get("content")?.as_str()?),
+        }),
+        "Edit" => Some(ToolDiff {
+            path,
+            old_text: Some(cap(input.get("old_string")?.as_str()?)),
+            new_text: cap(input.get("new_string")?.as_str()?),
+        }),
+        _ => None,
+    }
 }
 
 /// Decode a Claude `tool_use` block (name + input) into a typed [`ToolCall`].
@@ -244,9 +271,15 @@ pub(crate) struct Normalizer {
     workflow_tasks: std::collections::HashMap<String, String>,
     /// Started workflow runs by launching tool_use id.
     workflow_runs: std::collections::HashMap<String, WorkflowRun>,
+    /// Write/Edit tool_use id → the diff its input describes. The wire's
+    /// tool_result carries only a one-line confirmation, so the chip's diff
+    /// is rebuilt from the call and attached when the result lands.
+    file_diffs: std::collections::HashMap<String, ToolDiff>,
     /// Rotates at each assistant-frame close and at each steer; SessionStarted
     /// carries the first value so folds can attribute deltas from the start.
     assistant_message_id: String,
+    /// The tool row of a compaction the CLI has announced but not finished.
+    compaction: Option<String>,
     /// Last session id seen (init or result) — used for synthetic Dones.
     pub session_id: Option<String>,
 }
@@ -262,9 +295,89 @@ impl Normalizer {
             workflow_inputs: std::collections::HashMap::new(),
             workflow_tasks: std::collections::HashMap::new(),
             workflow_runs: std::collections::HashMap::new(),
+            file_diffs: std::collections::HashMap::new(),
             assistant_message_id: new_message_id(),
+            compaction: None,
             session_id: None,
         }
+    }
+
+    /// `/compact` and auto-compaction report only through `system` frames and
+    /// end with an empty `result` (live-verified 2.1.314), so without a row
+    /// a successful compaction reads as a turn that did nothing.
+    fn compaction_started(&mut self) -> (String, AgentEvent) {
+        let id = format!("compaction:{}", uuid::Uuid::new_v4());
+        self.compaction = Some(id.clone());
+        let call = AgentEvent::ToolCall {
+            id: id.clone(),
+            call: ToolCall::Unknown {
+                name: "Compact context".into(),
+                input: None,
+            },
+        };
+        (id, call)
+    }
+
+    fn compaction_status(&mut self, frame: &SystemFrame) -> Vec<AgentEvent> {
+        if frame.status.as_deref() == Some("compacting") {
+            if self.compaction.is_some() {
+                return Vec::new();
+            }
+            return vec![self.compaction_started().1];
+        }
+        // Success is left to the boundary frame, which carries the token counts.
+        if frame.compact_result.as_deref() != Some("failed") {
+            return Vec::new();
+        }
+        let error = frame.compact_error.as_deref();
+        self.compaction_failed(error.unwrap_or("Context compaction failed."))
+            .into_iter()
+            .collect()
+    }
+
+    fn compaction_failed(&mut self, reason: &str) -> Option<AgentEvent> {
+        Some(AgentEvent::ToolResult {
+            id: self.compaction.take()?,
+            is_error: true,
+            output: Some(reason.to_owned()),
+            diff: None,
+        })
+    }
+
+    fn compaction_finished(&mut self, frame: &SystemFrame) -> Vec<AgentEvent> {
+        let mut out = Vec::new();
+        let id = match self.compaction.take() {
+            Some(id) => id,
+            None => {
+                let (id, call) = self.compaction_started();
+                self.compaction = None;
+                out.push(call);
+                id
+            }
+        };
+        let (before, after) = (
+            frame.compact_metadata.pre_tokens,
+            frame.compact_metadata.post_tokens,
+        );
+        out.push(AgentEvent::ToolResult {
+            id,
+            is_error: false,
+            output: Some(match (before, after) {
+                (Some(before), Some(after)) => {
+                    format!("Context reduced from {before} to {after} tokens.")
+                }
+                _ => "Context compacted.".to_owned(),
+            }),
+            diff: None,
+        });
+        // The compaction's `result` has no usage to move the context meter.
+        if after.is_some() {
+            out.push(AgentEvent::ContextUsage {
+                tokens: after,
+                window: None,
+            });
+        }
+        out
     }
 
     /// Restore only spawn identity from Claude's native history. The CLI
@@ -538,6 +651,12 @@ impl Normalizer {
                         .insert(tool.to_owned(), spawn.clone());
                     return Vec::new();
                 }
+                if f.subtype == "status" {
+                    return self.compaction_status(&f);
+                }
+                if f.subtype == "compact_boundary" {
+                    return self.compaction_finished(&f);
+                }
                 if f.subtype != "init" || self.saw_init {
                     return Vec::new();
                 }
@@ -605,6 +724,13 @@ impl Normalizer {
             }
 
             Frame::Assistant(f) => {
+                for b in f.message.blocks() {
+                    if b.kind == "tool_use"
+                        && let Some(diff) = file_diff(&b.name, &b.input)
+                    {
+                        self.file_diffs.insert(b.id.clone(), diff);
+                    }
+                }
                 if let Some(parent) = &f.parent_tool_use_id {
                     let parent = self.agent_tool_spawns.get(parent).unwrap_or(parent);
                     // Subagent content, attributed. The 2.1.x wire streams NO
@@ -744,6 +870,17 @@ impl Normalizer {
             }
 
             Frame::User(f) => {
+                // A settled Write/Edit takes the diff its call described;
+                // a failed one changed nothing.
+                let mut diffs = std::collections::HashMap::new();
+                for b in f.message.blocks() {
+                    if b.kind == "tool_result"
+                        && let Some(diff) = self.file_diffs.remove(&b.tool_use_id)
+                        && !b.is_error.unwrap_or(false)
+                    {
+                        diffs.insert(b.tool_use_id.clone(), diff);
+                    }
+                }
                 if let Some(parent) = &f.parent_tool_use_id {
                     let parent = self.agent_tool_spawns.get(parent).unwrap_or(parent);
                     // A subagent's tool results echo on the main channel too;
@@ -759,7 +896,7 @@ impl Normalizer {
                                     id: b.tool_use_id.clone(),
                                     is_error: b.is_error.unwrap_or(false),
                                     output: crate::tool_output::text(&b.content),
-                                    diff: None,
+                                    diff: diffs.remove(&b.tool_use_id),
                                 },
                             )
                         })
@@ -792,7 +929,7 @@ impl Normalizer {
                         id: b.tool_use_id.clone(),
                         is_error,
                         output: crate::tool_output::text(&b.content),
-                        diff: None,
+                        diff: diffs.remove(&b.tool_use_id),
                     });
                     // A rejected workflow launch never starts a task, so no
                     // notification will settle it: settle it here.
@@ -911,7 +1048,10 @@ impl Normalizer {
                         session_id: f.session_id,
                     }
                 };
-                let mut out = Vec::new();
+                let mut out: Vec<AgentEvent> = self
+                    .compaction_failed("Context compaction did not finish.")
+                    .into_iter()
+                    .collect();
                 if let Some(window) = window {
                     out.push(AgentEvent::ContextUsage {
                         tokens: None,
@@ -935,6 +1075,109 @@ impl Normalizer {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn system(normalizer: &mut Normalizer, line: &str) -> Vec<AgentEvent> {
+        normalizer.normalize(super::super::wire::parse_frame(line).unwrap(), false)
+    }
+
+    #[test]
+    fn compaction_shows_a_row_and_moves_the_context_meter() {
+        let mut normalizer = Normalizer::new();
+        let started = system(
+            &mut normalizer,
+            r#"{"type":"system","subtype":"status","status":"compacting"}"#,
+        );
+        let [AgentEvent::ToolCall { id, call }] = started.as_slice() else {
+            panic!("{started:?}");
+        };
+        assert!(matches!(call, ToolCall::Unknown { name, .. } if name == "Compact context"));
+        assert!(
+            system(
+                &mut normalizer,
+                r#"{"type":"system","subtype":"status","status":null,"compact_result":"success"}"#,
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            system(
+                &mut normalizer,
+                r#"{"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"manual","pre_tokens":23759,"post_tokens":4391}}"#,
+            ),
+            vec![
+                AgentEvent::ToolResult {
+                    id: id.clone(),
+                    is_error: false,
+                    output: Some("Context reduced from 23759 to 4391 tokens.".into()),
+                    diff: None,
+                },
+                AgentEvent::ContextUsage {
+                    tokens: Some(4391),
+                    window: None,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn failed_compaction_reports_the_cli_reason() {
+        let mut normalizer = Normalizer::new();
+        let started = system(
+            &mut normalizer,
+            r#"{"type":"system","subtype":"status","status":"compacting"}"#,
+        );
+        let [AgentEvent::ToolCall { id, .. }] = started.as_slice() else {
+            panic!("{started:?}");
+        };
+        assert_eq!(
+            system(
+                &mut normalizer,
+                r#"{"type":"system","subtype":"status","status":null,"compact_result":"failed","compact_error":"Not enough messages to compact."}"#,
+            ),
+            vec![AgentEvent::ToolResult {
+                id: id.clone(),
+                is_error: true,
+                output: Some("Not enough messages to compact.".into()),
+                diff: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn a_turn_ending_mid_compaction_settles_the_row() {
+        let mut normalizer = Normalizer::new();
+        system(
+            &mut normalizer,
+            r#"{"type":"system","subtype":"status","status":"compacting"}"#,
+        );
+        let ended = system(
+            &mut normalizer,
+            r#"{"type":"result","subtype":"success","result":""}"#,
+        );
+        assert!(matches!(
+            ended.first(),
+            Some(AgentEvent::ToolResult { is_error: true, .. })
+        ));
+        assert!(matches!(ended.last(), Some(AgentEvent::Done { .. })));
+    }
+
+    #[test]
+    fn boundary_without_a_status_frame_still_shows_a_finished_row() {
+        let mut normalizer = Normalizer::new();
+        let events = system(
+            &mut normalizer,
+            r#"{"type":"system","subtype":"compact_boundary"}"#,
+        );
+        assert!(matches!(
+            events.as_slice(),
+            [
+                AgentEvent::ToolCall { .. },
+                AgentEvent::ToolResult {
+                    is_error: false,
+                    ..
+                }
+            ]
+        ));
+    }
 
     #[test]
     fn decodes_typed_tools() {
@@ -1411,12 +1654,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resumed_session_restores_task_ids_from_the_native_transcript() {
+    async fn cold_resume_restores_only_task_ids_without_republishing_native_text() {
         let root = tempfile::tempdir().unwrap();
         let project = root.path().join("projects/encoded-project");
         std::fs::create_dir_all(&project).unwrap();
         std::fs::write(project.join("session-1.jsonl"), concat!(
             "not json\n",
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"retired-credential-not-in-current-registry"}]}}"#,
+            "\n",
             r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_spawn","name":"Agent","input":{"description":"scout"}}]}}"#,
             "\n",
             r#"{"type":"user","toolUseResult":{"agentId":"a1","status":"async_launched"},"message":{"content":[{"type":"tool_result","tool_use_id":"toolu_spawn"}]}}"#,
@@ -1644,6 +1889,41 @@ mod context_tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn write_and_edit_results_carry_the_diff_their_call_described() {
+        let events = run_frames(
+            &mut Normalizer::new(),
+            &[
+                r#"{"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"tool_use","id":"w1","name":"Write","input":{"file_path":"/repo/plan.md","content":"Plan\n"}},{"type":"tool_use","id":"e1","name":"Edit","input":{"file_path":"/repo/a.rs","old_string":"old","new_string":"new"}},{"type":"tool_use","id":"e2","name":"Edit","input":{"file_path":"/repo/b.rs","old_string":"x","new_string":"y"}}]}}"#,
+                r#"{"type":"user","parent_tool_use_id":null,"message":{"content":[{"type":"tool_result","tool_use_id":"w1","content":"File created"},{"type":"tool_result","tool_use_id":"e1","content":"Updated"},{"type":"tool_result","tool_use_id":"e2","content":"String not found","is_error":true}]}}"#,
+            ],
+        );
+        let diff = |want: &str| {
+            events.iter().find_map(|event| match event {
+                AgentEvent::ToolResult { id, diff, .. } if id == want => Some(diff.clone()),
+                _ => None,
+            })
+        };
+        assert_eq!(
+            diff("w1"),
+            Some(Some(ToolDiff {
+                path: "/repo/plan.md".into(),
+                old_text: None,
+                new_text: "Plan\n".into(),
+            }))
+        );
+        assert_eq!(
+            diff("e1"),
+            Some(Some(ToolDiff {
+                path: "/repo/a.rs".into(),
+                old_text: Some("old".into()),
+                new_text: "new".into(),
+            }))
+        );
+        // A failed edit changed nothing, so it shows no diff.
+        assert_eq!(diff("e2"), Some(None));
     }
 
     #[test]

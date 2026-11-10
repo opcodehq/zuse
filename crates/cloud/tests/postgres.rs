@@ -145,7 +145,15 @@ async fn fixture() -> (PgPool, PgPool, String) {
         .execute(&pool)
         .await
         .unwrap();
+    sqlx::raw_sql(include_str!("../migrations/0012_provider_receipts.sql"))
+        .execute(&pool)
+        .await
+        .unwrap();
     sqlx::raw_sql(zuse_cloud::runtime::recovery::MIGRATION)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::raw_sql(include_str!("../migrations/0013_recovery_receipts.sql"))
         .execute(&pool)
         .await
         .unwrap();
@@ -153,11 +161,594 @@ async fn fixture() -> (PgPool, PgPool, String) {
         .execute(&pool)
         .await
         .unwrap();
+    sqlx::raw_sql(include_str!("../migrations/0014_restore_receipts.sql"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::raw_sql(zuse_cloud::runtime::task_history::MIGRATION)
+        .execute(&pool)
+        .await
+        .unwrap();
     sqlx::raw_sql(zuse_cloud::runtime::deletion::MIGRATION)
         .execute(&pool)
         .await
         .unwrap();
+    // Provider grants and credential delivery journal their receipts.
+    sqlx::raw_sql(include_str!(
+        "../migrations/0024_credential_delivery_journal.sql"
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
     (admin, pool, schema)
+}
+
+#[tokio::test]
+#[ignore = "requires explicit isolated localhost PostgreSQL"]
+async fn personal_computer_discovery_is_account_scoped_and_excludes_host_secrets() {
+    let (admin, pool, schema) = fixture().await;
+    sqlx::raw_sql("CREATE TABLE api_dpop_proofs (thumbprint text NOT NULL, jti text NOT NULL, issued_at bigint NOT NULL, expires_at bigint NOT NULL, PRIMARY KEY(thumbprint,jti)); CREATE TABLE api_revoked_dpop_keys (thumbprint text PRIMARY KEY, revoked_at bigint NOT NULL);")
+        .execute(&pool).await.unwrap();
+    let store = Store::from_pool(pool.clone());
+    sqlx::raw_sql("CREATE TABLE api_devices(device_id text PRIMARY KEY,account_id text NOT NULL,platform text NOT NULL,push_token text,dpop_jwk jsonb,dpop_thumbprint text,updated_at bigint NOT NULL)").execute(&pool).await.unwrap();
+    let key = json!({"kty":"EC"});
+    store
+        .register_native_device("phone", "alice", "android", None, &key, "key-a", 1)
+        .await
+        .unwrap();
+    store
+        .register_native_device("phone", "alice", "android", Some("push"), &key, "key-a", 2)
+        .await
+        .unwrap();
+    assert!(
+        store
+            .register_native_device("phone", "bob", "android", None, &key, "key-a", 3)
+            .await
+            .is_err()
+    );
+    assert!(
+        store
+            .register_native_device("phone", "alice", "android", None, &key, "key-b", 3)
+            .await
+            .is_err()
+    );
+    let thumbprint = "a".repeat(43);
+    let now = 1_000_000;
+    let (first, duplicate) = tokio::join!(
+        store.consume_device_proof(&thumbprint, "same-proof", now, now),
+        store.consume_device_proof(&thumbprint, "same-proof", now, now),
+    );
+    assert_ne!(
+        first.is_ok(),
+        duplicate.is_ok(),
+        "Exactly one concurrent proof must succeed"
+    );
+    assert!(
+        store
+            .consume_device_proof(&thumbprint, "stale", now - 121_000, now)
+            .await
+            .is_err()
+    );
+    assert!(
+        store
+            .consume_device_proof(&thumbprint, "future", now + 31_000, now)
+            .await
+            .is_err()
+    );
+    sqlx::query("INSERT INTO api_revoked_dpop_keys VALUES ($1,$2)")
+        .bind(&thumbprint)
+        .bind(now)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(
+        store
+            .consume_device_proof(&thumbprint, "new-proof", now, now)
+            .await
+            .is_err()
+    );
+    sqlx::raw_sql("CREATE TABLE api_environments (environment_id text PRIMARY KEY, account_id text NOT NULL, org_id text, provider_kind text NOT NULL, label text, wire_protocol_version bigint, capabilities jsonb, linked_at bigint NOT NULL, environment_public_key text, http_base_url text, ws_base_url text);
+        INSERT INTO api_environments VALUES
+        ('alice-host','user-alice',NULL,'desktop','Alice computer',1,'{\"features\":[\"zuse-rpc-json-v1\"]}',3,'PRIVATE_KEY','PRIVATE_HTTP','PRIVATE_WS'),
+        ('bob-host','user-bob',NULL,'desktop','Bob computer',1,'{}',2,'PRIVATE_KEY','PRIVATE_HTTP','PRIVATE_WS'),
+        ('org-host','user-alice','org-team','desktop','Organization computer',1,'{}',1,'PRIVATE_KEY','PRIVATE_HTTP','PRIVATE_WS');")
+        .execute(&pool).await.unwrap();
+    {
+        use sha2::{Digest, Sha256};
+        sqlx::raw_sql("ALTER TABLE api_environments ADD COLUMN last_seen_at bigint, ADD COLUMN runtime_version text, ADD COLUMN service_state text; CREATE TABLE api_environment_credentials(environment_id text NOT NULL,account_id text NOT NULL,credential_hash text NOT NULL,revoked_at bigint);").execute(&pool).await.unwrap();
+        let credential = "zenv_test-heartbeat-secret";
+        let hash = format!("{:x}", Sha256::digest(credential.as_bytes()));
+        sqlx::query(
+            "INSERT INTO api_environment_credentials VALUES ('alice-host','user-alice',$1,NULL)",
+        )
+        .bind(hash)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let heartbeat = json!({"runtimeVersion":"0.25.1","wireProtocolVersion":1,"capabilities":{"features":["zuse-rpc-json-v1"]},"serviceState":"healthy","origin":{"localHttpHost":"127.0.0.1","localHttpPort":28655}});
+        store
+            .heartbeat_native_environment("alice-host", credential, &heartbeat, 100)
+            .await
+            .unwrap();
+        assert!(
+            store
+                .heartbeat_native_environment("bob-host", credential, &heartbeat, 200)
+                .await
+                .is_err()
+        );
+        assert!(
+            store
+                .heartbeat_native_environment("alice-host", "zenv_wrong", &heartbeat, 200)
+                .await
+                .is_err()
+        );
+        sqlx::query("UPDATE api_environment_credentials SET revoked_at=101")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(
+            store
+                .heartbeat_native_environment("alice-host", credential, &heartbeat, 200)
+                .await
+                .is_err()
+        );
+        let last_seen: i64 = sqlx::query_scalar(
+            "SELECT last_seen_at FROM api_environments WHERE environment_id='alice-host'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(last_seen, 100);
+    }
+    let app = router(
+        AppState {
+            store: Store::from_pool(pool.clone()),
+            identity: Arc::new(TestIdentity),
+            organizations_enabled: true,
+            organization_ids: Arc::new(vec!["org-team".into()]),
+            runtime: None,
+            gateway: Arc::new(zuse_cloud::gateway::Hub::default()),
+        },
+        vec![],
+    );
+    assert_eq!(
+        request(&app, "/v1/environments", "", None).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    let (status, body) = request(&app, "/v1/environments", "alice", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["environments"].as_array().unwrap().len(), 1);
+    assert_eq!(body["environments"][0]["environmentId"], "alice-host");
+    assert_eq!(body["environments"][0]["wireProtocolVersion"], 1);
+    assert_eq!(
+        body["environments"][0]["capabilities"]["features"][0],
+        "zuse-rpc-json-v1"
+    );
+    for secret in [
+        "PRIVATE",
+        "bob-host",
+        "org-host",
+        "account_id",
+        "publicKey",
+        "httpBaseUrl",
+        "wsBaseUrl",
+    ] {
+        assert!(!body.to_string().contains(secret));
+    }
+    let (_, bob) = request(&app, "/v1/environments", "bob", None).await;
+    {
+        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+        use p256::{ecdsa::SigningKey, pkcs8::EncodePrivateKey};
+        let seed = [9u8; 32];
+        let mint_key = ed25519_dalek::SigningKey::from_bytes(&seed);
+        sqlx::raw_sql("CREATE TABLE api_link_challenges(challenge_id text PRIMARY KEY,account_id text NOT NULL,challenge text NOT NULL,relay_issuer text NOT NULL,expires_at bigint NOT NULL,consumed_at bigint)").execute(&pool).await.unwrap();
+        let issuer = "http://127.0.0.1:28700";
+        let challenge = store
+            .create_native_link_challenge("user-alice", issuer, 1_000_000)
+            .await
+            .unwrap();
+        let public = json!({"kty":"OKP","crv":"Ed25519","x":URL_SAFE_NO_PAD.encode(mint_key.verifying_key().as_bytes())});
+        let der = mint_key.to_pkcs8_der().unwrap();
+        let encoding = jsonwebtoken::EncodingKey::from_ed_der(der.as_bytes());
+        let mut header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::EdDSA);
+        header.typ = Some("environment-link-proof+jwt".into());
+        let link_proof=jsonwebtoken::encode(&header,&json!({"aud":issuer,"challenge":challenge["challenge"],"environmentId":"desktop","iat":1000,"exp":1300}),&encoding).unwrap();
+        let id = challenge["challengeId"].as_str().unwrap();
+        assert!(
+            store
+                .consume_native_link_proof(
+                    "user-bob",
+                    id,
+                    "desktop",
+                    &public,
+                    &link_proof,
+                    issuer,
+                    1_000_000
+                )
+                .await
+                .is_err()
+        );
+        assert!(
+            store
+                .consume_native_link_proof(
+                    "user-alice",
+                    id,
+                    "other-host",
+                    &public,
+                    &link_proof,
+                    issuer,
+                    1_000_000
+                )
+                .await
+                .is_err()
+        );
+        let (a, b) = tokio::join!(
+            store.consume_native_link_proof(
+                "user-alice",
+                id,
+                "desktop",
+                &public,
+                &link_proof,
+                issuer,
+                1_000_000
+            ),
+            store.consume_native_link_proof(
+                "user-alice",
+                id,
+                "desktop",
+                &public,
+                &link_proof,
+                issuer,
+                1_000_000
+            )
+        );
+        assert_ne!(a.is_ok(), b.is_ok());
+        let expired = store
+            .create_native_link_challenge("user-alice", issuer, 0)
+            .await
+            .unwrap();
+        assert!(
+            store
+                .consume_native_link_proof(
+                    "user-alice",
+                    expired["challengeId"].as_str().unwrap(),
+                    "desktop",
+                    &public,
+                    &link_proof,
+                    issuer,
+                    1_000_000
+                )
+                .await
+                .is_err()
+        );
+        sqlx::raw_sql("ALTER TABLE api_environment_credentials ADD COLUMN credential_id text, ADD COLUMN created_at bigint;").execute(&pool).await.unwrap();
+        let finish_challenge = store
+            .create_native_link_challenge("user-alice", issuer, 1_000_000)
+            .await
+            .unwrap();
+        let finish_id = finish_challenge["challengeId"].as_str().unwrap();
+        let finish_proof=jsonwebtoken::encode(&header,&json!({"aud":issuer,"challenge":finish_challenge["challenge"],"environmentId":"linked-host","iat":1000,"exp":1300}),&encoding).unwrap();
+        sqlx::query("ALTER TABLE api_environment_credentials ADD CONSTRAINT reject_test_insert CHECK (false) NOT VALID").execute(&pool).await.unwrap();
+        assert!(
+            store
+                .finish_native_host_link(
+                    "user-alice",
+                    finish_id,
+                    "linked-host",
+                    &public,
+                    &finish_proof,
+                    issuer,
+                    "Desktop",
+                    "https://linked.example",
+                    "wss://linked.example",
+                    1_000_000
+                )
+                .await
+                .is_err()
+        );
+        let absent: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM api_environments WHERE environment_id='linked-host'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(absent, 0);
+        let unused: bool = sqlx::query_scalar(
+            "SELECT consumed_at IS NULL FROM api_link_challenges WHERE challenge_id=$1",
+        )
+        .bind(finish_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(unused);
+        sqlx::query("ALTER TABLE api_environment_credentials DROP CONSTRAINT reject_test_insert")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let credential = store
+            .finish_native_host_link(
+                "user-alice",
+                finish_id,
+                "linked-host",
+                &public,
+                &finish_proof,
+                issuer,
+                "Desktop",
+                "https://linked.example",
+                "wss://linked.example",
+                1_000_000,
+            )
+            .await
+            .unwrap();
+        assert!(credential.starts_with("zenv_"));
+        assert!(
+            store
+                .finish_native_host_link(
+                    "user-alice",
+                    finish_id,
+                    "linked-host",
+                    &public,
+                    &finish_proof,
+                    issuer,
+                    "Desktop",
+                    "https://linked.example",
+                    "wss://linked.example",
+                    1_000_000
+                )
+                .await
+                .is_err()
+        );
+        let rotation = store
+            .create_native_link_challenge("user-alice", issuer, 1_001_000)
+            .await
+            .unwrap();
+        let rotation_proof=jsonwebtoken::encode(&header,&json!({"aud":issuer,"challenge":rotation["challenge"],"environmentId":"linked-host","iat":1001,"exp":1301}),&encoding).unwrap();
+        sqlx::query("ALTER TABLE api_environments ADD COLUMN tunnel_hostname text, ADD COLUMN tunnel_id text, ADD COLUMN dns_record_id text, ADD COLUMN tunnel_status text").execute(&pool).await.unwrap();
+        let allocation = zuse_cloud::tunnels::Allocation {
+            hostname: "linked.example".into(),
+            tunnel_id: "test-tunnel".into(),
+            dns_record_id: "test-dns".into(),
+            connector_token: zeroize::Zeroizing::new("test-connector".into()),
+        };
+        let next = store
+            .finish_native_host_link_with_tunnel(
+                "user-alice",
+                rotation["challengeId"].as_str().unwrap(),
+                "linked-host",
+                &public,
+                &rotation_proof,
+                issuer,
+                "Desktop",
+                "https://linked.example",
+                "wss://linked.example",
+                1_001_000,
+                Some(&allocation),
+            )
+            .await
+            .unwrap();
+        assert_ne!(next, credential);
+        let saved:Value=sqlx::query_scalar("SELECT jsonb_build_object('hostname',tunnel_hostname,'tunnel',tunnel_id,'dns',dns_record_id,'status',tunnel_status) FROM api_environments WHERE environment_id='linked-host'").fetch_one(&pool).await.unwrap();
+        assert_eq!(
+            saved,
+            json!({"hostname":"linked.example","tunnel":"test-tunnel","dns":"test-dns","status":"ready"})
+        );
+
+        let active:i64=sqlx::query_scalar("SELECT count(*) FROM api_environment_credentials WHERE environment_id='linked-host' AND revoked_at IS NULL").fetch_one(&pool).await.unwrap();
+        assert_eq!(active, 1);
+        let stored_plain:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM api_environment_credentials WHERE credential_hash=$1 OR credential_hash=$2)").bind(&credential).bind(&next).fetch_one(&pool).await.unwrap();
+        assert!(!stored_plain);
+        let mint_jwk = json!({"kty":"OKP","crv":"Ed25519","d":URL_SAFE_NO_PAD.encode(seed),"x":URL_SAFE_NO_PAD.encode(mint_key.verifying_key().as_bytes())});
+        let signer = zuse_cloud::tickets::TicketSigner::from_jwk(
+            &mint_jwk.to_string(),
+            "http://127.0.0.1:28700",
+        )
+        .unwrap();
+        let mut store = Store::from_pool(pool.clone());
+        store.devices = Some(Arc::new(zuse_cloud::devices::Authority::new(
+            signer,
+            pool.clone(),
+        )));
+        let routes = router(
+            AppState {
+                store,
+                identity: Arc::new(TestIdentity),
+                organizations_enabled: false,
+                organization_ids: Arc::new(vec![]),
+                runtime: None,
+                gateway: Arc::new(zuse_cloud::gateway::Hub::default()),
+            },
+            vec![],
+        );
+        let key = SigningKey::from_slice(&[8; 32]).unwrap();
+        let point = key.verifying_key().to_encoded_point(false);
+        let jwk = json!({"kty":"EC","crv":"P-256","x":URL_SAFE_NO_PAD.encode(point.x().unwrap()),"y":URL_SAFE_NO_PAD.encode(point.y().unwrap())});
+        let der = key.to_pkcs8_der().unwrap();
+        let encoding = jsonwebtoken::EncodingKey::from_ec_der(der.as_bytes());
+        let proof = |path: &str, access: Option<&str>| {
+            use sha2::{Digest, Sha256};
+            let mut header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::ES256);
+            header.typ = Some("dpop+jwt".into());
+            header.jwk = Some(serde_json::from_value(jwk.clone()).unwrap());
+            let mut claims = json!({"htm":"POST","htu":format!("http://127.0.0.1:28700{path}"),"iat":chrono::Utc::now().timestamp(),"jti":Uuid::new_v4().to_string()});
+            if let Some(access) = access {
+                claims["ath"] = json!(URL_SAFE_NO_PAD.encode(Sha256::digest(access.as_bytes())));
+            }
+            jsonwebtoken::encode(&header, &claims, &encoding).unwrap()
+        };
+        async fn post(
+            app: &Router,
+            path: &str,
+            auth: &str,
+            proof: &str,
+            body: Value,
+        ) -> (StatusCode, Value) {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(path)
+                        .header("Authorization", auth)
+                        .header("DPoP", proof)
+                        .header("Content-Type", "application/json")
+                        .body(Body::from(body.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let status = response.status();
+            let bytes = to_bytes(response.into_body(), 65536).await.unwrap();
+            (status, serde_json::from_slice(&bytes).unwrap())
+        }
+        let mint_path = "/v1/client/dpop-token";
+        let mint_proof = proof(mint_path, None);
+        assert_eq!(
+            post(&routes, mint_path, "Bearer invalid", &mint_proof, json!({}))
+                .await
+                .0,
+            StatusCode::UNAUTHORIZED
+        );
+        let (status, minted) =
+            post(&routes, mint_path, "Bearer alice", &mint_proof, json!({})).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            post(&routes, mint_path, "Bearer alice", &mint_proof, json!({}))
+                .await
+                .0,
+            StatusCode::UNAUTHORIZED
+        );
+        let token = minted["accessToken"].as_str().unwrap();
+        let path = "/v1/mobile/devices";
+        let registration = proof(path, Some(token));
+        let body = json!({"deviceId":"native-phone","platform":"android","dpopJwk":jwk});
+        let auth = format!("DPoP {token}");
+        assert_eq!(
+            post(&routes, path, &auth, &registration, body.clone())
+                .await
+                .0,
+            StatusCode::OK
+        );
+        assert_eq!(
+            post(&routes, path, &auth, &registration, body).await.0,
+            StatusCode::UNAUTHORIZED
+        );
+        sqlx::query("UPDATE api_environments SET http_base_url='https://host.example',ws_base_url='wss://host.example',service_state='healthy',last_seen_at=(extract(epoch from clock_timestamp())*1000)::bigint WHERE environment_id='alice-host'").execute(&pool).await.unwrap();
+        let connect_path = "/v1/environments/alice-host/connect";
+        let request_body = json!({"requireManaged":true,"wireProtocolVersion":1});
+        let (status, grant) = post(
+            &routes,
+            connect_path,
+            &auth,
+            &proof(connect_path, Some(token)),
+            request_body.clone(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let connection = grant["connectToken"].as_str().unwrap();
+        assert_eq!(
+            jsonwebtoken::decode_header(connection)
+                .unwrap()
+                .typ
+                .as_deref(),
+            Some("connect+jwt")
+        );
+        let public = json!({"kty":"OKP","crv":"Ed25519","x":mint_jwk["x"]});
+        let decoding =
+            jsonwebtoken::DecodingKey::from_jwk(&serde_json::from_value(public).unwrap()).unwrap();
+        let mut validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::EdDSA);
+        validation.set_issuer(&["http://127.0.0.1:28700"]);
+        validation.set_audience(&["zuse-env:alice-host"]);
+        validation.leeway = 0;
+        let claims = jsonwebtoken::decode::<Value>(connection, &decoding, &validation)
+            .unwrap()
+            .claims;
+        assert_eq!(claims["sub"], "user-alice");
+        assert_eq!(claims["environmentId"], "alice-host");
+        assert_eq!(
+            claims["exp"].as_i64().unwrap() - claims["iat"].as_i64().unwrap(),
+            60
+        );
+        assert_eq!(
+            grant["expiresAt"].as_i64().unwrap(),
+            claims["exp"].as_i64().unwrap() * 1000
+        );
+        let other = "/v1/environments/bob-host/connect";
+        sqlx::query("UPDATE api_environments SET last_seen_at=1 WHERE environment_id='alice-host'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let (status, offline) = post(
+            &routes,
+            connect_path,
+            &auth,
+            &proof(connect_path, Some(token)),
+            request_body.clone(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(offline["error"], "environment_offline");
+        sqlx::query("UPDATE api_environments SET last_seen_at=(extract(epoch from clock_timestamp())*1000)::bigint,service_state='starting' WHERE environment_id='alice-host'").execute(&pool).await.unwrap();
+        assert_eq!(
+            post(
+                &routes,
+                connect_path,
+                &auth,
+                &proof(connect_path, Some(token)),
+                request_body.clone()
+            )
+            .await
+            .0,
+            StatusCode::CONFLICT
+        );
+        sqlx::query(
+            "UPDATE api_environments SET service_state='healthy' WHERE environment_id='alice-host'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            post(
+                &routes,
+                other,
+                &auth,
+                &proof(other, Some(token)),
+                request_body.clone()
+            )
+            .await
+            .0,
+            StatusCode::NOT_FOUND
+        );
+        sqlx::query("UPDATE api_environments SET ws_base_url='ws://host.example' WHERE environment_id='alice-host'").execute(&pool).await.unwrap();
+        assert_eq!(
+            post(
+                &routes,
+                connect_path,
+                &auth,
+                &proof(connect_path, Some(token)),
+                request_body
+            )
+            .await
+            .0,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+    }
+    assert_eq!(bob["environments"][0]["environmentId"], "bob-host");
+    assert_eq!(
+        request(
+            &app,
+            "/v1/environments",
+            "admin",
+            Some("organization:org-team")
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    pool.close().await;
+    sqlx::raw_sql(&format!("DROP SCHEMA {schema} CASCADE"))
+        .execute(&admin)
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -1038,6 +1629,10 @@ async fn runtime_post_for_url(url: &str, token: &str, body: &Value) -> (u16, Val
 
 #[cfg(feature = "runtime-acceptance")]
 mod runtime_engine {
+    mod memory_acceptance {
+        use super::*;
+        include!("cases/memory.rs");
+    }
     mod recovery_acceptance {
         use super::*;
         include!("cases/recovery.rs");
@@ -1300,6 +1895,7 @@ mod runtime_engine {
             generation: 2,
             gateway_epoch: 5,
             expires_at: now + 900000,
+            storage_binding: None,
         };
         let runtime_cancel = CancellationToken::new();
         let guest = tokio::spawn({
@@ -2133,13 +2729,18 @@ mod runtime_engine {
             "cloud_provider_outcome_unknown"
         );
         allocation_due(&api).await;
-        assert!(
+        // One claim adopts the uncertain machine and launches it; the fixture
+        // loses that launch response too.
+        assert_eq!(
             api.control
                 .allocate_once(&provider, chrono::Utc::now().timestamp_millis())
                 .await
-                .unwrap()
+                .unwrap_err()
+                .code,
+            "cloud_provider_outcome_unknown"
         );
         assert_eq!(provider.creates.load(Ordering::SeqCst), 1);
+        assert_eq!(provider.launches.load(Ordering::SeqCst), 1);
         // An assigned source disappearing must not cause another create.
         let retained = provider.machine.lock().unwrap().take().unwrap();
         allocation_due(&api).await;
@@ -2218,7 +2819,8 @@ mod runtime_engine {
         );
         assert!(record["sealed_boot_token"].is_null());
         assert_eq!(provider.creates.load(Ordering::SeqCst), 1);
-        assert_eq!(provider.launches.load(Ordering::SeqCst), 1);
+        // The uncertain launch is redelivered unchanged to the same machine.
+        assert_eq!(provider.launches.load(Ordering::SeqCst), 2);
         let receipt: Value = sqlx::query_scalar(
             "SELECT request_config FROM api_cloud_workspaces WHERE workspace_id='ws-bob'",
         )
@@ -2445,6 +3047,11 @@ for line in sys.stdin:
             !seen.exists(),
             "A late grant must not start the stopped turn"
         );
+        // Preparation hands the gateway from its diagnostic connection to the
+        // serving one; clients reconnect once, as the desktop does.
+        client.closed.cancel();
+        drop(client);
+        let client = api.client().await;
         client.client.call(zuse_rpc::methods::RELAY_COMMAND,json!({"chatId":"session-bob","entry":{"id":"explicit-run-after-grant","issuedBy":"cloud-ui","issuedAt":chrono::Utc::now().timestamp_millis(),"status":"pending","payload":{"kind":"run","messageId":"explicit-provider-message","request":{"prompt":"Run with the account credential","harness":"claude-code","model":"fixture","cwd":checkout,"sandbox":"workspace-write","autoApprove":false}}}})).await.unwrap();
         client.closed.cancel();
         drop(client);
@@ -2697,7 +3304,7 @@ for line in sys.stdin:
                             let value: Value = serde_json::from_slice(&bytes).unwrap();
                             (
                                 Request::from_parts(parts, Body::from(bytes)),
-                                value["kind"] == "quiesced",
+                                matches!(value["kind"].as_str(), Some("quiesced" | "parked")),
                             )
                         } else {
                             (request, false)
@@ -3132,6 +3739,8 @@ for line in sys.stdin:
                     thread: "chat-bob".into(),
                     checkout: checkout.clone(),
                     allow_test: true,
+                    task_context: None,
+                    progress: None,
                 }),
             )
             .unwrap(),
@@ -3497,7 +4106,9 @@ for line in sys.stdin:
         let mut recovered = guest_command(&api, &directory, &checkout, None, &log)
             .spawn()
             .unwrap();
-        wait_command_state(&api, "mailbox-receipt-gap", "applied").await;
+        // Queue admission is not proof of a terminal outcome. Cold recovery
+        // quarantines the lost receipt instead of claiming it applied.
+        wait_command_state(&api, "mailbox-receipt-gap", "outcome-unknown").await;
         let connection = api.client().await;
         let mut messages = connection
             .client
@@ -3765,10 +4376,12 @@ for line in sys.stdin:
         ) -> Result<(), zuse_cloud::providers::ProviderError> {
             assert_eq!(id, "machine-bob");
             self.pauses.fetch_add(1, Ordering::SeqCst);
+            // The provider accepted the mutation but its response can be lost.
+            // Reconciliation must observe this state without issuing another pause.
+            *self.state.lock().unwrap() = zuse_cloud::providers::MachineState::Paused;
             if self.fail_pause.load(Ordering::SeqCst) {
                 return Err(zuse_cloud::providers::ProviderError::Unavailable);
             }
-            *self.state.lock().unwrap() = zuse_cloud::providers::MachineState::Paused;
             Ok(())
         }
         async fn wake_retained(
@@ -4492,6 +5105,8 @@ async fn mailbox_durable_ordering_receipts_and_uncertain_lease_fences() {
     assert!(stored.get("actor").is_none());
     assert!(stored.get("plaintext").is_none());
     let lease_request = LeaseRequest {
+        control_only: false,
+        max_items: None,
         storage_incarnation_id: "original-storage".into(),
         wait_ms: None,
         after_revision: None,
@@ -5035,6 +5650,10 @@ async fn encrypted_transcript_publication_and_archived_reads_preserve_original_c
     use zuse_cloud::{crypto::MasterKey, runtime::RuntimeControl, tickets::TicketSigner};
     let (admin, pool, schema) = fixture().await;
     sqlx::raw_sql("CREATE TABLE api_cloud_transcript_checkpoints (workspace_id text NOT NULL,session_id text NOT NULL,runtime_generation bigint NOT NULL,stream_epoch text NOT NULL,stream_version bigint NOT NULL,object_key text NOT NULL,ciphertext_sha256 text NOT NULL,ciphertext_bytes bigint NOT NULL,created_at bigint NOT NULL,PRIMARY KEY(workspace_id,session_id))").execute(&pool).await.unwrap();
+    sqlx::raw_sql(include_str!("../migrations/0011_transcript_heads.sql"))
+        .execute(&pool)
+        .await
+        .unwrap();
     let fixture: Value =
         serde_json::from_str(include_str!("fixtures/transcript-crypto.json")).unwrap();
     let objects = Arc::new(ProjectionObjects::default());
@@ -5177,6 +5796,11 @@ async fn encrypted_transcript_publication_and_archived_reads_preserve_original_c
     let (status, body) = request(&read_app, read, "bob", None).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(
+        objects.gets.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "Opening screen must come from its Postgres cursor row without object reads"
+    );
+    assert_eq!(
         body["checkpoint"]["ciphertext"],
         fixture["head2"]["ciphertext"]
     );
@@ -5213,6 +5837,34 @@ async fn encrypted_transcript_publication_and_archived_reads_preserve_original_c
         .await
         .1,
         json!({"page":null})
+    );
+    // Corrupted hot data fails integrity checks; a stale cache tag falls back to
+    // the authoritative object's current cursor rather than returning old text.
+    let saved_hot: Value =
+        sqlx::query_scalar("SELECT rust_hot_head FROM api_cloud_transcript_checkpoints")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    sqlx::query("UPDATE api_cloud_transcript_checkpoints SET rust_hot_head=jsonb_set(rust_hot_head,'{ciphertext}','\"tampered\"')").execute(&pool).await.unwrap();
+    assert_eq!(
+        request(&read_app, read, "bob", None).await.1["error"],
+        "cloud_transcript_integrity_failed"
+    );
+    sqlx::query(
+        "UPDATE api_cloud_transcript_checkpoints SET rust_hot_head=jsonb_set($1,'{version}','1')",
+    )
+    .bind(saved_hot)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let gets = objects.gets.load(std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(
+        request(&read_app, read, "bob", None).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        objects.gets.load(std::sync::atomic::Ordering::SeqCst),
+        gets + 1
     );
     let key = objects
         .bytes
@@ -5663,3 +6315,6 @@ async fn billing_portal_preserves_provider_customer_and_owner() {
 
 #[path = "cases/launch_assets.rs"]
 mod launch_assets;
+
+#[path = "cases/startup_binding.rs"]
+mod startup_binding;

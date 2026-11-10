@@ -8,6 +8,15 @@ use crate::shell::{
 use zuse_i18n::messages as msg;
 use zuse_protocol::presentation::{SidebarView, project_identity};
 
+struct SidebarProjectGroup {
+    key: String,
+    path: String,
+    name: String,
+    chats: Vec<Value>,
+    cloud_tasks: Vec<Value>,
+    cloud_project: Option<Value>,
+}
+
 impl WorkspaceView {
     pub(super) fn toggle_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.sidebar_open = true;
@@ -23,6 +32,30 @@ impl WorkspaceView {
         cx.notify();
     }
     pub(super) fn start_new_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // On a task computer this is another conversation on the same
+        // computer. A project header explicitly creates a new task instead.
+        if (self.cloud.guest || self.cloud.cached) && self.selected.is_some() {
+            self.start_thread_conversation(cx);
+            return;
+        }
+        let no_local_project = self.selected.is_none()
+            && self.project.is_none()
+            && self
+                .spaces
+                .iter()
+                .all(|space| zuse_protocol::projectless::is_projectless_cwd(Some(&space.path)));
+        if self.cloud.mode || no_local_project {
+            if let Some(project) = self.cloud_draft_project() {
+                self.start_cloud_project_session(project, window, cx);
+                return;
+            }
+            if self.cloud.mode {
+                self.settings = true;
+                self.select_settings_section(crate::settings_view::Section::Cloud, cx);
+                cx.notify();
+                return;
+            }
+        }
         if !self.require_connection(cx)
             || self.file_navigation_blocked(cx)
             || self.queue_edit_navigation_blocked(cx)
@@ -38,6 +71,10 @@ impl WorkspaceView {
         window.focus(&self.input.focus_handle(cx), cx);
     }
     fn start_project_session(&mut self, path: String, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(navigation) = &self.cloud.local_navigation {
+            let _=self.requests.unbounded_send(json!({"ui":"newLocalProjectConversation","path":path,"deviceId":navigation.device,"epoch":navigation.epoch,"accountId":self.cloud.account,"organizationId":self.cloud.organization}));
+            return;
+        }
         if !self.require_connection(cx)
             || self.file_navigation_blocked(cx)
             || self.queue_edit_navigation_blocked(cx)
@@ -95,11 +132,7 @@ impl WorkspaceView {
                 })))
             .when(selected["archived"] != true, |d| d.child(icon_button("add-thread-conversation", "plus", "New chat in this thread")
                 .on_click(cx.listener(|this, _, _, cx| {
-                    if !this.require_connection(cx) || this.file_navigation_blocked(cx) || this.queue_edit_navigation_blocked(cx) { return; }
-                    let Some(chat) = this.selected.clone() else { return; };
-                    let root = chat["threadId"].as_str().or_else(|| chat["id"].as_str()).unwrap_or_default();
-                    this.call(methods::CREATE_THREAD_SESSION, json!({"chatId":uuid::Uuid::new_v4().to_string(),"threadId":root,"targetDeviceId":chat["deviceId"]}));
-                    cx.notify();
+                    this.start_thread_conversation(cx);
                 }))))
             .into_any_element()
     }
@@ -111,13 +144,25 @@ impl WorkspaceView {
         } else {
             String::new()
         };
-        let mut rows = self
-            .chats
+        let navigation_chats = self
+            .cloud
+            .local_navigation
+            .as_ref()
+            .map(|v| v.chats.as_slice())
+            .unwrap_or(self.chats.as_slice());
+        let mut rows = navigation_chats
             .iter()
             .filter(|c| {
                 c["archived"].as_bool().unwrap_or(false) == self.show_archive
                     && c["parentChatId"].is_null()
                     && c["threadId"].is_null()
+            })
+            // Zots list their own threads; projects don't repeat them.
+            .filter(|c| {
+                !zuse_protocol::presentation::zot_panel::zot_owns_chat(
+                    &self.zots.items,
+                    c["id"].as_str().unwrap_or_default(),
+                )
             })
             .filter(|c| {
                 query.is_empty()
@@ -143,6 +188,40 @@ impl WorkspaceView {
                 .then_with(|| a["id"].as_str().cmp(&b["id"].as_str()))
         });
         let projects = self.preferences.sidebar_view == SidebarView::Projects;
+        let cloud_rows: Vec<_> = self
+            .cloud
+            .workspaces
+            .iter()
+            .filter(|workspace| {
+                !self.show_archive
+                    && !matches!(
+                        workspace["state"].as_str(),
+                        Some("deleted" | "archived" | "archiving")
+                    )
+                    && !matches!(
+                        workspace["desiredState"].as_str(),
+                        Some("deleted" | "archived")
+                    )
+                    && (query.is_empty()
+                        || format!(
+                            "{} {}",
+                            workspace["title"].as_str().unwrap_or_default(),
+                            workspace["branch"].as_str().unwrap_or_default()
+                        )
+                        .to_lowercase()
+                        .contains(&query))
+            })
+            .collect();
+        let project_groups = if projects {
+            self.project_groups(&rows, query.is_empty(), &query)
+        } else {
+            vec![]
+        };
+        let empty = if projects {
+            project_groups.is_empty()
+        } else {
+            rows.is_empty() && cloud_rows.is_empty()
+        };
         column()
             .w_full()
             .h_full()
@@ -178,28 +257,40 @@ impl WorkspaceView {
                     .py(px(4.))
                     .gap(px(2.))
                     .child(
-                        sidebar_action("sidebar-new-chat", crate::localization::text("chat-chat_view_new_chat", cx), "pen-new-square")
-                            .child(label("Ctrl+N").text_size(px(12.)).text_color(rgb(MUTED)))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.start_new_session(window, cx)
-                            })),
+                        sidebar_action(
+                            "sidebar-new-chat",
+                            crate::localization::text("chat-chat_view_new_chat", cx),
+                            "pen-new-square",
+                        )
+                        .child(label("Ctrl+N").text_size(px(12.)).text_color(rgb(MUTED)))
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.start_new_session(window, cx)),
+                        ),
                     )
                     .child(
-                        sidebar_action("sidebar-new-project", crate::localization::text("projects-projects_sidebar_new_project", cx), "folder-with-files")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.project_picker = true;
-                                cx.notify();
-                            })),
+                        sidebar_action(
+                            "sidebar-new-project",
+                            crate::localization::text("projects-projects_sidebar_new_project", cx),
+                            "folder-with-files",
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.open_project_setup(cx);
+                        })),
                     )
                     .when(self.cloud_account["user"].is_object(), |v| {
                         v.child(
-                            sidebar_action("sidebar-plugins", crate::localization::text("plugins-plugins_back", cx), "settings-plugins")
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.open_plugins_browse(cx);
-                                })),
+                            sidebar_action(
+                                "sidebar-plugins",
+                                crate::localization::text("plugins-plugins_back", cx),
+                                "settings-plugins",
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.open_plugins_browse(cx);
+                            })),
                         )
                     }),
             )
+            .child(self.zot_sidebar(cx))
             .when(self.search_open, |d| {
                 d.child(
                     row()
@@ -222,66 +313,80 @@ impl WorkspaceView {
                 )
             })
             .child(
+                // Section header shares the Zots header's quiet style; its
+                // controls stay out of the way until the header is hovered.
                 row()
-                    .px_4()
-                    .pb_2()
-                    .gap_2()
+                    .id("threads-header")
+                    .group("threads-header")
+                    .h(px(28.))
+                    .mx_2()
+                    .px_2()
+                    .gap_1()
                     .child(
-                        label(if self.show_archive {
-                            crate::localization::text("native-archived_threads", cx)
-                        } else if projects {
-                            crate::localization::text("projects-projects_sidebar_projects", cx)
-                        } else {
-                            crate::localization::text("projects-projects_sidebar_threads", cx)
-                        })
-                        .text_size(px(11.))
-                        .text_color(rgb(FAINT)),
-                    )
-                    .child(
-                        icon_button(
-                            "sidebar-view-switch",
-                            "alt-arrow-down",
-                            "Switch threads and projects",
-                        )
-                        .size(px(20.))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.preferences.sidebar_view = if projects {
-                                SidebarView::Threads
+                        row()
+                            .id("sidebar-view-switch")
+                            .role(Role::Button)
+                            .aria_label("Switch threads and projects")
+                            .cursor_pointer()
+                            .gap_1()
+                            .text_size(px(11.))
+                            .text_color(rgb(FAINT))
+                            .hover(|d| d.text_color(rgb(MUTED)))
+                            .child(if self.show_archive {
+                                crate::localization::text("native-archived_threads", cx)
+                            } else if projects {
+                                crate::localization::text("projects-projects_sidebar_projects", cx)
                             } else {
-                                SidebarView::Projects
-                            };
-                            this.save_preferences();
-                            cx.notify();
-                        })),
-                    )
-                    .child(
-                        label(rows.len().to_string())
-                            .text_size(px(10.))
-                            .text_color(rgb(FAINT)),
+                                crate::localization::text("projects-projects_sidebar_threads", cx)
+                            })
+                            .child(icon("alt-arrow-down").size(px(11.)))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.preferences.sidebar_view = if projects {
+                                    SidebarView::Threads
+                                } else {
+                                    SidebarView::Projects
+                                };
+                                this.save_preferences();
+                                cx.notify();
+                            })),
                     )
                     .child(div().flex_1())
-                    .when(projects, |d| {
-                        d.child(
-                            icon_button("add-sidebar-project", "plus", "Open project")
-                                .size(px(22.))
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.project_picker = true;
-                                    cx.notify();
-                                })),
-                        )
-                    })
                     .child(
-                        icon_button(
-                            "archive-view",
-                            "archive-minimalistic",
-                            "Toggle archived threads",
-                        )
-                        .size(px(22.))
-                        .when(self.show_archive, |d| d.bg(rgb(RAISED)))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.show_archive = !this.show_archive;
-                            cx.notify();
-                        })),
+                        row()
+                            .gap(px(2.))
+                            .when(!self.show_archive, |d| {
+                                d.invisible().group_hover("threads-header", |d| d.visible())
+                            })
+                            .when(projects, |d| {
+                                d.child(
+                                    icon_button("add-sidebar-project", "plus", "Open project")
+                                        .size(px(20.))
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.open_project_setup(cx);
+                                        })),
+                                )
+                            })
+                            .child(
+                                icon_button(
+                                    "archive-view",
+                                    "archive-minimalistic",
+                                    if self.show_archive {
+                                        "Back to threads"
+                                    } else {
+                                        "Show archived threads"
+                                    },
+                                )
+                                .size(px(20.))
+                                .when(self.show_archive, |d| {
+                                    d.bg(rgb(RAISED)).text_color(rgb(TEXT))
+                                })
+                                .on_click(cx.listener(
+                                    |this, _, _, cx| {
+                                        this.show_archive = !this.show_archive;
+                                        cx.notify();
+                                    },
+                                )),
+                            ),
                     ),
             )
             .child(
@@ -292,158 +397,244 @@ impl WorkspaceView {
                     .overflow_y_scroll()
                     .px_2()
                     .gap_1()
-                    .when(
-                        rows.is_empty() && (!projects || self.repos.is_empty()),
-                        |d| {
-                            d.child(
-                                column()
-                                    .p_4()
-                                    .gap_2()
-                                    .child(label(if query.is_empty() {
-                                        crate::localization::text("projects-projects_sidebar_no_threads_yet", cx)
+                    .when(empty, |d| {
+                        d.child(
+                            column()
+                                .p_4()
+                                .gap_2()
+                                .child(label(if query.is_empty() {
+                                    crate::localization::text(
+                                        "projects-projects_sidebar_no_threads_yet",
+                                        cx,
+                                    )
+                                } else {
+                                    crate::localization::text("native-no_matching_threads", cx)
+                                }))
+                                .child(
+                                    label(if query.is_empty() {
+                                        crate::localization::text(
+                                            "native-start_conversation_shortcut",
+                                            cx,
+                                        )
                                     } else {
-                                        crate::localization::text("native-no_matching_threads", cx)
-                                    }))
-                                    .child(
-                                        label(if query.is_empty() {
-                                            crate::localization::text("native-start_conversation_shortcut", cx)
-                                        } else {
-                                            crate::localization::text("native-try_title_project_branch", cx)
-                                        })
-                                        .text_size(px(11.))
-                                        .text_color(rgb(FAINT)),
-                                    ),
-                            )
-                        },
-                    )
+                                        crate::localization::text(
+                                            "native-try_title_project_branch",
+                                            cx,
+                                        )
+                                    })
+                                    .text_size(px(11.))
+                                    .text_color(rgb(FAINT)),
+                                ),
+                        )
+                    })
                     .when(!projects, |d| {
                         d.children(rows.iter().map(|chat| self.session_row(chat, false, cx)))
+                            .children(
+                                cloud_rows
+                                    .iter()
+                                    .map(|workspace| self.cloud_session_row(workspace, cx)),
+                            )
                     })
                     .when(projects, |d| {
-                        d.children(
-                            self.project_groups(&rows, query.is_empty())
-                                .into_iter()
-                                .map(|(key, path, name, chats)| {
-                                    let collapsed =
-                                        self.preferences.collapsed_projects.contains(&key);
-                                    let toggle = key.clone();
-                                    let create = path.clone();
-                                    let archive_space=self.spaces.iter().find(|s|zuse_protocol::view::project_key(s)==key).map(|s|s.id.clone());
-                                    let context_space=archive_space.clone();
-                                    column()
-                                        .flex_shrink_0()
-                                        .gap_1()
-                                        .mb_2()
+                        d.children(project_groups.into_iter().map(|group| {
+                            let SidebarProjectGroup {
+                                key,
+                                path,
+                                name,
+                                chats,
+                                cloud_tasks,
+                                cloud_project,
+                            } = group;
+                            let collapsed = self.preferences.collapsed_projects.contains(&key);
+                            let toggle = key.clone();
+                            let create = path.clone();
+                            let create_cloud = cloud_project.clone();
+                            let explicit_cloud = cloud_project.filter(|_| !path.is_empty());
+                            let archive_space = self
+                                .spaces
+                                .iter()
+                                .find(|s| zuse_protocol::view::project_key(s) == key)
+                                .map(|s| s.id.clone());
+                            let context_space = archive_space.clone();
+                            column()
+                                .flex_shrink_0()
+                                .gap_1()
+                                .mb_2()
+                                .child(
+                                    row()
+                                        .id(SharedString::from(format!("project-group-{key}")))
+                                        .cursor_pointer()
+                                        .h(px(34.))
+                                        .px_2()
+                                        .gap_2()
+                                        .rounded_md()
+                                        .hover(|d| d.bg(rgb(0x222222)))
+                                        .on_mouse_down(
+                                            MouseButton::Right,
+                                            cx.listener(
+                                                move |this, event: &MouseDownEvent, window, cx| {
+                                                    if let Some(id) = context_space.clone() {
+                                                        this.project_archive_menu(
+                                                            id,
+                                                            event.position,
+                                                            window,
+                                                            cx,
+                                                        );
+                                                        cx.stop_propagation();
+                                                    }
+                                                },
+                                            ),
+                                        )
                                         .child(
-                                            row()
-                                                .id(SharedString::from(format!(
-                                                    "project-group-{path}"
-                                                )))
-                                                .cursor_pointer()
-                                                .h(px(34.))
-                                                .px_2()
-                                                .gap_2()
-                                                .rounded_md()
-                                                .hover(|d| d.bg(rgb(0x222222)))
-                                                .on_mouse_down(MouseButton::Right,cx.listener(move|this,event:&MouseDownEvent,window,cx| {
-                                                    if let Some(id)=context_space.clone(){this.project_archive_menu(id,event.position,window,cx);cx.stop_propagation();}
-                                                }))
-                                                .child(
-                                                    icon(if collapsed {
-                                                        "alt-arrow-right"
-                                                    } else {
-                                                        "alt-arrow-down"
-                                                    })
-                                                    .size(px(10.))
-                                                    .text_color(rgb(FAINT)),
+                                            icon(if collapsed {
+                                                "alt-arrow-right"
+                                            } else {
+                                                "alt-arrow-down"
+                                            })
+                                            .size(px(10.))
+                                            .text_color(rgb(FAINT)),
+                                        )
+                                        .child(icon("folder").size(px(14.)).text_color(rgb(MUTED)))
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .min_w_0()
+                                                .text_ellipsis()
+                                                .text_size(px(12.))
+                                                .font_weight(FontWeight::MEDIUM)
+                                                .child(name),
+                                        )
+                                        .child(
+                                            label((chats.len() + cloud_tasks.len()).to_string())
+                                                .text_size(px(10.))
+                                                .text_color(rgb(FAINT)),
+                                        )
+                                        .when_some(archive_space, |d, id| {
+                                            d.child(
+                                                icon_button(
+                                                    SharedString::from(format!(
+                                                        "project-menu-{id}"
+                                                    )),
+                                                    "more-horizontal",
+                                                    crate::localization::text(
+                                                        "native-project_actions",
+                                                        cx,
+                                                    ),
                                                 )
-                                                .child(
-                                                    icon("folder")
-                                                        .size(px(14.))
-                                                        .text_color(rgb(MUTED)),
+                                                .size(px(22.))
+                                                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                                    cx.stop_propagation()
+                                                })
+                                                .on_click(cx.listener(
+                                                    move |this, event: &ClickEvent, window, cx| {
+                                                        cx.stop_propagation();
+                                                        this.project_archive_menu(
+                                                            id.clone(),
+                                                            event.position(),
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    },
+                                                )),
+                                            )
+                                        })
+                                        .when_some(explicit_cloud, |d, project| {
+                                            d.child(
+                                                icon_button(
+                                                    SharedString::from(format!(
+                                                        "new-cloud-project-thread-{key}"
+                                                    )),
+                                                    "cloud-dither",
+                                                    "New cloud chat in this project",
                                                 )
-                                                .child(
-                                                    div()
-                                                        .flex_1()
-                                                        .min_w_0()
-                                                        .text_ellipsis()
-                                                        .text_size(px(12.))
-                                                        .font_weight(FontWeight::MEDIUM)
-                                                        .child(name),
-                                                )
-                                                .child(
-                                                    label(chats.len().to_string())
-                                                        .text_size(px(10.))
-                                                        .text_color(rgb(FAINT)),
-                                                )
-                                                .when_some(archive_space,|d,id|d.child(icon_button(SharedString::from(format!("project-menu-{id}")),"more-horizontal",crate::localization::text("native-project_actions", cx)).size(px(22.))
-                                                    .on_mouse_down(MouseButton::Left,|_,_,cx|cx.stop_propagation())
-                                                    .on_click(cx.listener(move|this,event:&ClickEvent,window,cx| {cx.stop_propagation();this.project_archive_menu(id.clone(),event.position(),window,cx);}))))
-                                                .child(
-                                                    icon_button(
-                                                        SharedString::from(format!(
-                                                            "new-project-thread-{path}"
-                                                        )),
-                                                        "plus",
-                                                        "New thread in this project",
-                                                    )
-                                                    .size(px(22.))
-                                                    .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                                                        cx.stop_propagation()
-                                                    })
-                                                    .on_click(cx.listener(
-                                                        move |this, _, window, cx| {
-                                                            cx.stop_propagation();
-                                                            this.start_project_session(
-                                                                create.clone(),
+                                                .size(px(22.))
+                                                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                                    cx.stop_propagation()
+                                                })
+                                                .on_click(cx.listener(
+                                                    move |this, _, window, cx| {
+                                                        cx.stop_propagation();
+                                                        this.start_cloud_project_session(
+                                                            project.clone(),
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    },
+                                                )),
+                                            )
+                                        })
+                                        .child(
+                                            icon_button(
+                                                SharedString::from(format!(
+                                                    "new-project-thread-{key}"
+                                                )),
+                                                "plus",
+                                                "New thread in this project",
+                                            )
+                                            .size(px(22.))
+                                            .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                                cx.stop_propagation()
+                                            })
+                                            .on_click(
+                                                cx.listener(move |this, _, window, cx| {
+                                                    cx.stop_propagation();
+                                                    if create.is_empty() {
+                                                        if let Some(project) = &create_cloud {
+                                                            this.start_cloud_project_session(
+                                                                project.clone(),
                                                                 window,
                                                                 cx,
                                                             );
-                                                        },
-                                                    )),
-                                                )
-                                                .on_click(cx.listener(move |this, _, _, cx| {
-                                                    if let Some(index) = this
-                                                        .preferences
-                                                        .collapsed_projects
-                                                        .iter()
-                                                        .position(|p| p == &toggle)
-                                                    {
-                                                        this.preferences
-                                                            .collapsed_projects
-                                                            .remove(index);
+                                                        }
                                                     } else {
-                                                        this.preferences
-                                                            .collapsed_projects
-                                                            .push(toggle.clone());
+                                                        this.start_project_session(
+                                                            create.clone(),
+                                                            window,
+                                                            cx,
+                                                        );
                                                     }
-                                                    this.save_preferences();
-                                                    cx.notify();
-                                                })),
+                                                }),
+                                            ),
                                         )
-                                        .when(!collapsed, |d| {
-                                            d.when(chats.is_empty(), |d| {
-                                                d.child(
-                                                    label(tr(cx, msg::native::no_threads_in_this_project))
-                                                        .pl_6()
-                                                        .py_2()
-                                                        .text_size(px(10.))
-                                                        .text_color(rgb(FAINT)),
-                                                )
-                                            })
-                                            .children(
-                                                chats
-                                                    .iter()
-                                                    .map(|chat| self.session_row(chat, true, cx)),
-                                            )
-                                        })
-                                }),
-                        )
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            if let Some(index) = this
+                                                .preferences
+                                                .collapsed_projects
+                                                .iter()
+                                                .position(|p| p == &toggle)
+                                            {
+                                                this.preferences.collapsed_projects.remove(index);
+                                            } else {
+                                                this.preferences
+                                                    .collapsed_projects
+                                                    .push(toggle.clone());
+                                            }
+                                            this.save_preferences();
+                                            cx.notify();
+                                        })),
+                                )
+                                .when(!collapsed, |d| {
+                                    d.when(chats.is_empty() && cloud_tasks.is_empty(), |d| {
+                                        d.child(
+                                            label(tr(cx, msg::native::no_threads_in_this_project))
+                                                .pl_6()
+                                                .py_2()
+                                                .text_size(px(10.))
+                                                .text_color(rgb(FAINT)),
+                                        )
+                                    })
+                                    .children(
+                                        chats.iter().map(|chat| self.session_row(chat, true, cx)),
+                                    )
+                                    .children(
+                                        cloud_tasks
+                                            .iter()
+                                            .map(|workspace| self.cloud_session_row(workspace, cx)),
+                                    )
+                                })
+                        }))
                     }),
             )
-            .when(!self.cloud.workspaces.is_empty(), |view| {
-                view.child(self.cloud_recent(cx))
-            })
             .child(
                 row()
                     .h(px(36.))
@@ -476,50 +667,175 @@ impl WorkspaceView {
         &self,
         rows: &[&Value],
         include_empty: bool,
-    ) -> Vec<(String, String, String, Vec<Value>)> {
-        let projects = self.known_projects();
+        query: &str,
+    ) -> Vec<SidebarProjectGroup> {
+        let navigation_spaces = self
+            .cloud
+            .local_navigation
+            .as_ref()
+            .map(|v| v.spaces.as_slice())
+            .unwrap_or(self.spaces.as_slice());
+        let projects = if self.cloud.local_navigation.is_some() {
+            navigation_spaces
+                .iter()
+                .filter(|space| !zuse_protocol::projectless::is_projectless_cwd(Some(&space.path)))
+                .map(|space| json!({"path":space.path,"name":space.display_name()}))
+                .collect()
+        } else {
+            self.known_projects()
+        };
         let roots = projects
             .iter()
             .filter_map(|p| p["path"].as_str())
             .collect::<Vec<_>>();
-        let mut groups = std::collections::BTreeMap::<String, (String, String, Vec<Value>)>::new();
+        let mut groups = std::collections::BTreeMap::<String, SidebarProjectGroup>::new();
         for chat in rows {
             let identity = project_identity(
                 chat["cwd"].as_str(),
                 chat["spaceId"].as_str(),
-                &self.spaces,
+                navigation_spaces,
                 &roots,
             );
             groups
-                .entry(identity.key)
-                .or_insert_with(|| (identity.path, identity.name, Vec::new()))
-                .2
+                .entry(identity.key.clone())
+                .or_insert_with(|| SidebarProjectGroup {
+                    key: identity.key,
+                    path: identity.path,
+                    name: identity.name,
+                    chats: Vec::new(),
+                    cloud_tasks: Vec::new(),
+                    cloud_project: None,
+                })
+                .chats
                 .push((*chat).clone());
         }
         if include_empty && !self.show_archive {
             for root in roots.iter().copied() {
-                let space = self.spaces.iter().find(|s| s.path == root);
+                let space = navigation_spaces.iter().find(|s| s.path == root);
                 let identity = project_identity(
                     Some(root),
                     space.map(|s| s.id.as_str()),
-                    &self.spaces,
+                    navigation_spaces,
                     &roots,
                 );
                 groups
-                    .entry(identity.key)
-                    .or_insert((identity.path, identity.name, Vec::new()));
+                    .entry(identity.key.clone())
+                    .or_insert(SidebarProjectGroup {
+                        key: identity.key,
+                        path: identity.path,
+                        name: identity.name,
+                        chats: Vec::new(),
+                        cloud_tasks: Vec::new(),
+                        cloud_project: None,
+                    });
             }
         }
-        let mut groups = groups
-            .into_iter()
-            .map(|(key, (path, name, chats))| (key, path, name, chats))
-            .collect::<Vec<_>>();
+        if !self.show_archive {
+            for project in &self.cloud.projects {
+                let Some(identity) =
+                    zuse_protocol::presentation::cloud_project_group(project, navigation_spaces)
+                else {
+                    continue;
+                };
+                let cloud_tasks: Vec<_> = self
+                    .cloud
+                    .workspaces
+                    .iter()
+                    .filter(|workspace| {
+                        workspace["projectId"].as_str() == Some(identity.project_id.as_str())
+                            && !matches!(
+                                workspace["state"].as_str(),
+                                Some("deleted" | "archived" | "archiving")
+                            )
+                            && !matches!(
+                                workspace["desiredState"].as_str(),
+                                Some("deleted" | "archived")
+                            )
+                            && (query.is_empty()
+                                || format!(
+                                    "{} {} {}",
+                                    identity.name,
+                                    workspace["title"].as_str().unwrap_or_default(),
+                                    workspace["branch"].as_str().unwrap_or_default()
+                                )
+                                .to_lowercase()
+                                .contains(query))
+                    })
+                    .cloned()
+                    .collect();
+                if !query.is_empty() && cloud_tasks.is_empty() {
+                    continue;
+                }
+                let path = identity
+                    .local_space
+                    .as_ref()
+                    .and_then(|id| navigation_spaces.iter().find(|space| &space.id == id))
+                    .map(|space| space.path.clone())
+                    .unwrap_or_default();
+                let group =
+                    groups
+                        .entry(identity.key.clone())
+                        .or_insert_with(|| SidebarProjectGroup {
+                            key: identity.key,
+                            path,
+                            name: identity.name,
+                            chats: Vec::new(),
+                            cloud_tasks: Vec::new(),
+                            cloud_project: None,
+                        });
+                group.cloud_tasks.extend(cloud_tasks);
+                group.cloud_project = Some(project.clone());
+            }
+        }
+        let mut groups: Vec<_> = groups.into_values().collect();
         groups.sort_by(|a, b| {
-            a.2.to_lowercase()
-                .cmp(&b.2.to_lowercase())
-                .then_with(|| a.0.cmp(&b.0))
+            a.name
+                .to_lowercase()
+                .cmp(&b.name.to_lowercase())
+                .then_with(|| a.key.cmp(&b.key))
         });
         groups
+    }
+    fn cloud_session_row(&self, workspace: &Value, cx: &mut Context<Self>) -> AnyElement {
+        let workspace = workspace.clone();
+        let title = workspace["title"]
+            .as_str()
+            .or_else(|| workspace["branch"].as_str())
+            .unwrap_or("New cloud chat")
+            .to_owned();
+        let state = match workspace["state"].as_str() {
+            Some("paused") => "Sleeping",
+            Some("pausing") => "Going to sleep",
+            Some("ready") => "Ready",
+            Some("failed" | "error") => "Needs attention",
+            _ => "Starting",
+        };
+        row()
+            .id(SharedString::from(format!(
+                "cloud-thread-{}",
+                workspace["workspaceId"].as_str().unwrap_or_default()
+            )))
+            .h(px(32.))
+            .px_2()
+            .gap_2()
+            .rounded_md()
+            .cursor_pointer()
+            .hover(|d| d.bg(rgb(RAISED)))
+            .child(icon("cloud-dither").size(px(13.)).text_color(rgb(MUTED)))
+            .child(
+                div()
+                    .min_w_0()
+                    .flex_1()
+                    .truncate()
+                    .text_size(px(12.))
+                    .child(title),
+            )
+            .child(label(state).text_size(px(10.)).text_color(rgb(FAINT)))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.open_cloud(workspace.clone());
+                cx.notify();
+            }))
+            .into_any_element()
     }
     fn session_row(&self, chat: &Value, nested: bool, cx: &mut Context<Self>) -> AnyElement {
         let selected = !self.usage_open
@@ -561,6 +877,11 @@ impl WorkspaceView {
             .and_then(|s| s.trim_end_matches('/').rsplit('/').next())
             .unwrap_or("No project");
         let harness = chat["config"]["harness"].as_str().unwrap_or("zuse");
+        let projected = self
+            .cloud
+            .local_navigation
+            .as_ref()
+            .is_some_and(|navigation| navigation.chats.iter().any(|row| row["id"] == chat["id"]));
         let value = chat.clone();
         let context = chat.clone();
         let actions = chat.clone();
@@ -614,7 +935,7 @@ impl WorkspaceView {
                             .text_color(rgb(if selected { TEXT } else { 0xd0d0d0 }))
                             .child(chat["title"].as_str().unwrap_or("New thread").to_owned()),
                     )
-                    .child(
+                    .when(!projected,|row|row.child(
                         icon_button(
                             SharedString::from(format!(
                                 "thread-actions-{}",
@@ -631,7 +952,7 @@ impl WorkspaceView {
                                 this.open_thread_actions(actions.clone(), window, cx);
                             },
                         )),
-                    )
+                    ))
                     .when(active, |d| {
                         d.child(div().size(px(5.)).rounded_full().bg(rgb(
                             if status == "awaitingInput" {
@@ -668,10 +989,16 @@ impl WorkspaceView {
                 cx.listener(move |this, _, window, cx| {
                     window.prevent_default();
                     cx.stop_propagation();
-                    this.open_thread_actions(context.clone(), window, cx);
+                    if !projected {this.open_thread_actions(context.clone(), window, cx);}
                 }),
             )
             .on_click(cx.listener(move |this, _, window, cx| {
+                if projected {
+                    if let Some(navigation)=&this.cloud.local_navigation {
+                        let _=this.requests.unbounded_send(json!({"ui":"selectLocalConversation","chatId":value["id"],"deviceId":navigation.device,"epoch":navigation.epoch,"accountId":this.cloud.account,"organizationId":this.cloud.organization}));
+                    }
+                    return;
+                }
                 this.select(value.clone(), cx);
                 if this
                     .selected

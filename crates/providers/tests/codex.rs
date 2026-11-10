@@ -2080,3 +2080,177 @@ fn changing_access_posture_requires_a_new_runtime() {
     assert!(!harness().same_runtime(&before, &after));
     assert!(!harness().reconfigures_in_place(&before, &after));
 }
+
+#[tokio::test]
+async fn brokered_renewal_does_not_block_streaming_or_stop() {
+    use std::os::unix::fs::PermissionsExt;
+    use zeroize::Zeroizing;
+    use zuse_providers::codex::auth::{Credential, CredentialResolver};
+    struct Broker {
+        renewing: Arc<tokio::sync::Notify>,
+    }
+    #[async_trait::async_trait]
+    impl CredentialResolver for Broker {
+        async fn resolve(
+            &self,
+            unauthorized: bool,
+            previous: Option<&str>,
+        ) -> Result<Credential, HarnessError> {
+            if unauthorized {
+                assert_eq!(previous, Some("account-a"));
+                self.renewing.notify_one();
+                // The authority stays slow; Stop must still reach the child.
+                tokio::time::sleep(Duration::from_secs(30)).await;
+            }
+            Ok(Credential::ChatGpt {
+                access_token: Zeroizing::new("synthetic-access".into()),
+                account_id: "account-a".into(),
+                plan_type: None,
+            })
+        }
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let script = temp.path().join("codex");
+    std::fs::write(&script, r#"#!/usr/bin/env python3
+import json,sys
+assert 'cli_auth_credentials_store="ephemeral"' in sys.argv
+logged_in=False
+for line in sys.stdin:
+    message=json.loads(line)
+    method=message.get('method')
+    if method=='initialize': result={}
+    elif method=='initialized': continue
+    elif method=='account/login/start':
+        assert message['params']['accessToken']=='synthetic-access'
+        logged_in=True
+        result={}
+    elif method=='thread/start':
+        assert logged_in
+        result={'thread':{'id':'thread-a'}}
+    elif method=='turn/start':
+        print(json.dumps({'id':message['id'],'result':{'turn':{'id':'turn-a'}}}),flush=True)
+        print(json.dumps({'method':'turn/started','params':{'threadId':'thread-a','turn':{'id':'turn-a'}}}),flush=True)
+        print(json.dumps({'id':'renew-a','method':'account/chatgptAuthTokens/refresh','params':{'previousAccountId':'account-a'}}),flush=True)
+        print(json.dumps({'method':'item/agentMessage/delta','params':{'threadId':'thread-a','turnId':'turn-a','itemId':'message-a','delta':'still streaming'}}),flush=True)
+        continue
+    elif method=='turn/interrupt':
+        print(json.dumps({'id':message['id'],'result':{}}),flush=True)
+        print(json.dumps({'method':'turn/completed','params':{'threadId':'thread-a','turn':{'id':'turn-a','status':'interrupted'}}}),flush=True)
+        continue
+    else: raise Exception('Unexpected method')
+    print(json.dumps({'id':message['id'],'result':result}),flush=True)
+"#).unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let renewing = Arc::new(tokio::sync::Notify::new());
+    let harness = CodexHarness::new()
+        .with_executable(script)
+        .with_credentials(Arc::new(Broker {
+            renewing: renewing.clone(),
+        }));
+    let (controls, _steer, token) = controls("Yes");
+    let turn = controls.turn.clone();
+    let started = std::time::Instant::now();
+    let mut stream = harness.run(request("test"), controls).await.unwrap();
+    let result = tokio::time::timeout(Duration::from_secs(4), async {
+        loop {
+            if matches!(stream.next().await.unwrap().unwrap(), AgentEvent::TextDelta { text } if text == "still streaming") { break; }
+        }
+        let first_text_ms = started.elapsed().as_secs_f64() * 1000.0;
+        renewing.notified().await;
+        let stopping = std::time::Instant::now();
+        turn.stop_turn();
+        loop {
+            if let AgentEvent::Done { status, .. } = stream.next().await.unwrap().unwrap() {
+                assert_eq!(status, DoneStatus::Interrupted);
+                println!("HARNESS_CONTROL_TIMINGS={}", serde_json::json!({
+                    "scope":"synthetic Codex subprocess; 30s slow credential resolver; no real inference",
+                    "spawnToSyntheticTextMs":first_text_ms,
+                    "stopToDoneMs":stopping.elapsed().as_secs_f64() * 1000.0,
+                }));
+                break;
+            }
+        }
+    }).await;
+    token.cancel();
+    drop(stream);
+    result.expect("credential refresh must not stall streaming or Stop");
+}
+
+#[tokio::test]
+async fn retained_app_server_reauthenticates_rotated_connection_before_next_turn() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use zeroize::Zeroizing;
+    use zuse_providers::codex::auth::{Credential, CredentialResolver};
+    struct Broker(AtomicUsize);
+    #[async_trait::async_trait]
+    impl CredentialResolver for Broker {
+        async fn resolve(&self, _: bool, _: Option<&str>) -> Result<Credential, HarnessError> {
+            Ok(Credential::ApiKey(Zeroizing::new("old-fixture-key".into())))
+        }
+        async fn before_turn(&self) -> Result<Credential, HarnessError> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(Credential::ApiKey(Zeroizing::new("new-fixture-key".into())))
+        }
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let script = temp.path().join("codex");
+    std::fs::write(&script, r#"#!/usr/bin/env python3
+import json,sys
+logins=0
+turns=0
+threads=0
+for line in sys.stdin:
+    message=json.loads(line)
+    method=message.get('method')
+    if method=='initialize': result={}
+    elif method=='initialized': continue
+    elif method=='account/login/start':
+        assert message['params']['apiKey']==('old-fixture-key' if logins==0 else 'new-fixture-key')
+        logins+=1
+        result={}
+    elif method=='thread/start':
+        threads+=1
+        assert threads==1
+        result={'thread':{'id':'retained-thread'}}
+    elif method=='turn/start':
+        turns+=1
+        assert logins==turns
+        tid='turn-'+str(turns)
+        print(json.dumps({'id':message['id'],'result':{'turn':{'id':tid}}}),flush=True)
+        print(json.dumps({'method':'turn/started','params':{'threadId':'retained-thread','turn':{'id':tid}}}),flush=True)
+        print(json.dumps({'method':'turn/completed','params':{'threadId':'retained-thread','turn':{'id':tid,'status':'completed'}}}),flush=True)
+        continue
+    else: raise Exception('Unexpected method')
+    print(json.dumps({'id':message['id'],'result':result}),flush=True)
+"#).unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let broker = Arc::new(Broker(AtomicUsize::new(0)));
+    let harness = CodexHarness::new()
+        .with_executable(script)
+        .with_credentials(broker.clone());
+    let (controls, steer, token) = controls("Yes");
+    let mut stream = harness.run(request("first"), controls).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        for index in 0..2 {
+            loop {
+                if let AgentEvent::Done {
+                    status, session_id, ..
+                } = stream.next().await.unwrap().unwrap()
+                {
+                    assert_eq!(status, DoneStatus::Completed);
+                    assert_eq!(session_id.as_deref(), Some("retained-thread"));
+                    break;
+                }
+            }
+            if index == 0 {
+                steer.send(SteerMessage::text("next")).await.unwrap();
+            }
+        }
+    })
+    .await
+    .expect("same retained app-server admits both authenticated turns");
+    assert_eq!(broker.0.load(Ordering::SeqCst), 1);
+    token.cancel();
+    drop(stream);
+}

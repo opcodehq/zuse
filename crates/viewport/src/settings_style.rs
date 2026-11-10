@@ -271,11 +271,10 @@ pub fn toggle(
                 .rounded_full()
                 .border_1()
                 .border_color(rgb(if checked { 0x89ca21 } else { BORDER }))
-                .bg(rgb(if checked {
-                    0x89ca21
-                } else {
-                    crate::shell::RAISED
-                })),
+                .when(!checked, |track| track.bg(rgb(crate::shell::RAISED)))
+                .when(checked, |track| {
+                    track.child(crate::dither::fill([0x89, 0xca, 0x21], 10.))
+                }),
         )
         .child(
             div()

@@ -317,6 +317,41 @@ pub enum SessionStatus {
     Errored,
 }
 
+/// Why a run is waiting on the user, so a sidebar can say so without loading
+/// the chat.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AwaitingInputKind {
+    Question,
+    Permission,
+    Plan,
+}
+
+impl AwaitingInputKind {
+    pub fn of(questions: &[crate::UserInputQuestion]) -> Self {
+        let is_plan = |tool: &str| {
+            let tool = tool.to_ascii_lowercase();
+            tool.contains("exitplanmode") || tool.contains("exit_plan")
+        };
+        let plan = questions.iter().any(|question| {
+            question.approval.as_ref().is_some_and(|a| is_plan(&a.tool))
+                || question.approval_prompt.as_ref().is_some_and(|prompt| {
+                    matches!(&prompt.action, crate::permission::PermissionAction::Other { tool, .. } if is_plan(tool))
+                })
+        });
+        if plan {
+            Self::Plan
+        } else if questions
+            .iter()
+            .any(|question| question.approval.is_some() || question.approval_prompt.is_some())
+        {
+            Self::Permission
+        } else {
+            Self::Question
+        }
+    }
+}
+
 /// Live run status for a chat — drives the Working indicator and sidebar status dots.
 /// Staleness-checked client-side against `updated_at` so a crashed backend never shows
 /// an eternal "Working".
@@ -338,6 +373,9 @@ pub struct Session {
     /// has not opened; read it through `view::running_subagents`.
     #[serde(default)]
     pub running_subagents: u32,
+    /// Why a run in `AwaitingInput` is waiting. Absent from older engines.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub awaiting_input: Option<AwaitingInputKind>,
     /// Background work the chat's runtime holds (shells, dev servers,
     /// detached agents) plus the few most recently ended, so every device
     /// can list them. Read through `view::background_tasks`.
@@ -1042,6 +1080,12 @@ pub struct ChangeRequestSummary {
     pub state: ChangeRequestState,
     pub base_ref: String,
     pub head_ref: String,
+    /// Absent from engines that predate draft reporting.
+    #[serde(default)]
+    pub is_draft: bool,
+    /// `Unknown` when the provider reports no decision.
+    #[serde(default)]
+    pub review_decision: ChangeRequestReviewDecision,
 }
 
 /// Relationship filter for one repository; never widens repository scope.
@@ -1231,6 +1275,8 @@ pub struct ChangeRequestComment {
     pub state: String,
     pub created_at: String,
     pub submitted_at: String,
+    /// The diff an inline review comment is anchored to, ending at its line.
+    pub diff_hunk: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -1265,10 +1311,13 @@ pub struct ChangeRequestCheck {
 /// Latest successful change request resolution for one checkout and branch.
 ///
 /// `change_request: None` is an authoritative successful lookup with no match;
-/// resolution failures must retain the previous successful snapshot instead.
+/// resolution failures retain previous values and set `error`; an initial
+/// failure has no authoritative lookup result.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CheckoutChangeRequestStatus {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
     pub checkout_id: String,
     pub device_id: String,
     pub cwd: String,
@@ -1679,6 +1728,7 @@ mod tests {
             (ChangeRequestState::Merged, "merged"),
         ] {
             let status = CheckoutChangeRequestStatus {
+                error: None,
                 checkout_id: "checkout-1".into(),
                 device_id: "device-1".into(),
                 cwd: "/repo".into(),
@@ -1691,6 +1741,8 @@ mod tests {
                     state,
                     base_ref: "main".into(),
                     head_ref: "feature/change".into(),
+                    is_draft: false,
+                    review_decision: Default::default(),
                 }),
                 updated_at: Utc.with_ymd_and_hms(2026, 8, 15, 12, 30, 0).unwrap(),
             };

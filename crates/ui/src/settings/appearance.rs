@@ -2491,7 +2491,7 @@ impl AppearancePage {
         let footer = div()
             .border_t_1()
             .border_color(hairline)
-            .bg(theme.surface_raised.opacity(0.18))
+            .bg(popover::dialog_footer_fill(theme))
             .px(px(20.0))
             .py(px(12.0))
             .flex()
@@ -2938,15 +2938,7 @@ impl AppearancePage {
                     ),
             );
 
-        let footer = div()
-            .mt(px(18.0))
-            .pt(px(12.0))
-            .border_t_1()
-            .border_color(theme.border)
-            .flex()
-            .items_center()
-            .justify_end()
-            .gap(px(8.0))
+        let footer = popover::dialog_footer(theme)
             .child(
                 compact_action(theme, "Cancel", "new-thread-background-adjustment-cancel")
                     .h(px(34.0))
@@ -3148,7 +3140,7 @@ impl AppearancePage {
             }
         }
         card = card.child(
-            div().mt(px(16.0)).flex().justify_end().child(
+            popover::dialog_footer(&theme).child(
                 widgets::text_action(
                     theme,
                     widgets::ActionTone::Solid,

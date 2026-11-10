@@ -107,8 +107,7 @@ impl Identity {
                     boot.is_some_and(|s| !s.is_empty() && s.len() <= 512),
                     "runtime_identity_missing"
                 );
-                let key = RsaPrivateKey::new(&mut OsRng, 2048)
-                    .map_err(|_| anyhow::anyhow!("runtime_identity_key_generation_failed"))?;
+                let key = generate_credential_key()?;
                 let seed: [u8; 32] = rand::random();
                 let signing = SigningKey::from_bytes(&seed);
                 let enc = |n: &BigUint| B64.encode(n.to_bytes_be());
@@ -230,6 +229,24 @@ impl Identity {
     pub fn acknowledged(&self) -> bool {
         self.stored.bootstrap_acknowledged
     }
+    #[cfg(unix)]
+    pub fn git_recipient(
+        &self,
+        bootstrap: &CloudRuntimeBootstrap,
+    ) -> Result<crate::github::GitRecipient> {
+        ensure!(
+            self.bootstrap()
+                .is_some_and(|known| known.workspace_id == bootstrap.workspace_id
+                    && known.zuse_account_id == bootstrap.zuse_account_id
+                    && known.runtime_generation == bootstrap.runtime_generation),
+            "runtime_git_identity_mismatch"
+        );
+        crate::github::GitRecipient::new(
+            bootstrap,
+            self.credential.clone(),
+            self.stored.credential_public_jwk.clone(),
+        )
+    }
     pub fn grant_recipient(
         &self,
         bootstrap: &CloudRuntimeBootstrap,
@@ -241,14 +258,33 @@ impl Identity {
             self.stored.credential_public_jwk.clone(),
         )
     }
+    #[cfg(unix)]
+    pub fn workload_recipient(
+        &self,
+        bootstrap: &CloudRuntimeBootstrap,
+    ) -> Result<crate::workload_secrets::Recipient> {
+        crate::workload_secrets::Recipient::new(
+            bootstrap,
+            self.credential.clone(),
+            self.stored.credential_public_jwk.clone(),
+        )
+    }
     pub fn request(&self) -> CloudRuntimeBootstrapRequest {
         CloudRuntimeBootstrapRequest {
             credential_public_jwk: self.stored.credential_public_jwk.clone(),
             signing_public_jwk: self.stored.signing_public_jwk.clone(),
             capabilities: Some(vec![
+                "rust-fast-start-v1".into(),
+                zuse_protocol::cloud::STARTUP_BIND_CAPABILITY.into(),
+                crate::project_cache::CAPABILITY.into(),
                 "rust-rpc-v1".into(),
                 "rust-session-commands-v1".into(),
+                zuse_protocol::cloud_task_commands::CAPABILITY.into(),
+                "rust-organization-execution-v1".into(),
+                "rust-workload-secrets-v1".into(),
                 zuse_protocol::cloud_lifecycle::CAPABILITY.into(),
+                zuse_protocol::cloud_lifecycle::MEMORY_CAPABILITY.into(),
+                zuse_protocol::cloud_lifecycle::RECREATION_CAPABILITY.into(),
                 "rust-transcript-projection-v1".into(),
                 "rust-full-state-recovery-v1".into(),
             ]),
@@ -439,6 +475,38 @@ fn digest(value: &str) -> String {
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect()
+}
+
+/// RSA prime search has a long-tailed duration. Race independent generations
+/// on the available cores and keep the first; each attempt uses its own OS
+/// randomness, so the chosen key is distributed exactly like a single one.
+fn generate_credential_key() -> Result<RsaPrivateKey> {
+    let attempts = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .clamp(1, 4);
+    if attempts == 1 {
+        return RsaPrivateKey::new(&mut OsRng, 2048)
+            .map_err(|_| anyhow::anyhow!("runtime_identity_key_generation_failed"));
+    }
+    let (sender, receiver) = std::sync::mpsc::channel();
+    for _ in 0..attempts {
+        let sender = sender.clone();
+        std::thread::spawn(move || {
+            // Losing attempts are dropped (and zeroized) when the receiver is gone.
+            let _ = sender.send(RsaPrivateKey::new(&mut OsRng, 2048));
+        });
+    }
+    drop(sender);
+    let mut failure = None;
+    for result in receiver {
+        match result {
+            Ok(key) => return Ok(key),
+            Err(error) => failure = Some(error),
+        }
+    }
+    let _ = failure;
+    anyhow::bail!("runtime_identity_key_generation_failed")
 }
 
 #[cfg(all(test, unix))]

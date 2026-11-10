@@ -54,6 +54,7 @@ pub enum ShortcutsEvent {
     EscapeStopsActiveAgentChanged(bool),
     /// The composer send behavior changed — persist + re-apply.
     ComposerSendBehaviorChanged(ComposerSendBehavior),
+    QuitGestureChanged,
     AppshotsChanged {
         enabled: bool,
         sound_enabled: bool,
@@ -85,6 +86,7 @@ pub struct ShortcutsPage {
     appshot_destination: AppshotDestination,
     appshot_capabilities: AppshotCapabilities,
     send_select: widgets::SelectState,
+    quit_select: widgets::SelectState,
     pull_request_destination_select: widgets::SelectState,
     destination_select: widgets::SelectState,
     capture_access_prompted: bool,
@@ -130,6 +132,7 @@ impl ShortcutsPage {
             appshot_destination,
             appshot_capabilities: crate::appshots::capabilities(),
             send_select: widgets::SelectState::default(),
+            quit_select: widgets::SelectState::default(),
             pull_request_destination_select: widgets::SelectState::default(),
             destination_select: widgets::SelectState::default(),
             capture_access_prompted: false,
@@ -205,6 +208,14 @@ impl ShortcutsPage {
             cx.emit(ShortcutsEvent::EscapeStopsActiveAgentChanged(enabled));
             cx.notify();
         }
+    }
+
+    fn set_quit_gesture(&mut self, gesture: crate::settings::QuitGesture, cx: &mut Context<Self>) {
+        crate::settings::update(SavePolicy::Debounced, cx, |settings| {
+            settings.quit_gesture = gesture;
+        });
+        cx.emit(ShortcutsEvent::QuitGestureChanged);
+        cx.notify();
     }
 
     fn set_composer_send_behavior(
@@ -757,9 +768,11 @@ impl Render for ShortcutsPage {
         let escape_stops_active_agent = self.escape_stops_active_agent;
         let send_behavior = self.composer_send_behavior;
         let compact_mode = crate::settings::transcript_compact_mode(cx);
+        let quit_gesture = crate::settings::quit_gesture(cx);
         let customized = self.keymap != KeymapConfig::default()
             || escape_stops_active_agent
-            || send_behavior != ComposerSendBehavior::default();
+            || send_behavior != ComposerSendBehavior::default()
+            || quit_gesture != crate::settings::QuitGesture::default();
         let modifier_label = modifier_send_label(cfg!(target_os = "macos"));
 
         let send_behaviors = [
@@ -792,6 +805,45 @@ impl Render for ShortcutsPage {
                 tr(cx, msg::native::send_messages_with),
             )))
             .child(send_behavior_control);
+        let quit_gestures = [
+            (crate::settings::QuitGesture::Press, "⌘Q"),
+            (crate::settings::QuitGesture::DoublePress, "Press ⌘Q twice"),
+            (crate::settings::QuitGesture::Hold, "Hold ⌘Q"),
+        ];
+        let quit_gesture_control = widgets::select(
+            "quit-gesture",
+            "Quit Zuse with",
+            &theme,
+            |page: &mut Self| &mut page.quit_select,
+        )
+        .options(
+            quit_gestures
+                .iter()
+                .map(|(_, label)| widgets::SelectOption::new(*label)),
+            quit_gestures
+                .iter()
+                .position(|(gesture, _)| *gesture == quit_gesture)
+                .unwrap_or_default(),
+        )
+        .width(148.0)
+        .on_select(move |page, ix, _, cx| page.set_quit_gesture(quit_gestures[ix].0, cx))
+        .render(&self.quit_select, cx);
+        let quit_gesture_row = widgets::card_row(&theme, true)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(160.0))
+                    .child(widgets::row_title(&theme, "Quit Zuse with"))
+                    .child(widgets::meta_line(
+                        &theme,
+                        vec![
+                            div()
+                                .child("The Quit menu item always quits right away.")
+                                .into_any_element(),
+                        ],
+                    )),
+            )
+            .child(quit_gesture_control);
         let compact_mode_row = widgets::card_row(&theme, false)
             .child(
                 div()
@@ -1014,12 +1066,31 @@ impl Render for ShortcutsPage {
                                     .child(
                                         widgets::section_stack()
                                             .child(self.general_account.clone())
-                                            .child(div().mt_3().mb_3().flex().items_center().justify_between()
-                                                .child(div().text_color(theme.text_muted).child(tr(cx, msg::native::move_chats_and_settings_from_electron)))
-                                                .child(crate::popover::btn_ghost(&theme,&tr(cx, msg::native::import_from_electron),"settings-desktop-import")
-                                                    .id("settings-desktop-import")
-                                                    .on_click(|_,window,cx|window.dispatch_action(Box::new(crate::desktop_import::OpenDesktopImport),cx))))
+                                            .child(
+                                                widgets::group(&theme, "Import", "").child(
+                                                    widgets::section_card(&theme).mt_0().child(
+                                                        widgets::card_row(&theme, true)
+                                                            .child(widgets::row_copy(
+                                                                &theme,
+                                                                &tr(cx, msg::native::import_from_electron),
+                                                                &tr(cx, msg::native::move_chats_and_settings_from_electron),
+                                                            ))
+                                                            .child(
+                                                                widgets::text_action(&theme, widgets::ActionTone::Outlined, "Import…")
+                                                                    .id("settings-desktop-import")
+                                                                    .role(gpui::Role::Button)
+                                                                    .tab_index(0)
+                                                                    .on_click(|_, window, cx| {
+                                                                        window.dispatch_action(Box::new(crate::desktop_import::OpenDesktopImport), cx)
+                                                                    }),
+                                                            ),
+                                                    ),
+                                                ),
+                                            )
                                             .child(self.general_preferences(&theme, cx))
+                                            .when(cfg!(target_os = "macos"), |el| {
+                                                el.child(widgets::section_card(&theme).mt_0().child(quit_gesture_row))
+                                            })
                                             .child(div().flex().flex_col().gap(px(16.))
                                                 .child(
                                                 widgets::group(&theme, tr(cx, msg::commands::command_group_composer), "").child(
@@ -1116,6 +1187,14 @@ impl Render for ShortcutsPage {
                                             .when(!disabled, |el| {
                                                 el.on_click(cx.listener(|this, _, _, cx| {
                                                     this.keymap = KeymapConfig::default();
+                                                    crate::settings::update(
+                                                        SavePolicy::Debounced,
+                                                        cx,
+                                                        |settings| {
+                                                            settings.quit_gesture =
+                                                                Default::default();
+                                                        },
+                                                    );
                                                     this.stop_recording();
                                                     this.conflict_notice = None;
                                                     this.commit(cx);

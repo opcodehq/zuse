@@ -18,6 +18,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use base64::Engine as _;
+use futures::channel::oneshot;
 use gpui::{
     App, Context, Entity, FocusHandle, IntoElement, KeyBinding, KeyDownEvent, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Render, ScrollDelta, SharedString,
@@ -270,6 +271,8 @@ struct TerminalTab {
     coalescer: InputCoalescer,
     flush_task: Option<Task<()>>,
     resize_task: Option<Task<()>>,
+    /// New shells wait until the terminal has measured its actual grid.
+    geometry_ready: Option<oneshot::Sender<()>>,
     /// Open + subscribe/reconnect lifecycle; dropping it cancels the stream.
     _run: Option<Task<()>>,
 }
@@ -503,6 +506,7 @@ impl TerminalPanel {
             coalescer: InputCoalescer::default(),
             flush_task: None,
             resize_task: None,
+            geometry_ready: None,
             _run: None,
         });
         entry.active = entry.tabs.len() - 1;
@@ -531,6 +535,7 @@ impl TerminalPanel {
             engine,
             target_device_id,
             Some(session),
+            None,
             None,
             cx,
         );
@@ -747,7 +752,20 @@ impl TerminalPanel {
         let key = self.reserve_tab_for_chat(chat.clone(), format!("Terminal {tab_no}"), cx);
         let target = self.chat_target(&chat, cx);
         let cwd = self.state.read(cx).terminal_open_cwd_for(&chat);
-        let run = Self::spawn_session(chat.clone(), key, engine, target, None, cwd, cx);
+        let (geometry_ready, measured) = oneshot::channel();
+        if let Some(tab) = self.tab_mut(&chat, key) {
+            tab.geometry_ready = Some(geometry_ready);
+        }
+        let run = Self::spawn_session(
+            chat.clone(),
+            key,
+            engine,
+            target,
+            None,
+            cwd,
+            Some(measured),
+            cx,
+        );
         if let Some(tab) = self.tab_mut(&chat, key) {
             tab._run = Some(run);
         }
@@ -762,9 +780,17 @@ impl TerminalPanel {
         target: Option<String>,
         existing_session: Option<TerminalSession>,
         cwd: Option<String>,
+        measured: Option<oneshot::Receiver<()>>,
         cx: &mut Context<Self>,
     ) -> Task<()> {
         cx.spawn(async move |this, cx| {
+            // Starting zsh at the provisional 80-column size can leave its
+            // partial-line marker on screen when the grid is measured later.
+            if let Some(measured) = measured
+                && measured.await.is_err()
+            {
+                return;
+            }
             let (cols, rows) = this
                 .update(cx, |panel, _| {
                     panel
@@ -1083,6 +1109,14 @@ impl TerminalPanel {
         let Some(tabs) = self.chats.get_mut(&chat) else {
             return;
         };
+        // Several new tabs can be requested before the next frame. Give each
+        // waiting shell the measured size, including tabs not currently active.
+        for tab in &mut tabs.tabs {
+            if let Some(ready) = tab.geometry_ready.take() {
+                tab.emulator.resize(cols, rows);
+                let _ = ready.send(());
+            }
+        }
         let active = tabs.active;
         let Some(tab) = tabs.tabs.get_mut(active) else {
             return;
@@ -1941,6 +1975,32 @@ impl Render for TerminalPanel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[gpui::test]
+    fn new_shells_wait_for_measured_geometry(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            gpui_base::init(cx);
+            cx.set_global(Theme::default());
+        });
+        let (panel, cx) = cx.add_window_view(|_, cx| {
+            let state = cx.new(|_| {
+                let mut state = AppState::new();
+                state.selected_chat = Some("chat".into());
+                state
+            });
+            TerminalPanel::new(state, cx)
+        });
+        let (sender, mut receiver) = oneshot::channel();
+        panel.update(cx, |panel, cx| {
+            let key = panel.reserve_tab_for_chat("chat".into(), "Terminal", cx);
+            panel.tab_mut("chat", key).unwrap().geometry_ready = Some(sender);
+            assert_eq!(receiver.try_recv(), Ok(None));
+            panel.on_grid_metrics(test_geometry(), cx);
+            assert_eq!(receiver.try_recv(), Ok(Some(())));
+            let tab = panel.tab_mut("chat", key).unwrap();
+            assert_eq!((tab.emulator.cols(), tab.emulator.rows()), (35, 9));
+        });
+    }
 
     #[gpui::test]
     fn slow_trackpad_scroll_accumulates_per_terminal(cx: &mut gpui::TestAppContext) {

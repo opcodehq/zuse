@@ -7,6 +7,7 @@
 mod auth_cli;
 mod daemon;
 mod paths;
+mod ssh_proxy;
 mod update_cli;
 
 use clap::{Parser, Subcommand};
@@ -61,6 +62,16 @@ enum Command {
         #[command(subcommand)]
         command: DaemonCommand,
     },
+    /// SSH ProxyCommand for `ssh zuse-<workspace>`: tunnels to that cloud
+    /// computer through the running Zuse engine.
+    #[command(hide = true)]
+    SshProxy {
+        /// The host alias ssh connects to (`zuse-<workspace id>`).
+        host: String,
+        /// The engine's IPC port (defaults to this environment's).
+        #[arg(long)]
+        ipc_port: Option<u16>,
+    },
     /// Check for a newer release and apply it (download → verify → swap →
     /// service restart). `--check` only reports (exits 1 when one is available).
     Update {
@@ -85,13 +96,9 @@ enum DaemonCommand {
     Status,
 }
 
-/// Local-only edge. `ZUSE_EDGE_URL` overrides (local dev / self-hosting).
+/// Optional workspace/device/relay edge; local development remains the default.
+/// `ZUSE_EDGE_URL` overrides (local dev / self-hosting).
 const DEFAULT_EDGE_URL: &str = zuse_update::LOCAL_EDGE_URL;
-
-/// Production WorkOS AuthKit client id — public knowledge (it appears in every
-/// authorize URL), so baking it in is safe. Overridden by `ZUSE_WORKOS_CLIENT_ID`;
-/// set it to the empty string — or set a dev bearer via `ZUSE_EDGE_TOKEN` — to
-/// force dev-mode auth instead.
 
 fn edge_url_from_env() -> String {
     std::env::var("ZUSE_EDGE_URL")
@@ -100,10 +107,9 @@ fn edge_url_from_env() -> String {
         .unwrap_or_else(|| DEFAULT_EDGE_URL.into())
 }
 
-/// WorkOS client id resolution: explicit env wins (empty string = dev mode);
-/// otherwise a `ZUSE_EDGE_TOKEN` dev bearer keeps dev mode (smoke tests,
-/// local wrangler); otherwise the baked production client id makes optional
-/// sync available while a bare start remains local-only.
+/// Optional workspace/relay auth: explicit public client wins (empty = dev mode).
+/// Without one, workspace sync remains local-only. General account sign-in uses
+/// engine::account's browser sign-in, whose client follows the API origin.
 fn workos_client_id_from_env(edge_token: &Option<String>) -> Option<String> {
     match std::env::var("ZUSE_WORKOS_CLIENT_ID") {
         Ok(v) if v.trim().is_empty() => None,
@@ -201,7 +207,7 @@ fn main() -> anyhow::Result<()> {
         use tracing_subscriber::util::SubscriberInitExt;
         // `zuse mcp` owns stdout for the protocol: a single log line on it
         // would corrupt the JSON-RPC stream, so its diagnostics go to stderr.
-        if matches!(&cli.command, Some(Command::Mcp)) {
+        if matches!(&cli.command, Some(Command::Mcp | Command::SshProxy { .. })) {
             tracing_subscriber::registry()
                 .with(filter)
                 .with(
@@ -247,7 +253,7 @@ fn main() -> anyhow::Result<()> {
 
     match cli.command {
         Some(Command::Headless) => {
-            let runtime = tokio::runtime::Runtime::new()?;
+            let runtime = zuse_engine::runtime()?;
             runtime.block_on(async {
                 let engine = zuse_engine::Engine::new(engine_config_from_env());
                 engine.run().await
@@ -264,6 +270,11 @@ fn main() -> anyhow::Result<()> {
         Some(Command::Status) => {
             let runtime = tokio::runtime::Runtime::new()?;
             runtime.block_on(auth_cli::status(engine_config_from_env()))
+        }
+        Some(Command::SshProxy { host, ipc_port }) => {
+            let runtime = tokio::runtime::Runtime::new()?;
+            let port = ipc_port.unwrap_or_else(|| engine_config_from_env().ipc_port);
+            runtime.block_on(ssh_proxy::run(port, &host))
         }
         Some(Command::Sync) => {
             let runtime = tokio::runtime::Runtime::new()?;
@@ -368,8 +379,7 @@ fn engine_config_from_env() -> zuse_engine::EngineConfig {
         // WorkOS mode: the signed-in session's org wins; ZUSE_ORG_ID (dev
         // default "dev-org") scopes the workspace room otherwise.
         org_id: std::env::var("ZUSE_ORG_ID").ok(),
-        // Real auth against production by default; see
-        // `workos_client_id_from_env` for the dev-mode escape hatches.
+        // Optional workspace identity; General cloud-account auth is separate.
         workos_client_id: workos_client_id_from_env(&edge_token),
         edge_token,
     }

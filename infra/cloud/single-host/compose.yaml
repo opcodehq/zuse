@@ -1,0 +1,98 @@
+# API and gateway share a process; the lifecycle worker has separate provider credentials.
+x-runtime: &runtime
+  image: ${ZUSE_CLOUD_IMAGE:?Set an immutable API image tag or digest}
+  # API and lifecycle operations do not launch coding-agent tooling. Only the
+  # credential worker needs the independently pinned authority entrypoint.
+  entrypoint: [/usr/local/bin/zuse-cloud-api]
+  volumes:
+    - type: bind
+      source: ${ZUSE_DATABASE_CA_FILE:-/etc/ssl/certs/ca-certificates.crt}
+      target: /etc/zuse/cloud/database-ca.crt
+      read_only: true
+      bind:
+        create_host_path: false
+  environment:
+    ZUSE_DEPLOYMENT_ENVIRONMENT: ${ZUSE_ENV:?}
+  restart: unless-stopped
+  init: true
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,size=16m
+  pids_limit: 256
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  api:
+    <<: *runtime
+    command: [serve]
+    env_file:
+      - path: ${ZUSE_CONFIG_DIR:?}/runtime.env
+        format: raw
+      - path: ${ZUSE_CONFIG_DIR:?}/api.env
+        format: raw
+        required: false
+      - path: ${ZUSE_CONFIG_DIR:?}/storage.env
+        format: raw
+        required: false
+    environment:
+      ZUSE_DEPLOYMENT_ENVIRONMENT: ${ZUSE_ENV:?}
+      ZUSE_CLOUD_LISTEN: 0.0.0.0:8080
+    cpus: ${APP_CPUS:-1}
+    mem_limit: ${APP_MEMORY:-384m}
+    ports:
+      - "127.0.0.1:${APP_HOST_PORT:?}:8080"
+    networks:
+      edge:
+        aliases: ["zuse-${ZUSE_ENV:?}-api"]
+    healthcheck:
+      test: [CMD, curl, --fail, --silent, --max-time, "5", http://127.0.0.1:8080/readyz]
+      interval: 30s
+      timeout: 6s
+      retries: 3
+      start_period: 20s
+
+  worker:
+    <<: *runtime
+    command: [worker]
+    env_file:
+      - path: ${ZUSE_CONFIG_DIR:?}/runtime.env
+        format: raw
+      - path: ${ZUSE_CONFIG_DIR:?}/worker.env
+        format: raw
+      - path: ${ZUSE_CONFIG_DIR:?}/storage.env
+        format: raw
+        required: false
+    cpus: ${WORKER_CPUS:-0.5}
+    mem_limit: ${WORKER_MEMORY:-192m}
+    networks: [edge]
+    depends_on:
+      api:
+        condition: service_healthy
+
+  auth-worker:
+    <<: *runtime
+    entrypoint: [/usr/local/lib/zuse/launch-authority.sh]
+    profiles: [authority]
+    command: [auth-worker]
+    env_file:
+      - path: ${ZUSE_CONFIG_DIR:?}/runtime.env
+        format: raw
+    cpus: ${AUTH_WORKER_CPUS:-0.25}
+    mem_limit: ${AUTH_WORKER_MEMORY:-256m}
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=128m,mode=1777
+    networks: [edge]
+    depends_on:
+      api:
+        condition: service_healthy
+
+networks:
+  edge:
+    external: true
+    name: zuse-${ZUSE_ENV:?}-edge

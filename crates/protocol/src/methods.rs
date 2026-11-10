@@ -127,6 +127,8 @@ pub const CREATE_ORG: &str = "CreateOrg";
 pub const SELECT_ORG: &str = "SelectOrg";
 /// One-time local→synced profile import: what's importable (unary).
 pub const LOCAL_IMPORT_STATUS: &str = "LocalImportStatus";
+/// MCP servers configured in this computer's agent apps, for import.
+pub const DISCOVER_LOCAL_MCP_SERVERS: &str = "DiscoverLocalMcpServers";
 /// One-time local→synced profile import: run it (stream of progress items).
 pub const IMPORT_LOCAL_WORKSPACE: &str = "ImportLocalWorkspace";
 // Repos / worktrees / folders (ControlRpc, relay-forwardable).
@@ -152,6 +154,8 @@ pub const GET_WORKTREE_SETTINGS: &str = "GetWorktreeSettings";
 pub const SET_WORKTREE_SETTINGS: &str = "SetWorktreeSettings";
 /// The device's browse roots: home plus mounted drives/volumes.
 pub const LIST_DRIVES: &str = "ListDrives";
+/// Make one empty folder inside an existing one (new-project picker).
+pub const CREATE_FOLDER: &str = "CreateFolder";
 /// Folders under the host's home by name (new-project picker).
 pub const SEARCH_HOME_FOLDERS: &str = "SearchHomeFolders";
 /// The new-project picker closed: drop the host's home index if unpinned.
@@ -204,6 +208,8 @@ pub const POST_CHANGE_REQUEST_COMMENT: &str = "PostChangeRequestComment";
 /// device whose `gh` acts for the user. `{url, update}` →
 /// `{refusal?: string}`: GitHub's reason when it declined.
 pub const UPDATE_CHANGE_REQUEST: &str = "UpdateChangeRequest";
+/// A merge tied to the commit the user inspected. Older hosts reject this method.
+pub const UPDATE_CHANGE_REQUEST_AT_HEAD: &str = "UpdateChangeRequestAtHead";
 pub const GET_CHANGE_REQUEST_DIFF: &str = "GetChangeRequestDiff";
 pub const GET_CHECKOUT_DIFF: &str = "GetCheckoutDiff";
 /// Permanently restore one chat-owned checkout to its current HEAD and
@@ -229,6 +235,8 @@ pub const DRAW_VISUAL: &str = "DrawVisual";
 /// Store an agent's sandboxed visual in its live turn (`show_visual`).
 /// Local only: the calling agent runs on this device.
 pub const PUBLISH_VISUAL: &str = "PublishVisual";
+/// Store an agent's UI block in its live turn (`show_ui`). Local only.
+pub const PUBLISH_UI_BLOCK: &str = "PublishUiBlock";
 /// Lazy full-tool-output fetch from the R2 sidecar by doc-resident ref
 /// (chat2-sync A3). Edge-direct from any device — never relay-forwarded.
 pub const FETCH_TOOL_BLOB: &str = "FetchToolBlob";
@@ -261,11 +269,23 @@ pub const LIST_ACCOUNT_DEVICES: &str = "ListAccountDevices";
 pub const REVOKE_ACCOUNT_DEVICE: &str = "RevokeAccountDevice";
 /// Host-authorized cloud catalog and saved history; neither wakes compute.
 pub const CLOUD_CONTEXT: &str = "CloudContext";
+/// Shared account invalidation subscription. Never transports executable actions.
+pub const CLOUD_EVENTS: &str = "CloudEvents";
 pub const CLOUD_CREATE: &str = "CloudCreate";
 pub const CLOUD_ENVIRONMENT: &str = "CloudEnvironment";
 pub const CLOUD_RPC: &str = "CloudRpc";
 pub const CLOUD_WORKSPACES: &str = "CloudWorkspaces";
 pub const CLOUD_HISTORY: &str = "CloudHistory";
+/// CPU, memory and disk of the machine the engine runs on.
+pub const MACHINE_RESOURCES: &str = "MachineResources";
+/// Authorize an SSH key on this machine and start its loopback sshd.
+pub const SSH_PREPARE: &str = "SshPrepare";
+/// Stream a connection to the loopback sshd: `{tunnel}`, then `{data}` items.
+pub const SSH_TUNNEL: &str = "SshTunnel";
+/// Send `{tunnel, data}` (base64) into an open SSH tunnel.
+pub const SSH_TUNNEL_WRITE: &str = "SshTunnelWrite";
+/// Close an SSH tunnel.
+pub const SSH_TUNNEL_CLOSE: &str = "SshTunnelClose";
 /// Explicit lifecycle mutation. Never automatically retry on reconnect.
 pub const CLOUD_CLEANUP_MIRROR: &str = "CloudCleanupMirror";
 pub const CLOUD_DELETE: &str = "CloudDelete";
@@ -275,6 +295,11 @@ pub const CLOUD_SYNC_STATUS: &str = "CloudSyncStatus";
 pub const CLOUD_SYNC_CONFIGURE: &str = "CloudSyncConfigure";
 pub const CLOUD_SYNC_RETRY: &str = "CloudSyncRetry";
 pub const CLOUD_PAUSE: &str = "CloudPause";
+/// Explicit supervised repair; start and resolve retain uncertain delivery.
+pub const CLOUD_RUNTIME_REPAIR: &str = "CloudRuntimeRepair";
+pub const CLOUD_ALLOCATION_RETRY: &str = "CloudAllocationRetry";
+/// Verified backup followed by explicit replacement of the task computer.
+pub const CLOUD_COMPUTER_RECREATION: &str = "CloudComputerRecreation";
 pub const CLOUD_WORKSPACE: &str = "CloudWorkspace";
 pub const CLOUD_ACCOUNT_STATUS: &str = "CloudAccountStatus";
 pub const CLOUD_ACCOUNT_SIGN_IN: &str = "CloudAccountSignIn";
@@ -302,8 +327,11 @@ pub const RESOLVE_RECOVERY: &str = "ResolveRecovery";
 pub fn retryable_read(method: &str, params: &serde_json::Value) -> bool {
     match method {
         GET_GIT_WORKSPACE
+        | WATCH_GIT_WORKSPACE
+        | WATCH_CHANGE_REQUEST
         | GET_BRANCH_GRAPH
         | RELAY_ACCESS_STATUS
+        | DIRECT_ACCESS_STATUS
         | BROWSER_ACCESS_STATUS
         | LIST_PAIRINGS
         | LIST_ACCOUNT_ROUTES
@@ -313,8 +341,14 @@ pub fn retryable_read(method: &str, params: &serde_json::Value) -> bool {
         | LIST_ACCOUNT_DEVICES
         | CLOUD_ACCOUNT_STATUS
         | CLOUD_CONTEXT
+        | CLOUD_EVENTS
         | CLOUD_PROJECTS
         | CLOUD_GITHUB
+        | CLOUD_CAPABILITIES
+        | CLOUD_AGENT_CONNECTIONS
+        | CLOUD_AGENT_LOGIN_STATUS
+        | CLOUD_PROJECT_ENVIRONMENT
+        | CLOUD_MACHINE
         | CLOUD_PREPAID_BALANCE
         | CLOUD_BILLING_ENTITLEMENTS
         | CLOUD_BILLING_SUMMARY
@@ -323,6 +357,7 @@ pub fn retryable_read(method: &str, params: &serde_json::Value) -> bool {
         | CLOUD_HISTORY
         | CLOUD_WORKSPACE
         | CLOUD_SYNC_STATUS
+        | MACHINE_RESOURCES
         | AUTH_STATUS
         | LOCAL_DEVICE
         | LIST_HARNESSES
@@ -358,6 +393,10 @@ pub fn retryable_read(method: &str, params: &serde_json::Value) -> bool {
         | crate::project_creation::GITHUB_STATUS
         | crate::project_creation::GITHUB_REPOS
         | SEARCH_FILES => true,
+        CLOUD_ENVIRONMENT => {
+            params.get("interactiveResume") == Some(&serde_json::Value::Bool(false))
+        }
+        CLOUD_RUNTIME_REPAIR | CLOUD_COMPUTER_RECREATION => params["action"] == "status",
         PLUGINS => params["action"] == "list",
         _ => false,
     }
@@ -367,10 +406,29 @@ pub fn retryable_read(method: &str, params: &serde_json::Value) -> bool {
 mod retry_tests {
     use super::*;
     #[test]
+    fn only_explicit_passive_cloud_attachment_is_a_retryable_read() {
+        assert!(retryable_read(
+            CLOUD_ENVIRONMENT,
+            &serde_json::json!({"interactiveResume":false})
+        ));
+        for params in [
+            serde_json::Value::Null,
+            serde_json::json!({}),
+            serde_json::json!({"interactiveResume":true}),
+            serde_json::json!({"interactiveResume":null}),
+            serde_json::json!({"interactiveResume":"false"}),
+            serde_json::json!({"interactiveResume":0}),
+        ] {
+            assert!(!retryable_read(CLOUD_ENVIRONMENT, &params));
+        }
+    }
+    #[test]
     fn privileged_actions_and_unknown_methods_keep_uncertain_delivery() {
         for method in [
             CREATE_PAIRING,
             REVOKE_PAIRING,
+            START_DIRECT_ACCESS,
+            STOP_DIRECT_ACCESS,
             START_RELAY_ACCESS,
             RESUME_RELAY_ACCESS,
             SET_RELAY_AUTO_START,
@@ -386,6 +444,9 @@ mod retry_tests {
             MODEL_CONNECT,
             CLOUD_UNARCHIVE,
             CLOUD_PAUSE,
+            CLOUD_RUNTIME_REPAIR,
+            CLOUD_ALLOCATION_RETRY,
+            CLOUD_COMPUTER_RECREATION,
             CLOUD_LOCAL_TERMINAL,
             CLOUD_SYNC_CONFIGURE,
             CLOUD_SYNC_RETRY,
@@ -436,6 +497,9 @@ pub const START_BROWSER_ACCESS: &str = "StartBrowserAccess";
 pub const STOP_BROWSER_ACCESS: &str = "StopBrowserAccess";
 
 /// Profile-owned outbound relay; routing credentials never appear in status.
+pub const DIRECT_ACCESS_STATUS: &str = "DirectAccessStatus";
+pub const START_DIRECT_ACCESS: &str = "StartDirectAccess";
+pub const STOP_DIRECT_ACCESS: &str = "StopDirectAccess";
 pub const RELAY_ACCESS_STATUS: &str = "RelayAccessStatus";
 /// Resume the saved profile-local relay configuration; never automatically retry.
 pub const RESUME_RELAY_ACCESS: &str = "ResumeRelayAccess";
@@ -449,6 +513,8 @@ pub const SELECT_PLUGIN_WORKSPACE: &str = "SelectPluginWorkspace";
 
 /// User-owned Git workflow; only the workspace read may reconnect automatically.
 pub const GET_GIT_WORKSPACE: &str = "GetGitWorkspace";
+pub const WATCH_GIT_WORKSPACE: &str = "WatchGitWorkspace";
+pub const WATCH_CHANGE_REQUEST: &str = "WatchChangeRequest";
 pub const GIT_WORKSPACE_ACTION: &str = "GitWorkspaceAction";
 
 /// Account-scoped cloud administration; handled by the host authority.
@@ -465,6 +531,22 @@ pub const CLOUD_PROJECTS: &str = "CloudProjects";
 pub const CLOUD_PROJECT_CONNECT: &str = "CloudProjectConnect";
 pub const CLOUD_PROJECT_REMOVE: &str = "CloudProjectRemove";
 pub const CLOUD_GITHUB: &str = "CloudGithubCatalog";
+pub const CLOUD_GITHUB_INSTALL: &str = "CloudGithubInstall";
+pub const CLOUD_CAPABILITIES: &str = "CloudCapabilities";
+pub const CLOUD_AGENT_CONNECTIONS: &str = "CloudAgentConnections";
+pub const CLOUD_AGENT_CONFIGURE: &str = "CloudAgentConfigure";
+pub const CLOUD_AGENT_LOGIN: &str = "CloudAgentLogin";
+pub const CLOUD_AGENT_LOGIN_STATUS: &str = "CloudAgentLoginStatus";
+pub const CLOUD_AGENT_LOGIN_CANCEL: &str = "CloudAgentLoginCancel";
+pub const CLOUD_AGENT_DISCONNECT: &str = "CloudAgentDisconnect";
+pub const CLOUD_PROJECT_ENVIRONMENT: &str = "CloudProjectEnvironment";
+pub const CLOUD_PROJECT_ENVIRONMENT_SAVE: &str = "CloudProjectEnvironmentSave";
+/// The account machine recipe every cloud computer's image is built from.
+pub const CLOUD_MACHINE: &str = "CloudMachine";
+pub const CLOUD_MACHINE_SAVE: &str = "CloudMachineSave";
+pub const CLOUD_PROJECT_SECRETS: &str = "CloudProjectSecrets";
+pub const CLOUD_PROJECT_SECRET_SAVE: &str = "CloudProjectSecretSave";
+pub const CLOUD_PROJECT_SECRET_REVOKE: &str = "CloudProjectSecretRevoke";
 pub const CLOUD_IMAGE: &str = "CloudImage";
 pub const CLOUD_IMAGE_BUILD: &str = "CloudImageBuild";
 pub const CLOUD_IMAGE_DELETE: &str = "CloudImageDelete";
@@ -473,3 +555,8 @@ pub const CLOUD_IMAGE_DELETE: &str = "CloudImageDelete";
 pub const OBSERVE_PR_WATCH: &str = "ObservePrWatch";
 pub const SET_PR_WATCH: &str = "SetPrWatch";
 pub const WATCH_PR_WATCHES: &str = "WatchPrWatches";
+/// Explicit controller admission; never a guest RPC fallback.
+pub const CLOUD_TASK_COMMAND: &str = "CloudTaskCommand";
+
+/// Scoped API-owned workspace asset transfer; does not acquire execution.
+pub const CLOUD_TASK_ASSET: &str = "CloudTaskAsset";

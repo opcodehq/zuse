@@ -46,6 +46,9 @@ struct RecoveryMachine {
     lose_delete_reply: AtomicBool,
     retired: std::sync::Mutex<Vec<String>>,
     wakes: AtomicUsize,
+    target_wakes: AtomicUsize,
+    pending_target_wake: AtomicBool,
+    ready_during_inspection: AtomicBool,
     pool: PgPool,
     source: std::path::PathBuf,
     data: std::path::PathBuf,
@@ -59,10 +62,17 @@ struct RecoveryMachine {
     uncertain_launch: AtomicBool,
     runtime: tokio::sync::Mutex<Option<tokio::process::Child>>,
 }
+impl RecoveryMachine {
+    async fn assert_recovery_unlocked(&self) {
+        tokio::time::timeout(Duration::from_secs(2),sqlx::query("UPDATE api_cloud_workspaces SET revision=revision+1 WHERE workspace_id='ws-bob'").execute(&self.pool))
+            .await.expect("recovery provider I/O held the workspace row lock").unwrap();
+    }
+}
 #[async_trait]
 impl RecoveryProvider for RecoveryMachine {
     async fn inspect(&self, id: &str) -> Result<Option<Machine>, ProviderError> {
         assert_eq!(id, "machine-bob");
+        self.assert_recovery_unlocked().await;
         if self.destroyed.load(Ordering::SeqCst) {
             return Ok(None);
         }
@@ -75,14 +85,38 @@ impl RecoveryProvider for RecoveryMachine {
         }))
     }
     async fn wake(&self, id: &str, _: &MachineState) -> Result<(), ProviderError> {
-        assert_eq!(id, "machine-bob");
+        self.assert_recovery_unlocked().await;
+        if id=="replacement-bob" {
+            self.target_wakes.fetch_add(1,Ordering::SeqCst);
+            self.replacement.lock().unwrap().as_mut().unwrap().state=MachineState::Running;
+            return Ok(());
+        }
+        assert_eq!(id,"machine-bob");
         self.wakes.fetch_add(1, Ordering::SeqCst);
         *self.state.lock().unwrap() = MachineState::Running;
         Ok(())
     }
+    async fn wake_receipt(&self,id:&str,state:&MachineState)->Result<zuse_cloud::providers::contract::ProviderOperation,ProviderError>{
+        self.wake(id,state).await?;
+        Ok(zuse_cloud::providers::contract::ProviderOperation{resource_id:id.into(),operation_id:if id=="replacement-bob"{Some("original-replacement-wake".into())}else{None},desired:zuse_cloud::providers::contract::DesiredState::Running})
+    }
+    async fn recovery_state(&self,r:&zuse_cloud::providers::contract::ProviderOperation)->Result<zuse_cloud::providers::contract::OperationState,ProviderError>{
+        use zuse_cloud::providers::contract::{DesiredState,OperationState};
+        self.assert_recovery_unlocked().await;
+        if r.resource_id=="replacement-bob" {
+            assert_eq!(r.operation_id.as_deref(),Some("original-replacement-wake"));
+            assert_eq!(r.desired,DesiredState::Running);
+            return Ok(if self.pending_target_wake.load(Ordering::SeqCst){OperationState::Retrying}else{OperationState::Completed});
+        }
+        assert!(r.operation_id.is_none());
+        let machine=self.inspect(&r.resource_id).await?;
+        let complete=matches!((r.desired,machine.as_ref().map(|m|&m.state)),(DesiredState::Running,Some(MachineState::Running))|(DesiredState::Sleeping,Some(MachineState::Paused|MachineState::Stopped|MachineState::Standby))|(DesiredState::Deleted,None));
+        Ok(if complete{OperationState::Completed}else{OperationState::Pending})
+    }
     async fn capture(&self, plan: &CapturePlan) -> Result<(), ProviderError> {
         assert_eq!(plan.source_machine_id, "machine-bob");
         assert_eq!(plan.workspace_id, "ws-bob");
+        self.assert_recovery_unlocked().await;
         let mut helper = self.helper.lock().await;
         if let Some(child) = helper.as_mut() {
             if child.try_wait().unwrap().is_none() {
@@ -109,6 +143,7 @@ impl RecoveryProvider for RecoveryMachine {
     }
     async fn stop_capture(&self, id: &str, _: &str) -> Result<(), ProviderError> {
         assert!(["machine-bob", "replacement-bob"].contains(&id));
+        self.assert_recovery_unlocked().await;
         if let Some(mut child) = self.helper.lock().await.take() {
             if child.try_wait().unwrap().is_none() {
                 child.start_kill().unwrap();
@@ -119,6 +154,7 @@ impl RecoveryProvider for RecoveryMachine {
     }
     async fn pause(&self, id: &str) -> Result<(), ProviderError> {
         assert_eq!(id, "machine-bob");
+        self.assert_recovery_unlocked().await;
         *self.state.lock().unwrap() = MachineState::Paused;
         Ok(())
     }
@@ -142,6 +178,11 @@ impl RecoveryProvider for RecoveryMachine {
 #[async_trait]
 impl zuse_cloud::runtime::allocation::AllocationProvider for RecoveryMachine {
     async fn find(&self, name: &str) -> Result<Option<Machine>, ProviderError> {
+        self.assert_recovery_unlocked().await;
+        if name=="replacement-bob" && self.ready_during_inspection.swap(false,Ordering::SeqCst) {
+            sqlx::query("UPDATE zuse_rust_lifecycle_operations SET phase='ready' WHERE operation_id=(SELECT request_config->'rustLifecycleOperation'->>'id' FROM api_cloud_workspaces WHERE workspace_id='ws-bob')").execute(&self.pool).await.unwrap();
+            sqlx::query("UPDATE api_cloud_workspaces SET state='ready',status_code='ready',request_config=jsonb_set(request_config,'{rustLifecycleOperation,phase}','\"ready\"') WHERE workspace_id='ws-bob'").execute(&self.pool).await.unwrap();
+        }
         Ok(self
             .replacement
             .lock()
@@ -151,6 +192,7 @@ impl zuse_cloud::runtime::allocation::AllocationProvider for RecoveryMachine {
             .cloned())
     }
     async fn create(&self, snapshot: &str, name: &str) -> Result<Machine, ProviderError> {
+        self.assert_recovery_unlocked().await;
         assert_eq!(snapshot, "approved-rust-snapshot");
         assert!(self.destroyed.load(Ordering::SeqCst));
         assert!(self.replacement.lock().unwrap().is_none());
@@ -176,6 +218,7 @@ impl zuse_cloud::runtime::allocation::AllocationProvider for RecoveryMachine {
         id: &str,
         launch: &zuse_cloud::runtime::allocation::RuntimeLaunch,
     ) -> Result<(), ProviderError> {
+        self.assert_recovery_unlocked().await;
         assert_eq!(id, "replacement-bob");
         assert_eq!(launch.generation, 3);
         assert_eq!(launch.incarnation, "packaged-storage");
@@ -227,6 +270,7 @@ impl zuse_cloud::runtime::allocation::AllocationProvider for RecoveryMachine {
 #[async_trait]
 impl zuse_cloud::runtime::restore::RestoreProvider for RecoveryMachine {
     async fn restore(&self, id: &str, plan: &CapturePlan) -> Result<(), ProviderError> {
+        self.assert_recovery_unlocked().await;
         assert_eq!(id, "replacement-bob");
         // The physical targets have the same guest paths, as real replacement VMs do.
         RecoveryProvider::capture(self, plan).await?;
@@ -236,6 +280,7 @@ impl zuse_cloud::runtime::restore::RestoreProvider for RecoveryMachine {
         Ok(())
     }
     async fn installed(&self, id: &str, _: &str) -> Result<bool, ProviderError> {
+        self.assert_recovery_unlocked().await;
         assert_eq!(id, "replacement-bob");
         let mut helper = self.helper.lock().await;
         if let Some(child) = helper.as_mut() {
@@ -350,6 +395,9 @@ impl ArchiveFixture {
             lose_delete_reply: AtomicBool::new(false),
             retired: std::sync::Mutex::new(vec![]),
             wakes: AtomicUsize::new(0),
+            target_wakes: AtomicUsize::new(0),
+            pending_target_wake: AtomicBool::new(false),
+            ready_during_inspection: AtomicBool::new(false),
             pool: api.pool.clone(),
             source,
             data,
@@ -623,6 +671,8 @@ async fn retired_archive_restores_into_fresh_generation_and_continues_original_c
         f.tick().await.unwrap();
         if !request_during_retirement {
             f.tick().await.unwrap();
+            assert_eq!(f.phase().await, "retiring");
+            f.tick().await.unwrap();
             assert_eq!(f.phase().await, "retired");
         } else {
             assert_eq!(f.phase().await, "retiring");
@@ -644,6 +694,8 @@ async fn retired_archive_restores_into_fresh_generation_and_continues_original_c
             let unchanged = f.unarchive("repeat-unarchive-after-demand").await;
             assert_eq!(unchanged["desiredState"], "ready");
             f.tick().await.unwrap();
+            assert_eq!(f.phase().await, "retiring");
+            f.tick().await.unwrap();
             assert_eq!(f.phase().await, "retired");
             assert_eq!(f.machine.creates.load(Ordering::SeqCst), 0);
             f.tick().await.unwrap();
@@ -656,7 +708,7 @@ async fn retired_archive_restores_into_fresh_generation_and_continues_original_c
         f.machine.uncertain_launch.store(true, Ordering::SeqCst);
         let mut uncertain = 0;
         let mut expired_before_bootstrap = false;
-        tokio::time::timeout(Duration::from_secs(30), async {
+        let restored = tokio::time::timeout(Duration::from_secs(30), async {
             loop {
                 sqlx::query("UPDATE zuse_rust_jobs SET due_at=0 WHERE kind='workspace-restore'")
                     .execute(&f.api.pool)
@@ -713,11 +765,30 @@ async fn retired_archive_restores_into_fresh_generation_and_continues_original_c
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
         })
-        .await
-        .unwrap();
+        .await;
+        if restored.is_err() {
+            let state:Value=sqlx::query_scalar("SELECT json_build_object('restorePhase',r.phase,'archivePhase',a.phase,'jobState',j.state,'lastError',j.last_error_code,'attempts',j.attempts,'runtimeState',w.runtime_state,'lifecycle',w.request_config->'rustLifecycleOperation','hasBootstrap',w.request_config ? 'runtimeBootstrapReceipt','hasEnrollment',w.request_config ? 'rustStorageEnrollment') FROM zuse_rust_restores r JOIN zuse_rust_recovery_operations a ON a.operation_id=r.archive_operation_id JOIN api_cloud_workspaces w ON w.workspace_id=r.workspace_id JOIN zuse_rust_jobs j ON j.kind='workspace-restore' AND j.resource_id=w.workspace_id").fetch_one(&f.api.pool).await.unwrap();
+            panic!("Restore failed to converge: {state}; uncertainty replies={uncertain}; runtime started={}",f.machine.runtime.lock().await.is_some());
+        }
+
         assert_eq!(f.machine.creates.load(Ordering::SeqCst), 1);
         assert_eq!(uncertain, 3);
         assert!(expired_before_bootstrap);
+        // Replay a lost completion delivery, with the real enrolled guest's ready
+        // receipt arriving during provider inspection after the worker snapshot.
+        sqlx::query("UPDATE zuse_rust_recovery_operations SET phase='restoring'").execute(&f.api.pool).await.unwrap();
+        sqlx::query("UPDATE zuse_rust_restores SET phase='launching'").execute(&f.api.pool).await.unwrap();
+        sqlx::query("UPDATE api_cloud_workspaces SET state='provisioning',request_config=jsonb_set(jsonb_set(request_config,'{recoveryArchive,phase}','\"restoring\"'),'{rustLifecycleOperation,phase}','\"launching\"') WHERE workspace_id='ws-bob'").execute(&f.api.pool).await.unwrap();
+        sqlx::query("UPDATE zuse_rust_lifecycle_operations SET phase='launching' WHERE operation_id=(SELECT request_config->'rustLifecycleOperation'->>'id' FROM api_cloud_workspaces WHERE workspace_id='ws-bob')").execute(&f.api.pool).await.unwrap();
+        sqlx::query("UPDATE zuse_rust_jobs SET state='pending',due_at=0,lease_token=NULL,lease_expires_at=NULL,attempts=0 WHERE kind='workspace-restore'").execute(&f.api.pool).await.unwrap();
+        f.machine.ready_during_inspection.store(true,Ordering::SeqCst);
+        f.control.restore_once(&f.machine,chrono::Utc::now().timestamp_millis()).await.unwrap();
+        assert!(!f.machine.ready_during_inspection.load(Ordering::SeqCst),"provider inspection must exercise the late ready receipt");
+        let phase:String=sqlx::query_scalar("SELECT request_config->'rustLifecycleOperation'->>'phase' FROM api_cloud_workspaces WHERE workspace_id='ws-bob'").fetch_one(&f.api.pool).await.unwrap();
+        assert_eq!(phase,"ready","a worker must never rewind a concurrently acknowledged resume");
+        sqlx::query("UPDATE zuse_rust_jobs SET due_at=0 WHERE kind='workspace-restore'").execute(&f.api.pool).await.unwrap();
+        f.control.restore_once(&f.machine,chrono::Utc::now().timestamp_millis()).await.unwrap();
+        assert_eq!(f.phase().await,"restored");
         assert_eq!(
             std::fs::read_to_string(f.machine.repository.join(".env")).unwrap(),
             "SAVED_USER_ENV=yes"
@@ -832,4 +903,38 @@ async fn retired_archive_restores_into_fresh_generation_and_continues_original_c
         drop(client);
         f.finish().await;
     }
+}
+
+#[tokio::test]
+#[ignore="requires isolated PostgreSQL and packaged guest"]
+async fn restore_waits_for_original_wake_receipt_when_inspection_already_says_running(){
+    let f=ArchiveFixture::start().await;
+    sqlx::query("UPDATE api_cloud_workspaces SET project_id='create-project' WHERE workspace_id='ws-bob'").execute(&f.api.pool).await.unwrap();
+    f.control.begin_recovery("ws-bob",chrono::Utc::now().timestamp_millis()).await.unwrap().unwrap();
+    f.upload().await;
+    for _ in 0..3 {f.tick().await.unwrap();}
+    assert_eq!(f.phase().await,"retired");
+    f.unarchive("unarchive-pending-wake").await;
+    assert_eq!(runtime_post_for_url(&format!("{}/v1/cloud/workspaces/ws-bob/resume",f.api.origin),"bob",&json!({"workspaceId":"ws-bob","commandId":"resume-pending-wake"})).await.0,200);
+    f.control.restore_once(&f.machine,chrono::Utc::now().timestamp_millis()).await.unwrap();
+    f.machine.replacement.lock().unwrap().as_mut().unwrap().state=MachineState::Paused;
+    f.machine.pending_target_wake.store(true,Ordering::SeqCst);
+    for _ in 0..4 {
+        sqlx::query("UPDATE zuse_rust_jobs SET due_at=0 WHERE kind='workspace-restore'").execute(&f.api.pool).await.unwrap();
+        f.control.restore_once(&f.machine,chrono::Utc::now().timestamp_millis()).await.unwrap();
+        assert_eq!(f.machine.target_wakes.load(Ordering::SeqCst),1);
+        let phase:String=sqlx::query_scalar("SELECT phase FROM zuse_rust_restores").fetch_one(&f.api.pool).await.unwrap();
+        assert_eq!(phase,"allocated","running inspection cannot settle an original pending wake");
+        assert!(f.machine.helper.lock().await.is_none());
+        assert!(f.machine.runtime.lock().await.is_none());
+    }
+    f.machine.pending_target_wake.store(false,Ordering::SeqCst);
+    sqlx::query("UPDATE zuse_rust_jobs SET due_at=0 WHERE kind='workspace-restore'").execute(&f.api.pool).await.unwrap();
+    f.control.restore_once(&f.machine,chrono::Utc::now().timestamp_millis()).await.unwrap();
+    let effects:Value=sqlx::query_scalar("SELECT provider_effects FROM zuse_rust_restores").fetch_one(&f.api.pool).await.unwrap();
+    assert_eq!(effects["wake"]["state"],"completed");
+    assert_eq!(effects["wake"]["receipt"]["operationId"],"original-replacement-wake");
+    assert_eq!(f.machine.target_wakes.load(Ordering::SeqCst),1);
+    assert!(f.machine.helper.lock().await.is_some());
+    f.finish().await;
 }

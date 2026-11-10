@@ -71,6 +71,9 @@ impl Drop for Guard {
 impl RpcService for Service {
     async fn handle(&self, method: &str, params: Value) -> Result<RpcReply, RpcError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
+        if method == "EngineInfo" {
+            return RpcReply::value(&json!({"deviceId":"host-device"}));
+        }
         if method == "Watch" {
             self.streams.fetch_add(1, Ordering::SeqCst);
             let guard = Guard(self.streams.clone());
@@ -85,6 +88,60 @@ impl RpcService for Service {
         }
         RpcReply::value(&params)
     }
+}
+
+/// Exercises the packaged native wire client against this crate's real account transport.
+#[tokio::test]
+#[ignore = "requires JDK21 and the Android Gradle toolchain"]
+async fn android_account_client_acceptance() {
+    let root = tempfile::tempdir().unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let calls = Arc::new(AtomicUsize::new(0));
+    let streams = Arc::new(AtomicUsize::new(0));
+    let shutdown = CancellationToken::new();
+    let browser = zuse_serve::BrowserServer::new(
+        Arc::new(Service {
+            calls: calls.clone(),
+            streams: streams.clone(),
+        }),
+        "x".repeat(64),
+        None,
+    )
+    .unwrap()
+    .with_managed_authority(Arc::new(Auth {
+        account: CancellationToken::new(),
+        host: CancellationToken::new(),
+    }));
+    let task = tokio::spawn(browser.serve_with_shutdown(
+        listener,
+        root.path().into(),
+        None,
+        shutdown.clone().cancelled_owned(),
+    ));
+    let result = tokio::task::spawn_blocking(move || {
+        let checkout = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        std::process::Command::new(checkout.join("apps/android/gradlew"))
+            .args([
+                "-p",
+                "apps/android",
+                ":core:test",
+                "--tests",
+                "sh.zuse.core.RealAccountTests",
+                "--rerun-tasks",
+                "--no-daemon",
+            ])
+            .current_dir(checkout)
+            .env("ZUSE_NATIVE_ACCOUNT_ORIGIN", origin)
+            .status()
+    })
+    .await
+    .unwrap();
+    shutdown.cancel();
+    task.await.unwrap().unwrap();
+    assert!(result.unwrap().success());
+    assert!(calls.load(Ordering::SeqCst) >= 4);
+    assert_eq!(streams.load(Ordering::SeqCst), 0);
 }
 async fn receive(socket: &mut Socket) -> Option<Value> {
     match tokio::time::timeout(Duration::from_secs(3), socket.next())

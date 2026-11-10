@@ -1,0 +1,114 @@
+name: Native binaries
+
+# Compiles the browser assets and every platform's executables without packaging
+# them, so one build can be signed and released later under any preview version.
+on:
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        required: true
+      retention_days:
+        type: number
+        default: 2
+    # These jobs run dependency build code, so they never receive signing secrets.
+    secrets:
+      HUGEICONS_LICENSE_KEY:
+        required: false
+
+jobs:
+  # Browser assets are identical on every platform, so build them once.
+  web:
+    runs-on: ubuntu-24.04
+    env:
+      HUGEICONS_LICENSE_KEY: ${{ secrets.HUGEICONS_LICENSE_KEY }}
+      HUGEICONS_SOLID_VERSION: ${{ vars.HUGEICONS_SOLID_VERSION }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # The browser client rebuilds std for wasm threads.
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+          targets: wasm32-unknown-unknown
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: trunk@0.21.14
+      - run: bash scripts/build-web.sh --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-assets
+          path: dist/web
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention_days }}
+
+  build:
+    needs: web
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            platform: linux
+            arch: x86_64
+          - os: ubuntu-24.04-arm
+            platform: linux
+            arch: aarch64
+          - os: macos-latest
+            platform: macos
+            arch: aarch64
+          - os: macos-15-intel
+            platform: macos
+            arch: x86_64
+          - os: windows-latest
+            platform: windows
+            arch: x86_64
+    runs-on: ${{ matrix.os }}
+    # Git Bash on Windows, so the steps below run unchanged.
+    defaults:
+      run:
+        shell: bash
+    env:
+      HUGEICONS_LICENSE_KEY: ${{ secrets.HUGEICONS_LICENSE_KEY }}
+      HUGEICONS_SOLID_VERSION: ${{ vars.HUGEICONS_SOLID_VERSION }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-assets
+          path: dist/web
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake clang libclang-dev pkg-config libssl-dev libfontconfig-dev libfreetype-dev libxcb1-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libvulkan-dev libasound2-dev libwebkit2gtk-4.1-dev libjson-glib-dev
+      - run: cargo fetch --locked
+      - name: Build
+        run: python scripts/package.py --platform ${{ matrix.platform }} --arch ${{ matrix.arch }} --build-only --skip-web
+      # Packaging and signing happen on fresh runners that never ran dependency build code.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            target/release/zuse
+            target/release/zuse-server
+            target/release/zuse-relay
+            target/release/zuse.exe
+            target/release/zuse-server.exe
+            target/release/zuse-relay.exe
+            dist/web
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention_days }}

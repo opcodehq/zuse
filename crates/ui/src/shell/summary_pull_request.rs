@@ -7,7 +7,7 @@ use super::*;
 use gpui::{Bounds, Pixels, WeakEntity, canvas};
 
 use crate::pull_request_detail::{
-    PullRequestRepair, chat_context, failing_check_count, open_feedback_count, repair_prompt,
+    PullRequestRepair, chat_context_item, failing_check_count, open_feedback_count, repair_message,
 };
 use zuse_protocol::change_request_assessment::check_status;
 use zuse_protocol::{
@@ -191,10 +191,12 @@ impl Shell {
         let (Some(detail), Some(url)) = (&self.summary_pr.detail, &self.summary_pr.url) else {
             return;
         };
-        let prompt = repair_prompt(repair, detail, url);
+        let (text, context) = repair_message(repair, detail, url);
         self.close_summary_pr_menu(cx);
         self.close_session_info_overlay(cx);
-        self.stage_in_composer(prompt, cx);
+        self.composer
+            .update(cx, |composer, cx| composer.stage_context(context, cx));
+        self.stage_in_composer(text, cx);
     }
 
     /// Merge, toggle auto-merge or change the status on GitHub, through the
@@ -294,11 +296,9 @@ impl Shell {
                     })
                     .child(SharedString::from(format!("#{}", model.number)))
                     .child(if self.summary_pr.busy {
-                        crate::loaders::ring_spinner(
+                        crate::loaders::dither_ring(
                             "session-info-pull-request-busy",
                             12.0,
-                            1.5,
-                            theme.text_muted.opacity(0.25),
                             theme.text_muted,
                         )
                     } else {
@@ -471,10 +471,11 @@ impl Shell {
                     else {
                         return;
                     };
-                    let context = chat_context(detail, url);
+                    let context = chat_context_item(detail, url);
                     this.close_summary_pr_menu(cx);
                     this.close_session_info_overlay(cx);
-                    this.stage_in_composer(context, cx);
+                    this.composer
+                        .update(cx, |composer, cx| composer.stage_context(context, cx));
                 }))
             }),
         );

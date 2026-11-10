@@ -2047,6 +2047,15 @@ struct ActiveChatRow {
     group: Option<(String, String)>,
 }
 
+/// The time a chat sorts by in the sidebar, in epoch milliseconds.
+fn sidebar_sort_time(sort: SidebarSort, chat: &zuse_protocol::Chat) -> i64 {
+    match sort {
+        SidebarSort::Created => chat.created_at,
+        SidebarSort::LastUpdated => chat.last_message_at.unwrap_or(chat.created_at),
+    }
+    .timestamp_millis()
+}
+
 pub(super) fn compare_sidebar_chats(
     sort: SidebarSort,
     left: &zuse_protocol::Chat,
@@ -2370,7 +2379,8 @@ fn sidebar_project_action(
     theme: &Theme,
 ) -> gpui::Stateful<gpui::Div> {
     div()
-        .id(id)
+        .id(id.clone())
+        .debug_selector(move || id.to_string())
         .size(px(20.0))
         .flex_none()
         .flex()
@@ -2730,8 +2740,8 @@ fn home_folder_row(
         )
         .when(is_repo, |el| {
             el.child(
-                icon(icons::GIT_BRANCH)
-                    .size(px(14.0))
+                icon(icons::GIT_STATE_BRANCH)
+                    .size(px(12.0))
                     .flex_none()
                     .text_color(theme.text_muted),
             )
@@ -2820,6 +2830,33 @@ pub(crate) fn status_dot_color(status: ChatIndicator, theme: &Theme) -> gpui::Hs
             theme.success.opacity(0.9) // emerald-400
         }
         ChatIndicator::Idle => crate::theme::ink(0.14),
+    }
+}
+
+/// The mark for a chat that needs attention, each reason with its own shape;
+/// routine states (working, done, idle) have none.
+pub(crate) fn status_glyph(
+    status: ChatIndicator,
+    queued: bool,
+    undelivered: bool,
+    awaiting: Option<zuse_protocol::AwaitingInputKind>,
+    theme: &Theme,
+) -> Option<(&'static str, gpui::Hsla)> {
+    use zuse_protocol::AwaitingInputKind as Kind;
+    if undelivered {
+        return Some((icons::STATUS_FAILED, theme.danger.opacity(0.8)));
+    }
+    if queued {
+        return Some((icons::STATUS_QUEUED, theme.text_muted));
+    }
+    match status {
+        ChatIndicator::Errored => Some((icons::STATUS_FAILED, theme.danger.opacity(0.8))),
+        ChatIndicator::AwaitingInput => Some(match awaiting {
+            Some(Kind::Plan) => (icons::STATUS_PLAN, theme.success),
+            Some(Kind::Permission) => (icons::STATUS_PERMISSION, theme.warning),
+            Some(Kind::Question) | None => (icons::STATUS_QUESTION, theme.warning),
+        }),
+        _ => None,
     }
 }
 
@@ -2982,6 +3019,11 @@ impl Shell {
     /// Open the new-session canvas in a just-added space, preserving the
     /// sidebar's current project filter.
     pub(super) fn land_in_space(&mut self, space_id: String, cx: &mut Context<Self>) {
+        // A project added from a Zot form stays on the form, which adopts it.
+        if matches!(self.route, Route::Zot) {
+            cx.notify();
+            return;
+        }
         self.cancel_pinned_session_drag(cx);
         self.set_route(Route::Chat, cx);
         self.focus_composer(cx);
@@ -5351,6 +5393,7 @@ impl Shell {
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> SidebarSessionRows {
+        let cloud_groups = self.cloud_sidebar_groups(cx);
         let now = Utc::now();
         let filter = self.settings.space_filter.clone();
         let profile_key = self.active_sidebar_pin_profile_key(cx);
@@ -5444,6 +5487,20 @@ impl Shell {
                 existing.push(row);
             } else {
                 regular_groups.push((row.group.clone(), vec![row]));
+            }
+        }
+        for cloud in &cloud_groups {
+            if (self.settings.sidebar_organization == SidebarOrganization::ByProject
+                || !cloud.rows.is_empty())
+                && !regular_groups
+                    .iter()
+                    .any(|(group, _)| match (group, &cloud.group) {
+                        (Some((a, _)), Some((b, _))) => a == b,
+                        (None, None) => true,
+                        _ => false,
+                    })
+            {
+                regular_groups.push((cloud.group.clone(), Vec::new()));
             }
         }
         if self.settings.sidebar_organization == SidebarOrganization::ByProject {
@@ -5610,6 +5667,8 @@ impl Shell {
                 .then(|| rows.first().map(|row| row.chat.id.clone()))
                 .flatten();
             let mut rendered_rows = Vec::with_capacity(rows.len());
+            // Each local row's sort time, so cloud tasks interleave by it.
+            let mut row_times: Vec<i64> = Vec::with_capacity(rows.len());
             for (group_index, row) in rows.into_iter().enumerate() {
                 let ActiveChatRow {
                     status,
@@ -5760,9 +5819,39 @@ impl Shell {
                         },
                     ))
                     .into_any_element();
+                row_times.push(sidebar_sort_time(self.settings.sidebar_sort, &chat));
                 rendered_rows.push((format!("c:{}", chat.id), slot_height, element));
             }
 
+            if !pinned_group {
+                for cloud in cloud_groups
+                    .iter()
+                    .filter(|cloud| match (&cloud.group, &group) {
+                        (Some((a, _)), Some((b, _))) => a == b,
+                        (None, None) => true,
+                        _ => false,
+                    })
+                {
+                    for row in &cloud.rows {
+                        let time = match self.settings.sidebar_sort {
+                            SidebarSort::Created => row["createdAt"].as_i64(),
+                            SidebarSort::LastUpdated => row["updatedAt"].as_i64(),
+                        }
+                        .or_else(|| row["createdAt"].as_i64())
+                        .unwrap_or_default();
+                        if let Some(row) = self.render_cloud_sidebar_row(row.clone(), theme, cx) {
+                            // Newest first, alongside local chats of the same
+                            // group, rather than after all of them.
+                            let at = row_times
+                                .iter()
+                                .position(|other| *other < time)
+                                .unwrap_or(row_times.len());
+                            row_times.insert(at, time);
+                            rendered_rows.insert(at, row);
+                        }
+                    }
+                }
+            }
             let Some((key, label)) = group else {
                 rendered.extend(rendered_rows);
                 if !pinned_group {
@@ -5869,9 +5958,12 @@ impl Shell {
                         })
                 })
                 .flatten();
+            let cloud_project = cloud_groups
+                .iter()
+                .find(|cloud| cloud.group.as_ref().is_some_and(|(id, _)| id == &key))
+                .map(|cloud| cloud.project.clone());
             let mut actions = Vec::new();
-            if let Some(project) = group_space {
-                let menu_space = project.clone();
+            if let Some(project) = group_space.clone() {
                 actions.push(
                     sidebar_project_action(
                         format!("sidebar-group-settings-{collapse_key}").into(),
@@ -5882,11 +5974,27 @@ impl Shell {
                     .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
                         cx.stop_propagation();
                         this.space_menu_active = 0;
-                        this.space_menu.open((menu_space.clone(), event.position()));
+                        this.space_menu.open((project.clone(), event.position()));
                         cx.notify();
                     }))
                     .into_any_element(),
                 );
+            } else if cloud_project.is_some() {
+                actions.push(
+                    sidebar_project_action(
+                        format!("sidebar-group-settings-{collapse_key}").into(),
+                        icons::SETTINGS,
+                        "Cloud settings",
+                        theme,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.open_settings(SettingsSection::Cloud, cx);
+                    }))
+                    .into_any_element(),
+                );
+            }
+            if group_space.is_some() || cloud_project.is_some() {
                 actions.push(
                     sidebar_project_action(
                         format!("sidebar-group-new-chat-{collapse_key}").into(),
@@ -5896,7 +6004,14 @@ impl Shell {
                     )
                     .on_click(cx.listener(move |this, _, _, cx| {
                         cx.stop_propagation();
-                        this.open_new_session(Some(project.clone()), cx);
+                        if let Some(project) = cloud_project
+                            .as_ref()
+                            .filter(|_| group_space.is_none() || this.cloud_conversation.is_some())
+                        {
+                            this.open_new_cloud_session(project.clone(), cx);
+                        } else {
+                            this.open_new_session(group_space.clone(), cx);
+                        }
                     }))
                     .into_any_element(),
                 );
@@ -7705,12 +7820,7 @@ impl Shell {
                         .child(popover::dialog_field(input.into_any_element())),
                 )
                 .child(
-                    div()
-                        .mt(px(16.0))
-                        .flex()
-                        .flex_row()
-                        .justify_end()
-                        .gap(px(8.0))
+                    popover::dialog_footer(&theme)
                         .child(
                             popover::btn_ghost(
                                 &theme,
@@ -7763,12 +7873,7 @@ impl Shell {
                 .child(popover::dialog_title(&theme, "Remove project?"))
                 .child(div().mt(px(6.0)).child(popover::dialog_body(&theme, copy)))
                 .child(
-                    div()
-                        .mt(px(16.0))
-                        .flex()
-                        .flex_row()
-                        .justify_end()
-                        .gap(px(8.0))
+                    popover::dialog_footer(&theme)
                         .child(
                             popover::btn_ghost(
                                 &theme,

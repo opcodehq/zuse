@@ -309,9 +309,10 @@ impl WorkspaceView {
                 self.selected.is_none() && !self.cloud.guest && !starting,
                 |view| view.child(self.cloud_toolbar(cx)),
             )
-            .when(!self.queue.is_empty(), |view| {
-                view.child(self.queue_view(cx))
-            })
+            .when(
+                !self.queue.is_empty() || (self.queue_paused && self.cloud_server_commands()),
+                |view| view.child(self.queue_view(cx)),
+            )
             .when(self.queue_edit.is_some(), |view| {
                 view.child(self.queue_edit_bar(cx))
             })
@@ -627,6 +628,14 @@ impl WorkspaceView {
             .pt_6()
             .pb_8()
             .gap_8()
+            .when(self.cloud.older_before.is_some(), |view| view.child(control("cloud-load-older",if self.cloud.older_loading { "Loading earlier messages…" } else { "Load earlier messages" })
+                .self_center().on_click(cx.listener(|this,_,_,cx| {
+                    if !this.cloud.older_loading {
+                        this.cloud.older_loading=true;
+                        let _=this.requests.unbounded_send(json!({"ui":"cloudHistoryOlder"}));
+                        cx.notify();
+                    }
+                }))))
             .when(self.messages.is_empty() && archived, |d| {
                 d.child(column().flex_1().justify_center().items_center().gap_3()
                     .child(icon("archive-minimalistic").size(px(24.)).text_color(rgb(MUTED)))
@@ -636,15 +645,19 @@ impl WorkspaceView {
                 let title = self.creation_project_name().map(|name|tr(cx, |l10n| msg::native::what_build_in(l10n, name))).unwrap_or_else(||tr(cx,msg::native::what_build_today));
                 d.px(px(if self.viewport_width <= 800. { 16. } else { 24. })).pt(px(32.)).child(column().flex_1().justify_center().items_center().w_full().max_w(px(768.)).self_center().gap_2()
                     .child(div().relative().top(px(3.)).text_size(px(24.)).line_height(px(32.)).font_weight(FontWeight::MEDIUM).child(title))
-                    .when(self.project.is_some() || self.cloud.mode, |view| view.child(control("welcome-without-project", tr(cx, msg::chat::start_without_project))
+                    .when(!self.cloud_controller && (self.project.is_some() || self.cloud.mode), |view| view.child(control("welcome-without-project", tr(cx, msg::chat::start_without_project))
                         .text_color(rgb(MUTED)).text_size(px(12.))
                         .on_click(cx.listener(|this, _, _, cx| { this.project = None; this.set_creation_destination(false, cx); cx.notify(); })))))
             })
+            .when(self.transcript_state.has_more, |view| view.child(
+                row().w_full().justify_center().child(control("load-earlier-messages", if self.transcript_state.loading_earlier { tr(cx, msg::chat::cloud_history_loading) } else { tr(cx, msg::chat::cloud_history_load_earlier) })
+                    .on_click(cx.listener(|this, _, _, cx| this.load_earlier_messages(cx))))
+            ))
             .children(self.messages.iter().enumerate().map(|(i, entry)| {
                 let message = serde_json::to_value(entry).unwrap_or(Value::Null);
                 let user = message["role"] == "user";
                 column()
-                    .id(("message", i))
+                    .id(SharedString::from(format!("message-{}",entry.id)))
                     .group("message")
                     .relative()
                     .w_full().max_w(px(796.)).self_center()
@@ -730,6 +743,7 @@ impl WorkspaceView {
                                             .into_any_element(),
                                     ),
                                     "visual" => Some(self.visual_part(part,cx)),
+                                    "uiBlock" => Some(self.ui_block_part(part, i + 1 == self.messages.len(), cx)),
                                     "tool" | "reasoning" => Some(self.activity_part(&entry.id,part,cx)),
                                     "image" => Some(self.image_preview(
                                         part["path"].as_str().unwrap_or_default(),
@@ -739,7 +753,7 @@ impl WorkspaceView {
                             }),
                     )
                     .child(row().absolute().left_0().right_0().bottom(px(-25.)).h(px(22.)).when(user,|d|d.justify_end()).child(
-                        icon_button(("copy-message",i),"copy",crate::localization::text("chat-assistant_message_actions_copy_message", cx))
+                        icon_button(SharedString::from(format!("copy-message-{}",entry.id)),"copy",crate::localization::text("chat-assistant_message_actions_copy_message", cx))
                             .opacity(0.).group_hover("message",|d|d.opacity(1.))
                             .on_click({let text=entry.parts.iter().filter_map(|p|serde_json::to_value(p).ok()).filter_map(|p|p["text"].as_str().map(str::to_owned)).collect::<Vec<_>>().join("\n");move|_,_,cx|cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))})
                     ))
@@ -1210,7 +1224,7 @@ impl Render for WorkspaceView {
                 .child(self.transcript(cx))
                 .into_any_element();
         }
-        if self.cloud.target.is_some() && !self.cloud_startup_pending() {
+        if self.cloud.target.is_some() && !self.settings {
             return self.cloud_workspace(window, cx);
         }
         if self.connected
@@ -1255,7 +1269,10 @@ impl Render for WorkspaceView {
             panel.set_target(target, cx);
         });
 
-        let panel_width = if !self.right_open || self.settings || self.project_picker {
+        let panel_width = if self.selected_zot().is_some() && !self.settings && !self.project_picker
+        {
+            320.
+        } else if !self.right_open || self.settings || self.project_picker {
             0.
         } else if self.right_tab == "browser" {
             (f32::from(window.viewport_size().width)
@@ -1505,8 +1522,13 @@ impl Render for WorkspaceView {
                     && !self.settings
                     && !self.project_picker
                     && self.project_archive.project.is_none()
-                    && !self.usage_open,
+                    && !self.usage_open
+                    && self.selected_zot().is_none(),
                 |d| d.child(self.workspace_panel(panel_width, cx)),
+            )
+            .when(
+                self.selected_zot().is_some() && !self.settings && !self.project_picker,
+                |d| d.child(self.zot_panel(cx)),
             )
             .when(self.preview_open.is_some() && !self.settings, |d| {
                 d.child(self.preview_overlay(window, cx))
@@ -1515,6 +1537,7 @@ impl Render for WorkspaceView {
             .when(self.thread_dialog.is_some(), |d| {
                 d.child(self.thread_dialog_view(cx))
             })
+            .when(self.zots.form.is_some(), |d| d.child(self.zot_form(cx)))
             .into_any_element()
     }
 }

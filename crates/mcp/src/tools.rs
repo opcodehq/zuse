@@ -45,6 +45,22 @@ pub struct Tools {
     pending_turns: tokio::sync::Mutex<HashMap<String, Arc<PendingTurn>>>,
 }
 
+fn coordinator_tool(name: &str) -> bool {
+    name.starts_with("zot_")
+        || matches!(
+            name,
+            "whoami"
+                | "list_devices"
+                | "list_projects"
+                | "list_harnesses"
+                | "list_models"
+                | "list_chats"
+                | "get_chat"
+                | "read_chat"
+                | "wait_for_turn"
+        )
+}
+
 fn chat_key_schema(extra: Value) -> Value {
     let mut properties = json!({
         "chat": {
@@ -283,7 +299,33 @@ fn catalog() -> Vec<ToolDef> {
             "required": ["script", "title"]
         }),
     });
+    tools.push(ToolDef {
+        name: SHOW_UI,
+        description: show_ui_description(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "spec": {
+                    "type": "string",
+                    "description": "UI block spec text. Must define `root = Component(...)`."
+                }
+            },
+            "required": ["spec"]
+        }),
+    });
     tools
+}
+
+/// Shows a UI block in the CALLING chat; offered only inside a chat, like
+/// [`SHOW_VISUAL`].
+const SHOW_UI: &str = "show_ui";
+
+/// The spec crate words the tool from its own catalogue, so the prompt and
+/// the validator never drift.
+fn show_ui_description() -> &'static str {
+    static DESCRIPTION: std::sync::LazyLock<String> =
+        std::sync::LazyLock::new(zuse_ui_block::tool_description);
+    DESCRIPTION.as_str()
 }
 
 /// Shows a page in the CALLING chat, so it is offered only to an agent that
@@ -486,6 +528,11 @@ async fn read_visual_assets(
 }
 
 // ---- argument shapes ---------------------------------------------------------
+
+#[derive(Deserialize)]
+struct ShowUiArgs {
+    spec: String,
+}
 
 #[derive(Deserialize)]
 struct ShowVisualArgs {
@@ -704,14 +751,41 @@ impl Tools {
 
     pub fn list(&self) -> Vec<ToolDef> {
         let in_chat = self.zuse.origin().chat_id.is_some();
-        catalog()
-            .into_iter()
+        let mut all = catalog();
+        for (name, description) in [
+            (
+                "zot_command",
+                "Apply a scoped Zot command. Supply commandId, zotId, expectedRevision and action. Reuse the commandId on retry. Actions include delegate (worker, model, base), messageWorker, stopWorker, archiveWorker, releaseWorker, decide, writeFile, restoreFile and freshConversation.",
+            ),
+            (
+                "zot_files",
+                "Read versioned Zot rules, notes, digest and reports. Supply zotId and optional history.",
+            ),
+            (
+                "zot_events",
+                "Read durable worker reports and blockers. Supply zotId.",
+            ),
+            (
+                "zot_acknowledge",
+                "Acknowledge handled worker reports. Supply zotId and eventIds; unresolved human decisions remain separate.",
+            ),
+        ] {
+            all.push(ToolDef {
+                name,
+                description,
+                input_schema: if name=="zot_command" {zuse_protocol::zots::command_schema()}else{json!({"type":"object","properties":{"zotId":{"type":"string"},"history":{"type":"boolean"},"eventIds":{"type":"array","items":{"type":"string"}}},"required":["zotId"]})},
+            });
+        }
+        all.into_iter()
             .filter(|tool| {
-                in_chat
+                (in_chat
                     || (tool.name != "request_secret"
                         && tool.name != SHOW_VISUAL
+                        && tool.name != SHOW_UI
                         && !tool.name.starts_with("plugins_")
-                        && !tool.name.starts_with("device_"))
+                        && !tool.name.starts_with("device_")))
+                    && (!self.zuse.is_coordinator() || coordinator_tool(tool.name))
+                    && (!tool.name.starts_with("zot_") || self.zuse.is_coordinator())
             })
             .collect()
     }
@@ -723,6 +797,9 @@ impl Tools {
     /// `Ok` is the tool's structured result; `Err` is a message the model
     /// should read (surfaced as `isError`, never as a protocol error).
     pub async fn call(&self, name: &str, args: Value) -> Result<Value, String> {
+        if self.zuse.is_coordinator() && !coordinator_tool(name) {
+            return Err("coordinators delegate mutations through scoped Zot commands".into());
+        }
         let result = match name {
             "request_secret" => {
                 let chat = self
@@ -732,6 +809,26 @@ impl Tools {
                     .as_deref()
                     .ok_or("Private secrets require an originating chat")?;
                 self.zuse.call_once(zuse_rpc::methods::REQUEST_PRIVATE_OPERATION, json!({"chatId":chat,"targetDeviceId":self.zuse.origin().device_id,"operation":args})).await
+            }
+            "zot_command" => {
+                self.zuse
+                    .control(zuse_protocol::control::ZOT_COMMAND, args)
+                    .await
+            }
+            "zot_files" => {
+                self.zuse
+                    .control(zuse_protocol::control::ZOT_FILES, args)
+                    .await
+            }
+            "zot_events" => {
+                self.zuse
+                    .control(zuse_protocol::control::ZOT_EVENTS, args)
+                    .await
+            }
+            "zot_acknowledge" => {
+                self.zuse
+                    .control(zuse_protocol::control::ACK_ZOT_EVENTS, args)
+                    .await
             }
             "plugins_list" | "plugins_search" | "plugins_schema" | "plugins_call" => {
                 self.plugin_tool(name, args).await
@@ -755,6 +852,7 @@ impl Tools {
             "respond_to_input" => self.respond_to_input(parse(args)?).await,
             "archive_chat" => self.archive_chat(parse(args)?).await,
             SHOW_VISUAL => self.show_visual(parse(args)?).await,
+            SHOW_UI => self.show_ui(parse(args)?).await,
             other => return Err(format!("unknown tool: {other}")),
         };
         result.map_err(|e| format!("{e:#}"))
@@ -1334,6 +1432,30 @@ impl Tools {
         }))
     }
 
+    async fn show_ui(&self, args: ShowUiArgs) -> anyhow::Result<Value> {
+        let chat_id = self
+            .zuse
+            .origin()
+            .chat_id
+            .clone()
+            .context("show_ui only works from an agent Zuse launched in a chat")?;
+        // Checked here first so the agent gets every problem with line
+        // numbers without a round trip; the engine checks again.
+        zuse_ui_block::validate(&args.spec).map_err(|e| anyhow::anyhow!("{e}"))?;
+        let shown = self
+            .zuse
+            .call(
+                zuse_rpc::methods::PUBLISH_UI_BLOCK,
+                json!({ "chatId": chat_id, "spec": args.spec }),
+            )
+            .await?;
+        Ok(json!({
+            "ok": true,
+            "id": shown["id"],
+            "message": "Shown below your reply. Don't restate it; reply with only what it doesn't already say.",
+        }))
+    }
+
     async fn interrupt_chat(&self, args: ChatArgs) -> anyhow::Result<Value> {
         let chat = self.zuse.resolve_chat(&args.chat).await?;
         let command_id = self
@@ -1728,6 +1850,13 @@ mod tests {
                         .push((method.to_owned(), params.clone()));
                     RpcReply::Value(json!({ "id": "v:1", "title": params["title"] }))
                 }
+                methods::PUBLISH_UI_BLOCK => {
+                    self.writes
+                        .lock()
+                        .unwrap()
+                        .push((method.to_owned(), params.clone()));
+                    RpcReply::Value(json!({ "id": "ui:1" }))
+                }
                 methods::MUTATE | methods::QUEUE_COMMAND | methods::QUEUE_MESSAGE => {
                     self.writes
                         .lock()
@@ -1890,6 +2019,48 @@ mod tests {
                 .unwrap();
         let report = zuse_visual::check(&SHOW_VISUAL_DESCRIPTION[start..end], 1).unwrap();
         assert_eq!(report.interactions, 2, "both tabs");
+    }
+
+    #[tokio::test]
+    async fn show_ui_is_offered_only_inside_a_chat_and_validates_first() {
+        let world = Arc::new(World::default());
+        let outside = tools(world.clone(), Origin::default());
+        assert!(!outside.has("show_ui"));
+
+        let inside = tools(
+            world.clone(),
+            Origin {
+                chat_id: Some("chat-alpha-1".into()),
+                device_id: Some("dev-local".into()),
+            },
+        );
+        assert!(inside.has("show_ui"));
+        let invalid = inside
+            .call("show_ui", json!({ "spec": "root = Nope()" }))
+            .await
+            .unwrap_err();
+        assert!(invalid.contains("Nope"), "{invalid}");
+        assert!(world.writes.lock().unwrap().is_empty(), "nothing published");
+
+        let spec = r#"root = Stat("Requests", "3,000")"#;
+        let shown = inside
+            .call("show_ui", json!({ "spec": spec }))
+            .await
+            .unwrap();
+        assert_eq!(shown["id"], "ui:1");
+        let writes = world.writes.lock().unwrap();
+        let (method, params) = writes.last().unwrap();
+        assert_eq!(method, methods::PUBLISH_UI_BLOCK);
+        assert_eq!(params["chatId"], "chat-alpha-1");
+        assert_eq!(params["spec"], spec);
+    }
+
+    #[test]
+    fn the_show_ui_examples_pass_their_own_check() {
+        for (_, spec) in zuse_ui_block::EXAMPLES {
+            zuse_ui_block::validate(spec).unwrap();
+            assert!(show_ui_description().contains(spec));
+        }
     }
 
     #[tokio::test]
@@ -2088,6 +2259,7 @@ mod tests {
             updated_at: chrono::Utc::now() - chrono::Duration::minutes(10),
             last_completed_turn: None,
             running_subagents: 0,
+            awaiting_input: None,
             background_tasks: Vec::new(),
         };
         // No mid-turn capability is required for a live mailbox delivery.

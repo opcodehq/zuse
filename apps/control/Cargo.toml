@@ -1,0 +1,17 @@
+[package]
+name = "zuse-control"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+zuse-protocol.workspace = true
+zuse-rpc = { path = "../../crates/rpc", default-features = false }
+tokio.workspace = true
+clap = { workspace = true, features = ["env"] }
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+url = "2"
+
