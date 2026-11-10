@@ -1834,7 +1834,7 @@
     "onboarding-flow_chats_title": "c1261c3927259be5a25abb9376065e37b92a0f46c27c36030deb45017c45d150",
     "onboarding-flow_chats_body": "fae7db774e0ffa38ff52113acc7c6502dbe25f21bc8c2db259155efbb4ae4019",
     "onboarding-flow_previous_title": "967ce9f7e3fb736f8f644d4235593e1d855d8b155da77c6a78a7587d9bf32160",
-    "onboarding-flow_previous_summary": "a9f4881ca9579f179641d34db6eb0a667ab4d24a4f5de0cf4cd25c129cca646e",
+    "onboarding-flow_previous_summary": "6d732653e9ef415cdeba7843a8a066c3b790e477eba68144586f0fd49b54f1ef",
     "onboarding-flow_previous_settings": "e2286638601328a2c8dfd8df585a27e2031ce3eae654e665fd5e8d860e0992d5",
     "onboarding-flow_chats_loading": "ac5ace17f55bcc0a9ca7e6bad7ca6978e858b4d67e7273629900342283abe02b",
     "onboarding-flow_chats_none": "13edf31be1651876593c5a72cf09a1d4af97cb084fb3acbb772cd5704d77d0eb",
@@ -1860,7 +1860,7 @@
     "onboarding-flow_launch_project": "69c7be567fca896e319e40ecaa459761acd982346f8c8ad0aac17d70f2725641",
     "onboarding-flow_launch_open_chats": "aaabe71537835d646fb01234eda0cc43b40c47fb04574dc4f412a3b2155964ad",
     "onboarding-flow_source_importing": "c01c4324f1fa14fc76957936626e11a5150c24e748dbd08cc46848dfcbe37d00",
-    "onboarding-flow_source_picked": "d48928ea99da481ce77ee584e415f0c3aebb65bbe0a3fbd87cfc5803f9556c7d",
+    "onboarding-flow_source_picked": "59a7063e9937a3b725d74ae8abc88ccb1e62cd4bf9e59c9f47b66eb6fb390834",
     "onboarding-flow_chats_hint": "2c60024ac3168b319c41645699fc3d320704bafb462e60d3a0aa1bc167713bd5",
     "plugins-plugins_title": "9514b7ff4860ead73491768e45cce0ce20e6e3473a7b272e496c43c875d80ac5",
     "plugins-plugins_subtitle": "ad1ba22040518b63e02dfb0ec73c457c3e72149d29280a7f7a694d4733ae1f1d",
@@ -4447,6 +4447,14 @@
       "projects-masters_ask_the_master_to_start_work_it_will_decide_which_tasks_need_separate_agents": {
         "status": "needs-review",
         "sourceHash": "2eb64296aeee20715198611ecc3c6a3f01f3ea34d2e75634bb06a2c208cc2c47"
+      },
+      "onboarding-flow_previous_summary": {
+        "status": "needs-review",
+        "sourceHash": "a9f4881ca9579f179641d34db6eb0a667ab4d24a4f5de0cf4cd25c129cca646e"
+      },
+      "onboarding-flow_source_picked": {
+        "status": "needs-review",
+        "sourceHash": "d48928ea99da481ce77ee584e415f0c3aebb65bbe0a3fbd87cfc5803f9556c7d"
       }
     },
     "zh-Hant": {
@@ -4537,6 +4545,14 @@
       "projects-masters_ask_the_master_to_start_work_it_will_decide_which_tasks_need_separate_agents": {
         "status": "needs-review",
         "sourceHash": "2eb64296aeee20715198611ecc3c6a3f01f3ea34d2e75634bb06a2c208cc2c47"
+      },
+      "onboarding-flow_previous_summary": {
+        "status": "needs-review",
+        "sourceHash": "a9f4881ca9579f179641d34db6eb0a667ab4d24a4f5de0cf4cd25c129cca646e"
+      },
+      "onboarding-flow_source_picked": {
+        "status": "needs-review",
+        "sourceHash": "d48928ea99da481ce77ee584e415f0c3aebb65bbe0a3fbd87cfc5803f9556c7d"
       }
     },
     "ja": {
@@ -4627,6 +4643,14 @@
       "projects-masters_ask_the_master_to_start_work_it_will_decide_which_tasks_need_separate_agents": {
         "status": "needs-review",
         "sourceHash": "2eb64296aeee20715198611ecc3c6a3f01f3ea34d2e75634bb06a2c208cc2c47"
+      },
+      "onboarding-flow_previous_summary": {
+        "status": "needs-review",
+        "sourceHash": "a9f4881ca9579f179641d34db6eb0a667ab4d24a4f5de0cf4cd25c129cca646e"
+      },
+      "onboarding-flow_source_picked": {
+        "status": "needs-review",
+        "sourceHash": "d48928ea99da481ce77ee584e415f0c3aebb65bbe0a3fbd87cfc5803f9556c7d"
       }
     },
     "de": {
@@ -4717,6 +4741,14 @@
       "projects-masters_ask_the_master_to_start_work_it_will_decide_which_tasks_need_separate_agents": {
         "status": "needs-review",
         "sourceHash": "2eb64296aeee20715198611ecc3c6a3f01f3ea34d2e75634bb06a2c208cc2c47"
+      },
+      "onboarding-flow_previous_summary": {
+        "status": "needs-review",
+        "sourceHash": "a9f4881ca9579f179641d34db6eb0a667ab4d24a4f5de0cf4cd25c129cca646e"
+      },
+      "onboarding-flow_source_picked": {
+        "status": "needs-review",
+        "sourceHash": "d48928ea99da481ce77ee584e415f0c3aebb65bbe0a3fbd87cfc5803f9556c7d"
       }
     },
     "ko": {
@@ -4807,6 +4839,14 @@
       "projects-masters_ask_the_master_to_start_work_it_will_decide_which_tasks_need_separate_agents": {
         "status": "needs-review",
         "sourceHash": "2eb64296aeee20715198611ecc3c6a3f01f3ea34d2e75634bb06a2c208cc2c47"
+      },
+      "onboarding-flow_previous_summary": {
+        "status": "needs-review",
+        "sourceHash": "a9f4881ca9579f179641d34db6eb0a667ab4d24a4f5de0cf4cd25c129cca646e"
+      },
+      "onboarding-flow_source_picked": {
+        "status": "needs-review",
+        "sourceHash": "d48928ea99da481ce77ee584e415f0c3aebb65bbe0a3fbd87cfc5803f9556c7d"
       }
     },
     "fr": {
@@ -4897,6 +4937,14 @@
       "projects-masters_ask_the_master_to_start_work_it_will_decide_which_tasks_need_separate_agents": {
         "status": "needs-review",
         "sourceHash": "2eb64296aeee20715198611ecc3c6a3f01f3ea34d2e75634bb06a2c208cc2c47"
+      },
+      "onboarding-flow_previous_summary": {
+        "status": "needs-review",
+        "sourceHash": "a9f4881ca9579f179641d34db6eb0a667ab4d24a4f5de0cf4cd25c129cca646e"
+      },
+      "onboarding-flow_source_picked": {
+        "status": "needs-review",
+        "sourceHash": "d48928ea99da481ce77ee584e415f0c3aebb65bbe0a3fbd87cfc5803f9556c7d"
       }
     }
   }

@@ -56,6 +56,7 @@ pub struct Wizard {
     skipped_sign_in: bool,
     harnesses: Option<Result<Vec<HarnessDescriptor>, String>>,
     harness_task: Option<Task<()>>,
+    harness_error: Option<String>,
     rows: Option<Result<Vec<external::Row>, String>>,
     picked: BTreeSet<String>,
     /// External rows already copied in, so their app row reads as done.
@@ -104,6 +105,7 @@ impl Wizard {
             skipped_sign_in: false,
             harnesses: None,
             harness_task: None,
+            harness_error: None,
             rows: None,
             picked: BTreeSet::new(),
             done: BTreeSet::new(),
@@ -203,8 +205,13 @@ impl Wizard {
         // startup restoration from navigating while onboarding is open.
         self.state.update(cx, |state, _| state.auto_selected = true);
         if self.previous_pending(cx).is_some() {
-            self.chats_after_previous = !self.picked.is_empty();
             self.desktop.update(cx, |d, cx| d.import_previous(cx));
+            // A refused start leaves the job idle; don't wait on it forever.
+            self.chats_after_previous = !self.picked.is_empty()
+                && matches!(self.desktop.read(cx).progress(), PreviousImport::Running(_));
+            if !self.chats_after_previous {
+                self.import_chats(cx);
+            }
         } else {
             self.import_chats(cx);
         }
@@ -330,10 +337,19 @@ impl Wizard {
         self.harness_task = Some(cx.spawn(async move |this, cx| {
             let result = job.await.unwrap_or_else(|e| Err(e.to_string()));
             let _ = this.update(cx, |this, cx| {
-                if let Ok(list) = result.and_then(|v| {
+                match result.and_then(|v| {
                     serde_json::from_value::<Vec<HarnessDescriptor>>(v).map_err(|e| e.to_string())
                 }) {
-                    this.harnesses = Some(Ok(list));
+                    Ok(list) => {
+                        this.harness_error = None;
+                        this.harnesses = Some(Ok(list));
+                    }
+                    // The switch moved optimistically; reload the engine's
+                    // real state instead of leaving it wrong.
+                    Err(error) => {
+                        this.harness_error = Some(error);
+                        this.load_harnesses(cx);
+                    }
                 }
                 crate::pickers::bump_harness_catalog(cx);
                 cx.notify();
@@ -798,6 +814,14 @@ impl Wizard {
                 }
             }
         }
+        if let Some(error) = &self.harness_error {
+            body = body.child(
+                div()
+                    .text_size(crate::typography::text_sm())
+                    .text_color(theme.danger)
+                    .child(error.clone()),
+            );
+        }
         body.into_any_element()
     }
 
@@ -945,20 +969,30 @@ impl Wizard {
                 overflow,
                 rows,
             ));
-            if let Some((queued, skipped)) = summary.submitted {
+            if let Some((_, skipped)) = summary.submitted {
+                let added = summary.added();
                 body = body.child(Self::note(
                     theme,
                     if summary.pending > 0 {
                         tr(cx, msg::onboarding::flow_mcp_adding)
                     } else {
-                        tr(cx, |l| msg::onboarding::flow_mcp_added(l, queued))
+                        tr(cx, |l| msg::onboarding::flow_mcp_added(l, added))
                     },
                 ));
-                if skipped > 0 {
+                let failed = skipped + summary.failed;
+                if summary.pending == 0 && failed > 0 {
                     body = body.child(Self::note(
                         theme,
-                        tr(cx, |l| msg::onboarding::flow_mcp_skipped(l, skipped)),
+                        tr(cx, |l| msg::onboarding::flow_mcp_skipped(l, failed)),
                     ));
+                }
+                if let Some(error) = self.plugins.read(cx).account_error() {
+                    body = body.child(
+                        div()
+                            .text_size(crate::typography::text_sm())
+                            .text_color(theme.danger)
+                            .child(error),
+                    );
                 }
             }
         }
@@ -1549,8 +1583,8 @@ impl Wizard {
             .plugins
             .read(cx)
             .import_summary()
-            .and_then(|s| s.submitted)
-            .map_or(0, |s| s.0);
+            .filter(|s| s.pending == 0)
+            .map_or(0, |s| s.added());
         let open_chat = self
             .imported
             .first()

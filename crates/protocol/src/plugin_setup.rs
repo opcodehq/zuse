@@ -283,6 +283,19 @@ pub fn validate_local_url(
     {
         return Err(LOCAL_URL_INVALID);
     }
+    // Credentials only travel unencrypted to a server on this computer.
+    let loopback = match parsed.host() {
+        Some(url::Host::Domain(host)) => {
+            let host = host.trim_end_matches('.').to_ascii_lowercase();
+            host == "localhost" || host.ends_with(".localhost")
+        }
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        None => false,
+    };
+    if parsed.scheme() == "http" && !loopback && !headers.is_empty() {
+        return Err("Use HTTPS to send headers to a server on another computer.");
+    }
     if headers.len() > 64
         || headers
             .iter()

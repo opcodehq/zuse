@@ -68,6 +68,10 @@ pub struct PluginsCard {
     import: Option<LocalImport>,
     /// Add-server requests waiting for the single-flight plugin pipeline.
     import_queue: std::collections::VecDeque<Value>,
+    /// The request in flight came from the import queue, and how many of
+    /// those failed, so callers report what was actually added.
+    import_inflight: bool,
+    import_failed: usize,
     import_task: Option<Task<()>>,
     /// Review fixtures seed the account and snapshot without an engine.
     fixture: bool,
@@ -151,6 +155,8 @@ impl PluginsCard {
             setup_events: None,
             import: None,
             import_queue: Default::default(),
+            import_inflight: false,
+            import_failed: 0,
             import_task: None,
             fixture: false,
             _state: subscription,
@@ -390,6 +396,9 @@ impl PluginsCard {
                     }
                     Ok(_) => {}
                     Err(error) => {
+                        if card.import_inflight {
+                            card.import_failed += 1;
+                        }
                         card.error = Some(error.to_string());
                         if matches!(method, methods::PLUGINS | methods::SELECT_PLUGIN_WORKSPACE) {
                             if let Some(next) = card.plugins.failed() {
@@ -398,9 +407,11 @@ impl PluginsCard {
                         }
                     }
                 }
+                card.import_inflight = false;
                 card.schedule_poll(cx);
                 if !card.busy {
                     if let Some(next) = card.import_queue.pop_front() {
+                        card.import_inflight = true;
                         card.request(methods::PLUGINS, next, cx);
                     }
                 }
@@ -459,6 +470,14 @@ pub struct ImportSummary {
     pub error: Option<String>,
     pub submitted: Option<(usize, usize)>,
     pub pending: usize,
+    pub failed: usize,
+}
+impl ImportSummary {
+    /// Servers that reached Plugins: queued minus failed, once done.
+    pub fn added(&self) -> usize {
+        self.submitted
+            .map_or(0, |(queued, _)| queued.saturating_sub(self.failed))
+    }
 }
 
 /// First-run onboarding drives sign-in and the local MCP import through the
@@ -501,6 +520,7 @@ impl PluginsCard {
             error: import.error.clone(),
             submitted: import.submitted,
             pending: self.import_queue.len() + usize::from(self.busy),
+            failed: self.import_failed,
         })
     }
     pub fn toggle_imported_server(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -675,8 +695,10 @@ impl PluginsCard {
             }
         }
         import.submitted = Some((queued, skipped));
+        self.import_failed = 0;
         if !self.busy {
             if let Some(next) = self.import_queue.pop_front() {
+                self.import_inflight = true;
                 self.request(methods::PLUGINS, next, cx);
             }
         }

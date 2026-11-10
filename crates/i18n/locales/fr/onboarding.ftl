@@ -213,7 +213,14 @@ onboarding-flow_mcp_skipped =
 onboarding-flow_chats_title = Importez vos discussions
 onboarding-flow_chats_body = Reprenez là où vous vous étiez arrêté. Les discussions importées conservent leur historique et continuent avec le même agent.
 onboarding-flow_previous_title = Version précédente de Zuse
-onboarding-flow_previous_summary = { $chats } discussions · { $projects } projets
+onboarding-flow_previous_summary =
+    { $chats ->
+        [one] 1 discussion
+       *[other] { $chats } discussions
+    } · { $projects ->
+        [one] 1 projet
+       *[other] { $projects } projets
+    }
 onboarding-flow_previous_settings = Importer aussi les paramètres pris en charge
 onboarding-flow_chats_loading = Recherche de discussions récentes…
 onboarding-flow_chats_none = Aucune autre discussion trouvée sur cet ordinateur.
@@ -259,5 +266,9 @@ onboarding-flow_launch_open = Ouvrir Zuse
 onboarding-flow_launch_project = Ajouter un projet
 onboarding-flow_launch_open_chats = Ouvrir les discussions importées
 onboarding-flow_source_importing = Importation…
-onboarding-flow_source_picked = { $picked } discussions sur { $count }
+onboarding-flow_source_picked =
+    { $picked ->
+        [one] { $picked } discussion sur { $count }
+       *[other] { $picked } discussions sur { $count }
+    }
 onboarding-flow_chats_hint = Les applications basées sur ces agents enregistrent leurs discussions au même endroit : elles apparaissent aussi ici.

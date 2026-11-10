@@ -213,7 +213,14 @@ onboarding-flow_mcp_skipped =
 onboarding-flow_chats_title = Chats übernehmen
 onboarding-flow_chats_body = Machen Sie dort weiter, wo Sie aufgehört haben. Importierte Chats behalten ihren Verlauf und laufen mit demselben Agenten weiter.
 onboarding-flow_previous_title = Vorherige Version von Zuse
-onboarding-flow_previous_summary = { $chats } Chats · { $projects } Projekte
+onboarding-flow_previous_summary =
+    { $chats ->
+        [one] 1 Chat
+       *[other] { $chats } Chats
+    } · { $projects ->
+        [one] 1 Projekt
+       *[other] { $projects } Projekte
+    }
 onboarding-flow_previous_settings = Auch unterstützte Einstellungen übernehmen
 onboarding-flow_chats_loading = Suche nach aktuellen Chats…
 onboarding-flow_chats_none = Keine weiteren Chats auf diesem Computer gefunden.
@@ -259,5 +266,9 @@ onboarding-flow_launch_open = Zuse öffnen
 onboarding-flow_launch_project = Projekt hinzufügen
 onboarding-flow_launch_open_chats = Importierte Chats öffnen
 onboarding-flow_source_importing = Wird importiert…
-onboarding-flow_source_picked = { $picked } von { $count } Chats
+onboarding-flow_source_picked =
+    { $count ->
+        [one] { $picked } von 1 Chat
+       *[other] { $picked } von { $count } Chats
+    }
 onboarding-flow_chats_hint = Apps, die auf diesen Agenten aufbauen, speichern ihre Chats am selben Ort – sie erscheinen daher ebenfalls hier.

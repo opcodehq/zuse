@@ -265,6 +265,20 @@ mod tests {
                 )
                 .is_err()
         );
+        // Headers may carry credentials: plain HTTP only reaches this computer.
+        let with_key = |url: &str| DetectedServer {
+            url: Some(url.into()),
+            headers: BTreeMap::from([("Authorization".into(), "Bearer k".into())]),
+            ..insecure.clone()
+        };
+        let personal = |server: DetectedServer| {
+            server.request("personal:me", zuse_protocol::plugins::PluginReturnTo::Web)
+        };
+        assert!(personal(with_key("http://plain.example/mcp")).is_err());
+        assert!(personal(with_key("http://192.168.1.4:3000/mcp")).is_err());
+        assert!(personal(with_key("http://localhost:3000/mcp")).is_ok());
+        assert!(personal(with_key("http://127.0.0.1:3000/mcp")).is_ok());
+        assert!(personal(with_key("http://[::1]:3000/mcp")).is_ok());
         let public = DetectedServer {
             url: Some("https://tools.example/mcp".into()),
             ..insecure

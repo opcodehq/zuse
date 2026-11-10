@@ -2157,6 +2157,8 @@ pub struct Shell {
     cloud_tabs: cloud_tabs::CloudTabs,
     desktop_import: Entity<crate::desktop_import::Onboarding>,
     onboarding: Entity<crate::onboarding::Wizard>,
+    /// A chat onboarding asked to open before its row synced in.
+    pending_open_chat: Option<String>,
     sidebar_pane: Entity<SidebarPane>,
     sidebar_controls: Entity<zuse_viewport::sidebar_controls::SidebarControls>,
     workspace_sidebar_focus: FocusHandle,
@@ -2630,14 +2632,8 @@ impl Shell {
             &onboarding,
             |this: &mut Self, _, event: &crate::onboarding::Finished, cx| {
                 if let Some(id) = &event.open_chat {
-                    this.state.update(cx, |state, cx| {
-                        if let Some(chat) = state.chats.iter().find(|chat| &chat.id == id).cloned()
-                        {
-                            state.select_space(chat.space_id.clone(), cx);
-                            state.select_chat(Some(chat.id), cx);
-                        }
-                    });
-                    this.set_route(Route::Chat, cx);
+                    this.pending_open_chat = Some(id.clone());
+                    this.open_pending_chat(cx);
                 } else if event.add_project {
                     this.open_add_space(cx);
                 }
@@ -2869,6 +2865,7 @@ impl Shell {
             cloud_tabs: Default::default(),
             desktop_import,
             onboarding,
+            pending_open_chat: None,
             zot_ui: zots::ZotUi::default(),
             sidebar_pane,
             sidebar_controls,
@@ -3256,8 +3253,32 @@ impl Shell {
 
     // ---- splash ----
 
+    /// Open the chat onboarding asked for once the chat watch delivers it.
+    fn open_pending_chat(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.pending_open_chat.clone() else {
+            return;
+        };
+        let Some(chat) = self
+            .state
+            .read(cx)
+            .chats
+            .iter()
+            .find(|chat| chat.id == id)
+            .cloned()
+        else {
+            return;
+        };
+        self.pending_open_chat = None;
+        self.state.update(cx, |state, cx| {
+            state.select_space(chat.space_id.clone(), cx);
+            state.select_chat(Some(chat.id), cx);
+        });
+        self.set_route(Route::Chat, cx);
+    }
+
     fn on_state_changed(&mut self, state: &Entity<AppState>, cx: &mut Context<Self>) {
         self.refresh_pr_watches(cx);
+        self.open_pending_chat(cx);
         // Voice is an orchestrator over every thread: navigation keeps it,
         // only losing the engine that hosts it ends the session.
         if self.voice.read(cx).chat_id.is_some()
