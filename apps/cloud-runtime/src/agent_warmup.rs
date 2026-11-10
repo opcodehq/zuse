@@ -13,10 +13,18 @@ fn executable_var(agent: &str) -> &'static str {
     }
 }
 
-pub fn spawn(agent: &str) {
+/// Where the selected agent's executable is recorded for the boot supervisor,
+/// which starts reading it before this process exists on the next restart.
+const RECORD: &str = "cloud-agent-executable";
+
+pub fn spawn(agent: &str, data: &Path) {
     let Some(path) = std::env::var_os(executable_var(agent)).filter(|p| !p.is_empty()) else {
         return;
     };
+    let _ = std::fs::write(
+        data.join(RECORD),
+        Path::new(&path).as_os_str().as_encoded_bytes(),
+    );
     let agent = agent.to_owned();
     let _ = std::thread::Builder::new()
         .name("agent-warmup".into())

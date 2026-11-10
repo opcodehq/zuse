@@ -304,4 +304,23 @@ class ConnectionReadinessTest(unittest.TestCase):
             with self.assertRaises(OSError):helper.rpc(Path(directory),{'version':1,'action':'ping'},connect_timeout=.05)
             self.assertLess(time.monotonic()-started,.5)
 
+class AgentWarmupTest(unittest.TestCase):
+    def test_boot_reads_only_the_recorded_agent_inside_harness_releases(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);releases=root/'releases';agent=releases/'release-1'/'codex'
+            agent.parent.mkdir(parents=True);agent.write_bytes(b'x'*(3<<20))
+            data=root/'data';data.mkdir()
+            self.assertIsNone(helper.warm_agent(data,releases),'no record yet: nothing to read')
+            (data/helper.AGENT_RECORD).write_text(str(agent))
+            thread=helper.warm_agent(data,releases);self.assertIsNotNone(thread)
+            thread.join(5);self.assertFalse(thread.is_alive())
+            outside=root/'elsewhere';outside.write_bytes(b'secret')
+            (data/helper.AGENT_RECORD).write_text(str(outside))
+            self.assertIsNone(helper.warm_agent(data,releases),'paths outside harness releases are ignored')
+            (data/helper.AGENT_RECORD).write_text(str(agent.parent))
+            self.assertIsNone(helper.warm_agent(data,releases),'directories are ignored')
+            link=releases/'release-1'/'link';link.symlink_to(outside)
+            (data/helper.AGENT_RECORD).write_text(str(link))
+            self.assertIsNone(helper.warm_agent(data,releases),'symlinks leaving releases are ignored')
+
 if __name__=='__main__':unittest.main()

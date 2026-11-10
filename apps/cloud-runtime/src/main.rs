@@ -462,7 +462,7 @@ async fn run() -> Result<()> {
             }
         });
     if !args.test_harness {
-        agent_warmup::spawn(selected_agent);
+        agent_warmup::spawn(selected_agent, &directory);
     }
     let default_harness = if args.test_harness {
         HarnessId::Mock

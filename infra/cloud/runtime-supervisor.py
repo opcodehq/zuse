@@ -423,6 +423,27 @@ def rpc(data,request,connect_timeout=3):
             require(block and len(response)+len(block)<=LIMIT,'supervisor_response_invalid');response.extend(block)
     value=json.loads(response.split(b'\n',1)[0]);require('error' not in value,value.get('error','runtime_supervisor_rejected'));return value
 
+AGENT_RECORD='cloud-agent-executable'
+HARNESS_RELEASES=Path('/opt/zuse/harnesses/releases')
+
+def warm_agent(data,releases=HARNESS_RELEASES):
+    """Start reading the selected agent's executable at boot, before the
+    runtime starts. A computer that restarted without its memory (Daytona,
+    Boat after ten minutes) otherwise pages a ~300 MB binary in from a cold,
+    lazily restored disk at the first prompt. Best effort; returns the thread."""
+    import threading
+    try:
+        target=Path((data/AGENT_RECORD).read_text().strip()).resolve(strict=True)
+        root=releases.resolve(strict=True)
+        if root not in target.parents or not stat.S_ISREG(target.stat().st_mode):return None
+    except (OSError,ValueError):return None
+    def read():
+        try:
+            with target.open('rb') as handle:
+                while handle.read(1<<20):pass
+        except OSError:pass
+    thread=threading.Thread(target=read,name='agent-warmup',daemon=True);thread.start();return thread
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--version',action='store_true')
@@ -442,6 +463,7 @@ def main():
         if os.getuid()==0:
             account=pwd.getpwnam('zuse');os.initgroups(account.pw_name,account.pw_gid);os.setgid(account.pw_gid);os.setuid(account.pw_uid)
         os.umask(0o077)
+        warm_agent(args.data_dir)
         Supervisor(args.data_dir,args.workspace_root,args.status_dir,args.launcher,args.binary,args.recovery_root,args.recovery_launcher).run();return
     if args.action=='rpc':
         payload=sys.stdin.buffer.read(LIMIT+1);require(len(payload)<=LIMIT,'supervisor_frame_invalid')
