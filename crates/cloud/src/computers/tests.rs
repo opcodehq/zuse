@@ -251,7 +251,10 @@ async fn environments_are_scoped_revisioned_and_available_without_compute_entitl
     )
     .await;
     assert_eq!(capabilities.0, StatusCode::OK);
-    assert_eq!(capabilities.1["providers"].as_array().unwrap().len(), 4);
+    assert_eq!(
+        capabilities.1["providers"].as_array().unwrap().len(),
+        zuse_protocol::cloud_computers::ProviderId::ALL.len()
+    );
     assert_eq!(capabilities.1["canAllocate"], false);
     assert_eq!(capabilities.1["canConfigure"], true);
     assert!(
