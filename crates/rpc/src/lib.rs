@@ -51,6 +51,7 @@ pub use zuse_protocol::methods;
 /// Stable capability error codes transported without provider stderr.
 pub mod capability_errors {
     pub const PULL_REQUESTS_CLI_UNAVAILABLE: &str = "pull_requests.cli_unavailable";
+    pub const PULL_REQUESTS_CLI_OUTDATED: &str = "pull_requests.cli_outdated";
     pub const PULL_REQUESTS_AUTHENTICATION: &str = "pull_requests.authentication";
     pub const PULL_REQUESTS_RATE_LIMITED: &str = "pull_requests.rate_limited";
     pub const PULL_REQUESTS_TIMEOUT: &str = "pull_requests.timeout";
