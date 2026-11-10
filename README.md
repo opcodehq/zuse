@@ -155,6 +155,17 @@ zuse --paired-link-file ~/.zuse/paired-engine-link.txt
 
 An explicit paired connection never falls back to another local engine. Remote destinations require trusted HTTPS; localhost HTTP is supported for development. Native Settings → Devices includes pairing controls. Outbound relay hosting is available through the server commands below; physical desktop acceptance and complete remote connection management remain in progress. See [paired access](internal-docs/remote.md) for the current transport and acceptance scope.
 
+### Use another machine from your browser
+
+Install Zuse on the machine that should run your agents, then start it:
+
+```sh
+zuse-server --lan        # same network: prints a private link and QR code
+zuse-server --account    # anywhere: sign in with a code, then open the printed link
+```
+
+On a local network the browser warns about the computer's private certificate the first time, because the web app needs HTTPS. Continue only on a network you trust, or add `--tailscale-serve` for a certificate browsers already accept. Run `zuse-server pair` for another link, or `zuse-server status` to see what is reachable.
+
 ## License
 
 AGPL-3.0-only. Adapted third-party source retains its applicable attribution and license in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

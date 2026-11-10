@@ -1155,7 +1155,7 @@ native-no_matching_threads = 沒有符合的討論串
 native-try_title_project_branch = 嘗試搜尋標題、專案或分支
 
 # Context: new-chat landing screen and local account status.
-native-composer_placeholder = 要求修改透過 @ 提及的檔案，或執行斜線指令…
+native-composer_placeholder = 做任何事…
 
 # Context: new-chat landing screen and local account status.
 native-agent_default = 代理程式預設值

@@ -1155,7 +1155,7 @@ native-no_matching_threads = Keine passenden Threads
 native-try_title_project_branch = Nach Titel, Projekt oder Branch suchen
 
 # Context: new-chat landing screen and local account status.
-native-composer_placeholder = Änderungen an mit @ erwähnten Dateien anfordern oder Slash-Befehle ausführen…
+native-composer_placeholder = Frag einfach…
 
 # Context: new-chat landing screen and local account status.
 native-agent_default = Agentenstandard

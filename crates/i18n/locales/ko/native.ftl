@@ -1155,7 +1155,7 @@ native-no_matching_threads = 일치하는 스레드 없음
 native-try_title_project_branch = 제목, 프로젝트 또는 브랜치로 검색해 보세요
 
 # Context: new-chat landing screen and local account status.
-native-composer_placeholder = @로 언급한 파일의 변경을 요청하거나 슬래시 명령을 실행하세요…
+native-composer_placeholder = 무엇이든 해보세요…
 
 # Context: new-chat landing screen and local account status.
 native-agent_default = 에이전트 기본값

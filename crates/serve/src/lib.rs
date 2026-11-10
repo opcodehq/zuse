@@ -145,7 +145,7 @@ impl BrowserServer {
     }
 
     pub fn router(self, assets: PathBuf) -> Router {
-        Router::new()
+        let router = Router::new()
             .route(
                 "/health",
                 get(|| async { Json(serde_json::json!({"status":"ok", "service":"zuse"})) }),
@@ -156,26 +156,9 @@ impl BrowserServer {
             .route("/api/paired-rpc/{pair_id}", get(paired::upgrade))
             .route("/api/account-rpc", get(managed::upgrade))
             .route("/api/attachments", post(upload))
-            .fallback_service(
-                ServeDir::new(&assets).not_found_service(ServeFile::new(assets.join("index.html"))),
-            )
-            .with_state(self)
-            .layer(SetResponseHeaderLayer::overriding(
-                header::X_CONTENT_TYPE_OPTIONS,
-                HeaderValue::from_static("nosniff"),
-            ))
-            .layer(SetResponseHeaderLayer::overriding(
-                header::REFERRER_POLICY,
-                HeaderValue::from_static("no-referrer"),
-            ))
-            .layer(SetResponseHeaderLayer::overriding(
-                header::HeaderName::from_static("cross-origin-opener-policy"),
-                HeaderValue::from_static("same-origin"),
-            ))
-            .layer(SetResponseHeaderLayer::overriding(
-                header::HeaderName::from_static("cross-origin-embedder-policy"),
-                HeaderValue::from_static("require-corp"),
-            ))
+            .fallback_service(app_files(&assets))
+            .with_state(self);
+        app_headers(router)
     }
 
     pub async fn serve(self, listener: TcpListener, assets: PathBuf) -> anyhow::Result<()> {
@@ -249,6 +232,37 @@ impl BrowserServer {
     where
         F: std::future::Future<Output = ()> + Send + 'static,
     {
+        self.serve_private(listener, None, None, signal).await
+    }
+
+    /// Serve the browser app beside paired RPC, to private network peers only.
+    /// There is no owner token or cookie session here, so a browser still needs
+    /// a pairing link. The app only runs in a secure context, which is why a
+    /// LAN listener needs `tls`; a loopback proxy can supply HTTPS instead.
+    pub async fn serve_paired_app<F>(
+        self,
+        listener: TcpListener,
+        assets: PathBuf,
+        tls: Option<TlsConfig>,
+        signal: F,
+    ) -> anyhow::Result<()>
+    where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
+        self.serve_private(listener, Some(assets), tls, signal)
+            .await
+    }
+
+    async fn serve_private<F>(
+        self,
+        listener: TcpListener,
+        assets: Option<PathBuf>,
+        tls: Option<TlsConfig>,
+        signal: F,
+    ) -> anyhow::Result<()>
+    where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
         let shutdown = self.shutdown.clone();
         let _guard = shutdown.clone().drop_guard();
         let connections = self.connections.clone();
@@ -256,16 +270,28 @@ impl BrowserServer {
             signal.await;
             shutdown.cancel();
         };
-        let router = Router::new()
-            .route("/api/paired-rpc/{pair_id}", get(paired::upgrade))
-            .layer(axum::middleware::from_fn(private_peers_only))
-            .with_state(self);
-        axum::serve(
-            listener.tap_io(no_delay),
-            router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-        )
-        .with_graceful_shutdown(signal)
-        .await?;
+        let mut router = Router::new().route("/api/paired-rpc/{pair_id}", get(paired::upgrade));
+        if let Some(assets) = &assets {
+            router = router
+                .route("/api/session/check", post(no_owner_session))
+                .fallback_service(app_files(assets));
+        }
+        let mut router = router.with_state(self);
+        if assets.is_some() {
+            router = app_headers(router);
+        }
+        match tls {
+            Some(tls) => {
+                axum::serve(PrivatePeers(tls::Listener::new(listener, tls)), router)
+                    .with_graceful_shutdown(signal)
+                    .await?
+            }
+            None => {
+                axum::serve(PrivatePeers(listener.tap_io(no_delay)), router)
+                    .with_graceful_shutdown(signal)
+                    .await?
+            }
+        }
         connections.close();
         connections.wait().await;
         Ok(())
@@ -322,15 +348,60 @@ impl BrowserServer {
     }
 }
 
-async fn private_peers_only(
-    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    request: axum::extract::Request,
-    next: axum::middleware::Next,
-) -> Response {
-    if !zuse_remote::routes::is_private_host(&peer.ip().to_canonical().to_string()) {
-        return StatusCode::NOT_FOUND.into_response();
+fn app_files(assets: &std::path::Path) -> ServeDir<tower_http::set_status::SetStatus<ServeFile>> {
+    ServeDir::new(assets).not_found_service(ServeFile::new(assets.join("index.html")))
+}
+
+/// Shared memory in the browser app depends on the cross-origin isolation pair.
+fn app_headers(router: Router) -> Router {
+    router
+        .layer(tower_http::compression::CompressionLayer::new())
+        .layer(SetResponseHeaderLayer::overriding(
+            header::X_CONTENT_TYPE_OPTIONS,
+            HeaderValue::from_static("nosniff"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            header::REFERRER_POLICY,
+            HeaderValue::from_static("no-referrer"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            header::HeaderName::from_static("cross-origin-opener-policy"),
+            HeaderValue::from_static("same-origin"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            header::HeaderName::from_static("cross-origin-embedder-policy"),
+            HeaderValue::from_static("require-corp"),
+        ))
+}
+
+/// Tells the app this listener has no owner session to unlock.
+async fn no_owner_session() -> Response {
+    (
+        [(header::CACHE_CONTROL, "no-store")],
+        StatusCode::UNAUTHORIZED,
+    )
+        .into_response()
+}
+
+/// Accepts private network peers only, for any transport on top of TCP.
+struct PrivatePeers<L>(L);
+impl<L> axum::serve::Listener for PrivatePeers<L>
+where
+    L: axum::serve::Listener<Addr = std::net::SocketAddr>,
+{
+    type Io = L::Io;
+    type Addr = std::net::SocketAddr;
+    async fn accept(&mut self) -> (Self::Io, Self::Addr) {
+        loop {
+            let (io, peer) = self.0.accept().await;
+            if zuse_remote::routes::is_private_host(&peer.ip().to_canonical().to_string()) {
+                return (io, peer);
+            }
+        }
     }
-    next.run(request).await
+    fn local_addr(&self) -> std::io::Result<Self::Addr> {
+        self.0.local_addr()
+    }
 }
 
 #[derive(Deserialize)]

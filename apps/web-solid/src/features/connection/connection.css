@@ -1,0 +1,154 @@
+/* Connection screens and Settings → Devices. Dimensions from crates/viewport remote_access_style and settings_style. */
+.cx {
+  --cx-frame: var(--st-frame, var(--input));
+  --cx-card: var(--card);
+  --cx-line: color-mix(in srgb, var(--text-strong) 8%, transparent);
+  --cx-divider: color-mix(in srgb, var(--text-strong) 4%, transparent);
+}
+
+/* Full-window states shown before the workspace first loads: desktop's w-400 gate card. */
+.cx-screen {
+  height: 100%; display: grid; place-items: center; padding: 24px; background: var(--bg); overflow-y: auto;
+}
+.cx-screen-body {
+  box-sizing: border-box; width: min(400px, 100%); display: flex; flex-direction: column; padding: 36px 32px; border-radius: 12px;
+  border: 1px solid var(--border); background: var(--card); box-shadow: var(--shadow);
+}
+.cx-screen-mark { display: inline-flex; color: var(--text); margin: -4px 0 0 -6px; }
+.cx-screen-title { margin: 16px 0 0; font-size: var(--text-xl); line-height: 28px; font-weight: 500; color: var(--text-strong); }
+.cx-screen-text { margin: 6px 0 0; font-size: var(--text-sm); line-height: 19px; color: var(--text-muted); overflow-wrap: anywhere; }
+.cx-screen-detail { margin: 8px 0 0; font-size: var(--text-xs); line-height: 17px; color: var(--text-faint); overflow-wrap: anywhere; }
+.cx-screen-actions { margin-top: 24px; display: flex; flex-direction: column; gap: 12px; }
+.cx-screen-actions[data-row="true"] { flex-direction: row; align-items: center; gap: 8px; }
+.cx-screen-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.cx-screen-form { display: flex; gap: 8px; }
+.cx-screen-error { font-size: var(--text-xs); line-height: 17px; color: var(--danger); }
+.cx-screen-list { display: flex; flex-direction: column; border-radius: 8px; border: 1px solid var(--border); overflow: hidden; }
+.cx-screen-list .cx-row { min-height: 44px; padding: 6px 8px 6px 12px; }
+
+/* Status pills sit in a strip above the window frame: visible on every screen, never covering its controls. */
+.cx-banners { flex: none; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: var(--gutter) var(--gutter) 0; background: var(--shell); }
+.cx-banner {
+  box-sizing: border-box; width: min(720px, 100%); display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 3px 4px 3px 12px;
+  border-radius: 8px; border: 1px solid var(--border-strong); background: var(--card);
+  font-size: var(--text-sm); color: var(--text-muted);
+}
+.cx-banner[data-tone="warning"] { color: var(--text); background: color-mix(in srgb, var(--warning) 8%, var(--card)); border-color: color-mix(in srgb, var(--warning) 30%, var(--border-strong)); }
+.cx-banner > [data-icon], .cx-banner > span[aria-hidden="true"] { color: var(--warning); }
+.cx-banner-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cx-gate { height: 100%; display: flex; flex-direction: column; }
+.cx-gate > .cx-gate-frame { flex: 1; min-height: 0; }
+.cx-gate-frame > * { height: 100%; }
+
+/* Settings → Devices */
+/* Settings' column supplies the width and outer padding; the header and inset match widgets::section_title. */
+.cx-page { width: 100%; }
+.cx-head { display: flex; flex-direction: column; gap: 4px; padding-bottom: 16px; border-bottom: 1px solid var(--border); }
+.cx-title { margin: 0; font-size: var(--text-xl); line-height: 28px; font-weight: 500; color: var(--text-strong); }
+.cx-subtitle { margin: 0; font-size: var(--text-xs); line-height: 20px; color: var(--text-muted); }
+.cx-stack { margin-top: 20px; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+@media (max-width: 599px) {
+  .cx-stack { padding: 12px 0; }
+  .cx-screen { padding: 12px; }
+  .cx-screen-body { padding: 28px 20px; }
+}
+
+.cx-frame { display: flex; flex-direction: column; border-radius: 12px; background: var(--cx-frame); padding: 4px; }
+.cx-frame-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; }
+.cx-frame-head[data-first="true"] { padding-top: 6px; padding-bottom: 8px; }
+.cx-frame-title { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.cx-frame-title h3 { margin: 0; font-size: var(--text-base); line-height: 18px; font-weight: 500; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cx-help {
+  width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border: 0; padding: 0;
+  border-radius: 6px; background: transparent; color: color-mix(in srgb, var(--text-muted) 60%, transparent); cursor: help;
+}
+.cx-help:hover, .cx-help:focus-visible { background: var(--cx-frame); color: var(--text-muted); }
+.cx-card { display: flex; flex-direction: column; border-radius: 10px; border: 1px solid var(--cx-line); background: var(--cx-card); overflow: hidden; }
+
+.cx-row { display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 8px 12px; }
+.cx-row + .cx-row { border-top: 1px solid var(--cx-divider); }
+.cx-row[data-size="method"] { min-height: 56px; }
+.cx-row[data-wrap="true"] { flex-wrap: wrap; }
+.cx-tile {
+  width: 28px; height: 28px; flex: none; border-radius: 6px; background: var(--cx-frame);
+  display: flex; align-items: center; justify-content: center; color: var(--text-muted);
+}
+.cx-tile[data-size="lg"] { width: 32px; height: 32px; }
+.cx-glyph { color: var(--text-muted); flex: none; display: inline-flex; }
+.cx-details { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.cx-details-title { font-size: var(--text-sm); line-height: 16px; font-weight: 500; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cx-details-text { font-size: var(--text-xs); line-height: 16px; color: var(--text-muted); overflow-wrap: anywhere; }
+.cx-details-text[data-tone="success"] { color: var(--success); }
+.cx-empty { padding: 16px 12px; font-size: var(--text-xs); line-height: 15px; color: var(--text-muted); }
+.cx-empty-computers { min-height: 80px; padding: 12px; gap: 12px; }
+.cx-actions { display: flex; align-items: center; gap: 4px; flex: none; }
+.cx-actions[data-gap="8"] { gap: 8px; }
+
+.cx-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px; flex: none;
+  height: 28px; padding: 0 15px; border-radius: 6px; border: 1px solid var(--border); background: var(--cx-card);
+  color: var(--text); font-size: var(--text-sm); font-weight: 400; white-space: nowrap; cursor: pointer; user-select: none; text-decoration: none;
+}
+.cx-btn:hover:not(:disabled, [aria-disabled="true"]) { background: var(--cx-frame); }
+.cx-btn:disabled, .cx-btn[aria-disabled="true"] { opacity: 0.5; cursor: default; }
+.cx-btn[data-size="sm"] { height: 24px; padding: 0 11px; font-size: 10px; }
+.cx-btn[data-size="method"] { height: 28px; padding: 0 11px; font-size: 10px; }
+.cx-btn[data-size="add"] { height: 24px; padding: 0 13px; font-size: var(--text-xs); }
+.cx-btn[data-size="lg"] { height: 36px; padding: 0 16px; font-size: var(--text-md); font-weight: 500; }
+.cx-btn[data-tone="danger"] { border-color: transparent; color: var(--danger); }
+.cx-btn[data-tone="solid"] { background: var(--solid); color: var(--on-solid); border-color: transparent; }
+.cx-btn[data-tone="solid"]:hover:not(:disabled, [aria-disabled="true"]) { background: color-mix(in srgb, var(--solid) 88%, var(--bg)); }
+.cx-btn[data-tone="quiet"] { background: transparent; border-color: transparent; color: var(--text-muted); }
+.cx-btn[data-tone="quiet"]:hover:not(:disabled, [aria-disabled="true"]) { background: var(--hover); color: var(--text); }
+
+.cx-field {
+  flex: 1; min-width: 140px; height: 28px; padding: 0 12px; border-radius: 7px; border: 1px solid var(--border-strong);
+  background: var(--cx-card); color: var(--text); font-size: var(--text-sm); outline: none;
+}
+.cx-field:focus { border-color: color-mix(in srgb, var(--accent) 60%, var(--border-strong)); }
+.cx-field::placeholder { color: var(--text-faint); }
+.cx-field[data-size="lg"] { height: 36px; border-radius: 8px; border-color: var(--border); background: var(--bg); font-size: var(--text-sm); }
+.cx-field[data-size="lg"]:focus { border-color: color-mix(in srgb, var(--accent) 60%, var(--border-strong)); }
+.cx-field[aria-invalid="true"] { border-color: color-mix(in srgb, var(--danger) 60%, var(--border-strong)); }
+
+.cx-error {
+  display: flex; align-items: flex-start; gap: 8px; padding: 12px 16px; border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--danger) 20%, transparent); background: color-mix(in srgb, var(--danger) 6%, transparent);
+  color: color-mix(in srgb, var(--danger) 90%, var(--text)); font-size: var(--text-sm); line-height: 16px; overflow-wrap: anywhere;
+}
+.cx-error > span:first-child { margin-top: 0; }
+.cx-note { font-size: var(--text-xs); line-height: 16px; color: var(--text-muted); }
+.cx-more { display: flex; justify-content: flex-end; }
+.cx-code {
+  font-family: var(--font-mono); font-size: var(--text-md); letter-spacing: 0.08em; color: var(--text-strong);
+  user-select: all;
+}
+
+/* Device registry rows, from crates/ui settings widgets. */
+.cx-group { display: flex; flex-direction: column; gap: 8px; }
+.cx-group-title { padding: 0 4px; font-size: var(--text-base); line-height: 16px; font-weight: 500; color: var(--text-strong); }
+.cx-registry { display: flex; flex-direction: column; gap: 16px; margin-top: 6px; }
+.cx-registry .cx-row { min-height: 48px; padding: 10px 12px; flex-wrap: wrap; }
+.cx-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; margin-top: 2px; font-size: var(--text-xs); line-height: 16px; color: var(--text-muted); }
+.cx-meta > span + span::before { content: "·"; margin-right: 8px; color: color-mix(in srgb, var(--text-muted) 30%, transparent); }
+.cx-meta [data-tone="success"] { color: var(--success); }
+.cx-row-title { font-size: var(--text-sm); line-height: 16px; font-weight: 500; color: var(--text-strong); overflow: hidden; text-overflow: ellipsis; }
+
+/* Focused dialogs, from remote_access_style::dialog_panel. */
+.cx-dialog-overlay { position: fixed; inset: 0; background: rgb(0 0 0 / 0.32); z-index: 60; }
+.cx-dialog {
+  position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 61;
+  width: min(448px, calc(100vw - 32px)); max-height: 85vh; overflow-y: auto; display: flex; flex-direction: column;
+  border-radius: 12px; border: 1px solid var(--cx-line); background: var(--cx-card); color: var(--text); outline: none;
+  box-shadow: var(--shadow);
+}
+.cx-dialog-head { padding: 16px; display: flex; flex-direction: column; gap: 6px; }
+.cx-dialog-title { margin: 0; font-size: 15px; line-height: 20px; font-weight: 600; color: var(--text-strong); }
+.cx-dialog-description { margin: 0; font-size: var(--text-sm); line-height: 20px; color: var(--text-muted); }
+.cx-dialog-body { padding: 0 16px 16px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.cx-dialog-body .cx-field { flex: none; width: 100%; }
+.cx-dialog-footer {
+  border-top: 1px solid var(--cx-line); background: var(--cx-frame); padding: 10px 16px;
+  display: flex; align-items: center; justify-content: flex-end; gap: 6px; border-radius: 0 0 11px 11px;
+}
+.cx-label { display: flex; flex-direction: column; gap: 6px; }

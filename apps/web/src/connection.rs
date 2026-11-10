@@ -22,7 +22,7 @@ pub(super) async fn delay(ms: u32) {
     });
     let _ = JsFuture::from(promise).await;
 }
-async fn auth_status() -> Result<bool, ()> {
+async fn session_check() -> Result<u16, ()> {
     let controller = web_sys::AbortController::new().map_err(|_| ())?;
     let abort = controller.clone();
     let timeout = Closure::<dyn FnMut()>::new(move || abort.abort());
@@ -41,7 +41,10 @@ async fn auth_status() -> Result<bool, ()> {
     let response = JsFuture::from(window.fetch_with_request(&request)).await;
     window.clear_timeout_with_handle(timer);
     let response: Response = response.map_err(|_| ())?.dyn_into().map_err(|_| ())?;
-    match response.status() {
+    Ok(response.status())
+}
+async fn auth_status() -> Result<bool, ()> {
+    match session_check().await? {
         200..=299 | 404 | 405 => Ok(true),
         401 | 403 => Ok(false),
         _ => Err(()),
@@ -79,6 +82,9 @@ fn local_action(frame: &Value, events: &Sender) -> bool {
     if crate::account_connection::action(frame, events) {
         return true;
     }
+    if crate::computers::action(frame, events) {
+        return true;
+    }
     if crate::browser_frame::handle(frame) {
         return true;
     }
@@ -98,8 +104,9 @@ fn local_action(frame: &Value, events: &Sender) -> bool {
         return true;
     }
     if frame["ui"] == "forgetPairing" {
+        crate::computers::forget_selected();
         if let Ok(Some(storage)) = web_sys::window().unwrap().session_storage() {
-            let _ = storage.remove_item("zuse.paired-target.v1");
+            let _ = storage.remove_item(crate::computers::SELECTED);
         }
         let _ = web_sys::window().unwrap().location().reload();
         return true;
@@ -178,7 +185,7 @@ fn paired_target() -> Result<Option<PairedTarget>, String> {
     let storage = window.session_storage().ok().flatten();
     if hash.starts_with("#token=") {
         if let Some(storage) = &storage {
-            let _ = storage.remove_item("zuse.paired-target.v1");
+            let _ = storage.remove_item(crate::computers::SELECTED);
         }
         return Ok(None);
     }
@@ -195,7 +202,7 @@ fn paired_target() -> Result<Option<PairedTarget>, String> {
             .replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&clean))
             .map_err(|_| "Could not clear private invitation")?;
         if let Some(storage) = &storage {
-            let _ = storage.remove_item("zuse.paired-target.v1");
+            let _ = storage.remove_item(crate::computers::SELECTED);
         }
         let invitation =
             Invitation::parse_fragment(&hash).map_err(|_| "Invalid pairing invitation")?;
@@ -206,7 +213,7 @@ fn paired_target() -> Result<Option<PairedTarget>, String> {
         .map_err(|_| "Pairing requires HTTPS, or localhost for development")?;
         if let Some(storage) = storage {
             let _ = storage.set_item(
-                "zuse.paired-target.v1",
+                crate::computers::SELECTED,
                 &target
                     .export_link()
                     .map_err(|_| "Invalid pairing invitation")?,
@@ -215,7 +222,7 @@ fn paired_target() -> Result<Option<PairedTarget>, String> {
         return Ok(Some(target));
     }
     let saved =
-        storage.and_then(|storage| storage.get_item("zuse.paired-target.v1").ok().flatten());
+        storage.and_then(|storage| storage.get_item(crate::computers::SELECTED).ok().flatten());
     saved
         .map(|link| {
             PairedTarget::parse_link(&link).map_err(|_| {
@@ -238,7 +245,7 @@ pub(super) async fn run(mut outbound: mpsc::UnboundedReceiver<Value>, events: Se
             return;
         }
     };
-    let target = match paired_target() {
+    let mut target = match paired_target() {
         Ok(target) => target,
         Err(message) => {
             let _ = events.unbounded_send(
@@ -248,12 +255,16 @@ pub(super) async fn run(mut outbound: mpsc::UnboundedReceiver<Value>, events: Se
             return;
         }
     };
-    let paired = target.is_some();
-    if !paired {
+    if target.is_none() {
         if let Err(error) = super::browser::unlock().await {
             let _=events.unbounded_send(json!({"connection":"authRequired","message":error.as_string().unwrap_or_else(||"Authentication required".into())}));
         }
+        // An owner session wins. Otherwise a new tab reopens the last computer.
+        if account_target.is_none() && !matches!(session_check().await, Ok(200..=299)) {
+            target = crate::computers::resume();
+        }
     }
+    let paired = target.is_some();
     let location = web_sys::window().unwrap().location();
     let local = account_target.is_none()
         && !paired
@@ -394,6 +405,12 @@ pub(super) async fn run(mut outbound: mpsc::UnboundedReceiver<Value>, events: Se
             .clone()
             .map(crate::attachments::UploadTarget::Account)
             .or_else(|| paired_upload(&socket));
+        if controller.is_none()
+            && let Some(target) = &target
+        {
+            crate::computers::remember(target);
+        }
+        crate::computers::publish(&events);
         let epoch = link.open();
         attempt = 0;
         let _ =

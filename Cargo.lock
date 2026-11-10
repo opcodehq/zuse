@@ -514,6 +514,7 @@ dependencies = [
  "compression-core",
  "futures-io",
  "pin-project-lite",
+ "tokio",
 ]
 
 [[package]]
@@ -8075,6 +8076,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "qrcode"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d68782463e408eb1e668cf6152704bd856c78c5b6417adaee3203d8f4c1fc9ec"
+
+[[package]]
 name = "quick-error"
 version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11035,6 +11042,7 @@ version = "0.6.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4cfcf7e2740e6fc6d4d688b4ef00650406bb94adf4731e43c096c3a19fe40840"
 dependencies = [
+ "async-compression",
  "bitflags 2.13.1",
  "bytes",
  "futures-core",
@@ -13846,8 +13854,11 @@ name = "zuse-cli"
 version = "0.26.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "clap",
  "futures",
+ "gethostname",
+ "qrcode",
  "rcgen",
  "reqwest",
  "serde_json",
@@ -13861,6 +13872,7 @@ dependencies = [
  "zuse-i18n",
  "zuse-mcp",
  "zuse-protocol",
+ "zuse-remote",
  "zuse-rpc",
  "zuse-serve",
 ]
@@ -14065,6 +14077,7 @@ dependencies = [
  "p256",
  "portable-pty",
  "rand_core 0.6.4",
+ "rcgen",
  "reqwest",
  "rusqlite",
  "same-file",
@@ -14778,6 +14791,16 @@ dependencies = [
  "zuse-protocol",
  "zuse-remote",
  "zuse-viewport",
+]
+
+[[package]]
+name = "zuse-web-link"
+version = "0.26.0"
+dependencies = [
+ "js-sys",
+ "serde_json",
+ "wasm-bindgen",
+ "zuse-remote",
 ]
 
 [[package]]

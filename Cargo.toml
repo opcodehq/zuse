@@ -44,6 +44,7 @@ members = [
     "crates/model",
     "crates/serve",
     "crates/remote",
+    "crates/web-link",
     "crates/plugins",
     "crates/harness",
     "crates/harness-extensions",
@@ -93,7 +94,7 @@ zuse-viewport = { path = "crates/viewport" }
 zuse-model = { path = "crates/model" }
 zuse-plugins = { path = "crates/plugins" }
 axum = { version = "0.8", features = ["ws"] }
-tower-http = { version = "0.6", features = ["fs", "set-header"] }
+tower-http = { version = "0.6", features = ["compression-gzip", "fs", "set-header"] }
 subtle = "2"
 
 # CRDT

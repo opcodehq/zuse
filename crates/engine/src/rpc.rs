@@ -2499,9 +2499,25 @@ impl RpcService for EngineRpc {
                         }
                         (origin, _) => origin,
                     };
-                    RpcReply::value(
-                        &serde_json::json!({"peer":peer,"fragment":fragment,"origin":origin}),
-                    )
+                    // Plain LAN routes suit paired apps. A browser needs HTTPS.
+                    let (browser_origin, browser_self_signed) = match (&origin, &self.direct_access)
+                    {
+                        (Some(origin), _) if origin.starts_with("https:") => {
+                            (Some(origin.clone()), false)
+                        }
+                        (_, Some(direct)) => match direct.browser_origin().await {
+                            Some((origin, self_signed)) => (Some(origin), self_signed),
+                            None => (None, false),
+                        },
+                        _ => (None, false),
+                    };
+                    RpcReply::value(&serde_json::json!({
+                        "peer":peer,
+                        "fragment":fragment,
+                        "origin":origin,
+                        "browserOrigin":browser_origin,
+                        "browserSelfSigned":browser_self_signed,
+                    }))
                 }
                 _ => {
                     #[derive(Deserialize)]

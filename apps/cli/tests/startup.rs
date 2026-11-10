@@ -487,6 +487,43 @@ async fn direct_https_authenticates_browser_rpc_and_drains_open_websockets_on_si
 }
 
 #[tokio::test]
+async fn pair_command_creates_links_on_the_running_server_and_says_when_none_runs() {
+    let root = tempfile::tempdir().unwrap();
+    let bin = root.path().join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    let mut server = Server::start(
+        &root.path().join("profile"),
+        &bin,
+        &root.path().join("mcp.json"),
+    )
+    .await;
+    let pair = |port: u16| {
+        Command::new(env!("CARGO_BIN_EXE_zuse-server"))
+            .args(["--language", "en", "pair", "--label", "Phone", "--ipc-port"])
+            .arg(port.to_string())
+            .kill_on_drop(true)
+            .output()
+    };
+    let output = pair(server.port).await.unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    assert!(output.status.success(), "{output:?}");
+    assert!(stdout.contains("/#pair="), "{stdout}");
+    assert!(stdout.contains("only works on this computer"), "{stdout}");
+    let pairings = server
+        .client()
+        .await
+        .call(methods::LIST_PAIRINGS, json!({}))
+        .await
+        .unwrap();
+    assert_eq!(pairings[0]["label"], "Phone");
+    let port = server.port;
+    server.stop().await;
+    let output = pair(port).await.unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("No Zuse server is running"));
+}
+
+#[tokio::test]
 async fn invalid_network_configuration_fails_before_starting_the_engine() {
     let root = tempfile::tempdir().unwrap();
     for (name, arguments, expected) in [

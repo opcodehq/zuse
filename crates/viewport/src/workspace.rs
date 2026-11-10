@@ -247,6 +247,7 @@ impl WorkspaceView {
 
     pub(super) fn add_project(&mut self, cx: &mut Context<Self>) {
         let path = self.project_input.read(cx).value(cx);
+        self.project_error = None;
         if !path.trim().is_empty() {
             self.call(methods::ADD_REPO, json!({"path":path.trim()}));
         }

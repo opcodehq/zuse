@@ -30,11 +30,16 @@ impl TlsConfig {
             anyhow::ensure!(bytes.len() <= 1024 * 1024, "TLS input exceeds 1 MiB");
             Ok(bytes)
         }
-        let certificates = CertificateDer::pem_slice_iter(&read(certificate)?)
+        Self::from_pem(&read(certificate)?, &read(private_key)?)
+    }
+
+    /// Parse PEM text already held in memory, such as a generated certificate.
+    pub fn from_pem(certificate: &[u8], private_key: &[u8]) -> anyhow::Result<Self> {
+        let certificates = CertificateDer::pem_slice_iter(certificate)
             .collect::<Result<Vec<_>, _>>()
             .context("Could not parse TLS certificate chain")?;
         anyhow::ensure!(!certificates.is_empty(), "TLS certificate chain is empty");
-        let key = PrivateKeyDer::from_pem_slice(&read(private_key)?)
+        let key = PrivateKeyDer::from_pem_slice(private_key)
             .context("Could not parse TLS private key")?;
         let mut config = rustls::ServerConfig::builder_with_provider(Arc::new(
             rustls::crypto::ring::default_provider(),
@@ -148,6 +153,89 @@ mod tests {
             )
             .is_err()
         );
+    }
+    #[tokio::test]
+    async fn paired_app_listener_serves_an_isolated_app_and_no_owner_access() {
+        let directory = tempfile::tempdir().unwrap();
+        let (certificate, config) = material(directory.path());
+        std::fs::write(
+            directory.path().join("index.html"),
+            "<title>Zuse</title>".repeat(16),
+        )
+        .unwrap();
+        let tcp = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = tcp.local_addr().unwrap();
+        let (stop, stopped) = tokio::sync::oneshot::channel();
+        let token = "a".repeat(64);
+        let server = BrowserServer::new(Arc::new(Service), token.clone(), None).unwrap();
+        let task = tokio::spawn(server.serve_paired_app(
+            tcp,
+            directory.path().into(),
+            Some(config),
+            async {
+                let _ = stopped.await;
+            },
+        ));
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .add_root_certificate(reqwest::Certificate::from_der(&certificate).unwrap())
+            .build()
+            .unwrap();
+        let base = format!("https://{address}");
+        let page = client.get(format!("{base}/")).send().await.unwrap();
+        assert_eq!(page.status(), reqwest::StatusCode::OK);
+        assert_eq!(page.headers()["cross-origin-opener-policy"], "same-origin");
+        assert_eq!(
+            page.headers()["cross-origin-embedder-policy"],
+            "require-corp"
+        );
+        assert!(page.text().await.unwrap().contains("Zuse"));
+        let compressed = client
+            .get(format!("{base}/"))
+            .header("Accept-Encoding", "gzip")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(compressed.headers()["content-encoding"], "gzip");
+        assert_eq!(
+            compressed.headers()["cross-origin-embedder-policy"],
+            "require-corp"
+        );
+        let session = client
+            .post(format!("{base}/api/session/check"))
+            .header("Origin", &base)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(session.status(), reqwest::StatusCode::UNAUTHORIZED);
+        let unlock = client
+            .post(format!("{base}/api/session"))
+            .header("Origin", &base)
+            .json(&serde_json::json!({ "token": token }))
+            .send()
+            .await
+            .unwrap();
+        assert!(!unlock.headers().contains_key("set-cookie"));
+        let owner_socket = client
+            .get(format!("{base}/api/rpc"))
+            .header("Connection", "upgrade")
+            .header("Upgrade", "websocket")
+            .header("Sec-WebSocket-Version", "13")
+            .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .header("Authorization", format!("Bearer {token}"))
+            .send()
+            .await
+            .unwrap();
+        assert_ne!(
+            owner_socket.status(),
+            reqwest::StatusCode::SWITCHING_PROTOCOLS
+        );
+        stop.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(3), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
     }
     #[tokio::test]
     async fn stalled_tls_handshakes_do_not_block_trusted_clients_or_shutdown() {

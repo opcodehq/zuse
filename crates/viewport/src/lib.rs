@@ -62,6 +62,7 @@ mod previews;
 mod project_actions;
 pub mod project_archive;
 mod project_archive_host;
+mod project_setup;
 pub mod provider_accounts;
 pub mod provider_options;
 mod provider_settings;
@@ -225,6 +226,9 @@ pub struct WorkspaceView {
     paired: bool,
     account_remote: bool,
     pairing_origin: String,
+    pairing_app_origin: Option<String>,
+    pairing_self_signed: bool,
+    saved_computers: Value,
     pairings: Value,
     pairing_name: Entity<input::TextInput>,
     pairing_fragment: Option<String>,
@@ -272,6 +276,9 @@ pub struct WorkspaceView {
     spaces: Vec<zuse_protocol::Space>,
     project: Option<Value>,
     project_picker: bool,
+    project_error: Option<String>,
+    project_setup: project_setup::ProjectSetup,
+    software_renderer: bool,
     project_input: Entity<input::TextInput>,
     sidebar_controls: Entity<sidebar_controls::SidebarControls>,
     sidebar_control_requests: HashMap<u64, u64>,
@@ -461,7 +468,7 @@ impl WorkspaceView {
         cx.subscribe_in(
             &project_input,
             window,
-            |this, _, _: &input::Submitted, _, cx| this.add_project(cx),
+            |this, _, _: &input::Submitted, _, cx| this.submit_project_path(cx),
         )
         .detach();
         cx.subscribe_in(
@@ -757,6 +764,9 @@ impl WorkspaceView {
             managed_access: Default::default(),
             managed_name,
             pairing_origin: String::new(),
+            pairing_app_origin: None,
+            pairing_self_signed: false,
+            saved_computers: Value::Null,
             pairings: Value::Null,
             pairing_name,
             pairing_fragment: None,
@@ -803,6 +813,9 @@ impl WorkspaceView {
             spaces: vec![],
             project: None,
             project_picker: false,
+            project_error: None,
+            project_setup: project_setup::ProjectSetup::new(window, cx),
+            software_renderer: false,
             project_input,
             sidebar_controls,
             sidebar_control_requests: Default::default(),
@@ -1072,6 +1085,16 @@ impl WorkspaceView {
         if let Some(paired) = frame["paired"].as_bool() {
             self.paired = paired;
         }
+        if frame["softwareRenderer"] == true {
+            self.software_renderer = true;
+            cx.notify();
+            return;
+        }
+        if let Some(computers) = frame.get("savedComputers") {
+            self.saved_computers = computers.clone();
+            cx.notify();
+            return;
+        }
         if frame.get("linkRoute").is_some() {
             self.link_route = frame["linkRoute"].clone();
             cx.notify();
@@ -1183,6 +1206,9 @@ impl WorkspaceView {
             }
             return;
         }
+        if self.receive_project_setup(id, &frame, cx) {
+            return;
+        }
         if self.receive_usage(id, &frame, cx) {
             return;
         }
@@ -1263,6 +1289,13 @@ impl WorkspaceView {
                     | methods::CLOUD_ACCOUNT_STATUS
             ) {
                 self.account_action_error = Some(error.into());
+            }
+            if method == methods::ADD_REPO {
+                if self.add_plain_project_folder(error, cx) {
+                    self.pending.remove(&id);
+                    return;
+                }
+                self.project_error = Some(error.into());
             }
             self.error = Some(error.into());
             if let Some(draft) = self.send_draft.remove(&id) {
@@ -1819,7 +1852,7 @@ impl WorkspaceView {
                 .focus_handle(cx)
                 .is_focused(window)
         {
-            self.add_project(cx);
+            self.submit_project_path(cx);
             return;
         }
         if self

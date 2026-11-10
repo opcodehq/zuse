@@ -250,7 +250,7 @@ impl BrowserAccess {
         self.status().await
     }
 }
-fn discover_assets() -> Option<PathBuf> {
+pub fn discover_assets() -> Option<PathBuf> {
     if let Some(path) = std::env::var_os("ZUSE_WEB_ASSETS").map(PathBuf::from) {
         return Some(path);
     }

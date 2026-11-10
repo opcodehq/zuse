@@ -3,6 +3,7 @@
 node_modules/
 /dist/build/
 /dist/web/
+/dist/web-solid/
 __pycache__/
 .env
 .env.local
