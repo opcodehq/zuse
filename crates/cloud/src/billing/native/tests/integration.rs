@@ -84,7 +84,7 @@ async fn price() -> Json<Value> {
 async fn portal() -> Json<Value> {
     Json(json!({"url":"https://billing.stripe.com/native"}))
 }
-fn signed(event: &Value) -> (HeaderMap, Vec<u8>) {
+pub(super) fn signed(event: &Value) -> (HeaderMap, Vec<u8>) {
     let bytes = serde_json::to_vec(event).unwrap();
     let ts = chrono::Utc::now().timestamp();
     let mut mac = Hmac::<Sha256>::new_from_slice(b"whsec_fixture").unwrap();
@@ -103,7 +103,7 @@ fn signed(event: &Value) -> (HeaderMap, Vec<u8>) {
     );
     (h, bytes)
 }
-fn signer() -> crate::tickets::TicketSigner {
+pub(super) fn signer() -> crate::tickets::TicketSigner {
     let signing = ed25519_dalek::SigningKey::from_bytes(&[19; 32]);
     crate::tickets::TicketSigner::from_jwk(&json!({"kty":"OKP","crv":"Ed25519","d":URL_SAFE_NO_PAD.encode([19;32]),"x":URL_SAFE_NO_PAD.encode(signing.verifying_key().as_bytes())}).to_string(),"https://api.example.test").unwrap()
 }

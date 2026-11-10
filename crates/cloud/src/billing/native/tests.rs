@@ -1,5 +1,6 @@
 use super::*;
 mod integration;
+mod live;
 
 #[test]
 fn explicit_schema_matches_pinned_engine() {

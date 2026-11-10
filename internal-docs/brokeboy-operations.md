@@ -101,3 +101,22 @@ cargo check -p zuse-cloud-api
 ```
 
 Before enabling a merchant account, repeat checkout, signed public delivery, renewal, refunds/disputes, existing-customer adoption and restore/replay against that account's Stripe sandbox. Upstream merchant qualification does not establish that this host's deployment is configured correctly. No account is enrolled or balance transferred merely by installing this code.
+
+### Zuse merchant exercise, 2026-11-10
+
+The opt-in `stripe_merchant_checkout_wallet_refund_and_compute` test passed against a real Stripe test account and a disposable PostgreSQL schema. Chrome completed both native-created hosted Checkouts using a Stripe test card. Stripe reported both payments paid. The $40/month subscription produced the host compute period, the $10 prepaid payment granted exactly 1,000 cents, a real successful $5 partial refund left 500 cents, and a replayed 25-cent model settlement left 475 cents. Replaying the refund notification did not claw back twice.
+
+The exercise retrieved real Stripe events and signed them locally before invoking Zuse's webhook entry point. This verifies canonical provider reconciliation and host accounting, **not registered public webhook delivery**. It does not qualify renewal, 3DS, ACH, disputes, tax, metered overage collection or live-mode payments. The first harness attempt included unrelated customer events despite having no legacy fallback adapter; the corrected harness selects the relevant billing notifications. No production billing change was required by this exercise.
+
+Both runs' synthetic customers were deleted, and their dedicated prices/products were archived and independently checked afterward. Raw IDs, browser checkout URLs and result evidence remain in the ignored `.context/stripe-live-evidence/` directory; no credential is committed.
+
+To repeat, use a protected test-key file and a fresh evidence directory, run the ignored test, complete the two URLs written to `checkouts.json`, then create the `browser-completed` marker only after Stripe confirms both sessions paid:
+
+```sh
+ZUSE_STRIPE_LIVE_QUALIFICATION=test-only \
+ZUSE_STRIPE_TEST_KEY_FILE=/absolute/path/to/test-key \
+ZUSE_STRIPE_EVIDENCE_DIR=/absolute/path/to/fresh-evidence-directory \
+ZUSE_CLOUD_TEST_DATABASE_URL=postgresql://user@localhost/disposable_database \
+  cargo test -p zuse-cloud --lib stripe_merchant_checkout_wallet_refund_and_compute \
+  -- --ignored --nocapture
+```
