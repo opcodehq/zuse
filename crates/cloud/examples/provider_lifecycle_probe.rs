@@ -17,7 +17,8 @@ use zuse_cloud::providers::{
 use zuse_protocol::cloud_computers::ProviderId;
 
 const RUNTIME: &str = "/usr/local/bin/zuse-cloud-runtime --version";
-const MARKER: &str = "/tmp/zuse-lifecycle-probe-marker";
+// Under the home directory: Boat keeps only home directories on a cold restore.
+const MARKER: &str = "$HOME/.zuse-lifecycle-probe-marker";
 
 struct Receipt {
     path: PathBuf,
@@ -78,14 +79,65 @@ async fn settle(
     bail!("operation_not_settled after {}ms: {last}", wait.as_millis())
 }
 
+/// Upload `name` from the scripts directory and run it; its last stdout line is JSON.
+async fn script(
+    provider: &dyn Provider,
+    machine: &str,
+    dir: &std::path::Path,
+    name: &str,
+) -> Result<Value> {
+    // Re-upload the shared helpers too: a cold restore may have dropped /tmp.
+    provider
+        .upload(
+            machine,
+            "/tmp/zuse-timing-common.sh",
+            &std::fs::read(dir.join("common.sh"))?,
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("upload common.sh: {e:?}"))?;
+    let path = format!("/tmp/zuse-timing-{name}");
+    provider
+        .upload(machine, &path, &std::fs::read(dir.join(name))?)
+        .await
+        .map_err(|e| anyhow::anyhow!("upload {name}: {e:?}"))?;
+    let started = Instant::now();
+    let result = provider
+        .execute(machine, &format!("bash {path}"))
+        .await
+        .map_err(|e| anyhow::anyhow!("run {name}: {e:?}"))?;
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    let line = stdout.lines().last().unwrap_or_default();
+    let mut value: Value = serde_json::from_str(line).with_context(|| {
+        format!(
+            "{name} exit {}: {}",
+            result.exit_code,
+            stdout.chars().take(300).collect::<String>()
+        )
+    })?;
+    value["scriptMs"] = json!(started.elapsed().as_millis() as u64);
+    Ok(value)
+}
+
 async fn lifecycle(
     provider: &dyn Provider,
     machine: &str,
     receipt: &mut Receipt,
     candidate: Option<&[u8]>,
+    scripts: Option<&std::path::Path>,
 ) -> Result<()> {
     let (ms, version) = command(provider, machine, RUNTIME, Duration::from_secs(120)).await?;
     receipt.record("runtimeReady", json!({"ms":ms,"version":version}))?;
+    if let Some(dir) = scripts {
+        provider
+            .upload(
+                machine,
+                "/tmp/zuse-timing-common.sh",
+                &std::fs::read(dir.join("common.sh"))?,
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("upload common.sh: {e:?}"))?;
+        receipt.record("fresh", script(provider, machine, dir, "fresh.sh").await?)?;
+    }
     // What app features rely on inside the computer. Recorded, never fatal.
     let mut checks = serde_json::Map::new();
     for (name, line) in [
@@ -173,6 +225,12 @@ async fn lifecycle(
     )
     .await?;
 
+    if let Some(dir) = scripts {
+        receipt.record(
+            "beforeSleep",
+            script(provider, machine, dir, "before.sh").await?,
+        )?;
+    }
     let started = Instant::now();
     let sleep = provider
         .sleep(machine)
@@ -187,6 +245,12 @@ async fn lifecycle(
         json!({"requestMs":request_ms,"settledMs":settled_ms}),
     )?;
 
+    if let Ok(wait) = std::env::var("PROBE_SLEEP_WAIT_SECS") {
+        // Providers keep a recently stopped machine warm for a while; a real
+        // resume after idle usually comes later than that.
+        tokio::time::sleep(Duration::from_secs(wait.parse()?)).await;
+        receipt.record("sleptForSecs", json!(wait.parse::<u64>()?))?;
+    }
     let started = Instant::now();
     let resume = provider
         .resume(machine, 1800)
@@ -208,6 +272,12 @@ async fn lifecycle(
     .await
     .context("disk marker after resume")?;
     ensure!(marker == "retained", "disk_marker_lost");
+    if let Some(dir) = scripts {
+        receipt.record(
+            "afterResume",
+            script(provider, machine, dir, "resume.sh").await?,
+        )?;
+    }
     receipt.record(
         "resume",
         json!({"requestMs":request_ms,"settledMs":settled_ms,"runtimeAfterResumeMs":ms,"diskRetained":true,
@@ -227,7 +297,7 @@ async fn main() -> Result<()> {
     };
     ensure!(
         args.first().map(String::as_str) == Some("--live"),
-        "Usage: provider_lifecycle_probe --live --provider boat|boxd|e2b|daytona --artifact ID [--binding JSON] [--size default] [--runtime PATH]"
+        "Usage: provider_lifecycle_probe --live --provider boat|boxd|e2b|daytona --artifact ID [--binding JSON] [--size default] [--runtime PATH] [--scripts DIR]"
     );
     let id = match value("--provider").as_deref() {
         Some("boat") => ProviderId::Boat,
@@ -241,6 +311,7 @@ async fn main() -> Result<()> {
         .map(|raw| serde_json::from_str(&raw))
         .transpose()?;
     let size = value("--size").unwrap_or_else(|| "default".into());
+    let scripts = value("--scripts").map(PathBuf::from);
     let candidate = value("--runtime")
         .map(std::fs::read)
         .transpose()
@@ -301,6 +372,7 @@ async fn main() -> Result<()> {
         &machine.id,
         &mut receipt,
         candidate.as_deref(),
+        scripts.as_deref(),
     )
     .await;
     if let Err(error) = &outcome {

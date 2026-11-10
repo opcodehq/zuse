@@ -14,6 +14,7 @@ use zuse_protocol::{
 use zuse_rpc::{RpcService, methods};
 
 mod active;
+mod agent_warmup;
 mod early_ingress;
 mod early_start;
 
@@ -460,6 +461,9 @@ async fn run() -> Result<()> {
                 "claude"
             }
         });
+    if !args.test_harness {
+        agent_warmup::spawn(selected_agent);
+    }
     let default_harness = if args.test_harness {
         HarnessId::Mock
     } else if selected_agent == "codex" {
