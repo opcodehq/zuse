@@ -1372,7 +1372,7 @@ impl Render for WorkspaceView {
 
         let panel_width = if self.selected_zot().is_some() && !self.settings && !self.project_picker
         {
-            320.
+            crate::zots::ZOT_PANEL_WIDTH
         } else if !self.right_open || self.settings || self.project_picker {
             0.
         } else if self.right_tab == "browser" {

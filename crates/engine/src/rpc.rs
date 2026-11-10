@@ -1792,6 +1792,7 @@ fn forwardable(method: &str) -> bool {
             | zuse_protocol::control::WATCH_ZOTS
             | zuse_protocol::control::ZOT_FILES
             | zuse_protocol::control::ZOT_EVENTS
+            | zuse_protocol::control::ZOT_ISSUE
             | zuse_protocol::control::ACK_ZOT_EVENTS
     ) {
         return true;
@@ -2794,6 +2795,7 @@ impl EngineRpc {
                         zuse_protocol::control::API_INFO
                             | zuse_protocol::control::ZOT_FILES
                             | zuse_protocol::control::ZOT_EVENTS
+                            | zuse_protocol::control::ZOT_ISSUE
                             | zuse_protocol::control::ACK_ZOT_EVENTS
                     ) {
                         return Err(denied());
@@ -3092,6 +3094,7 @@ impl EngineRpc {
             zuse_protocol::control::ZOT_COMMAND => self.zot_command(params).await,
             zuse_protocol::control::ZOT_FILES
             | zuse_protocol::control::ZOT_EVENTS
+            | zuse_protocol::control::ZOT_ISSUE
             | zuse_protocol::control::ACK_ZOT_EVENTS => {
                 let zots = self
                     .zots
@@ -3116,6 +3119,19 @@ impl EngineRpc {
                     ),
                     zuse_protocol::control::ZOT_EVENTS => {
                         RpcReply::value(&zots.events(id).map_err(failure)?)
+                    }
+                    zuse_protocol::control::ZOT_ISSUE => {
+                        let issue = params
+                            .get("issueId")
+                            .and_then(|v| v.as_str())
+                            .ok_or_else(|| RpcError::BadParams("issueId is required".into()))?;
+                        let zot = zots.get(id).map_err(failure)?;
+                        RpcReply::value(
+                            zot.issues
+                                .iter()
+                                .find(|i| i.id == issue)
+                                .ok_or_else(|| RpcError::Failed("issue not found".into()))?,
+                        )
                     }
                     _ => {
                         let ids: Vec<String> = serde_json::from_value(

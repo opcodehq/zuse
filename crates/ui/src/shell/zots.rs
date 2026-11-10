@@ -34,6 +34,9 @@ pub(super) struct ZotUi {
     loading: bool,
     pub(super) pending: bool,
     pub(super) retry: Option<ZotCommand>,
+    /// Set while the issue panel hands a command to `send_zot_command`, so
+    /// only its own results close or fail its editor.
+    pub(super) issue_command: bool,
     history: bool,
     confirm_delete: bool,
 }
@@ -1210,6 +1213,7 @@ impl Shell {
                         if let ZotAction::Delegate { model, .. } = &mut action {
                             *model = this.zot_thread_model(&zot, cx);
                         }
+                        this.zot_ui.issue_command = true;
                         this.send_zot_command(zot.id, Some(*revision), action, ZotAfter::Stay, cx);
                     }
                 }

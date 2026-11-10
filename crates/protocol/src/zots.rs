@@ -209,6 +209,25 @@ pub struct ZotEvent {
     pub acknowledged: bool,
 }
 
+/// Whether a failed command may still have been applied, because the request
+/// or its answer was lost in transit. Only then should a retry reuse the
+/// command ID, so the engine's receipt makes it idempotent. Any other failure
+/// is a definite rejection (e.g. a revision conflict): nothing was written,
+/// and the next attempt is a new command at the current revision.
+pub fn command_outcome_unknown(error: &str) -> bool {
+    let error = error.to_ascii_lowercase();
+    [
+        "transport",
+        "connection closed",
+        "host unavailable",
+        "timed out",
+        "timeout",
+        "disconnected",
+    ]
+    .iter()
+    .any(|signal| error.contains(signal))
+}
+
 /// Canonical command schema exposed by both application discovery and MCP.
 pub fn command_schema() -> serde_json::Value {
     serde_json::to_value(schemars::schema_for!(ZotCommand)).expect("command schema serializes")

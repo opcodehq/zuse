@@ -388,7 +388,11 @@ impl IssuePanel {
                         followups: 0,
                     },
                     model: self.zot.config.coordinator_model.clone(),
-                    base: values[1].trim().into(),
+                    // Same fallback as the other delegation paths.
+                    base: match values[1].trim() {
+                        "" => "HEAD".into(),
+                        base => base.into(),
+                    },
                 }
             }
         };

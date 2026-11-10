@@ -491,6 +491,7 @@ impl Shell {
         after: ZotAfter,
         cx: &mut Context<Self>,
     ) {
+        let from_issue_panel = std::mem::take(&mut self.zot_ui.issue_command);
         if self.zot_ui.pending {
             return;
         }
@@ -547,7 +548,9 @@ impl Shell {
                 match result {
                     Ok(value) => {
                         this.zot_ui.retry = None;
-                        if let Some(panel) = &this.zot_ui.issues {
+                        if let Some(panel) =
+                            this.zot_ui.issues.as_ref().filter(|_| from_issue_panel)
+                        {
                             panel.update(cx, |p, cx| p.committed(cx));
                         }
                         this.zot_ui.loaded = None;
@@ -558,7 +561,14 @@ impl Shell {
                         this.finish_zot_command(after, coordinator, cx);
                     }
                     Err(error) => {
-                        if let Some(panel) = &this.zot_ui.issues {
+                        // The engine answered: nothing was written, so the
+                        // next attempt is a new command at the current revision.
+                        if !zuse_protocol::zots::command_outcome_unknown(&error.to_string()) {
+                            this.zot_ui.retry = None;
+                        }
+                        if let Some(panel) =
+                            this.zot_ui.issues.as_ref().filter(|_| from_issue_panel)
+                        {
                             panel.update(cx, |p, cx| p.failed(error.to_string(), cx));
                         }
                         this.show_notice(crate::toast::ToastKind::Error, error.to_string(), cx)

@@ -766,6 +766,10 @@ impl Tools {
                 "Read durable worker reports and blockers. Supply zotId.",
             ),
             (
+                "zot_issue",
+                "Read one issue in full, including its whole description and older activity. Supply zotId and issueId.",
+            ),
+            (
                 "zot_acknowledge",
                 "Acknowledge handled worker reports. Supply zotId and eventIds; unresolved human decisions remain separate.",
             ),
@@ -773,7 +777,7 @@ impl Tools {
             all.push(ToolDef {
                 name,
                 description,
-                input_schema: if name=="zot_command" {zuse_protocol::zots::command_schema()}else{json!({"type":"object","properties":{"zotId":{"type":"string"},"history":{"type":"boolean"},"eventIds":{"type":"array","items":{"type":"string"}}},"required":["zotId"]})},
+                input_schema: if name=="zot_command" {zuse_protocol::zots::command_schema()}else if name=="zot_issue" {json!({"type":"object","properties":{"zotId":{"type":"string"},"issueId":{"type":"string"}},"required":["zotId","issueId"]})}else{json!({"type":"object","properties":{"zotId":{"type":"string"},"history":{"type":"boolean"},"eventIds":{"type":"array","items":{"type":"string"}}},"required":["zotId"]})},
             });
         }
         all.into_iter()
@@ -825,6 +829,11 @@ impl Tools {
             "zot_events" => {
                 self.zuse
                     .control(zuse_protocol::control::ZOT_EVENTS, args)
+                    .await
+            }
+            "zot_issue" => {
+                self.zuse
+                    .control(zuse_protocol::control::ZOT_ISSUE, args)
                     .await
             }
             "zot_acknowledge" => {

@@ -8804,6 +8804,15 @@ impl Transcript {
         // User entries align end (under the bubble), assistant entries start.
         // Both read timestamp first, then the copy action.
         let is_user_row = matches!(row.kind, RowKind::User { .. });
+        // Zapper-attributed messages and activity notices draw their own
+        // copy + time footer; a second hover strip would duplicate it.
+        let own_footer = matches!(
+            row.kind,
+            RowKind::User {
+                sender: Some(_),
+                ..
+            }
+        );
         let hovered = self
             .hovered_entry
             .as_ref()
@@ -8828,7 +8837,7 @@ impl Transcript {
         // no hover lane, so the reply sits at the ordinary turn gap below it.
         let strip = row
             .timestamp
-            .filter(|_| !(is_user_row && self.doc_override.is_some()))
+            .filter(|_| !(is_user_row && self.doc_override.is_some()) && !own_footer)
             .map(|ms| {
                 let timestamp = div()
                     .flex()

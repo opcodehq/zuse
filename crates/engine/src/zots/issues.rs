@@ -203,6 +203,58 @@ pub(super) fn apply(
     }
     Ok(())
 }
+/// The Zot as the coordinator prompt sees it. Issues carry only their recent
+/// activity and a bounded description; storage keeps everything, and the
+/// coordinator reads a full issue through `zot_issue`.
+pub(super) fn coordinator_view(zot: &Zot) -> Result<serde_json::Value> {
+    const RECENT_ACTIVITY: usize = 6;
+    const ACTIVITY_TEXT: usize = 600;
+    const DESCRIPTION: usize = 4000;
+    let clip = |text: &str, max: usize| -> (String, bool) {
+        if text.chars().count() > max {
+            (
+                format!("{}…", text.chars().take(max).collect::<String>()),
+                true,
+            )
+        } else {
+            (text.to_owned(), false)
+        }
+    };
+    let mut view = serde_json::to_value(zot)?;
+    view["issues"] = zot
+        .issues
+        .iter()
+        .map(|issue| -> Result<serde_json::Value> {
+            let mut details = serde_json::to_value(&issue.details)?;
+            let (description, clipped) = clip(&issue.details.description, DESCRIPTION);
+            details["description"] = serde_json::json!(description);
+            let skip = issue.activity.len().saturating_sub(RECENT_ACTIVITY);
+            let recent: Vec<_> = issue.activity[skip..]
+                .iter()
+                .map(|a| {
+                    let mut a = a.clone();
+                    a.text = clip(&a.text, ACTIVITY_TEXT).0;
+                    a
+                })
+                .collect();
+            Ok(serde_json::json!({
+                "id": issue.id,
+                "code": issue.code(),
+                "number": issue.number,
+                "details": details,
+                "descriptionClipped": clipped,
+                "createdAt": issue.created_at,
+                "updatedAt": issue.updated_at,
+                "threads": issue.threads,
+                "pullRequests": issue.pull_requests,
+                "activityCount": issue.activity.len(),
+                "recentActivity": recent,
+            }))
+        })
+        .collect::<Result<Vec<_>>>()?
+        .into();
+    Ok(view)
+}
 fn find<'a>(zot: &'a mut Zot, id: &str) -> Result<&'a mut ZotIssue> {
     zot.issues
         .iter_mut()
@@ -344,6 +396,93 @@ mod tests {
                 },
             ))
             .unwrap();
+    }
+    #[test]
+    fn coordinator_view_keeps_recent_activity_and_flags_clipped_descriptions() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Zots::open(dir.path(), "local").unwrap();
+        create(&store, "release");
+        add(&store);
+        let mut long = details();
+        long.description = "x".repeat(5000);
+        store
+            .command(command(
+                "release",
+                "long",
+                ZotAction::EditIssue {
+                    issue_id: "fix".into(),
+                    details: long,
+                },
+            ))
+            .unwrap();
+        for n in 0..10 {
+            store
+                .command(command(
+                    "release",
+                    &format!("comment-{n}"),
+                    ZotAction::CommentIssue {
+                        issue_id: "fix".into(),
+                        text: format!("note {n} {}", "y".repeat(900)),
+                        reply_to: None,
+                    },
+                ))
+                .unwrap();
+        }
+        let first = issue(&store).activity[2].id.clone();
+        store
+            .command(command(
+                "release",
+                "reply",
+                ZotAction::CommentIssue {
+                    issue_id: "fix".into(),
+                    text: "Answering".into(),
+                    reply_to: Some(first.clone()),
+                },
+            ))
+            .unwrap();
+        // Replies attach to their thread's root, never to another reply.
+        let stored = issue(&store);
+        let reply = stored.activity.last().unwrap().id.clone();
+        assert_eq!(
+            stored.activity.last().unwrap().reply_to,
+            Some(first.clone())
+        );
+        store
+            .command(command(
+                "release",
+                "reply-to-reply",
+                ZotAction::CommentIssue {
+                    issue_id: "fix".into(),
+                    text: "Again".into(),
+                    reply_to: Some(reply),
+                },
+            ))
+            .unwrap();
+        let stored = issue(&store);
+        assert_eq!(stored.activity.last().unwrap().reply_to, Some(first));
+        // Storage keeps everything; the prompt view is bounded.
+        assert_eq!(stored.activity.len(), 14);
+        assert_eq!(stored.details.description.len(), 5000);
+        let view = coordinator_view(&store.get("release").unwrap()).unwrap();
+        let fix = &view["issues"][0];
+        assert_eq!(fix["descriptionClipped"], true);
+        assert_eq!(fix["activityCount"], 14);
+        assert_eq!(fix["recentActivity"].as_array().unwrap().len(), 6);
+        assert!(
+            fix["recentActivity"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|a| a["text"].as_str().unwrap().chars().count() <= 601)
+        );
+        assert!(
+            fix["details"]["description"]
+                .as_str()
+                .unwrap()
+                .chars()
+                .count()
+                <= 4001
+        );
     }
     #[test]
     fn unlinking_is_reversible_without_releasing_workers_or_duplicate_activity() {

@@ -5,6 +5,9 @@ use crate::shell::{BORDER, FAINT, MUTED, RAISED, TEXT, column, icon_button, row}
 use zuse_protocol::presentation::zot_panel::{ZotTab, ZotTabs, zot_owns_chat};
 use zuse_protocol::{control as api, zots::*};
 
+/// The selected Zapper's inspector width; the shell reserves the same space.
+pub(crate) const ZOT_PANEL_WIDTH: f32 = 520.;
+
 #[derive(Default)]
 pub(super) struct ZotView {
     pub items: Vec<Zot>,
@@ -20,6 +23,10 @@ pub(super) struct ZotView {
     document: Option<ZotFile>,
     history: bool,
     pending: Option<u64>,
+    /// Whether the pending command came from the issue panel, so only its own
+    /// results close or fail the panel's editor.
+    pending_issue: bool,
+    issue_command: bool,
     selection: Option<String>,
     retry: Option<ZotCommand>,
     file_request: Option<u64>,
@@ -104,7 +111,17 @@ impl WorkspaceView {
                 self.error = Some(error.into());
             }
             if self.zots.pending == Some(id) {
-                if let Some(panel) = &self.zots.issues {
+                // The engine answered: nothing was written, so the next
+                // attempt is a new command at the current revision.
+                if !command_outcome_unknown(error) {
+                    self.zots.retry = None;
+                }
+                if let Some(panel) = self
+                    .zots
+                    .issues
+                    .as_ref()
+                    .filter(|_| self.zots.pending_issue)
+                {
                     panel.update(cx, |p, cx| p.failed(error.to_owned(), cx));
                 }
                 self.zots.pending = None;
@@ -144,7 +161,12 @@ impl WorkspaceView {
                 api::ZOT_COMMAND if self.zots.pending == Some(id) => {
                     self.zots.pending = None;
                     self.zots.retry = None;
-                    if let Some(panel) = &self.zots.issues {
+                    if let Some(panel) = self
+                        .zots
+                        .issues
+                        .as_ref()
+                        .filter(|_| self.zots.pending_issue)
+                    {
                         panel.update(cx, |p, cx| p.committed(cx));
                     }
                     self.zots.form = None;
@@ -435,6 +457,7 @@ impl WorkspaceView {
         action: ZotAction,
         cx: &mut Context<Self>,
     ) {
+        let from_issue_panel = std::mem::take(&mut self.zots.issue_command);
         if self.zots.pending.is_some() || !self.require_connection(cx) {
             return;
         }
@@ -462,6 +485,7 @@ impl WorkspaceView {
         let mut params = serde_json::to_value(command).unwrap();
         params["targetDeviceId"] = json!(home);
         self.zots.pending = Some(self.call(api::ZOT_COMMAND, params));
+        self.zots.pending_issue = from_issue_panel;
         cx.notify();
     }
     fn save_zot(&mut self, cx: &mut Context<Self>) {
@@ -1229,7 +1253,7 @@ impl WorkspaceView {
             body
         };
         crate::workspace_style::column()
-            .w(px(520.))
+            .w(px(ZOT_PANEL_WIDTH))
             .flex_none()
             .pr(px(crate::workspace_style::GUTTER))
             .child(
@@ -1280,6 +1304,7 @@ impl WorkspaceView {
                                 }
                             }
                         }
+                        this.zots.issue_command = true;
                         this.send_zot(
                             zot.id,
                             Some(*revision),
