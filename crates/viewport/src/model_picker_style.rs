@@ -6,23 +6,25 @@ use crate::{
 };
 use gpui::{prelude::*, *};
 
-pub const WIDTH: f32 = 380.;
-pub const MAX_HEIGHT: f32 = 480.;
-pub const SEARCH_HEIGHT: f32 = 53.;
+pub const WIDTH: f32 = 304.;
+pub const MAX_HEIGHT: f32 = 320.;
+pub const SEARCH_HEIGHT: f32 = 42.;
 pub const LABEL_HEIGHT: f32 = 29.5;
 pub const GROUP_HEADER_HEIGHT: f32 = 35.;
-pub const ROW_HEIGHT: f32 = 32.;
+pub const ROW_HEIGHT: f32 = 28.;
 pub const PROVIDER_ROW_HEIGHT: f32 = 45.16667;
+pub const LIST_INSET: f32 = 6.;
 const ACCENT: u32 = 0x89ca21;
 
 pub fn section(label: impl Into<SharedString>) -> Div {
     div()
         .flex_none()
-        .px(px(8.))
-        .pt(px(12.))
-        .pb(px(4.))
-        .text_size(px(10.))
-        .line_height(px(13.5))
+        .h(px(LABEL_HEIGHT))
+        .px(px(6.))
+        .flex()
+        .items_center()
+        .text_size(px(12.))
+        .line_height(px(16.))
         .font_weight(FontWeight::MEDIUM)
         .text_color(palette::rgb(MUTED))
         .child(label.into())
@@ -45,11 +47,11 @@ pub fn provider_heading(
                 .flex()
                 .items_center()
                 .gap(px(8.))
-                .px(px(8.))
+                .px(px(6.))
                 .pt(px(6.))
                 .pb(px(4.))
-                .text_size(px(12.))
-                .line_height(px(16.))
+                .text_size(px(13.))
+                .line_height(px(17.))
                 .child(glyph.size(px(14.)).flex_none())
                 .child(
                     div()
@@ -124,7 +126,7 @@ pub fn provider_tab(
                     .text_color(palette::rgb(TEXT))
             })
         })
-        .when_some(glyph, |v, glyph| v.child(glyph.size(px(14.)).flex_none()))
+        .when_some(glyph, |v, glyph| v.child(glyph.size(px(16.)).flex_none()))
         .when(!has_glyph, |v| {
             v.child(
                 div()
@@ -148,8 +150,7 @@ pub fn provider_tab(
 }
 
 fn selected<E: Styled>(v: E) -> E {
-    v.bg(palette::rgb(ACCENT).opacity(0.12))
-        .border_color(palette::rgb(ACCENT).opacity(0.2))
+    v.bg(s::frame_bg().opacity(0.6))
 }
 
 pub fn default_button(id: impl Into<ElementId>, is_default: bool) -> Stateful<Div> {
@@ -178,6 +179,46 @@ pub fn default_button(id: impl Into<ElementId>, is_default: bool) -> Stateful<Di
         .child(icon("star").size(px(14.)))
 }
 
+/// A persistent favorite control; starring a model is independent of selection.
+pub fn favorite_button(id: impl Into<ElementId>, favorite: bool) -> Stateful<Div> {
+    div()
+        .id(id)
+        .role(Role::Button)
+        .aria_label(if favorite {
+            "Remove from favorites"
+        } else {
+            "Add to favorites"
+        })
+        .aria_toggled(if favorite {
+            Toggled::True
+        } else {
+            Toggled::False
+        })
+        .tab_index(0)
+        .size(px(22.))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(5.))
+        .text_color(palette::rgb(if favorite { ACCENT } else { MUTED }))
+        .opacity(0.)
+        .group_hover("model-choice", |v| v.opacity(1.))
+        .focus_visible(|v| v.opacity(1.))
+        .hover(|v| {
+            v.bg(s::frame_bg())
+                .text_color(palette::rgb(if favorite { ACCENT } else { TEXT }))
+        })
+        .child(
+            icon(if favorite {
+                "model-favorite-filled"
+            } else {
+                "star"
+            })
+            .size(px(14.)),
+        )
+}
+
 pub fn model_row(
     id: impl Into<ElementId>,
     title: impl Into<SharedString>,
@@ -195,19 +236,22 @@ pub fn model_row(
         .tab_index(0)
         .aria_selected(is_selected)
         .relative()
-        .min_h(px(ROW_HEIGHT))
+        .h(px(if provider.is_some() {
+            PROVIDER_ROW_HEIGHT
+        } else {
+            ROW_HEIGHT
+        }))
         .w_full()
         .border_1()
         .border_color(transparent_black())
-        .px(px(7.))
-        .py(px(5.))
+        .px(px(6.))
+        .py(px(0.))
         .rounded(px(7.))
         .flex()
         .items_center()
         .gap(px(6.))
         .text_size(px(12.))
         .text_color(palette::rgb(TEXT))
-        .when(is_selected, |v| selected(v))
         .when(!is_selected && active, |v| v.bg(s::frame_bg().opacity(0.6)))
         .hover(|v| {
             v.bg(if is_selected {
@@ -215,19 +259,6 @@ pub fn model_row(
             } else {
                 s::frame_bg().opacity(0.6)
             })
-        })
-        .when(is_selected, |v| {
-            v.child(
-                div()
-                    .absolute()
-                    .left(px(0.))
-                    .top(relative(0.5))
-                    .mt(px(-8.))
-                    .w(px(2.))
-                    .h(px(16.))
-                    .rounded_full()
-                    .bg(palette::rgb(ACCENT)),
-            )
         })
         .child(glyph.size(px(16.)).flex_none())
         .child(
@@ -239,7 +270,8 @@ pub fn model_row(
                 .gap(px(2.))
                 .child(
                     div()
-                        .font_weight(FontWeight::MEDIUM)
+                        .truncate()
+                        .font_weight(FontWeight::NORMAL)
                         .line_height(px(16.5))
                         .child(title.into()),
                 )
@@ -254,13 +286,12 @@ pub fn model_row(
                     )
                 }),
         )
-        .child(star)
         .when(is_selected, |v| {
             v.child(
                 icon("check")
                     .size(px(14.))
                     .flex_none()
-                    .text_color(palette::rgb(ACCENT)),
+                    .text_color(palette::rgb(TEXT)),
             )
         })
         .when_some(shortcut, |v, n| {
@@ -268,27 +299,21 @@ pub fn model_row(
                 div()
                     .flex_none()
                     .ml(px(2.))
+                    .min_w(px(if cfg!(target_os = "macos") { 26. } else { 44. }))
                     .rounded(px(4.))
                     .px(px(4.))
                     .bg(s::frame_bg().opacity(0.7))
                     .text_size(px(10.))
                     .line_height(px(13.5))
                     .font_weight(FontWeight::MEDIUM)
+                    .text_center()
                     .text_color(palette::rgb(MUTED))
-                    .child(n.to_string()),
+                    .child(if cfg!(target_os = "macos") {
+                        format!("⌘{n}")
+                    } else {
+                        format!("Ctrl+{n}")
+                    }),
             )
         })
-        .when(is_selected, |v| {
-            v.child(
-                div()
-                    .absolute()
-                    .left_0()
-                    .top_1_2()
-                    .mt(px(-8.))
-                    .w(px(2.))
-                    .h(px(16.))
-                    .rounded_full()
-                    .bg(palette::rgb(ACCENT)),
-            )
-        })
+        .child(star)
 }

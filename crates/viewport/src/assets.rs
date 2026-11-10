@@ -70,6 +70,7 @@ assets!(
     "copy",
     "magnifer",
     "star",
+    "model-favorite-filled",
     "danger-triangle",
     "trash-bin-minimalistic",
     "pen",
