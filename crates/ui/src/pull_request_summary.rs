@@ -622,7 +622,11 @@ impl PullRequestDetailPage {
         )
     }
 
-    fn update_pr(&mut self, update: zuse_protocol::ChangeRequestUpdate, cx: &mut Context<Self>) {
+    pub(super) fn update_pr(
+        &mut self,
+        update: zuse_protocol::ChangeRequestUpdate,
+        cx: &mut Context<Self>,
+    ) {
         if self.updating_pr {
             return;
         }
