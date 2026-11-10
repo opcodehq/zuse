@@ -26,7 +26,7 @@ pub fn template_versions_from_env() -> anyhow::Result<BTreeMap<String, String>> 
     anyhow::ensure!(
         versions.iter().all(|(provider, version)| matches!(
             provider.as_str(),
-            "box" | "boxd" | "e2b"
+            "box" | "boxd" | "boat" | "e2b" | "daytona"
         ) && !version.trim().is_empty()
             && version.len() <= 1024),
         "Invalid cloud provider template versions"
@@ -80,6 +80,7 @@ impl ProjectControl {
         owner: &str,
         request: ProjectConnectRequest,
         now: i64,
+        only_if_absent: bool,
     ) -> Result<Value, ApiError> {
         let normalized = normalize(&request.repository_url)?;
         validate(&request)?;
@@ -87,17 +88,33 @@ impl ProjectControl {
             return Err(ApiError::conflict("cloud_project_secret_vault_required"));
         }
         let mut tx = self.owned(owner).await?;
-        let entitled:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM api_entitlements WHERE account_id=$1 AND kind='cloud-workspace' AND (status IN ('active','grace') OR (status='ended' AND paid_through>$2)) AND (paid_through IS NULL OR paid_through>$2))").bind(owner).bind(now).fetch_one(&mut *tx).await?;
-        if !entitled {
-            return Err(ApiError::forbidden("cloud_entitlement_required"));
-        }
+        // Selecting repositories is onboarding. Allocation enforces entitlement
+        // independently when the user actually requests compute.
         // Keep the original repository lock as well, for compatibility during fenced handoff.
         sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
             .bind(format!("{owner}:{}", normalized.identity))
             .execute(&mut *tx)
             .await?;
+        if only_if_absent {
+            let exists: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM api_cloud_projects WHERE account_id=$1 AND repository_identity=$2)",
+            )
+            .bind(owner)
+            .bind(&normalized.identity)
+            .fetch_one(&mut *tx)
+            .await?;
+            if exists {
+                return Err(ApiError::new(
+                    axum::http::StatusCode::PRECONDITION_FAILED,
+                    "cloud_project_already_exists",
+                ));
+            }
+        }
         let retry:Option<Value>=sqlx::query_scalar("SELECT to_jsonb(p) FROM api_cloud_projects p WHERE account_id=$1 AND idempotency_key=$2 AND included=true LIMIT 1 FOR UPDATE").bind(owner).bind(&request.idempotency_key).fetch_optional(&mut *tx).await?;
         if let Some(retry) = retry {
+            if only_if_absent {
+                return Err(ApiError::conflict("idempotency_key_reused"));
+            }
             tx.commit().await?;
             return Ok(retry);
         }
@@ -112,8 +129,34 @@ impl ProjectControl {
             ProjectVisibility::Public => "public",
             ProjectVisibility::Private => "private",
         };
-        let row:Value=sqlx::query_scalar("INSERT INTO api_cloud_projects AS p(project_id,account_id,repository_identity,repository_url,display_name,default_branch,visibility,git_connection_kind,cloud_environment,secret_bindings,configuration_digest,state,included,last_error_code,idempotency_key,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,'github-app',$8,'[]',$9,'connected',true,NULL,$10,$11,$11) ON CONFLICT(account_id,repository_identity) DO UPDATE SET repository_url=EXCLUDED.repository_url,display_name=EXCLUDED.display_name,default_branch=EXCLUDED.default_branch,visibility=EXCLUDED.visibility,cloud_environment=EXCLUDED.cloud_environment,secret_bindings=EXCLUDED.secret_bindings,configuration_digest=EXCLUDED.configuration_digest,state='connected',included=true,last_error_code=NULL,idempotency_key=EXCLUDED.idempotency_key,updated_at=EXCLUDED.updated_at RETURNING to_jsonb(p)")
-            .bind(id).bind(owner).bind(normalized.identity).bind(normalized.url).bind(request.display_name.unwrap_or(normalized.name)).bind(request.default_branch).bind(visibility).bind(json!(request.cloud_environment)).bind(digest).bind(request.idempotency_key).bind(now).fetch_one(&mut *tx).await?;
+        let conflict = if only_if_absent {
+            "DO NOTHING"
+        } else {
+            "DO UPDATE SET repository_url=EXCLUDED.repository_url,display_name=EXCLUDED.display_name,default_branch=EXCLUDED.default_branch,visibility=EXCLUDED.visibility,cloud_environment=EXCLUDED.cloud_environment,secret_bindings=EXCLUDED.secret_bindings,configuration_digest=EXCLUDED.configuration_digest,state='connected',included=true,last_error_code=NULL,idempotency_key=EXCLUDED.idempotency_key,updated_at=EXCLUDED.updated_at"
+        };
+        let statement = format!(
+            "INSERT INTO api_cloud_projects AS p(project_id,account_id,repository_identity,repository_url,display_name,default_branch,visibility,git_connection_kind,cloud_environment,secret_bindings,configuration_digest,state,included,last_error_code,idempotency_key,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,'github-app',$8,'[]',$9,'connected',true,NULL,$10,$11,$11) ON CONFLICT(account_id,repository_identity) {conflict} RETURNING to_jsonb(p)"
+        );
+        let row: Option<Value> = sqlx::query_scalar(&statement)
+            .bind(id)
+            .bind(owner)
+            .bind(normalized.identity)
+            .bind(normalized.url)
+            .bind(request.display_name.unwrap_or(normalized.name))
+            .bind(request.default_branch)
+            .bind(visibility)
+            .bind(json!(request.cloud_environment))
+            .bind(digest)
+            .bind(request.idempotency_key)
+            .bind(now)
+            .fetch_optional(&mut *tx)
+            .await?;
+        let row = row.ok_or_else(|| {
+            ApiError::new(
+                axum::http::StatusCode::PRECONDITION_FAILED,
+                "cloud_project_already_exists",
+            )
+        })?;
         tx.commit().await?;
         Ok(row)
     }
@@ -232,11 +275,21 @@ impl Store {
         request: ProjectConnectRequest,
         now: i64,
     ) -> Result<CloudProject, ApiError> {
+        self.project_connect_conditionally(owner, request, now, false)
+            .await
+    }
+    pub(crate) async fn project_connect_conditionally(
+        &self,
+        owner: &str,
+        request: ProjectConnectRequest,
+        now: i64,
+        only_if_absent: bool,
+    ) -> Result<CloudProject, ApiError> {
         let row = self
             .projects
             .as_ref()
             .ok_or_else(|| ApiError::unavailable("cloud_project_writes_disabled"))?
-            .connect_project(owner, request, now)
+            .connect_project(owner, request, now, only_if_absent)
             .await?;
         public_project(&row, &[], &self.project_templates)
     }

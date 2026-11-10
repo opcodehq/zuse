@@ -23,6 +23,8 @@ const SYSTEMD_UNIT: &str = "zuse.service";
 const CAPTURED_ENV: &[&str] = &[
     "PATH",
     "ZUSE_DATA_DIR",
+    "ZUSE_API_URL",
+    "ZUSE_CLOUD_API_URL",
     "ZUSE_EDGE_URL",
     "ZUSE_EDGE_TOKEN",
     "ZUSE_ORG_ID",
@@ -437,6 +439,78 @@ mod tests {
         assert!(plist.contains("<key>SuccessfulExit</key><false/>"));
         assert!(
             plist.contains("<key>StandardOutPath</key><string>/Users/x/.zuse/daemon.log</string>")
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn staging_api_origins_survive_daemon_capture_and_spawn() {
+        const CHILD: &str = "ZUSE_TEST_DAEMON_ORIGIN_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let output = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "tests::staging_api_origins_survive_daemon_capture_and_spawn",
+                    "--nocapture",
+                ])
+                .env_clear()
+                .env("PATH", "/usr/bin:/bin")
+                .env(CHILD, "1")
+                .env("ZUSE_API_URL", "https://general-staging.example")
+                .env("ZUSE_CLOUD_API_URL", "https://cloud-staging.example")
+                .env("ZUSE_WORKOS_CLIENT_ID", "client_staging_public")
+                .env("ZUSE_EDGE_URL", "http://127.0.0.1:27655")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        let env = captured_env();
+        for (key, value) in [
+            ("ZUSE_API_URL", "https://general-staging.example"),
+            ("ZUSE_CLOUD_API_URL", "https://cloud-staging.example"),
+            ("ZUSE_WORKOS_CLIENT_ID", "client_staging_public"),
+            ("ZUSE_EDGE_URL", "http://127.0.0.1:27655"),
+        ] {
+            assert!(
+                env.iter()
+                    .any(|(name, actual)| name == key && actual == value),
+                "missing captured {key}"
+            );
+            let unit = render_systemd_unit(Path::new("/usr/bin/zuse"), &env);
+            assert!(unit.contains(&format!("Environment=\"{key}={value}\"")));
+            let plist = render_launchd_plist(
+                Path::new("/Applications/Zuse"),
+                &env,
+                Path::new("/tmp/daemon.log"),
+            );
+            assert!(plist.contains(&format!("<key>{key}</key><string>{value}</string>")));
+        }
+        let spawned = Command::new("/usr/bin/env")
+            .env_clear()
+            .envs(env)
+            .output()
+            .unwrap();
+        assert!(spawned.status.success());
+        let public = String::from_utf8(spawned.stdout).unwrap();
+        assert!(
+            public
+                .lines()
+                .any(|s| s == "ZUSE_API_URL=https://general-staging.example")
+        );
+        assert!(
+            public
+                .lines()
+                .any(|s| s == "ZUSE_CLOUD_API_URL=https://cloud-staging.example")
+        );
+        assert!(
+            public
+                .lines()
+                .any(|s| s == "ZUSE_EDGE_URL=http://127.0.0.1:27655")
         );
     }
 }

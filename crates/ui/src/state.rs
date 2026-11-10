@@ -88,6 +88,7 @@ use history_window::{HistoryFrame, NativeHistory, WatchSeed};
 
 mod account_connection;
 mod cloud_connection;
+mod cloud_sidebar;
 pub use cloud_connection::CloudTarget;
 mod remote_connection;
 pub use account_connection::{AccountTarget, RemoteTarget};
@@ -629,7 +630,7 @@ impl EngineHandle {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "appshots-fixture"))]
     pub(crate) fn from_test_client(client: RpcClient) -> Self {
         Self {
             inner: Arc::new(RemoteEngine {
@@ -915,6 +916,7 @@ pub struct AppState {
     pub auth: Option<AuthState>,
     /// Account identity for cloud features, independent of device/workspace auth.
     pub cloud_account: Option<serde_json::Value>,
+    cloud_sidebar: cloud_sidebar::Catalog,
     pub devices: Vec<Device>,
     pub project_creations: HashMap<String, Vec<zuse_protocol::project_creation::ProjectCreation>>,
     project_creation_watches: HashMap<String, Task<()>>,
@@ -984,6 +986,7 @@ pub struct AppState {
     /// agent was busy, in the order it will be sent. Device-agnostic: the
     /// chat's doc holds them (every device sees the same queue).
     pub queue: Vec<zuse_doc::QueuedMessage>,
+    pub(crate) cloud_queue_revisions: HashMap<(String, String), i64>,
     pub context_usage: Option<zuse_protocol::ContextUsage>,
     /// The selected chat has a transcript from a `WatchDocMessages` reset
     /// (including a retained reset from an earlier visit). An
@@ -1122,6 +1125,7 @@ impl AppState {
             workspace_scope: None,
             auth: None,
             cloud_account: None,
+            cloud_sidebar: Default::default(),
             devices: Vec::new(),
             project_creations: HashMap::new(),
             project_creation_watches: HashMap::new(),
@@ -1149,6 +1153,7 @@ impl AppState {
             pending_cloud_resume: None,
             transcript: Vec::new(),
             queue: Vec::new(),
+            cloud_queue_revisions: HashMap::new(),
             context_usage: None,
             transcript_replayed: false,
             transcript_history: NativeHistory::default(),
@@ -2025,12 +2030,24 @@ impl AppState {
         if self.cloud_account.as_ref() == Some(&value) {
             return false;
         }
+        let scope_changed = self
+            .cloud_account
+            .as_ref()
+            .map(|old| (&old["user"]["id"], &old["orgId"]))
+            != Some((&value["user"]["id"], &value["orgId"]));
+        if scope_changed {
+            self.clear_cloud_sidebar();
+        }
         self.cloud_account = Some(value);
         true
     }
 
     pub fn cloud_user_id(&self) -> Option<&str> {
         self.cloud_account.as_ref()?["user"]["id"].as_str()
+    }
+
+    pub fn cloud_organization_id(&self) -> Option<&str> {
+        self.cloud_account.as_ref()?["orgId"].as_str()
     }
 
     /// The signed-in user, if the engine reports one.
@@ -3220,6 +3237,33 @@ impl AppState {
         true
     }
 
+    /// Retire a cloud computer's execution subscriptions without clearing its
+    /// account-owned conversation, transcript, queue or current selection.
+    pub(crate) fn detach_cloud_conversation_execution(&mut self, cx: &mut Context<Self>) {
+        self.engine = None;
+        self.watch_tasks.clear();
+        self.transcript_task = None;
+        self.change_request_tasks.clear();
+        self.change_requests = ChangeRequestClientState::default();
+        self.reset_configuration_transport();
+        self.workspace_scope = None;
+        self.connection = ConnectionStatus::Connecting;
+        cx.notify();
+    }
+
+    /// Install execution only in an already-selected native cloud conversation.
+    /// The controller/navigation state must never call this method.
+    pub(crate) fn attach_cloud_conversation(
+        &mut self,
+        handle: EngineHandle,
+        session: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.attach_engine(handle, cx);
+        self.select_chat(Some(session), cx);
+        cx.notify();
+    }
+
     /// Wire the connected engine: mark Ready and start the standing watches.
     /// Methods the engine doesn't serve yet (chats/devices/auth land with the
     /// workspace doc in M4) fail their subscribe and are skipped gracefully.
@@ -3228,6 +3272,7 @@ impl AppState {
         self.project_creations.clear();
         self.reset_configuration_transport();
         self.cloud_account = None;
+        self.clear_cloud_sidebar();
         // The attachment notification precedes the first connectivity frame.
         // Make that bootstrap gap explicit so the shell resets its alert
         // baseline instead of comparing the new runtime with the old one.
@@ -3325,6 +3370,7 @@ impl AppState {
                 AppState::apply_cloud_account,
             ),
             spawn_local_device_probe(cx, handle.clone()),
+            cloud_sidebar::spawn(cx, handle.controller()),
         ]);
         if supports_harness_updates {
             watch_tasks.push(spawn_watch(
@@ -4261,6 +4307,16 @@ fn spawn_queue_watch(
                 }
             };
             while let Some(value) = rx.recv().await {
+                let revisions = value["items"]
+                    .as_array()
+                    .map(|rows| {
+                        rows.iter()
+                            .filter_map(|r| {
+                                Some((r["id"].as_str()?.to_owned(), r["revision"].as_i64()?))
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
                 let frame: QueueFrame = match serde_json::from_value(value) {
                     Ok(frame) => frame,
                     Err(err) => {
@@ -4271,6 +4327,14 @@ fn spawn_queue_watch(
                 let alive = this.update(cx, |state, cx| {
                     // Guard against a stale pump racing a newer selection.
                     if state.selected_chat.as_deref() == Some(chat_id.as_str()) {
+                        state
+                            .cloud_queue_revisions
+                            .retain(|(chat, _), _| chat != &chat_id);
+                        for (id, revision) in revisions {
+                            state
+                                .cloud_queue_revisions
+                                .insert((chat_id.clone(), id), revision);
+                        }
                         state.apply_queue(frame.items);
                         cx.notify();
                     }
@@ -7183,6 +7247,15 @@ mod tests {
 #[cfg(any(feature = "appshots-fixture", feature = "pull-request-fixture"))]
 impl AppState {
     /// Keep fixture documents deterministic while using the real attachment RPC.
+    pub fn fixture_cloud_sidebar_catalog(
+        &mut self,
+        client: RpcClient,
+        context: &serde_json::Value,
+        list: &serde_json::Value,
+    ) -> bool {
+        self.engine = Some(EngineHandle::from_test_client(client));
+        self.apply_cloud_sidebar_catalog(context, list)
+    }
     pub fn fixture_attachment_engine(&mut self, engine: EngineHandle) {
         self.engine = Some(engine);
     }

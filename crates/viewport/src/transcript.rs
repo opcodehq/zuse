@@ -5,7 +5,7 @@ use web_time::Instant;
 
 #[derive(Default)]
 pub(super) struct TranscriptState {
-    ready: bool,
+    pub(super) ready: bool,
     retries: usize,
     generation: uuid::Uuid,
     timer: Option<Task<()>>,
@@ -22,21 +22,77 @@ pub(super) struct TranscriptState {
 }
 
 impl WorkspaceView {
+    /// A local view of an admitted command, never an authoritative history page.
+    /// It is replaced by the guest's canonical transcript when enrollment finishes.
+    pub(super) fn install_pending_cloud_history(
+        &mut self,
+        target: &Value,
+        request: &Value,
+        prompt: &crate::cloud_queue::Prompt,
+    ) {
+        let Some(session) = target["initialSessionId"].as_str() else {
+            return;
+        };
+        self.selected = Some(
+            json!({"id":session,"threadId":target["chatId"],"archived":false,
+            "title":request["firstMessage"],"config":{"harness":request["agent"],"model":request["model"]},
+            "branch":target["branch"],"createdAt":target["createdAt"]}),
+        );
+        self.messages = vec![SessionMessageEntry {
+            id: format!(
+                "pending-cloud:{}",
+                target["workspaceId"].as_str().unwrap_or(session)
+            ),
+            role: zuse_model::MessageRole::User,
+            parts: vec![zuse_model::MessagePart::Text {
+                id: "pending-cloud-text".into(),
+                text: prompt.display_text(),
+            }],
+            created_at: target["createdAt"].as_i64().unwrap_or_default(),
+            device_id: String::new(),
+            status: None,
+            continuation_of: None,
+            duration_ms: None,
+        }];
+        self.chats = self.selected.clone().into_iter().collect();
+        self.model = request["model"].as_str().map(str::to_owned);
+        self.transcript_state.ready = true;
+        self.error = None;
+    }
     pub(super) fn apply_archive_transcript(
         &mut self,
         update: TranscriptUpdate,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
-        apply_transcript_frame(&mut self.messages, update.frame).map_err(|e| e.to_string())?;
+        self.clear_cloud_admission_overlay();
+        let applied =
+            apply_transcript_frame(&mut self.messages, update.frame).map_err(|e| e.to_string());
+        self.restore_cloud_admission_overlay();
+        applied?;
         self.transcript_state.ready = true;
         self.context_usage = update.context_usage;
         cx.notify();
         Ok(())
     }
     pub(super) fn install_cached_history(&mut self, head: &zuse_model::cloud::Head) {
+        self.cloud.cached_run_selection = head.chat.config.as_ref().and_then(|config| {
+            Some((
+                head.workspace_id.clone(),
+                head.session_id.clone(),
+                zuse_protocol::cloud_task_commands::RunSelection {
+                    harness: config.harness,
+                    model: config.model.clone()?,
+                    reasoning: config.reasoning,
+                    model_options: config.model_options.clone(),
+                    sandbox: config.sandbox,
+                },
+            ))
+        });
         let mut chat = head.chat.clone();
         chat.archived = true;
         self.selected = serde_json::to_value(chat).ok();
+        self.queue_paused = head.queue_paused;
+        self.clear_cloud_admission_overlay();
         self.messages.clear();
         if apply_transcript_frame(&mut self.messages, head.transcript.frame.clone()).is_ok() {
             self.transcript_state.ready = true;
@@ -63,6 +119,7 @@ impl WorkspaceView {
             generation: uuid::Uuid::new_v4(),
             ..Default::default()
         };
+        self.history_growth = None;
         self.context_confirmed = false;
     }
     pub(super) fn begin_transcript(&mut self, cx: &mut Context<Self>) {
@@ -74,6 +131,7 @@ impl WorkspaceView {
         });
         if scope != self.transcript_state.scope {
             self.transcript_state.scope = scope;
+            self.history_auto_from = None;
             self.transcript_state.rows = 32;
             self.transcript_state.bytes = 64 * 1024;
         }
@@ -214,10 +272,19 @@ impl WorkspaceView {
                 self.recover_transcript("The host omitted the initial history snapshot".into(), cx);
                 return;
             }
+            let growth = self.transcript_state.loading_earlier.then(|| {
+                (
+                    self.transcript_scroll.max_offset().y,
+                    self.transcript_scroll.offset(),
+                )
+            });
             let follow = !self.transcript_state.loading_earlier
                 && self.transcript_scroll.max_offset().y + self.transcript_scroll.offset().y
                     <= px(24.);
-            if let Err(error) = apply_transcript_frame(&mut self.messages, update.frame) {
+            self.clear_cloud_admission_overlay();
+            let applied = apply_transcript_frame(&mut self.messages, update.frame);
+            self.restore_cloud_admission_overlay();
+            if let Err(error) = applied {
                 self.recover_transcript(error.to_string(), cx);
                 return;
             }
@@ -232,6 +299,9 @@ impl WorkspaceView {
             }
             self.transcript_state.notice = None;
             self.transcript_state.loading_earlier = false;
+            if growth.is_some() {
+                self.history_growth = growth;
+            }
             if reset || resumed || value.get("historyHasMore").is_some() {
                 self.transcript_state.has_more = value["historyHasMore"].as_bool().unwrap_or(false);
                 self.transcript_state.next_anchor =

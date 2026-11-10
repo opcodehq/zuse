@@ -51,6 +51,14 @@ fn queue_mutation_acknowledged(method: &str, reply: &serde_json::Value) -> bool 
     reply.get(field).and_then(serde_json::Value::as_bool) == Some(true)
 }
 
+fn queue_action_failure_message(error: &str, fallback: &str) -> String {
+    if error.contains("This queued message uses different agent settings") {
+        "This message is still queued. Stop the current turn and use Send now to change its agent or model, or let it run afterward.".into()
+    } else {
+        fallback.into()
+    }
+}
+
 struct QueueActionTooltip {
     label: SharedString,
 }
@@ -1293,6 +1301,7 @@ impl Composer {
         let params = serde_json::json!({
             "chatId": chat_id,
             "id": id,
+            "revision":self.state.read(cx).cloud_queue_revisions.get(&(chat_id.clone(),id.clone())),
             "targetDeviceId": host_device_id,
         });
         cx.spawn(async move |this, cx| {
@@ -1487,6 +1496,7 @@ impl Composer {
         let params = serde_json::json!({
             "chatId": chat_id,
             "id": id,
+            "revision":self.state.read(cx).cloud_queue_revisions.get(&(chat_id.clone(),id.clone())),
             "editorDeviceId": owner_device_id,
             "editorInstanceId": instance_id,
             "targetDeviceId": host_device_id,
@@ -1603,6 +1613,7 @@ impl Composer {
                         composer.editing_queued = Some(id.clone());
                         composer.queue_edit_lease_id = Some(lease_id.to_string());
                         composer.queue_edit_base_text_hash = Some(base_text_hash.to_string());
+                        composer.queue_edit_revision=reply["revision"].as_i64();
                         composer.queue_edit_chat_id = Some(chat_id.clone());
                         composer.queue_edit_host_device_id = Some(host_device_id.clone());
                         composer.swap_in_queued_draft(
@@ -1715,6 +1726,7 @@ impl Composer {
         self.editing_queued = None;
         self.queue_edit_lease_id = None;
         self.queue_edit_base_text_hash = None;
+        self.queue_edit_revision = None;
         self.queue_edit_chat_id = None;
         self.queue_edit_host_device_id = None;
         self.queue_edit_pending_id = None;
@@ -1768,6 +1780,7 @@ impl Composer {
             "action": action,
             "text": text,
             "expectedTextHash": expected,
+            "revision":self.queue_edit_revision,
             "targetDeviceId": host_device_id,
         });
         self.queue_edit_finishing = true;
@@ -1979,6 +1992,16 @@ impl Composer {
             });
         }
         let mut params = params;
+        if let Some(queue_id) = params["id"].as_str() {
+            if let Some(revision) = self
+                .state
+                .read(cx)
+                .cloud_queue_revisions
+                .get(&(chat_id.clone(), queue_id.to_owned()))
+            {
+                params["revision"] = serde_json::json!(revision);
+            }
+        }
         if let Some(object) = params.as_object_mut() {
             object.insert("chatId".into(), serde_json::Value::String(chat_id.clone()));
             if let Some(host) = host_device_id {
@@ -2032,7 +2055,8 @@ impl Composer {
                                 cx.notify();
                             });
                         }
-                        composer.failure = Some(failure.into());
+                        composer.failure =
+                            Some(queue_action_failure_message(&err.to_string(), failure).into());
                         composer
                             .state
                             .update(cx, |state, cx| state.refresh_selected_queue(cx));
@@ -2054,10 +2078,24 @@ mod tests {
         PANEL_BORDER, PANEL_PAD_TOP, PANEL_PAD_X, PANEL_RADIUS, QueuePrimaryAction,
         ROW_CONTROL_INSET, ROW_CONTROL_RADIUS, ROW_CONTROL_SIZE, ROW_HEIGHT, ROW_PAD_X, ROW_RADIUS,
         ROW_SLOT, available_queue_primary_action, latest_queued_message, one_line,
-        queue_action_needs_host, queue_drag_offsets, queue_drop_index,
-        queue_latest_shortcut_visible, queue_lifted_top, queue_mutation_acknowledged,
-        queue_visible_text, visible_queue_rows,
+        queue_action_failure_message, queue_action_needs_host, queue_drag_offsets,
+        queue_drop_index, queue_latest_shortcut_visible, queue_lifted_top,
+        queue_mutation_acknowledged, queue_visible_text, visible_queue_rows,
     };
+
+    #[test]
+    fn selected_queue_steer_refusal_keeps_actionable_recovery_without_exposing_other_errors() {
+        let error=zuse_rpc::RpcError::Failed("This queued message uses different agent settings, or the active settings could not be verified. It is still queued.".into());
+        let message =
+            queue_action_failure_message(&error.to_string(), "Couldn't steer this message");
+        assert!(message.contains("still queued"));
+        assert!(message.contains("Stop the current turn"));
+        assert!(message.contains("Send now"));
+        assert_eq!(
+            queue_action_failure_message("untrusted server detail", "Couldn't steer this message"),
+            "Couldn't steer this message"
+        );
+    }
 
     #[test]
     fn queue_preview_work_follows_the_visible_rows() {

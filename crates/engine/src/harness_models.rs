@@ -142,7 +142,7 @@ fn parse_model(id: &str) -> Result<(Provider, &str), Error> {
     };
     Ok((provider, model))
 }
-fn inventory(provider: Provider, body: Value) -> Result<Vec<HarnessModel>, Error> {
+pub(crate) fn inventory(provider: Provider, body: Value) -> Result<Vec<HarnessModel>, Error> {
     let rows = body[if provider == Provider::Chatgpt {
         "models"
     } else {
@@ -743,6 +743,7 @@ mod tests {
             retry_index: 0,
             cancel: CancellationToken::new(),
             text: Arc::new(|_| {}),
+            thinking: Arc::new(|_| {}),
             budget,
             report: Arc::new(|_| {}),
         }
@@ -1223,6 +1224,7 @@ mod local_tests {
                 retry_index: 0,
                 cancel: CancellationToken::new(),
                 text: Arc::new(|_| {}),
+                thinking: Arc::new(|_| {}),
                 budget: Arc::new(Budget),
                 report: Arc::new(|_| {}),
             })

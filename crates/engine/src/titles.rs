@@ -140,7 +140,7 @@ impl TitleGenerator {
             .workspace
             .chat(chat_id)?
             .ok_or_else(|| EngineError::Other("chat has no workspace row".into()))?;
-        if chat.title.as_deref().is_some_and(|t| !t.trim().is_empty()) {
+        if !needs_title(chat.title.as_deref()) {
             return Ok(()); // already named
         }
 
@@ -154,7 +154,7 @@ impl TitleGenerator {
             None => return Ok(()),
         };
         let title = reply.title;
-        if title.is_empty() {
+        if !usable_automatic_title(&title) {
             return Ok(());
         }
         let branch_name = if reply.branch.is_empty() {
@@ -165,18 +165,18 @@ impl TitleGenerator {
 
         // Re-read after the model call: a user may have named the chat or checked
         // out another branch while the throwaway generation was live.
+        let original_title = chat.title.clone();
         let latest = self.inner.workspace.chat(chat_id)?.unwrap_or(chat);
-        if latest
-            .title
-            .as_deref()
-            .is_some_and(|t| !t.trim().is_empty())
-        {
+        if !can_apply_title(original_title.as_deref(), latest.title.as_deref()) {
             return Ok(());
         }
 
         // Rename the worktree branch when the chat still sits on its original
         // zuse/<name> branch (guards live inside rename_worktree_branch).
         if let (Some(chat_cwd), Some(branch)) = (&latest.cwd, &latest.branch)
+            && original_title
+                .as_deref()
+                .is_none_or(|title| title.trim().is_empty())
             && branch.starts_with("zuse/")
         {
             match self
@@ -340,10 +340,27 @@ fn parse_naming_reply(raw: &str) -> Option<NamingReply> {
             .unwrap_or_default()
     };
     let title = text(reply.title);
-    (!title.is_empty()).then(|| NamingReply {
+    usable_automatic_title(&title).then(|| NamingReply {
         title,
         branch: text(reply.branch),
     })
+}
+
+fn usable_automatic_title(title: &str) -> bool {
+    title
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .take(2)
+        .count()
+        == 2
+}
+
+fn needs_title(title: Option<&str>) -> bool {
+    title.is_none_or(|title| title.trim().is_empty() || title.trim().eq_ignore_ascii_case("k"))
+}
+
+fn can_apply_title(original: Option<&str>, current: Option<&str>) -> bool {
+    original == current && needs_title(current)
 }
 
 /// The request's first words: the completed-turn fallback name.
@@ -665,6 +682,79 @@ mod tests {
         assert_eq!(parse_naming_reply(r#"{"ti"#), None);
         assert_eq!(parse_naming_reply(r#"{"title":"  ","branch":"x"}"#), None);
         assert_eq!(parse_naming_reply(r#"{"title":7}"#), None);
+    }
+
+    #[test]
+    fn automatic_titles_reject_single_character_or_punctuation_replies() {
+        for title in ["k", "K", "# k", "!", "...", "  "] {
+            assert_eq!(
+                parse_naming_reply(&serde_json::json!({"title":title}).to_string()),
+                None
+            );
+        }
+        assert!(parse_naming_reply(r#"{"title":"修复登录"}"#).is_some());
+    }
+
+    #[test]
+    fn stuck_k_titles_can_be_repaired_but_concurrent_user_renames_win() {
+        assert!(needs_title(None));
+        assert!(needs_title(Some("k")));
+        assert!(needs_title(Some(" K ")));
+        assert!(can_apply_title(Some("k"), Some("k")));
+        assert!(!can_apply_title(None, Some("k")));
+        assert!(!can_apply_title(Some("k"), Some("My session")));
+        assert!(!needs_title(Some("Fix Login Flow")));
+        assert!(
+            !needs_title(Some("C")),
+            "other manual one-character titles are preserved"
+        );
+        assert!(
+            !usable_automatic_title(&first_words("k")),
+            "fallback cannot reintroduce k"
+        );
+    }
+
+    #[tokio::test]
+    async fn existing_k_title_is_replaced_by_a_generated_task_title() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = Arc::new(HarnessRegistry::new());
+        registry.register(Arc::new(RecordingTitleHarness(
+            Default::default(),
+            r#"{"title":"Fix Login Flow","branch":"fix-login"}"#,
+        )));
+        let core = crate::EngineCore::assemble(dir.path(), registry.clone(), HarnessId::Mock, None)
+            .unwrap();
+        registry
+            .set_title_settings(crate::registry::TitleSettings {
+                harness: Some(HarnessId::ClaudeCode),
+                model: Some("title-model".into()),
+            })
+            .unwrap();
+        core.workspace
+            .create_chat("chat-1", None, Some(&core.device_id), None, None)
+            .unwrap();
+        core.workspace.rename_chat("chat-1", "k").unwrap();
+        let generator = TitleGenerator::new(core.workspace.clone(), registry, core.repos.clone());
+        generator
+            .generate(
+                "chat-1",
+                HarnessId::ClaudeCode,
+                "Fix the login flow",
+                "",
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            core.workspace
+                .chat("chat-1")
+                .unwrap()
+                .unwrap()
+                .title
+                .as_deref(),
+            Some("Fix Login Flow")
+        );
+        core.shutdown().await;
     }
 
     #[test]

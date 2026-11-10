@@ -7,6 +7,7 @@ use sha2::{Digest, Sha256};
 use std::sync::Arc;
 
 pub const HEAD_LIMIT: usize = 1024 * 1024;
+pub const HOT_HEAD_LIMIT: usize = 256 * 1024;
 pub const PAGE_LIMIT: usize = 4 * 1024 * 1024;
 pub use zuse_cloud_projection::{Cursor, Upload};
 #[derive(Default, Deserialize)]
@@ -37,7 +38,7 @@ fn number(s: Option<&str>) -> Option<i64> {
     (value.is_finite() && value.fract() == 0.0 && (0.0..=9_007_199_254_740_991.0).contains(&value))
         .then_some(value as i64)
 }
-fn component(s: &str) -> String {
+pub(crate) fn component(s: &str) -> String {
     s.as_bytes()
         .iter()
         .map(|b| {
@@ -205,7 +206,20 @@ impl Store {
         } else {
             expected
         };
-        let Some(bytes) = reader.objects.get(&key).await? else {
+        let hot = &metadata["rust_hot_head"];
+        let inline = (!page
+            && hot["runtimeGeneration"] == metadata["runtime_generation"]
+            && hot["epoch"] == metadata["stream_epoch"]
+            && hot["version"] == metadata["stream_version"]
+            && hot["sha256"] == metadata["ciphertext_sha256"])
+            .then(|| hot["ciphertext"].as_str())
+            .flatten()
+            .filter(|value| value.len() <= HOT_HEAD_LIMIT);
+        let bytes = match inline {
+            Some(value) => Some(value.as_bytes().to_vec()),
+            None => reader.objects.get(&key).await?,
+        };
+        let Some(bytes) = bytes else {
             return if page {
                 Ok(empty)
             } else {

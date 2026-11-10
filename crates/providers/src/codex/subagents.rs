@@ -28,6 +28,9 @@ pub(super) struct Subagents {
 }
 
 impl Subagents {
+    pub(super) fn has_children(&self) -> bool {
+        !self.spawns.is_empty() || !self.streams.is_empty() || !self.pending.is_empty()
+    }
     pub(super) fn new(root: String) -> Self {
         Self {
             root,

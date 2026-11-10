@@ -145,7 +145,15 @@ async fn fixture() -> (PgPool, PgPool, String) {
         .execute(&pool)
         .await
         .unwrap();
+    sqlx::raw_sql(include_str!("../migrations/0012_provider_receipts.sql"))
+        .execute(&pool)
+        .await
+        .unwrap();
     sqlx::raw_sql(zuse_cloud::runtime::recovery::MIGRATION)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::raw_sql(include_str!("../migrations/0013_recovery_receipts.sql"))
         .execute(&pool)
         .await
         .unwrap();
@@ -153,10 +161,25 @@ async fn fixture() -> (PgPool, PgPool, String) {
         .execute(&pool)
         .await
         .unwrap();
+    sqlx::raw_sql(include_str!("../migrations/0014_restore_receipts.sql"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::raw_sql(zuse_cloud::runtime::task_history::MIGRATION)
+        .execute(&pool)
+        .await
+        .unwrap();
     sqlx::raw_sql(zuse_cloud::runtime::deletion::MIGRATION)
         .execute(&pool)
         .await
         .unwrap();
+    // Provider grants and credential delivery journal their receipts.
+    sqlx::raw_sql(include_str!(
+        "../migrations/0024_credential_delivery_journal.sql"
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
     (admin, pool, schema)
 }
 
@@ -1606,6 +1629,10 @@ async fn runtime_post_for_url(url: &str, token: &str, body: &Value) -> (u16, Val
 
 #[cfg(feature = "runtime-acceptance")]
 mod runtime_engine {
+    mod memory_acceptance {
+        use super::*;
+        include!("cases/memory.rs");
+    }
     mod recovery_acceptance {
         use super::*;
         include!("cases/recovery.rs");
@@ -1868,6 +1895,7 @@ mod runtime_engine {
             generation: 2,
             gateway_epoch: 5,
             expires_at: now + 900000,
+            storage_binding: None,
         };
         let runtime_cancel = CancellationToken::new();
         let guest = tokio::spawn({
@@ -2701,13 +2729,18 @@ mod runtime_engine {
             "cloud_provider_outcome_unknown"
         );
         allocation_due(&api).await;
-        assert!(
+        // One claim adopts the uncertain machine and launches it; the fixture
+        // loses that launch response too.
+        assert_eq!(
             api.control
                 .allocate_once(&provider, chrono::Utc::now().timestamp_millis())
                 .await
-                .unwrap()
+                .unwrap_err()
+                .code,
+            "cloud_provider_outcome_unknown"
         );
         assert_eq!(provider.creates.load(Ordering::SeqCst), 1);
+        assert_eq!(provider.launches.load(Ordering::SeqCst), 1);
         // An assigned source disappearing must not cause another create.
         let retained = provider.machine.lock().unwrap().take().unwrap();
         allocation_due(&api).await;
@@ -2786,7 +2819,8 @@ mod runtime_engine {
         );
         assert!(record["sealed_boot_token"].is_null());
         assert_eq!(provider.creates.load(Ordering::SeqCst), 1);
-        assert_eq!(provider.launches.load(Ordering::SeqCst), 1);
+        // The uncertain launch is redelivered unchanged to the same machine.
+        assert_eq!(provider.launches.load(Ordering::SeqCst), 2);
         let receipt: Value = sqlx::query_scalar(
             "SELECT request_config FROM api_cloud_workspaces WHERE workspace_id='ws-bob'",
         )
@@ -3013,6 +3047,11 @@ for line in sys.stdin:
             !seen.exists(),
             "A late grant must not start the stopped turn"
         );
+        // Preparation hands the gateway from its diagnostic connection to the
+        // serving one; clients reconnect once, as the desktop does.
+        client.closed.cancel();
+        drop(client);
+        let client = api.client().await;
         client.client.call(zuse_rpc::methods::RELAY_COMMAND,json!({"chatId":"session-bob","entry":{"id":"explicit-run-after-grant","issuedBy":"cloud-ui","issuedAt":chrono::Utc::now().timestamp_millis(),"status":"pending","payload":{"kind":"run","messageId":"explicit-provider-message","request":{"prompt":"Run with the account credential","harness":"claude-code","model":"fixture","cwd":checkout,"sandbox":"workspace-write","autoApprove":false}}}})).await.unwrap();
         client.closed.cancel();
         drop(client);
@@ -3265,7 +3304,7 @@ for line in sys.stdin:
                             let value: Value = serde_json::from_slice(&bytes).unwrap();
                             (
                                 Request::from_parts(parts, Body::from(bytes)),
-                                value["kind"] == "quiesced",
+                                matches!(value["kind"].as_str(), Some("quiesced" | "parked")),
                             )
                         } else {
                             (request, false)
@@ -3700,6 +3739,8 @@ for line in sys.stdin:
                     thread: "chat-bob".into(),
                     checkout: checkout.clone(),
                     allow_test: true,
+                    task_context: None,
+                    progress: None,
                 }),
             )
             .unwrap(),
@@ -4065,7 +4106,9 @@ for line in sys.stdin:
         let mut recovered = guest_command(&api, &directory, &checkout, None, &log)
             .spawn()
             .unwrap();
-        wait_command_state(&api, "mailbox-receipt-gap", "applied").await;
+        // Queue admission is not proof of a terminal outcome. Cold recovery
+        // quarantines the lost receipt instead of claiming it applied.
+        wait_command_state(&api, "mailbox-receipt-gap", "outcome-unknown").await;
         let connection = api.client().await;
         let mut messages = connection
             .client
@@ -4333,10 +4376,12 @@ for line in sys.stdin:
         ) -> Result<(), zuse_cloud::providers::ProviderError> {
             assert_eq!(id, "machine-bob");
             self.pauses.fetch_add(1, Ordering::SeqCst);
+            // The provider accepted the mutation but its response can be lost.
+            // Reconciliation must observe this state without issuing another pause.
+            *self.state.lock().unwrap() = zuse_cloud::providers::MachineState::Paused;
             if self.fail_pause.load(Ordering::SeqCst) {
                 return Err(zuse_cloud::providers::ProviderError::Unavailable);
             }
-            *self.state.lock().unwrap() = zuse_cloud::providers::MachineState::Paused;
             Ok(())
         }
         async fn wake_retained(
@@ -5060,6 +5105,8 @@ async fn mailbox_durable_ordering_receipts_and_uncertain_lease_fences() {
     assert!(stored.get("actor").is_none());
     assert!(stored.get("plaintext").is_none());
     let lease_request = LeaseRequest {
+        control_only: false,
+        max_items: None,
         storage_incarnation_id: "original-storage".into(),
         wait_ms: None,
         after_revision: None,
@@ -5603,6 +5650,10 @@ async fn encrypted_transcript_publication_and_archived_reads_preserve_original_c
     use zuse_cloud::{crypto::MasterKey, runtime::RuntimeControl, tickets::TicketSigner};
     let (admin, pool, schema) = fixture().await;
     sqlx::raw_sql("CREATE TABLE api_cloud_transcript_checkpoints (workspace_id text NOT NULL,session_id text NOT NULL,runtime_generation bigint NOT NULL,stream_epoch text NOT NULL,stream_version bigint NOT NULL,object_key text NOT NULL,ciphertext_sha256 text NOT NULL,ciphertext_bytes bigint NOT NULL,created_at bigint NOT NULL,PRIMARY KEY(workspace_id,session_id))").execute(&pool).await.unwrap();
+    sqlx::raw_sql(include_str!("../migrations/0011_transcript_heads.sql"))
+        .execute(&pool)
+        .await
+        .unwrap();
     let fixture: Value =
         serde_json::from_str(include_str!("fixtures/transcript-crypto.json")).unwrap();
     let objects = Arc::new(ProjectionObjects::default());
@@ -5745,6 +5796,11 @@ async fn encrypted_transcript_publication_and_archived_reads_preserve_original_c
     let (status, body) = request(&read_app, read, "bob", None).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(
+        objects.gets.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "Opening screen must come from its Postgres cursor row without object reads"
+    );
+    assert_eq!(
         body["checkpoint"]["ciphertext"],
         fixture["head2"]["ciphertext"]
     );
@@ -5781,6 +5837,34 @@ async fn encrypted_transcript_publication_and_archived_reads_preserve_original_c
         .await
         .1,
         json!({"page":null})
+    );
+    // Corrupted hot data fails integrity checks; a stale cache tag falls back to
+    // the authoritative object's current cursor rather than returning old text.
+    let saved_hot: Value =
+        sqlx::query_scalar("SELECT rust_hot_head FROM api_cloud_transcript_checkpoints")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    sqlx::query("UPDATE api_cloud_transcript_checkpoints SET rust_hot_head=jsonb_set(rust_hot_head,'{ciphertext}','\"tampered\"')").execute(&pool).await.unwrap();
+    assert_eq!(
+        request(&read_app, read, "bob", None).await.1["error"],
+        "cloud_transcript_integrity_failed"
+    );
+    sqlx::query(
+        "UPDATE api_cloud_transcript_checkpoints SET rust_hot_head=jsonb_set($1,'{version}','1')",
+    )
+    .bind(saved_hot)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let gets = objects.gets.load(std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(
+        request(&read_app, read, "bob", None).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        objects.gets.load(std::sync::atomic::Ordering::SeqCst),
+        gets + 1
     );
     let key = objects
         .bytes
@@ -6231,3 +6315,6 @@ async fn billing_portal_preserves_provider_customer_and_owner() {
 
 #[path = "cases/launch_assets.rs"]
 mod launch_assets;
+
+#[path = "cases/startup_binding.rs"]
+mod startup_binding;

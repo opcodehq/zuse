@@ -34,6 +34,8 @@ async fn android_client_through_real_gateway_and_guest() {
             closed: false,
         }),
         bytes: Arc::new(Semaphore::new(32 * 1024 * 1024)),
+        control: None,
+        activity: tokio::sync::Mutex::new(None),
     })));
     let expires = now() + 120_000;
     let app = Router::new().route(
@@ -96,6 +98,7 @@ async fn android_client_through_real_gateway_and_guest() {
         generation: 1,
         gateway_epoch: 1,
         expires_at: expires,
+        storage_binding: None,
     };
     let guest = tokio::spawn(async move {
         zuse_rpc::cloud::serve_guest(Arc::new(Service), grant, "workspace", "owner", guest_stop)

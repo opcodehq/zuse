@@ -10,6 +10,8 @@ use async_trait::async_trait;
 use zeroize::Zeroizing;
 use zuse_cloud_runtime::recovery::{RestoreEnrollment, RestoreReceipt};
 use zuse_protocol::cloud::ArchivePhase;
+mod admission;
+mod initial_boot;
 pub const MIGRATION: &str = include_str!("../../migrations/0007_restore.sql");
 pub const JOB_KIND: &str = "workspace-restore";
 fn fenced() -> ApiError {
@@ -23,6 +25,13 @@ fn context(workspace: &str, operation: &str, generation: i64) -> String {
 }
 #[async_trait]
 pub trait RestoreProvider: AllocationProvider + RecoveryProvider {
+    async fn prepare_recreation(
+        &self,
+        _machine: &str,
+        _request: &Value,
+    ) -> Result<Value, ProviderError> {
+        Err(ProviderError::Rejected)
+    }
     async fn restore(&self, machine: &str, plan: &CapturePlan) -> Result<(), ProviderError>;
     async fn installed(&self, machine: &str, archive: &str) -> Result<bool, ProviderError>;
 }
@@ -71,7 +80,7 @@ impl RuntimeControl {
         }
         crate::images::deletion::snapshot_read_guard(tx, required(row, "account_id")?, None)
             .await?;
-        lifecycle::require_resume_capacity(tx, row, now).await?;
+        lifecycle::require_resume_capacity(self.staging_candidate.as_deref(), tx, row, now).await?;
         let ready: bool =
             sqlx::query_scalar("SELECT to_regclass('zuse_rust_restores') IS NOT NULL")
                 .fetch_one(&mut **tx)
@@ -79,10 +88,39 @@ impl RuntimeControl {
         if !ready {
             return Err(ApiError::unavailable("cloud_restore_schema_not_ready"));
         }
-        // Reuse an approved native image from this account and project, never an arbitrary snapshot ID.
-        let snapshot:Option<String>=sqlx::query_scalar("SELECT b.snapshot_id FROM api_cloud_project_builds b WHERE b.account_id=$1 AND (b.project_id=$2 OR b.settings->'rustRuntimeRepositoryLayouts' ? $2) AND b.provider=$3 AND b.state='ready' AND b.settings->>'runtimeRpcProtocol'='zuse-rpc-v1' AND b.settings->>'rustRuntimeStorageFormat'='zuse-rust-engine-v1' AND NOT EXISTS(SELECT 1 FROM api_cloud_snapshots s WHERE (s.provider=b.provider OR (b.provider='boxd' AND s.provider='box')) AND s.snapshot_id=b.snapshot_id AND s.state IN ('deleting','deleted')) ORDER BY b.updated_at DESC LIMIT 1 FOR SHARE").bind(required(row,"account_id")?).bind(required(row,"project_id")?).bind(required(row,"provider")?).fetch_optional(&mut **tx).await?;
-        let snapshot =
-            snapshot.ok_or_else(|| ApiError::conflict("cloud_restore_image_required"))?;
+        let snapshot = if let Some(release) = row["managed_release_id"].as_str() {
+            if row["request_config"]["managedReleaseId"] != release {
+                return Err(fenced());
+            }
+            if !row["request_config"]["managedCandidateSha256"].is_null() {
+                let pin = self
+                    .staging_candidate
+                    .as_ref()
+                    .filter(|p| {
+                        p.applies(
+                            required(row, "account_id").unwrap_or(""),
+                            required(row, "provider").unwrap_or(""),
+                        )
+                    })
+                    .ok_or_else(|| {
+                        ApiError::forbidden("staging_managed_base_candidate_not_selected")
+                    })?;
+                if row["request_config"]["managedCandidateSha256"] != pin.candidate_sha256
+                    || row["request_config"]["managedCandidateArtifactId"] != pin.artifact_id
+                    || pin.release_id != release
+                {
+                    return Err(fenced());
+                }
+                pin.load(tx, now, true).await?.artifact_id
+            } else {
+                crate::managed_bases::retained_source(tx, required(row, "provider")?, release)
+                    .await?
+            }
+        } else {
+            // Reuse an approved native image from this account and project, never an arbitrary snapshot ID.
+            let snapshot:Option<String>=sqlx::query_scalar("SELECT b.snapshot_id FROM api_cloud_project_builds b WHERE b.account_id=$1 AND (b.project_id=$2 OR b.settings->'rustRuntimeRepositoryLayouts' ? $2) AND b.provider=$3 AND b.state='ready' AND b.settings->>'runtimeRpcProtocol'='zuse-rpc-v1' AND b.settings->>'rustRuntimeStorageFormat'='zuse-rust-engine-v1' AND NOT EXISTS(SELECT 1 FROM api_cloud_snapshots s WHERE (s.provider=b.provider OR (b.provider='boxd' AND s.provider='box')) AND s.snapshot_id=b.snapshot_id AND s.state IN ('deleting','deleted')) ORDER BY b.updated_at DESC LIMIT 1 FOR SHARE").bind(required(row,"account_id")?).bind(required(row,"project_id")?).bind(required(row,"provider")?).fetch_optional(&mut **tx).await?;
+            snapshot.ok_or_else(|| ApiError::conflict("cloud_restore_image_required"))?
+        };
         let previous = row["request_config"]["runtimeGeneration"]
             .as_i64()
             .ok_or_else(fenced)?;
@@ -120,6 +158,7 @@ impl RuntimeControl {
         let mut config = row["request_config"].clone();
         for key in [
             "runtimeBootstrapReceipt",
+            "initialRuntimeBootstrapReceipt",
             "runtimeCredentialRenewal",
             "runtimeCredentialKeyThumbprint",
             "runtimeSigningKeyThumbprint",
@@ -191,16 +230,21 @@ impl RuntimeControl {
         let Some(job) = jobs::claim(&self.pool, JOB_KIND, "workspace", now, 120000).await? else {
             return Ok(false);
         };
-        let result = self.restore_step(provider, &job, now).await;
+        self.restore_run_job(provider, &job, now).await
+    }
+    pub(super) async fn restore_run_job(
+        &self,
+        provider: &dyn RestoreProvider,
+        job: &jobs::Job,
+        now: i64,
+    ) -> Result<bool, ApiError> {
+        let result = self.restore_step(provider, job, now).await;
         if let Err(error) = &result {
-            jobs::retry(
-                &self.pool,
-                &job,
-                chrono::Utc::now().timestamp_millis(),
-                error.code,
-            )
-            .await?;
-            sqlx::query("UPDATE api_cloud_workspaces SET status_code=$3,revision=revision+1 WHERE workspace_id=$1 AND request_config->>'rustRestoreOperationId'=$2 AND state='provisioning' AND desired_state='ready'").bind(&job.resource_id).bind(job.payload["operationId"].as_str()).bind(error.code).execute(&self.pool).await?;
+            // A late provider response cannot overwrite a newer generation's status.
+            let at = chrono::Utc::now().timestamp_millis();
+            sqlx::query("UPDATE api_cloud_workspaces w SET status_code=$3,revision=revision+1 WHERE workspace_id=$1 AND request_config->>'rustRestoreOperationId'=$2 AND state='provisioning' AND desired_state='ready' AND EXISTS(SELECT 1 FROM zuse_rust_jobs j JOIN zuse_rust_control_owners o ON o.resource_kind='workspace' AND o.resource_id=j.resource_id AND o.backend='rust' AND o.generation=j.resource_generation WHERE j.job_id=$4 AND j.lease_token=$5 AND j.state='running' AND j.lease_expires_at>$6 AND j.resource_generation=$7)")
+                .bind(&job.resource_id).bind(job.payload["operationId"].as_str()).bind(error.code).bind(&job.id).bind(&job.lease_token).bind(at).bind(job.generation).execute(&self.pool).await?;
+            jobs::retry(&self.pool, job, at, error.code).await?;
         }
         result.map(|_| true)
     }
@@ -211,20 +255,16 @@ impl RuntimeControl {
         now: i64,
     ) -> Result<(), ApiError> {
         let _effects = effects::Guard::acquire(&job.resource_id)?;
-        let mut tx = self.pool.begin().await?;
-        let (row, generation, _) = locked_workspace(&mut tx, &job.resource_id).await?;
-        active_job(&mut tx, job).await?;
-        if lifecycle::deleted(&row)
-            || row["desired_state"] != "ready"
-            || generation != job.generation
-            || row["request_config"]["rustRestoreOperationId"] != job.payload["operationId"]
+        self.worker_job_scope_access(job, "restore", now).await?;
+        let (mut tx, mut row, _, mut a, mut restore) = self.restore_locked(job).await?;
+        let mut op;
+        let generation = job.generation;
+        if row["provider"] != AllocationProvider::provider_id(provider)
+            || row["provider"] != RecoveryProvider::provider_id(provider)
         {
-            return Err(fenced());
+            return Err(ApiError::conflict("cloud_provider_identity_mismatch"));
         }
-        let op = locked_op(&mut tx, &row).await?;
-        let mut a = archive(&row)?;
-        let restore:Value=sqlx::query_scalar("SELECT to_jsonb(r) FROM zuse_rust_restores r WHERE operation_id=$1 AND workspace_id=$2 AND generation=$3 FOR UPDATE").bind(job.payload["operationId"].as_str()).bind(&job.resource_id).bind(generation).fetch_one(&mut *tx).await?;
-        let operation = required(&restore, "operation_id")?;
+        let operation = required(&restore, "operation_id")?.to_owned();
         if row["runtime_state"] == "online"
             && storage_enrolled(&row)
             && row["request_config"]["rustLifecycleOperation"]["id"] == operation
@@ -232,38 +272,59 @@ impl RuntimeControl {
         {
             a.phase = ArchivePhase::Restored;
             sqlx::query("UPDATE zuse_rust_recovery_operations SET phase='restored',updated_at=$2 WHERE operation_id=$1").bind(&a.id).bind(now).execute(&mut *tx).await?;
-            sqlx::query("UPDATE zuse_rust_restores SET phase='ready',sealed_boot_token=NULL,updated_at=$2 WHERE operation_id=$1").bind(operation).bind(now).execute(&mut *tx).await?;
+            sqlx::query("UPDATE zuse_rust_restores SET phase='ready',sealed_boot_token=NULL,updated_at=$2 WHERE operation_id=$1").bind(&operation).bind(now).execute(&mut *tx).await?;
             save(&mut tx, &row, &a, "ready", now).await?;
             defer(&mut tx, job, true, now).await?;
             tx.commit().await?;
             return Ok(());
         }
-        lifecycle::require_resume_capacity(&mut tx, &row, now).await?;
-        let name = required(&restore, "machine_name")?;
+        lifecycle::require_resume_capacity(self.staging_candidate.as_deref(), &mut tx, &row, now)
+            .await?;
+        let name = required(&restore, "machine_name")?.to_owned();
         if restore["machine_id"].is_null() {
-            let machine = match AllocationProvider::find(provider, name)
-                .await
-                .map_err(|_| failed())?
-            {
-                Some(m) => m,
+            tx.commit().await?;
+            let known =
+                effects::created_identity(&self.pool, &job.resource_id, &operation, &name).await?;
+            let found = if let Some(id) = known.as_deref() {
+                AllocationProvider::inspect_id(provider, id).await
+            } else {
+                AllocationProvider::find(provider, &name).await
+            }
+            .map_err(|_| failed())?;
+            let machine = match found {
+                Some(machine) => machine,
                 None => {
-                    effects::creating(&self.pool, &job.resource_id, operation, name).await?;
-                    let result = AllocationProvider::create(
+                    if known.is_some() {
+                        return Err(ApiError::conflict("cloud_restore_target_missing"));
+                    }
+                    let (admission, _, _, _, current) = self.restore_locked(job).await?;
+                    if !current["machine_id"].is_null() {
+                        return Err(fenced());
+                    }
+                    admission.commit().await?;
+                    effects::creating(&self.pool, &job.resource_id, &operation, &name).await?;
+                    let result = AllocationProvider::create_operation(
                         provider,
                         required(&restore, "snapshot_id")?,
-                        name,
+                        &name,
+                        &operation,
                     )
                     .await;
-                    effects::created(&self.pool, operation, &result).await?;
+                    effects::created(&self.pool, &operation, &result).await?;
                     result.map_err(|_| failed())?
                 }
             };
+            effects::created(&self.pool, &operation, &Ok(machine.clone())).await?;
+            (tx, row, op, a, restore) = self.restore_locked(job).await?;
+            if !restore["machine_id"].is_null() {
+                return Err(fenced());
+            }
             if machine.name != name || machine.id.is_empty() || machine.id == a.source_sandbox_id {
                 return Err(fenced());
             }
-            sqlx::query("UPDATE zuse_rust_restores SET machine_id=$2,phase='allocated',updated_at=$3 WHERE operation_id=$1").bind(operation).bind(&machine.id).bind(now).execute(&mut *tx).await?;
+            sqlx::query("UPDATE zuse_rust_restores SET machine_id=$2,phase='allocated',updated_at=$3 WHERE operation_id=$1").bind(&operation).bind(&machine.id).bind(now).execute(&mut *tx).await?;
             sqlx::query("UPDATE api_cloud_workspaces SET provider_sandbox_id=$2,status_code='archive-restoring',revision=revision+1 WHERE workspace_id=$1 AND provider_sandbox_id IS NULL").bind(&job.resource_id).bind(&machine.id).execute(&mut *tx).await?;
-            sqlx::query("INSERT INTO zuse_rust_lifecycle_operations(operation_id,workspace_id,command_id,generation,source_machine_id,storage_incarnation_id,action,phase,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,'resume','waking',$7,$7)").bind(operation).bind(&job.resource_id).bind(required(&restore,"command_id")?).bind(generation).bind(&machine.id).bind(required(&op,"storage_incarnation_id")?).bind(now).execute(&mut *tx).await?;
+            sqlx::query("INSERT INTO zuse_rust_lifecycle_operations(operation_id,workspace_id,command_id,generation,source_machine_id,storage_incarnation_id,action,phase,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,'resume','waking',$7,$7)").bind(&operation).bind(&job.resource_id).bind(required(&restore,"command_id")?).bind(generation).bind(&machine.id).bind(required(&op,"storage_incarnation_id")?).bind(now).execute(&mut *tx).await?;
             let mut config = row["request_config"].clone();
             config["rustLifecycleOperation"] =
                 json!({"id":operation,"action":"resume","phase":"waking"});
@@ -273,38 +334,87 @@ impl RuntimeControl {
                 .execute(&mut *tx)
                 .await?;
         } else {
-            let id = required(&restore, "machine_id")?;
+            let id = required(&restore, "machine_id")?.to_owned();
             if row["provider_sandbox_id"] != id || id == a.source_sandbox_id {
                 return Err(fenced());
             }
-            let machine = AllocationProvider::find(provider, id)
+            tx.commit().await?;
+            let machine = AllocationProvider::inspect_id(provider, &id)
                 .await
                 .map_err(|_| failed())?
                 .ok_or_else(|| ApiError::conflict("cloud_restore_target_missing"))?;
+            let runtime_ready = if machine.state == MachineState::Running {
+                AllocationProvider::runtime_ready(provider, &id)
+                    .await
+                    .map_err(|_| failed())?
+            } else {
+                false
+            };
+            (tx, row, op, a, restore) = self.restore_locked(job).await?;
+            if restore["machine_id"] != id {
+                return Err(fenced());
+            }
             if machine.id != id || machine.name != name {
                 return Err(fenced());
+            }
+            if machine.state == MachineState::Running && !runtime_ready {
+                defer(&mut tx, job, false, now).await?;
+                tx.commit().await?;
+                return Ok(());
             }
             recovery::observe_runtime(
                 &mut tx,
                 &row,
-                id,
+                &id,
                 restore["running_since"].as_i64().unwrap_or(now),
                 Some(&machine),
                 now,
             )
             .await?;
             if machine.state == MachineState::Running {
-                sqlx::query("UPDATE zuse_rust_restores SET running_since=COALESCE(running_since,$2) WHERE operation_id=$1").bind(operation).bind(now).execute(&mut *tx).await?;
+                sqlx::query("UPDATE zuse_rust_restores SET running_since=COALESCE(running_since,$2) WHERE operation_id=$1").bind(&operation).bind(now).execute(&mut *tx).await?;
+            }
+            if !restore["provider_effects"]["wake"].is_null() {
+                tx.commit().await?;
+                let completed = self.restore_wake(provider, job, &machine).await?;
+                (tx, row, op, a, restore) = self.restore_locked(job).await?;
+                if !completed {
+                    defer(&mut tx, job, false, now).await?;
+                    tx.commit().await?;
+                    return Ok(());
+                }
             }
             if machine.state != MachineState::Running {
-                RecoveryProvider::wake(provider, id, &machine.state)
-                    .await
-                    .map_err(|_| failed())?;
+                tx.commit().await?;
+                self.restore_wake(provider, job, &machine).await?;
+                (tx, _, _, _, _) = self.restore_locked(job).await?;
             } else if matches!(restore["phase"].as_str(), Some("allocated" | "restoring")) {
-                if provider.installed(id, &a.id).await.map_err(|_| failed())? {
-                    RecoveryProvider::stop_capture(provider, id, &a.id)
+                if !row["request_config"]["initialRuntimeBootstrap"].is_null() {
+                    tx.commit().await?;
+                    if !self.initial_restore_boot(provider, job).await? {
+                        (tx, _, _, _, _) = self.restore_locked(job).await?;
+                        defer(&mut tx, job, false, now).await?;
+                        tx.commit().await?;
+                        return Ok(());
+                    }
+                    (tx, row, op, a, restore) = self.restore_locked(job).await?;
+                }
+                tx.commit().await?;
+                let installed = provider.installed(&id, &a.id).await.map_err(|_| failed())?;
+                (tx, row, op, a, _) = self.restore_locked(job).await?;
+                if installed {
+                    tx.commit().await?;
+                    RecoveryProvider::stop_capture(provider, &id, &a.id)
                         .await
                         .map_err(|_| failed())?;
+                    self.recreation_prepare_environment(
+                        provider,
+                        job,
+                        &id,
+                        chrono::Utc::now().timestamp_millis(),
+                    )
+                    .await?;
+                    (tx, row, op, _, restore) = self.restore_locked(job).await?;
                     let grant = RestoreEnrollment {
                         receipt: RestoreReceipt {
                             binding: serde_json::from_value(op["binding"].clone())
@@ -312,14 +422,14 @@ impl RuntimeControl {
                             archive_sha256: required(&op, "verified_archive_sha256")?.into(),
                         },
                         generation,
-                        machine_id: id.into(),
+                        machine_id: id.clone(),
                     };
                     let boot = self.restore_boot(&job.resource_id, &restore)?;
                     let mut config = row["request_config"].clone();
                     config["rustRecoveryRestore"] =
                         serde_json::to_value(grant).map_err(|_| failed())?;
                     sqlx::query("UPDATE api_cloud_workspaces SET runtime_boot_token_hash=$2,runtime_boot_token_expires_at=$3,request_config=$4,status_code='archive-restore-enrolling',revision=revision+1 WHERE workspace_id=$1").bind(&job.resource_id).bind(hash(&boot)).bind(now+1800000).bind(config).execute(&mut *tx).await?;
-                    sqlx::query("UPDATE zuse_rust_restores SET phase='restored',boot_expires_at=$2+1800000,updated_at=$2 WHERE operation_id=$1").bind(operation).bind(now).execute(&mut *tx).await?;
+                    sqlx::query("UPDATE zuse_rust_restores SET phase='restored',boot_expires_at=$2+1800000,updated_at=$2 WHERE operation_id=$1").bind(&operation).bind(now).execute(&mut *tx).await?;
                 } else {
                     if a.expires_at_ms <= now {
                         a.expires_at_ms = now + 3600000;
@@ -333,17 +443,27 @@ impl RuntimeControl {
                         config: Zeroizing::new(config.to_string()),
                         ..plan
                     };
-                    provider.restore(id, &plan).await.map_err(|_| failed())?;
-                    sqlx::query("UPDATE zuse_rust_restores SET phase='restoring',updated_at=$2 WHERE operation_id=$1").bind(operation).bind(now).execute(&mut *tx).await?;
+                    sqlx::query("UPDATE zuse_rust_restores SET phase='restoring',updated_at=$2 WHERE operation_id=$1").bind(&operation).bind(now).execute(&mut *tx).await?;
+                    tx.commit().await?;
+                    provider.restore(&id, &plan).await.map_err(|_| failed())?;
+                    (tx, _, _, _, _) = self.restore_locked(job).await?;
                 }
             } else if matches!(restore["phase"].as_str(), Some("restored" | "launching")) {
+                // Provider inspection releases our row lock. The enrolled guest may
+                // have acknowledged resume in that interval; never rewind its ready
+                // phase or relaunch an online runtime from a stale worker snapshot.
+                if row["runtime_state"] == "online" && storage_enrolled(&row) {
+                    defer(&mut tx, job, false, now).await?;
+                    tx.commit().await?;
+                    return Ok(());
+                }
                 if restore["boot_expires_at"].as_i64().unwrap_or(0) <= now {
                     if !row["request_config"]["runtimeBootstrapReceipt"].is_null() {
                         return Err(ApiError::conflict("cloud_restore_boot_expired"));
                     }
                     // No runtime has enrolled: renew only this operation's unpublished bootstrap grant.
                     let boot = self.restore_boot(&job.resource_id, &restore)?;
-                    sqlx::query("UPDATE zuse_rust_restores SET boot_expires_at=$2,updated_at=$3 WHERE operation_id=$1").bind(operation).bind(now+1800000).bind(now).execute(&mut *tx).await?;
+                    sqlx::query("UPDATE zuse_rust_restores SET boot_expires_at=$2,updated_at=$3 WHERE operation_id=$1").bind(&operation).bind(now+1800000).bind(now).execute(&mut *tx).await?;
                     sqlx::query("UPDATE api_cloud_workspaces SET runtime_boot_token_hash=$2,runtime_boot_token_expires_at=$3 WHERE workspace_id=$1").bind(&job.resource_id).bind(hash(&boot)).bind(now+1800000).execute(&mut *tx).await?;
                     defer(&mut tx, job, false, now).await?;
                     tx.commit().await?;
@@ -352,7 +472,7 @@ impl RuntimeControl {
                 self.validate_restore_enrollment(&mut tx, &row, generation)
                     .await?;
                 let launch = RuntimeLaunch {
-                    operation_id: operation.into(),
+                    operation_id: operation.clone(),
                     workspace_id: job.resource_id.clone(),
                     generation,
                     incarnation: required(&op, "storage_incarnation_id")?.into(),
@@ -360,8 +480,8 @@ impl RuntimeControl {
                     boot_token: self.restore_boot(&job.resource_id, &restore)?,
                 };
                 // Authorization is committed before the guest's HTTP bootstrap can acquire this row.
-                sqlx::query("UPDATE zuse_rust_restores SET phase='launching',updated_at=$2 WHERE operation_id=$1").bind(operation).bind(now).execute(&mut *tx).await?;
-                sqlx::query("UPDATE zuse_rust_lifecycle_operations SET phase='launching',updated_at=$2 WHERE operation_id=$1").bind(operation).bind(now).execute(&mut *tx).await?;
+                sqlx::query("UPDATE zuse_rust_restores SET phase='launching',updated_at=$2 WHERE operation_id=$1").bind(&operation).bind(now).execute(&mut *tx).await?;
+                sqlx::query("UPDATE zuse_rust_lifecycle_operations SET phase='launching',updated_at=$2 WHERE operation_id=$1").bind(&operation).bind(now).execute(&mut *tx).await?;
                 let mut config = row["request_config"].clone();
                 config["rustLifecycleOperation"]["phase"] = json!("launching");
                 sqlx::query(
@@ -372,12 +492,10 @@ impl RuntimeControl {
                 .execute(&mut *tx)
                 .await?;
                 tx.commit().await?;
-                AllocationProvider::launch(provider, id, &launch)
+                AllocationProvider::launch(provider, &id, &launch)
                     .await
                     .map_err(|_| failed())?;
-                let mut tx = self.pool.begin().await?;
-                let _ = locked_workspace(&mut tx, &job.resource_id).await?;
-                active_job(&mut tx, job).await?;
+                let (mut tx, _, _, _, _) = self.restore_locked(job).await?;
                 defer(&mut tx, job, false, now).await?;
                 tx.commit().await?;
                 return Ok(());

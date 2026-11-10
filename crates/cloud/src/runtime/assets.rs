@@ -1,4 +1,5 @@
 //! Encrypted prelaunch assets share the future workspace's purge namespace.
+mod workspace;
 use super::*;
 use crate::access::Access;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -27,14 +28,24 @@ fn valid_id(value: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
 }
 impl RuntimeControl {
+    pub(super) fn launch_idempotency(&self, access: &Access, key: &str) -> String {
+        let context = if access.membership.is_some() {
+            format!(
+                "launch-assets:{}:actor:{}",
+                access.owner_id, access.actor.account_id
+            )
+        } else {
+            format!("launch-assets:{}", access.owner_id)
+        };
+        self.master.digest_api(&context, key)
+    }
     async fn launch_stage(
         &self,
         access: &Access,
         key: &str,
         at: i64,
     ) -> Result<(Transaction<'_, Postgres>, String), ApiError> {
-        if access.membership.is_some()
-            || access.owner_id != access.actor.account_id
+        if !super::creation::creation_actor_allowed(access)
             || !self.creation_accounts.contains(&access.owner_id)
         {
             return Err(ApiError::forbidden("cloud_workspace_creation_disabled"));
@@ -42,6 +53,7 @@ impl RuntimeControl {
         if key.is_empty() || key.len() > 512 {
             return Err(invalid());
         }
+        self.scope_admission(access).await?;
         loop {
             let mut tx = self.pool.begin().await?;
             sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
@@ -63,19 +75,35 @@ impl RuntimeControl {
                 }
             }
             let entitled:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM api_entitlements WHERE account_id=$1 AND kind='cloud-workspace' AND (status IN ('active','grace') OR (status='ended' AND paid_through>$2)) AND (paid_through IS NULL OR paid_through>$2))").bind(&access.owner_id).bind(at).fetch_one(&mut *tx).await?;
-            if !entitled {
+            let staging_allowance = if let Some(pin) = self
+                .staging_candidate
+                .as_ref()
+                .filter(|p| p.owner_id == access.owner_id)
+            {
+                pin.require_actor(&access.actor.account_id)?;
+                pin.load(&mut tx, at, true).await?;
+                pin.allow_staging_compute
+            } else {
+                false
+            };
+            if !entitled && !staging_allowance {
                 return Err(ApiError::forbidden("cloud_entitlement_required"));
             }
-            crate::billing::require_capacity(&mut tx, &access.owner_id, at).await?;
-            let prior:Option<(String,String)>=sqlx::query_as("SELECT workspace_id,state FROM api_cloud_workspaces WHERE account_id=$1 AND idempotency_key=$2").bind(&access.owner_id).bind(key).fetch_optional(&mut *tx).await?;
-            if let Some((_, state)) = &prior {
+            if !staging_allowance {
+                crate::billing::require_capacity(&mut tx, &access.owner_id, at).await?;
+            }
+            let prior:Option<(String,String,Value)>=sqlx::query_as("SELECT workspace_id,state,request_config FROM api_cloud_workspaces WHERE account_id=$1 AND idempotency_key=$2").bind(&access.owner_id).bind(key).fetch_optional(&mut *tx).await?;
+            if let Some((_, state, config)) = &prior {
+                if access.membership.is_some()
+                    && config["rustActorId"].as_str() != Some(access.actor.account_id.as_str())
+                {
+                    return Err(ApiError::conflict("cloud_workspace_idempotency_conflict"));
+                }
                 if matches!(state.as_str(), "deleting" | "deleted") {
                     return Err(ApiError::conflict("cloud_workspace_deleted"));
                 }
             }
-            let token = self
-                .master
-                .digest_api(&format!("launch-assets:{}", access.owner_id), key);
+            let token = self.launch_idempotency(access, key);
             let bound = prior.is_some();
             let reserved = prior
                 .map(|p| p.0)
@@ -273,6 +301,40 @@ impl RuntimeControl {
     }
 }
 impl RuntimeControl {
+    pub(super) fn verify_launch_asset_rows(
+        &self,
+        owner: &str,
+        workspace: &str,
+        assets: &[Asset],
+        rows: &[Value],
+    ) -> Result<(), ApiError> {
+        let mut ids = std::collections::HashSet::new();
+        for asset in assets {
+            if !ids.insert(&asset.asset_id) {
+                return Err(invalid());
+            }
+            let encoded = rows
+                .iter()
+                .find(|row| row["asset_id"] == asset.asset_id)
+                .and_then(|row| row.get("manifest"))
+                .filter(|v| !v.is_null())
+                .ok_or_else(|| ApiError::conflict("launch_asset_incomplete"))?;
+            let plain = self
+                .master
+                .open_api(
+                    &context(owner, workspace, &asset.asset_id, ""),
+                    &encoded.to_string(),
+                )
+                .map_err(|_| failed())?;
+            let expected: Value = serde_json::from_slice(&plain).map_err(|_| failed())?;
+            let metadata: Asset =
+                serde_json::from_value(expected["asset"].clone()).map_err(|_| failed())?;
+            if metadata != *asset {
+                return Err(ApiError::conflict("launch_asset_manifest_conflict"));
+            }
+        }
+        Ok(())
+    }
     pub(super) async fn verify_launch_assets(
         &self,
         tx: &mut Transaction<'_, Postgres>,
@@ -318,9 +380,26 @@ impl RuntimeControl {
         let mut tx = self.pool.begin().await?;
         let (row, _, _) = locked_workspace(&mut tx, workspace).await?;
         super::mailbox::runtime_auth(&row, credential, at)?;
+        let generation = row["request_config"]["runtimeGeneration"]
+            .as_i64()
+            .unwrap_or(1);
+        let fence = super::mailbox::destruction_fence(&row);
+        tx.commit().await?;
+        self.scope_access(workspace, None, true).await?;
         let result = self
             .read_asset(required(&row, "account_id")?, workspace, id)
             .await?;
+        self.scope_access(workspace, None, true).await?;
+        let mut tx = self.pool.begin().await?;
+        let (current, current_generation, _) = locked_workspace(&mut tx, workspace).await?;
+        super::mailbox::runtime_auth(&current, credential, chrono::Utc::now().timestamp_millis())?;
+        if current_generation != generation
+            || super::mailbox::destruction_fence(&current) != fence
+            || current["account_id"] != row["account_id"]
+            || current["request_config"]["sharingPolicy"] != row["request_config"]["sharingPolicy"]
+        {
+            return Err(ApiError::conflict("cloud_asset_workspace_fenced"));
+        }
         tx.commit().await?;
         Ok(result)
     }

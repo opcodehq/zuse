@@ -9,8 +9,11 @@ mod ci;
 mod create;
 #[path = "source_control_creation_sources.rs"]
 mod creation_sources;
+#[path = "source_control_launcher.rs"]
+mod launcher;
 #[path = "source_control_review_threads.rs"]
 mod review_threads;
+pub use launcher::GitHubCommandLauncher;
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -374,6 +377,7 @@ impl CheckoutChangeRequestLookup for ChangeRequestResolver {
 #[derive(Clone)]
 pub struct GitHubCli {
     runner: Arc<dyn ProcessRunner>,
+    managed_launcher: Option<GitHubCommandLauncher>,
     pr_cache: Arc<tokio::sync::Mutex<PrRequestCache>>,
     /// The board's on-disk first pages. `None` keeps everything in memory
     /// (tests, and engines without a data directory).
@@ -1043,6 +1047,7 @@ impl GitHubCli {
     fn with_runner(runner: Arc<dyn ProcessRunner>) -> Self {
         Self {
             runner,
+            managed_launcher: None,
             pr_cache: Default::default(),
             store: None,
             account: Default::default(),
@@ -1065,6 +1070,14 @@ impl GitHubCli {
     /// `None` when it can't be told — including a token in the environment,
     /// which may belong to another account — and then nothing is stored.
     async fn store_account(&self) -> Option<String> {
+        if self
+            .managed_launcher
+            .as_ref()
+            .is_some_and(|slot| slot.is_required())
+        {
+            return None;
+        }
+
         if ["GH_TOKEN", "GITHUB_TOKEN"]
             .iter()
             .any(|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()))
@@ -2357,6 +2370,7 @@ fn classify_run_error(error: ProcessRunError) -> ChangeRequestError {
     match error {
         ProcessRunError::Spawn(io::ErrorKind::NotFound) => ChangeRequestError::CliUnavailable,
         ProcessRunError::Timeout => ChangeRequestError::Timeout,
+        ProcessRunError::Authentication => ChangeRequestError::Authentication,
         ProcessRunError::Spawn(_) | ProcessRunError::Io => ChangeRequestError::CommandFailed,
     }
 }
@@ -2383,6 +2397,7 @@ struct ProcessOutput {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ProcessRunError {
+    Authentication,
     Spawn(io::ErrorKind),
     Timeout,
     Io,

@@ -274,10 +274,7 @@ impl WorkspaceView {
                 |view, url| {
                     view.child(r::details(
                         "Complete sign-in",
-                        self.cloud_account["login"]["userCode"]
-                            .as_str()
-                            .unwrap_or("Continue in your browser.")
-                            .to_owned(),
+                        "Continue in your browser.".to_owned(),
                     ))
                     .child(
                         r::button("managed-open-sign-in", "Open sign-in")

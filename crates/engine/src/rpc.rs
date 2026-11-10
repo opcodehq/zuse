@@ -967,6 +967,13 @@ impl EngineRpc {
         self
     }
 
+    pub(crate) fn with_github_launcher(
+        mut self,
+        launcher: crate::source_control::GitHubCommandLauncher,
+    ) -> Self {
+        self.github = self.github.with_launcher(launcher);
+        self
+    }
     #[cfg(test)]
     pub(crate) fn with_github(mut self, github: GitHubCli) -> Self {
         self.github = github;
@@ -2308,6 +2315,12 @@ impl AuthRpc {
 #[async_trait]
 impl RpcService for AuthRpc {
     async fn handle(&self, method: &str, params: serde_json::Value) -> Result<RpcReply, RpcError> {
+        if crate::cloud::beta_gated(method) && !crate::cloud::beta_enabled() {
+            return Err(RpcError::Failed(crate::cloud::BETA_MESSAGE.into()));
+        }
+        if method == methods::CLOUD_EVENTS {
+            return crate::cloud::events::handle(&self.cloud, params).await;
+        }
         if matches!(method, methods::CLOUD_ENVIRONMENT | methods::CLOUD_RPC) {
             return crate::cloud::environment::handle(&self.cloud, method, params).await;
         }
@@ -2367,7 +2380,7 @@ impl RpcService for AuthRpc {
         if crate::cloud::handles(method) {
             let result = crate::cloud::handle(&self.cloud, method, params)
                 .await
-                .map_err(|error| RpcError::Failed(error.to_string()))?;
+                .map_err(crate::cloud::rpc_error)?;
             return RpcReply::value(&result);
         }
         match method {
@@ -2441,6 +2454,23 @@ impl RpcService for AuthRpc {
 #[async_trait]
 impl RpcService for EngineRpc {
     async fn handle(&self, method: &str, params: serde_json::Value) -> Result<RpcReply, RpcError> {
+        if methods::retryable_read(method, &params) {
+            return self.handle_admitted(method, params).await;
+        }
+        let permit = self
+            .sessions
+            .execution_admission()
+            .enter()
+            .map_err(|error| RpcError::Failed(error.to_string()))?;
+        permit.scope(self.handle_admitted(method, params)).await
+    }
+}
+impl EngineRpc {
+    async fn handle_admitted(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<RpcReply, RpcError> {
         let failed = |error: crate::EngineError| RpcError::Failed(error.to_string());
         if matches!(
             method,
@@ -2521,38 +2551,38 @@ impl RpcService for EngineRpc {
             let method = method.to_owned();
             // Admitted control operations finish even if their caller disconnects.
             return tokio::spawn(async move { match method.as_str() {
-                methods::RELAY_ACCESS_STATUS => RpcReply::value(&access.status().await),
-                methods::STOP_RELAY_ACCESS => RpcReply::value(&access.stop().await),
-                methods::RESUME_RELAY_ACCESS => {
-                    let status = access.resume(service.clone()).await
-                        .map_err(|_| RpcError::Failed("Could not resume relay access. Check the saved configuration and private credential file.".into()))?;
-                    RpcReply::value(&status)
+            methods::RELAY_ACCESS_STATUS => RpcReply::value(&access.status().await),
+            methods::STOP_RELAY_ACCESS => RpcReply::value(&access.stop().await),
+            methods::RESUME_RELAY_ACCESS => {
+                let status = access.resume(service.clone()).await
+                    .map_err(|_| RpcError::Failed("Could not resume relay access. Check the saved configuration and private credential file.".into()))?;
+                RpcReply::value(&status)
+            }
+            methods::SET_RELAY_AUTO_START => {
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct P {
+                    enabled: bool,
                 }
-                methods::SET_RELAY_AUTO_START => {
-                    #[derive(Deserialize)]
-                    #[serde(deny_unknown_fields)]
-                    struct P {
-                        enabled: bool,
-                    }
-                    let mut params = params;
-                    if let Some(object) = params.as_object_mut() {
-                        object.remove("targetDeviceId");
-                    }
-                    let p: P = parse_params(params)?;
-                    let status = access.set_auto_start(p.enabled).await
-                        .map_err(|_|RpcError::Failed("Could not save relay startup. Configure relay access and check its private credential file.".into()))?;
-                    RpcReply::value(&status)
+                let mut params = params;
+                if let Some(object) = params.as_object_mut() {
+                    object.remove("targetDeviceId");
                 }
-                _ => {
-                    let mut params = params;
-                    if let Some(object) = params.as_object_mut() {
-                        object.remove("targetDeviceId");
-                    }
-                    let status = access.start(parse_params(params)?, service.clone()).await
-                        .map_err(|_| RpcError::Failed("Could not start relay access. Check the relay URL and private host credential file.".into()))?;
-                    RpcReply::value(&status)
+                let p: P = parse_params(params)?;
+                let status = access.set_auto_start(p.enabled).await
+                    .map_err(|_|RpcError::Failed("Could not save relay startup. Configure relay access and check its private credential file.".into()))?;
+                RpcReply::value(&status)
+            }
+            _ => {
+                let mut params = params;
+                if let Some(object) = params.as_object_mut() {
+                    object.remove("targetDeviceId");
                 }
-            }}).await.map_err(|_|RpcError::Failed("Relay control stopped unexpectedly. Refresh its status before trying again.".into()))?;
+                let status = access.start(parse_params(params)?, service.clone()).await
+                    .map_err(|_| RpcError::Failed("Could not start relay access. Check the relay URL and private host credential file.".into()))?;
+                RpcReply::value(&status)
+            }
+        }}).await.map_err(|_|RpcError::Failed("Relay control stopped unexpectedly. Refresh its status before trying again.".into()))?;
         }
         if matches!(
             method,
@@ -3368,11 +3398,11 @@ impl RpcService for EngineRpc {
                                 .map_err(|e| RpcError::Failed(e.to_string()))?;
                         }
                         let listen = browser.listen
-                            .filter(|address| browser.running && browser.local_http
-                                && address.ip() == std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST))
-                            .ok_or_else(|| RpcError::Failed(
-                                "Start an HTTP browser listener on 127.0.0.1 before linking this computer".into()
-                            ))?;
+                        .filter(|address| browser.running && browser.local_http
+                            && address.ip() == std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST))
+                        .ok_or_else(|| RpcError::Failed(
+                            "Start an HTTP browser listener on 127.0.0.1 before linking this computer".into()
+                        ))?;
                         host.link(label, listen.port())
                             .await
                             .map_err(|e| RpcError::Failed(e.to_string()))?
@@ -3402,12 +3432,12 @@ impl RpcService for EngineRpc {
                     .account
                     .as_ref()
                     .ok_or_else(|| RpcError::Failed("Account service is unavailable.".into()))?;
-                // Only a client on this machine can follow a loopback redirect;
-                // remote browsers confirm a device code instead.
+                // Browser sign-in only: the loopback callback lives on this
+                // machine, so a client elsewhere must sign in from here.
                 let progress = if params["browser"] == true {
                     account.sign_in_in_browser().await
                 } else {
-                    account.sign_in().await
+                    Err(crate::account::AccountError::BrowserRequired)
                 }
                 .map_err(|e| RpcError::Failed(e.to_string()))?;
                 RpcReply::value(&progress)
@@ -3464,6 +3494,37 @@ impl RpcService for EngineRpc {
                 RpcReply::value(&response)
             }
             methods::ENGINE_INFO => RpcReply::value(&self.engine_info),
+            methods::SSH_PREPARE => {
+                let key = params["publicKey"].as_str().unwrap_or_default();
+                let prepared = crate::ssh_access::prepare(key, None)
+                    .await
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(&prepared)
+            }
+            methods::SSH_TUNNEL => {
+                let stream = crate::ssh_access::open_tunnel()
+                    .await
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                Ok(RpcReply::Stream(stream))
+            }
+            methods::SSH_TUNNEL_WRITE => {
+                crate::ssh_access::write_tunnel(
+                    params["tunnel"].as_str().unwrap_or_default(),
+                    params["data"].as_str().unwrap_or_default(),
+                )
+                .await
+                .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(&serde_json::json!({"ok": true}))
+            }
+            methods::SSH_TUNNEL_CLOSE => {
+                crate::ssh_access::close_tunnel(params["tunnel"].as_str().unwrap_or_default())
+                    .await;
+                RpcReply::value(&serde_json::json!({"ok": true}))
+            }
+            methods::MACHINE_RESOURCES => {
+                let root = std::env::current_dir().unwrap_or_else(|_| "/".into());
+                RpcReply::value(&crate::machine_resources::snapshot(&root).await)
+            }
             methods::ENGINE_READY => RpcReply::value(&serde_json::json!({ "ready": true })),
             methods::LIST_HARNESSES => RpcReply::value(&self.registry.descriptors()),
             methods::INSTALL_HARNESS => {
@@ -3501,10 +3562,10 @@ impl RpcService for EngineRpc {
                     .flatten();
                 RpcReply::value(
                     &serde_json::json!({"chatId":chat.id,"archived":chat.archived,
-                    "phase":record.as_ref().map(|record|&record.phase),
-                    "storageReclaimed":record.as_ref().is_some_and(|record|!record.checkout.exists() && record.phase!=crate::archives::Phase::Restored),
-                    "checkpoint":record.as_ref().map(|record|&record.checkpoint),
-                    "changedPaths":record.as_ref().map(|record|&record.changed_paths).cloned().unwrap_or_default()}),
+                "phase":record.as_ref().map(|record|&record.phase),
+                "storageReclaimed":record.as_ref().is_some_and(|record|!record.checkout.exists() && record.phase!=crate::archives::Phase::Restored),
+                "checkpoint":record.as_ref().map(|record|&record.checkpoint),
+                "changedPaths":record.as_ref().map(|record|&record.changed_paths).cloned().unwrap_or_default()}),
                 )
             }
             zuse_protocol::custom_acp::catalog::GET => {
@@ -3590,6 +3651,7 @@ impl RpcService for EngineRpc {
                     harness,
                     p.force,
                     Some(lease),
+                    self.registry.pinned_models(p.harness),
                 )
                 .await
                 .map_err(|e| RpcError::Failed(e.to_string()))?;
@@ -4320,6 +4382,16 @@ impl RpcService for EngineRpc {
             methods::LOCAL_DEVICE => {
                 RpcReply::value(&serde_json::json!({ "deviceId": self.doc_host.device_id() }))
             }
+            methods::DISCOVER_LOCAL_MCP_SERVERS => {
+                let home = std::env::var_os("HOME")
+                    .map(std::path::PathBuf::from)
+                    .ok_or_else(|| RpcError::Failed("home directory unavailable".into()))?;
+                let servers =
+                    tokio::task::spawn_blocking(move || crate::local_mcp::discover(&home))
+                        .await
+                        .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(&serde_json::json!({ "servers": servers }))
+            }
             methods::LOCAL_IMPORT_STATUS => {
                 let importer = self.local_importer()?.clone();
                 let status = tokio::task::spawn_blocking(move || importer.status())
@@ -4501,7 +4573,8 @@ impl RpcService for EngineRpc {
                 // never probes arbitrary directories for their remotes.
                 let cwd = self.change_request_root(&p.cwd).await?;
                 let cwd = cwd.as_path();
-                let resolver = crate::source_control::ChangeRequestResolver::new();
+                let resolver = crate::source_control::ChangeRequestResolver::new()
+                    .with_github(self.github.clone());
                 let repository = match p.repository {
                     Some(repository) => {
                         resolver

@@ -68,14 +68,72 @@ next edit. No watcher package is required.
 
 This is automatic rebuild/relaunch, not Rust code replacement inside a running
 process. Unsaved editor buffers and UI-only drafts do not survive a relaunch.
-Engine or protocol changes require restarting the command so both processes use
-the new engine code. Ctrl+C stops the UI and its development engine.
+Changes outside the UI crates (`crates/ui`, `crates/viewport`) also restart the
+development engine, so both processes run the new code. Ctrl+C stops the UI and
+its development engine.
 
 The default profile is `.context/native-profile`, with IPC on `127.0.0.1:27664`.
 Use `--data-dir /path/to/profile` and `--ipc-port 27665` to override them;
 `ZUSE_DATA_DIR` and `ZUSE_IPC_PORT` also work. An occupied port fails startup
 rather than connecting to a different engine. Existing provider CLI logins work;
 cloud sync is opt-in through `ZUSE_WORKOS_CLIENT_ID` or `ZUSE_EDGE_TOKEN`.
+
+### Staging cloud account sign-in
+
+General settings signs in through the browser (WorkOS AuthKit with a loopback
+`http://127.0.0.1` callback); there is no device-code fallback. This is separate
+from the optional workspace/device/relay identity using `ZUSE_EDGE_URL` and
+`/auth/*`. The cloud REST API is not an auth-edge replacement.
+
+For the owner-only staging pilot, stop the previous development runner with
+Ctrl+C before starting the engine with the staging environment:
+
+```bash
+ZUSE_API_URL=https://api-rust-stag.zuse.sh \
+ZUSE_CLOUD_API_URL=https://api-rust-stag.zuse.sh \
+ZUSE_WORKOS_CLIENT_ID=client_01KW6ZEZKVMZ0G429A89XZD83Q \
+python3 scripts/dev-native.py --data-dir .context/native-staging-profile
+```
+
+The explicit staging profile leaves the existing development/production profile
+untouched and avoids loading its saved workspace identity. Then use
+**Settings → General → Sign in**. Restarting only the UI does not update
+an already running engine's environment. For an installed daemon, run its install
+command with the same environment before restarting it; installation captures
+both API overrides and the public client. No private WorkOS key belongs on the Mac.
+
+`ZUSE_API_URL` selects General account services, model connections and managed
+access; `ZUSE_CLOUD_API_URL` selects cloud task operations. If only one is set,
+both use that origin. Setting both preserves each explicit choice. With neither,
+the existing production API default remains unchanged. Optional workspace sync
+keeps its separate edge configuration and local default. This command/configuration
+is covered by local tests; interactive Mac sign-in still needs device acceptance.
+
+### Optional hosted cloud browser (source integration)
+
+The API's optional `hosted-browser` feature serves the existing shared client at
+`/app/` and scoped controller sessions at `/api/session/check` and `/api/rpc`.
+It is disabled by default. Build its static client with the explicit hosted base:
+
+```sh
+bash scripts/build-web.sh --public-url /app/
+```
+
+An enabled deployment must provide `ZUSE_CLOUD_BROWSER_ORIGIN` and
+`ZUSE_CLOUD_BROWSER_ASSETS` together, plus an explicit `CLOUD_PUBLIC_API_URL`
+matching that same HTTPS origin and the deployment's public `WORKOS_CLIENT_ID`.
+The assets path points to the resulting compiled directory. The API binary must
+be built with `cargo build -p zuse-cloud-api --features hosted-browser`.
+These are source configuration instructions, not evidence that staging has
+this feature deployed or that a real browser login has been approved.
+
+Each browser receives an opaque HttpOnly/Secure cookie and its own in-memory
+General account and cloud controller. General uses the existing public device
+sign-in flow. No running Mac or host-local workspace/terminal controller is used.
+Sessions expire after eight hours; anonymous sessions expire after ten minutes.
+**An API restart requires browser sign-in again.** Durable hosted login and
+restart recovery remain a release gate. Native persisted account sessions are
+unchanged. History reads remain separate from foreground compute actions.
 
 ## Linux native dependencies
 

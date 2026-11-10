@@ -1,4 +1,9 @@
 //! Read-through migration adapter. Existing GitHub OAuth/installation authority stays upstream.
+pub mod native;
+
+/// GitHub behavior/test migration pin; separate from the older read-only API catalogue baseline.
+pub const GITHUB_REFERENCE_COMMIT: &str = "a0155d2dd11f07495a99d3737c9bd40a5c8b4508";
+
 use crate::{access::Access, error::ApiError};
 use zuse_protocol::cloud_projects::GithubCatalog;
 pub struct LegacyGithub {
@@ -60,6 +65,60 @@ impl LegacyGithub {
         );
         Ok(result)
     }
+
+    /// Keep OAuth state, callbacks and installation ownership with the existing
+    /// authority. The browser receives only its short-lived authorization URL.
+    pub async fn install(
+        &self,
+        access: &Access,
+        bearer: &str,
+    ) -> Result<serde_json::Value, ApiError> {
+        let mut url = self.url.clone();
+        url.set_path("/v1/cloud/github/install");
+        let scope = match &access.scope {
+            crate::access::Scope::Personal => "personal".into(),
+            crate::access::Scope::Organization { organization_id } => {
+                format!("organization:{organization_id}")
+            }
+        };
+        let mut response = self
+            .http
+            .post(url)
+            .bearer_auth(bearer)
+            .header("x-zuse-workspace", scope)
+            .send()
+            .await
+            .map_err(|_| unavailable())?;
+        if !response.status().is_success() {
+            return Err(unavailable());
+        }
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response.chunk().await.map_err(|_| unavailable())? {
+            if bytes.len() + chunk.len() > 16 * 1024 {
+                return Err(unavailable());
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|_| unavailable())?;
+        install_destination(&self.url, &value)
+    }
+}
+fn install_destination(
+    origin: &reqwest::Url,
+    value: &serde_json::Value,
+) -> Result<serde_json::Value, ApiError> {
+    let destination = value["url"].as_str().ok_or_else(unavailable)?;
+    let destination = reqwest::Url::parse(destination).map_err(|_| unavailable())?;
+    if destination.scheme() != "https"
+        || !destination.username().is_empty()
+        || destination.password().is_some()
+        || destination.fragment().is_some()
+        || destination.origin() != origin.origin()
+        || destination.path() != "/v1/cloud/github/callback"
+    {
+        return Err(unavailable());
+    }
+    Ok(serde_json::json!({"url":destination.as_str()}))
 }
 fn unavailable() -> ApiError {
     ApiError::unavailable("cloud_github_unavailable")
@@ -70,6 +129,24 @@ mod tests {
     use super::*;
     use axum::{Json, Router, http::HeaderMap, routing::get};
     use serde_json::{Value, json};
+    #[test]
+    fn install_links_stay_with_the_authorization_authority_and_filter_fields() {
+        let origin = reqwest::Url::parse("https://api.zuse.sh/v1/cloud/github").unwrap();
+        let url = "https://api.zuse.sh/v1/cloud/github/callback?state=opaque&authorize=1";
+        let result =
+            install_destination(&origin, &json!({"url":url,"privateToken":"hidden"})).unwrap();
+        assert_eq!(result, json!({"url":url}));
+        for url in [
+            "javascript:alert(1)",
+            "http://api.zuse.sh/v1/cloud/github/callback",
+            "https://attacker.example/v1/cloud/github/callback",
+            "https://api.zuse.sh/other",
+            "https://user:password@api.zuse.sh/v1/cloud/github/callback",
+            "https://api.zuse.sh/v1/cloud/github/callback#token",
+        ] {
+            assert!(install_destination(&origin, &json!({"url":url})).is_err());
+        }
+    }
     #[tokio::test]
     async fn scoped_legacy_catalog_filters_private_fields_and_refuses_redirects() {
         async fn catalog(headers: HeaderMap) -> Json<Value> {

@@ -118,6 +118,7 @@ enum Slot {
 }
 
 pub struct HarnessRegistry {
+    secret_filter: std::sync::OnceLock<Arc<zuse_providers::credentials::redaction::Secrets>>,
     custom_acp: Mutex<custom_acp::CustomAcpState>,
     custom_acp_mutation: tokio::sync::Mutex<()>,
     pub(crate) installs: crate::rpc::Installations,
@@ -134,6 +135,7 @@ pub struct HarnessRegistry {
     gates: Mutex<HashMap<HarnessId, Arc<tokio::sync::RwLock<()>>>>,
     pending_updates: Mutex<std::collections::HashSet<HarnessId>>,
     update_generation: tokio::sync::watch::Sender<u64>,
+    pinned_models: Mutex<HashMap<HarnessId, Vec<zuse_protocol::Model>>>,
 }
 
 impl Default for HarnessRegistry {
@@ -180,6 +182,9 @@ impl HarnessRegistry {
         id: HarnessId,
         lease: Arc<tokio::sync::OwnedRwLockReadGuard<()>>,
     ) -> Result<Vec<zuse_protocol::Model>, HarnessError> {
+        if let Some(models) = self.pinned_models(id) {
+            return Ok(models);
+        }
         let harness = self.resolve(id)?;
         tokio::spawn(async move {
             // An RPC cancellation must not drop the gate before the probe's
@@ -230,6 +235,7 @@ impl HarnessRegistry {
     pub fn new() -> Self {
         let (update_generation, _) = tokio::sync::watch::channel(0);
         Self {
+            secret_filter: std::sync::OnceLock::new(),
             installs: Default::default(),
             slots: Mutex::new(HashMap::new()),
             order: Mutex::new(Vec::new()),
@@ -240,6 +246,7 @@ impl HarnessRegistry {
             gates: Mutex::new(HashMap::new()),
             pending_updates: Mutex::new(std::collections::HashSet::new()),
             update_generation,
+            pinned_models: Mutex::new(HashMap::new()),
         }
     }
 
@@ -469,11 +476,50 @@ impl HarnessRegistry {
         Ok(())
     }
 
+    /// Install before any task starts; private requests are left unchanged.
+    pub fn set_secret_filter(&self, filter: Arc<zuse_providers::credentials::redaction::Secrets>) {
+        if self.secret_filter.set(filter.clone()).is_err() {
+            return;
+        }
+        for slot in self.slots().values_mut() {
+            if let Slot::Ready(harness) = slot {
+                *harness = zuse_providers::credentials::redaction::Filtered::wrap(
+                    harness.clone(),
+                    filter.clone(),
+                );
+            }
+        }
+    }
     pub fn register(&self, harness: Arc<dyn Harness>) {
+        let harness: Arc<dyn Harness> = if let Some(filter) = self.secret_filter.get() {
+            zuse_providers::credentials::redaction::Filtered::wrap(harness, filter.clone())
+        } else {
+            harness
+        };
         let id = harness.id();
+        self.pinned_models
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&id);
         if self.slots().insert(id, Slot::Ready(harness)).is_none() {
             self.order().push(id);
         }
+    }
+
+    /// A managed guest uses the exact installed catalogue supplied by its API.
+    /// Model discovery must not start an unselected provider or request its token.
+    pub fn pin_models(&self, id: HarnessId, models: Vec<zuse_protocol::Model>) {
+        self.pinned_models
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(id, models);
+    }
+    pub fn pinned_models(&self, id: HarnessId) -> Option<Vec<zuse_protocol::Model>> {
+        self.pinned_models
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&id)
+            .cloned()
     }
 
     /// Register a slot resolved on first `resolve` (the factory result is
@@ -508,6 +554,11 @@ impl HarnessRegistry {
             Some(Slot::Ready(harness)) => Ok(harness.clone()),
             Some(Slot::Lazy { factory, .. }) => {
                 let harness = factory()?;
+                let harness: Arc<dyn Harness> = if let Some(filter) = self.secret_filter.get() {
+                    zuse_providers::credentials::redaction::Filtered::wrap(harness, filter.clone())
+                } else {
+                    harness
+                };
                 slots.insert(id, Slot::Ready(harness.clone()));
                 Ok(harness)
             }

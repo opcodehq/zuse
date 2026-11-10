@@ -39,7 +39,7 @@ fi
 ''')
     helper.chmod(0o700)
     env = dict(os.environ, ZUSE_RECOVERY_STATUS_ROOT=str(root), ZUSE_RUNTIME_BINARY=str(helper),
-               TEST_ROOT=str(root), BOXD_API_KEY="must-be-removed", CLOUD_DATA_ENCRYPTION_KEY="must-be-removed")
+               TEST_ROOT=str(root), ZUSE_RUNTIME_PROVIDER="boat", ZUSE_RUNTIME_PERSISTENT_EXEC_CERTIFIED="1", BOXD_API_KEY="must-be-removed", CLOUD_DATA_ENCRYPTION_KEY="must-be-removed")
 
     def launch(operation, *args, **extra):
         subprocess.run([str(launcher), operation, *args], env=dict(env, **extra), check=True)

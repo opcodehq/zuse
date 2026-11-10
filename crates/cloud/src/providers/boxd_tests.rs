@@ -8,7 +8,7 @@ use axum::{
 };
 use serde_json::{Value, json};
 use std::sync::{
-    Arc,
+    Arc, Mutex,
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
@@ -19,6 +19,7 @@ struct Fixture {
     creates: Arc<AtomicUsize>,
     truncate_create: Arc<AtomicBool>,
     reject: Arc<AtomicBool>,
+    methods: Arc<Mutex<Vec<String>>>,
 }
 fn decode(hex: &str) -> Vec<u8> {
     hex.as_bytes()
@@ -68,6 +69,7 @@ async fn rpc(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response<Body> {
+    fixture.methods.lock().unwrap().push(method.clone());
     assert_eq!(headers["authorization"], "Bearer fixture-provider-token");
     assert_eq!(headers["content-type"], "application/grpc-web+proto");
     assert_eq!(headers["x-grpc-web"], "1");
@@ -110,7 +112,7 @@ async fn rpc(
             ("machineRequest", vec!["machineResponse"])
         }
         "ResumeVm" => ("machineRequest", vec!["resumeResponse"]),
-        "StartVm" | "HibernateVm" | "WakeVm" | "DestroyVm" => {
+        "StartVm" | "SuspendVm" | "HibernateVm" | "WakeVm" | "DestroyVm" => {
             ("machineRequest", vec!["emptyResponse"])
         }
         "SetAutoHibernateTimeout" => ("idleRequest", vec!["emptyResponse"]),
@@ -135,6 +137,7 @@ async fn sdk_wire_matches_actual_http_lifecycle_bootstrap_and_ambiguous_create()
         creates: Arc::new(AtomicUsize::new(0)),
         truncate_create: Arc::new(AtomicBool::new(false)),
         reject: Arc::new(AtomicBool::new(false)),
+        methods: Arc::new(Mutex::new(Vec::new())),
     };
     let app = axum::Router::new()
         .route("/token", post(exchange))
@@ -172,7 +175,38 @@ async fn sdk_wire_matches_actual_http_lifecycle_bootstrap_and_ambiguous_create()
     provider.hibernate("vm-fixture").await.unwrap();
     provider.wake("vm-fixture").await.unwrap();
     provider.start("vm-fixture").await.unwrap();
+    let memory = super::contract::Provider::sleep_memory(&provider, "vm-fixture")
+        .await
+        .unwrap();
+    assert_eq!(memory.resource_id, "vm-fixture");
+    assert_eq!(
+        fixture.methods.lock().unwrap().last().map(String::as_str),
+        Some("SuspendVm")
+    );
     assert_eq!(provider.resume("vm-fixture").await.unwrap(), 123456);
+    let before = fixture.methods.lock().unwrap().len();
+    provider
+        .activate("vm-fixture", &MachineState::Standby)
+        .await
+        .unwrap();
+    provider
+        .activate("vm-fixture", &MachineState::Paused)
+        .await
+        .unwrap();
+    provider
+        .activate("vm-fixture", &MachineState::Stopped)
+        .await
+        .unwrap();
+    assert_eq!(
+        &fixture.methods.lock().unwrap()[before..],
+        &["ResumeVm", "WakeVm", "StartVm"]
+    );
+    assert_eq!(
+        provider
+            .activate("vm-fixture", &MachineState::Running)
+            .await,
+        Err(ProviderError::Conflict)
+    );
     let output = provider
         .exec("vm-fixture", "printf cloud-ready")
         .await
@@ -241,6 +275,7 @@ async fn sdk_usage_wire_matches_http_and_rejects_incomplete_or_non_usd_costs() {
             creates: Arc::new(AtomicUsize::new(0)),
             truncate_create: Arc::new(AtomicBool::new(false)),
             reject: Arc::new(AtomicBool::new(false)),
+            methods: Arc::new(Mutex::new(Vec::new())),
         };
         let app = axum::Router::new()
             .route("/token", post(exchange))
@@ -284,6 +319,7 @@ async fn sdk_snapshot_capture_read_provenance_and_delete_never_replay_uncertain_
         creates: Arc::new(AtomicUsize::new(0)),
         truncate_create: Arc::new(AtomicBool::new(false)),
         reject: Arc::new(AtomicBool::new(false)),
+        methods: Arc::new(Mutex::new(Vec::new())),
     };
     let app = axum::Router::new()
         .route("/token", post(exchange))
@@ -353,4 +389,61 @@ async fn sdk_snapshot_capture_read_provenance_and_delete_never_replay_uncertain_
     assert_eq!(source.kind, "snapshot");
     assert_eq!(fixture.exchanges.load(Ordering::Relaxed), 1);
     server.abort();
+}
+
+#[tokio::test]
+async fn memory_sleep_observation_never_certifies_disk_hibernation_or_stop() {
+    use super::contract::{DesiredState, OperationState, Provider, ProviderOperation};
+    use prost::Message;
+    for (status, expected) in [
+        ("suspended", OperationState::Completed),
+        ("hibernated", OperationState::Superseded),
+        ("stopped", OperationState::Superseded),
+        ("running", OperationState::Pending),
+    ] {
+        let mut wire: Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/boxd-wire.json")).unwrap();
+        let mut machine = super::boxd_wire::MachineDetails::decode(
+            decode(wire["machineResponse"].as_str().unwrap()).as_slice(),
+        )
+        .unwrap();
+        machine.status = status.into();
+        wire["machineResponse"] = json!(
+            machine
+                .encode_to_vec()
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+        );
+        let fixture = Fixture {
+            wire: Arc::new(wire),
+            exchanges: Arc::new(AtomicUsize::new(0)),
+            creates: Arc::new(AtomicUsize::new(0)),
+            truncate_create: Arc::new(AtomicBool::new(false)),
+            reject: Arc::new(AtomicBool::new(false)),
+            methods: Arc::new(Mutex::new(vec![])),
+        };
+        let app = axum::Router::new()
+            .route("/token", post(exchange))
+            .route("/boxd.api.v1.BoxdApi/{method}", post(rpc))
+            .with_state(fixture.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let mut provider = Boxd::new("fixture-api-key".into(), Some("fixture-org".into())).unwrap();
+        provider.set_test_endpoint(format!("http://{address}"));
+        let receipt = ProviderOperation {
+            resource_id: "vm-fixture".into(),
+            operation_id: None,
+            desired: DesiredState::Sleeping,
+        };
+        assert_eq!(
+            Provider::memory_operation(&provider, &receipt)
+                .await
+                .unwrap(),
+            expected
+        );
+        assert_eq!(&*fixture.methods.lock().unwrap(), &["GetVm"]);
+        server.abort();
+    }
 }

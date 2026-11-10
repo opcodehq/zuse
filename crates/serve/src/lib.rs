@@ -20,6 +20,7 @@ use zuse_rpc::RpcService;
 mod access_token;
 mod assets;
 mod browser_io;
+pub mod hosted;
 
 // Let slow receivers apply backpressure before stale transcript frames pile up.
 const SOCKET_OUTPUT_CAPACITY: usize = 8;
@@ -421,14 +422,31 @@ async fn browser_socket(
     if server.shutdown.is_cancelled() {
         return;
     }
+    rpc_socket(
+        server.service,
+        socket,
+        server.shutdown.cancelled_owned(),
+        compression,
+        transfer_notices,
+    )
+    .await;
+}
+
+pub(crate) async fn rpc_socket(
+    service: Arc<dyn RpcService>,
+    socket: axum::extract::ws::WebSocket,
+    closed: impl std::future::Future<Output = ()>,
+    compression: browser_io::Compression,
+    transfer_notices: bool,
+) {
     let (writer, reader) = socket.split();
     let (out_tx, out_rx) = mpsc::channel::<zuse_rpc::OutputFrame>(SOCKET_OUTPUT_CAPACITY);
     let (in_tx, in_rx) = mpsc::channel::<String>(16);
     let dispatch = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(
-        zuse_rpc::serve_connection_bounded(server.service, out_tx, in_rx, SOCKET_OUTPUT_BYTES),
+        zuse_rpc::serve_connection_bounded(service, out_tx, in_rx, SOCKET_OUTPUT_BYTES),
     ));
     tokio::select! { biased;
-        _ = server.shutdown.cancelled() => {},
+        _ = closed => {},
         _ = browser_io::exchange(writer, reader, out_rx, in_tx, compression, transfer_notices) => {},
     }
     dispatch.abort();

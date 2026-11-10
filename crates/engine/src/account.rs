@@ -1,9 +1,9 @@
 //! Zuse cloud identity for hosted plugins and provider connections.
 //!
-//! Native clients on this machine sign in through the browser: AuthKit redirects
-//! back to a loopback callback and the engine redeems the code with PKCE. Remote
-//! browser clients, and machines where the callback cannot bind, use device
-//! authorization instead. Credentials stay in the engine; views receive only
+//! Sign-in is browser-only: AuthKit redirects back to a loopback callback on
+//! the engine's machine and the engine redeems the code with PKCE. There is no
+//! device-code fallback, so a misconfigured redirect fails loudly instead of
+//! silently switching flows. Credentials stay in the engine; views receive only
 //! profile and sign-in progress metadata.
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use futures::StreamExt;
@@ -18,8 +18,30 @@ use tokio::sync::{Mutex as AsyncMutex, watch};
 use tokio_util::sync::CancellationToken;
 use zuse_protocol::UserProfile;
 
-pub const API_URL: &str = "https://api.zuse.sh";
+pub const API_URL: &str = crate::api_origins::DEFAULT_API_URL;
 pub const PUBLIC_CLIENT_ID: &str = "client_01KWGQ818571ARFATQ3G9AR2Y2";
+/// Staging's identity client. Staging only accepts tokens issued to it, and it
+/// is the client that allows the http://127.0.0.1 sign-in callback there.
+pub const STAGING_CLIENT_ID: &str = "client_01KW6ZEZKVMZ0G429A89XZD83Q";
+
+/// The identity client that belongs to `api_url`'s deployment, so pointing the
+/// app at staging signs in with staging's client without extra configuration.
+fn default_client_id(api_url: &str) -> &'static str {
+    let host = reqwest::Url::parse(api_url)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .unwrap_or_default();
+    let staging = host.ends_with(".zuse.sh")
+        && host
+            .trim_end_matches(".zuse.sh")
+            .split(['.', '-'])
+            .any(|part| part == "stag" || part == "staging");
+    if staging {
+        STAGING_CLIENT_ID
+    } else {
+        PUBLIC_CLIENT_ID
+    }
+}
 const IDENTITY_URL: &str = "https://api.workos.com";
 const MAX_RESPONSE: usize = 256 * 1024;
 /// How long a browser sign-in waits for AuthKit to redirect back.
@@ -47,6 +69,16 @@ pub enum AccountError {
         "Account service URLs must be HTTPS origins (local HTTP requires ZUSE_ALLOW_LOOPBACK_ACCOUNT_HTTP=1)."
     )]
     InvalidEndpoint,
+    #[error(
+        "Zuse couldn't open its local sign-in callback. Check that 127.0.0.1 is reachable, then retry."
+    )]
+    CallbackUnavailable,
+    #[error(
+        "Sign-in is misconfigured: the identity provider rejected Zuse's http://127.0.0.1 callback. Allow it as a redirect URI for this client."
+    )]
+    RedirectRejected,
+    #[error("Sign in from Zuse on the computer that runs this engine.")]
+    BrowserRequired,
 }
 
 /// Deliberately has no Debug implementation.
@@ -59,10 +91,6 @@ pub struct Credential {
 #[serde(rename_all = "camelCase")]
 pub struct LoginProgress {
     pub url: String,
-    /// The code to confirm on the device authorization page; empty for a
-    /// browser sign-in, which returns to this machine on its own.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub user_code: String,
     pub expires_at: i64,
 }
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -99,7 +127,7 @@ struct Inner {
     client_id: String,
     identity_url: String,
     api_url: String,
-    store: PathBuf,
+    store: Option<PathBuf>,
     state: Mutex<State>,
     refresh: AsyncMutex<()>,
     status: watch::Sender<AccountStatus>,
@@ -107,14 +135,6 @@ struct Inner {
 #[derive(Clone)]
 pub struct Account(Arc<Inner>);
 
-#[derive(Deserialize)]
-struct DeviceGrant {
-    device_code: String,
-    user_code: String,
-    verification_uri_complete: String,
-    expires_in: u64,
-    interval: u64,
-}
 #[derive(Deserialize)]
 struct TokenResponse {
     access_token: String,
@@ -183,11 +203,11 @@ fn endpoint(value: &str, allow_loopback_http: bool) -> Result<String, AccountErr
 
 impl Account {
     pub fn open(root: &Path) -> Result<Self, AccountError> {
-        let api_url = std::env::var("ZUSE_API_URL").unwrap_or_else(|_| API_URL.into());
+        let api_url = crate::api_origins::from_env().general;
         let client_id = std::env::var("ZUSE_WORKOS_CLIENT_ID")
             .ok()
             .filter(|s| !s.trim().is_empty())
-            .unwrap_or_else(|| PUBLIC_CLIENT_ID.into());
+            .unwrap_or_else(|| default_client_id(&api_url).into());
         let allow_local_http =
             std::env::var("ZUSE_ALLOW_LOOPBACK_ACCOUNT_HTTP").is_ok_and(|value| value == "1");
         Self::configured(
@@ -205,10 +225,74 @@ impl Account {
         client_id: String,
         identity_url: String,
     ) -> Result<Self, AccountError> {
-        let store = root.join("account").join("session.json");
+        Self::with_storage(
+            Some(root.join("account").join("session.json")),
+            api_url,
+            client_id,
+            identity_url,
+        )
+    }
+
+    /// An isolated hosted-browser account. Refresh credentials remain in server
+    /// memory; this never loads a desktop session or writes a profile/cache.
+    pub fn ephemeral(api_url: &str, client_id: &str) -> Result<Self, AccountError> {
+        if client_id.trim().is_empty() {
+            return Err(AccountError::InvalidEndpoint);
+        }
+        Self::with_storage(
+            None,
+            endpoint(api_url, false)?,
+            client_id.into(),
+            IDENTITY_URL.into(),
+        )
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn ephemeral_fixture(
+        api_url: &str,
+        identity_url: &str,
+        client_id: &str,
+    ) -> Result<Self, AccountError> {
+        fn fixture_endpoint(value: &str) -> Result<String, AccountError> {
+            let url = reqwest::Url::parse(value).map_err(|_| AccountError::InvalidEndpoint)?;
+            if url.scheme() == "http"
+                && url.host_str().is_some_and(|host| {
+                    host.parse::<std::net::IpAddr>()
+                        .is_ok_and(|ip| ip.is_loopback())
+                })
+                && url.username().is_empty()
+                && url.password().is_none()
+                && url.path() == "/"
+                && url.query().is_none()
+                && url.fragment().is_none()
+            {
+                Ok(value.trim_end_matches('/').into())
+            } else {
+                endpoint(value, false)
+            }
+        }
+        if client_id.trim().is_empty() {
+            return Err(AccountError::InvalidEndpoint);
+        }
+        Self::with_storage(
+            None,
+            fixture_endpoint(api_url)?,
+            client_id.into(),
+            fixture_endpoint(identity_url)?,
+        )
+    }
+
+    fn with_storage(
+        store: Option<PathBuf>,
+        api_url: String,
+        client_id: String,
+        identity_url: String,
+    ) -> Result<Self, AccountError> {
         // A damaged cloud session must not prevent local agent work.
-        let (saved, storage_error) = match std::fs::read(&store) {
-            Ok(bytes) => match serde_json::from_slice::<Option<SavedSession>>(&bytes) {
+        let loaded = store.as_ref().map(std::fs::read).transpose();
+        let (saved, storage_error) = match loaded {
+            Ok(None) => (None, None),
+            Ok(Some(bytes)) => match serde_json::from_slice::<Option<SavedSession>>(&bytes) {
                 Ok(saved) => (saved, None),
                 Err(_) => (None, Some(AccountError::Storage.to_string())),
             },
@@ -353,16 +437,14 @@ impl Account {
 
     /// Sign in through this machine's browser: AuthKit redirects to a loopback
     /// callback and the code is redeemed with PKCE, so there is no code to
-    /// confirm. Falls back to [`Self::sign_in`] (device authorization) when the
-    /// callback cannot bind or the identity provider rejects its redirect.
-    /// Only for clients on the engine's own machine.
+    /// confirm. Only for clients on the engine's own machine.
     pub async fn sign_in_in_browser(&self) -> Result<LoginProgress, AccountError> {
         let listener = match tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await
         {
             Ok(listener) => listener,
             Err(error) => {
-                tracing::info!(%error, "account: loopback sign-in unavailable; using device authorization");
-                return self.sign_in().await;
+                tracing::warn!(%error, "account: loopback sign-in callback unavailable");
+                return Err(AccountError::CallbackUnavailable);
             }
         };
         let port = listener
@@ -401,12 +483,13 @@ impl Account {
             rejected = crate::auth::loopback_redirect_rejected(url.as_str()) => rejected,
         };
         if rejected {
-            tracing::info!("account: loopback redirect rejected; using device authorization");
-            return self.sign_in_attempt(generation, cancel).await;
+            tracing::warn!("account: identity provider rejected the loopback redirect");
+            // Surface it on the account status too, so the app shows the cause.
+            self.complete_login(generation, async { Err(AccountError::RedirectRejected) });
+            return Err(AccountError::RedirectRejected);
         }
         let progress = LoginProgress {
             url: url.into(),
-            user_code: String::new(),
             expires_at: now() + BROWSER_SIGN_IN_SECS,
         };
         self.show_login(generation, &progress)?;
@@ -507,96 +590,6 @@ impl Account {
         self.install(tokens, generation, None)
     }
 
-    /// Sign in with device authorization: the user confirms a code on the
-    /// identity provider's page, from any device.
-    pub async fn sign_in(&self) -> Result<LoginProgress, AccountError> {
-        let (generation, cancel) = self.begin_login()?;
-        self.sign_in_attempt(generation, cancel).await
-    }
-
-    async fn sign_in_attempt(
-        &self,
-        generation: u64,
-        cancel: CancellationToken,
-    ) -> Result<LoginProgress, AccountError> {
-        let response = tokio::select! {
-            biased;
-            _=cancel.cancelled()=>return Err(AccountError::Cancelled),
-            response=self.0.http.post(format!("{}/user_management/authorize/device",self.0.identity_url))
-                .form(&[("client_id",self.0.client_id.as_str())]).send()=>response.map_err(|_|AccountError::Unavailable)?,
-        };
-        if !response.status().is_success() {
-            return Err(AccountError::Unavailable);
-        }
-        let grant: DeviceGrant = serde_json::from_value(read_json(response).await?)
-            .map_err(|_| AccountError::InvalidResponse)?;
-        if grant.device_code.is_empty()
-            || grant.user_code.is_empty()
-            || grant.interval == 0
-            || grant.expires_in == 0
-            || grant.expires_in > 3600
-            || !grant.verification_uri_complete.starts_with("https://")
-        {
-            return Err(AccountError::InvalidResponse);
-        }
-        let verification = reqwest::Url::parse(&grant.verification_uri_complete)
-            .map_err(|_| AccountError::InvalidResponse)?;
-        if verification.scheme() != "https"
-            || verification.host_str().is_none()
-            || !verification.username().is_empty()
-            || verification.password().is_some()
-        {
-            return Err(AccountError::InvalidResponse);
-        }
-        let progress = LoginProgress {
-            url: grant.verification_uri_complete.clone(),
-            user_code: grant.user_code.clone(),
-            expires_at: now() + grant.expires_in as i64,
-        };
-        self.show_login(generation, &progress)?;
-        let account = self.clone();
-        self.complete_login(generation, async move {
-            account.poll_login(grant, generation, cancel).await
-        });
-        Ok(progress)
-    }
-
-    async fn poll_login(
-        &self,
-        grant: DeviceGrant,
-        generation: u64,
-        cancel: CancellationToken,
-    ) -> Result<(), AccountError> {
-        let deadline = now() + grant.expires_in as i64;
-        let mut interval = grant.interval.clamp(1, 60);
-        while now() < deadline {
-            tokio::select! {_ = cancel.cancelled()=>return Err(AccountError::Cancelled),_ = tokio::time::sleep(Duration::from_secs(interval))=>{}}
-            if now() >= deadline {
-                return Err(AccountError::Expired);
-            }
-            let response = tokio::select! {
-                _=cancel.cancelled()=>return Err(AccountError::Cancelled),
-                response=self.0.http.post(format!("{}/user_management/authenticate",self.0.identity_url))
-                    .form(&[("client_id",self.0.client_id.as_str()),("grant_type","urn:ietf:params:oauth:grant-type:device_code"),("device_code",grant.device_code.as_str())]).send()=>response.map_err(|_|AccountError::Unavailable)?,
-            };
-            let success = response.status().is_success();
-            let body = read_json(response).await?;
-            if success {
-                let tokens: TokenResponse =
-                    serde_json::from_value(body).map_err(|_| AccountError::InvalidResponse)?;
-                return self.install(tokens, generation, None);
-            }
-            match body["error"].as_str() {
-                Some("authorization_pending") => {}
-                Some("slow_down") => interval = (interval + 5).min(60),
-                Some("access_denied") => return Err(AccountError::Denied),
-                Some("expired_token") => return Err(AccountError::Expired),
-                _ => return Err(AccountError::Unavailable),
-            }
-        }
-        Err(AccountError::Expired)
-    }
-
     fn install(
         &self,
         tokens: TokenResponse,
@@ -626,7 +619,7 @@ impl Account {
             user,
             refresh_token: tokens.refresh_token,
         };
-        persist(&self.0.store, &saved)?;
+        self.persist(&saved)?;
         if state
             .saved
             .as_ref()
@@ -708,7 +701,7 @@ impl Account {
                     state.saved = None;
                     state.access = None;
                     state.error = Some("Your Zuse sign-in expired. Sign in again.".into());
-                    if persist(&self.0.store, &Value::Null).is_err() {
+                    if self.persist(&Value::Null).is_err() {
                         state.error = Some(AccountError::Storage.to_string());
                     }
                     self.publish(&state);
@@ -758,6 +751,12 @@ impl Account {
         self.publish(&state);
     }
 
+    fn persist(&self, value: &impl Serialize) -> Result<(), AccountError> {
+        match &self.0.store {
+            Some(path) => persist(path, value),
+            None => Ok(()),
+        }
+    }
     pub fn sign_out(&self) -> Result<(), AccountError> {
         let mut state = lock(&self.0.state);
         state.generation = state.generation.wrapping_add(1);
@@ -770,7 +769,12 @@ impl Account {
         state.retry_after = 0;
         self.publish(&state);
         // Persist a signed-out tombstone atomically, including directory fsync.
-        let result = persist(&self.0.store, &Value::Null);
+        let result = self.persist(&Value::Null);
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.0.store.is_some() && crate::cloud::clear_native_history_cache().is_err() {
+            state.error = Some("Signed out. Local history cache cleanup could not finish.".into());
+            self.publish(&state);
+        }
         if result.is_err() {
             state.error = Some(AccountError::Storage.to_string());
             self.publish(&state);
@@ -933,6 +937,26 @@ fn persist(path: &Path, session: &impl Serialize) -> Result<(), AccountError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn staging_origins_sign_in_with_staging_client() {
+        for url in [
+            "https://api-rust-stag.zuse.sh",
+            "https://api-staging.zuse.sh",
+            "https://code-staging.zuse.sh/",
+        ] {
+            assert_eq!(default_client_id(url), STAGING_CLIENT_ID, "{url}");
+        }
+        for url in [
+            "https://api.zuse.sh",
+            "https://api-rust.zuse.sh",
+            "https://stag.example.com",
+            "http://127.0.0.1:27655",
+        ] {
+            assert_eq!(default_client_id(url), PUBLIC_CLIENT_ID, "{url}");
+        }
+    }
+
     #[test]
     fn local_http_requires_opt_in_and_a_literal_loopback_origin() {
         assert!(endpoint("https://api.zuse.sh", false).is_ok());
@@ -990,7 +1014,10 @@ mod tests {
             Err(AccountError::Changed)
         ));
         assert!(account.status().user.is_none());
-        assert_eq!(std::fs::read_to_string(&account.0.store).unwrap(), "null");
+        assert_eq!(
+            std::fs::read_to_string(account.0.store.as_ref().unwrap()).unwrap(),
+            "null"
+        );
         assert!(Account::open(dir.path()).unwrap().status().user.is_none());
     }
     #[test]
@@ -1005,7 +1032,7 @@ mod tests {
             account.install(token("a", now() + 3600), 1, Some("a")),
             Err(AccountError::Changed)
         ));
-        let bytes = std::fs::read_to_string(&account.0.store).unwrap();
+        let bytes = std::fs::read_to_string(account.0.store.as_ref().unwrap()).unwrap();
         assert!(!bytes.contains("access_token"));
         assert!(!bytes.contains("signature"));
         let reopened = Account::open(dir.path()).unwrap();
@@ -1015,7 +1042,7 @@ mod tests {
         {
             use std::os::unix::fs::PermissionsExt;
             assert_eq!(
-                std::fs::metadata(&account.0.store)
+                std::fs::metadata(account.0.store.as_ref().unwrap())
                     .unwrap()
                     .permissions()
                     .mode()

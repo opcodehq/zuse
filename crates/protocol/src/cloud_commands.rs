@@ -27,6 +27,8 @@ pub fn is_session_command_kind(kind: &str) -> bool {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CloudSessionCommand {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_binding: Option<crate::cloud_task_commands::RuntimeBinding>,
     pub command_id: String,
     pub session_id: String,
     pub payload: crate::session_commands::SessionCommandPayload,
@@ -168,6 +170,11 @@ pub struct RuntimeAcknowledgment {
 #[serde(rename_all = "camelCase")]
 pub struct LeaseRequest {
     pub storage_incarnation_id: String,
+    /// Reserve a bounded admission lane for controls during asset preparation.
+    #[serde(default)]
+    pub control_only: bool,
+    #[serde(default)]
+    pub max_items: Option<u32>,
     #[serde(default)]
     pub wait_ms: Option<u32>,
     #[serde(default)]

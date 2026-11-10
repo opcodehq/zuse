@@ -7,6 +7,57 @@ pub(super) struct PendingQueueAction {
     pub action: QueueAction,
 }
 impl WorkspaceView {
+    pub(super) fn pause_cloud_queue(&mut self, paused: bool, cx: &mut Context<Self>) {
+        if !self.cloud_server_commands() || self.queue_action_blocked() {
+            return;
+        }
+        let Some(chat) = self
+            .selected
+            .as_ref()
+            .and_then(|v| v["id"].as_str())
+            .map(str::to_owned)
+        else {
+            return;
+        };
+        let request = json!({"commandId":uuid::Uuid::new_v4().to_string(),"sessionId":chat,"action":{"type":"pause-queue","paused":paused}});
+        let id = self.call(methods::CLOUD_TASK_COMMAND, json!({"request":request}));
+        self.queue_pause_request = Some((id, chat));
+        cx.notify();
+    }
+    pub(super) fn receive_queue_pause(
+        &mut self,
+        id: u64,
+        frame: &Value,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self
+            .queue_pause_request
+            .as_ref()
+            .is_none_or(|(pending, _)| *pending != id)
+        {
+            return false;
+        }
+        if frame.get("ok").is_none() && frame.get("err").is_none() && frame["done"] != true {
+            return true;
+        }
+        let (_, chat) = self.queue_pause_request.take().unwrap();
+        self.pending.remove(&id);
+        if self.selected.as_ref().and_then(|v| v["id"].as_str()) != Some(chat.as_str()) {
+            return true;
+        }
+        if frame.get("err").is_some() {
+            self.error = Some(
+                "The queue change was not confirmed. Refresh its current state before retrying."
+                    .into(),
+            );
+        }
+        if let Some(selected) = self.selected.clone() {
+            self.queue_unconfirmed.insert(chat);
+            self.refresh_queue_snapshot(&selected);
+        }
+        cx.notify();
+        true
+    }
     pub(super) fn queued_primary_action(
         &self,
         item: &Value,
@@ -83,12 +134,13 @@ impl WorkspaceView {
     }
 
     pub(super) fn queue_action_blocked(&self) -> bool {
-        self.queue_edit.is_some()
+        self.queue_pause_request.is_some()
+            || self.queue_edit.is_some()
             || self.model_change_pending_for_selection()
             || self.access_change_pending_for_selection()
             || self.transcript_blocked()
-            || !self.connected
-            || !self.workspace_synced
+            || (!self.connected && !self.cloud_server_commands())
+            || (!self.workspace_synced && !self.cloud_server_commands())
             || self
                 .selected
                 .as_ref()
@@ -108,7 +160,9 @@ impl WorkspaceView {
         position: Option<usize>,
         cx: &mut Context<Self>,
     ) {
-        if !self.require_connection(cx) || self.queue_action_blocked() {
+        if (!self.cloud_server_commands() && !self.require_connection(cx))
+            || self.queue_action_blocked()
+        {
             return;
         }
         let Some(chat) = self.selected.clone() else {
@@ -125,7 +179,7 @@ impl WorkspaceView {
             cx.notify();
             return;
         }
-        let mut params = json!({"id":current["id"]});
+        let mut params = json!({"id":current["id"],"revision":current["revision"]});
         if action == QueueAction::Move {
             let Some(position) = position.filter(|index| *index < self.queue.len()) else {
                 return;
@@ -184,7 +238,7 @@ impl WorkspaceView {
         if let Some(id) = chat["id"].as_str() {
             self.queue_unconfirmed.insert(id.to_owned());
         }
-        if !self.connected {
+        if !self.connected && !self.cloud_server_commands() {
             return;
         }
         // An editor can retain the previous host after a handoff. Read from the
@@ -399,5 +453,182 @@ mod tests {
             writes[0]["params"],
             json!({"chatId":"chat","targetDeviceId":"host","id":"older","toIndex":2})
         );
+    }
+    #[gpui::test]
+    fn cloud_resume_queue_uses_typed_api_and_waits_for_authoritative_snapshot(
+        cx: &mut TestAppContext,
+    ) {
+        let mut f = fixture(cx);
+        f.window.update(cx,|view,_,cx|{
+            view.cloud.guest=true;view.cloud.guest_status=json!({"commandDeliveryMode":"server-admitted-v2","commandAdmissionVersion":2,"commandApiAuthorized":true,"taskCommandCanEdit":true});
+            view.connected=false;view.workspace_synced=false;view.queue.clear();view.queue_unconfirmed.clear();view.queue_paused=true;
+            view.pause_cloud_queue(false,cx);let (id,chat)=view.queue_pause_request.clone().expect("paused cloud queue must be resumable without runtime connection");assert_eq!(chat,"chat");
+            view.pause_cloud_queue(false,cx);assert_eq!(view.queue_pause_request.as_ref().unwrap().0,id,"only one pending logical resume action");
+            view.receive(json!({"id":id,"ok":{"commandId":"server","durablyAdmitted":true,"paused":false}}),cx);
+            assert!(view.queue_paused,"wait for actual queue projection, not an optimistic toggle");
+            let watch=view.queue_watch.unwrap();view.receive(json!({"id":watch,"item":{"items":[],"paused":false}}),cx);assert!(!view.queue_paused);
+        }).unwrap();
+        let mut mutations = vec![];
+        while let Ok(request) = f.requests.try_recv() {
+            if request["method"] == methods::CLOUD_TASK_COMMAND {
+                mutations.push(request);
+            }
+        }
+        assert_eq!(mutations.len(), 1);
+        let request = &mutations[0]["params"]["request"];
+        assert_eq!(request["sessionId"], "chat");
+        assert_eq!(
+            request["action"],
+            json!({"type":"pause-queue","paused":false})
+        );
+        assert!(uuid::Uuid::parse_str(request["commandId"].as_str().unwrap()).is_ok());
+    }
+
+    fn selected_cloud_fixture(cx: &mut TestAppContext, version: u32, cached: bool) -> Fixture {
+        let f = fixture(cx);
+        f.window.update(cx,|view,_,cx| {
+            view.cloud.guest=true;view.cloud.cached=cached;view.connected=!cached;
+            view.cloud.guest_status=json!({"commandDeliveryMode":"server-admitted-v2","commandAdmissionVersion":2,"commandApiAuthorized":true,"taskCommandCanEdit":true,"queueRunSelectionVersion":version});
+            view.selected.as_mut().unwrap()["config"]["harness"]=json!("grok");
+            view.selected.as_mut().unwrap()["config"]["model"]=json!("old-registered-model");
+            if cached {
+                let mut chat=view.selected.clone().unwrap();chat["createdAt"]=json!("2026-01-01T00:00:00Z");chat["archived"]=json!(false);chat["config"]["reasoning"]=Value::Null;
+                let head:zuse_model::cloud::Head=serde_json::from_value(json!({"schemaVersion":1,"payloadFormat":"zuse-cloud-admission-v1","workspaceId":"queue-workspace","sessionId":"chat","runtimeGeneration":1,"cursor":{"epoch":"epoch","version":1},"chat":chat,"conversations":[],"transcript":{"reset":[]},"queue":[],"queuePaused":false})).unwrap();
+                view.cloud.guest_workspace=Some(head.workspace_id.clone());view.install_cached_history(&head);view.cached_only=false;view.selected.as_mut().unwrap()["archived"]=json!(false);
+            }
+            view.model_host.rows=vec![json!({"id":"grok","installed":true,"supportsSteering":true,"steeringMode":"step-boundary"})];
+            view.model=Some("chosen-grok".into());view.reasoning=Some(zuse_protocol::ReasoningLevel::High);view.model_options=serde_json::from_value(json!({"speed":"fast"})).unwrap();view.sandbox=zuse_protocol::SandboxLevel::WorkspaceWrite;
+            view.input.update(cx,|input,cx|input.set_value("Keep selected config".into(),cx));view.attachments=vec![json!({"path":"/host/context.txt"})];
+        }).unwrap();
+        f
+    }
+    #[gpui::test]
+    fn cloud_queue_keeps_selected_model_and_refuses_old_server_without_losing_draft(
+        cx: &mut TestAppContext,
+    ) {
+        for version in [0, 1] {
+            let mut f = selected_cloud_fixture(cx, version, false);
+            f.window
+                .update(cx, |view, window, cx| {
+                    assert_eq!(
+                        view.input.read(cx).value(cx),
+                        "Keep selected config",
+                        "the real deferred editor write must settle before submission"
+                    );
+                    view.submit_composer(true, window, cx);
+                    if version == 0 {
+                        assert_eq!(view.input.read(cx).value(cx), "Keep selected config");
+                        assert_eq!(view.attachments.len(), 1);
+                        assert!(
+                            view.error
+                                .as_deref()
+                                .unwrap()
+                                .contains("draft is preserved")
+                        );
+                    }
+                })
+                .unwrap();
+            let writes = mutations(&mut f);
+            if version == 0 {
+                assert!(writes.is_empty());
+            } else {
+                assert_eq!(writes.len(), 1);
+                assert_eq!(writes[0]["method"], methods::QUEUE_MESSAGE);
+                assert_eq!(
+                    writes[0]["params"]["runSelection"],
+                    json!({"harness":"grok","model":"chosen-grok","reasoning":"high","modelOptions":{"speed":"fast"},"sandbox":"workspace-write"})
+                );
+                assert_eq!(writes[0]["params"]["text"], "Keep selected config");
+                assert_eq!(
+                    writes[0]["params"]["attachments"],
+                    json!(["/host/context.txt"])
+                );
+            }
+        }
+    }
+    #[gpui::test]
+    fn cached_cloud_direct_run_uses_current_selection_without_requiring_queue_capability(
+        cx: &mut TestAppContext,
+    ) {
+        let mut f = selected_cloud_fixture(cx, 0, true);
+        f.window
+            .update(cx, |view, window, cx| {
+                assert_eq!(view.input.read(cx).value(cx), "Keep selected config");
+                view.submit_composer(true, window, cx);
+            })
+            .unwrap();
+        let writes = mutations(&mut f);
+        assert_eq!(writes.len(), 1);
+        assert_eq!(writes[0]["method"], methods::QUEUE_COMMAND);
+        assert_eq!(writes[0]["params"]["wake"], "explicit-resume");
+        let run = &writes[0]["params"]["command"]["request"];
+        assert_eq!(run["harness"], "grok");
+        assert_eq!(run["model"], "chosen-grok");
+        assert_eq!(run["reasoning"], "high");
+        assert_eq!(run["modelOptions"], json!({"speed":"fast"}));
+        assert_eq!(run["sandbox"], "workspace-write");
+        assert_eq!(run["autoApprove"], false);
+        assert_eq!(run["cwd"], ".");
+    }
+    #[gpui::test]
+    fn freshly_hydrated_cached_head_sends_its_authenticated_config_without_local_catalog_or_separate_resume_rpc(
+        cx: &mut TestAppContext,
+    ) {
+        for variant in ["fresh", "pending-edit", "foreign-target"] {
+            let mut f = selected_cloud_fixture(cx, 0, true);
+            f.window
+                .update(cx, |view, _, _| {
+                    // Match the real cached_cloud_view hydration: no live host confirmation/catalog.
+                    view.model_confirmed = false;
+                    view.model_host = Default::default();
+                    view.providers.clear();
+                    view.connected = false;
+                    view.model = Some("unrelated-local-model".into());
+                    view.reasoning = Some(zuse_protocol::ReasoningLevel::High);
+                    if variant == "pending-edit" {
+                        view.model_dirty = true;
+                    }
+                    if variant == "foreign-target" {
+                        view.cloud.guest_workspace = Some("another-workspace".into());
+                    }
+                })
+                .unwrap();
+            f.window
+                .update(cx, |view, window, cx| {
+                    assert_eq!(view.input.read(cx).value(cx), "Keep selected config");
+                    view.submit_composer(true, window, cx);
+                    if variant != "fresh" {
+                        assert_eq!(view.input.read(cx).value(cx), "Keep selected config");
+                        assert_eq!(view.attachments.len(), 1);
+                    }
+                })
+                .unwrap();
+            let mut writes = Vec::new();
+            while let Ok(frame) = f.requests.try_recv() {
+                assert_ne!(
+                    frame["ui"], "resumeCloud",
+                    "cached API admission must not request a separate wake"
+                );
+                if matches!(
+                    frame["method"].as_str(),
+                    Some(methods::QUEUE_COMMAND | methods::QUEUE_MESSAGE)
+                ) {
+                    writes.push(frame);
+                }
+            }
+            if variant != "fresh" {
+                assert!(writes.is_empty());
+            } else {
+                assert_eq!(writes.len(), 1);
+                assert_eq!(writes[0]["method"], methods::QUEUE_COMMAND);
+                assert_eq!(writes[0]["params"]["wake"], "explicit-resume");
+                let run = &writes[0]["params"]["command"]["request"];
+                assert_eq!(run["harness"], "grok");
+                assert_eq!(run["model"], "old-registered-model");
+                assert_eq!(run["reasoning"], Value::Null);
+                assert_eq!(run["modelOptions"], json!({}));
+                assert_eq!(run["sandbox"], "workspace-write");
+            }
+        }
     }
 }

@@ -57,8 +57,55 @@ pub struct Limits {
     pub usable: u64,
     pub compact_at: u64,
 }
+
+pub const DEFAULT_WINDOW_TOKENS: u64 = 32_000;
+
+/// Model fallbacks for catalogs that omit context metadata. Explicit catalog
+/// limits always take precedence over these defaults.
+pub fn default_window(model: &str) -> u64 {
+    let model = model.rsplit('/').next().unwrap_or(model);
+    if model.starts_with("claude-") {
+        let base = model.strip_suffix("[1m]").unwrap_or(model);
+        if base != model
+            || [
+                "claude-fable-5",
+                "claude-mythos-5",
+                "claude-mythos-preview",
+                "claude-opus-5",
+                "claude-opus-4-8",
+                "claude-opus-4-7",
+                "claude-opus-4-6",
+                "claude-sonnet-5",
+                "claude-sonnet-4-6",
+                "claude-haiku-5-5",
+            ]
+            .iter()
+            .any(|prefix| {
+                base == *prefix
+                    || base
+                        .strip_prefix(*prefix)
+                        .is_some_and(|suffix| suffix.starts_with('-'))
+            })
+        {
+            return 1_000_000;
+        }
+        return 200_000;
+    }
+    if model.starts_with("gpt-6.1-sol") || model.starts_with("gpt-6.1-terra") {
+        return 500_000;
+    }
+    if model.starts_with("gpt-5") || model.starts_with("gpt-6") || model.starts_with("codex-") {
+        return 272_000;
+    }
+    DEFAULT_WINDOW_TOKENS
+}
+
 pub fn limits(window: u64, cap: Option<u64>, percent: f64) -> Limits {
-    let window = if window == 0 { 32000 } else { window };
+    let window = if window == 0 {
+        DEFAULT_WINDOW_TOKENS
+    } else {
+        window
+    };
     let percent = if !percent.is_finite() || percent <= 0. || percent > 100. {
         95.
     } else {

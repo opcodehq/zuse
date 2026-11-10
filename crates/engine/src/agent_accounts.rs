@@ -771,6 +771,10 @@ pub struct AgentAccounts {
 }
 
 impl AgentAccounts {
+    pub(crate) fn codex_models_cache_path(&self) -> PathBuf {
+        self.inner.config.codex_home.join("models_cache.json")
+    }
+
     pub fn new(config: AgentAccountsConfig) -> Self {
         Self::with_endpoints(config, ProbeEndpoints::default(), Default::default())
     }

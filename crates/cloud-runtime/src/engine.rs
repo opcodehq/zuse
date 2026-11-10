@@ -3,12 +3,22 @@ use anyhow::{Result, ensure};
 use std::{path::PathBuf, sync::Arc};
 use zuse_engine::EngineCore;
 use zuse_protocol::SandboxLevel;
+mod adoption;
+pub use adoption::seed_adoption_titles;
+mod binding;
+pub use binding::TaskContext;
+mod preparation_rpc;
+mod rpc_guard;
+pub use preparation_rpc::PreparationRpc;
+pub use rpc_guard::CanonicalTaskRpc;
 
 pub struct EngineExecutor {
     pub core: Arc<EngineCore>,
     pub thread: String,
     pub checkout: PathBuf,
     pub allow_test: bool,
+    pub task_context: Option<TaskContext>,
+    pub progress: Option<Arc<crate::task_progress::Publisher>>,
 }
 impl EngineExecutor {
     fn conversation(&self, session: &str) -> Result<zuse_protocol::Chat> {
@@ -30,6 +40,20 @@ impl EngineExecutor {
 }
 #[async_trait::async_trait]
 impl crate::mailbox::Executor for EngineExecutor {
+    async fn quarantine(&self, session: &str, command: &str, fingerprint: &str) -> Result<()> {
+        let Some(chat) = self.core.workspace.chat(session)? else {
+            return Ok(());
+        };
+        ensure!(
+            chat.id == self.thread || chat.thread_id.as_deref() == Some(&self.thread),
+            "mailbox_conversation_scope_rejected"
+        );
+        self.core
+            .doc_host
+            .quarantine_mailbox_command(session, command, fingerprint)?;
+        Ok(())
+    }
+
     async fn native_admitted(
         &self,
         payload: &zuse_protocol::cloud_commands::CloudSessionCommand,
@@ -54,7 +78,28 @@ impl crate::mailbox::Executor for EngineExecutor {
         fingerprint: &str,
         created_at: i64,
     ) -> Result<()> {
+        if let Some(progress) = &self.progress {
+            progress.register(payload, fingerprint)?;
+        }
+        let payload = self.resolve_task_binding(payload).await?;
         self.conversation(&payload.session_id)?;
+        if matches!(
+            payload.payload,
+            zuse_protocol::session_commands::SessionCommandPayload::Interrupt {}
+        ) && let Some(binding) = &payload.runtime_binding
+        {
+            let target = match (&binding.interrupt_command_id, &binding.interrupt_message_id) {
+                (Some(command), Some(message)) => Some((command.as_str(), message.as_str())),
+                (None, None) => None,
+                _ => anyhow::bail!("cloud_interrupt_target_invalid"),
+            };
+            self.core.doc_host.bind_cloud_interrupt(
+                &payload.session_id,
+                &payload.command_id,
+                target,
+            )?;
+        }
+
         if let zuse_protocol::session_commands::SessionCommandPayload::Run {
             request,
             message_id,

@@ -29,6 +29,7 @@ impl Mapper {
             | Event::ModelCompleted { agent_id, .. }
             | Event::MailConsumed { agent_id, .. }
             | Event::Text { agent_id, .. }
+            | Event::Thinking { agent_id, .. }
             | Event::ToolStart { agent_id, .. }
             | Event::ToolResult { agent_id, .. }
             | Event::Usage { agent_id, .. }
@@ -71,6 +72,10 @@ impl Mapper {
             Event::Text { item_id, text, .. } => {
                 self.items.insert(agent.clone(), item_id);
                 result.push(AgentEvent::TextDelta { text });
+            }
+            Event::Thinking { item_id, text, .. } => {
+                self.items.insert(agent.clone(), item_id);
+                result.push(AgentEvent::ReasoningDelta { text });
             }
             Event::ModelCompleted { item_id, .. } => {
                 self.items.remove(&agent);
