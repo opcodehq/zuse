@@ -167,7 +167,10 @@ jobs:
       - run: cargo test --locked -p zuse-cloud-projection
       - run: cargo test --locked -p zuse-cloud-runtime -- --include-ignored
       - run: cargo test --locked -p zuse-cloud-runtime --features engine --lib grok_auth::tests
-      - run: cargo test --locked -p zuse-cloud -- --include-ignored
+      # The staging pilot test drives a child process against its own schema and
+      # times out on locks when it shares the database with the parallel suite.
+      - run: cargo test --locked -p zuse-cloud -- --include-ignored --skip staging_pilot_is_separate_bounded_and_reconciles_original_effects
+      - run: cargo test --locked -p zuse-cloud --lib staging_pilot_is_separate_bounded_and_reconciles_original_effects -- --include-ignored --exact project_caches::pilot_tests::staging_pilot_is_separate_bounded_and_reconciles_original_effects
       # These fixtures use the same workspace IDs across isolated database schemas.
       # Serialize them so the shared provider-effect guard remains enforced.
       - run: cargo test --locked -p zuse-cloud --features runtime-acceptance --test postgres rust_cloud -- --ignored --test-threads=1 --skip rust_cloud_composer_launch_close_and_reopen
