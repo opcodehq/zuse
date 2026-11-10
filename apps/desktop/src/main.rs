@@ -98,7 +98,7 @@ enum DaemonCommand {
 
 /// Optional workspace/device/relay edge; local development remains the default.
 /// `ZUSE_EDGE_URL` overrides (local dev / self-hosting).
-const DEFAULT_EDGE_URL: &str = "http://127.0.0.1:27655";
+const DEFAULT_EDGE_URL: &str = zuse_update::LOCAL_EDGE_URL;
 
 fn edge_url_from_env() -> String {
     std::env::var("ZUSE_EDGE_URL")
