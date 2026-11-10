@@ -1,15 +1,15 @@
 name: Prebuild release binaries
 
 # Tagging a commit built here skips compilation and only signs, packages and
-# publishes. Only the newest commit on main needs to finish.
+# publishes. Let the active build finish and warm the cache; GitHub keeps only the newest pending push.
 on:
   push:
     branches: [main]
   workflow_dispatch:
 
 concurrency:
-  group: prebuild
-  cancel-in-progress: true
+  group: prebuild-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: read

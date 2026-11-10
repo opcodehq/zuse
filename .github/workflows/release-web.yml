@@ -1,0 +1,58 @@
+name: Release browser assets
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        required: true
+      retention_days:
+        type: number
+        default: 2
+    secrets:
+      HUGEICONS_LICENSE_KEY:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  web:
+    runs-on: ubuntu-24.04
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/browser
+      HUGEICONS_LICENSE_KEY: ${{ secrets.HUGEICONS_LICENSE_KEY }}
+      HUGEICONS_SOLID_VERSION: ${{ vars.HUGEICONS_SOLID_VERSION }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # The browser client rebuilds std for wasm threads.
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+          targets: wasm32-unknown-unknown
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: trunk@0.21.14
+      - run: python scripts/cargo_dev.py --github-env
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target/browser
+          shared-key: release-browser
+          env-vars: HUGEICONS_BUILD_KEY HUGEICONS_SOLID_VERSION
+          cache-on-failure: true
+      - run: bash scripts/build-web.sh --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-assets
+          path: dist/web
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention_days }}
+

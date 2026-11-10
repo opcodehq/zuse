@@ -169,3 +169,30 @@ gh workflow run release.yml -f tag=v0.26.0-preview.4 -f formats_only=true
 
 This adds the downloads and updates checksums and installation notes on the
 same release. The version tag stays unchanged.
+
+
+## Release build scheduling
+
+`prebuild.yml` compiles the current main commit ahead of tagging. An active
+prebuild finishes instead of being cancelled by each push, so it can save its
+Rust cache; GitHub replaces older pending pushes with the newest pending push.
+Release verification reuses only successful exact-commit main prebuilds with
+all five unsigned native artifacts and the browser artifact still available.
+If that commit is already queued or building, verification waits for it. Failed
+or cancelled prebuilds fall back to release compilation. A two-hour wait limit
+fails explicitly instead of starting a duplicate build beside a stuck run.
+
+`release-web.yml` and `native-compile.yml` run independently. Rust caches use
+shared keys per target (and a separate browser key), so releases can restore
+main's prebuild caches. Cargo records native build timings in the
+`compile-timings-*` artifacts. A first build on a new cache still compiles all
+dependencies; tagged caches are subject to GitHub's branch visibility rules.
+
+Both macOS architectures compile on Apple Silicon. Intel builds explicitly
+select `x86_64-apple-darwin`, validate each executable's Mach-O architecture,
+and run the desktop startup smoke check through Rosetta. Intel packaging and
+the existing distribution startup check still run on `macos-15-intel`.
+Each platform's fresh packaging/signing runner starts when its own executables
+and the shared browser assets are ready. Build jobs receive no signing secrets,
+and signing runners never restore compilation caches. Publication still waits
+for every archive, installer, signature and distribution check.
