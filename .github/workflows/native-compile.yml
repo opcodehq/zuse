@@ -54,13 +54,18 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ inputs.target }}
+      - if: runner.os == 'macOS'
+        name: Set the supported macOS deployment target and verify native helpers
+        run: |
+          echo 'MACOSX_DEPLOYMENT_TARGET=12.0' >> "$GITHUB_ENV"
+          python -m unittest discover -s scripts -p test_macos_permission.py -v
       - run: python scripts/cargo_dev.py --github-env
       # shared-key omits the caller job name: main prebuilds and tagged releases
       # restore the same default-branch cache, isolated by target and toolchain.
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: release-native-${{ inputs.target }}
-          env-vars: HUGEICONS_BUILD_KEY HUGEICONS_SOLID_VERSION
+          env-vars: HUGEICONS_BUILD_KEY HUGEICONS_SOLID_VERSION MACOSX_DEPLOYMENT_TARGET
           cache-on-failure: true
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y build-essential cmake clang libclang-dev pkg-config libssl-dev libfontconfig-dev libfreetype-dev libxcb1-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libvulkan-dev libasound2-dev libwebkit2gtk-4.1-dev libjson-glib-dev
@@ -72,7 +77,7 @@ jobs:
       - name: Verify architecture and stage portable build artifacts
         run: |
           python - <<'PY'
-          import os, shutil, subprocess, sys
+          import os, shutil, subprocess, sys, time
           from pathlib import Path
           sys.path.insert(0, 'scripts')
           from package import BINS, binary_target
@@ -88,7 +93,14 @@ jobs:
           # Exercise the cross-compiled binary before any signing credentials
           # are loaded. Distribution checks also run it on an actual Intel host.
           if os.environ['RELEASE_TARGET'] == 'x86_64-apple-darwin':
-              subprocess.run([str(source / 'zuse'), '--noop-browser'], check=True, timeout=30)
+              command = [str(source / 'zuse'), '--noop-browser']
+              # The first launch includes Rosetta's translation of this large
+              # executable. Check that separately from normal process startup.
+              for label, timeout in [('cold Rosetta translation', 180), ('warm startup', 30)]:
+                  started = time.monotonic()
+                  print(f'Checking {label} (limit {timeout}s)', flush=True)
+                  subprocess.run(command, check=True, timeout=timeout)
+                  print(f'{label}: {time.monotonic() - started:.2f}s', flush=True)
           PY
       - uses: actions/upload-artifact@v4
         with:
