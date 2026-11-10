@@ -1198,7 +1198,12 @@ mod tests {
         for id in ["side", "agent"] {
             rpc.handle(methods::MUTATE, json!({"op":"createChat","chatId":id,"spaceId":"project","cwd":f.checkout,"parentChatId":"first","config":{"harness":"mock","sandbox":"workspace-write"}})).await.unwrap();
         }
-        rpc.handle(methods::MUTATE, json!({"op":"forceDeleteChat","chatId":"side"})).await.unwrap();
+        rpc.handle(
+            methods::MUTATE,
+            json!({"op":"forceDeleteChat","chatId":"side"}),
+        )
+        .await
+        .unwrap();
         assert!(f.checkout.exists());
         assert!(core.workspace.chat("side").unwrap().is_none());
         rpc.handle(

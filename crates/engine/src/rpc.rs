@@ -1341,8 +1341,10 @@ impl EngineRpc {
             return Ok(RpcReply::Stream(stream.boxed()));
         }
         let deadline = if method == methods::MUTATE
-            && matches!(params["op"].as_str(), Some("setChatArchived" | "forceDeleteChat"))
-        {
+            && matches!(
+                params["op"].as_str(),
+                Some("setChatArchived" | "forceDeleteChat")
+            ) {
             std::time::Duration::from_secs(10 * 60)
         } else {
             forward_deadline(method)
@@ -1772,8 +1774,10 @@ const LOGIN_TUNNEL_TTL: Duration = Duration::from_secs(15 * 60);
 fn forwardable_request(method: &str, params: &serde_json::Value) -> bool {
     forwardable(method)
         || (method == methods::MUTATE
-            && (matches!(params["op"].as_str(), Some("setChatArchived" | "forceDeleteChat"))
-                || (params["op"] == "setChatConfig" && params.get("expectedConfig").is_some())))
+            && (matches!(
+                params["op"].as_str(),
+                Some("setChatArchived" | "forceDeleteChat")
+            ) || (params["op"] == "setChatConfig" && params.get("expectedConfig").is_some())))
 }
 
 fn forwardable(method: &str) -> bool {
@@ -2708,7 +2712,10 @@ impl EngineRpc {
         let mut params = params;
         if method == methods::GET_CHAT_ARCHIVE_STATUS
             || (method == methods::MUTATE
-                && matches!(params["op"].as_str(), Some("setChatArchived" | "forceDeleteChat")))
+                && matches!(
+                    params["op"].as_str(),
+                    Some("setChatArchived" | "forceDeleteChat")
+                ))
         {
             if let Some(id) = params["chatId"].as_str() {
                 if let Some(chat) = self.workspace.chat(id).map_err(failed)? {

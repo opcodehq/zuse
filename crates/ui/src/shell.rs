@@ -5653,14 +5653,27 @@ impl Shell {
     fn show_archive_error(&mut self, chat_id: String, message: String, cx: &mut Context<Self>) {
         self.sidebar_notice = Some(message.clone().into());
         let shell = cx.weak_entity();
-        crate::toast::error_with_action(cx, message, chat_id.clone(), "Force delete…", move |_, cx| {
-            let _ = shell.update(cx, |this, cx| {
-                if !this.deleting_chat && this.state.read(cx).chats.iter().any(|chat| chat.id == chat_id) {
-                    this.delete_confirm = Some(chat_id.clone());
-                    cx.notify();
-                }
-            });
-        });
+        crate::toast::error_with_action(
+            cx,
+            message,
+            chat_id.clone(),
+            "Force delete…",
+            move |_, cx| {
+                let _ = shell.update(cx, |this, cx| {
+                    if !this.deleting_chat
+                        && this
+                            .state
+                            .read(cx)
+                            .chats
+                            .iter()
+                            .any(|chat| chat.id == chat_id)
+                    {
+                        this.delete_confirm = Some(chat_id.clone());
+                        cx.notify();
+                    }
+                });
+            },
+        );
     }
 
     fn set_chat_copy_open(&mut self, open: bool, cx: &mut Context<Self>) {
