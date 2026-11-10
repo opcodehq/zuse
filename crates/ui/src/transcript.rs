@@ -1133,6 +1133,7 @@ pub enum RowKind {
         spec: Arc<str>,
     },
     User {
+        sender: Option<zuse_protocol::presentation::zot_message::ZotSender>,
         /// Visible prompt (attachment-ref trailer already stripped). When the
         /// prompt carries file mentions this is the *projected* display text —
         /// chip labels in place of the raw Markdown links.
@@ -1459,7 +1460,10 @@ pub fn rows_for_entry(
         // Lifted before the mention projection, so a comment body's own
         // Markdown never lands in the bubble.
         let (body, badges) = crate::badges::split(&parsed.text);
-        let body = agent_message_display(&body);
+        let (sender, body) = match zuse_protocol::presentation::zot_message::parse_display(&body) {
+            Some((sender, body)) => (Some(sender), body.to_owned()),
+            None => (None, agent_message_display(&body)),
+        };
         // Draft chips become attachment references above the sent bubble.
         // Resolve uploads before lifting their spans so ordinary text and links
         // keep their original meaning; the draft editor is unaffected.
@@ -1513,6 +1517,7 @@ pub fn rows_for_entry(
             version: (raw.len() as u64) << 1 | pending as u64 | ((!turn_start) as u64) << 62,
             turn_start,
             kind: RowKind::User {
+                sender,
                 text: text.into(),
                 mentions: Arc::new(mentions),
                 attachments: Arc::new(attachments),
@@ -8498,6 +8503,7 @@ impl Transcript {
 
         let inner: AnyElement = match &row.kind {
             RowKind::User {
+                sender,
                 text,
                 mentions,
                 attachments,
@@ -8514,72 +8520,109 @@ impl Transcript {
                 // Chips ride ABOVE the bubble, right-aligned: context pills
                 // first, then attachments and mentioned files. A message with
                 // no text of its own shows no bubble at all.
-                let mut column = div().w_full().flex().flex_col();
-                if !badges.is_empty() {
-                    let pills: Vec<AnyElement> = badges
-                        .iter()
-                        .enumerate()
-                        .map(|(bix, badge)| {
-                            crate::badges::render(
-                                SharedString::from(format!("{}#badge{bix}", row.id)),
-                                badge,
-                                &theme,
-                                window,
-                                cx,
-                            )
-                        })
-                        .collect();
-                    column = column.child(
-                        div()
-                            .w_full()
-                            .flex()
-                            .flex_row()
-                            .flex_wrap()
-                            .justify_end()
-                            .items_center()
-                            .gap(px(6.0))
-                            .pb(px(6.0))
-                            .children(pills),
-                    );
-                }
-                if !attachments.is_empty() || !files.is_empty() {
-                    column = column.child(self.render_user_attachments(
-                        &row.id,
-                        &attachments,
-                        &files,
-                        window,
-                        cx,
-                    ));
-                }
-                if !text.is_empty() {
-                    // `min_w_0` is load-bearing: gpui text answers min/max-content
-                    // probes with its UNWRAPPED width, so without it the bubble's
-                    // automatic min-size is the full single-line width — the flex
-                    // item can't shrink, `justify_end` pushes the overflow off the
-                    // left edge, and long prompts render as one clipped line
-                    // instead of wrapping inside the 80% column cap.
-                    column = column.child(
-                        div().w_full().flex().justify_end().child(
+                if let Some(sender) = sender.as_ref().filter(|s| s.activity) {
+                    zuse_viewport::zot_issues::activity_notice(
+                        sender,
+                        &text,
+                        row.timestamp.unwrap_or_default(),
+                    )
+                    .into_any_element()
+                } else {
+                    let mut column = div().w_full().flex().flex_col();
+                    if !badges.is_empty() {
+                        let pills: Vec<AnyElement> = badges
+                            .iter()
+                            .enumerate()
+                            .map(|(bix, badge)| {
+                                crate::badges::render(
+                                    SharedString::from(format!("{}#badge{bix}", row.id)),
+                                    badge,
+                                    &theme,
+                                    window,
+                                    cx,
+                                )
+                            })
+                            .collect();
+                        column = column.child(
                             div()
-                                .min_w_0()
-                                .max_w(px(self.content_width * 0.8))
-                                .bg(theme.user_bubble_fill())
-                                // A speech-bubble corner toward the sender.
-                                .rounded(px(12.0))
-                                .rounded_tr(px(4.0))
-                                .px(px(14.0))
-                                .py(px(8.0))
-                                .text_size(crate::typography::text_md())
-                                .line_height(crate::typography::ui_rems(USER_LINE_HEIGHT))
-                                .text_color(theme.text)
-                                .when(pending, |el| el.opacity(0.65))
-                                .child(self.render_user_body(
-                                    &row.id, ix, text, mentions, &theme, window, cx,
-                                )),
-                        ),
-                    );
+                                .w_full()
+                                .flex()
+                                .flex_row()
+                                .flex_wrap()
+                                .justify_end()
+                                .items_center()
+                                .gap(px(6.0))
+                                .pb(px(6.0))
+                                .children(pills),
+                        );
+                    }
+                    if !attachments.is_empty() || !files.is_empty() {
+                        column = column.child(self.render_user_attachments(
+                            &row.id,
+                            &attachments,
+                            &files,
+                            window,
+                            cx,
+                        ));
+                    }
+                    if !text.is_empty() {
+                        // `min_w_0` is load-bearing: gpui text answers min/max-content
+                        // probes with its UNWRAPPED width, so without it the bubble's
+                        // automatic min-size is the full single-line width — the flex
+                        // item can't shrink, `justify_end` pushes the overflow off the
+                        // left edge, and long prompts render as one clipped line
+                        // instead of wrapping inside the 80% column cap.
+                        column = column.child(
+                            div()
+                                .w_full()
+                                .flex()
+                                .when(sender.is_none(), |d| d.justify_end())
+                                .child(
+                                    div()
+                                        .min_w_0()
+                                        .max_w(px(self.content_width
+                                            * if sender.is_some() { 1.0 } else { 0.8 }))
+                                        .bg(theme.user_bubble_fill())
+                                        // A speech-bubble corner toward the sender.
+                                        .rounded(px(12.0))
+                                        .when(sender.is_some(), |d| d.w_full())
+                                        .when(sender.is_none(), |d| d.rounded_tr(px(4.0)))
+                                        .px(px(14.0))
+                                        .py(px(8.0))
+                                        .text_size(crate::typography::text_md())
+                                        .line_height(crate::typography::ui_rems(USER_LINE_HEIGHT))
+                                        .when(sender.is_some(), |d| {
+                                            d.text_size(crate::typography::ui_rems(13.))
+                                                .line_height(crate::typography::ui_rems(19.))
+                                        })
+                                        .text_color(theme.text)
+                                        .when(pending, |el| el.opacity(0.65))
+                                        .when_some(sender.as_ref(), |d, sender| {
+                                            d.child(zuse_viewport::zot_issues::sender_header(
+                                                sender,
+                                                row.timestamp.unwrap_or_default(),
+                                            ))
+                                        })
+                                        .child(self.render_user_body(
+                                            &row.id,
+                                            ix,
+                                            text.clone(),
+                                            mentions,
+                                            &theme,
+                                            window,
+                                            cx,
+                                        )),
+                                ),
+                        );
+                    }
+                    if sender.is_some() {
+                        column = column.child(zuse_viewport::zot_issues::sender_footer(
+                            text.to_string(),
+                            row.timestamp.unwrap_or_default(),
+                        ));
+                    }
+                    column.into_any_element()
                 }
-                column.into_any_element()
             }
             RowKind::Markdown { tree, block_ix } => {
                 let link = self.link_ui(cx);
@@ -8761,6 +8804,15 @@ impl Transcript {
         // User entries align end (under the bubble), assistant entries start.
         // Both read timestamp first, then the copy action.
         let is_user_row = matches!(row.kind, RowKind::User { .. });
+        // Zapper-attributed messages and activity notices draw their own
+        // copy + time footer; a second hover strip would duplicate it.
+        let own_footer = matches!(
+            row.kind,
+            RowKind::User {
+                sender: Some(_),
+                ..
+            }
+        );
         let hovered = self
             .hovered_entry
             .as_ref()
@@ -8785,7 +8837,7 @@ impl Transcript {
         // no hover lane, so the reply sits at the ordinary turn gap below it.
         let strip = row
             .timestamp
-            .filter(|_| !(is_user_row && self.doc_override.is_some()))
+            .filter(|_| !(is_user_row && self.doc_override.is_some()) && !own_footer)
             .map(|ms| {
                 let timestamp = div()
                     .flex()

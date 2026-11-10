@@ -9,6 +9,8 @@ pub const ZOT_COMMAND: &str = "ZotCommand";
 pub const WATCH_ZOTS: &str = "WatchZots";
 pub const ZOT_FILES: &str = "ZotFiles";
 pub const ZOT_EVENTS: &str = "ZotEvents";
+/// One issue in full, including activity the coordinator prompt leaves out.
+pub const ZOT_ISSUE: &str = "ZotIssue";
 pub const ACK_ZOT_EVENTS: &str = "AckZotEvents";
 
 /// Explicit public surface. Credential-management and raw provider transport stay private.
@@ -18,6 +20,7 @@ pub const METHODS: &[&str] = &[
     WATCH_ZOTS,
     ZOT_FILES,
     ZOT_EVENTS,
+    ZOT_ISSUE,
     ACK_ZOT_EVENTS,
     "ControlUpdateStatus",
     "RetryControlUpdate",

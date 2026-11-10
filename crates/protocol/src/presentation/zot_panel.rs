@@ -6,17 +6,25 @@
 pub enum ZotTab {
     #[default]
     Overview,
+    Issues,
     Threads,
     Drive,
     History,
 }
 
 impl ZotTab {
-    pub const ALL: [ZotTab; 4] = [Self::Overview, Self::Threads, Self::Drive, Self::History];
+    pub const ALL: [ZotTab; 5] = [
+        Self::Overview,
+        Self::Issues,
+        Self::Threads,
+        Self::Drive,
+        Self::History,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
             Self::Overview => "Overview",
+            Self::Issues => "Issues",
             Self::Threads => "Threads",
             Self::Drive => "Drive",
             Self::History => "History",
@@ -26,7 +34,8 @@ impl ZotTab {
     /// Icon name shared by both clients' asset sets.
     pub fn icon(self) -> &'static str {
         match self {
-            Self::Overview => "widget",
+            Self::Overview => "list",
+            Self::Issues => "clock-circle",
             Self::Threads => "chat-round-line",
             Self::Drive => "folder-open",
             Self::History => "history",
