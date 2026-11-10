@@ -118,6 +118,19 @@ async fn script(
     Ok(value)
 }
 
+/// When the provider itself reports the machine ready for the runtime (Boat:
+/// fully hydrated). Production waits for this before launching the runtime.
+async fn provider_ready(provider: &dyn Provider, machine: &str) -> Value {
+    let started = Instant::now();
+    while started.elapsed() < Duration::from_secs(300) {
+        if let Ok(true) = provider.runtime_ready(machine).await {
+            return json!(started.elapsed().as_millis() as u64);
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    json!(null)
+}
+
 async fn lifecycle(
     provider: &dyn Provider,
     machine: &str,
@@ -125,7 +138,12 @@ async fn lifecycle(
     candidate: Option<&[u8]>,
     scripts: Option<&std::path::Path>,
 ) -> Result<()> {
-    let (ms, version) = command(provider, machine, RUNTIME, Duration::from_secs(120)).await?;
+    let (ready_ms, first) = tokio::join!(
+        provider_ready(provider, machine),
+        command(provider, machine, RUNTIME, Duration::from_secs(120))
+    );
+    let (ms, version) = first?;
+    receipt.record("providerReadyAfterCreateMs", ready_ms)?;
     receipt.record("runtimeReady", json!({"ms":ms,"version":version}))?;
     if let Some(dir) = scripts {
         provider
@@ -260,9 +278,12 @@ async fn lifecycle(
     let settled_ms = settle(provider, &resume, Duration::from_secs(180))
         .await
         .context("resume")?;
-    let (ms, _) = command(provider, machine, RUNTIME, Duration::from_secs(120))
-        .await
-        .context("runtime after resume")?;
+    let (ready_ms, first) = tokio::join!(
+        provider_ready(provider, machine),
+        command(provider, machine, RUNTIME, Duration::from_secs(120))
+    );
+    let (ms, _) = first.context("runtime after resume")?;
+    receipt.record("providerReadyAfterResumeMs", ready_ms)?;
     let (_, marker) = command(
         provider,
         machine,
