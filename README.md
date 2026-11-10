@@ -42,6 +42,8 @@ This repository is under active implementation. See [the implementation plan](in
 
 Chat access controls and their current provider-specific limits are described in [permissions](internal-docs/permissions.md).
 The [native Rust harness](internal-docs/harness-native-capabilities.md) provides durable orchestration, bounded parallel reads, local skills and lazy external tools.
+Optional [Opcode computer use](internal-docs/computer-use.md) connects a separately
+installed CU runtime through the native harness's trusted MCP configuration.
 
 The Rust hosted-cloud rewrite and its acceptance checklist are tracked in
 [cloud implementation](internal-docs/cloud-implementation.md). Its current API supports
