@@ -12,7 +12,7 @@ use macos as native;
 mod windows_webview;
 #[cfg(windows)]
 use windows_webview as native;
-#[cfg(any(target_os = "linux", windows))]
+#[cfg(target_os = "linux")]
 mod controls;
 pub mod model;
 pub(crate) mod profile;
@@ -393,7 +393,7 @@ impl BrowserSurface {
         }
         self.presentation = presentation;
         #[cfg(any(target_os = "macos", target_os = "linux", windows))]
-        if presentation != Presentation::Live {
+        if presentation == Presentation::Hidden {
             self.cancel_selection();
         }
         self.apply_presentation();
@@ -620,7 +620,7 @@ impl BrowserSurface {
         #[cfg(windows)]
         if let Some(native) = &self.native {
             let _ = window;
-            native.save_screenshot(self.native_tx.clone());
+            native.capture(self.native_tx.clone());
         }
         // Linux already composites WebKit's frames; freeze the current one.
         #[cfg(target_os = "linux")]
@@ -875,8 +875,8 @@ impl BrowserSurface {
                 }
             },
             #[cfg(windows)]
-            native::NativeEvent::ScreenshotSaved(result) => match result {
-                Ok((_, bytes)) => match markup::decode(&bytes) {
+            native::NativeEvent::Captured(result) => match result {
+                Ok(bytes) => match markup::decode(&bytes) {
                     Ok(image) => self.open_markup(image, window, cx),
                     Err(error) => crate::toast::error(cx, error),
                 },
@@ -1192,6 +1192,11 @@ mod tests {
             browser.page.url = Some(page.clone());
             browser.selecting_element = true;
             browser.selection_generation = 7;
+            browser.set_presentation(Presentation::Live, cx);
+            browser.set_presentation(Presentation::Passthrough, cx);
+            assert!(browser.selecting_element, "Dragging must preserve annotation drafts");
+            assert_eq!(browser.selection_generation, 7);
+            browser.set_presentation(Presentation::Live, cx);
             let details = |comment: &str| Some(serde_json::json!({"comment":comment,"elements":[{"tag":"button","selector":"button#save","text":"Save"}]}).to_string());
             browser.element_selected(page.clone(), 6, Ok(details("Stale note")), cx);
             assert!(browser.selecting_element);
@@ -1202,6 +1207,10 @@ mod tests {
             browser.element_selected(page.clone(), 7, Ok(None), cx);
             assert!(!browser.selecting_element);
             browser.element_selected(page, 7, Ok(details("Too late")), cx);
+            browser.selecting_element = true;
+            browser.set_presentation(Presentation::Hidden, cx);
+            assert!(!browser.selecting_element);
+            assert_eq!(browser.selection_generation, 8);
         }).unwrap();
         cx.run_until_parked();
         let notes = captured.borrow();

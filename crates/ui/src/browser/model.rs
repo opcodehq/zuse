@@ -108,19 +108,21 @@ pub fn address_bar_input(input: &str) -> Result<String, &'static str> {
     }
 
     let authority = text.split(['/', '?', '#']).next().unwrap_or(text);
-    let has_scheme = authority.split_once(':').is_some_and(|(scheme, rest)| {
-        !scheme.is_empty()
-            && scheme
-                .chars()
-                .next()
-                .is_some_and(|c| c.is_ascii_alphabetic())
-            && scheme
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
-            && (rest.is_empty() || !rest.chars().all(|c| c.is_ascii_digit()))
-    });
+    let spaced = text.chars().any(char::is_whitespace);
+    let has_scheme = (!spaced || text.contains("://"))
+        && authority.split_once(':').is_some_and(|(scheme, rest)| {
+            !scheme.is_empty()
+                && scheme
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_ascii_alphabetic())
+                && scheme
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+                && (rest.is_empty() || !rest.chars().all(|c| c.is_ascii_digit()))
+        });
     let looks_like_address = has_scheme
-        || (!text.chars().any(char::is_whitespace)
+        || (!spaced
             && (authority.contains('.') || authority.contains(':') || authority == "localhost"));
     if looks_like_address {
         if text.chars().any(char::is_whitespace) {
@@ -237,6 +239,14 @@ mod tests {
                 "https://duckduckgo.com/?q=what+is+an+index.html+file",
             ),
             ("rust", "https://duckduckgo.com/?q=rust"),
+            (
+                "TypeError: x is not a function",
+                "https://duckduckgo.com/?q=TypeError%3A+x+is+not+a+function",
+            ),
+            (
+                "note: check the preview",
+                "https://duckduckgo.com/?q=note%3A+check+the+preview",
+            ),
             (
                 "c++ & rust?",
                 "https://duckduckgo.com/?q=c%2B%2B+%26+rust%3F",

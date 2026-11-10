@@ -1074,6 +1074,7 @@ impl Composer {
                 }))
             };
             let remove_id = comment.id().clone();
+            let browser_annotation = matches!(comment, StagedAnnotation::Browser(_));
             let remove = tray_icon_action(
                 ("tray-annotation-remove", ix),
                 icons::CLOSE,
@@ -1087,8 +1088,11 @@ impl Composer {
                 let key = this.current_key.clone();
                 let id = remove_id.clone();
                 this.state.update(cx, |state, cx| {
-                    state.remove_review_comment(&key, &id);
-                    state.remove_context_item(&key, &id);
+                    if browser_annotation {
+                        state.remove_context_item(&key, &id);
+                    } else {
+                        state.remove_review_comment(&key, &id);
+                    }
                     cx.notify();
                 });
                 if this

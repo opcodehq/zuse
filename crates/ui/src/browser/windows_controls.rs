@@ -147,7 +147,7 @@ impl NativePage {
         unsafe { page.webview.OpenDevToolsWindow() }.map_err(|error| error.to_string())
     }
 
-    pub(crate) fn save_screenshot(&self, tx: Sender) {
+    pub(crate) fn capture(&self, tx: Sender) {
         let Some(web) = self
             .0
             .page
@@ -155,7 +155,7 @@ impl NativePage {
             .as_ref()
             .map(|page| page.webview.clone())
         else {
-            let _ = tx.try_send(NativeEvent::ScreenshotSaved(Err(
+            let _ = tx.try_send(NativeEvent::Captured(Err(
                 "The browser page is still starting".into(),
             )));
             return;
@@ -171,10 +171,16 @@ impl NativePage {
                         .decode(value["data"].as_str().unwrap_or_default())
                         .map_err(|error| error.to_string())
                 });
-                // PNG persistence belongs off the COM/UI thread.
+                // Capture stays in memory; only saving markup writes to disk.
                 std::thread::spawn(move || {
-                    let result = bytes.and_then(super::super::controls::save_screenshot);
-                    let _ = tx.blocking_send(NativeEvent::ScreenshotSaved(result));
+                    let result = bytes.and_then(|bytes| {
+                        if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+                            Ok(bytes)
+                        } else {
+                            Err("The browser did not return a PNG image".into())
+                        }
+                    });
+                    let _ = tx.blocking_send(NativeEvent::Captured(result));
                 });
             }),
         );

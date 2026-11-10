@@ -51,7 +51,7 @@ pub(super) enum NativeEvent {
         generation: u64,
         result: Result<Option<String>, String>,
     },
-    ScreenshotSaved(Result<(std::path::PathBuf, Vec<u8>), String>),
+    Captured(Result<Vec<u8>, String>),
     DataCleared(&'static str),
     ControlError(String),
 }
