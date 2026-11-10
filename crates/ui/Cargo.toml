@@ -61,6 +61,10 @@ name = "tool-images-fixture"
 required-features = ["appshots-fixture"]
 
 [[example]]
+name = "workflow-fixture"
+required-features = ["appshots-fixture", "browser-fixture"]
+
+[[example]]
 name = "pull-request-fixture"
 required-features = ["pull-request-fixture"]
 

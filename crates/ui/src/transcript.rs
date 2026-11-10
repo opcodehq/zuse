@@ -3698,10 +3698,6 @@ pub struct Transcript {
     /// identity, so the virtual list must explicitly discard cached heights.
     typography_generation: u32,
     content_width: f32,
-    /// Reading column width, captured in `render` before the list lays out.
-    /// Row rendering runs while the list holds its RefCell mutably, so rows
-    /// must use this instead of reading the `ListState` back.
-    reading_column_width: f32,
     /// Review fixture: every work group renders open.
     #[cfg(feature = "browser-fixture")]
     fixture_open_groups: bool,
@@ -3862,6 +3858,13 @@ pub enum TranscriptEvent {
         doc_id: String,
         title: String,
         frozen: bool,
+    },
+    /// A workflow board's agent row: open that agent in the right pane.
+    /// `row_id` names the board row in the emitting transcript.
+    OpenWorkflowAgent {
+        row_id: SharedString,
+        agent_index: u32,
+        title: String,
     },
     /// An assistant message's Fork menu: branch `chat_id` into `target`.
     /// The engine copies the conversation through its latest completed
@@ -4123,7 +4126,6 @@ impl Transcript {
             rendered_rows: HashSet::new(),
             typography_generation: crate::typography::generation(cx),
             content_width: crate::settings::transcript_width(cx),
-            reading_column_width: crate::settings::transcript_width(cx),
             #[cfg(feature = "browser-fixture")]
             fixture_open_groups: false,
             code_fences_generation: crate::settings::code_fences_generation(cx),
@@ -7495,22 +7497,15 @@ impl Transcript {
                 .map(|path| SharedString::from(path.to_owned())),
             _ => None,
         };
-        let brand = self
-            .chat_id
-            .as_deref()
-            .and_then(|id| self.state.read(cx).chats.iter().find(|chat| chat.id == id))
-            .and_then(|chat| chat.config.as_ref())
-            .map(|config| crate::pickers::harness_brand_icon(config.harness).0);
-        let column = self.reading_column_width;
         let working = run == RunStatus::Working;
         let reduce_motion = cx.reduce_motion();
         if working {
-            // Live elapsed timers, turning marks and the status shimmer.
+            // Live elapsed timers, turning marks and the summary shimmer.
             motion::pulse_lease(cx.entity_id(), cx);
         }
         let shimmer_phase = (working && !reduce_motion)
             .then(|| tool_title_shimmer_phase(shimmer_epoch(), Instant::now()));
-        let (busy, peak) = (theme.busy, theme.text_strong);
+        let (base, peak) = (theme.text_muted, theme.text);
         let status_theme = theme.clone();
         let state = self
             .workflow_boards
@@ -7535,13 +7530,11 @@ impl Transcript {
                 run,
                 progress: progress.as_ref(),
                 script_path,
-                brand,
-                stacked: column - 32.0 < crate::workflow_board::STACK_BELOW_WIDTH,
                 state: &state,
                 now_ms: crate::workflow_board::now_ms(),
                 spin: (!reduce_motion).then(|| crate::workflow_board::spin_epoch().elapsed()),
                 status_shimmer: Some(Box::new(move |text| {
-                    shimmer_title(text, shimmer_phase, busy, peak, &status_theme)
+                    shimmer_title(text, shimmer_phase, base, peak, &status_theme)
                 })),
             },
             dispatch,
@@ -7549,13 +7542,49 @@ impl Transcript {
         )
     }
 
-    /// A board control was used: update its state and remeasure its row.
+    /// One agent of the workflow run on board row `row_id`, as it stands now.
+    pub(crate) fn workflow_agent(
+        &self,
+        row_id: &str,
+        index: u32,
+    ) -> Option<crate::workflow_board::AgentSnapshot> {
+        let tool = self.rows.iter().find_map(|row| match &row.kind {
+            RowKind::WorkflowRun { tool } if row.id.as_ref() == row_id => Some(tool.clone()),
+            _ => None,
+        })?;
+        let run = workflow_run_status(&tool);
+        let progress = tool.call.workflow_progress();
+        let (phase, agent) = crate::workflow_board::find_agent(progress.as_ref(), run, index)?;
+        Some(crate::workflow_board::AgentSnapshot {
+            workflow: tool
+                .call
+                .workflow_name()
+                .map(|name| SharedString::from(name.to_owned()))
+                .unwrap_or_else(|| "Workflow".into()),
+            phase,
+            run,
+            agent,
+        })
+    }
+
+    /// A board control was used: update its state and remeasure its row, or
+    /// hand an agent to the shell to open in the right pane.
     fn workflow_board_action(
         &mut self,
         row_id: &SharedString,
         action: crate::workflow_board::BoardAction,
         cx: &mut Context<Self>,
     ) {
+        if let crate::workflow_board::BoardAction::Open(index) = action {
+            if let Some(snapshot) = self.workflow_agent(row_id, index) {
+                cx.emit(TranscriptEvent::OpenWorkflowAgent {
+                    row_id: row_id.clone(),
+                    agent_index: index,
+                    title: snapshot.agent.label,
+                });
+            }
+            return;
+        }
         let state = self.workflow_boards.entry(row_id.clone()).or_default();
         if state.apply(&action) {
             self.diagram_layout_changed(std::slice::from_ref(row_id), cx);
@@ -8739,126 +8768,131 @@ impl Transcript {
             .get()
             .is_some_and(|menu| menu.entry_id == row.entry_id);
         let worked_secs = self.turn_worked_secs.get(&row.entry_id).copied();
-        let strip = row.timestamp.map(|ms| {
-            let timestamp = div()
-                .flex()
-                .gap(px(Theme::SPACE_MD))
-                .text_size(crate::typography::text_xs())
-                .text_color(theme.text_muted.opacity(0.55))
-                .child(SharedString::from(format_timestamp(ms, &chrono::Local)))
-                .children(worked_secs.map(|secs| SharedString::from(format_elapsed(secs))));
-            let copy = copy_text.map(|text| {
-                let entry_id = copy_entry_id.clone();
-                let fade_key = format!("copy-message-hover-{entry_id}");
-                div()
-                    .id(SharedString::from(format!("copy-message-{entry_id}")))
-                    .size(px(Theme::SPACE_MD * 2.0))
+        // A subagent tab's opening prompt was not sent from here: it keeps
+        // no hover lane, so the reply sits at the ordinary turn gap below it.
+        let strip = row
+            .timestamp
+            .filter(|_| !(is_user_row && self.doc_override.is_some()))
+            .map(|ms| {
+                let timestamp = div()
                     .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(Theme::CONTROL_RADIUS))
-                    .cursor_pointer()
-                    // Same quiet icon-button treatment as the copy action
-                    // over transcript code blocks.
-                    .bg(motion::hover_blend(
-                        &fade_key,
-                        gpui::transparent_black(),
-                        crate::theme::ink(0.08),
-                    ))
-                    .on_hover(motion::hover_listener(fade_key))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.copy_message(entry_id.clone(), text.clone(), cx)
-                    }))
-                    .tooltip(crate::settings::widgets::text_tooltip("Copy message"))
-                    .child(
-                        crate::icons::icon(if copied_message {
-                            crate::icons::CHECK
-                        } else {
-                            crate::icons::COPY
-                        })
-                        .size(px(14.0))
-                        .text_color(theme.text_muted),
-                    )
-            });
-            // Assistant replies can branch the conversation from here, with
-            // the same split glyph as every other fork action: a small menu
-            // picks a new tab in this thread or a new thread.
-            let fork = fork_chat_id.filter(|_| !is_user_row).map(|chat_id| {
-                let fade_key = format!("fork-message-hover-{copy_entry_id}");
-                let entry_id = copy_entry_id.clone();
-                let button = div()
-                    .id(SharedString::from(format!("fork-message-{copy_entry_id}")))
-                    .debug_selector(|| "fork-message".into())
-                    .size(px(Theme::SPACE_MD * 2.0))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(Theme::CONTROL_RADIUS))
-                    .cursor_pointer()
-                    .role(gpui::Role::Button)
-                    .aria_label(tr(cx, msg::native::fork_chat))
-                    .bg(if fork_menu_here {
-                        crate::theme::ink(0.08)
-                    } else {
-                        motion::hover_blend(
+                    .gap(px(Theme::SPACE_MD))
+                    .text_size(crate::typography::text_xs())
+                    .text_color(theme.text_muted.opacity(0.55))
+                    .child(SharedString::from(format_timestamp(ms, &chrono::Local)))
+                    .children(worked_secs.map(|secs| SharedString::from(format_elapsed(secs))));
+                let copy = copy_text.map(|text| {
+                    let entry_id = copy_entry_id.clone();
+                    let fade_key = format!("copy-message-hover-{entry_id}");
+                    div()
+                        .id(SharedString::from(format!("copy-message-{entry_id}")))
+                        .size(px(Theme::SPACE_MD * 2.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(Theme::CONTROL_RADIUS))
+                        .cursor_pointer()
+                        // Same quiet icon-button treatment as the copy action
+                        // over transcript code blocks.
+                        .bg(motion::hover_blend(
                             &fade_key,
                             gpui::transparent_black(),
                             crate::theme::ink(0.08),
-                        )
-                    })
-                    .on_hover(motion::hover_listener(fade_key))
-                    .on_mouse_down(
-                        gpui::MouseButton::Left,
-                        cx.listener(|this, _, _, _| this.fork_menu.note_trigger_press()),
-                    )
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        cx.stop_propagation();
-                        this.toggle_fork_menu(entry_id.clone(), chat_id.clone(), window, cx);
-                    }))
-                    .when(!fork_menu_here, |button| {
-                        button.tooltip(crate::settings::widgets::text_tooltip("Fork chat"))
-                    })
-                    .child(
-                        crate::icons::icon(crate::icons::FORK)
-                            .size(px(14.0))
-                            .text_color(if fork_menu_here {
-                                theme.text
+                        ))
+                        .on_hover(motion::hover_listener(fade_key))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.copy_message(entry_id.clone(), text.clone(), cx)
+                        }))
+                        .tooltip(crate::settings::widgets::text_tooltip("Copy message"))
+                        .child(
+                            crate::icons::icon(if copied_message {
+                                crate::icons::CHECK
                             } else {
-                                theme.text_muted
-                            }),
-                    );
+                                crate::icons::COPY
+                            })
+                            .size(px(14.0))
+                            .text_color(theme.text_muted),
+                        )
+                });
+                // Assistant replies can branch the conversation from here, with
+                // the same split glyph as every other fork action: a small menu
+                // picks a new tab in this thread or a new thread.
+                let fork = fork_chat_id.filter(|_| !is_user_row).map(|chat_id| {
+                    let fade_key = format!("fork-message-hover-{copy_entry_id}");
+                    let entry_id = copy_entry_id.clone();
+                    let button = div()
+                        .id(SharedString::from(format!("fork-message-{copy_entry_id}")))
+                        .debug_selector(|| "fork-message".into())
+                        .size(px(Theme::SPACE_MD * 2.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(Theme::CONTROL_RADIUS))
+                        .cursor_pointer()
+                        .role(gpui::Role::Button)
+                        .aria_label(tr(cx, msg::native::fork_chat))
+                        .bg(if fork_menu_here {
+                            crate::theme::ink(0.08)
+                        } else {
+                            motion::hover_blend(
+                                &fade_key,
+                                gpui::transparent_black(),
+                                crate::theme::ink(0.08),
+                            )
+                        })
+                        .on_hover(motion::hover_listener(fade_key))
+                        .on_mouse_down(
+                            gpui::MouseButton::Left,
+                            cx.listener(|this, _, _, _| this.fork_menu.note_trigger_press()),
+                        )
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            cx.stop_propagation();
+                            this.toggle_fork_menu(entry_id.clone(), chat_id.clone(), window, cx);
+                        }))
+                        .when(!fork_menu_here, |button| {
+                            button.tooltip(crate::settings::widgets::text_tooltip("Fork chat"))
+                        })
+                        .child(
+                            crate::icons::icon(crate::icons::FORK)
+                                .size(px(14.0))
+                                .text_color(if fork_menu_here {
+                                    theme.text
+                                } else {
+                                    theme.text_muted
+                                }),
+                        );
+                    div()
+                        .relative()
+                        .child(button)
+                        .children(fork_menu_here.then(|| self.render_fork_menu(cx)).flatten())
+                });
+                let metadata = div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(Theme::SPACE_SM));
+                let metadata = metadata.child(timestamp).children(copy).children(fork);
                 div()
-                    .relative()
-                    .child(button)
-                    .children(fork_menu_here.then(|| self.render_fork_menu(cx)).flatten())
+                    .h(px(Theme::SPACE_SM + Theme::SPACE_MD * 2.0))
+                    .pt(px(Theme::SPACE_SM))
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    // No horizontal inset: the original's `px-1` netted out flush
+                    // because its message text was inset by the same amount (group
+                    // padding 4 + inner VStack 4 = 8 = group 4 + px-1 4). Here the
+                    // markdown text / user bubble sit AT the content column edges,
+                    // so the label must too — assistant label's left edge on the
+                    // text's first-character x, user label's right edge on the
+                    // bubble's right edge (user-reported 4px drift).
+                    .when(is_user_row, |el| el.justify_end())
+                    .when(hovered || fork_menu_here, |el| {
+                        el.child(motion::fade_quick(
+                            SharedString::from(format!("meta-{}", row.id)),
+                            metadata,
+                        ))
+                    })
             });
-            let metadata = div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(px(Theme::SPACE_SM));
-            let metadata = metadata.child(timestamp).children(copy).children(fork);
-            div()
-                .h(px(Theme::SPACE_SM + Theme::SPACE_MD * 2.0))
-                .pt(px(Theme::SPACE_SM))
-                .w_full()
-                .flex()
-                .items_center()
-                // No horizontal inset: the original's `px-1` netted out flush
-                // because its message text was inset by the same amount (group
-                // padding 4 + inner VStack 4 = 8 = group 4 + px-1 4). Here the
-                // markdown text / user bubble sit AT the content column edges,
-                // so the label must too — assistant label's left edge on the
-                // text's first-character x, user label's right edge on the
-                // bubble's right edge (user-reported 4px drift).
-                .when(is_user_row, |el| el.justify_end())
-                .when(hovered || fork_menu_here, |el| {
-                    el.child(motion::fade_quick(
-                        SharedString::from(format!("meta-{}", row.id)),
-                        metadata,
-                    ))
-                })
-        });
         let entry_id = row.entry_id.clone();
         let row_id = row.id.clone();
         let outer = div()
@@ -11783,7 +11817,6 @@ impl Render for Transcript {
             } else {
                 self.content_width
             };
-            self.reading_column_width = column;
             released.extend(diagrams.set_view((column.max(1.0), 480.0), window.scale_factor()));
             released
         };
@@ -15091,6 +15124,80 @@ mod tests {
         }
 
         #[test]
+        fn workflow_agent_rows_open_in_the_right_pane() {
+            use zuse_protocol::{
+                WorkflowAgentProgress, WorkflowAgentState, WorkflowPhase, WorkflowProgress,
+            };
+            with_window(|transcript, window, cx| {
+                let progress = WorkflowProgress {
+                    phases: vec![WorkflowPhase {
+                        index: 0,
+                        title: "Review".into(),
+                    }],
+                    agents: vec![WorkflowAgentProgress {
+                        index: 4,
+                        label: "review:auth".into(),
+                        state: WorkflowAgentState::Done,
+                        phase_index: Some(0),
+                        phase_title: None,
+                        model: Some("opus".into()),
+                        started_at: Some(1_000),
+                        duration_ms: Some(2_000),
+                        prompt_preview: Some("Check the auth flow".into()),
+                        result_preview: Some("No issues".into()),
+                        error: None,
+                    }],
+                };
+                let entry = assistant(
+                    "workflow",
+                    MessageStatus::Complete,
+                    vec![workflow_part(Some(&progress), Some(SubagentStatus::Done))],
+                );
+                let opened = Rc::new(std::cell::RefCell::new(Vec::new()));
+                let sink = opened.clone();
+                let _events = cx.subscribe(&transcript, move |_, event, _| {
+                    if let TranscriptEvent::OpenWorkflowAgent {
+                        row_id,
+                        agent_index,
+                        title,
+                    } = event
+                    {
+                        sink.borrow_mut()
+                            .push((row_id.clone(), *agent_index, title.clone()));
+                    }
+                });
+                let row_id = transcript.update(cx, |this, cx| {
+                    this.rows = rows_for_entry(&entry, false, false, &mut parse);
+                    this.list.reset(this.rows.len());
+                    this.rail_enabled = false;
+                    cx.notify();
+                    this.rows
+                        .iter()
+                        .find(|row| matches!(row.kind, RowKind::WorkflowRun { .. }))
+                        .map(|row| row.id.clone())
+                        .unwrap()
+                });
+                draw(window, cx);
+                draw(window, cx);
+                transcript.update(cx, |this, cx| {
+                    let snapshot = this.workflow_agent(&row_id, 4).expect("agent found");
+                    assert_eq!(snapshot.workflow.as_ref(), "audit");
+                    assert_eq!(snapshot.phase.as_deref(), Some("Review"));
+                    // "review:auth" under "Review" reads as "auth".
+                    assert_eq!(snapshot.agent.label, "auth");
+                    assert_eq!(snapshot.agent.model.as_deref(), Some("opus"));
+                    assert!(this.workflow_agent(&row_id, 9).is_none());
+                    this.workflow_board_action(
+                        &row_id,
+                        crate::workflow_board::BoardAction::Open(4),
+                        cx,
+                    );
+                });
+                assert_eq!(*opened.borrow(), vec![(row_id, 4, "auth".to_string())]);
+            });
+        }
+
+        #[test]
         fn conversation_width_reflows_streaming_text_without_restarting_animations() {
             with_window(|transcript, window, cx| {
                 let dir = tempfile::tempdir().unwrap();
@@ -18328,6 +18435,16 @@ impl Transcript {
     pub fn fixture_appshots_start(&mut self, cx: &mut Context<Self>) {
         self.list.scroll_to(gpui::ListOffset::default());
         cx.notify();
+    }
+
+    /// Open agent `index` of the first workflow board, as a row click would.
+    pub fn fixture_open_workflow_agent(&mut self, index: u32, cx: &mut Context<Self>) {
+        let row = self.rows.iter().find_map(|row| {
+            matches!(row.kind, RowKind::WorkflowRun { .. }).then(|| row.id.clone())
+        });
+        if let Some(row) = row {
+            self.workflow_board_action(&row, crate::workflow_board::BoardAction::Open(index), cx);
+        }
     }
 
     /// Open or close every tool group and image chip, as clicks would.

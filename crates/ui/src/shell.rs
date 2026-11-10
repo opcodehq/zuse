@@ -2088,6 +2088,8 @@ struct SubagentTab {
     _fetch: Option<Task<()>>,
     /// Spawn chips INSIDE the subagent transcript open their own tabs.
     _events: Subscription,
+    /// A workflow agent's conversation follows its run's progress.
+    _feed: Option<Subscription>,
 }
 
 /// Sidebar render identity lets transcript/caret frames reuse its GPUI scene.
@@ -4848,6 +4850,19 @@ impl Shell {
                     cx,
                 );
             }
+            TranscriptEvent::OpenWorkflowAgent {
+                row_id,
+                agent_index,
+                title,
+            } => {
+                self.add_workflow_agent_surface(
+                    transcript,
+                    row_id.clone(),
+                    *agent_index,
+                    title.clone(),
+                    cx,
+                );
+            }
             // A reply's Fork menu: a new tab in this thread, or a new thread.
             TranscriptEvent::ForkChat { chat_id, target } => {
                 let source = self
@@ -4869,6 +4884,91 @@ impl Shell {
                 });
             }
         }
+    }
+
+    /// A workflow board's agent row: open that agent as a subagent tab. A
+    /// workflow agent has no doc of its own, so its conversation (what it was
+    /// asked, what it returned) is built from the run's progress and kept in
+    /// step with it; the tab then reads exactly like any other transcript.
+    fn add_workflow_agent_surface(
+        &mut self,
+        transcript: Entity<Transcript>,
+        row_id: SharedString,
+        index: u32,
+        title: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.set_surfaces_open(true, cx);
+        let doc_id = format!("workflow-agent:{row_id}:{index}");
+        if let Some((&id, _)) = self
+            .subagent_tabs
+            .iter()
+            .find(|(_, tab)| tab.doc_id == doc_id)
+        {
+            self.set_right_active(RightSurface::Subagent(id), cx);
+            return;
+        }
+        let Some(snapshot) = transcript.read(cx).workflow_agent(&row_id, index) else {
+            return;
+        };
+        let device = self
+            .state
+            .read(cx)
+            .local_device_id
+            .clone()
+            .unwrap_or_default();
+        let entries = crate::workflow_board::agent_entries(&snapshot, &device);
+        let live = matches!(
+            snapshot.agent.status,
+            crate::workflow_board::AgentStatus::Working
+                | crate::workflow_board::AgentStatus::Queued
+        );
+        self.state.update(cx, |state, cx| {
+            state.set_subagent_snapshot(doc_id.clone(), entries.clone());
+            cx.notify();
+        });
+        let last = std::cell::RefCell::new(entries);
+        let state = self.state.clone();
+        let feed_doc = doc_id.clone();
+        let feed = cx.observe(&transcript, move |_, source, cx| {
+            let Some(snapshot) = source.read(cx).workflow_agent(&row_id, index) else {
+                return;
+            };
+            let entries = crate::workflow_board::agent_entries(&snapshot, &device);
+            if *last.borrow() == entries {
+                return;
+            }
+            last.replace(entries.clone());
+            state.update(cx, |state, cx| {
+                state.set_subagent_snapshot(feed_doc.clone(), entries);
+                cx.notify();
+            });
+        });
+        self.subagent_seq += 1;
+        let id = self.subagent_seq;
+        let view = cx.new(|cx| Transcript::for_doc(self.state.clone(), doc_id.clone(), live, cx));
+        let links = Self::session_links(Some(self.active_chat.clone()), cx);
+        view.update(cx, |view, _| view.set_workspace_link_handler(links));
+        let events = cx.subscribe(&view, Self::on_transcript_event);
+        self.subagent_tabs.insert(
+            id,
+            SubagentTab {
+                doc_id,
+                // Workflows are a Claude Code feature.
+                harness: Some(zuse_protocol::HarnessId::ClaudeCode),
+                title: title.into(),
+                transcript: view,
+                _fetch: None,
+                _events: events,
+                _feed: Some(feed),
+            },
+        );
+        let key = self.panel_key(cx);
+        self.right_tabs
+            .entry(key)
+            .or_default()
+            .push(RightSurface::Subagent(id));
+        self.set_right_active(RightSurface::Subagent(id), cx);
     }
 
     /// A spawn chip's "Open subagent": focus the existing tab for that doc,
@@ -4944,6 +5044,7 @@ impl Shell {
                 transcript,
                 _fetch: fetch,
                 _events: events,
+                _feed: None,
             },
         );
         let key = self.panel_key(cx);
