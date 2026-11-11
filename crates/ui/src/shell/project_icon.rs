@@ -221,10 +221,9 @@ struct ProjectIconTooltip {
 impl Render for ProjectIconTooltip {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx);
-        let card = div()
-            .max_w(px(320.0))
-            .px(px(9.0))
-            .py(px(7.0))
+        let card = crate::tooltip::surface(theme)
+            .max_w(px(crate::tooltip::MAX_WIDTH))
+            .py(px(4.5))
             .flex()
             .flex_col()
             .gap(px(3.0))
@@ -238,7 +237,7 @@ impl Render for ProjectIconTooltip {
                     .min_w_0()
                     .truncate()
                     .whitespace_nowrap()
-                    .text_size(px(11.0))
+                    .text_size(px(crate::tooltip::TEXT_SIZE))
                     .font_weight(gpui::FontWeight::MEDIUM)
                     .text_color(theme.text_strong)
                     .child(self.name.clone()),
@@ -248,11 +247,11 @@ impl Render for ProjectIconTooltip {
                     .min_w_0()
                     .truncate()
                     .whitespace_nowrap()
-                    .text_size(px(11.0))
+                    .text_size(px(crate::tooltip::TEXT_SIZE))
                     .text_color(theme.text_muted)
                     .child(self.device.clone()),
             );
-        crate::frost::frosted(6.0, crate::frost::MENU_BLUR, card)
+        crate::tooltip::frost(card)
     }
 }
 
@@ -269,7 +268,7 @@ fn project_icon_frame(
         .id(SharedString::from(format!("project-icon-{chat_id}")))
         .size(px(size))
         .flex_none()
-        .tooltip(move |_, cx| {
+        .anchored_tooltip(crate::tooltip::Placement::Below, move |_, cx| {
             cx.new(|_| ProjectIconTooltip {
                 name: name.clone(),
                 device: device.clone(),

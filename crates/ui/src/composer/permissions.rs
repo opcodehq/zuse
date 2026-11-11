@@ -218,9 +218,7 @@ impl Composer {
                             (label(selected)).to_string()
                         })
                     })
-                    .when(icon_only, |el| {
-                        el.tooltip(crate::settings::widgets::text_tooltip(label(selected)))
-                    })
+                    .when(icon_only, |el| el.tip(label(selected)))
                     .child(
                         icons::icon(icons::ALT_ARROW_DOWN)
                             .size(px(12.))

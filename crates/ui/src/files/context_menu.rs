@@ -277,7 +277,7 @@ impl FilesSurface {
                     .aria_label(label.clone())
                     .when(index == 3, |row| row.text_color(theme.danger))
                     .when(index == 1, |row| {
-                        row.tooltip(move |_, cx| {
+                        row.anchored_tooltip(crate::tooltip::Placement::Below, move |_, cx| {
                             cx.new(|_| preview::FileEditorTooltip {
                                 text: if count > 1 {
                                     "Copy full paths, one per line"

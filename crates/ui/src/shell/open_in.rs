@@ -683,7 +683,7 @@ impl Shell {
                     cx.notify();
                 }
             }))
-            .tooltip(crate::settings::widgets::text_tooltip("Open in…"))
+            .tip("Open in…")
             .child(
                 div()
                     .size(px(26.0))

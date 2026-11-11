@@ -33,6 +33,7 @@
 //!   while the virtual list measures each logical row's resulting height.
 
 use crate::localization::message as tr;
+use crate::tooltip::TooltipExt as _;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -1730,18 +1731,7 @@ struct DiffHeaderTooltip(&'static str);
 
 impl Render for DiffHeaderTooltip {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = Theme::of(cx);
-        div()
-            .px(px(8.0))
-            .py(px(6.0))
-            .rounded(px(6.0))
-            .border_1()
-            .border_color(theme.border_strong)
-            .bg(theme.surface_raised)
-            .shadow_md()
-            .text_size(px(11.0))
-            .text_color(theme.text)
-            .child(self.0)
+        crate::tooltip::chip(self.0, Theme::of(cx))
     }
 }
 
@@ -3732,7 +3722,9 @@ impl Changes {
                         cx.stop_propagation();
                         cx.emit(ChangesEvent::OpenFile(path.clone()));
                     }))
-                    .tooltip(|_, cx| cx.new(|_| DiffHeaderTooltip("Open in file browser")).into())
+                    .anchored_tooltip(crate::tooltip::Placement::Below, |_, cx| {
+                        cx.new(|_| DiffHeaderTooltip("Open in file browser")).into()
+                    })
                     .tooltip_show_delay(Duration::from_millis(350))
                     .child(
                         crate::icons::icon(crate::icons::DOCUMENT)
@@ -3849,7 +3841,9 @@ impl Changes {
             .on_mouse_down(gpui::MouseButton::Left, |_, window, _| {
                 window.prevent_default()
             })
-            .tooltip(move |_, cx| cx.new(|_| DiffHeaderTooltip(label)).into())
+            .anchored_tooltip(crate::tooltip::Placement::Below, move |_, cx| {
+                cx.new(|_| DiffHeaderTooltip(label)).into()
+            })
             .tooltip_show_delay(Duration::from_millis(350))
             .child(
                 crate::icons::icon(icon_path)

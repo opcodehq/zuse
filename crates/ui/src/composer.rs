@@ -9,6 +9,7 @@
 
 use crate::localization::message as tr;
 use crate::settings::keybindings::Command;
+use crate::tooltip::TooltipExt as _;
 use zuse_i18n::messages as msg;
 mod add_menu;
 mod archive;
@@ -486,18 +487,7 @@ struct AppshotActionTooltip(SharedString);
 
 impl Render for AppshotActionTooltip {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = Theme::of(cx);
-        div()
-            .px(px(8.0))
-            .py(px(6.0))
-            .rounded(px(6.0))
-            .border_1()
-            .border_color(theme.border_strong)
-            .bg(theme.surface_raised)
-            .shadow_md()
-            .text_size(px(11.0))
-            .text_color(theme.text)
-            .child(self.0.clone())
+        crate::tooltip::chip(self.0.clone(), Theme::of(cx))
     }
 }
 
@@ -8153,7 +8143,7 @@ impl Composer {
                 .overflow_hidden()
                 .cursor_pointer()
                 .hover(|style| style.bg(crate::theme::ink(0.045)))
-                .tooltip(move |_, cx| {
+                .anchored_tooltip(crate::tooltip::Placement::Below, move |_, cx| {
                     cx.new(|_| AppshotActionTooltip(preview_label.clone()))
                         .into()
                 })
@@ -8271,7 +8261,7 @@ impl Composer {
                     .shadow_sm()
                     .opacity(0.0)
                     .group_hover(group, |style| style.opacity(1.0))
-                    .tooltip(move |_, cx| {
+                    .anchored_tooltip(crate::tooltip::Placement::Below, move |_, cx| {
                         cx.new(|_| AppshotActionTooltip(remove_label.clone()))
                             .into()
                     })
@@ -11696,10 +11686,7 @@ impl Composer {
                                         .hover(|style| style.bg(theme.element_hover))
                                         .role(Role::Button)
                                         .aria_label(tr(cx, msg::chat::stash_delete))
-                                        .tooltip(crate::settings::widgets::text_tooltip(tr(
-                                            cx,
-                                            msg::chat::stash_delete,
-                                        )))
+                                        .tip(tr(cx, msg::chat::stash_delete))
                                         .on_click(cx.listener(move |this, _, _, cx| {
                                             cx.stop_propagation();
                                             this.delete_stashed_at(ix, cx);
@@ -12472,7 +12459,7 @@ impl Composer {
                     .justify_center()
                     .rounded(px(6.))
                     .cursor_pointer()
-                    .tooltip(crate::settings::widgets::text_tooltip("Set up voice input"))
+                    .tip("Set up voice input")
                     .on_click(|_, window, cx| window.dispatch_action(Box::new(SetupDictation), cx))
                     .child(
                         crate::icons::icon(crate::icons::DITHER_MIC)
@@ -12546,7 +12533,7 @@ impl Composer {
                 glass::accent(el, &theme, t, glow).hover(|style| style.opacity(0.85))
             })
             .focus_visible(|style| style.border_1().border_color(theme.accent))
-            .tooltip(crate::settings::widgets::text_tooltip(tooltip))
+            .tip(tooltip)
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| this.press_dictation(HoldSource::Pointer, cx)),
@@ -12920,7 +12907,7 @@ impl Composer {
                 .cursor_pointer()
                 .hover(|s| s.opacity(0.85))
                 .on_click(cx.listener(|this, _, _, cx| this.interrupt_selected(cx)))
-                .tooltip(crate::settings::widgets::text_tooltip("Stop"))
+                .tip("Stop")
                 .child(zuse_viewport::dither::fill_color(theme.text_muted, 7.0))
                 .child(div().size(px(10.0)).rounded(px(1.0)).bg(gpui::white()))
                 .into_any_element(),
@@ -12941,7 +12928,7 @@ impl Composer {
                     .when(!blocked, |el| {
                         el.on_click(cx.listener(|this, _, _, cx| this.on_submit(cx)))
                     })
-                    .tooltip(crate::settings::widgets::text_tooltip(
+                    .tip(
                         if mode == SendButtonMode::Queue
                             && crate::settings::direct_steer_enabled(cx)
                         {
@@ -13502,7 +13489,7 @@ impl Render for Composer {
                 el.debug_selector(|| "dictation-dismiss".into())
             })
             .when(!self.add_menu_open, |el| {
-                el.tooltip(crate::settings::widgets::text_tooltip(if dictating {
+                el.tip(if dictating {
                     SharedString::from("Cancel dictation")
                 } else {
                     add_label.clone()
@@ -13697,7 +13684,7 @@ impl Render for Composer {
             .on_hover(motion::hover_listener(plugins_hover_key.clone()))
             .role(Role::Button)
             .aria_label(tr(cx, msg::plugins::plugins_back))
-            .tooltip(crate::settings::widgets::text_tooltip("Plugins"))
+            .tip("Plugins")
             .opacity(beneath_voice)
             .on_click(cx.listener(|_, _, _, cx| {
                 cx.emit(ComposerEvent::WorkspaceCommand(WorkspaceCommand::Plugins));
@@ -13739,7 +13726,7 @@ impl Render for Composer {
             .aria_label(stash_label.clone())
             .aria_expanded(stash_open)
             .tab_index(0)
-            .tooltip(crate::settings::widgets::text_tooltip(stash_label))
+            .tip(stash_label)
             .hover(|style| style.bg(theme.muted_fill().opacity(0.6)))
             .focus_visible(|style| style.border_1().border_color(theme.accent))
             .on_click(cx.listener(|this, _, _, cx| this.toggle_stash_list(cx)))
