@@ -5,9 +5,7 @@ use crate::{state::AppState, theme::Theme};
 use gpui::{Context, Entity, SharedString, Subscription, Task, Window, div, prelude::*, px};
 use std::time::Duration;
 use zuse_i18n::messages as msg;
-use zuse_protocol::pr_watch::{
-    MAX_REPAIR_ATTEMPTS, PrWatchRequest, PrWatchStatus, SetPrWatchRequest,
-};
+use zuse_protocol::pr_watch::{PrWatchRequest, PrWatchStatus, SetPrWatchRequest};
 use zuse_rpc::methods;
 
 pub(crate) struct PrWatchControl {
@@ -185,6 +183,7 @@ mod tests {
             error: None,
             repairing: false,
             can_auto_fix: true,
+            last_follow_up: None,
         };
         let rpc = ScriptedRpc::new({
             let status = status.clone();
@@ -246,7 +245,8 @@ impl Render for PrWatchControl {
         let status = self.status.as_ref();
         let watching = status.is_some_and(|s| s.enabled);
         let fixing = status.is_some_and(|s| s.auto_fix);
-        let exhausted = status.map_or(0, |s| s.attempts) >= MAX_REPAIR_ATTEMPTS;
+        // Older engines report their own, smaller budget.
+        let exhausted = status.is_some_and(|s| s.attempts >= s.max_attempts.max(1));
         let writable = self
             .state
             .read(cx)
@@ -259,6 +259,19 @@ impl Render for PrWatchControl {
             .error
             .clone()
             .or_else(|| status.and_then(|s| s.error.clone()));
+        let follow_up = status
+            .filter(|_| !self.compact && error.is_none())
+            .and_then(|s| {
+                let label = s.last_follow_up.as_ref()?;
+                Some(if s.repairing {
+                    format!("Following up on {label}…")
+                } else {
+                    format!(
+                        "Last follow-up: {label} · {} of {}",
+                        s.attempts, s.max_attempts
+                    )
+                })
+            });
         let fix_ready = ready && ((writable && status.is_some_and(|s| s.can_auto_fix)) || fixing);
         let toggle = div()
             .id("pr-auto-fix-toggle")
@@ -328,6 +341,9 @@ impl Render for PrWatchControl {
                             control.set(false, false, false, cx);
                         })),
                 )
+            })
+            .when_some(follow_up, |el, text| {
+                el.child(div().min_w_0().child(SharedString::from(text)))
             })
             .when_some(error.filter(|_| !self.compact), |el, error| {
                 el.child(

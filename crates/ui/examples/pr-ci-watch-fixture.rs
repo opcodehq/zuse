@@ -65,6 +65,7 @@ impl RpcService for CaptureRpc {
                         error: None,
                         repairing: false,
                         can_auto_fix: true,
+                        last_follow_up: None,
                     });
                     true
                 });

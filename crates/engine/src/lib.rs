@@ -504,6 +504,7 @@ impl EngineCore {
         let pr_watches =
             pr_watch::PrWatches::open(profile.store_root(), workspace.clone(), doc_host.clone())?;
         pr_watches.start();
+        pr_watches.follow_sessions(sessions.watch_sessions());
         let zot_supervisor = zots::ZotSupervisor::start(
             zots.clone(),
             sessions.clone(),
