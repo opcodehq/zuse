@@ -16,8 +16,27 @@ impl RuntimeControl {
         &self,
         id: &str,
         access: &Access,
+        command: CommandEnvelope,
+        now: i64,
+    ) -> Result<Value, ApiError> {
+        self.enqueue_command(id, access, command, now, false).await
+    }
+    pub(crate) async fn command_enqueue_slack(
+        &self,
+        id: &str,
+        access: &Access,
+        command: CommandEnvelope,
+        now: i64,
+    ) -> Result<Value, ApiError> {
+        self.enqueue_command(id, access, command, now, true).await
+    }
+    async fn enqueue_command(
+        &self,
+        id: &str,
+        access: &Access,
         mut command: CommandEnvelope,
         now: i64,
+        slack: bool,
     ) -> Result<Value, ApiError> {
         if command.workspace_id != id || !command.eligible() {
             return Err(ApiError::bad_request("cloud_command_not_eligible"));
@@ -47,8 +66,16 @@ impl RuntimeControl {
         if command.destruction_fence != destruction_fence(&row) {
             return Err(ApiError::conflict("cloud_command_fence_stale"));
         }
-        // Author metadata is derived from fresh authorization, never client input.
-        command.actor = access.membership.as_ref().map(|member|json!({"subject":access.actor.account_id,"membershipId":member.id,"organizationId":member.organization_id,"role":member.role.slug}));
+        // Author metadata is derived from fresh authorization, never client
+        // input. Slack messages run in the linked member's personal workspace.
+        if slack && access.membership.is_some() {
+            return Err(ApiError::conflict("slack_requires_personal_workspace"));
+        }
+        command.actor = if slack {
+            Some(json!({"kind":"slack"}))
+        } else {
+            access.membership.as_ref().map(|member|json!({"subject":access.actor.account_id,"membershipId":member.id,"organizationId":member.organization_id,"role":member.role.slug}))
+        };
         mailbox(&mut tx, id).await?;
         if let Some(existing) = sqlx::query("SELECT command_id,fingerprint,state,workspace_sequence,revision,accepted_at FROM zuse_rust_mailbox_commands WHERE workspace_id=$1 AND command_id=$2")
             .bind(id).bind(&command.command_id).fetch_optional(&mut *tx).await? {

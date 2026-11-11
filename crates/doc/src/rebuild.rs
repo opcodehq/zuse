@@ -56,6 +56,9 @@ pub fn rebuild_thin_doc(source: &SessionDoc) -> Result<ThinRebuild, DocError> {
     if let Some(usage) = source.context_usage() {
         thin.update_context_usage(usage.tokens, usage.window)?;
     }
+    for (message, result) in source.slack_turn_results() {
+        thin.record_slack_turn_result(&message, &result)?;
+    }
     let mut sidecar = Vec::new();
     let entries = source.read_entries()?;
     let entry_count = entries.len();

@@ -140,6 +140,28 @@ impl RuntimeControl {
         body: CreateWorkspace,
         now: i64,
     ) -> Result<(Value, bool), ApiError> {
+        self.create_workspace_impl(access, body, now, false).await
+    }
+    /// A Slack task creates a personal workspace for the linked member; Slack
+    /// never creates organization runtimes.
+    pub(crate) async fn create_slack_workspace(
+        &self,
+        access: &Access,
+        body: CreateWorkspace,
+        now: i64,
+    ) -> Result<(Value, bool), ApiError> {
+        if access.membership.is_some() || access.owner_id.starts_with("organization:") {
+            return Err(ApiError::conflict("slack_organization_runtime_unavailable"));
+        }
+        self.create_workspace_impl(access, body, now, true).await
+    }
+    async fn create_workspace_impl(
+        &self,
+        access: &Access,
+        body: CreateWorkspace,
+        now: i64,
+        slack: bool,
+    ) -> Result<(Value, bool), ApiError> {
         if !creation_actor_allowed(access) || !self.creation_accounts.contains(&access.owner_id) {
             return Err(ApiError::forbidden("cloud_workspace_creation_disabled"));
         }
@@ -215,7 +237,9 @@ impl RuntimeControl {
             return Err(ApiError::conflict("agent_connection_required"));
         }
         let digest = self.master.digest_api(
-            &if access.membership.is_some() {
+            &if slack {
+                format!("rust-slack-workspace-create:{owner}")
+            } else if access.membership.is_some() {
                 format!(
                     "rust-workspace-create:{owner}:actor:{}",
                     access.actor.account_id
@@ -568,6 +592,9 @@ impl RuntimeControl {
                 )
                 .await?;
             }
+        }
+        if slack && build["settings"]["rustSlackVersion"] != 1 {
+            return Err(ApiError::conflict("slack_runtime_update_required"));
         }
         if (body.reasoning.is_some() || !body.model_options.is_empty())
             && build["settings"]["rustLaunchModelConfigVersion"] != 1

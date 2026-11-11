@@ -86,6 +86,7 @@ mod settings_view;
 mod shell;
 pub mod sidebar_controls;
 mod sidebar_host;
+pub mod slack_settings;
 pub mod styling;
 mod terminals;
 mod thread_actions;
@@ -134,6 +135,8 @@ pub struct WorkspaceView {
     cloud: cloud::Cloud,
     cloud_models: cloud::models::State,
     repository_panel: Entity<cloud_repositories::RepositoryPanel>,
+    slack_panel: Entity<slack_settings::SlackPanel>,
+    slack_requests: HashMap<u64, u64>,
     repository_requests: HashMap<u64, u64>,
     billing: cloud_billing::Billing,
     cloud_settings_focus: [FocusHandle; 2],
@@ -444,6 +447,28 @@ impl WorkspaceView {
         .detach();
         let creation_source_picker = Self::new_creation_sources(cx);
         let import_picker = Self::new_import_menu(cx);
+        let slack_panel = cx.new(|cx| slack_settings::SlackPanel::new(window, cx));
+        cx.observe(&slack_panel, |_, _, cx| cx.notify()).detach();
+        cx.subscribe(
+            &slack_panel,
+            |this, _, event: &cloud_repositories::Request, _cx| match event {
+                cloud_repositories::Request::Call { id, method, params } => {
+                    let remote = this.call(method, params.clone());
+                    this.slack_requests.insert(remote, *id);
+                }
+                cloud_repositories::Request::Cancel { id } => {
+                    if let Some(remote) = this
+                        .slack_requests
+                        .iter()
+                        .find_map(|(r, l)| (*l == *id).then_some(*r))
+                    {
+                        this.slack_requests.remove(&remote);
+                        this.cancel(remote);
+                    }
+                }
+            },
+        )
+        .detach();
         let repository_panel = cx.new(|cx| cloud_repositories::RepositoryPanel::new(window, cx));
         cx.observe(&repository_panel, |_, _, cx| cx.notify())
             .detach();
@@ -641,6 +666,16 @@ impl WorkspaceView {
                 }
                 this.repository_panel
                     .update(cx, |panel, cx| panel.interrupted(cx));
+                for remote in this
+                    .slack_requests
+                    .drain()
+                    .map(|(id, _)| id)
+                    .collect::<Vec<_>>()
+                {
+                    this.pending.remove(&remote);
+                }
+                this.slack_panel
+                    .update(cx, |panel, cx| panel.interrupted(cx));
                 cx.notify();
             });
         });
@@ -694,6 +729,8 @@ impl WorkspaceView {
             cloud_archive: Default::default(),
             cloud: Default::default(),
             cloud_models: Default::default(),
+            slack_panel,
+            slack_requests: HashMap::new(),
             repository_panel,
             repository_requests: HashMap::new(),
             billing: Default::default(),
@@ -1037,6 +1074,8 @@ impl WorkspaceView {
                     .as_str()
                     .map(|id| (id.to_owned(), value["orgId"].as_str().map(str::to_owned)));
                 self.repository_panel
+                    .update(cx, |panel, cx| panel.bind_owner(owner.clone(), cx));
+                self.slack_panel
                     .update(cx, |panel, cx| panel.bind_owner(owner, cx));
             }
         }
@@ -1056,6 +1095,24 @@ impl WorkspaceView {
                     .ok_or_else(|| "Repository response was interrupted.".into())
             };
             self.repository_panel
+                .update(cx, |panel, cx| panel.receive(local, result, cx));
+            return;
+        }
+        if let Some((remote, local)) = frame["id"]
+            .as_u64()
+            .and_then(|id| self.slack_requests.remove(&id).map(|local| (id, local)))
+        {
+            self.pending.remove(&remote);
+            let result = if let Some(error) = frame["err"].as_str() {
+                Err(error.to_owned())
+            } else {
+                frame
+                    .get("ok")
+                    .or_else(|| frame.get("item"))
+                    .cloned()
+                    .ok_or_else(|| "Slack response interrupted.".into())
+            };
+            self.slack_panel
                 .update(cx, |panel, cx| panel.receive(local, result, cx));
             return;
         }
