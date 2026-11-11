@@ -1730,6 +1730,7 @@ impl Theme {
             .with_code_font_size(crate::typography::code_font_size(cx))
             .with_terminal_font_size(crate::typography::terminal_font_size(cx));
         sync_gpui_base_scrollbar(&next, cx);
+        crate::tooltip::install(cx);
         cx.set_global(next);
         // An accent-only swap leaves CURRENT_APPEARANCE unchanged, but cached
         // resolved colors still need to be discarded for the next frame.
@@ -1805,6 +1806,7 @@ impl Theme {
         });
         set_current_appearance(appearance);
         sync_gpui_base_scrollbar(&next, cx);
+        crate::tooltip::install(cx);
         cx.set_global(next);
         if changed || force_generation {
             bump_style_generation();

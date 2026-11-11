@@ -90,6 +90,7 @@ mod terminals;
 mod thread_actions;
 mod title_settings;
 mod tool_results;
+pub mod tooltip;
 mod transcript;
 pub mod ui_block;
 mod ui_block_parts;

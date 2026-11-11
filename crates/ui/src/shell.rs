@@ -12,6 +12,7 @@
 //! dock. Double-clicking a handle resets that pane to its default width.
 
 use crate::localization::message as tr;
+use crate::tooltip::TooltipExt as _;
 use std::path::PathBuf;
 use std::time::Duration;
 use zuse_i18n::messages as msg;
@@ -1476,19 +1477,7 @@ struct SurfaceTabTooltip {
 
 impl Render for SurfaceTabTooltip {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = Theme::of(cx);
-        let card = div()
-            .max_w(px(380.0))
-            .px(px(9.0))
-            .py(px(6.0))
-            .rounded(px(6.0))
-            .border_1()
-            .border_color(theme.border)
-            .bg(crate::popover::surface_bg(theme))
-            .text_size(px(10.5))
-            .text_color(theme.text_muted)
-            .child(self.text.clone());
-        crate::frost::frosted(6.0, crate::frost::MENU_BLUR, card)
+        crate::tooltip::chip(self.text.clone(), Theme::of(cx))
     }
 }
 /// Drag marker for the terminal-panel height handle.
@@ -9459,7 +9448,7 @@ impl Shell {
                             this.set_chat_archived(archive_id.clone(), !archived, cx);
                         }))
                         // Above the pill: below it the chip would cover the next row.
-                        .tooltip(crate::settings::widgets::text_tooltip_above(if archived {
+                        .tip_above(if archived {
                             "Unarchive session"
                         } else {
                             ShortcutId::ArchiveSession.label()
@@ -9760,7 +9749,7 @@ impl Shell {
                             this.chat_hover_resync = true;
                             this.set_chat_archived(archive_id.clone(), !archived, cx);
                         }))
-                        .tooltip(crate::settings::widgets::text_tooltip_above(if archived {
+                        .tip_above(if archived {
                             "Unarchive session"
                         } else {
                             ShortcutId::ArchiveSession.label()
@@ -10163,13 +10152,11 @@ impl Shell {
                                                     cx,
                                                 );
                                             }))
-                                            .tooltip(crate::settings::widgets::text_tooltip_above(
-                                                if archived {
-                                                    "Unarchive session"
-                                                } else {
-                                                    ShortcutId::ArchiveSession.label()
-                                                },
-                                            ))
+                                            .tip_above(if archived {
+                                                "Unarchive session"
+                                            } else {
+                                                ShortcutId::ArchiveSession.label()
+                                            })
                                     })
                                     .child(if show_archive {
                                         icon(if archived {
@@ -11033,7 +11020,7 @@ impl Shell {
                             cx.stop_propagation();
                             this.dismiss_github_star_banner(cx);
                         }))
-                        .tooltip(crate::settings::widgets::text_tooltip("Dismiss"))
+                        .tip("Dismiss")
                         .child(icon(icons::CLOSE).size(px(10.0)).text_color(tone)),
                 )
                 .into_any_element(),
@@ -11065,7 +11052,7 @@ impl Shell {
                     .text_size(crate::typography::ui_rems(12.0))
                     .text_color(theme.danger)
                     .cursor_pointer()
-                    .tooltip(crate::settings::widgets::text_tooltip(problem))
+                    .tip(problem)
                     .child("Control tools update failed · Retry")
                     .on_click(cx.listener(|_, _, _, cx| {
                         if let Some(update) = crate::app_update::AppUpdate::global(cx) {
@@ -11191,7 +11178,7 @@ impl Shell {
                         })
                         .into()
                     }),
-                    None => el.tooltip(crate::settings::widgets::text_tooltip_above(tip)),
+                    None => el.tip_above(tip),
                 })
                 .when(interactive, |el| {
                     el.tab_index(0)
@@ -11554,7 +11541,7 @@ impl Shell {
                 this.settings_focus_pending = false;
                 this.open_pull_requests(cx);
             }))
-            .tooltip(crate::settings::widgets::text_tooltip("Pull requests"))
+            .tip("Pull requests")
             .child(icon(icons::PULL_REQUEST).size(px(15.0)).text_color(
                 if matches!(self.route, Route::PullRequests) {
                     theme.text
@@ -11832,7 +11819,7 @@ impl Shell {
             } else {
                 gpui::Toggled::False
             })
-            .tooltip(move |_, cx| {
+            .anchored_tooltip(crate::tooltip::Placement::Below, move |_, cx| {
                 let text = settings_tooltip.clone();
                 cx.new(|_| SurfaceTabTooltip { text }).into()
             })
@@ -14313,7 +14300,7 @@ impl Shell {
             )
             .aria_label(accessible_label)
             .when_some(detail, |chip, detail| {
-                chip.tooltip(move |_, cx| {
+                chip.anchored_tooltip(crate::tooltip::Placement::Below, move |_, cx| {
                     cx.new(|_| SurfaceTabTooltip {
                         text: detail.clone(),
                     })
@@ -14456,7 +14443,7 @@ impl Shell {
             .aria_label(tr(cx, msg::chat::right_pane_add_panel))
             .aria_expanded(plus_open)
             .when(plus_open, |el| el.bg(crate::theme::wash(0.11)))
-            .tooltip(crate::settings::widgets::text_tooltip("Add panel"))
+            .tip("Add panel")
             .child(
                 icon(icons::PLUS)
                     .size(px(14.0))
@@ -15010,7 +14997,7 @@ fn window_control_button_with(
             on_click(event, window, cx)
         })
         .child(glyph)
-        .tooltip(crate::settings::widgets::text_tooltip(label))
+        .tip(label)
 }
 
 const WINDOWS_CAPTION_BUTTON_WIDTH: f32 = 36.0;
@@ -15199,7 +15186,7 @@ fn header_icon_button_with(
             cx.stop_propagation();
             on_click(event, window, cx)
         })
-        .tooltip(crate::settings::widgets::text_tooltip(label))
+        .tip(label)
         .child(glyph)
 }
 

@@ -760,7 +760,7 @@ impl Shell {
                 cx,
             )
             .aria_label(label)
-            .tooltip(move |_, cx| {
+            .anchored_tooltip(crate::tooltip::Placement::Below, move |_, cx| {
                 cx.new(|_| SurfaceTabTooltip {
                     text: tooltip.clone(),
                 })

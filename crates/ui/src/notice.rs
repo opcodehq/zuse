@@ -2,6 +2,7 @@
 //! failed run (zuse chat-view.tsx `ErrorChip`). The composer's own notices
 //! live in its attached tray (`composer/tray.rs`).
 
+use crate::tooltip::TooltipExt as _;
 use gpui::{Div, FontWeight, SharedString, div, prelude::*, px};
 
 use crate::theme::Theme;
@@ -93,7 +94,7 @@ pub fn notice_chip(
                                 copy_message.to_string(),
                             ));
                         })
-                        .tooltip(crate::settings::widgets::text_tooltip("Copy message"))
+                        .tip("Copy message")
                         .child(
                             crate::icons::icon(crate::icons::COPY)
                                 .size(px(12.0))

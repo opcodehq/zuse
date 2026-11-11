@@ -11,6 +11,7 @@
 //! pulse clock, and freeze on one frame under reduced motion. Scene math lives
 //! in pure code so it is unit-tested.
 
+use crate::tooltip::TooltipExt as _;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use gpui::prelude::*;
@@ -602,9 +603,7 @@ impl Render for Runner {
             .cursor_pointer()
             .occlude()
             .track_focus(&self.focus)
-            .when(!playing, |d| {
-                d.tooltip(crate::settings::widgets::text_tooltip("Click to play"))
-            })
+            .when(!playing, |d| d.tip("Click to play"))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
             .on_key_down(cx.listener(Self::on_key_down))
             .child(

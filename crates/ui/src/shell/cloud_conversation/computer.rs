@@ -1260,7 +1260,7 @@ impl CloudConversation {
                                 .gap(px(6.))
                                 .cursor_pointer()
                                 .hover(|el| el.bg(theme.element_hover))
-                                .tooltip(crate::settings::widgets::text_tooltip("Open folder"))
+                                .tip("Open folder")
                                 .child(
                                     icon(icons::FOLDER_OPEN)
                                         .size(px(13.))
@@ -1284,7 +1284,7 @@ impl CloudConversation {
                                 .border_color(theme.border)
                                 .cursor_pointer()
                                 .hover(|el| el.bg(theme.element_hover))
-                                .tooltip(crate::settings::widgets::text_tooltip("Copy path"))
+                                .tip("Copy path")
                                 .child(icon(icons::COPY).size(px(13.)).text_color(theme.text_muted))
                                 .on_click(cx.listener(move |_, _, _, cx| {
                                     cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()))

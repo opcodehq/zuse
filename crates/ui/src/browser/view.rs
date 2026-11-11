@@ -1,5 +1,6 @@
 use super::{BrowserEvent, BrowserSurface};
 use crate::localization::message as tr;
+use crate::tooltip::TooltipExt as _;
 use crate::{icons, surface_chrome, theme::Theme};
 use gpui::{
     AnyElement, Context, Focusable, IntoElement, KeyDownEvent, MouseButton, Render, Window, div,
@@ -17,14 +18,7 @@ fn button(
     cx: &mut Context<BrowserSurface>,
 ) -> gpui::Stateful<gpui::Div> {
     let show_tooltip = enabled && id != "browser-options" && hovered_button == Some(id);
-    let card = div()
-        .px(px(7.0))
-        .py(px(4.0))
-        .rounded(px(6.0))
-        .border_1()
-        .border_color(theme.border)
-        .bg(crate::popover::surface_bg(theme))
-        .font_family(theme.font_sans.clone())
+    let card = crate::tooltip::surface(theme)
         .font_weight(gpui::FontWeight::MEDIUM)
         .text_size(px(11.0))
         .text_color(theme.text_strong)
@@ -959,7 +953,7 @@ impl Render for BrowserSurface {
                         .hover(|s| s.bg(crate::theme::wash(0.10)))
                         .on_mouse_down(MouseButton::Left, |_, w, _| w.prevent_default())
                         .on_click(cx.listener(|this, _, w, cx| this.submit(w, cx)))
-                        .tooltip(crate::settings::widgets::text_tooltip("Go to address"))
+                        .tip("Go to address")
                         .child(
                             icons::icon(icons::RETURN)
                                 .size(px(12.0))

@@ -62,7 +62,7 @@ pub(super) fn state_mark(state: &str, draft: bool, theme: &Theme) -> AnyElement 
         .id("pr-state")
         .debug_selector(|| "pr-state".into())
         .flex_none()
-        .tooltip(widgets::text_tooltip(label))
+        .tip(label)
         .child(
             crate::icons::icon(glyph)
                 .size(px(14.0))
@@ -192,7 +192,7 @@ pub(super) fn detail_header(
                                     .hover(|style| {
                                         style.text_color(theme.text).bg(theme.glass_hover())
                                     })
-                                    .tooltip(widgets::text_tooltip(format!("Copy {shown}")))
+                                    .tip(format!("Copy {shown}"))
                                     .on_click(move |_, _, cx| {
                                         cx.stop_propagation();
                                         cx.write_to_clipboard(gpui::ClipboardItem::new_string(
@@ -791,7 +791,7 @@ impl PullRequestDetailPage {
             .items_center()
             .gap(px(6.0))
             .cursor_pointer()
-            .tooltip(widgets::text_tooltip(format!("Copy {shown}")))
+            .tip(format!("Copy {shown}"))
             .child(
                 div()
                     .min_w_0()
@@ -844,7 +844,7 @@ impl PullRequestDetailPage {
                 div()
                     .id(SharedString::from(format!("pr-reviewer-{index}")))
                     .flex_none()
-                    .tooltip(widgets::text_tooltip(login.to_string()))
+                    .tip(login.to_string())
                     .child(super::super::pull_request_media::avatar(
                         login,
                         format!("pr-reviewer-avatar-{index}").into(),

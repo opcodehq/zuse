@@ -117,7 +117,10 @@ impl Shell {
             .tab_index(0)
             .rounded_full()
             .cursor_pointer()
-            .tooltip(stage_tooltip("Open voice"))
+            .anchored_tooltip(
+                crate::tooltip::Placement::Below,
+                stage_tooltip("Open voice"),
+            )
             .on_click(cx.listener(|this, _, _, cx| this.set_voice_stage_open(true, cx)))
             .child(self.voice_composer_orb.clone());
         Some(
@@ -423,11 +426,10 @@ impl Shell {
             } else {
                 "Mute microphone"
             })
-            .tooltip(stage_tooltip(if muted {
-                "Unmute · M"
-            } else {
-                "Mute · M"
-            }))
+            .anchored_tooltip(
+                crate::tooltip::Placement::Below,
+                stage_tooltip(if muted { "Unmute · M" } else { "Mute · M" }),
+            )
             .on_click(cx.listener(|this, _, _, cx| {
                 this.voice.update(cx, |voice, cx| voice.toggle_mute(cx))
             }))
@@ -448,11 +450,14 @@ impl Shell {
                 } else {
                     "Open the voice transcript"
                 })
-                .tooltip(stage_tooltip(if awaiting {
-                    "Codex is asking you something"
-                } else {
-                    "Transcript"
-                }))
+                .anchored_tooltip(
+                    crate::tooltip::Placement::Below,
+                    stage_tooltip(if awaiting {
+                        "Codex is asking you something"
+                    } else {
+                        "Transcript"
+                    }),
+                )
                 .on_click(cx.listener(move |this, _, _, cx| this.open_chat(chat_id.clone(), cx)))
                 .child(
                     icon(icons::CHAT_ROUND_LINE)
@@ -495,7 +500,7 @@ impl Shell {
             ))
             .on_hover(motion::hover_listener("voice-bar-end"))
             .focus_visible(|s| s.border_2().border_color(popup.accent))
-            .tooltip(stage_tooltip("End voice"))
+            .anchored_tooltip(crate::tooltip::Placement::Below, stage_tooltip("End voice"))
             .on_click(cx.listener(|this, _, _, cx| this.end_voice(cx)))
             .child(
                 icon(icons::PHONE_HANG_UP)
@@ -512,7 +517,10 @@ impl Shell {
 
         let back = round_control("voice-bar-back", &popup, false)
             .aria_label(tr(cx, msg::shell::hosted_back_to_chats))
-            .tooltip(stage_tooltip("Back to chats · Esc"))
+            .anchored_tooltip(
+                crate::tooltip::Placement::Below,
+                stage_tooltip("Back to chats · Esc"),
+            )
             .on_click(cx.listener(|this, _, _, cx| this.set_voice_stage_open(false, cx)))
             .child(
                 icon(icons::ALT_ARROW_DOWN)
@@ -558,7 +566,7 @@ fn veiled_caption(
 }
 
 fn stage_tooltip(text: &'static str) -> impl Fn(&mut Window, &mut App) -> gpui::AnyView + 'static {
-    move |_, cx| cx.new(|_| SurfaceTabTooltip { text: text.into() }).into()
+    crate::tooltip::text_tooltip(text)
 }
 
 /// A round call-bar control; `active` inverts it onto the solid plate.
