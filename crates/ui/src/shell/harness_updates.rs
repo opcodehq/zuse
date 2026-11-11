@@ -1,4 +1,4 @@
-//! Home's agent-update island: one bottom-anchored surface for the compact
+//! Agent-update notification: one top-right surface for the compact
 //! summary and the expanded list. Geometry uses the shell's reversible RESIZE
 //! tweens; content keeps its final width while the outer surface clips it.
 
@@ -17,6 +17,13 @@ pub(super) fn notification_key(device: &str, status: &HarnessUpdateStatus) -> Op
         Some(version) => format!("{device}:{:?}:{version}", status.harness),
         None => versionless_notification_key(device, status.harness),
     })
+}
+
+fn dismissal_key(device: &str, status: &HarnessUpdateStatus) -> String {
+    match status.latest_version.as_deref() {
+        Some(version) => format!("{device}:{:?}:{version}", status.harness),
+        None => versionless_notification_key(device, status.harness),
+    }
 }
 
 const CHIP_HEIGHT: f32 = 38.0;
@@ -217,9 +224,7 @@ fn mark_stack(statuses: &[UpdateRow], theme: &Theme) -> gpui::Div {
                             .items_center()
                             .justify_center()
                             .child(
-                                icon(mark)
-                                    .size(px(16.0))
-                                    .text_color(tint.unwrap_or(theme.text_muted)),
+                                icons::brand_icon(mark, 16.0, tint.unwrap_or(theme.text_muted)),
                             ),
                     )
                 }),
@@ -380,9 +385,16 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         self.refresh_harness_update_watch(cx);
-        let marks = visible_rows(&self.harness_update_devices, |id| {
+        let marks: Vec<_> = visible_rows(&self.harness_update_devices, |id| {
             self.state.read(cx).device_name(id).unwrap_or(id).to_owned()
-        });
+        })
+        .into_iter()
+        .filter(|row| {
+            !self
+                .harness_update_dismissed
+                .contains(&dismissal_key(&row.device_id, &row.status))
+        })
+        .collect();
         if marks.is_empty() {
             self.harness_update_expanded = false;
             self.harness_update_transition = None;
@@ -482,6 +494,8 @@ impl Shell {
         let has_bulk = multiple && !targets.is_empty();
         let compact_action = if multiple {
             has_bulk.then(|| {
+                let click_targets = targets.clone();
+                let keyboard_targets = targets.clone();
                 div()
                     .id("harness-update-all")
                     .h(px(24.0))
@@ -502,14 +516,28 @@ impl Shell {
                     .border_color(gpui::transparent_black())
                     .focus_visible(move |el| el.border_color(theme.accent))
                     .hover(move |el| el.bg(theme.accent_wash).text_color(theme.accent))
-                    .on_click(cx.listener(|this, _, _, cx| {
+                    .on_click(cx.listener(move |this, _, _, cx| {
                         cx.stop_propagation();
-                        this.update_all_harnesses(cx);
+                        for (device, harness) in &click_targets {
+                            this.run_harness_update_action(
+                                device.clone(),
+                                methods::APPLY_HARNESS_UPDATE,
+                                *harness,
+                                cx,
+                            );
+                        }
                     }))
-                    .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                    .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
                         if matches!(event.keystroke.key.as_str(), "enter" | "space") {
                             cx.stop_propagation();
-                            this.update_all_harnesses(cx);
+                            for (device, harness) in &keyboard_targets {
+                                this.run_harness_update_action(
+                                    device.clone(),
+                                    methods::APPLY_HARNESS_UPDATE,
+                                    *harness,
+                                    cx,
+                                );
+                            }
                         }
                     }))
                     .child("Update all")
@@ -547,6 +575,7 @@ impl Shell {
             + if has_activity { 22.0 } else { 0.0 }
             + controls_width
             + trailing
+            + 32.0
             + 2.0)
             .min(max_width);
         let list_width = LIST_WIDTH.min(max_width);
@@ -570,8 +599,14 @@ impl Shell {
             });
             size[axis] = self.eval_tween(self.harness_update_geometry[axis], target);
         }
-        let radius = motion::lerp(19.0, 16.0, reveal);
+        let radius: f32 = 14.0;
         let list_bottom_radius = (radius - 1.0).max(0.0);
+        let dismissed_keys: Vec<_> = marks
+            .iter()
+            .map(|row| dismissal_key(&row.device_id, &row.status))
+            .collect();
+        let keyboard_dismissed_keys = dismissed_keys.clone();
+        let dismiss_hover = theme.glass_hover();
         let summary = div()
             .id("home-harness-update-summary")
             .h(px(SUMMARY_HEIGHT))
@@ -647,7 +682,44 @@ impl Shell {
                                 ))),
                         ),
                 )
-            });
+            })
+            .child(
+                div()
+                    .id("harness-update-dismiss")
+                    .size(px(24.0))
+                    .ml(px(4.0))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded_full()
+                    .cursor_pointer()
+                    .role(gpui::Role::Button)
+                    .aria_label("Dismiss update notification")
+                    .tab_index(0)
+                    .hover(move |el| el.bg(dismiss_hover))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.harness_update_dismissed
+                            .extend(dismissed_keys.iter().cloned());
+                        this.set_harness_updates_expanded(false, cx);
+                        cx.notify();
+                    }))
+                    .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
+                        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                            cx.stop_propagation();
+                            this.harness_update_dismissed
+                                .extend(keyboard_dismissed_keys.iter().cloned());
+                            this.set_harness_updates_expanded(false, cx);
+                            cx.notify();
+                        }
+                    }))
+                    .child(
+                        icon(icons::CLOSE)
+                            .size(px(12.0))
+                            .text_color(theme.text_muted),
+                    ),
+            );
         let rows = (reveal > 0.0).then(|| {
             let rows: Vec<_> = statuses
                 .iter()
@@ -702,10 +774,7 @@ impl Shell {
                             )
                         })
                         .child(
-                            icon(mark)
-                                .size(px(20.0))
-                                .flex_none()
-                                .text_color(tint.unwrap_or(theme.text_muted)),
+                            icons::brand_icon(mark, 20.0, tint.unwrap_or(theme.text_muted)),
                         )
                         .child(
                             div()
@@ -1043,6 +1112,26 @@ mod tests {
             applying: Default::default(),
             watch: None,
         }
+    }
+
+    #[test]
+    fn dismissal_is_scoped_to_device_harness_and_version_not_phase() {
+        let available = status(Phase::Available);
+        let mut installing = available.clone();
+        installing.phase = Phase::Installing;
+        assert_eq!(
+            dismissal_key("host", &available),
+            dismissal_key("host", &installing)
+        );
+        assert_ne!(
+            dismissal_key("host", &available),
+            dismissal_key("other", &available)
+        );
+        installing.latest_version = Some("3.0".into());
+        assert_ne!(
+            dismissal_key("host", &available),
+            dismissal_key("host", &installing)
+        );
     }
 
     #[test]

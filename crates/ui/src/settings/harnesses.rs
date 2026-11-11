@@ -1018,9 +1018,7 @@ impl HarnessesPage {
                     .items_center()
                     .justify_center()
                     .child(
-                        crate::icons::icon(icon_path)
-                            .size(px(16.0))
-                            .text_color(tint.unwrap_or(theme.text_muted)),
+                        crate::icons::brand_icon(icon_path, 16.0, tint.unwrap_or(theme.text_muted)),
                     );
                 let can_expand = enabled || !installed;
                 let expanded = can_expand && self.expanded_harness == Some(harness);

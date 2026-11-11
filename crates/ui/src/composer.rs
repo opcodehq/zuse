@@ -6737,6 +6737,7 @@ pub struct Composer {
     /// The host's latest worktree phase for a just-sent chat (fetching the
     /// base, creating the checkout), shown above the composer while it runs.
     worktree_progress: Option<(String, zuse_protocol::WorktreeProgress)>,
+    pub(crate) checkout_controls: Option<gpui::AnyView>,
 }
 
 /// Drafts cleared with Escape twice that Up can still bring back.
@@ -7408,6 +7409,7 @@ impl Composer {
             flash: None,
             flash_seq: 0,
             worktree_progress: None,
+            checkout_controls: None,
         };
         // Dev knob: pre-stage attachments (drop/paste can't be synthesized on
         // a rig) — `ZUSE_ATTACH=/path/a.png[,/path/b.png]`, and
@@ -13261,7 +13263,41 @@ impl Render for Composer {
                 crate::pull_request_card::composer_chips(self.state.read(cx), &theme, cx)
             })
             .flatten();
-        let container = container.when_some(chips, |el, chips| el.child(chips));
+        let checkout = (!new_chat
+            && self.state.read(cx).selected_chat_row().is_some_and(|chat| {
+                crate::change_requests::conversation_branch(chat, &self.state.read(cx).spaces)
+                    .is_some()
+            }))
+            .then(|| self.checkout_controls.clone())
+            .flatten();
+        let container = if chips.is_some() || checkout.is_some() {
+            container.child(
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .children(chips)
+                    .child(div().flex_1())
+                    .when_some(checkout, |row, checkout| {
+                        row.child(
+                            div()
+                                .min_w_0()
+                                .max_w(px(
+                                    (self.last_available_width.unwrap_or(COMPOSER_MAX_WIDTH)
+                                        - 2.0 * COMPOSER_OUTER_PAD)
+                                        * 0.45,
+                                ))
+                                .flex()
+                                .items_center()
+                                .child(checkout),
+                        )
+                    }),
+            )
+        } else {
+            container
+        };
         let embed_tray = new_chat && !self.cloud_launch_pending(cx);
         let tray_stack = self.render_tray_stack(show_queue_latest_shortcut, embed_tray, window, cx);
         let (embedded_tray, tray_stack) = if embed_tray {
@@ -13843,14 +13879,6 @@ impl Render for Composer {
                     pickers.render_new_thread_target_selectors(cx)
                 })
             });
-        let new_thread_git_selectors = (new_thread_chrome_opacity > 0.0
-            && !self.cloud_launch_pending(cx))
-        .then(|| {
-            self.pickers.update(cx, |pickers, cx| {
-                pickers.render_new_thread_git_selectors(cx)
-            })
-        })
-        .flatten();
         // The file dropzone lives in the shell (the whole conversation column,
         // shell.rs `chat-dropzone`); drops land back here via `add_paths`.
         // The card shows the drop target itself (`tray::drop_overlay`).
@@ -13925,8 +13953,7 @@ impl Render for Composer {
                         .gap(px(6.0))
                         .px(px(8.0))
                         .children(new_thread_target_selectors)
-                        .child(div().flex_1())
-                        .children(new_thread_git_selectors),
+                        .child(div().flex_1()),
                 )
         };
         let container = if self.cloud_launch_pending(cx) {

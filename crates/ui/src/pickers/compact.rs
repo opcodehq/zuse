@@ -171,12 +171,11 @@ impl Pickers {
                 }
             }))
             .on_click(cx.listener(move |this, _, _, cx| this.activate_model_index(ix, cx)))
-            .child(
-                crate::icons::icon(icon)
-                    .size(px(14.0))
-                    .flex_none()
-                    .text_color(tint.unwrap_or(theme.text_muted)),
-            )
+            .child(crate::icons::brand_icon(
+                icon,
+                14.0,
+                tint.unwrap_or(theme.text_muted),
+            ))
             .child(
                 div()
                     .flex_1()
@@ -345,15 +344,13 @@ impl Pickers {
                 let icon = match harness {
                     Some(harness) => {
                         let (icon, tint) = harness_brand_icon(*harness);
-                        crate::icons::icon(icon)
-                            .size(px(14.0))
-                            .flex_none()
-                            .text_color(tint.unwrap_or(theme.text))
+                        crate::icons::brand_icon(icon, 14.0, tint.unwrap_or(theme.text))
                     }
                     None => crate::icons::icon(crate::icons::STAR_BOLD)
                         .size(px(13.0))
                         .flex_none()
-                        .text_color(theme.accent),
+                        .text_color(theme.accent)
+                        .into_any_element(),
                 };
                 el.items_center()
                     .text_size(crate::typography::text_xs())

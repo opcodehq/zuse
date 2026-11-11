@@ -2408,6 +2408,32 @@ pub(super) fn sidebar_header_glyph(theme: &Theme) -> gpui::Hsla {
     theme.text_muted.opacity(0.5)
 }
 
+pub(super) fn sidebar_section_heading(
+    theme: &Theme,
+    label: &'static str,
+    id: &'static str,
+) -> gpui::Div {
+    div()
+        .flex_none()
+        .flex()
+        .items_center()
+        .gap(px(2.))
+        .pl(px(Theme::SPACE_SM + 2.))
+        .pr(px(Theme::SPACE_SM))
+        .pt(px(10.))
+        .pb(px(4.))
+        .child(
+            div()
+                .id(id)
+                .debug_selector(move || id.into())
+                .flex_1()
+                .min_w_0()
+                .text_size(crate::typography::text_xs())
+                .text_color(theme.text_muted)
+                .child(label),
+        )
+}
+
 /// A 22px icon button in the sidebar's section heading (14px glyph).
 pub(super) fn sidebar_header_button(
     id: &'static str,
@@ -4765,25 +4791,7 @@ impl Shell {
             && self.settings.sidebar_show_project_filter)
             .then(|| self.render_spaces_filter_button(theme, cx));
         let view_trigger = self.render_sidebar_view_trigger(theme, cx);
-        div()
-            .flex_none()
-            .flex()
-            .items_center()
-            .gap(px(2.))
-            .pl(px(Theme::SPACE_SM + 2.))
-            .pr(px(Theme::SPACE_SM))
-            .pt(px(10.))
-            .pb(px(4.))
-            .child(
-                div()
-                    .id("sidebar-view-label")
-                    .debug_selector(|| "sidebar-view-label".into())
-                    .flex_1()
-                    .min_w_0()
-                    .text_size(crate::typography::text_xs())
-                    .text_color(theme.text_muted)
-                    .child(label),
-            )
+        sidebar_section_heading(theme, label, "sidebar-view-label")
             .children(filter_button)
             .child(view_trigger)
             .when(projects, |el| {

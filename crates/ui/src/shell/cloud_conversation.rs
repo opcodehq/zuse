@@ -2118,10 +2118,7 @@ mod tests {
                 shell.viewport_width = 1400.;
                 shell.viewport_height = 960.;
                 shell.settings.sidebar_collapsed = false;
-                assert!(
-                    !shell.main_chrome_visible(cx),
-                    "blank local canvas keeps its existing chrome policy"
-                );
+                assert!(shell.main_chrome_visible(cx));
                 shell.open_cloud_conversation(
                     CloudTarget {
                         controller,

@@ -278,7 +278,9 @@ impl WorkspaceView {
                 current,
             } => ui::provider_heading(
                 name.clone(),
-                icon(provider_icon(provider)).text_color(rgb(TEXT)),
+                icon(provider_icon(provider))
+                    .size(px(14.))
+                    .text_color(rgb(TEXT)),
                 *count,
                 *current,
             )
@@ -345,7 +347,9 @@ impl WorkspaceView {
                             )),
                             entry.model.label.clone(),
                             provider.then(|| entry.name.clone().into()),
-                            icon(provider_icon(&entry.provider)).text_color(rgb(MUTED)),
+                            icon(provider_icon(&entry.provider))
+                                .size(px(16.))
+                                .text_color(rgb(MUTED)),
                             selected,
                             active,
                             (*index < 9).then_some(index + 1),
@@ -462,7 +466,11 @@ impl WorkspaceView {
                     format!("{name} models"),
                     self.picker_scope.as_deref() == Some(&provider),
                     live,
-                    Some(icon(provider_icon(&provider))),
+                    Some(
+                        icon(provider_icon(&provider))
+                            .size(px(16.))
+                            .into_any_element(),
+                    ),
                 )
                 .track_focus(&self.picker_menu.focus(format!("tab:{provider}"), cx))
                 .on_key_down(cx.listener(move |this, e: &KeyDownEvent, _, cx| {

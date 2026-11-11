@@ -130,6 +130,7 @@ fn monogram(name: &str, selected: bool, theme: &Theme) -> AnyElement {
 pub(super) struct ProjectIcon {
     name: String,
     media: Option<MediaImage>,
+    avatar_url: Option<String>,
     refreshed: std::time::Instant,
     _task: Task<()>,
 }
@@ -139,6 +140,7 @@ impl ProjectIcon {
         name: String,
         context: FilesRequestContext,
         engine: Option<crate::state::EngineHandle>,
+        discover_avatar: bool,
         cx: &mut Context<Self>,
     ) -> Self {
         cx.on_release(|this, cx| release_media(this.media.take(), cx))
@@ -148,9 +150,19 @@ impl ProjectIcon {
             let load = async {
                 if context.target_device_id.is_none() {
                     let root = std::path::PathBuf::from(context.cwd);
-                    return executor.spawn(async move { load_local_icon(&root) }).await;
+                    return executor
+                        .spawn(async move {
+                            let avatar = discover_avatar
+                                .then(|| local_github_avatar(&root))
+                                .flatten();
+                            (load_local_icon(&root), avatar)
+                        })
+                        .await;
                 }
-                let client = WorkspaceFilesClient::new(engine?, context.clone());
+                let Some(engine) = engine else {
+                    return (None, None);
+                };
+                let client = WorkspaceFilesClient::new(engine, context.clone());
                 for path in ICON_PATHS {
                     // This also resolves the current checkout identity on the owning host.
                     let file = match client
@@ -161,38 +173,43 @@ impl ProjectIcon {
                         .await
                     {
                         Ok(file) => file,
-                        Err(error) if error.retryable() => return None,
+                        Err(error) if error.retryable() => return (None, None),
                         Err(_) => continue,
                     };
-                    let (mime, bytes) = client
-                        .read_image((*path).into(), file.checkout_id)
-                        .await
-                        .ok()?;
-                    return executor
+                    let Ok((mime, bytes)) =
+                        client.read_image((*path).into(), file.checkout_id).await
+                    else {
+                        return (None, None);
+                    };
+                    let media = executor
                         .spawn(async move { decode_project_icon(&mime, bytes).ok() })
                         .await;
+                    return (media, None);
                 }
-                None
+                (None, None)
             };
-            let media = match futures::future::select(
+            let (media, avatar_url) = match futures::future::select(
                 Box::pin(load),
                 Box::pin(executor.timer(Duration::from_secs(30))),
             )
             .await
             {
-                futures::future::Either::Left((media, _)) => {
-                    media.map(|media| media.for_view((16.0, 16.0), 2.0, 4096))
-                }
-                _ => None,
+                futures::future::Either::Left(((media, avatar), _)) => (
+                    media.map(|media| media.for_view((16.0, 16.0), 2.0, 4096)),
+                    avatar,
+                ),
+                _ => (None, None),
             };
             let _ = this.update(cx, |this, cx| {
                 this.media = media;
+                this.avatar_url = avatar_url;
                 cx.notify();
             });
         });
         Self {
             name,
             media: None,
+            avatar_url: None,
             refreshed: std::time::Instant::now(),
             _task: task,
         }
@@ -201,12 +218,28 @@ impl ProjectIcon {
 
 impl Render for ProjectIcon {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        match &self.media {
+        let fallback = match &self.media {
             Some(media) => gpui::img(media.image.clone())
                 .size_full()
                 .object_fit(gpui::ObjectFit::Contain)
                 .into_any_element(),
             None => monogram(&self.name, false, Theme::of(cx)),
+        };
+        match &self.avatar_url {
+            Some(url) => div()
+                .relative()
+                .size_full()
+                .child(fallback)
+                .child(
+                    gpui::img(SharedString::from(url.clone()))
+                        .absolute()
+                        .inset_0()
+                        .size_full()
+                        .rounded(px(4.0))
+                        .object_fit(gpui::ObjectFit::Cover),
+                )
+                .into_any_element(),
+            None => fallback,
         }
     }
 }
@@ -226,12 +259,7 @@ impl Render for ProjectIconTooltip {
             .py(px(4.5))
             .flex()
             .flex_col()
-            .gap(px(3.0))
-            .rounded(px(6.0))
-            .border_1()
-            .border_color(theme.border_strong)
-            .bg(crate::popover::surface_bg(theme))
-            .when(!theme.is_frost(), |el| el.shadow_md())
+            .gap(px(2.0))
             .child(
                 div()
                     .min_w_0()
@@ -407,11 +435,12 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let avatar = space.and_then(|space| github_avatar_url(self.state.read(cx), space));
-        let fallback = self.project_icons.render(
+        let fallback = self.project_icons.render_with_avatar_fallback(
             &self.state,
             space,
             self.active_sidebar_pin_profile_key(cx),
             selected,
+            avatar.is_none(),
             cx,
         );
         match avatar {
@@ -446,6 +475,26 @@ fn github_owner(path: &str) -> Option<&str> {
                 .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
     };
     (valid(owner) && !repository.is_empty() && !owner.starts_with('.')).then_some(owner)
+}
+
+fn local_github_avatar(root: &std::path::Path) -> Option<String> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["config", "--get", "remote.origin.url"])
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let remote = std::str::from_utf8(&output.stdout).ok()?.trim();
+    let path = remote
+        .strip_prefix("https://github.com/")
+        .or_else(|| remote.strip_prefix("ssh://git@github.com/"))
+        .or_else(|| remote.strip_prefix("git@github.com:"))?;
+    let owner = github_owner(path)?;
+    Some(format!("https://github.com/{owner}.png?size=80"))
 }
 
 /// The GitHub owner avatar for a project hosted on github.com. The owner
@@ -499,6 +548,18 @@ impl ProjectIcons {
         selected: bool,
         cx: &mut Context<V>,
     ) -> AnyElement {
+        self.render_with_avatar_fallback(state, space, profile, selected, false, cx)
+    }
+
+    fn render_with_avatar_fallback<V: 'static>(
+        &self,
+        state: &Entity<AppState>,
+        space: Option<&zuse_protocol::Space>,
+        profile: Option<String>,
+        selected: bool,
+        discover_avatar: bool,
+        cx: &mut Context<V>,
+    ) -> AnyElement {
         let state = state.read(cx);
         let representative = space.map(|space| state.representative_space(space));
         let name = representative
@@ -526,8 +587,13 @@ impl ProjectIcons {
             return monogram(&name, selected, Theme::of(cx));
         };
         let key = format!(
-            "{:?}:{:?}:{}:{:?}:{}",
-            profile, context.target_device_id, context.cwd, context.checkout_id, name
+            "{:?}:{:?}:{}:{:?}:{}:{}",
+            profile,
+            context.target_device_id,
+            context.cwd,
+            context.checkout_id,
+            name,
+            discover_avatar
         );
         let engine = state.engine().cloned();
         // Don't cache a remote miss before a connection exists.
@@ -539,14 +605,15 @@ impl ProjectIcons {
         let entity = cache
             .entry(key)
             .or_insert_with(|| {
-                let entity = cx.new(|cx| ProjectIcon::new(name.clone(), context, engine, cx));
+                let entity = cx
+                    .new(|cx| ProjectIcon::new(name.clone(), context, engine, discover_avatar, cx));
                 // The owner draws the selected monogram and redraws when artwork lands.
                 cx.observe(&entity, |_, _, cx| cx.notify()).detach();
                 entity
             })
             .clone();
         drop(cache);
-        if entity.read(cx).media.is_none() {
+        if entity.read(cx).media.is_none() && entity.read(cx).avatar_url.is_none() {
             return monogram(&name, selected, Theme::of(cx));
         }
         entity.into_any_element()
@@ -587,6 +654,43 @@ mod tests {
         assert_eq!(github_owner("example"), None);
         assert_eq!(github_owner("../etc/passwd"), None);
         assert_eq!(github_owner("a b/repo"), None);
+    }
+
+    #[test]
+    fn local_checkout_recovers_missing_github_avatar_metadata() {
+        let temp = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(temp.path())
+                .args(args)
+                .output()
+                .unwrap()
+        };
+        assert!(git(&["init", "-q"]).status.success());
+        assert!(
+            git(&[
+                "config",
+                "remote.origin.url",
+                "git@github.com:example/project.git"
+            ])
+            .status
+            .success()
+        );
+        assert_eq!(
+            local_github_avatar(temp.path()).as_deref(),
+            Some("https://github.com/example.png?size=80")
+        );
+        assert!(
+            git(&[
+                "config",
+                "remote.origin.url",
+                "https://github.com.evil.test/example/project"
+            ])
+            .status
+            .success()
+        );
+        assert_eq!(local_github_avatar(temp.path()), None);
     }
     #[test]
     fn monogram_initials_take_two_words_or_two_letters() {

@@ -8,7 +8,12 @@ impl Shell {
     pub(super) fn workspace_gutter(&self) -> f32 {
         if matches!(
             self.route,
-            Route::Chat | Route::Plugins | Route::Archives | Route::Usage | Route::Zot
+            Route::Chat
+                | Route::PullRequests
+                | Route::Plugins
+                | Route::Archives
+                | Route::Usage
+                | Route::Zot
         ) {
             layout::GUTTER
         } else {
@@ -18,6 +23,10 @@ impl Shell {
 
     pub(super) fn main_chrome_visible(&self, cx: &App) -> bool {
         self.workspace_gutter() == 0.
+            || matches!(
+                self.route,
+                Route::Chat | Route::PullRequests | Route::Plugins
+            )
             || self.has_conversation(cx)
             || self.settings.sidebar_collapsed
     }
@@ -51,6 +60,8 @@ impl Shell {
             12. + caption_buttons_width(self.linux_left_caption_count())
         };
         let theme = Theme::of(cx).clone();
+        let navigation = matches!(self.route, Route::PullRequests)
+            .then(|| self.render_titlebar_navigation(&theme, cx));
         self.titlebar_drag_region(
             "workspace-sidebar-titlebar",
             div()
@@ -82,11 +93,13 @@ impl Shell {
                         .text_color(theme.text)
                         .child(tr(cx, msg::chat::top_bar_zuse_beta)),
                 )
+                .children(navigation)
                 .child(
                     zuse_viewport::sidebar_controls::footer_button(
                         "workspace-hide-sidebar",
                         "Hide projects panel",
                     )
+                    .debug_selector(|| "workspace-hide-sidebar".into())
                     .track_focus(&self.workspace_sidebar_focus)
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .w(px(28.))
@@ -106,28 +119,5 @@ impl Shell {
             cx,
         )
         .into_any_element()
-    }
-
-    pub(super) fn workspace_native_actions(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        if self.workspace_gutter() == 0.
-            || matches!(self.route, Route::Archives | Route::Usage)
-            || (matches!(self.route, Route::Chat) && self.has_conversation(cx))
-        {
-            return Empty.into_any_element();
-        }
-        let theme = Theme::of(cx).clone();
-        // Keep native voice and Pull requests reachable beside the main pane.
-        div()
-            .absolute()
-            .top(px(layout::GUTTER))
-            .right(px(
-                layout::GUTTER + caption_buttons_width(self.linux_right_caption_count())
-            ))
-            .h(px(36.))
-            .flex()
-            .items_center()
-            .gap(px(2.))
-            .child(self.render_pull_requests_button(&theme, cx))
-            .into_any_element()
     }
 }

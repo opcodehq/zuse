@@ -280,44 +280,16 @@ impl Shell {
             .iter()
             .filter_map(|c| Some((c.id.clone(), c.title.clone()?)))
             .collect();
-        let header = div()
-            .flex()
-            .items_center()
-            .justify_between()
-            .h(px(26.0))
-            .px(px(8.0))
-            .text_size(crate::typography::ui_rems(11.0))
-            .text_color(theme.text_faint)
-            .child("Zappers")
+        let header = spaces::sidebar_section_heading(theme, "Zappers", "sidebar-zappers-label")
             .child(
-                div()
-                    .id("new-zot")
-                    .role(gpui::Role::Button)
+                spaces::sidebar_header_button("new-zot", icons::PLUS, theme)
+                    .debug_selector(|| "new-zot".into())
                     .aria_label("New Zapper")
-                    .size(px(20.0))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(5.0))
-                    .cursor_pointer()
                     .when(creating, |d| d.bg(theme.bg_selected))
-                    .hover(|d| d.bg(theme.element_hover))
                     .tip("New Zapper")
-                    .child(
-                        icon(icons::PLUS)
-                            .size(px(13.0))
-                            .text_color(theme.text_muted),
-                    )
                     .on_click(cx.listener(|this, _, _, cx| this.open_new_zot(cx))),
             );
-        let mut list = div()
-            .flex()
-            .flex_col()
-            .px(px(8.0))
-            .pt(px(6.0))
-            .pb(px(8.0))
-            .gap(px(1.0))
-            .child(header);
+        let mut list = div().flex().flex_col().px(px(8.0)).pb(px(8.0)).gap(px(1.0));
         for zot in zots {
             let id = zot.coordinator_chat_id.clone();
             let active = selected.as_deref() == Some(id.as_str())
@@ -534,7 +506,12 @@ impl Shell {
                 );
             }
         }
-        list.into_any_element()
+        div()
+            .flex()
+            .flex_col()
+            .child(header)
+            .child(list)
+            .into_any_element()
     }
     /// Archived threads leave every Zapper list and live under Archived.
     fn zot_thread_archived(&self, chat: &str, cx: &App) -> bool {

@@ -947,7 +947,13 @@ impl Shell {
             .gap(px(row_gap))
             .pl(px(row_left))
             .pr(px(right_pad))
-            .child(div().flex_1())
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .child(self.render_overview_tabs(cx)),
+            )
             .child(controls);
         let bar = div().h(px(Theme::TITLEBAR_HEIGHT)).flex_none().child(inner);
         self.titlebar_drag_region("pull-requests-titlebar", bar, cx)

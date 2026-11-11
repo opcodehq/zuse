@@ -2,7 +2,10 @@
 //! The shared icon crate selects licensed solid assets when configured and
 //! bundles the free set otherwise. File-identity glyphs keep their own theme.
 
-use std::borrow::Cow;
+use std::{
+    borrow::Cow,
+    sync::{Arc, OnceLock},
+};
 
 use gpui::{
     AssetSource, Div, Hsla, ParentElement as _, Result, SharedString, Styled as _, Svg, div, px,
@@ -305,6 +308,53 @@ pub fn claude_brand() -> Hsla {
 /// does not provide the paint input. Always set `.text_color(..)` on the icon.
 pub fn icon(path: &'static str) -> Svg {
     svg().path(path).flex_none()
+}
+
+fn codex_brand_image() -> &'static Arc<gpui::Image> {
+    static IMAGE: OnceLock<Arc<gpui::Image>> = OnceLock::new();
+    IMAGE.get_or_init(|| {
+            let svg = include_str!("../assets/icons/codex-mark.svg")
+                .replace("fill=\"currentColor\"", "fill=\"url(#codex-gradient)\"")
+                .replace("<path", "<defs><linearGradient id=\"codex-gradient\" x1=\"0\" y1=\"0\" x2=\"0\" y2=\"1\"><stop stop-color=\"#b9adff\"/><stop offset=\"0.5\" stop-color=\"#8094ff\"/><stop offset=\"1\" stop-color=\"#453cf5\"/></linearGradient></defs><path");
+            Arc::new(gpui::Image::from_bytes(gpui::ImageFormat::Svg, svg.into_bytes()))
+    })
+}
+
+pub fn brand_icon(path: &'static str, size: f32, color: Hsla) -> gpui::AnyElement {
+    use gpui::IntoElement as _;
+    if path == CODEX_MARK {
+        gpui::img(codex_brand_image().clone())
+            .size(px(size))
+            .flex_none()
+            .into_any_element()
+    } else {
+        icon(path)
+            .size(px(size))
+            .text_color(color)
+            .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod brand_tests {
+    use super::*;
+
+    #[test]
+    fn codex_brand_retains_transparency_and_gradient() {
+        let raster = codex_brand_image()
+            .to_image_data(gpui::SvgRenderer::new(Arc::new(Assets)))
+            .unwrap();
+        let size = raster.size(0);
+        let width: usize = i32::from(size.width) as usize;
+        let height: usize = i32::from(size.height) as usize;
+        let bytes = raster.as_bytes(0).unwrap();
+        let pixel = |x: usize, y: usize| &bytes[(y * width + x) * 4..][..4];
+        assert_eq!(pixel(0, 0)[3], 0);
+        let top = pixel(width / 2, height / 6);
+        let bottom = pixel(width / 2, height * 5 / 6);
+        assert!(top[3] > 200 && bottom[3] > 200);
+        assert!(top[2] > bottom[2]);
+    }
 }
 
 /// The Zuse Icons sidebar glyph (icons.zuse.sh "Sidebar" / "Right
