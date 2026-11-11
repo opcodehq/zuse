@@ -70,6 +70,9 @@ pub(crate) fn failure_reason(error: &zuse_rpc::RpcError) -> &'static str {
         RpcError::Capability(code) if code == codes::PULL_REQUESTS_CLI_UNAVAILABLE => {
             "Install GitHub CLI (gh) on this device and sign in."
         }
+        RpcError::Capability(code) if code == codes::PULL_REQUESTS_CLI_OUTDATED => {
+            "Update GitHub CLI (gh) on this device, then try again."
+        }
         RpcError::Capability(code) if code == codes::PULL_REQUESTS_AUTHENTICATION => {
             "Run gh auth login on this device, then refresh."
         }

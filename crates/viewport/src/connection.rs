@@ -644,7 +644,7 @@ mod hosted_session_tests {
                         if let Some(method)=frame["method"].as_str(){
                             // Retry classification is deliberately more conservative
                             // than read-only startup metadata (e.g. WatchDevices).
-                            let bootstrap = matches!(method,methods::WATCH_DEVICES|methods::WATCH_HARNESS_UPDATES|methods::LIST_PAIRINGS|methods::BROWSER_ACCESS_STATUS|methods::RELAY_ACCESS_STATUS|methods::GET_TITLE_SETTINGS|methods::GET_WORKTREE_SETTINGS|methods::PLUGINS);
+                            let bootstrap = matches!(method,methods::WATCH_DEVICES|methods::WATCH_HARNESS_UPDATES|methods::LIST_PAIRINGS|methods::BROWSER_ACCESS_STATUS|methods::RELAY_ACCESS_STATUS|methods::GET_TITLE_SETTINGS|methods::GET_WORKTREE_SETTINGS|methods::PLUGINS|methods::ENGINE_INFO|zuse_protocol::control::WATCH_ZOTS);
                             assert!(methods::retryable_read(method,&frame["params"])||bootstrap,"unexpected startup RPC: {method}");
                         }
                     }

@@ -9,6 +9,8 @@ mod browser_frame;
 #[cfg(target_family = "wasm")]
 mod cloud_upload;
 #[cfg(target_family = "wasm")]
+mod computers;
+#[cfg(target_family = "wasm")]
 mod connection;
 #[cfg(target_family = "wasm")]
 mod drafts;
@@ -133,26 +135,28 @@ mod browser {
                 zuse_viewport::initialize(cx);
                 zuse_viewport::localization::configure(language, languages, cx);
                 let bounds = Bounds::centered(None, size(px(1320.), px(880.)), cx);
-                let workspace = cx
-                    .open_window(
-                        WindowOptions {
-                            window_bounds: Some(WindowBounds::Windowed(bounds)),
-                            ..Default::default()
-                        },
-                        move |window, cx| {
-                            cx.new(|cx| {
-                                WorkspaceView::new(
-                                    Transport {
-                                        requests,
-                                        events: inbound,
-                                    },
-                                    window,
-                                    cx,
-                                )
-                            })
-                        },
-                    )
-                    .expect("open browser workspace");
+                let opened = cx.open_window(
+                    WindowOptions {
+                        window_bounds: Some(WindowBounds::Windowed(bounds)),
+                        ..Default::default()
+                    },
+                    move |window, cx| {
+                        cx.new(|cx| {
+                            WorkspaceView::new(
+                                Transport {
+                                    requests,
+                                    events: inbound,
+                                },
+                                window,
+                                cx,
+                            )
+                        })
+                    },
+                );
+                let Ok(workspace) = opened else {
+                    super::show_unsupported_browser();
+                    return;
+                };
                 crate::attachments::install_paste(workspace, cx.to_async());
                 if let Some(boot) = web_sys::window()
                     .unwrap()
@@ -165,6 +169,23 @@ mod browser {
             });
         APPLICATION.with(|owner| *owner.borrow_mut() = Some(application));
     }
+}
+
+/// Without a usable GPU the window cannot open, so say why instead of leaving
+/// the loading screen up forever.
+#[cfg(target_family = "wasm")]
+fn show_unsupported_browser() {
+    let Some(boot) = web_sys::window()
+        .and_then(|window| window.document())
+        .and_then(|document| document.get_element_by_id("boot"))
+    else {
+        return;
+    };
+    let _ = boot.set_attribute("role", "alert");
+    let _ = boot.remove_attribute("aria-label");
+    boot.set_text_content(Some(
+        "This browser can't open Zuse because WebGPU isn't available. Use a current version of Chrome or Edge with hardware acceleration on, or turn on WebGPU in this browser's settings.",
+    ));
 }
 
 #[cfg(target_family = "wasm")]

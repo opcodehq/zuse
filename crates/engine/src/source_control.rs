@@ -43,7 +43,7 @@ const GITHUB_RESULT_LIMIT: &str = "20";
 const GITHUB_JSON_FIELDS: &str = "number,title,url,state,baseRefName,headRefName,updatedAt,isCrossRepository,headRepositoryOwner,isDraft,reviewDecision";
 const GITHUB_SEARCH_QUERY: &str = "query($search: String!, $owner: String!, $name: String!, $after: String) { repository(owner: $owner, name: $name) { nameWithOwner } search(query: $search, type: ISSUE, first: 50, after: $after) { issueCount pageInfo { hasNextPage endCursor } nodes { ... on PullRequest { author { login } headRefOid viewerDidAuthor viewerLatestReviewRequest { id } reviewRequests(first: 100) { nodes { id } pageInfo { hasNextPage } } statusCheckRollup { commit { oid } state contexts { totalCount checkRunCountsByState { state count } statusContextCountsByState { state count } } } number title url state isDraft mergeable reviewDecision createdAt updatedAt additions deletions repository { nameWithOwner } } } } }";
 
-const GITHUB_PR_METADATA_QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) { viewer { login } repository(owner: $owner, name: $name) { pullRequest(number: $number) { headRefOid viewerDidAuthor viewerLatestReviewRequest { id } reviewRequests(first: 100) { nodes { id } pageInfo { hasNextPage } } statusCheckRollup { commit { oid } state contexts(first: 100) { nodes { ... on CheckRun { name status conclusion detailsUrl databaseId startedAt completedAt } ... on StatusContext { context state targetUrl } } totalCount checkRunCountsByState { state count } statusContextCountsByState { state count } } } } } }";
+const GITHUB_PR_METADATA_QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) { viewer { login } repository(owner: $owner, name: $name) { pullRequest(number: $number) { headRefOid baseRefOid viewerDidAuthor viewerLatestReviewRequest { id } reviewRequests(first: 100) { nodes { id } pageInfo { hasNextPage } } statusCheckRollup { commit { oid } state contexts(first: 100) { nodes { ... on CheckRun { name status conclusion detailsUrl databaseId startedAt completedAt } ... on StatusContext { context state targetUrl } } totalCount checkRunCountsByState { state count } statusContextCountsByState { state count } } } } } }";
 
 fn remove_nulls(value: &mut serde_json::Value) {
     match value {
@@ -144,6 +144,8 @@ pub enum ChangeRequestError {
     UnsupportedRepository,
     #[error("GitHub CLI is not installed")]
     CliUnavailable,
+    #[error("GitHub CLI is out of date. Update gh, then try again.")]
+    CliOutdated,
     #[error("GitHub CLI is not authenticated for this host")]
     Authentication,
     #[error("GitHub API rate limit reached")]
@@ -874,7 +876,7 @@ impl GitHubCli {
         if diff {
             args.push("--color=never".into());
         } else {
-            args.extend(["--json".into(), "title,body,url,number,author,baseRefName,headRefName,headRefOid,baseRefOid,state,isDraft,reviewDecision,mergeable,additions,deletions,comments,reviews,files,statusCheckRollup,autoMergeRequest,headRepository".into()]);
+            args.extend(["--json".into(), "title,body,url,number,author,baseRefName,headRefName,headRefOid,state,isDraft,reviewDecision,mergeable,additions,deletions,comments,reviews,files,statusCheckRollup,autoMergeRequest,headRepository".into()]);
         }
         let output = self
             .runner
@@ -914,8 +916,14 @@ impl GitHubCli {
                 // reviews included, before you've commented here.
                 detail.viewer_login = metadata.viewer_login.clone();
                 let checks = metadata.checks();
+                let base = metadata.base_ref_oid.clone();
                 let (head, ci, authored, requested) = metadata.into_fields();
                 if head == detail.head_ref_oid {
+                    if let Some(base) = base.filter(|base| {
+                        zuse_protocol::change_request_assessment::valid_head_oid(base)
+                    }) {
+                        detail.base_ref_oid = base;
+                    }
                     if let Some(checks) = checks {
                         detail.status_check_rollup = checks;
                     } else if ci.state != detail.ci.state {
@@ -1859,6 +1867,10 @@ struct GhSearchPullRequest {
 struct GhPrMetadata {
     #[serde(default)]
     head_ref_oid: Option<String>,
+    /// Read here rather than through `gh pr view --json`: older `gh`
+    /// releases (Ubuntu's 2.45) reject `baseRefOid` as an unknown field.
+    #[serde(default)]
+    base_ref_oid: Option<String>,
     #[serde(default)]
     viewer_did_author: Option<bool>,
     #[serde(default)]
@@ -2352,7 +2364,10 @@ fn github_refusal(stderr: &[u8]) -> String {
 
 fn classify_github_failure(stderr: &[u8]) -> ChangeRequestError {
     let stderr = String::from_utf8_lossy(stderr).to_ascii_lowercase();
-    if stderr.contains("rate limit") || stderr.contains("secondary rate") {
+    // An older `gh` rejects `--json` fields it predates.
+    if stderr.contains("unknown json field") {
+        ChangeRequestError::CliOutdated
+    } else if stderr.contains("rate limit") || stderr.contains("secondary rate") {
         ChangeRequestError::RateLimited
     } else if stderr.contains("not logged")
         || stderr.contains("authentication")
@@ -3273,6 +3288,33 @@ mod tests {
         assert_eq!(request.timeout, GITHUB_TIMEOUT);
         assert_eq!(request.output_limit, GITHUB_OUTPUT_LIMIT);
         assert!(request.cwd.is_none());
+    }
+
+    #[tokio::test]
+    async fn pr_detail_reads_base_revision_from_graphql_for_older_gh() {
+        use serde_json::json;
+        let url = "https://github.com/a/b/pull/12";
+        let head = "b".repeat(40);
+        let base = "c".repeat(40);
+        let runner = FakeProcessRunner::with_responses([
+            command_success(
+                serde_json::to_vec(&json!({"url":url,"number":12,"headRefOid":head})).unwrap(),
+            ),
+            command_success(
+                serde_json::to_vec(&json!({"data":{"viewer":{"login":"me"},"repository":{"pullRequest":{"headRefOid":head,"baseRefOid":base}}}}))
+                    .unwrap(),
+            ),
+            command_failure("review threads unavailable"),
+        ]);
+        let detail = GitHubCli::with_runner(runner.clone())
+            .detail(url, false)
+            .await
+            .unwrap();
+        assert_eq!(detail.base_ref_oid, base);
+        // Ubuntu's gh 2.45 rejects `baseRefOid` in `gh pr view --json`.
+        let view = &runner.requests()[0];
+        let fields = view.args.iter().skip_while(|arg| *arg != "--json").nth(1);
+        assert!(fields.is_some_and(|fields| !fields.contains("baseRefOid")));
     }
 
     #[tokio::test]
@@ -4777,6 +4819,17 @@ printf '%s\n' '[{"number":90,"title":"Host-resolved pull request","url":"https:/
         let (result, _) =
             resolve_with(&source, command_failure("GraphQL: API rate limit exceeded")).await;
         assert_eq!(result.unwrap_err(), ChangeRequestError::RateLimited);
+    }
+
+    #[tokio::test]
+    async fn outdated_github_cli_is_classified() {
+        let source = source("feature/status", "acme", Some("main"));
+        let (result, _) = resolve_with(
+            &source,
+            command_failure("Unknown JSON field: \"baseRefOid\"\nAvailable fields:\n  additions"),
+        )
+        .await;
+        assert_eq!(result.unwrap_err(), ChangeRequestError::CliOutdated);
     }
 
     #[tokio::test]

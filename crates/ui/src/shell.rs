@@ -2088,6 +2088,8 @@ struct SubagentTab {
     _fetch: Option<Task<()>>,
     /// Spawn chips INSIDE the subagent transcript open their own tabs.
     _events: Subscription,
+    /// A workflow agent's conversation follows its run's progress.
+    _feed: Option<Subscription>,
 }
 
 /// Sidebar render identity lets transcript/caret frames reuse its GPUI scene.
@@ -2332,6 +2334,8 @@ pub struct Shell {
     chat_rename: Option<ChatRename>,
     /// Chat id awaiting delete confirmation.
     delete_confirm: Option<String>,
+    deleting_chat: bool,
+    cloud_delete_commands: std::collections::HashMap<String, String>,
     /// Global confirmation/error dialog for the Changes-pane trash action. The
     /// RPC task is retained separately so rerenders do not cancel it.
     discard_working_tree: Option<DiscardWorkingTreeFlow>,
@@ -2980,6 +2984,8 @@ impl Shell {
             chat_copy_left: false,
             chat_rename: None,
             delete_confirm: None,
+            deleting_chat: false,
+            cloud_delete_commands: std::collections::HashMap::new(),
             discard_working_tree: None,
             discard_working_tree_task: None,
             space_menu: popover::Popup::default(),
@@ -4513,6 +4519,32 @@ impl Shell {
                         this.add_browser_surface(url.clone(), window, cx);
                     }
                 }
+                crate::browser::BrowserEvent::ElementSelected(details) => {
+                    if this.panel_key(cx) == owner
+                        && this.resolved_right_active(cx) == RightSurface::Browser(id)
+                    {
+                        let composer = this.composer.clone();
+                        let details = details.clone();
+                        let draft_key = composer.read(cx).current_key.clone();
+                        cx.defer(move |cx| {
+                            composer.update(cx, |composer, cx| {
+                                composer.stage_browser_annotation(draft_key, details, cx);
+                            })
+                        });
+                    }
+                }
+                crate::browser::BrowserEvent::AnnotationRemoved(id) => {
+                    if this.panel_key(cx) == owner {
+                        let composer = this.composer.clone();
+                        let draft_key = composer.read(cx).current_key.clone();
+                        let id = id.clone();
+                        cx.defer(move |cx| {
+                            composer.update(cx, |composer, cx| {
+                                composer.remove_browser_annotation(draft_key, &id, cx)
+                            })
+                        });
+                    }
+                }
                 crate::browser::BrowserEvent::Close => {
                     this.close_right_surface(RightSurface::Browser(id), window, cx)
                 }
@@ -4899,6 +4931,19 @@ impl Shell {
                     cx,
                 );
             }
+            TranscriptEvent::OpenWorkflowAgent {
+                row_id,
+                agent_index,
+                title,
+            } => {
+                self.add_workflow_agent_surface(
+                    transcript,
+                    row_id.clone(),
+                    *agent_index,
+                    title.clone(),
+                    cx,
+                );
+            }
             // A reply's Fork menu: a new tab in this thread, or a new thread.
             TranscriptEvent::ForkChat { chat_id, target } => {
                 let source = self
@@ -4920,6 +4965,91 @@ impl Shell {
                 });
             }
         }
+    }
+
+    /// A workflow board's agent row: open that agent as a subagent tab. A
+    /// workflow agent has no doc of its own, so its conversation (what it was
+    /// asked, what it returned) is built from the run's progress and kept in
+    /// step with it; the tab then reads exactly like any other transcript.
+    fn add_workflow_agent_surface(
+        &mut self,
+        transcript: Entity<Transcript>,
+        row_id: SharedString,
+        index: u32,
+        title: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.set_surfaces_open(true, cx);
+        let doc_id = format!("workflow-agent:{row_id}:{index}");
+        if let Some((&id, _)) = self
+            .subagent_tabs
+            .iter()
+            .find(|(_, tab)| tab.doc_id == doc_id)
+        {
+            self.set_right_active(RightSurface::Subagent(id), cx);
+            return;
+        }
+        let Some(snapshot) = transcript.read(cx).workflow_agent(&row_id, index) else {
+            return;
+        };
+        let device = self
+            .state
+            .read(cx)
+            .local_device_id
+            .clone()
+            .unwrap_or_default();
+        let entries = crate::workflow_board::agent_entries(&snapshot, &device);
+        let live = matches!(
+            snapshot.agent.status,
+            crate::workflow_board::AgentStatus::Working
+                | crate::workflow_board::AgentStatus::Queued
+        );
+        self.state.update(cx, |state, cx| {
+            state.set_subagent_snapshot(doc_id.clone(), entries.clone());
+            cx.notify();
+        });
+        let last = std::cell::RefCell::new(entries);
+        let state = self.state.clone();
+        let feed_doc = doc_id.clone();
+        let feed = cx.observe(&transcript, move |_, source, cx| {
+            let Some(snapshot) = source.read(cx).workflow_agent(&row_id, index) else {
+                return;
+            };
+            let entries = crate::workflow_board::agent_entries(&snapshot, &device);
+            if *last.borrow() == entries {
+                return;
+            }
+            last.replace(entries.clone());
+            state.update(cx, |state, cx| {
+                state.set_subagent_snapshot(feed_doc.clone(), entries);
+                cx.notify();
+            });
+        });
+        self.subagent_seq += 1;
+        let id = self.subagent_seq;
+        let view = cx.new(|cx| Transcript::for_doc(self.state.clone(), doc_id.clone(), live, cx));
+        let links = Self::session_links(Some(self.active_chat.clone()), cx);
+        view.update(cx, |view, _| view.set_workspace_link_handler(links));
+        let events = cx.subscribe(&view, Self::on_transcript_event);
+        self.subagent_tabs.insert(
+            id,
+            SubagentTab {
+                doc_id,
+                // Workflows are a Claude Code feature.
+                harness: Some(zuse_protocol::HarnessId::ClaudeCode),
+                title: title.into(),
+                transcript: view,
+                _fetch: None,
+                _events: events,
+                _feed: Some(feed),
+            },
+        );
+        let key = self.panel_key(cx);
+        self.right_tabs
+            .entry(key)
+            .or_default()
+            .push(RightSurface::Subagent(id));
+        self.set_right_active(RightSurface::Subagent(id), cx);
     }
 
     /// A spawn chip's "Open subagent": focus the existing tab for that doc,
@@ -4995,6 +5125,7 @@ impl Shell {
                 transcript,
                 _fetch: fetch,
                 _events: events,
+                _feed: None,
             },
         );
         let key = self.panel_key(cx);
@@ -5697,6 +5828,32 @@ impl Shell {
         let message = message.into();
         self.sidebar_notice = Some(message.clone());
         crate::toast::show(cx, kind, message);
+    }
+
+    fn show_archive_error(&mut self, chat_id: String, message: String, cx: &mut Context<Self>) {
+        self.sidebar_notice = Some(message.clone().into());
+        let shell = cx.weak_entity();
+        crate::toast::error_with_action(
+            cx,
+            message,
+            chat_id.clone(),
+            "Force delete…",
+            move |_, cx| {
+                let _ = shell.update(cx, |this, cx| {
+                    if !this.deleting_chat
+                        && this
+                            .state
+                            .read(cx)
+                            .chats
+                            .iter()
+                            .any(|chat| chat.id == chat_id)
+                    {
+                        this.delete_confirm = Some(chat_id.clone());
+                        cx.notify();
+                    }
+                });
+            },
+        );
     }
 
     fn set_chat_copy_open(&mut self, open: bool, cx: &mut Context<Self>) {
@@ -7026,7 +7183,11 @@ impl Shell {
                             if !shell.state.read(cx).engine().is_some_and(|current| current.same_connection(&engine)) {
                                 return;
                             }
-                            shell.show_notice(crate::toast::ToastKind::Error, format!("{error}"), cx);
+                            if archived {
+                                shell.show_archive_error(chat_id.clone(), format!("{error}"), cx);
+                            } else {
+                                shell.show_notice(crate::toast::ToastKind::Error, format!("{error}"), cx);
+                            }
                             cx.notify();
                         });
                     }
@@ -7113,7 +7274,14 @@ impl Shell {
     }
 
     fn delete_chat(&mut self, chat_id: String, cx: &mut Context<Self>) {
-        self.delete_confirm = None;
+        if self.deleting_chat {
+            return;
+        }
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            self.show_notice(crate::toast::ToastKind::Error, "Engine not connected", cx);
+            cx.notify();
+            return;
+        };
         // Take a Zapper thread off its Zapper first, so the Zapper stops
         // counting it and sending it work.
         if let Some(zot) = self.zot_of_thread(&chat_id, cx) {
@@ -7126,6 +7294,65 @@ impl Shell {
                 zot_forms::ZotAfter::Stay,
                 cx,
             );
+        }
+        let owner = self
+            .state
+            .read(cx)
+            .chats
+            .iter()
+            .find(|chat| chat.id == chat_id)
+            .map(|chat| chat.device_id.clone());
+        let cloud_request = engine.cloud_target().map(|target| {
+            let command_id = self
+                .cloud_delete_commands
+                .entry(chat_id.clone())
+                .or_insert_with(|| uuid::Uuid::new_v4().to_string())
+                .clone();
+            (target, command_id)
+        });
+        self.deleting_chat = true;
+        cx.spawn(async move |this, cx| {
+            let result = if let Some((target, command_id)) = cloud_request {
+                target.delete_session(&chat_id, &command_id).await
+            } else {
+                engine
+                    .client()
+                    .call(
+                        methods::MUTATE,
+                        serde_json::json!({
+                            "op": "forceDeleteChat", "chatId": chat_id, "targetDeviceId": owner,
+                        }),
+                    )
+                    .await
+            };
+            let _ = this.update(cx, |this, cx| {
+                this.deleting_chat = false;
+                if !this
+                    .state
+                    .read(cx)
+                    .engine()
+                    .is_some_and(|current| current.same_connection(&engine))
+                {
+                    cx.notify();
+                    return;
+                }
+                match result {
+                    Ok(_) => this.finish_delete_chat(chat_id, cx),
+                    Err(error) => {
+                        this.show_notice(crate::toast::ToastKind::Error, format!("{error}"), cx)
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn finish_delete_chat(&mut self, chat_id: String, cx: &mut Context<Self>) {
+        self.cloud_delete_commands.remove(&chat_id);
+        if self.delete_confirm.as_deref() == Some(chat_id.as_str()) {
+            self.delete_confirm = None;
         }
         if let Some(tabs) = self.right_tabs.get(&chat_id) {
             for surface in tabs {
@@ -7150,10 +7377,6 @@ impl Shell {
         }
         self.composer
             .update(cx, |composer, cx| composer.purge_chat(&chat_id, cx));
-        self.mutate(
-            serde_json::json!({ "op": "deleteChat", "chatId": chat_id }),
-            cx,
-        );
         cx.notify();
     }
 
@@ -12061,8 +12284,11 @@ impl Shell {
         // Modals and context menus sit above the rest of the shell. Preserve
         // their existing behavior: only surfaces that already have a Cancel
         // path close here; the others remain explicit blockers.
+        if self.delete_confirm.take().is_some() {
+            cx.notify();
+            return true;
+        }
         if self.sync_flow.has_visible_overlay()
-            || self.delete_confirm.is_some()
             || self.delete_space_confirm.is_some()
             || self.chat_menu.get().is_some()
             || self.space_menu.get().is_some()
@@ -12413,7 +12639,7 @@ impl Shell {
                                 .size(px(16.0))
                                 .text_color(theme.danger),
                         )
-                        .child(SharedString::from("Delete…"));
+                        .child(SharedString::from("Force delete…"));
                 menu.child(popover::menu_separator())
                     .child(self.chat_menu_hover_row(CHAT_MENU_ROW_DELETE, delete, cx))
             };
@@ -12487,14 +12713,29 @@ impl Shell {
                     .and_then(|c| c.title.clone())
                     .unwrap_or_else(|| "New session".into()),
             );
+            let cloud = self
+                .state
+                .read(cx)
+                .engine()
+                .is_some_and(|engine| engine.cloud_target().is_some());
             let card = popover::dialog_card(&theme)
-                .child(popover::dialog_title(&theme, "Delete session?"))
-                .child(div().mt(px(6.0)).child(popover::dialog_body(
-                    &theme,
-                    format!("\u{201C}{title}\u{201D} will be permanently deleted. This can\u{2019}t be undone."),
-                )))
+                .w(px(440.))
+                .overflow_hidden()
+                .child(
+                    div().flex().flex_col().gap(px(10.))
+                        .child(popover::dialog_title(&theme, "Force delete session?"))
+                        .child(popover::dialog_body(&theme,
+                            format!("“{title}” and its conversations and agents will be permanently deleted.")))
+                        .child(popover::dialog_body(&theme,
+                            if cloud {
+                                "Its cloud computer, disk, stored history and recovery data will be permanently deleted."
+                            } else {
+                                "Its private worktree and unsaved files will also be removed. Shared worktrees and your main project folder are kept."
+                            })),
+                )
                 .child(
                     popover::dialog_footer(&theme)
+                        .child(div().flex_1().text_size(px(11.)).text_color(theme.text_muted).child("This can’t be undone."))
                         .child(
                             popover::btn_ghost(&theme, &tr(cx, msg::common::cancel), "delete-chat-cancel")
                                 .id("delete-chat-cancel")
@@ -12504,8 +12745,12 @@ impl Shell {
                                 })),
                         )
                         .child(
-                            popover::btn_danger(&theme, "Delete")
+                            popover::btn_danger(
+                                &theme,
+                                if self.deleting_chat { "Deleting…" } else { "Force delete" },
+                            )
                                 .id("delete-chat-confirm")
+                                .opacity(if self.deleting_chat { 0.5 } else { 1. })
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.delete_chat(chat_id.clone(), cx)
                                 })),
@@ -16211,8 +16456,9 @@ mod tests {
 
     #[test]
     fn sidebar_drag_stays_exact_in_range_and_reduced_motion_never_nudges() {
-        let middle = sidebar_drag_sample(312.0, None, false);
-        assert_eq!(middle.width, 312.0);
+        let inside = (SIDEBAR_MIN + SIDEBAR_MAX) / 2.0;
+        let middle = sidebar_drag_sample(inside, None, false);
+        assert_eq!(middle.width, inside);
         assert_eq!(middle.edge, None);
         assert!(!middle.starts_bounce);
 
@@ -20216,6 +20462,19 @@ impl Shell {
 
     pub fn fixture_focus_mounted(&self, window: &Window, cx: &App) -> bool {
         self.shortcut_focus.contains_focused(window, cx)
+    }
+    pub fn fixture_browser_annotation_comments(&self, cx: &App) -> Vec<String> {
+        let composer = self.composer.read(cx);
+        self.state
+            .read(cx)
+            .context_items(&composer.current_key)
+            .iter()
+            .filter_map(|item| {
+                item.browser_annotation
+                    .as_ref()
+                    .map(|annotation| annotation.comment.clone())
+            })
+            .collect()
     }
     pub fn fixture_active_browser(
         &self,

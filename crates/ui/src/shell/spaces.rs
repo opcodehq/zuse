@@ -276,6 +276,22 @@ mod pinned_session_tests {
         .unwrap()
     }
 
+    /// The next sidebar write on the wire. The engine also sends unrelated
+    /// reads (account status and the like) as the shell settles; the tests
+    /// below are about the ordering and count of writes only.
+    fn next_write(
+        requests: &mut tokio::sync::mpsc::Receiver<String>,
+    ) -> Result<String, tokio::sync::mpsc::error::TryRecvError> {
+        loop {
+            let request = requests.try_recv()?;
+            if serde_json::from_str::<serde_json::Value>(&request)
+                .is_ok_and(|frame| frame["method"] == "Mutate")
+            {
+                return Ok(request);
+            }
+        }
+    }
+
     fn pin_test_engine() -> (
         crate::state::EngineHandle,
         tokio::sync::mpsc::Receiver<String>,
@@ -343,12 +359,13 @@ mod pinned_session_tests {
             })
             .unwrap();
         cx.run_until_parked();
-        let first: serde_json::Value = serde_json::from_str(&requests.try_recv().unwrap()).unwrap();
+        let first: serde_json::Value =
+            serde_json::from_str(&next_write(&mut requests).unwrap()).unwrap();
         assert_eq!(
             first["params"]["change"],
             serde_json::to_value(pin_change("first")).unwrap()
         );
-        assert!(requests.try_recv().is_err());
+        assert!(next_write(&mut requests).is_err());
         deliver_pin_rpc_reply(
             &runtime,
             &replies,
@@ -356,12 +373,12 @@ mod pinned_session_tests {
         );
         cx.run_until_parked();
         let second: serde_json::Value =
-            serde_json::from_str(&requests.try_recv().unwrap()).unwrap();
+            serde_json::from_str(&next_write(&mut requests).unwrap()).unwrap();
         assert_eq!(
             second["params"]["change"],
             serde_json::to_value(pin_change("second")).unwrap()
         );
-        assert!(requests.try_recv().is_err());
+        assert!(next_write(&mut requests).is_err());
         window
             .update(cx, |shell, _, cx| {
                 assert_eq!(shell.active_sidebar_pins(cx), ids(&["first", "second"]));
@@ -393,7 +410,7 @@ mod pinned_session_tests {
                 );
             })
             .unwrap();
-        assert!(requests.try_recv().is_err());
+        assert!(next_write(&mut requests).is_err());
     }
 
     #[gpui::test]
@@ -422,7 +439,7 @@ mod pinned_session_tests {
             .unwrap();
         cx.run_until_parked();
         let request: serde_json::Value =
-            serde_json::from_str(&requests.try_recv().unwrap()).unwrap();
+            serde_json::from_str(&next_write(&mut requests).unwrap()).unwrap();
         cx.executor()
             .advance_clock(std::time::Duration::from_secs(21));
         cx.run_until_parked();
@@ -435,7 +452,7 @@ mod pinned_session_tests {
             })
             .unwrap();
         assert!(
-            requests.try_recv().is_err(),
+            next_write(&mut requests).is_err(),
             "queued and fresh drops must not overtake the slow write"
         );
         deliver_pin_rpc_reply(
@@ -457,12 +474,13 @@ mod pinned_session_tests {
             })
             .unwrap();
         cx.run_until_parked();
-        let next: serde_json::Value = serde_json::from_str(&requests.try_recv().unwrap()).unwrap();
+        let next: serde_json::Value =
+            serde_json::from_str(&next_write(&mut requests).unwrap()).unwrap();
         assert_eq!(
             next["params"]["change"],
             serde_json::to_value(pin_change("after-confirmation")).unwrap()
         );
-        assert!(requests.try_recv().is_err());
+        assert!(next_write(&mut requests).is_err());
     }
 
     #[gpui::test]
@@ -553,13 +571,13 @@ mod pinned_session_tests {
             .unwrap();
         cx.run_until_parked();
         let request: serde_json::Value =
-            serde_json::from_str(&requests.try_recv().unwrap()).unwrap();
+            serde_json::from_str(&next_write(&mut requests).unwrap()).unwrap();
         assert_eq!(
             request["params"]["change"],
             serde_json::to_value(pin_change("first")).unwrap()
         );
         assert!(
-            requests.try_recv().is_err(),
+            next_write(&mut requests).is_err(),
             "only one write may be in flight"
         );
         window

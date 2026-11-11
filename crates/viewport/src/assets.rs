@@ -70,6 +70,7 @@ assets!(
     "copy",
     "magnifer",
     "star",
+    "model-favorite-filled",
     "danger-triangle",
     "trash-bin-minimalistic",
     "pen",
@@ -85,7 +86,8 @@ assets!(
     "settings",
     "info-circle",
     "more-horizontal",
-    "restart"
+    "restart",
+    "return"
 );
 
 pub(super) fn icon(name: &str) -> Svg {

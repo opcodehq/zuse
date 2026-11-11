@@ -68,6 +68,7 @@ jobs:
           ref: 14d9b82fb65d86f63b6332cb3d616f1ab0ada103
           path: vendor/zkit
       - run: python3 -m unittest discover -s scripts -p test_package.py -v
+      - run: python3 -m unittest discover -s scripts -p test_release_prebuild.py -v
       - run: python3 -m unittest discover -s scripts -p test_distribution.py -v
       - run: python3 -m unittest discover -s scripts -p test_release_notes.py -v
       - run: python3 -m unittest discover -s scripts -p test_cargo_dev.py -v
@@ -159,6 +160,9 @@ jobs:
         with:
           node-version: 22
       - uses: dtolnay/rust-toolchain@stable
+      - if: runner.os == 'macOS'
+        name: Check microphone helper cross-compilation
+        run: python3 -m unittest discover -s scripts -p test_macos_permission.py -v
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -269,5 +273,6 @@ jobs:
           cache-on-failure: true
       - run: sudo apt-get update && sudo apt-get install -y ripgrep
       - run: cargo test --locked -p zuse-harness -p zuse-harness-extensions --all-targets
+      - run: python3 -m unittest discover -s scripts -p test_computer_use_config.py -v
       - run: cargo build --locked --release -p zuse-harness --example harness-evaluate
       - run: python3 scripts/test-harness-evaluation.py --binary target/release/examples/harness-evaluate --output .context/native-transport-fixtures

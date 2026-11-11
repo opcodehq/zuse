@@ -1,0 +1,130 @@
+/* Zuse Dark and Zuse Light, from crates/theme/src/builtins.rs. Sampled desktop surfaces fill the gaps. */
+@font-face { font-family: "Geist"; src: url("@repo/crates/ui/assets/fonts/Geist.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Geist"; src: url("@repo/crates/ui/assets/fonts/Geist-Medium.ttf") format("truetype"); font-weight: 500; font-display: swap; }
+@font-face { font-family: "Geist"; src: url("@repo/crates/ui/assets/fonts/Geist-SemiBold.ttf") format("truetype"); font-weight: 600; font-display: swap; }
+@font-face { font-family: "Geist"; src: url("@repo/crates/ui/assets/fonts/Geist-Bold.ttf") format("truetype"); font-weight: 700; font-display: swap; }
+@font-face { font-family: "Geist Mono"; src: url("@repo/crates/ui/assets/fonts/GeistMono.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Geist Mono"; src: url("@repo/crates/ui/assets/fonts/GeistMono-Medium.ttf") format("truetype"); font-weight: 500; font-display: swap; }
+
+:root, [data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #151515;          /* main pane */
+  --shell: #1e1e1e;       /* window and sidebar */
+  --raised: #222222;
+  --card: #181818;
+  --composer: #1c1c1c;
+  --dialog: #1e1e1e;
+  --overlay: #222222;
+  --hover: #2a2a2a;
+  --active: #303030;
+  --selected: #353535;
+  --border: #272727;
+  --border-strong: #323232;
+  --input: #262626;
+  --text-strong: #f4f4f4;
+  --text: #e8e8e8;
+  --text-muted: #a3a3a3;
+  --text-faint: #6e6e6e;
+  --solid: #e8e8e8;
+  --on-solid: #151515;
+  --accent: #89ca21;
+  --on-accent: #0c170f;
+  /* Activity glyph rows (desktop GlyphPalette::for_accent): lighter, accent, deep. */
+  --glyph-light: hsl(from var(--accent) h calc(s * 0.72) min(calc(l + 14), 90));
+  --glyph-mid: var(--accent);
+  --glyph-deep: var(--accent);
+  --danger: #f87171;
+  --warning: #facc15;
+  --success: #34d399;
+  --terminal: #121212;
+  --code-bg: #1a1a1a;
+  --syntax-comment: #a3a3a3; --syntax-keyword: #c084fc; --syntax-string: #86efac; --syntax-number: #fbbf24;
+  --syntax-type: #67e8f9; --syntax-function: #7dd3fc; --syntax-tag: #f87171; --syntax-attribute: #fda4af;
+  --shadow: 0 8px 30px rgb(0 0 0 / 0.45);
+  /* Shared by several areas: settings frames, floating palettes and menus, tooltips. */
+  --border-alpha: rgb(255 255 255 / 0.10);
+  --card-border: rgb(255 255 255 / 0.08);
+  --frame: #262626;
+  --float-chrome: #1f1f1f;
+  --float: #191919;
+  --hairline: rgb(255 255 255 / 0.07);
+  --wash: rgb(255 255 255 / 0.05);
+  --scrim: rgb(0 0 0 / 0.35);
+  --tooltip: #191c1a;
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+  --bg: #ffffff;
+  --shell: #efefef;
+  --raised: #efefef;
+  --card: #ffffff;
+  --composer: #ffffff;
+  --dialog: #ffffff;
+  --overlay: #ffffff;
+  --hover: #f4f4f4;
+  --active: #e8e8e8;
+  --selected: #f0f0f0;
+  --border: #e8e8e8;
+  --border-strong: #dcdcdc;
+  --input: #e8e8e8;
+  --text-strong: #0f0f0f;
+  --text: #2a2a2a;
+  --text-muted: #737373;
+  --text-faint: #a3a3a3;
+  --solid: #1a1a1a;
+  --on-solid: #ffffff;
+  --accent: #81bf1d;
+  --on-accent: #0c170f;
+  --glyph-light: hsl(from var(--accent) h calc(s * 0.78) min(calc(l + 11), 76));
+  --glyph-mid: var(--accent);
+  --glyph-deep: hsl(from var(--accent) h s max(calc(l - 9), 22));
+  --danger: #dc2626;
+  --warning: #a16207;
+  --success: #15803d;
+  --terminal: #fafafa;
+  --code-bg: #f6f6f6;
+  --syntax-comment: #7f7f7f; --syntax-keyword: #7924b2; --syntax-string: #297537; --syntax-number: #90600e;
+  --syntax-type: #186f81; --syntax-function: #2256bf; --syntax-tag: #c32222; --syntax-attribute: #ba2157;
+  --shadow: 0 8px 30px rgb(0 0 0 / 0.12);
+  --border-alpha: rgb(0 0 0 / 0.12);
+  --card-border: var(--border);
+  --frame: #f0f0f0;
+  --float-chrome: #f9f9f9;
+  --float: #ffffff;
+  --hairline: rgb(0 0 0 / 0.08);
+  --wash: rgb(0 0 0 / 0.045);
+  --scrim: rgb(0 0 0 / 0.2);
+  --tooltip: #ffffff;
+}
+
+:root {
+  --font-sans: "Geist", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, monospace;
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-base: 13px;
+  --text-md: 14px;
+  --text-lg: 16px;
+  --text-xl: 20px;
+  --radius-sm: 6px;
+  --radius: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --gutter: 4px;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html, body, #root { height: 100%; margin: 0; }
+body {
+  background: var(--shell);
+  color: var(--text);
+  font: 400 var(--text-base) / 1.5 var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+button, input, textarea, select { font: inherit; color: inherit; }
+::selection { background: color-mix(in srgb, var(--accent) 35%, transparent); }
+:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent); outline-offset: 1px; }
+* { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+@media (prefers-reduced-motion: reduce) { * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; } }

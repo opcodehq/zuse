@@ -56,6 +56,7 @@ libc.workspace = true
 gethostname.workspace = true
 tokio-util = { workspace = true, features = ["rt"] }
 sha2.workspace = true
+rcgen = "0.14"
 reqwest.workspace = true
 ignore.workspace = true
 fff-search.workspace = true

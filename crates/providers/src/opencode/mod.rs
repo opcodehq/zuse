@@ -619,6 +619,49 @@ impl Server {
         startup: Duration,
         mcp: Option<&zuse_protocol::McpServer>,
     ) -> Result<Self, HarnessError> {
+        // Resolve the potentially slow version probe before choosing a port.
+        let config = if let Some(mcp) = mcp {
+            match opencode_version(exe).await {
+                Some(version) => Some(mcp_config(
+                    std::env::var("OPENCODE_CONFIG_CONTENT").ok().as_deref(),
+                    mcp,
+                    if version.major >= 2 {
+                        Protocol::V2
+                    } else {
+                        Protocol::V1
+                    },
+                )?),
+                None => {
+                    tracing::warn!(binary_path = %exe.display(), "opencode version unknown; starting without the Zuse MCP server");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let deadline = tokio::time::Instant::now() + startup;
+        for attempt in 0..3 {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            match Self::spawn_once(exe, cwd, remaining, config.as_deref()).await {
+                Err(HarnessError::Protocol(message))
+                    if message.starts_with("EADDRINUSE:")
+                        && attempt < 2
+                        && tokio::time::Instant::now() < deadline =>
+                {
+                    tracing::debug!(attempt, "opencode port was taken; retrying on a fresh port");
+                }
+                result => return result,
+            }
+        }
+        unreachable!("the final startup attempt returns its result")
+    }
+
+    async fn spawn_once(
+        exe: &std::path::Path,
+        cwd: Option<&str>,
+        startup: Duration,
+        config: Option<&str>,
+    ) -> Result<Self, HarnessError> {
         let port = free_localhost_port().ok_or_else(|| {
             HarnessError::Protocol("no free localhost port for opencode serve".into())
         })?;
@@ -634,30 +677,8 @@ impl Server {
             .env("OPENCODE_PASSWORD", &password)
             .env("OPENCODE_SERVER_PASSWORD", &password)
             .env("OPENCODE_CLIENT", "zuse");
-        if let Some(mcp) = mcp {
-            // The config shape differs by generation. If even the cold probe
-            // can't tell, run without the Zuse MCP server rather than fail.
-            match opencode_version(exe).await {
-                Some(version) => {
-                    let protocol = if version.major >= 2 {
-                        Protocol::V2
-                    } else {
-                        Protocol::V1
-                    };
-                    cmd.env(
-                        "OPENCODE_CONFIG_CONTENT",
-                        mcp_config(
-                            std::env::var("OPENCODE_CONFIG_CONTENT").ok().as_deref(),
-                            mcp,
-                            protocol,
-                        )?,
-                    );
-                }
-                None => tracing::warn!(
-                    binary_path = %exe.display(),
-                    "opencode version unknown; starting without the Zuse MCP server"
-                ),
-            }
+        if let Some(config) = config {
+            cmd.env("OPENCODE_CONFIG_CONTENT", config);
         }
         crate::compose_child_path(&mut cmd, exe);
         if let Some(cwd) = cwd {
@@ -675,16 +696,25 @@ impl Server {
             }
         })?;
         let stderr_tail = crate::StderrTail::default();
-        if let Some(stderr) = child.stderr.take() {
+        let address_in_use = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut stderr_task = child.stderr.take().map(|stderr| {
             let tail = stderr_tail.clone();
+            let address_in_use = address_in_use.clone();
             tokio::spawn(async move {
                 let mut lines = tokio::io::BufReader::new(stderr).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
+                    // Keep the classification even if a long Node/Bun trace
+                    // pushes its error code out of the diagnostic tail.
+                    if line.contains("EADDRINUSE")
+                        || line.to_ascii_lowercase().contains("address already in use")
+                    {
+                        address_in_use.store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
                     tracing::debug!(target: "zuse_providers::opencode", "stderr: {line}");
                     tail.push(&line);
                 }
-            });
-        }
+            })
+        });
 
         use base64::Engine as _;
         let auth = format!(
@@ -709,11 +739,20 @@ impl Server {
             if let Some(child) = server.child.as_mut()
                 && let Ok(Some(status)) = child.try_wait()
             {
-                return Err(HarnessError::Protocol(crate::crash_message(
-                    "opencode serve",
-                    Some(status),
-                    &server.stderr_tail,
-                )));
+                // An exited child can be observed before its stderr reader
+                // gets scheduled. Drain it before classifying a bind failure.
+                if let Some(task) = stderr_task.take() {
+                    let _ = tokio::time::timeout(Duration::from_millis(250), task).await;
+                }
+                let message =
+                    crate::crash_message("opencode serve", Some(status), &server.stderr_tail);
+                return Err(HarnessError::Protocol(
+                    if address_in_use.load(std::sync::atomic::Ordering::Relaxed) {
+                        format!("EADDRINUSE: {message}")
+                    } else {
+                        message
+                    },
+                ));
             }
             let detected = match Protocol::detect(&server).await {
                 Ok(detected) => detected,
@@ -4857,6 +4896,63 @@ http.createServer((req, res) => {{
             assert_eq!(
                 a_config["command"],
                 json!(["/path with spaces/zuse", "mcp"])
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn server_start_retries_bind_collisions_but_bounds_retries_and_preserves_other_errors() {
+        use std::os::unix::fs::PermissionsExt;
+        for (failure, fail_once, attempts) in [
+            ("EADDRINUSE", true, 2),
+            ("EADDRINUSE", false, 3),
+            ("invalid configuration", false, 1),
+        ] {
+            let fixture = tempfile::tempdir().unwrap();
+            let exe = fixture.path().join("opencode");
+            let count = fixture.path().join("attempts");
+            let script = format!(
+                r#"#!/usr/bin/env node
+const fs = require('node:fs');
+const http = require('node:http');
+const attempts = 'attempts';
+const count = fs.existsSync(attempts) ? Number(fs.readFileSync(attempts, 'utf8')) : 0;
+fs.writeFileSync(attempts, String(count + 1));
+if (!{fail_once} || count === 0) {{
+  // A long runtime trace must not hide EADDRINUSE from retry classification.
+  process.stderr.write('{failure}\n' + 'stack frame\n'.repeat(12), () => process.exit(1));
+}} else {{
+  const port = Number(process.argv[process.argv.indexOf('--port') + 1]);
+  http.createServer((req, res) => {{
+    res.setHeader('content-type', 'application/json');
+    if (req.url === '/global/health') res.end(JSON.stringify({{version:'1.0.0'}}));
+    else {{ res.statusCode = 404; res.end('{{}}'); }}
+  }}).listen(port, '127.0.0.1');
+}}
+"#
+            );
+            std::fs::write(&exe, script).unwrap();
+            std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let result =
+                Server::spawn(&exe, fixture.path().to_str(), Duration::from_secs(10), None).await;
+            if fail_once {
+                let mut server = result.unwrap();
+                assert_eq!(server.protocol().await, Protocol::V1);
+                server.shutdown(Duration::from_millis(100)).await;
+            } else {
+                let error = result
+                    .err()
+                    .expect("permanent startup failures must be returned");
+                if failure == "EADDRINUSE" {
+                    assert!(error.to_string().contains("EADDRINUSE"));
+                } else {
+                    assert!(!error.to_string().contains("EADDRINUSE"));
+                }
+            }
+            assert_eq!(
+                std::fs::read_to_string(count).unwrap(),
+                attempts.to_string()
             );
         }
     }

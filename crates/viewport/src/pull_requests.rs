@@ -174,6 +174,9 @@ impl WorkspaceView {
         self.pr_read(Read::Page(append),methods::LIST_CHANGE_REQUEST_PAGE,json!({"repository":repository,"filter":self.pull_requests.filter,"after":if append{self.pull_requests.next.clone()}else{None},"refresh":true}));
     }
     fn open_pr(&mut self, item: ChangeRequestListItem, cx: &mut Context<Self>) {
+        self.open_pr_url(item.url, item.head_ref_oid, cx);
+    }
+    pub(super) fn open_pr_url(&mut self, url: String, head: String, cx: &mut Context<Self>) {
         if self.pull_requests.posting.is_some() {
             return;
         }
@@ -186,32 +189,32 @@ impl WorkspaceView {
         }
         let watch = self.call(
             methods::WATCH_CHANGE_REQUEST,
-            self.pr_params(json!({"url":item.url})),
+            self.pr_params(json!({"url":url})),
         );
         self.pull_requests.watch = Some(watch);
         self.pull_requests.watch_seeded = false;
-        self.pull_requests.selected = Some(item.url.clone());
+        self.pull_requests.selected = Some(url.clone());
         self.pull_requests.detail = None;
         self.pull_requests.patch = Arc::new(vec![]);
         self.pull_requests.tab = "overview";
         self.pull_requests.error = None;
-        self.pull_requests.notice = self.pull_requests.uncertain.contains(&item.url).then(|| {
+        self.pull_requests.notice = self.pull_requests.uncertain.contains(&url).then(|| {
             "Comment delivery was uncertain. Check the discussion before posting again.".into()
         });
         let draft = self
             .pull_requests
             .drafts
-            .get(&item.url)
+            .get(&url)
             .cloned()
             .unwrap_or_default();
         self.pull_requests
             .comment
             .update(cx, |input, cx| input.set_value(draft, cx));
-        self.pr_read(
-            Read::Detail,
-            methods::GET_CHANGE_REQUEST,
-            json!({"url":item.url,"headRefOid":item.head_ref_oid,"refresh":true}),
-        );
+        let mut params = json!({"url":url,"refresh":true});
+        if !head.is_empty() {
+            params["headRefOid"] = json!(head);
+        }
+        self.pr_read(Read::Detail, methods::GET_CHANGE_REQUEST, params);
         cx.notify();
     }
     fn refresh_pr_detail(&mut self) {
@@ -896,6 +899,35 @@ mod tests {
             })
             .unwrap();
         (window, rx)
+    }
+    #[gpui::test]
+    fn url_only_issue_links_load_before_pinning_diff_revisions(cx: &mut TestAppContext) {
+        let (window, mut requests) = fixture(cx);
+        window
+            .update(cx, |view, _, cx| {
+                view.open_pr_url(
+                    "https://github.com/acme/app/pull/1".into(),
+                    String::new(),
+                    cx,
+                );
+                let id = read_id(view, |r| matches!(r, Read::Detail));
+                view.receive(json!({"id":id,"ok":detail('a')}), cx);
+                view.pr_tab("diff", cx);
+            })
+            .unwrap();
+        let mut first = None;
+        let mut diff = None;
+        while let Ok(frame) = requests.try_recv() {
+            if frame["method"] == methods::GET_CHANGE_REQUEST {
+                first = Some(frame);
+            } else if frame["method"] == methods::GET_CHANGE_REQUEST_DIFF {
+                diff = Some(frame);
+            }
+        }
+        assert!(first.unwrap()["params"].get("headRefOid").is_none());
+        let diff = diff.unwrap();
+        assert_eq!(diff["params"]["headRefOid"], "a".repeat(40));
+        assert_eq!(diff["params"]["baseRefOid"], "f".repeat(40));
     }
     #[gpui::test]
     fn pr_pages_and_pinned_diff_retire_old_scope_and_revision(cx: &mut TestAppContext) {

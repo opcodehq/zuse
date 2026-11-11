@@ -190,6 +190,7 @@ case "$turnline" in
   for want in '"sandbox":"read-only"' '"ephemeral":true' '"baseInstructions":"You generate session titles.' '"features.shell_tool":false' '"mcp_servers.test.enabled":false'; do
     has "$thread_line" "$want" || { fail_turn "$tid" "title restriction missing"; exit 0; }
   done
+  has "$thread_line" '"features.default_mode_request_user_input"' && { fail_turn "$tid" "title run can ask questions"; exit 0; }
   has "$turnline" '"sandboxPolicy":{"type":"readOnly"}' || { fail_turn "$tid" "title turn not read-only"; exit 0; }
   emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-1\"}}}"
   emit '{"method":"item/agentMessage/delta","params":{"threadId":"th-1","delta":"Fix Login Flow"}}'
@@ -230,7 +231,7 @@ case "$turnline" in
     has "$turnline" "$want" || { fail_turn "$tid" "turn param missing: $want"; exit 0; }
   done
   for want in '"approvalPolicy":"on-request"' '"sandbox":"workspace-write"' '"cwd":"/tmp"' \
-    '"serviceTier":"fast"'; do
+    '"serviceTier":"fast"' '"features.default_mode_request_user_input":true'; do
     has "$thread_line" "$want" || { fail_turn "$tid" "thread param missing: $want"; exit 0; }
   done
   emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-1\"}}}"

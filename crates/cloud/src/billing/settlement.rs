@@ -316,11 +316,18 @@ fn deltas(
     let br = bo * (10000 + markup) / 10000;
     let ar = ao * (10000 + markup) / 10000;
     let bc = charged as i128;
-    let ac = if p["status"] == "manual" {
-        0
-    } else {
-        ar.min(cap)
-    };
+    let policy = super::cost_policy(
+        p["status"].as_str().ok_or_else(invalid)?,
+        included as i64,
+        markup as i64,
+        cap as i64,
+    )?;
+    let ac = bc
+        + i128::from(
+            policy
+                .settlement(before, charged, cost)
+                .map_err(|_| invalid())?,
+        );
     [
         ("included-allowance", a.min(included) - b.min(included)),
         ("overage-provider-cost", ao - bo),
@@ -406,7 +413,18 @@ pub(super) async fn settle_segment(
     let charged:i64=sqlx::query_scalar("SELECT COALESCE(SUM(amount_micros),0)::bigint FROM api_cloud_billing_ledger WHERE period_id=$1 AND kind='overage-charge'").bind(period).fetch_one(&mut **tx).await?;
     let (exported,count):(i64,i64)=sqlx::query_as("SELECT COALESCE(SUM(amount_cents),0)::bigint,COUNT(*) FROM api_cloud_billing_outbox WHERE period_id=$1").bind(period).fetch_one(&mut **tx).await?;
     let delta = (charged.max(0) + 5000) / 10000 - exported;
-    if delta != 0 {
+    if p["shared_credit_account"] == true {
+        // Charge every confirmed retail-cost delta to the shared wallet, including
+        // costs inside the monthly allowance. The subscription funds that allowance.
+        let markup = number(p, "markup_basis_points")?;
+        let retail = |n: i128| n * (10000 + i128::from(markup)) / 10000;
+        let amount = i64::try_from(
+            retail(i128::from(before) + i128::from(cost)) - retail(i128::from(before)),
+        )
+        .map_err(|_| invalid())?;
+        sqlx::query("INSERT INTO zuse_brokeboy_compute_charges(account_id,entry_id,period_id,amount_micros,created_at) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING").bind(owner).bind(entry).bind(period).bind(amount).bind(now).execute(&mut **tx).await?;
+    }
+    if delta != 0 && p["shared_credit_account"] != true {
         let key = format!("{period}:{}", count + 1);
         let period_start = number(p, "period_start")?;
         let occurred = (if provider == "stripe" {

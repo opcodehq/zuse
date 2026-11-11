@@ -126,6 +126,8 @@ pub struct CloudBillingPage {
     history_open: bool,
     workspace_task: Option<Task<()>>,
     cap_request: Option<(i64, String)>,
+    credit_request: Option<(i64, String)>,
+    checkout_request: Option<String>,
 }
 impl EventEmitter<Navigate> for CloudBillingPage {}
 impl CloudBillingPage {
@@ -237,6 +239,8 @@ impl CloudBillingPage {
             history_open: false,
             workspace_task: None,
             cap_request: None,
+            credit_request: None,
+            checkout_request: None,
         }
     }
     fn sign_in(&mut self, cx: &mut Context<Self>) {
@@ -494,6 +498,15 @@ impl CloudBillingPage {
             return;
         };
         self.error = None;
+        let checkout_key = if subscribed {
+            None
+        } else {
+            Some(
+                self.checkout_request
+                    .get_or_insert_with(|| uuid::Uuid::new_v4().to_string())
+                    .clone(),
+            )
+        };
         let expected = owner.clone();
         let job = gpui_tokio::Tokio::spawn(cx, async move {
             engine
@@ -509,7 +522,7 @@ impl CloudBillingPage {
                         if subscribed {
                             json!({})
                         } else {
-                            json!({"offerId":"cloud-workspace-standard-v1"})
+                            json!({"offerId":"cloud-workspace-standard-v1","idempotencyKey":checkout_key})
                         },
                     ),
                 )
@@ -532,6 +545,9 @@ impl CloudBillingPage {
                         .as_str()
                         .filter(|url| url.starts_with("https://"))
                         {
+                            if !subscribed {
+                                this.checkout_request = None;
+                            }
                             cx.open_url(url);
                         } else {
                             this.error = Some(
@@ -561,6 +577,10 @@ impl CloudBillingPage {
             return;
         };
         let amount = self.credit_amount;
+        if buy && self.credit_request.as_ref().is_none_or(|r| r.0 != amount) {
+            self.credit_request = Some((amount, uuid::Uuid::new_v4().to_string()));
+        }
+        let credit_key = self.credit_request.as_ref().map(|r| r.1.clone());
         self.credit_error = None;
         let expected = owner.clone();
         let job = gpui_tokio::Tokio::spawn(cx, async move {
@@ -575,7 +595,7 @@ impl CloudBillingPage {
                     request_params(
                         &expected,
                         if buy {
-                            json!({"amountCents":amount})
+                            json!({"amountCents":amount,"idempotencyKey":credit_key})
                         } else {
                             json!({})
                         },
@@ -597,6 +617,7 @@ impl CloudBillingPage {
                                 .as_str()
                                 .filter(|s| s.starts_with("https://"))
                             {
+                                this.credit_request = None;
                                 cx.open_url(url);
                             } else {
                                 this.credit_error = Some(
@@ -725,6 +746,8 @@ impl Render for CloudBillingPage {
             self.error = None;
             self.notice = None;
             self.cap_request = None;
+            self.credit_request = None;
+            self.checkout_request = None;
             self.cap.update(cx, |i, cx| i.set_value("".into(), cx));
         }
         if !self.loaded {

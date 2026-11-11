@@ -144,3 +144,29 @@ Application messages over 1 KiB are compressed per message with LZ4 before seali
 The iOS and Android apps own their sockets and call `zuse-mobile-bridge`'s `link*` operations, which drive the `Link` state machine. They report socket and network events and perform the returned effects, so route choice, moves and resume are decided once for both platforms. Both apps start a fresh connection on foreground, using the remembered route. Network changes while open go through the link. The apps' `zuse serve` address-and-token connections are single-route and do not use this path.
 
 Evidence: `zuse-remote` state-machine tests; `crates/serve/tests/paired_link.rs` runs desktop and mobile links against real sockets, including resume and live upgrade; `apps/android/scripts/test-real-engine.py` covers Kotlin and JNI against an isolated engine; the portable Swift suite compiles and unit-tests the iOS transport on Linux. `apps/android/scripts/verify-routes.py` runs the packaged Android app on an emulator against a real engine and relay: LAN, tailnet address, automatic tailnet-to-LAN upgrade, relay, remembered routes, a killed route, an airplane-mode drop and revocation. The emulator reaches this machine's tailnet address through its own NAT, so that run proves addressing and upgrade logic, not a phone's WireGuard path. iOS against a live host and physical devices on real Wi-Fi, cellular and Tailscale remain acceptance gates.
+
+## Running on another machine
+
+`zuse-server` finds the packaged web files itself, so one installed command is enough. Three commands cover the common cases:
+
+- `zuse-server --lan` serves this network and prints a private link and QR code.
+- `zuse-server --account` signs in with a device code, links this computer to the account, and prints a link that works from anywhere.
+- `zuse-server --lan --tailscale-serve` also publishes over Tailscale HTTPS, which browsers trust without a warning.
+
+With a server already running, `zuse-server pair` creates another link, `pair --app` shows the QR code for the Zuse apps, and `login`, `logout`, `link`, `unlink` and `status` act on the same engine over its loopback port. Pass `--ipc-port` when the server does not use the default.
+
+### Why LAN browsers use HTTPS
+
+The browser client is built with WebAssembly threads and draws through WebGPU. Browsers expose shared memory only to cross-origin-isolated pages and WebGPU only to secure contexts, so the app cannot start from a plain `http://192.168.x.x` page. Checked in Chromium: plain HTTP on a LAN address has neither, while a generated certificate the user has clicked through has both.
+
+Direct access therefore opens a second listener, by default on port 27659, serving the app over HTTPS with a certificate generated for this computer. It is stored privately in the profile as `lan-https.json`. Addresses from earlier networks stay on the certificate, so returning to a known network does not repeat the browser warning. Paired apps keep using the plain listener, whose traffic is protected by Noise, and this HTTPS route is not advertised to them because they would reject the certificate.
+
+The trade-off is the page itself. Chat traffic stays end-to-end encrypted, but the certificate warning means the browser cannot prove the app came from this computer, and someone able to intercept traffic on that network could serve a modified page. Use Tailscale HTTPS or an account link on networks you do not trust.
+
+The app listener has no owner token, cookie session or `/api/rpc`: a browser reaching it still needs a pairing link. Non-private peers are dropped when the connection is accepted. Tailscale Serve points at a separate loopback listener with the same routes when web files are available.
+
+### Invitations and saved computers
+
+`CreatePairing` returns `browserOrigin` and `browserSelfSigned` beside `origin`. A public HTTPS origin serves both kinds of client. Otherwise `origin` is the paired-app route and `browserOrigin` is the best browser route: Tailscale HTTPS first, then the generated certificate.
+
+After a paired connection succeeds, the browser saves that link in `zuse.paired-computers.v1` in local storage, keeping the 16 most recent. A tab with no link and no owner session reopens the latest one. Links are saved only once they have worked, so a bad link never becomes the default. Settings → Devices lists them with Open and Forget, and revoking the pairing on the host ends access regardless of what the browser holds. Each origin has its own list. Add computer connects within the same tab for trusted HTTPS origins, and opens private-network links in their own page so the browser can show its certificate prompt.

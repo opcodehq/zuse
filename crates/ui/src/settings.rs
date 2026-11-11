@@ -988,6 +988,8 @@ pub struct UiSettings {
     pub settings_section: crate::shell::SettingsSection,
     /// Light/dark preference. Defaults to following the OS.
     pub appearance: crate::appearance::AppearanceMode,
+    /// Browser page color scheme; System follows the Zuse interface.
+    pub browser_appearance: crate::appearance::AppearanceMode,
     /// Optional columns shown in every Git History pane.
     pub git_history_columns: GitHistoryColumns,
     /// User-adjusted widths for the resizable Git History columns.
@@ -1142,6 +1144,7 @@ impl Default for UiSettings {
             appshot_sound_enabled: true,
             appshot_destination: crate::appshots::AppshotDestination::Automatic,
             appearance: crate::appearance::AppearanceMode::default(),
+            browser_appearance: crate::appearance::AppearanceMode::default(),
             git_history_columns: GitHistoryColumns::default(),
             git_history_column_widths: GitHistoryColumnWidths::default(),
             git_history_column_order: GitHistoryColumnOrder::default(),
@@ -2041,6 +2044,7 @@ impl UiSettings {
             escape_stops_active_agent,
             settings_section,
             appearance,
+            browser_appearance,
             git_history_columns,
             git_history_column_widths,
             git_history_column_order,
@@ -3126,6 +3130,7 @@ mod tests {
                 crate::appshots::AppshotDestination::Automatic
             },
             appearance: crate::appearance::AppearanceMode::Light,
+            browser_appearance: crate::appearance::AppearanceMode::Dark,
             git_history_columns: GitHistoryColumns {
                 author: false,
                 date: true,
@@ -3341,6 +3346,10 @@ mod tests {
         .unwrap();
         let loaded = UiSettings::load(dir.path());
         assert_eq!(loaded.appearance, crate::appearance::AppearanceMode::System);
+        assert_eq!(
+            loaded.browser_appearance,
+            crate::appearance::AppearanceMode::System
+        );
         assert_eq!(loaded.accent, zuse_theme::AccentSelection::ThemeDefault);
         assert_eq!(loaded.surface, zuse_theme::SurfacePreference::ThemeDefault);
         assert_eq!(loaded.sidebar_width, 300.0);
@@ -3889,7 +3898,17 @@ mod tests {
         keymap.align_desktop_defaults();
         assert_eq!(keymap.new_session, "mod-s");
         assert_eq!(keymap.save_file, "mod-shift-s");
-        assert_eq!(keymap.get(ShortcutId::Desktop(Command::ComposerStash)), "");
+        // Off macOS the stash default (Ctrl+S) collides with the kept New session
+        // binding and is cleared; on macOS it is a different key and survives.
+        let stash = if cfg!(target_os = "macos") {
+            "ctrl-s"
+        } else {
+            ""
+        };
+        assert_eq!(
+            keymap.get(ShortcutId::Desktop(Command::ComposerStash)),
+            stash
+        );
         assert!(conflicted_shortcuts(&keymap).is_empty());
         let mut restored: KeymapConfig =
             serde_json::from_value(serde_json::to_value(&keymap).unwrap()).unwrap();

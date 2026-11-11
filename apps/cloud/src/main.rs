@@ -121,6 +121,29 @@ enum Command {
         #[arg(long, default_value_t = false)]
         once: bool,
     },
+    /// Publish reviewed embedded billing prices; never runs on API startup.
+    BillingCatalog {
+        #[arg(long)]
+        catalog: std::path::PathBuf,
+        #[arg(long)]
+        expected_revision: i64,
+    },
+    /// Enroll one owned account; adoption keeps customer/subscription IDs and invoice credit.
+    BillingEnroll {
+        #[arg(long)]
+        owner: String,
+        #[arg(long, default_value_t = false)]
+        adopt_existing: bool,
+    },
+    /// Inspect or explicitly retry a durable account-scoped billing operation.
+    BillingOperation {
+        #[arg(long)]
+        owner: String,
+        #[arg(long)]
+        operation: String,
+        #[arg(long, default_value_t = false)]
+        retry: bool,
+    },
     /// Run only durable project preparation; one-shot mode awaits its actual result.
     ProjectPreparationWorker {
         #[arg(long, default_value_t = false)]
@@ -162,6 +185,55 @@ async fn main() -> Result<()> {
         .init();
     let args = Args::parse();
     match args.command.unwrap_or(Command::Serve) {
+        command @ (Command::BillingCatalog { .. }
+        | Command::BillingEnroll { .. }
+        | Command::BillingOperation { .. }) => {
+            let url = env::var("ZUSE_CLOUD_DATABASE_URL")
+                .context("ZUSE_CLOUD_DATABASE_URL is required")?;
+            let accounts = env::var("ZUSE_CLOUD_BILLING_WRITE_ACCOUNTS")
+                .unwrap_or_default()
+                .split(',')
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(str::to_owned)
+                .collect();
+            let mut control = zuse_cloud::billing::BillingControl::connect(&url, accounts)
+                .await?
+                .connect_native_from_env(&url)
+                .await?;
+            if matches!(&command, Command::BillingEnroll { .. }) {
+                if let Some(providers) = zuse_cloud::billing::PaymentProviders::from_env()? {
+                    control = control.with_payment_providers(providers);
+                }
+            }
+            let result = match command {
+                Command::BillingCatalog {
+                    catalog,
+                    expected_revision,
+                } => {
+                    let catalog = serde_json::from_slice(&std::fs::read(catalog)?)?;
+                    control
+                        .publish_native_catalog(catalog, expected_revision)
+                        .await
+                }
+                Command::BillingEnroll {
+                    owner,
+                    adopt_existing,
+                } => control
+                    .enroll_native(&owner, adopt_existing, now_ms())
+                    .await
+                    .map(|_| serde_json::json!({"enrolled":true})),
+                Command::BillingOperation {
+                    owner,
+                    operation,
+                    retry,
+                } => control.native_operation(&owner, &operation, retry).await,
+                _ => unreachable!(),
+            };
+            let closed = control.close_native_billing().await;
+            println!("{}", result.map_err(|e| anyhow::anyhow!("{}", e.code))?);
+            closed.map_err(|e| anyhow::anyhow!("{}", e.code))?;
+        }
         command @ (Command::DiscoverCodexModels { .. } | Command::DiscoverGrokModels { .. }) => {
             let (agent, owner, connection, binary, helper, driver) = match command {
                 Command::DiscoverCodexModels {
@@ -463,7 +535,14 @@ async fn main() -> Result<()> {
             let settings = zuse_cloud::billing::MeterExportConfig::from_env()?;
             let settlement = zuse_cloud::billing::BoxdSettlementConfig::from_env()?;
             let storage = zuse_cloud::billing::SnapshotSettlementConfig::from_env()?;
-            if !settings.enabled() && settlement.is_none() && storage.is_none() {
+            if !settings.enabled()
+                && settlement.is_none()
+                && storage.is_none()
+                && env::var("ZUSE_BROKEBOY_ACCOUNTS")
+                    .unwrap_or_default()
+                    .trim()
+                    .is_empty()
+            {
                 println!(
                     "{}",
                     serde_json::to_string(&zuse_cloud::billing::ExportReport::default())?
@@ -518,7 +597,15 @@ async fn main() -> Result<()> {
             if let Some(providers) = providers {
                 control = control.with_payment_providers(providers);
             }
+            control = control.connect_native_from_env(&url).await?;
             loop {
+                match control.native_maintenance().await {
+                    Ok(report) => println!("{}", report),
+                    Err(error) if once => anyhow::bail!("{}", error.code),
+                    Err(error) => {
+                        tracing::warn!(code = error.code, "Embedded billing maintenance deferred")
+                    }
+                }
                 if let Some(config) = storage {
                     match control.settle_snapshot_storage_once(config, now_ms()).await {
                         Ok(report) => println!("{}", serde_json::to_string(&report)?),
@@ -551,6 +638,10 @@ async fn main() -> Result<()> {
                 }
                 tokio::time::sleep(std::time::Duration::from_secs(60)).await;
             }
+            control
+                .close_native_billing()
+                .await
+                .map_err(|e| anyhow::anyhow!("{}", e.code))?;
         }
         Command::ProjectPreparationWorker {
             once,
@@ -1005,6 +1096,9 @@ async fn main() -> Result<()> {
                 if let Some(providers) = zuse_cloud::billing::PaymentProviders::from_env()? {
                     billing = billing.with_payment_providers(providers);
                 }
+                billing = billing
+                    .connect_native_from_env(&config.database_url)
+                    .await?;
                 store = store.with_billing_control(billing);
             }
             let identity = WorkosIdentity::new(&config)?;
@@ -1068,6 +1162,7 @@ async fn main() -> Result<()> {
                     .map_err(|error| anyhow::anyhow!("{}", error.code))?,
                 ),
             };
+            let billing_shutdown = state.store.clone();
             let origins = config
                 .allowed_origins
                 .iter()
@@ -1083,6 +1178,10 @@ async fn main() -> Result<()> {
                 app
             };
             axum_serve(listener, app).await?;
+            billing_shutdown
+                .close_native_billing()
+                .await
+                .map_err(|e| anyhow::anyhow!("{}", e.code))?;
         }
     }
     Ok(())

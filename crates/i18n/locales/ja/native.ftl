@@ -1155,7 +1155,7 @@ native-no_matching_threads = 一致するスレッドはありません
 native-try_title_project_branch = タイトル、プロジェクト、ブランチで検索
 
 # Context: new-chat landing screen and local account status.
-native-composer_placeholder = @ で参照したファイルの変更を依頼するか、スラッシュコマンドを実行…
+native-composer_placeholder = 何でもどうぞ…
 
 # Context: new-chat landing screen and local account status.
 native-agent_default = エージェントの既定値

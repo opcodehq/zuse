@@ -31,6 +31,9 @@ use windows::{
     core::{HSTRING, Interface, PWSTR},
 };
 
+#[path = "windows_controls.rs"]
+mod controls;
+
 type Sender = tokio::sync::mpsc::Sender<NativeEvent>;
 
 pub(super) enum NativeEvent {
@@ -38,8 +41,19 @@ pub(super) enum NativeEvent {
     Finished,
     NewTab(String),
     Key(Keystroke),
-    Favicon { page: String, url: String },
+    Favicon {
+        page: String,
+        url: String,
+    },
     Cursor(CursorStyle),
+    ElementSelected {
+        page: String,
+        generation: u64,
+        result: Result<Option<String>, String>,
+    },
+    Captured(Result<Vec<u8>, String>),
+    DataCleared(&'static str),
+    ControlError(String),
 }
 
 // ---------------------------------------------------------------------------
@@ -61,6 +75,7 @@ struct EnvironmentState {
     environment: Environment,
     /// Set once the shared folder answered ERROR_BUSY (see [`is_busy`]).
     own_folder: bool,
+    pages: Vec<std::rc::Weak<Host>>,
     /// InPrivate profile of this window/profile's pages. Every InPrivate
     /// controller with the same profile name shares one cookie jar — across
     /// windows, profile switches and processes sharing the folder — so each
@@ -77,6 +92,7 @@ impl Default for EnvironmentState {
         Self {
             environment: Environment::default(),
             own_folder: false,
+            pages: Vec::new(),
             profile: format!(
                 "zuse-{}-{started}-{}",
                 std::process::id(),
@@ -301,6 +317,8 @@ struct Geometry {
 
 pub(super) struct Host {
     hwnd: HWND,
+    control_generation: Cell<u64>,
+    dark: Cell<Option<bool>>,
     tx: Sender,
     /// Where pages are created (again, after the browser process exited).
     data: BrowserData,
@@ -336,6 +354,8 @@ impl NativePage {
             .map_err(|error| error.to_string())?;
         let host = Rc::new(Host {
             hwnd,
+            control_generation: Cell::new(0),
+            dark: Cell::new(None),
             tx,
             data: data.clone(),
             page: RefCell::new(None),
@@ -351,6 +371,11 @@ impl NativePage {
             hovered: Cell::new(false),
             shortcuts: RefCell::new(Vec::new()),
         });
+        {
+            let mut state = data.0.borrow_mut();
+            state.pages.retain(|page| page.strong_count() > 0);
+            state.pages.push(Rc::downgrade(&host));
+        }
         Host::start(&host, data.clone());
         Ok(Self(host))
     }
@@ -582,7 +607,7 @@ impl Host {
         let webview = unsafe { controller.CoreWebView2()? };
         unsafe {
             let settings = webview.Settings()?;
-            settings.SetAreDevToolsEnabled(false)?;
+            settings.SetAreDevToolsEnabled(true)?;
             // No page↔host channel exists; keep it that way.
             settings.SetIsWebMessageEnabled(false)?;
             settings.SetAreHostObjectsAllowed(false)?;
@@ -857,6 +882,7 @@ impl Host {
                 &mut token,
             )?;
         }
+        host.dark.set(None);
         *host.page.borrow_mut() = Some(Page {
             environment: environment.clone(),
             composition,

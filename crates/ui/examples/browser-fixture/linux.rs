@@ -8,6 +8,11 @@ use zuse_ui::browser::BrowserSurface;
 /// initial pause on a loaded runner. Yield to GPUI until X11 maps the window;
 /// blocking this thread would prevent the frame we're waiting for.
 pub(super) async fn wait_for_visible_window(cx: &mut AsyncApp) -> anyhow::Result<()> {
+    if std::env::var_os("ZUSE_BROWSER_ANNOTATION_ONLY").is_some() {
+        pause(cx, 500).await;
+        return Ok(());
+    }
+
     // Wayland captures the already-mapped nested compositor's X11 window.
     if std::env::var("ZUSE_BROWSER_CAPTURE_WINDOW").is_ok_and(|id| !id.is_empty()) {
         return Ok(());
@@ -141,6 +146,10 @@ pub async fn exercise(
     cx: &mut AsyncApp,
 ) -> anyhow::Result<()> {
     eval(&page,"document.body.style.paddingTop='0'; document.body.insertAdjacentHTML('afterbegin', `<div id='browser-blur-grid' style='height:140px;background:repeating-conic-gradient(#172f25 0% 25%,#f5f0df 0% 50%) 0 0/16px 16px'></div><input id='browser-input' style='height:32px;width:200px' placeholder='Browser input'><button id='browser-button' onclick='window.browserClicks=(window.browserClicks||0)+1'>Click</button>`); window.browserClicks=0; document.body.addEventListener('pointerdown',()=>window.pagePresses=(window.pagePresses||0)+1); let live=document.createElement('div');live.style='position:fixed;bottom:12px;right:12px;background:#29483b;color:white;padding:8px;border-radius:6px;font:12px monospace';document.body.append(live);window.browserFrames=0;function frame(){live.textContent='LIVE '+(++window.browserFrames);requestAnimationFrame(frame)}frame();true",cx).await?;
+    if std::env::var_os("ZUSE_BROWSER_ANNOTATION_ONLY").is_some() {
+        annotation_typing(window, page, output, cx).await?;
+        return Ok(());
+    }
     // Animated pages can keep the native event queue continuously ready.
     // Keep an independent deadline so executor starvation fails this process
     // even when a main-thread timeout could never get polled.
@@ -615,4 +624,206 @@ pub async fn exercise(
         )?,
     )?;
     Ok(())
+}
+
+async fn annotation_typing(
+    window: WindowHandle<shell::Shell>,
+    page: Entity<BrowserSurface>,
+    output: &std::path::Path,
+    cx: &mut AsyncApp,
+) -> anyhow::Result<()> {
+    pause(cx, 200).await;
+    window.update(cx, |_, window, cx| {
+        page.update(cx, |browser, cx| browser.fixture_annotate(window, cx))
+    })?;
+    pause(cx, 200).await;
+    let bounds = page.read_with(cx, |browser, _| browser.fixture_linux_bounds());
+    let target = eval(&page, "(()=>{let r=document.getElementById('browser-button').getBoundingClientRect();return [r.x+r.width/2,r.y+r.height/2,devicePixelRatio]})()", cx).await?;
+    let scale = AnyWindowHandle::from(window).update(cx, |_, w, _| w.scale_factor())?;
+    let factor = target[2].as_f64().unwrap() as f32 / scale;
+    click(
+        window,
+        bounds.origin
+            + point(
+                px(target[0].as_f64().unwrap() as f32 * factor),
+                px(target[1].as_f64().unwrap() as f32 * factor),
+            ),
+        cx,
+    )?;
+    pause(cx, 150).await;
+    // Exercise key dispatch, character/IME commits and editor controls through
+    // the actual shell. A pipe-level InsertText test bypasses this focus path.
+    for (text, prefer) in [("normal keys ", false), ("IME text", true)] {
+        for c in text.chars() {
+            let stroke = gpui::Keystroke {
+                key: if c == ' ' {
+                    "space".into()
+                } else {
+                    c.to_string()
+                },
+                key_char: Some(c.to_string()),
+                modifiers: Default::default(),
+            };
+            dispatch(
+                window,
+                PlatformInput::KeyDown(gpui::KeyDownEvent {
+                    keystroke: stroke.clone(),
+                    is_held: false,
+                    prefer_character_input: prefer,
+                }),
+                cx,
+            )?;
+            dispatch(
+                window,
+                PlatformInput::KeyUp(gpui::KeyUpEvent { keystroke: stroke }),
+                cx,
+            )?;
+            pause(cx, 25).await;
+        }
+    }
+    // Move the caret with a real GPUI pointer click, inside existing text.
+    let caret = eval(&page, "(()=>{let r=document.querySelector('[data-zuse-note]').getBoundingClientRect(),c=document.createElement('canvas').getContext('2d');c.font='12px system-ui';let u=Number(document.querySelector('[data-zuse-note]').style.zoom);return [r.x+(13+c.measureText('normal ').width)*u,r.y+49*u]})()", cx).await?;
+    click(
+        window,
+        bounds.origin
+            + point(
+                px(caret[0].as_f64().unwrap() as f32 * factor),
+                px(caret[1].as_f64().unwrap() as f32 * factor),
+            ),
+        cx,
+    )?;
+    pause(cx, 100).await;
+    annotation_key(window, "x", Some("x"), false, cx)?;
+    pause(cx, 100).await;
+    eval(&page, "document.body.insertAdjacentHTML('beforeend', `<button id='annotation-other' style='position:fixed;right:10px;bottom:15px;width:65px;height:22px'>Another target</button>`);true", cx).await?;
+    let other=eval(&page,"(()=>{let r=document.querySelector('#annotation-other').getBoundingClientRect();return [r.x+r.width/2,r.y+r.height/2]})()",cx).await?;
+    click(
+        window,
+        bounds.origin
+            + point(
+                px(other[0].as_f64().unwrap() as f32 * factor),
+                px(other[1].as_f64().unwrap() as f32 * factor),
+            ),
+        cx,
+    )?;
+    pause(cx, 150).await;
+    anyhow::ensure!(
+        eval(
+            &page,
+            "document.querySelectorAll('[data-zuse-note]').length",
+            cx
+        )
+        .await?
+            == 2,
+        "Second target did not create its own editor"
+    );
+    for c in "second draft".chars() {
+        let text = c.to_string();
+        annotation_key(
+            window,
+            if c == ' ' { "space" } else { &text },
+            Some(&text),
+            true,
+            cx,
+        )?;
+        pause(cx, 40).await;
+    }
+    let pin = eval(&page, "(()=>{let r=document.querySelector('#browser-button').getBoundingClientRect();return [r.x+1/devicePixelRatio,r.y+1/devicePixelRatio]})()", cx).await?;
+    click(
+        window,
+        bounds.origin
+            + point(
+                px(pin[0].as_f64().unwrap() as f32 * factor),
+                px(pin[1].as_f64().unwrap() as f32 * factor),
+            ),
+        cx,
+    )?;
+    pause(cx, 100).await;
+    annotation_key(window, "enter", None, false, cx)?;
+    wait_annotation_comments(window, &["normal xkeys IME text"], cx).await?;
+    pause(cx, 150).await;
+    let second_pin = eval(&page,"(()=>{let r=document.querySelector('#annotation-other').getBoundingClientRect();return [r.x+1/devicePixelRatio,r.y+1/devicePixelRatio]})()",cx).await?;
+    click(
+        window,
+        bounds.origin
+            + point(
+                px(second_pin[0].as_f64().unwrap() as f32 * factor),
+                px(second_pin[1].as_f64().unwrap() as f32 * factor),
+            ),
+        cx,
+    )?;
+    pause(cx, 100).await;
+    let second = eval(&page, "(()=>{let r=document.querySelectorAll('[data-zuse-note]')[1].getBoundingClientRect();return [r.x+13*Number(document.querySelectorAll('[data-zuse-note]')[1].style.zoom),r.y+49*Number(document.querySelectorAll('[data-zuse-note]')[1].style.zoom)]})()", cx).await?;
+    click(
+        window,
+        bounds.origin
+            + point(
+                px(second[0].as_f64().unwrap() as f32 * factor),
+                px(second[1].as_f64().unwrap() as f32 * factor),
+            ),
+        cx,
+    )?;
+    pause(cx, 100).await;
+    annotation_key(window, "end", None, false, cx)?;
+    pause(cx, 50).await;
+    annotation_key(window, "!", Some("!"), true, cx)?;
+    pause(cx, 50).await;
+    annotation_key(window, "enter", None, false, cx)?;
+    wait_annotation_comments(window, &["normal xkeys IME text", "second draft!"], cx).await?;
+    std::fs::write(
+        output.join("annotation-results.json"),
+        "{\"typing\":\"PASS\",\"caretClick\":\"PASS\",\"multipleNotes\":\"PASS\",\"ime\":\"PASS\",\"composerStaging\":\"PASS\"}\n",
+    )?;
+    eprintln!(
+        "PASS: annotation selection, physical key dispatch, IME commits and composer staging"
+    );
+    Ok(())
+}
+
+fn annotation_key(
+    window: WindowHandle<shell::Shell>,
+    key: &str,
+    text: Option<&str>,
+    prefer: bool,
+    cx: &mut AsyncApp,
+) -> anyhow::Result<()> {
+    let stroke = gpui::Keystroke {
+        key: key.into(),
+        key_char: text.map(str::to_owned),
+        modifiers: Default::default(),
+    };
+    dispatch(
+        window,
+        PlatformInput::KeyDown(gpui::KeyDownEvent {
+            keystroke: stroke.clone(),
+            is_held: false,
+            prefer_character_input: prefer,
+        }),
+        cx,
+    )?;
+    dispatch(
+        window,
+        PlatformInput::KeyUp(gpui::KeyUpEvent { keystroke: stroke }),
+        cx,
+    )
+}
+async fn wait_annotation_comments(
+    window: WindowHandle<shell::Shell>,
+    expected: &[&str],
+    cx: &mut AsyncApp,
+) -> anyhow::Result<()> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let comments = window.read_with(cx, |shell, cx| {
+            shell.fixture_browser_annotation_comments(cx)
+        })?;
+        if comments == expected {
+            return Ok(());
+        }
+        anyhow::ensure!(
+            std::time::Instant::now() < deadline,
+            "Annotation input failed through GPUI; staged comments: {comments:?}, expected: {expected:?}"
+        );
+        pause(cx, 50).await;
+    }
 }

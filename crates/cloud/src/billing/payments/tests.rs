@@ -6,6 +6,22 @@ use axum::{
     routing::{get, post},
 };
 use std::sync::atomic::{AtomicUsize, Ordering};
+
+#[test]
+fn compute_export_customer_ownership_survives_adoption_without_accepting_conflicts() {
+    let mut customer = json!({"id":"cus_original","metadata":{"brokeboy_customer":"owner","brokeboy_environment":"test"}});
+    assert!(stripe_customer_owned(&customer, "owner", "cus_original"));
+    assert!(!stripe_customer_owned(
+        &customer,
+        "other-owner",
+        "cus_original"
+    ));
+    customer["metadata"]["account_id"] = json!("another-account");
+    assert!(!stripe_customer_owned(&customer, "owner", "cus_original"));
+    customer["metadata"]["account_id"] = json!("owner");
+    customer["deleted"] = json!(true);
+    assert!(!stripe_customer_owned(&customer, "owner", "cus_original"));
+}
 struct Fixture {
     owner: std::sync::Mutex<String>,
     sessions: AtomicUsize,

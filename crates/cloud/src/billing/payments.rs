@@ -63,6 +63,8 @@ pub trait PortalProvider: Send + Sync {
             credit_cents: 0,
             debit_cents: 0,
             currency: "usd".into(),
+            funding: String::new(),
+            invoice_credit_cents: None,
         })
     }
     async fn prepaid_checkout(
@@ -382,8 +384,7 @@ impl PortalProvider for StripePortal {
                 .request(reqwest::Method::GET, &["customers", id])?,
         )
         .await?;
-        if value["id"] != id || value["deleted"] == true || value["metadata"]["account_id"] != owner
-        {
+        if !stripe_customer_owned(&value, owner, id) {
             return Err(unavailable());
         }
         Ok(())
@@ -556,6 +557,22 @@ impl PortalProvider for StripePortal {
         Ok(url.into())
     }
 }
+/// Compute exports retain their original delivery identities after billing enrollment.
+/// Either canonical metadata contract must name the exact application account.
+fn stripe_customer_owned(value: &Value, owner: &str, id: &str) -> bool {
+    let legacy = value["metadata"]["account_id"].as_str();
+    let native = value["metadata"]["brokeboy_customer"].as_str();
+    value["id"] == id
+        && value["deleted"] != true
+        && legacy.is_none_or(|id| id == owner)
+        && native.is_none_or(|id| id == owner)
+        && (legacy == Some(owner)
+            || (native == Some(owner)
+                && matches!(
+                    value["metadata"]["brokeboy_environment"].as_str(),
+                    Some("test" | "live")
+                )))
+}
 struct PolarPortal {
     checkout: Option<checkout::ProviderCheckout>,
     events: Option<events::EventConfig>,
@@ -670,6 +687,9 @@ impl BillingControl {
         self
     }
     async fn portal(&self, owner: &str) -> Result<String, ApiError> {
+        if let Some(url) = self.native_portal(owner).await? {
+            return Ok(url);
+        }
         let providers = self.payments.as_ref().ok_or_else(unavailable)?;
         let mut tx = self.owned_transaction(owner).await?;
         let ids:Vec<String>=sqlx::query_scalar("SELECT DISTINCT provider FROM api_entitlements WHERE account_id=$1 AND provider_subscription_id IS NOT NULL AND status<>'ended'").bind(owner).fetch_all(&mut *tx).await?;

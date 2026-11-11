@@ -50,6 +50,7 @@ struct Paging {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum PullRequestsPageError {
     CliUnavailable,
+    CliOutdated,
     Authentication,
     RateLimited,
     Network,
@@ -3489,6 +3490,9 @@ fn map_rpc_error(error: &RpcError, target_name: &str) -> PullRequestsPageError {
         RpcError::Capability(code) if code == capability_errors::PULL_REQUESTS_CLI_UNAVAILABLE => {
             PullRequestsPageError::CliUnavailable
         }
+        RpcError::Capability(code) if code == capability_errors::PULL_REQUESTS_CLI_OUTDATED => {
+            PullRequestsPageError::CliOutdated
+        }
         RpcError::Capability(code) if code == capability_errors::PULL_REQUESTS_AUTHENTICATION => {
             PullRequestsPageError::Authentication
         }
@@ -3511,6 +3515,10 @@ fn error_copy(error: &PullRequestsPageError) -> (String, String) {
         PullRequestsPageError::CliUnavailable => (
             "GitHub CLI isn’t available on this device".into(),
             "Install gh and sign in to view your pull requests.".into(),
+        ),
+        PullRequestsPageError::CliOutdated => (
+            "GitHub CLI on this device is out of date".into(),
+            "Update gh, then refresh this page.".into(),
         ),
         PullRequestsPageError::Authentication => (
             "Sign in to GitHub on this device".into(),

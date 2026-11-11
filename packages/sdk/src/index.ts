@@ -1,4 +1,4 @@
-import { API_VERSION, type ControlInfo, type ControlMethod, type Zot, type ZotCommand, type ZotEvent, type ZotFile } from './generated.js';
+import { API_VERSION, type ControlInfo, type ControlMethod, type Zot, type ZotCommand, type ZotEvent, type ZotFile, type ZotIssue } from './generated.js';
 export * from './generated.js';
 
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
@@ -171,6 +171,7 @@ export function createZuseClient(options: ClientOptions) {
       command: (command: ZotCommand, settings?: RequestOptions) => call<Zot | null>('ZotCommand', command, settings),
       files: (zotId: string, history = false, settings?: RequestOptions) => call<ZotFile[]>('ZotFiles', { zotId, history }, settings),
       events: (zotId: string, settings?: RequestOptions) => call<ZotEvent[]>('ZotEvents', { zotId }, settings),
+      issue: (zotId: string, issueId: string, settings?: RequestOptions) => call<ZotIssue>('ZotIssue', { zotId, issueId }, settings),
       acknowledge: (zotId: string, eventIds: string[], settings?: RequestOptions) => call('AckZotEvents', { zotId, eventIds }, settings),
     },
     close() { disconnect(); socket.close(); },

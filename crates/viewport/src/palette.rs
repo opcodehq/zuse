@@ -10,8 +10,8 @@ pub fn is_light() -> bool {
 pub fn rgb(value: u32) -> gpui::Rgba {
     let value = if is_light() {
         match value {
-            0x0b0c0b => 0xf7f9f6,
-            0x0e0f0e => 0xf1f5ef,
+            0x151515 => 0xf7f9f6,
+            0x1e1e1e => 0xf1f5ef,
             0x121413 | 0x101010 | 0x141414 | 0x181916 | 0x181a18 => 0xffffff,
             0x191c1a | 0x171717 | 0x181818 | 0x111111 | 0x13150f | 0x10110e | 0x191a17
             | 0x1a1a1a | 0x191919 | 0x1d1d1d | 0x1c1d19 | 0x20211e => 0xe3e9e2,
@@ -40,13 +40,10 @@ pub fn tone(dark: gpui::Hsla, light: gpui::Hsla) -> gpui::Hsla {
 
 /// The reference composer's surface and attached toolbar are separate tonal layers.
 pub fn composer_background() -> gpui::Hsla {
-    tone(gpui::hsla(120. / 360., 0.02, 0.10, 0.90), gpui::white())
+    tone(gpui::hsla(0., 0., 0.11, 0.96), gpui::white())
 }
 pub fn composer_toolbar() -> gpui::Hsla {
-    tone(
-        gpui::hsla(120. / 360., 0.02, 0.085, 0.96),
-        gpui::rgb(0xe9eee8).into(),
-    )
+    tone(gpui::hsla(0., 0., 0.095, 0.96), gpui::rgb(0xe9eee8).into())
 }
 pub fn composer_border() -> gpui::Hsla {
     tone(gpui::hsla(0., 0., 1., 0.08), gpui::rgb(0xe1e7df).into())

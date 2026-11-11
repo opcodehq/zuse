@@ -1,10 +1,16 @@
 //! Direct paired access over the local network and Tailscale, and the list of
 //! routes this host offers its paired devices.
 //!
-//! The listener serves only encrypted paired RPC: no application files, no
-//! cookie sessions and nothing readable without the pairing secret. That is
+//! The main listener serves only encrypted paired RPC: no application files,
+//! no cookie sessions and nothing readable without the pairing secret. That is
 //! why plain HTTP is acceptable on it, and it still refuses peers outside
 //! private address space.
+//!
+//! Browsers need more. The app uses shared memory and WebGPU, which only exist
+//! in a secure context, so a second listener serves it over HTTPS with a
+//! certificate generated for this computer. Browsers warn about that
+//! certificate once. Tailscale HTTPS reaches the app through a loopback
+//! listener instead, with a certificate browsers already trust.
 use serde::{Deserialize, Serialize};
 use std::{
     net::{IpAddr, SocketAddr},
@@ -23,11 +29,15 @@ use zuse_remote::{
     Route, RouteKind,
     routes::{is_private_host, is_tailnet_host},
 };
-use zuse_serve::{BrowserServer, PairedSessions};
+use zuse_serve::{BrowserServer, PairedSessions, TlsConfig};
 
 pub const DEFAULT_PORT: u16 = 27657;
 const SERVE_HTTPS_PORT: u16 = 27658;
+const LAN_HTTPS_PORT: u16 = 27659;
 const FILE: &str = "direct-access.json";
+const LAN_CERTIFICATE: &str = "lan-https.json";
+const MAX_CERTIFICATE_BYTES: u64 = 64 * 1024;
+const MAX_CERTIFICATE_ADDRESSES: usize = 32;
 const REFRESH: Duration = Duration::from_secs(15);
 const TAILSCALE_TIMEOUT: Duration = Duration::from_secs(3);
 const CLOUD_METADATA: &str = "169.254.169.254:80";
@@ -50,6 +60,8 @@ pub struct Status {
     pub tailscale_available: bool,
     pub tailscale_serve: bool,
     pub routes: Vec<Route>,
+    pub browser_origin: Option<String>,
+    pub browser_self_signed: bool,
     pub error: Option<String>,
 }
 #[derive(Clone, Serialize, Deserialize)]
@@ -78,7 +90,7 @@ fn read_saved(profile: &Path, device: &str) -> anyhow::Result<Option<Saved>> {
     );
     Ok(Some(saved))
 }
-fn write_saved(profile: &Path, saved: &Saved) -> anyhow::Result<()> {
+fn write_private(profile: &Path, name: &str, bytes: &[u8]) -> anyhow::Result<()> {
     use std::io::Write;
     std::fs::create_dir_all(profile)?;
     let mut file = tempfile::NamedTempFile::new_in(profile)?;
@@ -88,10 +100,79 @@ fn write_saved(profile: &Path, saved: &Saved) -> anyhow::Result<()> {
         file.as_file()
             .set_permissions(std::fs::Permissions::from_mode(0o600))?;
     }
-    file.write_all(&serde_json::to_vec_pretty(saved)?)?;
+    file.write_all(bytes)?;
     file.as_file().sync_all()?;
-    file.persist(profile.join(FILE))?;
+    file.persist(profile.join(name))?;
     Ok(())
+}
+fn write_saved(profile: &Path, saved: &Saved) -> anyhow::Result<()> {
+    write_private(profile, FILE, &serde_json::to_vec_pretty(saved)?)
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LanCertificate {
+    addresses: Vec<IpAddr>,
+    certificate: String,
+    key: String,
+}
+fn read_lan_certificate(profile: &Path) -> Option<LanCertificate> {
+    let path = profile.join(LAN_CERTIFICATE);
+    if std::fs::metadata(&path).ok()?.len() > MAX_CERTIFICATE_BYTES {
+        return None;
+    }
+    serde_json::from_slice(&std::fs::read(path).ok()?).ok()
+}
+/// This computer's stable browser certificate. Earlier addresses stay on it,
+/// so returning to a known network does not bring the browser warning back.
+fn lan_certificate(profile: &Path, current: &[IpAddr]) -> anyhow::Result<TlsConfig> {
+    let saved = read_lan_certificate(profile);
+    if let Some(saved) = &saved
+        && current.iter().all(|ip| saved.addresses.contains(ip))
+        && let Ok(config) = TlsConfig::from_pem(saved.certificate.as_bytes(), saved.key.as_bytes())
+    {
+        return Ok(config);
+    }
+    let mut addresses = current.to_vec();
+    for ip in saved.into_iter().flat_map(|saved| saved.addresses) {
+        if !addresses.contains(&ip) {
+            addresses.push(ip);
+        }
+    }
+    addresses.truncate(MAX_CERTIFICATE_ADDRESSES);
+    let names = addresses
+        .iter()
+        .map(IpAddr::to_string)
+        .chain(["localhost".to_owned()])
+        .collect::<Vec<_>>();
+    let rcgen::CertifiedKey { cert, signing_key } = rcgen::generate_simple_self_signed(names)?;
+    let generated = LanCertificate {
+        addresses,
+        certificate: cert.pem(),
+        key: signing_key.serialize_pem(),
+    };
+    write_private(
+        profile,
+        LAN_CERTIFICATE,
+        &serde_json::to_vec_pretty(&generated)?,
+    )?;
+    TlsConfig::from_pem(generated.certificate.as_bytes(), generated.key.as_bytes())
+}
+fn certificate_addresses(interfaces: &[(String, IpAddr)]) -> Vec<IpAddr> {
+    let mut addresses: Vec<IpAddr> = interfaces
+        .iter()
+        .filter(|(name, ip)| {
+            let text = ip.to_string();
+            ip.is_ipv4()
+                && !ip.is_loopback()
+                && !is_virtual_interface(name)
+                && (is_private_host(&text) || is_tailnet_host(&text))
+        })
+        .map(|(_, ip)| *ip)
+        .collect();
+    addresses.sort();
+    addresses.dedup();
+    addresses
 }
 
 /// Interface names of container and VM bridges, whose addresses no other
@@ -235,6 +316,15 @@ struct Running {
     port: u16,
     stop: CancellationToken,
     task: JoinHandle<anyhow::Result<()>>,
+    app: BrowserApp,
+}
+/// Listeners that carry the browser app. Missing web files or a failed
+/// certificate only cost browser access; paired apps keep working without them.
+#[derive(Default)]
+struct BrowserApp {
+    https_port: Option<u16>,
+    tailscale_target: Option<u16>,
+    tasks: Vec<JoinHandle<anyhow::Result<()>>>,
 }
 #[derive(Default)]
 struct State {
@@ -246,6 +336,7 @@ struct State {
 }
 impl State {
     fn status(&self) -> Status {
+        let browser = self.browser_origin();
         Status {
             running: self.running.is_some(),
             enabled: self.saved.as_ref().is_some_and(|saved| saved.enabled),
@@ -260,8 +351,31 @@ impl State {
                 .as_ref()
                 .is_some_and(|saved| saved.tailscale_serve),
             routes: self.routes.clone(),
+            browser_origin: browser.as_ref().map(|(origin, _)| origin.clone()),
+            browser_self_signed: browser.is_some_and(|(_, self_signed)| self_signed),
             error: self.error.clone(),
         }
+    }
+    /// Where a browser can open this computer, and whether it will see a
+    /// warning first. A trusted tailnet certificate wins over a generated one.
+    fn browser_origin(&self) -> Option<(String, bool)> {
+        let app = &self.running.as_ref()?.app;
+        if app.tailscale_target.is_some()
+            && let Some(route) = self.routes.iter().find(|route| {
+                route.kind == RouteKind::Tailnet && route.origin.starts_with("https:")
+            })
+        {
+            return Some((route.origin.clone(), false));
+        }
+        let port = app.https_port?;
+        let route = self
+            .routes
+            .iter()
+            .filter(|route| matches!(route.kind, RouteKind::Lan | RouteKind::Tailnet))
+            .filter(|route| route.origin.starts_with("http:"))
+            .min_by_key(|route| route.kind)?;
+        let (host, _) = route.origin.strip_prefix("http://")?.rsplit_once(':')?;
+        Some((format!("https://{host}:{port}"), true))
     }
 }
 /// Other reachable addresses of this host, supplied by their own owners.
@@ -353,6 +467,63 @@ impl DirectAccess {
         }
         self.0.state.lock().await.status()
     }
+    /// Where a browser can open this computer directly, if anywhere.
+    pub async fn browser_origin(&self) -> Option<(String, bool)> {
+        self.0.state.lock().await.browser_origin()
+    }
+    fn paired_server(
+        &self,
+        service: Arc<dyn zuse_rpc::RpcService>,
+        stop: &CancellationToken,
+    ) -> anyhow::Result<BrowserServer> {
+        Ok(
+            BrowserServer::new(service, BrowserServer::random_token(), None)?
+                .with_pairings(self.0.pairings.clone(), self.0.device.clone())
+                .with_pairing_slots(self.0.slots.clone())
+                .with_paired_sessions(self.0.sessions.clone())
+                .with_advertised_routes(self.0.advertised.subscribe())
+                .with_shutdown_token(stop.clone()),
+        )
+    }
+    async fn start_browser_app(
+        &self,
+        service: &Arc<dyn zuse_rpc::RpcService>,
+        stop: &CancellationToken,
+        tailscale: bool,
+    ) -> anyhow::Result<BrowserApp> {
+        let mut app = BrowserApp::default();
+        let Some(assets) = crate::browser_access::discover_assets() else {
+            return Ok(app);
+        };
+        let any = |port| SocketAddr::from(([0, 0, 0, 0], port));
+        let tls = lan_certificate(&self.0.profile, &certificate_addresses(&local_interfaces()))?;
+        let listener = match TcpListener::bind(any(LAN_HTTPS_PORT)).await {
+            Ok(listener) => listener,
+            Err(_) => TcpListener::bind(any(0)).await?,
+        };
+        app.https_port = Some(listener.local_addr()?.port());
+        app.tasks.push(tokio::spawn(
+            self.paired_server(service.clone(), stop)?.serve_paired_app(
+                listener,
+                assets.clone(),
+                Some(tls),
+                stop.clone().cancelled_owned(),
+            ),
+        ));
+        if tailscale {
+            let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+            app.tailscale_target = Some(listener.local_addr()?.port());
+            app.tasks.push(tokio::spawn(
+                self.paired_server(service.clone(), stop)?.serve_paired_app(
+                    listener,
+                    assets,
+                    None,
+                    stop.clone().cancelled_owned(),
+                ),
+            ));
+        }
+        Ok(app)
+    }
     /// The address to put in an invitation when nothing public is available.
     pub async fn invitation_origin(&self) -> Option<String> {
         let state = self.0.state.lock().await;
@@ -381,19 +552,27 @@ impl DirectAccess {
         };
         let port = listener.local_addr()?.port();
         let stop = self.0.closed.child_token();
-        let server = BrowserServer::new(service, BrowserServer::random_token(), None)?
-            .with_pairings(self.0.pairings.clone(), self.0.device.clone())
-            .with_pairing_slots(self.0.slots.clone())
-            .with_paired_sessions(self.0.sessions.clone())
-            .with_advertised_routes(self.0.advertised.subscribe())
-            .with_shutdown_token(stop.clone());
+        let server = self.paired_server(service.clone(), &stop)?;
         if persist {
             write_saved(&self.0.profile, &saved)?;
         }
+        let app = self
+            .start_browser_app(&service, &stop, saved.tailscale_serve)
+            .await
+            .unwrap_or_else(|error| {
+                tracing::warn!("Browser access over the network is unavailable: {error:#}");
+                BrowserApp::default()
+            });
         let signal = stop.clone();
         let task = tokio::spawn(server.serve_paired_only(listener, signal.cancelled_owned()));
-        let serve_failed = saved.tailscale_serve && !enable_tailscale_serve(port).await;
-        state.running = Some(Running { port, stop, task });
+        let serve_failed = saved.tailscale_serve
+            && !enable_tailscale_serve(app.tailscale_target.unwrap_or(port)).await;
+        state.running = Some(Running {
+            port,
+            stop,
+            task,
+            app,
+        });
         state.error = serve_failed.then(|| {
             "Tailscale HTTPS could not be turned on. Check that Tailscale is running and HTTPS is enabled for your tailnet.".to_owned()
         });
@@ -428,13 +607,14 @@ impl DirectAccess {
         };
         let Some(running) = running else { return };
         running.stop.cancel();
-        let mut task = running.task;
-        if tokio::time::timeout(Duration::from_secs(5), &mut task)
-            .await
-            .is_err()
-        {
-            task.abort();
-            let _ = task.await;
+        for mut task in std::iter::once(running.task).chain(running.app.tasks) {
+            if tokio::time::timeout(Duration::from_secs(5), &mut task)
+                .await
+                .is_err()
+            {
+                task.abort();
+                let _ = task.await;
+            }
         }
         if serve {
             disable_tailscale_serve().await;
@@ -652,6 +832,96 @@ mod tests {
         );
         assert_eq!(routes.len(), 1);
         assert_eq!(routes[0].kind, RouteKind::Tailnet);
+    }
+
+    #[test]
+    fn certificates_cover_real_networks_and_survive_moving_between_them() {
+        let directory = tempfile::tempdir().unwrap();
+        let addresses = certificate_addresses(&interfaces(&[
+            ("lo", "127.0.0.1"),
+            ("wlan0", "192.168.1.20"),
+            ("docker0", "172.17.0.1"),
+            ("eth1", "8.8.8.8"),
+        ]));
+        assert_eq!(addresses, vec![ip("192.168.1.20")]);
+        lan_certificate(directory.path(), &addresses).unwrap();
+        let first = read_lan_certificate(directory.path()).unwrap().certificate;
+        lan_certificate(directory.path(), &addresses).unwrap();
+        assert_eq!(
+            read_lan_certificate(directory.path()).unwrap().certificate,
+            first,
+            "the same network must keep the certificate the browser accepted"
+        );
+        lan_certificate(directory.path(), &[ip("10.0.0.9")]).unwrap();
+        let moved = read_lan_certificate(directory.path()).unwrap();
+        assert_ne!(moved.certificate, first);
+        assert_eq!(moved.addresses, vec![ip("10.0.0.9"), ip("192.168.1.20")]);
+        lan_certificate(directory.path(), &addresses).unwrap();
+        assert_eq!(
+            read_lan_certificate(directory.path()).unwrap().certificate,
+            moved.certificate,
+            "returning to a known network must not bring the warning back"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(directory.path().join(LAN_CERTIFICATE))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+    }
+
+    fn running(app: BrowserApp) -> Running {
+        Running {
+            port: 27657,
+            stop: CancellationToken::new(),
+            task: tokio::spawn(async { Ok(()) }),
+            app,
+        }
+    }
+
+    #[tokio::test]
+    async fn browsers_open_the_trusted_tailnet_before_the_generated_certificate() {
+        let lan = Route {
+            kind: RouteKind::Lan,
+            origin: "http://192.168.1.20:27657".into(),
+        };
+        let tailnet_https = Route {
+            kind: RouteKind::Tailnet,
+            origin: "https://box.tail1.ts.net:27658".into(),
+        };
+        let mut state = State {
+            routes: vec![lan.clone()],
+            ..Default::default()
+        };
+        assert_eq!(state.browser_origin(), None, "nothing is listening");
+        state.running = Some(running(BrowserApp::default()));
+        assert_eq!(state.browser_origin(), None, "no web files were found");
+        state.running = Some(running(BrowserApp {
+            https_port: Some(27659),
+            ..Default::default()
+        }));
+        assert_eq!(
+            state.browser_origin(),
+            Some(("https://192.168.1.20:27659".into(), true))
+        );
+        state.routes.push(tailnet_https);
+        assert_eq!(
+            state.browser_origin(),
+            Some(("https://192.168.1.20:27659".into(), true)),
+            "Tailscale HTTPS only carries the app when its listener exists"
+        );
+        state.running = Some(running(BrowserApp {
+            https_port: Some(27659),
+            tailscale_target: Some(40000),
+            ..Default::default()
+        }));
+        assert_eq!(
+            state.browser_origin(),
+            Some(("https://box.tail1.ts.net:27658".into(), false))
+        );
     }
 
     #[test]

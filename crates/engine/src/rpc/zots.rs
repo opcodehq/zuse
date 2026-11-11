@@ -6,12 +6,32 @@ impl EngineRpc {
         &self,
         params: serde_json::Value,
     ) -> Result<RpcReply, RpcError> {
+        let actor = params["_zotActor"].as_str().map(str::to_owned);
+        let worker = params["_zotWorkerChatId"].as_str().map(str::to_owned);
         let command: ZotCommand = parse_params(params)?;
         let zots = self
             .zots
             .as_ref()
             .ok_or_else(|| RpcError::Capability("zots.v1".into()))?;
         let failed = |e: anyhow::Error| RpcError::Failed(e.to_string());
+        let from_coordinator = actor.is_some() && worker.is_none();
+        if let Some(worker) = worker {
+            let issue_id = match &command.action {
+                ZotAction::CommentIssue { issue_id, .. }
+                | ZotAction::LinkIssuePullRequest { issue_id, .. } => issue_id,
+                _ => return Err(RpcError::Capability("worker.issue_scope".into())),
+            };
+            let zot = zots.get(&command.zot_id).map_err(failed)?;
+            if !zot.workers.iter().any(|w| w.chat_id == worker)
+                || !zot
+                    .issues
+                    .iter()
+                    .any(|i| i.id == *issue_id && i.threads.contains(&worker))
+            {
+                return Err(RpcError::Capability("worker.issue_scope".into()));
+            }
+        }
+
         if let Some(result) = zots.receipt(&command).map_err(failed)? {
             return RpcReply::value(&result);
         }
@@ -50,6 +70,7 @@ impl EngineRpc {
             worker,
             model,
             base,
+            ..
         } = &command.action
         {
             if self
@@ -85,7 +106,9 @@ impl EngineRpc {
                 "stop the active coordinator turn first".into(),
             ));
         }
-        let result = zots.command(command.clone()).map_err(failed)?;
+        let result = zots
+            .command_as(command.clone(), actor.as_deref(), from_coordinator)
+            .map_err(failed)?;
         let current = result.as_ref().and_then(|z| zots.get(&z.id).ok());
         if let Some(zot) = &current {
             let harness: HarnessId =
@@ -160,6 +183,53 @@ mod tests {
     use super::*;
     use crate::{EngineCore, EngineProfile};
     use zuse_protocol::zots::*;
+
+    #[tokio::test]
+    async fn worker_issue_commands_are_limited_to_linked_issues() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = EngineCore::assemble_with_profile(
+            EngineProfile::local(dir.path()).unwrap(),
+            std::sync::Arc::new(HarnessRegistry::new()),
+            HarnessId::Mock,
+            None,
+        )
+        .unwrap();
+        core.workspace
+            .create_space(
+                "repo",
+                &core.device_id,
+                dir.path().to_str().unwrap(),
+                None,
+                false,
+            )
+            .unwrap();
+        let service = core.rpc_service();
+        value(&service, "Mutate", serde_json::json!({"op":"createChat","chatId":"worker","deviceId":core.device_id,"spaceId":"repo"})).await;
+        value(&service, "ZotCommand", serde_json::json!({"commandId":"create","zotId":"release","expectedRevision":null,"action":{"type":"create","config":{"name":"Release","purpose":"Coordinate","homeDeviceId":core.device_id,"repositories":[{"deviceId":core.device_id,"spaceId":"repo"}],"coordinatorModel":{"harness":"mock","model":null},"workerDeviceId":core.device_id,"maxConcurrentWorkers":1,"maxFollowups":3}}})).await;
+        value(&service, "ZotCommand", serde_json::json!({"commandId":"adopt","zotId":"release","expectedRevision":null,"action":{"type":"adoptWorker","worker":{"chatId":"worker","deviceId":core.device_id,"spaceId":"repo","objective":"Work","followups":0}}})).await;
+        for id in ["linked", "unlinked"] {
+            value(&service,"ZotCommand",serde_json::json!({"commandId":format!("create-{id}"),"zotId":"release","expectedRevision":null,"action":{"type":"createIssue","issueId":id,"details":{"title":"Work","description":"","dueDate":null}}})).await;
+        }
+        value(&service,"ZotCommand",serde_json::json!({"commandId":"link","zotId":"release","expectedRevision":null,"action":{"type":"linkIssueThread","issueId":"linked","chatId":"worker"}})).await;
+        let worker_command = |id: &str, issue: &str| serde_json::json!({"commandId":id,"zotId":"release","expectedRevision":null,"_zotActor":"worker","_zotWorkerChatId":"worker","action":{"type":"commentIssue","issueId":issue,"text":"Tests passed"}});
+        value(&service, "ZotCommand", worker_command("report", "linked")).await;
+        assert!(
+            service
+                .handle("ZotCommand", worker_command("foreign", "unlinked"))
+                .await
+                .is_err()
+        );
+        let mut forbidden = worker_command("close", "linked");
+        forbidden["action"] = serde_json::json!({"type":"editIssue","issueId":"linked","details":{"title":"Closed","description":"","status":"done","dueDate":null}});
+        assert!(service.handle("ZotCommand", forbidden).await.is_err());
+        let zot = core.zots.get("release").unwrap();
+        assert_eq!(
+            zot.issues[0].activity.last().unwrap().actor.as_deref(),
+            Some("worker")
+        );
+        assert_eq!(zot.issues[1].activity.len(), 1);
+        core.shutdown().await;
+    }
 
     #[tokio::test]
     async fn delegated_worker_runs_in_an_isolated_tree_and_reports_once() {
