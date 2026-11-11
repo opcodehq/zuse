@@ -13268,8 +13268,8 @@ impl Render for Composer {
                 crate::change_requests::conversation_branch(chat, &self.state.read(cx).spaces)
                     .is_some()
             }))
-            .then(|| self.checkout_controls.clone())
-            .flatten();
+        .then(|| self.checkout_controls.clone())
+        .flatten();
         let container = if chips.is_some() || checkout.is_some() {
             container.child(
                 div()
@@ -13284,11 +13284,11 @@ impl Render for Composer {
                         row.child(
                             div()
                                 .min_w_0()
-                                .max_w(px(
-                                    (self.last_available_width.unwrap_or(COMPOSER_MAX_WIDTH)
-                                        - 2.0 * COMPOSER_OUTER_PAD)
-                                        * 0.45,
-                                ))
+                                .max_w(px((self
+                                    .last_available_width
+                                    .unwrap_or(COMPOSER_MAX_WIDTH)
+                                    - 2.0 * COMPOSER_OUTER_PAD)
+                                    * 0.45))
                                 .flex()
                                 .items_center()
                                 .child(checkout),

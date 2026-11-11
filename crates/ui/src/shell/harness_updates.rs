@@ -223,9 +223,11 @@ fn mark_stack(statuses: &[UpdateRow], theme: &Theme) -> gpui::Div {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .child(
-                                icons::brand_icon(mark, 16.0, tint.unwrap_or(theme.text_muted)),
-                            ),
+                            .child(icons::brand_icon(
+                                mark,
+                                16.0,
+                                tint.unwrap_or(theme.text_muted),
+                            )),
                     )
                 }),
         )
@@ -773,9 +775,11 @@ impl Shell {
                                     .bg(settings::widgets::row_divider(&theme)),
                             )
                         })
-                        .child(
-                            icons::brand_icon(mark, 20.0, tint.unwrap_or(theme.text_muted)),
-                        )
+                        .child(icons::brand_icon(
+                            mark,
+                            20.0,
+                            tint.unwrap_or(theme.text_muted),
+                        ))
                         .child(
                             div()
                                 .flex_1()

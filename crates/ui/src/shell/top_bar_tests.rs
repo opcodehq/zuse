@@ -128,11 +128,15 @@ fn conversations_and_add_button_precede_other_tabs(cx: &mut TestAppContext) {
     });
     cx.update(|window, cx| window.draw(cx).clear());
     let chat = cx
-        .debug_bounds(Box::leak(format!("thread-conversation-{chat_id}").into_boxed_str()))
+        .debug_bounds(Box::leak(
+            format!("thread-conversation-{chat_id}").into_boxed_str(),
+        ))
         .unwrap();
     let add = cx.debug_bounds("add-thread-conversation").unwrap();
     let diff = cx
-        .debug_bounds(Box::leak(format!("main-tab-diff-{diff_id}").into_boxed_str()))
+        .debug_bounds(Box::leak(
+            format!("main-tab-diff-{diff_id}").into_boxed_str(),
+        ))
         .unwrap();
     assert!(chat.right() <= add.left());
     assert!(add.right() <= diff.left());

@@ -9961,9 +9961,11 @@ impl Shell {
                                     .flex()
                                     .items_center()
                                     .justify_center()
-                                    .child(
-                                        icons::brand_icon(path, 14.0, tint.unwrap_or(subline).opacity(0.8)),
-                                    )
+                                    .child(icons::brand_icon(
+                                        path,
+                                        14.0,
+                                        tint.unwrap_or(subline).opacity(0.8),
+                                    ))
                                     .into_any_element()
                             })
                     })
@@ -10104,15 +10106,15 @@ impl Shell {
                         .when_some(
                             harness.map(crate::pickers::harness_brand_icon),
                             |el, (path, tint)| {
-                                el.child(
-                                    icons::brand_icon(path, SIDEBAR_ACTIVE_HARNESS_ICON_SIZE,
-                                            tint.unwrap_or(subline).opacity(if archived_muted {
-                                                0.4
-                                            } else {
-                                                0.8
-                                            }),
-                                        ),
-                                )
+                                el.child(icons::brand_icon(
+                                    path,
+                                    SIDEBAR_ACTIVE_HARNESS_ICON_SIZE,
+                                    tint.unwrap_or(subline).opacity(if archived_muted {
+                                        0.4
+                                    } else {
+                                        0.8
+                                    }),
+                                ))
                             },
                         )
                         .children(project_icon)
@@ -14250,7 +14252,11 @@ impl Shell {
                 .when(!is_active, |icon| icon.opacity(0.78))
                 .into_any_element()
             } else if let Some((icon_path, Some(brand_color))) = harness_icon {
-                icons::brand_icon(icon_path, 12.0, brand_color.opacity(if is_active { 1.0 } else { 0.7 }))
+                icons::brand_icon(
+                    icon_path,
+                    12.0,
+                    brand_color.opacity(if is_active { 1.0 } else { 0.7 }),
+                )
             } else {
                 let icon_path = harness_icon.map_or(icon_path, |(path, _)| path);
                 crate::surface_chrome::tab_chip_icon(icon_path, is_active, &theme)

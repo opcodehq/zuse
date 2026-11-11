@@ -1064,7 +1064,9 @@ impl Shell {
                     );
                 }))
                 .child(popover::picker_icon_slot(match brand {
-                    Some((path, tint)) => icons::brand_icon(path, 14.0, tint.unwrap_or(theme.text_muted)),
+                    Some((path, tint)) => {
+                        icons::brand_icon(path, 14.0, tint.unwrap_or(theme.text_muted))
+                    }
                     None => row_glyph(icons::TOOL_AGENT, theme),
                 }))
                 .child(div().flex_1().min_w_0().truncate().child(agent.title))

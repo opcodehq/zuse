@@ -1017,9 +1017,11 @@ impl HarnessesPage {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .child(
-                        crate::icons::brand_icon(icon_path, 16.0, tint.unwrap_or(theme.text_muted)),
-                    );
+                    .child(crate::icons::brand_icon(
+                        icon_path,
+                        16.0,
+                        tint.unwrap_or(theme.text_muted),
+                    ));
                 let can_expand = enabled || !installed;
                 let expanded = can_expand && self.expanded_harness == Some(harness);
                 // The update action follows the version; policy remains in the details.
