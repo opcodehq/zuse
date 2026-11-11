@@ -1,5 +1,6 @@
-//! Account-scoped stdio MCP servers that run on this computer. Commands and
-//! environment values are stored locally and never reach the hosted plugin API.
+//! Account-scoped MCP servers that run on or are reached from this computer:
+//! stdio commands, or URLs only this computer can reach. Commands, environment
+//! and header values are stored locally and never reach the hosted plugin API.
 //! Their tools join the same agent gateway as hosted plugins.
 
 use crate::PluginError;
@@ -10,7 +11,10 @@ use rmcp::{
         PaginatedRequestParams, ProtocolVersion, Tool,
     },
     service::{Peer, RunningService},
-    transport::async_rw::AsyncRwTransport,
+    transport::{
+        StreamableHttpClientTransport, async_rw::AsyncRwTransport,
+        streamable_http_client::StreamableHttpClientTransportConfig,
+    },
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -24,7 +28,7 @@ use std::{
 };
 use tokio::sync::Mutex;
 use zuse_protocol::{
-    plugin_setup::{MAX_LOCAL_SERVERS, validate_local_server},
+    plugin_setup::{MAX_LOCAL_SERVERS, display_url, validate_local_server, validate_local_url},
     plugins::{
         LOCAL_SERVER_PREFIX, PluginConnection, PluginConnectionState, PluginDefinition,
         PluginResponse, PluginToolRequest,
@@ -69,6 +73,7 @@ pub fn base_environment() -> BTreeMap<String, String> {
     .collect()
 }
 
+// Rows hold secrets in `env` and `headers`, so no Debug.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Row {
@@ -78,8 +83,40 @@ struct Row {
     command: String,
     args: Vec<String>,
     env: BTreeMap<String, String>,
+    /// URL servers leave the stdio fields empty. Absent in older files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    url: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    headers: BTreeMap<String, String>,
     enabled: bool,
     created_at: f64,
+}
+impl Row {
+    fn valid(&self) -> bool {
+        match &self.url {
+            Some(url) => {
+                self.command.is_empty()
+                    && self.args.is_empty()
+                    && self.env.is_empty()
+                    && validate_local_url(&self.name, url, &self.headers).is_ok()
+            }
+            None => {
+                self.headers.is_empty()
+                    && validate_local_server(&self.name, &self.command, &self.args, &self.env)
+                        .is_ok()
+            }
+        }
+    }
+    /// What the snapshot shows: the command line or the URL, never secrets.
+    fn target(&self) -> String {
+        match &self.url {
+            Some(url) => display_url(url),
+            None => std::iter::once(self.command.as_str())
+                .chain(self.args.iter().map(String::as_str))
+                .collect::<Vec<_>>()
+                .join(" "),
+        }
+    }
 }
 #[derive(Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -157,10 +194,10 @@ impl LocalServers {
         let saved: Saved =
             serde_json::from_reader(std::io::BufReader::new(file)).map_err(|_| unreadable())?;
         if saved.servers.len() > MAX_LOCAL_SERVERS
-            || saved.servers.iter().any(|row| {
-                !row.id.starts_with(LOCAL_SERVER_PREFIX)
-                    || validate_local_server(&row.name, &row.command, &row.args, &row.env).is_err()
-            })
+            || saved
+                .servers
+                .iter()
+                .any(|row| !row.id.starts_with(LOCAL_SERVER_PREFIX) || !row.valid())
         {
             return Err(unreadable());
         }
@@ -203,7 +240,7 @@ impl LocalServers {
         })
     }
 
-    /// Catalog rows and connections for the personal snapshot. Env values never leave.
+    /// Catalog rows and connections for the personal snapshot. Env and header values never leave.
     pub async fn snapshot(
         &self,
     ) -> Result<(Vec<PluginDefinition>, Vec<PluginConnection>), PluginError> {
@@ -220,12 +257,7 @@ impl LocalServers {
                 custom: true,
                 url: None,
                 api_key_header: None,
-                command: Some(
-                    std::iter::once(row.command.as_str())
-                        .chain(row.args.iter().map(String::as_str))
-                        .collect::<Vec<_>>()
-                        .join(" "),
-                ),
+                command: Some(row.target()),
             })
             .collect();
         let connections = rows
@@ -254,32 +286,65 @@ impl LocalServers {
     ) -> Result<PluginResponse, PluginError> {
         let (name, command) = (name.trim(), command.trim());
         validate_local_server(name, command, &args, &env).map_err(PluginError::Local)?;
-        if request_id.is_empty() || request_id.len() > 128 {
+        self.insert(Row {
+            id: String::new(),
+            request_id: request_id.into(),
+            name: name.into(),
+            command: command.into(),
+            args,
+            env,
+            url: None,
+            headers: BTreeMap::new(),
+            enabled: true,
+            created_at: 0.0,
+        })
+        .await
+    }
+
+    /// Verify that the URL server answers and lists tools before saving it.
+    pub async fn add_url(
+        &self,
+        request_id: &str,
+        name: &str,
+        url: &str,
+        headers: BTreeMap<String, String>,
+    ) -> Result<PluginResponse, PluginError> {
+        let (name, url) = (name.trim(), url.trim());
+        validate_local_url(name, url, &headers).map_err(PluginError::Local)?;
+        self.insert(Row {
+            id: String::new(),
+            request_id: request_id.into(),
+            name: name.into(),
+            command: String::new(),
+            args: vec![],
+            env: BTreeMap::new(),
+            url: Some(url.into()),
+            headers,
+            enabled: true,
+            created_at: 0.0,
+        })
+        .await
+    }
+
+    async fn insert(&self, mut row: Row) -> Result<PluginResponse, PluginError> {
+        if row.request_id.is_empty() || row.request_id.len() > 128 {
             return Err(PluginError::Local("Retry adding the local server."));
         }
         let _write = self.writes.lock().await;
         let mut rows = self.load()?;
-        if let Some(row) = rows.iter().find(|row| row.request_id == request_id) {
-            return Ok(connected(&row.id));
+        if let Some(saved) = rows.iter().find(|saved| saved.request_id == row.request_id) {
+            return Ok(connected(&saved.id));
         }
         if rows.len() >= MAX_LOCAL_SERVERS {
             return Err(PluginError::Local(
                 "Remove a local server before adding another.",
             ));
         }
-        let row = Row {
-            id: format!("{LOCAL_SERVER_PREFIX}{}", uuid_like()),
-            request_id: request_id.into(),
-            name: name.into(),
-            command: command.into(),
-            args,
-            env,
-            enabled: true,
-            created_at: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_millis() as f64)
-                .unwrap_or_default(),
-        };
+        row.id = format!("{LOCAL_SERVER_PREFIX}{}", uuid_like());
+        row.created_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as f64)
+            .unwrap_or_default();
         let slot = Arc::new(Slot::default());
         let connection = tokio::time::timeout(STARTUP, self.connect(&row))
             .await
@@ -492,6 +557,9 @@ impl LocalServers {
     }
 
     async fn connect(&self, row: &Row) -> Result<Arc<Connection>, PluginError> {
+        if let Some(url) = &row.url {
+            return connect_url(url, &row.headers).await;
+        }
         let mut environment = (self.environment)();
         environment.extend(row.env.clone());
         let mut command = tokio::process::Command::new(&row.command);
@@ -519,24 +587,81 @@ impl LocalServers {
         };
         let transport = AsyncRwTransport::<RoleClient, _, _>::new(output, input)
             .with_max_line_length(4 * 1024 * 1024);
-        let owner = ClientConfig::new(
-            ClientCapabilities::default(),
-            Implementation::new("zuse", env!("CARGO_PKG_VERSION")),
-        )
-        .with_protocol_version(ProtocolVersion::V_2025_06_18)
+        let owner = client_info()
+            .serve_with_lifecycle(transport, ClientLifecycleMode::Initialize)
+            .await
+            .map_err(|_| {
+                PluginError::Local("The local server did not complete MCP initialization.")
+            })?;
+        finish(owner, child).await
+    }
+}
+
+fn client_info() -> ClientConfig {
+    ClientConfig::new(
+        ClientCapabilities::default(),
+        Implementation::new("zuse", env!("CARGO_PKG_VERSION")),
+    )
+    .with_protocol_version(ProtocolVersion::V_2025_06_18)
+}
+
+async fn finish(
+    owner: RunningService<RoleClient, ClientConfig>,
+    child: OwnedChild,
+) -> Result<Arc<Connection>, PluginError> {
+    let peer = owner.peer().clone();
+    peer.set_response_cache_config(rmcp::service::ClientCacheConfig::disabled())
+        .await;
+    Ok(Arc::new(Connection {
+        peer,
+        _owner: owner,
+        _child: child,
+        tools: StdMutex::new(None),
+    }))
+}
+
+/// Streamable HTTP with the configured headers. Legacy SSE-only servers are
+/// reached the same way; ones that never adopted streamable HTTP fail
+/// verification instead of being saved.
+async fn connect_url(
+    url: &str,
+    headers: &BTreeMap<String, String>,
+) -> Result<Arc<Connection>, PluginError> {
+    let headers = http::headers(headers).ok_or(PluginError::Local(
+        "Header values can't contain line breaks or control characters.",
+    ))?;
+    // No redirects, so headers only ever reach the configured origin.
+    let mut client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(10))
+        .pool_max_idle_per_host(2);
+    // System proxies can't reach this computer's or its network's servers.
+    if !zuse_protocol::plugin_setup::public_https(url) {
+        client = client.no_proxy();
+    }
+    let client = client.build().map_err(|_| PluginError::Unavailable)?;
+    let mut configuration = StreamableHttpClientTransportConfig::with_uri(url)
+        .max_concurrent_requests(4)
+        .max_sse_event_size(MAX_RESULT_BYTES)
+        .reinit_on_expired_session(true)
+        .custom_headers(headers);
+    configuration.channel_buffer_capacity = 8;
+    configuration.retry_config =
+        Arc::new(rmcp::transport::common::client_side_sse::NeverRetry::default());
+    let transport = StreamableHttpClientTransport::with_client(
+        http::Http {
+            client,
+            uri: url.into(),
+        },
+        configuration,
+    );
+    let owner = client_info()
         .serve_with_lifecycle(transport, ClientLifecycleMode::Initialize)
         .await
-        .map_err(|_| PluginError::Local("The local server did not complete MCP initialization."))?;
-        let peer = owner.peer().clone();
-        peer.set_response_cache_config(rmcp::service::ClientCacheConfig::disabled())
-            .await;
-        Ok(Arc::new(Connection {
-            peer,
-            _owner: owner,
-            _child: child,
-            tools: StdMutex::new(None),
-        }))
-    }
+        .map_err(|_| {
+            PluginError::Local("The local server did not answer MCP initialization at its URL.")
+        })?;
+    finish(owner, OwnedChild(None)).await
 }
 
 /// Bounded, cached tools/list across pages.
@@ -594,5 +719,6 @@ fn uuid_like() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
+mod http;
 #[cfg(test)]
 mod tests;

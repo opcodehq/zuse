@@ -68,6 +68,10 @@ pub struct PluginsCard {
     import: Option<LocalImport>,
     /// Add-server requests waiting for the single-flight plugin pipeline.
     import_queue: std::collections::VecDeque<Value>,
+    /// The request in flight came from the import queue, and how many of
+    /// those failed, so callers report what was actually added.
+    import_inflight: bool,
+    import_failed: usize,
     import_task: Option<Task<()>>,
     /// Review fixtures seed the account and snapshot without an engine.
     fixture: bool,
@@ -151,6 +155,8 @@ impl PluginsCard {
             setup_events: None,
             import: None,
             import_queue: Default::default(),
+            import_inflight: false,
+            import_failed: 0,
             import_task: None,
             fixture: false,
             _state: subscription,
@@ -390,6 +396,9 @@ impl PluginsCard {
                     }
                     Ok(_) => {}
                     Err(error) => {
+                        if card.import_inflight {
+                            card.import_failed += 1;
+                        }
                         card.error = Some(error.to_string());
                         if matches!(method, methods::PLUGINS | methods::SELECT_PLUGIN_WORKSPACE) {
                             if let Some(next) = card.plugins.failed() {
@@ -398,9 +407,11 @@ impl PluginsCard {
                         }
                     }
                 }
+                card.import_inflight = false;
                 card.schedule_poll(cx);
                 if !card.busy {
                     if let Some(next) = card.import_queue.pop_front() {
+                        card.import_inflight = true;
                         card.request(methods::PLUGINS, next, cx);
                     }
                 }
@@ -448,6 +459,76 @@ struct Connection {
     domain: String,
     state: String,
     enabled: bool,
+}
+
+/// What first-run onboarding shows of the local MCP import. Never carries
+/// env values or headers: only names, sources, summaries and counts.
+pub struct ImportSummary {
+    pub servers: Vec<(String, String, String, usize)>,
+    pub selected: std::collections::BTreeSet<usize>,
+    pub loading: bool,
+    pub error: Option<String>,
+    pub submitted: Option<(usize, usize)>,
+    pub pending: usize,
+    pub failed: usize,
+}
+impl ImportSummary {
+    /// Servers that reached Plugins: queued minus failed, once done.
+    pub fn added(&self) -> usize {
+        self.submitted
+            .map_or(0, |(queued, _)| queued.saturating_sub(self.failed))
+    }
+}
+
+/// First-run onboarding drives sign-in and the local MCP import through the
+/// same entity Settings uses, so both stay in step.
+impl PluginsCard {
+    pub fn account_ready(&self) -> bool {
+        self.account_loaded
+    }
+    pub fn is_signed_in(&self) -> bool {
+        self.signed_in()
+    }
+    pub fn signing_in(&self) -> bool {
+        self.account.login.is_some() || (self.busy && !self.signed_in())
+    }
+    pub fn account_error(&self) -> Option<String> {
+        self.error.clone().or_else(|| self.account.error.clone())
+    }
+    pub fn begin_sign_in(&mut self, cx: &mut Context<Self>) {
+        self.sign_in(cx);
+    }
+    /// The plugin workspace is known once the first list after sign-in lands.
+    pub fn workspace_ready(&self) -> bool {
+        self.plugins.snapshot["tenantId"].is_string()
+    }
+    pub fn begin_import(&mut self, cx: &mut Context<Self>) {
+        if self.import.is_none() {
+            self.open_import(cx);
+        }
+    }
+    pub fn import_summary(&self) -> Option<ImportSummary> {
+        let import = self.import.as_ref()?;
+        Some(ImportSummary {
+            servers: import
+                .servers
+                .iter()
+                .map(|s| (s.name.clone(), s.source.clone(), s.summary(), s.env.len()))
+                .collect(),
+            selected: import.selected.clone(),
+            loading: import.loading,
+            error: import.error.clone(),
+            submitted: import.submitted,
+            pending: self.import_queue.len() + usize::from(self.busy),
+            failed: self.import_failed,
+        })
+    }
+    pub fn toggle_imported_server(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.toggle_import(index, cx);
+    }
+    pub fn import_selected(&mut self, cx: &mut Context<Self>) {
+        self.run_import(cx);
+    }
 }
 
 impl PluginsCard {
@@ -614,8 +695,10 @@ impl PluginsCard {
             }
         }
         import.submitted = Some((queued, skipped));
+        self.import_failed = 0;
         if !self.busy {
             if let Some(next) = self.import_queue.pop_front() {
+                self.import_inflight = true;
                 self.request(methods::PLUGINS, next, cx);
             }
         }

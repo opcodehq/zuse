@@ -142,3 +142,111 @@ onboarding-provider_requires_subscription_sentence = { $plan }{ " " }구독이 �
 onboarding-provider_sessions_will_fail_if_your_plan_doesn_apos_t_include_subscri_sentence = 계획에{ " " }{ $plan }가 포함되어 있지 않으면 세션이 실패합니다.{ " " }{ $value }를 사용하기 전에 구독(또는 기존 계획 확인)하세요.
 
 onboarding-welcome_every_agent_one_workspace_sentence = 모든 에이전트를<part0/>하나의 작업 공간에서.
+
+# First-run onboarding
+onboarding-flow_step = { $total }단계 중 { $current }단계
+onboarding-flow_back = 뒤로
+onboarding-flow_skip = 건너뛰기
+onboarding-flow_skip_setup = 설정 건너뛰기
+onboarding-flow_continue = 계속
+onboarding-flow_language = 언어
+onboarding-flow_system_language = 시스템 언어
+onboarding-flow_welcome_title = Zuse에 오신 것을 환영합니다
+onboarding-flow_welcome_back_title = 다시 오신 것을 환영합니다
+onboarding-flow_welcome_body = 이 컴퓨터나 클라우드에서 코딩 에이전트를 나란히 실행하고, 모든 채팅을 한곳에서 관리하세요.
+onboarding-flow_welcome_back_body = 이전 버전 Zuse의 채팅이 이 컴퓨터에 있습니다. 몇 단계만 거치면 설정에서 가져올 수 있습니다.
+onboarding-flow_welcome_point_agents = 이미 사용 중인 에이전트와 함께 작동
+onboarding-flow_welcome_point_parallel = 여러 채팅을 동시에, 각각 별도의 체크아웃에서
+onboarding-flow_welcome_point_phone = 휴대폰에서 진행 상황을 확인하고 작업 승인
+onboarding-flow_get_started = 시작하기
+onboarding-flow_agents_title = 에이전트
+onboarding-flow_agents_body = Zuse는 이 컴퓨터에 설치된 에이전트 앱을 실행합니다. 원하지 않는 에이전트는 에이전트 선택기에서 끌 수 있습니다.
+onboarding-flow_agents_ready =
+    { $count ->
+       *[other] 에이전트 { $count }개 준비됨
+    }
+onboarding-flow_agents_loading = 에이전트를 찾는 중…
+onboarding-flow_agents_none = 아직 에이전트를 찾지 못했습니다
+onboarding-flow_agents_none_body = 에이전트 앱을 설치한 다음 설정 → 공급자에서 켜세요. 지금은 그냥 계속해도 됩니다.
+onboarding-flow_agents_more =
+    { $count ->
+       *[other] 에이전트 { $count }개를 나중에 설정 → 공급자에서 추가로 설치할 수 있습니다.
+    }
+onboarding-flow_signin_title = Zuse에 로그인
+onboarding-flow_signin_body = 계정은 선택 사항입니다. 로그인하면 설정 과정에서 도구도 함께 가져올 수 있습니다.
+onboarding-flow_signin_point_mcp = MCP 서버를 한 번에 가져오기
+onboarding-flow_signin_point_cloud = 클라우드 작업 공간에서도 같은 플러그인 사용
+onboarding-flow_signin_point_phone = 휴대폰에서 채팅을 확인하고 작업 승인
+onboarding-flow_signin_action = 브라우저로 로그인
+onboarding-flow_signin_waiting = 브라우저에서 로그인을 완료하세요…
+onboarding-flow_signin_done = 로그인했습니다
+onboarding-flow_signin_skip = 지금은 건너뛰기
+onboarding-flow_mcp_title = MCP 서버 가져오기
+onboarding-flow_mcp_body = 이 서버들은 이 컴퓨터의 에이전트 앱에 이미 설정되어 있습니다. 선택한 서버는 모든 채팅에서 에이전트가 사용할 수 있습니다.
+onboarding-flow_mcp_loading = MCP 서버를 찾는 중…
+onboarding-flow_mcp_waiting = 플러그인을 준비하는 중…
+onboarding-flow_mcp_none = MCP 서버를 찾지 못했습니다
+onboarding-flow_mcp_none_body = 이 컴퓨터의 에이전트 앱 중 MCP 서버가 설정된 앱이 없습니다. 나중에 설정 → 플러그인에서 서버를 추가할 수 있습니다.
+onboarding-flow_mcp_env =
+    { $count ->
+       *[other] 환경 변수 { $count }개
+    }
+onboarding-flow_mcp_import =
+    { $count ->
+       *[other] 서버 { $count }개 가져오기
+    }
+onboarding-flow_mcp_adding = 서버를 추가하는 중…
+onboarding-flow_mcp_added =
+    { $count ->
+       *[other] 서버 { $count }개를 추가했습니다
+    }
+onboarding-flow_mcp_skipped =
+    { $count ->
+       *[other] 서버 { $count }개를 가져올 수 없습니다.
+    }
+onboarding-flow_chats_title = 채팅 가져오기
+onboarding-flow_chats_body = 하던 작업을 이어서 하세요. 가져온 채팅은 기록이 유지되며 같은 에이전트로 계속 진행됩니다.
+onboarding-flow_previous_title = 이전 버전 Zuse
+onboarding-flow_previous_summary = 채팅 { $chats }개 · 프로젝트 { $projects }개
+onboarding-flow_previous_settings = 지원되는 설정도 함께 가져오기
+onboarding-flow_chats_loading = 최근 채팅을 찾는 중…
+onboarding-flow_chats_none = 이 컴퓨터에서 다른 채팅을 찾지 못했습니다.
+onboarding-flow_chats_import =
+    { $count ->
+       *[other] 채팅 { $count }개 가져오기
+    }
+onboarding-flow_chats_importing = { $total }개 중 { $done }개 가져오는 중…
+onboarding-flow_chats_imported =
+    { $count ->
+       *[other] 채팅 { $count }개 가져오기 완료
+    }
+onboarding-flow_chats_failed =
+    { $count ->
+       *[other] 채팅 { $count }개를 가져올 수 없습니다.
+    }
+onboarding-flow_personal_title = 나에게 맞게 설정
+onboarding-flow_personal_body = 이 항목은 언제든지 설정에서 변경할 수 있습니다.
+onboarding-flow_appearance = 외관
+onboarding-flow_access = 새 채팅 시작 방식
+onboarding-flow_access_ask = 실행 전에 묻기
+onboarding-flow_access_ask_body = 에이전트가 파일을 편집하거나 명령을 실행하기 전에 묻습니다.
+onboarding-flow_access_auto = 자동 승인
+onboarding-flow_access_auto_body = 자동 검토자가 일상적인 작업은 승인하고 나머지는 묻습니다.
+onboarding-flow_access_full = 전체 액세스
+onboarding-flow_access_full_body = 에이전트가 묻지 않고 실행합니다. 작업 트리나 클라우드 컴퓨터와 함께 사용하는 것을 권장합니다.
+onboarding-flow_launch_title = 모두 준비되었습니다
+onboarding-flow_launch_body = 프로젝트를 추가해 에이전트가 작업할 폴더를 지정하거나, 바로 채팅을 시작하세요.
+onboarding-flow_launch_chats =
+    { $count ->
+       *[other] 이어서 진행할 수 있는 채팅 { $count }개
+    }
+onboarding-flow_launch_servers =
+    { $count ->
+       *[other] MCP 서버 { $count }개 추가됨
+    }
+onboarding-flow_launch_open = Zuse 열기
+onboarding-flow_launch_project = 프로젝트 추가
+onboarding-flow_launch_open_chats = 가져온 채팅 열기
+onboarding-flow_source_importing = 가져오는 중…
+onboarding-flow_source_picked = { $count }개 중 { $picked }개 채팅
+onboarding-flow_chats_hint = 이 에이전트를 기반으로 하는 앱은 같은 위치에 채팅을 저장하므로 여기에도 표시됩니다.

@@ -142,3 +142,111 @@ onboarding-provider_requires_subscription_sentence = 需要{ " " }{ $plan }{ " "
 onboarding-provider_sessions_will_fail_if_your_plan_doesn_apos_t_include_subscri_sentence = 如果你的套餐不包含{ " " }{ $plan }，会话将会失败。请先订阅（或确认现有套餐）再使用{ " " }{ $value }。
 
 onboarding-welcome_every_agent_one_workspace_sentence = 所有智能体，<part0/>一个工作区。
+
+# First-run onboarding
+onboarding-flow_step = 第 { $current } 步，共 { $total } 步
+onboarding-flow_back = 返回
+onboarding-flow_skip = 跳过
+onboarding-flow_skip_setup = 跳过设置
+onboarding-flow_continue = 继续
+onboarding-flow_language = 语言
+onboarding-flow_system_language = 系统语言
+onboarding-flow_welcome_title = 欢迎使用 Zuse
+onboarding-flow_welcome_back_title = 欢迎回来
+onboarding-flow_welcome_body = 在这台电脑或云端并行运行编程智能体，所有聊天集中在一处。
+onboarding-flow_welcome_back_body = 这台电脑上有你在旧版 Zuse 中的聊天。设置过程中即可将它们迁移过来。
+onboarding-flow_welcome_point_agents = 支持你已在使用的智能体
+onboarding-flow_welcome_point_parallel = 同时进行多个聊天，各自拥有独立的检出副本
+onboarding-flow_welcome_point_phone = 在手机上查看进度并批准操作
+onboarding-flow_get_started = 开始
+onboarding-flow_agents_title = 你的智能体
+onboarding-flow_agents_body = Zuse 会运行这台电脑上已安装的智能体应用。可在智能体选择器中关闭不需要的智能体。
+onboarding-flow_agents_ready =
+    { $count ->
+       *[other] { $count } 个智能体已就绪
+    }
+onboarding-flow_agents_loading = 正在查找智能体…
+onboarding-flow_agents_none = 尚未找到智能体
+onboarding-flow_agents_none_body = 请安装一个智能体应用，然后在“设置 → 提供商”中启用。你也可以先继续。
+onboarding-flow_agents_more =
+    { $count ->
+       *[other] 另有 { $count } 个智能体可稍后在“设置 → 提供商”中安装。
+    }
+onboarding-flow_signin_title = 登录 Zuse
+onboarding-flow_signin_body = 账户是可选的。登录后，设置过程可以一并迁移你的工具。
+onboarding-flow_signin_point_mcp = 一次性迁移你的 MCP 服务器
+onboarding-flow_signin_point_cloud = 在云端工作区中使用相同的插件
+onboarding-flow_signin_point_phone = 在手机上查看聊天并批准操作
+onboarding-flow_signin_action = 使用浏览器登录
+onboarding-flow_signin_waiting = 请在浏览器中完成登录…
+onboarding-flow_signin_done = 你已登录
+onboarding-flow_signin_skip = 暂时跳过
+onboarding-flow_mcp_title = 迁移你的 MCP 服务器
+onboarding-flow_mcp_body = 这些服务器已在这台电脑上的智能体应用中配置好。你选择的服务器将在每个聊天中提供给智能体。
+onboarding-flow_mcp_loading = 正在查找 MCP 服务器…
+onboarding-flow_mcp_waiting = 正在准备你的插件…
+onboarding-flow_mcp_none = 未找到 MCP 服务器
+onboarding-flow_mcp_none_body = 这台电脑上的智能体应用均未配置 MCP 服务器。你可以稍后在“设置 → 插件”中添加。
+onboarding-flow_mcp_env =
+    { $count ->
+       *[other] { $count } 个环境变量
+    }
+onboarding-flow_mcp_import =
+    { $count ->
+       *[other] 导入 { $count } 个服务器
+    }
+onboarding-flow_mcp_adding = 正在添加服务器…
+onboarding-flow_mcp_added =
+    { $count ->
+       *[other] 已添加 { $count } 个服务器
+    }
+onboarding-flow_mcp_skipped =
+    { $count ->
+       *[other] { $count } 个服务器无法导入。
+    }
+onboarding-flow_chats_title = 迁移你的聊天
+onboarding-flow_chats_body = 从上次中断的地方继续。导入的聊天会保留历史记录，并继续使用同一个智能体。
+onboarding-flow_previous_title = 旧版 Zuse
+onboarding-flow_previous_summary = { $chats } 个聊天 · { $projects } 个项目
+onboarding-flow_previous_settings = 同时迁移支持的设置
+onboarding-flow_chats_loading = 正在查找最近的聊天…
+onboarding-flow_chats_none = 这台电脑上未找到其他聊天。
+onboarding-flow_chats_import =
+    { $count ->
+       *[other] 导入 { $count } 个聊天
+    }
+onboarding-flow_chats_importing = 正在导入第 { $done } 个，共 { $total } 个…
+onboarding-flow_chats_imported =
+    { $count ->
+       *[other] 已导入 { $count } 个聊天
+    }
+onboarding-flow_chats_failed =
+    { $count ->
+       *[other] { $count } 个聊天无法导入。
+    }
+onboarding-flow_personal_title = 个性化设置
+onboarding-flow_personal_body = 你可以随时在“设置”中更改这些选项。
+onboarding-flow_appearance = 外观
+onboarding-flow_access = 新聊天默认
+onboarding-flow_access_ask = 操作前询问
+onboarding-flow_access_ask_body = 智能体在编辑文件或运行命令前会先询问。
+onboarding-flow_access_auto = 替我批准
+onboarding-flow_access_auto_body = 自动审核器会批准常规操作，其余操作仍会询问你。
+onboarding-flow_access_full = 完全访问
+onboarding-flow_access_full_body = 智能体无需询问即可操作。最适合配合工作树或云端电脑使用。
+onboarding-flow_launch_title = 一切就绪
+onboarding-flow_launch_body = 添加一个项目，为智能体提供工作文件夹，或立即开始聊天。
+onboarding-flow_launch_chats =
+    { $count ->
+       *[other] { $count } 个聊天可以继续
+    }
+onboarding-flow_launch_servers =
+    { $count ->
+       *[other] 已添加 { $count } 个 MCP 服务器
+    }
+onboarding-flow_launch_open = 打开 Zuse
+onboarding-flow_launch_project = 添加项目
+onboarding-flow_launch_open_chats = 打开已导入的聊天
+onboarding-flow_source_importing = 正在导入…
+onboarding-flow_source_picked = 已选 { $picked } / { $count } 个对话
+onboarding-flow_chats_hint = 基于这些智能体构建的应用会把对话保存在同一位置，因此也会显示在这里。

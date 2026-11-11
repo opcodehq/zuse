@@ -38,7 +38,7 @@ fn env_map(value: Option<&serde_json::Value>) -> BTreeMap<String, String> {
         .unwrap_or_default()
 }
 
-/// `{"mcpServers": {name: {command,args,env} | {url}}}`, shared by Claude and Cursor.
+/// `{"mcpServers": {name: {command,args,env} | {type,url,headers}}}`, shared by Claude and Cursor.
 fn json_servers(source: &str, text: &str) -> Vec<DetectedServer> {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
         return vec![];
@@ -60,14 +60,32 @@ fn json_servers(source: &str, text: &str) -> Vec<DetectedServer> {
                 command: if url.is_some() { None } else { command },
                 args: strings(entry.get("args")),
                 env: env_map(entry.get("env")),
+                headers: env_map(entry.get("headers")),
+                transport: entry
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_owned),
                 url,
             })
         })
         .collect()
 }
 
-/// Codex `[mcp_servers.<name>]` tables with `command`, `args`, `env` or `url`.
-fn codex_servers(text: &str) -> Vec<DetectedServer> {
+fn string_table(value: Option<&toml::Value>) -> BTreeMap<String, String> {
+    value
+        .and_then(|v| v.as_table())
+        .map(|t| {
+            t.iter()
+                .filter_map(|(k, v)| v.as_str().map(|v| (k.clone(), v.to_owned())))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Codex `[mcp_servers.<name>]` tables with `command`, `args`, `env` or `url`
+/// with `http_headers`. Headers and bearer tokens named by environment variable
+/// resolve from `var` now, as Codex would at launch; unset ones are skipped.
+fn codex_servers(text: &str, var: impl Fn(&str) -> Option<String>) -> Vec<DetectedServer> {
     let Ok(value) = text.parse::<toml::Table>() else {
         return vec![];
     };
@@ -92,21 +110,34 @@ fn codex_servers(text: &str) -> Vec<DetectedServer> {
                         .collect()
                 })
                 .unwrap_or_default();
-            let env = entry
-                .get("env")
-                .and_then(|v| v.as_table())
-                .map(|t| {
-                    t.iter()
-                        .filter_map(|(k, v)| v.as_str().map(|v| (k.clone(), v.to_owned())))
-                        .collect()
-                })
-                .unwrap_or_default();
+            let env = string_table(entry.get("env"));
+            let mut headers = string_table(entry.get("http_headers"));
+            if url.is_some() {
+                for (header, name) in string_table(entry.get("env_http_headers")) {
+                    if let Some(value) = var(&name) {
+                        headers.insert(header, value);
+                    }
+                }
+                if let Some(token) = entry
+                    .get("bearer_token_env_var")
+                    .and_then(|v| v.as_str())
+                    .and_then(&var)
+                {
+                    headers.insert("Authorization".into(), format!("Bearer {token}"));
+                }
+            }
             (url.is_some() || command.is_some()).then(|| DetectedServer {
                 source: "Codex".into(),
                 name: name.clone(),
                 command: if url.is_some() { None } else { command },
                 args,
                 env,
+                headers: if url.is_some() {
+                    headers
+                } else {
+                    BTreeMap::new()
+                },
+                transport: None,
                 url,
             })
         })
@@ -121,7 +152,7 @@ pub fn discover(home: &Path) -> Vec<DetectedServer> {
         found.extend(json_servers("Claude", &text));
     }
     if let Some(text) = read(&home.join(".codex/config.toml")) {
-        found.extend(codex_servers(&text));
+        found.extend(codex_servers(&text, |name| std::env::var(name).ok()));
     }
     if let Some(text) = read(&home.join(".cursor/mcp.json")) {
         found.extend(json_servers("Cursor", &text));
@@ -199,6 +230,8 @@ mod tests {
             args: vec!["-y".into(), "server".into()],
             env: BTreeMap::from([("TOKEN".into(), "v".into())]),
             url: None,
+            headers: BTreeMap::new(),
+            transport: None,
         };
         assert!(matches!(
             stdio.request("personal:me", zuse_protocol::plugins::PluginReturnTo::Web),
@@ -213,15 +246,84 @@ mod tests {
                 )
                 .is_err()
         );
+        // Plain HTTP can't go to the hosted service, so it becomes a local URL plugin.
         let insecure = DetectedServer {
             url: Some("http://plain.example/mcp".into()),
             command: None,
-            ..stdio
+            env: BTreeMap::new(),
+            ..stdio.clone()
         };
+        assert!(matches!(
+            insecure.request("personal:me", zuse_protocol::plugins::PluginReturnTo::Web),
+            Ok(zuse_protocol::plugins::PluginRequest::AddLocalServer { url: Some(_), .. })
+        ));
         assert!(
             insecure
-                .request("personal:me", zuse_protocol::plugins::PluginReturnTo::Web)
+                .request(
+                    "organization:team",
+                    zuse_protocol::plugins::PluginReturnTo::Web
+                )
                 .is_err()
         );
+        // Headers may carry credentials: plain HTTP only reaches this computer.
+        let with_key = |url: &str| DetectedServer {
+            url: Some(url.into()),
+            headers: BTreeMap::from([("Authorization".into(), "Bearer k".into())]),
+            ..insecure.clone()
+        };
+        let personal = |server: DetectedServer| {
+            server.request("personal:me", zuse_protocol::plugins::PluginReturnTo::Web)
+        };
+        assert!(personal(with_key("http://plain.example/mcp")).is_err());
+        assert!(personal(with_key("http://192.168.1.4:3000/mcp")).is_err());
+        assert!(personal(with_key("http://localhost:3000/mcp")).is_ok());
+        assert!(personal(with_key("http://127.0.0.1:3000/mcp")).is_ok());
+        assert!(personal(with_key("http://[::1]:3000/mcp")).is_ok());
+        let public = DetectedServer {
+            url: Some("https://tools.example/mcp".into()),
+            ..insecure
+        };
+        assert!(matches!(
+            public.request(
+                "organization:team",
+                zuse_protocol::plugins::PluginReturnTo::Web
+            ),
+            Ok(zuse_protocol::plugins::PluginRequest::AddServer { .. })
+        ));
+    }
+
+    #[test]
+    fn url_servers_keep_their_headers_and_transport() {
+        let claude = json_servers(
+            "Claude",
+            r#"{"mcpServers":{"dev":{"type":"sse","url":"http://localhost:3000/sse","headers":{"Authorization":"Bearer claude-secret","X-Team":"t"}},"files":{"command":"npx","headers":{"X":"ignored for stdio"}}}}"#,
+        );
+        assert_eq!(claude[0].transport.as_deref(), Some("sse"));
+        assert_eq!(claude[0].headers["Authorization"], "Bearer claude-secret");
+        assert_eq!(claude[0].headers["X-Team"], "t");
+        assert!(!claude[0].summary().contains("secret"));
+        assert!(!claude[0].hosted());
+        assert!(claude[1].transport.is_none());
+
+        let codex = codex_servers(
+            "[mcp_servers.remote]\nurl = \"https://tools.example/mcp\"\nbearer_token_env_var = \"TOOLS_TOKEN\"\n[mcp_servers.remote.http_headers]\nX-Org = \"acme\"\n[mcp_servers.remote.env_http_headers]\nX-Key = \"TOOLS_KEY\"\nX-Unset = \"MISSING\"\n",
+            |name| match name {
+                "TOOLS_TOKEN" => Some("codex-secret".into()),
+                "TOOLS_KEY" => Some("key".into()),
+                _ => None,
+            },
+        );
+        let headers = &codex[0].headers;
+        assert_eq!(headers["Authorization"], "Bearer codex-secret");
+        assert_eq!(headers["X-Org"], "acme");
+        assert_eq!(headers["X-Key"], "key");
+        assert!(!headers.contains_key("X-Unset"));
+        // Several headers can't be expressed by the hosted form.
+        assert!(!codex[0].hosted());
+        assert!(matches!(
+            codex[0].request("personal:me", zuse_protocol::plugins::PluginReturnTo::Web),
+            Ok(zuse_protocol::plugins::PluginRequest::AddLocalServer { .. })
+        ));
+        assert_eq!(codex[0].summary(), "https://tools.example/mcp");
     }
 }
