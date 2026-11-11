@@ -23,7 +23,15 @@ pub struct Boxd {
     endpoint: String,
     exchange_url: String,
     token: Mutex<Option<Token>>,
+    /// Machines found outside `endpoint` (created before a cluster override),
+    /// by ID; their calls go where they live.
+    regions: std::sync::Mutex<std::collections::HashMap<String, String>>,
+    /// The cluster to search when an override does not know a machine.
+    default_endpoint: String,
 }
+
+/// Boxd's default cluster, where machines created without an override live.
+const DEFAULT_ENDPOINT: &str = "https://boxd.sh:9443";
 
 #[derive(Clone, Debug)]
 pub struct Usage {
@@ -128,7 +136,8 @@ impl Boxd {
         machine_id(id)?;
         let (since, until) = usage_bounds(start_ms, end_ms)?;
         let report: wire::VmUsageResponse = self
-            .unary(
+            .unary_on(
+                id,
                 "GetVmUsage",
                 wire::VmUsageRequest {
                     vm_id: id.to_owned(),
@@ -154,7 +163,14 @@ impl Boxd {
     }
 
     #[cfg(test)]
+    pub(crate) fn set_test_default_endpoint(&mut self, endpoint: String) {
+        self.default_endpoint = endpoint;
+    }
+
+    #[cfg(test)]
     pub(crate) fn set_test_endpoint(&mut self, endpoint: String) {
+        // No fallback cluster unless a test sets one.
+        self.default_endpoint = endpoint.clone();
         self.exchange_url = format!("{endpoint}/token");
         self.endpoint = endpoint;
     }
@@ -172,9 +188,11 @@ impl Boxd {
                 .map_err(|_| ProviderError::Unavailable)?,
             api_key,
             organization: organization.unwrap_or_default(),
-            endpoint: "https://boxd.sh:9443".into(),
+            endpoint: DEFAULT_ENDPOINT.into(),
             exchange_url: "https://app.boxd.sh/api/v1/auth/token".into(),
             token: Mutex::new(None),
+            regions: Default::default(),
+            default_endpoint: DEFAULT_ENDPOINT.into(),
         })
     }
 
@@ -223,8 +241,28 @@ impl Boxd {
         Ok(value)
     }
 
+    /// Where calls about `machine` go: its recorded cluster, else the configured one.
+    fn endpoint_for(&self, machine: &str) -> String {
+        self.regions
+            .lock()
+            .ok()
+            .and_then(|regions| regions.get(machine).cloned())
+            .unwrap_or_else(|| self.endpoint.clone())
+    }
+
     async fn call(
         &self,
+        method: &str,
+        message: impl Message,
+        mutation: bool,
+    ) -> Result<Vec<Vec<u8>>, ProviderError> {
+        let endpoint = self.endpoint.clone();
+        self.call_at(&endpoint, method, message, mutation).await
+    }
+
+    async fn call_at(
+        &self,
+        endpoint: &str,
         method: &str,
         message: impl Message,
         mutation: bool,
@@ -236,7 +274,7 @@ impl Boxd {
         let token = self.token().await?;
         let response = self
             .http
-            .post(format!("{}/{SERVICE}/{method}", self.endpoint))
+            .post(format!("{endpoint}/{SERVICE}/{method}"))
             .header("content-type", "application/grpc-web+proto")
             .header("x-grpc-web", "1")
             .bearer_auth(token)
@@ -303,7 +341,30 @@ impl Boxd {
         request: impl Message,
         mutation: bool,
     ) -> Result<T, ProviderError> {
-        let mut messages = self.call(method, request, mutation).await?;
+        let endpoint = self.endpoint.clone();
+        self.unary_at(&endpoint, method, request, mutation).await
+    }
+
+    /// [`Self::unary`] for a call about one machine, sent to its cluster.
+    async fn unary_on<T: Message + Default>(
+        &self,
+        machine: &str,
+        method: &str,
+        request: impl Message,
+        mutation: bool,
+    ) -> Result<T, ProviderError> {
+        let endpoint = self.endpoint_for(machine);
+        self.unary_at(&endpoint, method, request, mutation).await
+    }
+
+    async fn unary_at<T: Message + Default>(
+        &self,
+        endpoint: &str,
+        method: &str,
+        request: impl Message,
+        mutation: bool,
+    ) -> Result<T, ProviderError> {
+        let mut messages = self.call_at(endpoint, method, request, mutation).await?;
         if messages.len() != 1 {
             return Err(if mutation {
                 ProviderError::OutcomeUnknown
@@ -330,7 +391,8 @@ impl Boxd {
         machine_id(machine)?;
         snapshot_reference(name)?;
         let captured: wire::CreateSnapshotResponse = self
-            .unary(
+            .unary_on(
+                machine,
                 "CreateSnapshot",
                 wire::CreateSnapshotRequest {
                     vm: machine.into(),
@@ -434,8 +496,9 @@ impl Boxd {
         if snapshot.state != SnapshotState::Ready || snapshot.version == 0 {
             return Err(ProviderError::Rejected);
         }
-        let details: wire::MachineDetails =
-            self.unary("GetVm", machine_id(machine)?, false).await?;
+        let details: wire::MachineDetails = self
+            .unary_on(machine, "GetVm", machine_id(machine)?, false)
+            .await?;
         let source = details.source_info.ok_or(ProviderError::Rejected)?;
         if details.vm_id != machine
             || details.name != name
@@ -459,8 +522,9 @@ impl Boxd {
         if version == 0 || version > 9_007_199_254_740_991 {
             return Err(ProviderError::Rejected);
         }
-        let details: wire::MachineDetails =
-            self.unary("GetVm", machine_id(machine)?, false).await?;
+        let details: wire::MachineDetails = self
+            .unary_on(machine, "GetVm", machine_id(machine)?, false)
+            .await?;
         let source = details.source_info.ok_or(ProviderError::Rejected)?;
         if details.vm_id != machine
             || source.kind != "snapshot"
@@ -473,10 +537,24 @@ impl Boxd {
     }
 
     pub async fn inspect(&self, id: &str) -> Result<Option<Machine>, ProviderError> {
-        match self
-            .unary::<wire::MachineDetails>("GetVm", machine_id(id)?, false)
-            .await
-        {
+        let mut found = self
+            .unary_on::<wire::MachineDetails>(id, "GetVm", machine_id(id)?, false)
+            .await;
+        // A cluster override only sees its own machines. One created before
+        // it (in the default cluster) is not missing: find it there and keep
+        // sending its calls there.
+        let fallback = self.default_endpoint.clone();
+        if matches!(found, Err(ProviderError::NotFound)) && self.endpoint_for(id) != fallback {
+            found = self
+                .unary_at::<wire::MachineDetails>(&fallback, "GetVm", machine_id(id)?, false)
+                .await;
+            if found.is_ok() {
+                if let Ok(mut regions) = self.regions.lock() {
+                    regions.insert(id.to_owned(), fallback);
+                }
+            }
+        }
+        match found {
             Err(ProviderError::NotFound) => Ok(None),
             Ok(machine) if !machine.vm_id.is_empty() => Ok(Some(Machine {
                 id: machine.vm_id,
@@ -539,7 +617,7 @@ impl Boxd {
     }
 
     async fn action(&self, method: &str, id: &str) -> Result<(), ProviderError> {
-        self.unary::<wire::Empty>(method, machine_id(id)?, true)
+        self.unary_on::<wire::Empty>(id, method, machine_id(id)?, true)
             .await
             .map(|_| ())
     }
@@ -560,7 +638,7 @@ impl Boxd {
     }
     pub async fn resume(&self, id: &str) -> Result<u64, ProviderError> {
         Ok(self
-            .unary::<wire::ResumeResult>("ResumeVm", machine_id(id)?, true)
+            .unary_on::<wire::ResumeResult>(id, "ResumeVm", machine_id(id)?, true)
             .await?
             .resume_us)
     }
@@ -576,7 +654,8 @@ impl Boxd {
         if seconds > 2592000 {
             return Err(ProviderError::Rejected);
         }
-        self.unary::<wire::Empty>(
+        self.unary_on::<wire::Empty>(
+            id,
             "SetAutoHibernateTimeout",
             wire::HibernateTimeout {
                 vm_id: machine_id(id)?.vm_id,
@@ -593,8 +672,10 @@ impl Boxd {
         if command.is_empty() || command.len() > 65536 {
             return Err(ProviderError::Rejected);
         }
+        let endpoint = self.endpoint_for(id);
         let messages = self
-            .call(
+            .call_at(
+                &endpoint,
                 "Exec",
                 wire::ExecChunk {
                     vm_id: machine_id(id)?.vm_id,
@@ -632,7 +713,8 @@ impl Boxd {
             return Err(ProviderError::Rejected);
         }
         let result: wire::Uploaded = self
-            .unary(
+            .unary_on(
+                id,
                 "UploadFile",
                 wire::UploadFile {
                     vm_id: machine_id(id)?.vm_id,
