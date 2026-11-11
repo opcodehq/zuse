@@ -567,10 +567,12 @@ impl Shell {
         });
         // A computer that restarted on wake lost its terminals' processes and
         // background work; say so rather than look identical to a memory wake.
+        // Only once running: while a new wake is pending, the stored result
+        // still describes the previous one.
         let wake_row = summary
             .last_wake
             .clone()
-            .filter(|_| !summary.sleeping)
+            .filter(|_| running)
             .map(|wake| {
                 info_row(&theme, row_glyph(icons::CLOCK_CIRCLE, &theme), wake.into())
                     .id("cloud-session-info-wake")

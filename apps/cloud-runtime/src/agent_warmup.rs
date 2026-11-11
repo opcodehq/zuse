@@ -21,10 +21,7 @@ pub fn spawn(agent: &str, data: &Path) {
     let Some(path) = std::env::var_os(executable_var(agent)).filter(|p| !p.is_empty()) else {
         return;
     };
-    let _ = std::fs::write(
-        data.join(RECORD),
-        Path::new(&path).as_os_str().as_encoded_bytes(),
-    );
+    let _ = write_record(data, Path::new(&path));
     let agent = agent.to_owned();
     let _ = std::thread::Builder::new()
         .name("agent-warmup".into())
@@ -40,6 +37,22 @@ pub fn spawn(agent: &str, data: &Path) {
                 Err(error) => tracing::debug!(agent, %error, "Agent executable warm-up skipped"),
             }
         });
+}
+
+/// Replace the record atomically. The data folder is task-writable, so never
+/// open an existing entry (a FIFO there would block startup): write a fresh
+/// file and rename it over whatever is at the record path.
+fn write_record(data: &Path, executable: &Path) -> std::io::Result<()> {
+    use std::io::Write as _;
+    let temporary = data.join(format!(".{RECORD}.{}", std::process::id()));
+    let _ = std::fs::remove_file(&temporary);
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)?;
+    file.write_all(executable.as_os_str().as_encoded_bytes())?;
+    drop(file);
+    std::fs::rename(&temporary, data.join(RECORD))
 }
 
 /// Sequentially read a file and discard it; the page cache keeps the bytes.
@@ -65,6 +78,20 @@ mod tests {
         std::fs::write(&path, vec![7u8; (1 << 20) + 5]).unwrap();
         assert_eq!(super::read_through(&path).unwrap(), (1 << 20) + 5);
         assert!(super::read_through(&dir.join("missing")).is_err());
+        // A FIFO at the record path is replaced, not opened.
+        let fifo = dir.join(super::RECORD);
+        assert!(
+            std::process::Command::new("mkfifo")
+                .arg(&fifo)
+                .status()
+                .unwrap()
+                .success()
+        );
+        super::write_record(&dir, &path).unwrap();
+        assert_eq!(
+            std::fs::read(&fifo).unwrap(),
+            path.as_os_str().as_encoded_bytes()
+        );
         std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(super::executable_var("codex"), "CODEX_EXECUTABLE");
         assert_eq!(super::executable_var("grok"), "GROK_EXECUTABLE");

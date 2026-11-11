@@ -430,19 +430,24 @@ def warm_agent(data,releases=HARNESS_RELEASES):
     """Start reading the selected agent's executable at boot, before the
     runtime starts. A computer that restarted without its memory (Daytona,
     Boat after ten minutes) otherwise pages a ~300 MB binary in from a cold,
-    lazily restored disk at the first prompt. Best effort; returns the thread."""
-    import threading
+    lazily restored disk at the first prompt. Best effort; returns the reader
+    process. A separate process, not a thread, so it can never overlap the
+    supervisor's fork-with-preexec launches."""
     try:
-        target=Path((data/AGENT_RECORD).read_text().strip()).resolve(strict=True)
+        # The record is task-writable: never follow a link, never block on a
+        # FIFO, and read a bounded path.
+        fd=os.open(data/AGENT_RECORD,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK|os.O_CLOEXEC)
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):return None
+            raw=os.read(fd,4097)
+        finally:os.close(fd)
+        if len(raw)>4096:return None
+        target=Path(raw.decode().strip()).resolve(strict=True)
         root=releases.resolve(strict=True)
         if root not in target.parents or not stat.S_ISREG(target.stat().st_mode):return None
-    except (OSError,ValueError):return None
-    def read():
-        try:
-            with target.open('rb') as handle:
-                while handle.read(1<<20):pass
-        except OSError:pass
-    thread=threading.Thread(target=read,name='agent-warmup',daemon=True);thread.start();return thread
+    except (OSError,ValueError,RuntimeError):return None
+    try:return subprocess.Popen(['cat',str(target)],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,close_fds=True)
+    except OSError:return None
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)

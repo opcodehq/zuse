@@ -484,15 +484,11 @@ async fn run() -> Result<()> {
     )?);
     phase.complete();
     drop(phase);
-    // Providers that do not keep memory restart this process on wake. Reopen
-    // the chat terminals that were open (fresh shells, same ids, a restart
-    // notice), and keep remembering them for the next restart.
+    // Providers that do not keep memory restart this process on wake. Keep
+    // remembering open chat terminals; they reopen once the workload
+    // environment is attached (below).
     core.terminals
         .persist_to(directory.join("cloud-terminals.json"));
-    let reopened = core.terminals.restore();
-    if reopened > 0 {
-        tracing::info!(reopened, "Reopened terminals after a restart");
-    }
     if track_preparation {
         let data = directory.clone();
         let boot = bootstrap.clone();
@@ -1163,6 +1159,13 @@ async fn run() -> Result<()> {
             }
         }
         workload.attach_terminals(core.terminals.clone()).await?;
+        // Reopen the chat terminals that were open before a restart (fresh
+        // shells, same ids, a restart notice). After the workload environment
+        // so restored shells get its bindings and command path.
+        let reopened = core.terminals.restore();
+        if reopened > 0 {
+            tracing::info!(reopened, "Reopened terminals after a restart");
+        }
         let resume = if bootstrap.launch_intent.is_none() {
             let directive = authority
                 .lifecycle(

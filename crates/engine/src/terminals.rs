@@ -108,7 +108,17 @@ struct TerminalsInner {
     /// Where open chat terminals are remembered, so a computer that restarts
     /// without its memory reopens them. Unset: terminals are not remembered.
     restore_path: Mutex<Option<std::path::PathBuf>>,
+    /// Held from snapshot through publication, so concurrent opens and closes
+    /// publish in order and the newest state wins.
+    save_lock: Mutex<()>,
     host_environment: Mutex<Arc<std::collections::BTreeMap<String, zeroize::Zeroizing<String>>>>,
+}
+
+/// First event sequence for a restored shell (see [`Terminals::restore`]).
+fn restored_seq_base() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_micros() as u64)
 }
 
 impl Drop for TerminalsInner {
@@ -174,6 +184,7 @@ impl Terminals {
             inner: Arc::new(TerminalsInner {
                 sessions: Mutex::new(HashMap::new()),
                 restore_path: Mutex::new(None),
+                save_lock: Mutex::new(()),
                 host_environment: Mutex::new(Arc::new(std::collections::BTreeMap::new())),
             }),
         };
@@ -256,6 +267,7 @@ impl Terminals {
     }
 
     fn remember(&self) {
+        let _publishing = lock(&self.inner.save_lock);
         let entries = self.restorable();
         self.save(&entries);
     }
@@ -294,6 +306,11 @@ impl Terminals {
             if let Ok(live) = self.session(&session.id) {
                 let mut live = lock(&live);
                 live.owner = Some(entry.owner);
+                // Same id, new shell: start its events past any cursor a
+                // client kept from the old one, so a reconnect with that
+                // `afterSeq` still replays the restart notice. Microseconds
+                // since the epoch outrun the old shell's per-chunk counter.
+                live.seq = live.seq.max(restored_seq_base());
                 let seq = live.next_seq();
                 live.emit(TerminalEvent::Data {
                     seq,
@@ -655,8 +672,9 @@ impl Terminals {
     pub fn shutdown(&self) {
         // Remember what was open before killing it: a computer that does not
         // keep memory reopens these when it wakes.
-        let entries = self.restorable();
-        self.save(&entries);
+        self.remember();
+        // Nothing after this point may overwrite that list.
+        *lock(&self.inner.restore_path) = None;
         let sessions: Vec<_> = lock(&self.inner.sessions).drain().map(|(_, s)| s).collect();
         for session in sessions {
             dispose(&session, true);
@@ -1411,6 +1429,12 @@ mod restore_tests {
         };
         let text = String::from_utf8(BASE64.decode(data).unwrap()).unwrap();
         assert!(text.contains("Computer restarted"), "{text}");
+        // A view reconnecting with the old shell's cursor still gets the notice.
+        let mut stale = after.subscribe(&kept.id, Some(50_000)).unwrap();
+        assert!(
+            matches!(stale.recv().await, Some(TerminalEvent::Data { .. })),
+            "the restart notice replays past an old cursor"
+        );
         assert_eq!(
             after.restore(),
             0,
