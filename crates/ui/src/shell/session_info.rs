@@ -569,14 +569,10 @@ impl Shell {
         // background work; say so rather than look identical to a memory wake.
         // Only once running: while a new wake is pending, the stored result
         // still describes the previous one.
-        let wake_row = summary
-            .last_wake
-            .clone()
-            .filter(|_| running)
-            .map(|wake| {
-                info_row(&theme, row_glyph(icons::CLOCK_CIRCLE, &theme), wake.into())
-                    .id("cloud-session-info-wake")
-            });
+        let wake_row = summary.last_wake.clone().filter(|_| running).map(|wake| {
+            info_row(&theme, row_glyph(icons::CLOCK_CIRCLE, &theme), wake.into())
+                .id("cloud-session-info-wake")
+        });
         // Performance: one row with CPU at a glance, unfolding to the bars.
         let cpu = resources["cpuPercent"].as_f64();
         let (performance_header, performance_open) = self.session_info_section(
