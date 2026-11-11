@@ -565,3 +565,5 @@ pub const CLOUD_TASK_ASSET: &str = "CloudTaskAsset";
 pub const SLACK_CONNECTIONS: &str = "SlackConnections";
 pub const SLACK_CONNECT: &str = "SlackConnect";
 pub const SLACK_DISCONNECT: &str = "SlackDisconnect";
+/// Accept or decline a Slack sign-in that is waiting for confirmation in Zuse.
+pub const SLACK_CONFIRM: &str = "SlackConfirm";

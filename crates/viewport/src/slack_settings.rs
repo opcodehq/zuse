@@ -6,7 +6,14 @@ use crate::{
 use gpui::{prelude::*, *};
 use serde_json::{Value, json};
 use std::collections::HashMap;
-use zuse_protocol::{cloud_catalog::CloudAgentCatalog, methods, slack::Connection};
+use zuse_protocol::{
+    cloud_catalog::CloudAgentCatalog,
+    methods,
+    slack::{Connection, PendingConnection},
+};
+
+/// Shown while settings re-check the connection after a failed action.
+const CHECKING: &str = "Checking the current connection…";
 
 pub struct SlackPanel {
     owner: Option<Owner>,
@@ -16,6 +23,7 @@ pub struct SlackPanel {
     next: u64,
     pending: HashMap<u64, (&'static str, Owner)>,
     connections: Vec<Connection>,
+    pending_links: Vec<PendingConnection>,
     projects: Vec<Value>,
     catalog: Option<CloudAgentCatalog>,
     project: Option<String>,
@@ -39,6 +47,7 @@ impl SlackPanel {
             next: 0,
             pending: HashMap::new(),
             connections: vec![],
+            pending_links: vec![],
             projects: vec![],
             catalog: None,
             project: None,
@@ -77,6 +86,7 @@ impl SlackPanel {
         }
         self.workspaces_open = false;
         self.connections.clear();
+        self.pending_links.clear();
         self.projects.clear();
         self.catalog = None;
         self.project = None;
@@ -91,7 +101,9 @@ impl SlackPanel {
     }
     pub fn interrupted(&mut self, cx: &mut Context<Self>) {
         self.pending.clear();
-        self.loaded = false;
+        // Stay "loaded" so render does not auto-refresh and wipe this message;
+        // the user refreshes explicitly.
+        self.loaded = true;
         self.error = Some("Connection interrupted. Refresh Slack settings.".into());
         cx.notify();
     }
@@ -143,12 +155,13 @@ impl SlackPanel {
         });
         match result {
             Err(error) => {
-                self.error = Some(error);
                 if kind != "list" {
+                    // Refresh first: it clears `error`, and the failed action's
+                    // message must survive it.
                     self.refresh(cx);
-                    self.notice =
-                        Some("Refresh to check the connection before trying again.".into());
+                    self.notice = Some(CHECKING.into());
                 }
+                self.error = Some(error);
             }
             Ok(data) if kind == "list" => {
                 let expected = self.workspace.clone().unwrap_or_else(|| {
@@ -170,12 +183,19 @@ impl SlackPanel {
                     serde_json::from_value(data["catalog"].clone());
                 match (parsed, catalog, data["projects"].as_array()) {
                     (Ok(connections), Ok(catalog), Some(projects)) => {
+                        // The check after a failed action is done; its result is
+                        // now on screen.
+                        if self.notice.as_deref() == Some(CHECKING) {
+                            self.notice = None;
+                        }
                         self.workspace = data["workspaceId"].as_str().map(str::to_owned);
                         self.workspaces =
                             data["workspaces"].as_array().cloned().unwrap_or_default();
                         self.execution_available =
                             data["executionAvailable"].as_bool() == Some(true);
                         self.connections = connections;
+                        self.pending_links =
+                            serde_json::from_value(data["pending"].clone()).unwrap_or_default();
                         if self.catalog.is_none() {
                             self.model = catalog
                                 .providers
@@ -215,12 +235,20 @@ impl SlackPanel {
                 if let Some(url) = data["url"].as_str().filter(|u| safe_oauth_url(u)) {
                     cx.open_url(url);
                     self.notice = Some(
-                        "Choose your Slack workspace in the browser, then return here and refresh."
+                        "Choose your Slack workspace in the browser, then return here, refresh and confirm the connection."
                             .into(),
                     );
                 } else {
                     self.error = Some("Slack returned an invalid sign-in link.".into());
                 }
+            }
+            Ok(data) if kind == "confirm" => {
+                self.notice = Some(if data["confirmed"] == true {
+                    "Slack connected. Mention Zuse in a channel or send it a direct message to start a task.".into()
+                } else {
+                    "Slack sign-in declined. Nothing was connected.".into()
+                });
+                self.refresh(cx);
             }
             Ok(_) => {
                 self.confirm = None;
@@ -312,6 +340,47 @@ impl Render for SlackPanel {
             }
         }
 
+        // A finished Slack sign-in only links after it is confirmed here, so a
+        // leaked sign-in link cannot attach someone else's Slack user.
+        for (index, link) in self.pending_links.clone().into_iter().enumerate() {
+            let who = link
+                .slack_user_name
+                .clone()
+                .unwrap_or_else(|| link.slack_user_id.clone());
+            let (accept, decline) = (link.pending_id.clone(), link.pending_id.clone());
+            card = card.child(
+                s::setting_row(false)
+                    .child(s::details(
+                        format!("Confirm {who} in {}", link.team_name),
+                        "Tasks from this Slack user will use this account's repositories and cloud usage.",
+                    ))
+                    .child(
+                        div()
+                            .flex()
+                            .gap(px(6.))
+                            .child(s::button(("slack-decline", index), "Decline").on_click(
+                                cx.listener(move |this, _, _, cx| {
+                                    this.call(
+                                        "confirm",
+                                        methods::SLACK_CONFIRM,
+                                        json!({"pendingId":decline,"accept":false}),
+                                        cx,
+                                    )
+                                }),
+                            ))
+                            .child(s::button(("slack-accept", index), "Confirm").on_click(
+                                cx.listener(move |this, _, _, cx| {
+                                    this.call(
+                                        "confirm",
+                                        methods::SLACK_CONFIRM,
+                                        json!({"pendingId":accept,"accept":true}),
+                                        cx,
+                                    )
+                                }),
+                            )),
+                    ),
+            );
+        }
         for (index, connection) in self.connections.clone().into_iter().enumerate() {
             let confirm = self.confirm.as_ref()
                 == Some(&(connection.team_id.clone(), connection.slack_user_id.clone()));

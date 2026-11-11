@@ -8,6 +8,7 @@ the hosted runtime still owns execution and writable conversation history.
 Settings → Cloud → Slack
   select Personal / an accessible organization, repository and model
   authenticated host RPC → cloud API → browser-bound OAuth confirmation
+  pending link → confirmed by the same Zuse account in Settings → member link
 Slack mention / new DM
   HMAC + timestamp check → encrypted PostgreSQL job (acknowledge immediately)
   member/account + thread binding → idempotent cloud create
@@ -68,17 +69,21 @@ review posture; questions and approvals that need a person still require Zuse.
    the existing runtime authority; this integration does not bypass those guards.
 4. Rebuild and attest the runtime image. The image manifest reports Slack support;
    the image worker preserves that capability in build settings.
-5. Use `apps/cloud/slack-manifest.example.yaml` with your service origin. Configure
-   the event and OAuth callback URLs in Slack and authorize the requested scopes.
+5. Create the Slack app from `apps/cloud/slack-manifest.example.yaml` with your
+   service origin, and copy its client ID, client secret and signing secret into
+   the configuration from step 2.
 6. Start the existing cloud API and allocation worker. The API starts its durable
    Slack worker only when enabled; missing secrets/schema/runtime/transcript
    prerequisites fail startup. No client receives an installation token or secret.
+7. With the API running, configure the event request URL (Slack verifies it
+   against the live `POST /slack/events` endpoint before saving) and the OAuth
+   callback URL, then authorize the requested scopes.
 
 Public ingress is `POST /slack/events`. Settings uses authenticated
 `GET /v1/cloud/slack`, `POST /v1/cloud/slack/connect`, and
-`POST /v1/cloud/slack/disconnect`. Browser OAuth uses `/slack/oauth/{start,authorize,callback}`.
-The native/browser clients call `SlackConnections`, `SlackConnect`, and
-`SlackDisconnect` through the host's account authority. Selected workspace headers
+`POST /v1/cloud/slack/disconnect` and `POST /v1/cloud/slack/confirm`. Browser OAuth uses `/slack/oauth/{start,authorize,callback}`.
+The native/browser clients call `SlackConnections`, `SlackConnect`,
+`SlackDisconnect` and `SlackConfirm` through the host's account authority. Selected workspace headers
 are reauthorized server-side; the host's account binding fences stale responses.
 
 ## Security and recovery
@@ -89,6 +94,11 @@ are reauthorized server-side; the host's account binding fences stale responses.
   bound to an HttpOnly/Secure/SameSite browser cookie. An explicit account/repository
   confirmation and same-origin POST precede Slack authorization. Callback code
   exchange is never automatically replayed after an uncertain failure.
+- Finishing Slack sign-in in a browser only creates a pending link (sealed, 30
+  minutes, single use). It becomes a member link when the same Zuse account and
+  actor confirm the shown Slack user and workspace through `SlackConfirm`, with
+  access rechecked; a leaked start link therefore cannot attach someone else's
+  Slack user. Existing links are unchanged until a confirmation succeeds.
 - Bot tokens and queued request/context/result bodies are AES-GCM sealed with
   purpose/tenant/identity-bound AAD. Only safe identifiers and settings are public.
 - Event ID and `(team,channel,message timestamp)` uniqueness deduplicate retries

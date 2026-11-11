@@ -156,6 +156,8 @@ pub(super) async fn events(
 struct Pending {
     member: Member,
 }
+/// How long a finished Slack sign-in waits for confirmation in Zuse.
+const PENDING_TTL_MS: i64 = 30 * 60 * 1000;
 #[derive(Deserialize)]
 pub(super) struct OAuthQuery {
     state: String,
@@ -185,6 +187,9 @@ pub(super) async fn connections(
     let access = s.access(&headers).await?;
     let rows:Vec<(String,String,String,Value)>=sqlx::query_as("SELECT m.team_id,i.team_name,m.user_id,m.settings FROM zuse_rust_slack_members m JOIN zuse_rust_slack_installs i USING(team_id) WHERE m.account_id=$1 AND m.actor_id=$2 ORDER BY i.team_name").bind(&access.owner_id).bind(&access.actor.account_id).fetch_all(&s.pool).await?;
     let connections=rows.into_iter().map(|(team,name,user,settings)|json!({"teamId":team,"teamName":name,"slackUserId":user,"projectId":settings["projectId"],"agent":settings["agent"],"model":settings["model"]})).collect::<Vec<_>>();
+    // Sign-ins finished in a browser, waiting for this account to confirm them.
+    let pending_rows:Vec<(String,String,String,String,Option<String>)>=sqlx::query_as("SELECT p.pending_id,p.team_id,i.team_name,p.user_id,p.user_name FROM zuse_rust_slack_pending p JOIN zuse_rust_slack_installs i USING(team_id) WHERE p.account_id=$1 AND p.actor_id=$2 AND p.expires_at>$3 ORDER BY p.expires_at DESC").bind(&access.owner_id).bind(&access.actor.account_id).bind(now()).fetch_all(&s.pool).await?;
+    let pending=pending_rows.into_iter().map(|(id,team,name,user,user_name)|json!({"pendingId":id,"teamId":team,"teamName":name,"slackUserId":user,"slackUserName":user_name})).collect::<Vec<_>>();
     let mut workspaces = vec![json!({"id":"personal","name":"Personal"})];
     if s.app.organizations_enabled {
         for id in s.app.organization_ids.iter() {
@@ -198,7 +203,15 @@ pub(super) async fn connections(
                     if m.status == "active"
                         && matches!(m.role.slug.as_str(), "member" | "admin") =>
                 {
-                    workspaces.push(json!({"id":format!("organization:{id}"),"name":s.app.identity.organization_name(id).await?}))
+                    // A display-name lookup failure must not hide every other
+                    // workspace and connection; show the organization ID instead.
+                    let name = s
+                        .app
+                        .identity
+                        .organization_name(id)
+                        .await
+                        .unwrap_or_else(|_| id.clone());
+                    workspaces.push(json!({"id":format!("organization:{id}"),"name":name}))
                 }
                 Ok(_) => {}
                 Err(e) if e.status == axum::http::StatusCode::FORBIDDEN => {}
@@ -213,7 +226,7 @@ pub(super) async fn connections(
         }
     };
     Ok(Json(
-        json!({"workspaceId":workspace_id,"executionAvailable":access.membership.is_none(),"workspaces":workspaces,"connections":connections,"projects":s.app.store.launch_projects(&access.owner_id).await?,"catalog":crate::model_catalog::launch_catalog()}),
+        json!({"workspaceId":workspace_id,"executionAvailable":access.membership.is_none(),"workspaces":workspaces,"connections":connections,"pending":pending,"projects":s.app.store.launch_projects(&access.owner_id).await?,"catalog":crate::model_catalog::launch_catalog()}),
     ))
 }
 pub(super) async fn connect(
@@ -419,10 +432,31 @@ pub(super) async fn callback(
     let credentials = s.seal(&format!("slack-install:{team}"), &json!({"token":token}))?;
     let mut tx = s.pool.begin().await?;
     sqlx::query("INSERT INTO zuse_rust_slack_installs(team_id,team_name,bot_user_id,credentials,generation) VALUES($1,$2,$3,$4,$5) ON CONFLICT(team_id) DO UPDATE SET team_name=EXCLUDED.team_name,bot_user_id=EXCLUDED.bot_user_id,credentials=EXCLUDED.credentials,generation=CASE WHEN zuse_rust_slack_installs.bot_user_id=EXCLUDED.bot_user_id THEN zuse_rust_slack_installs.generation ELSE EXCLUDED.generation END").bind(&team).bind(team_name).bind(bot).bind(credentials).bind(nonce()).execute(&mut *tx).await?;
+    // The browser that finished Slack sign-in is not proof of who asked for it:
+    // a leaked start link could be completed by someone else. Hold the link
+    // until the Zuse account that started it confirms this Slack user and
+    // workspace from inside Zuse. Existing links stay untouched until then.
+    let user_name = s
+        .api(&token, "users.info", json!({"user":user}))
+        .await
+        .ok()
+        .and_then(|v| {
+            v["user"]["profile"]["display_name"]
+                .as_str()
+                .filter(|v| !v.is_empty())
+                .or(v["user"]["real_name"].as_str())
+                .map(str::to_owned)
+        });
     let member = pending.member;
-    sqlx::query("INSERT INTO zuse_rust_slack_members(team_id,user_id,account_id,actor_id,organization_id,settings,revision) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(team_id,user_id) DO UPDATE SET account_id=EXCLUDED.account_id,actor_id=EXCLUDED.actor_id,organization_id=EXCLUDED.organization_id,settings=EXCLUDED.settings,revision=EXCLUDED.revision").bind(&team).bind(&user).bind(member.account_id).bind(member.actor_id).bind(member.organization_id).bind(serde_json::to_value(member.settings).map_err(|_|invalid())?).bind(member.revision).execute(&mut *tx).await?;
+    let pending_id = nonce();
+    sqlx::query("INSERT INTO zuse_rust_slack_pending(pending_id,team_id,user_id,user_name,account_id,actor_id,payload,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)")
+        .bind(&pending_id).bind(&team).bind(&user).bind(user_name)
+        .bind(&member.account_id).bind(&member.actor_id)
+        .bind(s.seal(&format!("slack-pending:{pending_id}"), &member)?)
+        .bind(now() + PENDING_TTL_MS)
+        .execute(&mut *tx).await?;
     tx.commit().await?;
-    let mut response=Html("<!doctype html><html><head><meta name=viewport content='width=device-width'><title>Slack connected</title></head><body><main><h1>Slack connected</h1><p>Return to Zuse and refresh Slack settings. Mention Zuse in a channel or send a direct message to start a task. Mention it in the same thread to continue.</p></main></body></html>").into_response();
+    let mut response=Html("<!doctype html><html><head><meta name=viewport content='width=device-width'><title>Confirm in Zuse</title></head><body><main><h1>One more step</h1><p>Return to Zuse and open Settings → Cloud. Confirm this Slack user and workspace there to finish connecting. Nothing runs from Slack until you confirm.</p></main></body></html>").into_response();
     response
         .headers_mut()
         .insert(header::SET_COOKIE, cookie("")?);
@@ -433,6 +467,34 @@ pub(super) async fn callback(
         .headers_mut()
         .insert("referrer-policy", HeaderValue::from_static("no-referrer"));
     Ok(response)
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct Confirm {
+    pending_id: String,
+    accept: bool,
+}
+/// Accept or decline a finished Slack sign-in. Only the Zuse account and actor
+/// that started it can act on it, and access is rechecked before linking.
+pub(super) async fn confirm(
+    State(s): State<Slack>,
+    headers: HeaderMap,
+    Json(q): Json<Confirm>,
+) -> Result<Json<Value>, ApiError> {
+    let access = s.access(&headers).await?;
+    let mut tx = s.pool.begin().await?;
+    let row:Option<(String,String,String)>=sqlx::query_as("DELETE FROM zuse_rust_slack_pending WHERE pending_id=$1 AND account_id=$2 AND actor_id=$3 AND expires_at>$4 RETURNING team_id,user_id,payload").bind(&q.pending_id).bind(&access.owner_id).bind(&access.actor.account_id).bind(now()).fetch_optional(&mut *tx).await?;
+    let (team, user, payload) =
+        row.ok_or_else(|| ApiError::not_found("slack_confirmation_expired"))?;
+    if !q.accept {
+        tx.commit().await?;
+        return Ok(Json(json!({"confirmed":false})));
+    }
+    let member: Member = s.open(&format!("slack-pending:{}", q.pending_id), &payload)?;
+    s.member_access(&member).await?;
+    sqlx::query("INSERT INTO zuse_rust_slack_members(team_id,user_id,account_id,actor_id,organization_id,settings,revision) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(team_id,user_id) DO UPDATE SET account_id=EXCLUDED.account_id,actor_id=EXCLUDED.actor_id,organization_id=EXCLUDED.organization_id,settings=EXCLUDED.settings,revision=EXCLUDED.revision").bind(&team).bind(&user).bind(member.account_id).bind(member.actor_id).bind(member.organization_id).bind(serde_json::to_value(member.settings).map_err(|_|invalid())?).bind(member.revision).execute(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(Json(json!({"confirmed":true})))
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

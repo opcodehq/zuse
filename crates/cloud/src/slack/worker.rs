@@ -36,6 +36,10 @@ impl Slack {
             .bind(now())
             .execute(&self.pool)
             .await?;
+        sqlx::query("DELETE FROM zuse_rust_slack_pending WHERE ctid IN (SELECT ctid FROM zuse_rust_slack_pending WHERE expires_at<$1 LIMIT 100)")
+            .bind(now())
+            .execute(&self.pool)
+            .await?;
         sqlx::query(
             "DELETE FROM zuse_rust_slack_jobs WHERE ctid IN (SELECT ctid FROM zuse_rust_slack_jobs WHERE phase IN ('done','dead') AND created_at<$1 LIMIT 100)",
         )
@@ -79,7 +83,13 @@ impl Slack {
             if retry_after > now() {
                 sqlx::query("UPDATE zuse_rust_slack_jobs SET next_at=GREATEST(next_at,$3) WHERE team_id=$1 AND event_id=$2").bind(&team).bind(&id).bind(retry_after).execute(&self.pool).await?;
             }
-            if error.status.is_client_error() {
+            if error.code == "slack_channel_access_unavailable" {
+                // The bot lost channel access (e.g. removed or archived). Keep
+                // the real result and retry delivery on the same backoff, so a
+                // re-invite delivers it instead of a generic failure.
+                let retry_at = (now() + delay).max(retry_after);
+                sqlx::query("UPDATE zuse_rust_slack_jobs SET next_at=GREATEST(next_at,$3) WHERE team_id=$1 AND event_id=$2").bind(&team).bind(&id).bind(retry_at).execute(&self.pool).await?;
+            } else if error.status.is_client_error() {
                 event.result = Some(format!(
                     "This task could not continue ({}). Check your Zuse connection and repository, then send a new request.",
                     error.code

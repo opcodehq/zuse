@@ -65,6 +65,18 @@ pub struct ConnectRequest {
     pub agent: String,
     pub model: String,
 }
+/// A Slack sign-in finished in a browser that the Zuse account must confirm
+/// before that Slack user can start tasks.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingConnection {
+    pub pending_id: String,
+    pub team_id: String,
+    pub team_name: String,
+    pub slack_user_id: String,
+    #[serde(default)]
+    pub slack_user_name: Option<String>,
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Connection {

@@ -140,6 +140,7 @@ pub fn handles(method: &str) -> bool {
             | zuse_protocol::methods::SLACK_CONNECTIONS
             | zuse_protocol::methods::SLACK_CONNECT
             | zuse_protocol::methods::SLACK_DISCONNECT
+            | zuse_protocol::methods::SLACK_CONFIRM
             | zuse_protocol::methods::CLOUD_LOCAL_TERMINAL
             | zuse_protocol::methods::CLOUD_SYNC_STATUS
             | zuse_protocol::methods::CLOUD_SYNC_CONFIGURE
@@ -792,7 +793,8 @@ impl CloudApi {
             }
             zuse_protocol::methods::SLACK_CONNECTIONS
             | zuse_protocol::methods::SLACK_CONNECT
-            | zuse_protocol::methods::SLACK_DISCONNECT => {
+            | zuse_protocol::methods::SLACK_DISCONNECT
+            | zuse_protocol::methods::SLACK_CONFIRM => {
                 let mut body = params.clone();
                 if let Some(map) = body.as_object_mut() {
                     map.remove("expectedAccountId");
@@ -810,6 +812,12 @@ impl CloudApi {
                             map.remove("workspaceId");
                         }
                         (vec!["v1", "cloud", "slack", "disconnect"], Some(body))
+                    }
+                    zuse_protocol::methods::SLACK_CONFIRM => {
+                        if let Some(map) = body.as_object_mut() {
+                            map.remove("workspaceId");
+                        }
+                        (vec!["v1", "cloud", "slack", "confirm"], Some(body))
                     }
                     _ => (vec!["v1", "cloud", "slack"], None),
                 };

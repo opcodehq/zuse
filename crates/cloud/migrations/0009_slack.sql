@@ -16,6 +16,19 @@ CREATE TABLE IF NOT EXISTS zuse_rust_slack_members (
     revision text NOT NULL,
     PRIMARY KEY(team_id,user_id)
 );
+-- A Slack sign-in waits here until the Zuse account that started it confirms
+-- the Slack user and workspace from inside Zuse. Only then is a member linked.
+CREATE TABLE IF NOT EXISTS zuse_rust_slack_pending (
+    pending_id text PRIMARY KEY,
+    team_id text NOT NULL REFERENCES zuse_rust_slack_installs(team_id) ON DELETE CASCADE,
+    user_id text NOT NULL,
+    user_name text,
+    account_id text NOT NULL,
+    actor_id text NOT NULL,
+    payload text NOT NULL,
+    expires_at bigint NOT NULL
+);
+CREATE INDEX IF NOT EXISTS zuse_rust_slack_pending_owner ON zuse_rust_slack_pending(account_id,actor_id);
 CREATE TABLE IF NOT EXISTS zuse_rust_slack_oauth (
     state_hash text PRIMARY KEY,
     browser_hash text NOT NULL,

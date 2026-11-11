@@ -499,8 +499,42 @@ async fn slack_oauth_is_browser_bound_single_use_and_disconnect_is_member_scoped
         assert!(form.contains("client_secret=secret"));
         assert!(form.contains("code=test-code"));
     }
+    // Finishing Slack sign-in in a browser links nothing by itself.
+    let (_, listed) = request(&app, "/v1/cloud/slack", None).await;
+    assert_eq!(listed["connections"], json!([]));
+    assert_eq!(listed["pending"][0]["teamName"], "Engineering");
+    assert_eq!(listed["pending"][0]["slackUserId"], "U_ADA");
+    assert_eq!(listed["pending"][0]["slackUserName"], "Ada Lovelace");
+    let pending = listed["pending"][0]["pendingId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (status, _) = request(
+        &app,
+        "/v1/cloud/slack/confirm",
+        Some(json!({"pendingId":"forged","accept":true})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, confirmed) = request(
+        &app,
+        "/v1/cloud/slack/confirm",
+        Some(json!({"pendingId":pending,"accept":true})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{confirmed}");
+    assert_eq!(confirmed["confirmed"], true);
+    // Single use: the same confirmation cannot be replayed.
+    let (status, _) = request(
+        &app,
+        "/v1/cloud/slack/confirm",
+        Some(json!({"pendingId":pending,"accept":true})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
     let (_, listed) = request(&app, "/v1/cloud/slack", None).await;
     assert_eq!(listed["connections"][0]["teamName"], "Engineering");
+    assert_eq!(listed["pending"], json!([]));
     assert!(!listed.to_string().contains("xoxb"));
     assert_eq!(listed["workspaces"][0]["id"], "personal");
     sqlx::query("INSERT INTO zuse_rust_slack_members(team_id,user_id,account_id,actor_id,organization_id,settings,revision) SELECT team_id,'U_OTHER','other-account','other-account',organization_id,settings,'other-revision' FROM zuse_rust_slack_members WHERE user_id='U_ADA'")

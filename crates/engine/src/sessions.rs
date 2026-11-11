@@ -3594,7 +3594,7 @@ async fn drive_run(
                 &AgentEvent::Done {
                     status: DoneStatus::Errored,
                     result: None,
-                    error: Some(message),
+                    error: Some(message.clone()),
                     session_id: None,
                 },
             );
@@ -3608,6 +3608,20 @@ async fn drive_run(
                     crate::execution_progress::State::OutcomeUnknown,
                 );
             }
+            // A Slack thread waits for this message's receipt; without one it
+            // would wait until its status timeout. The driver may have crossed
+            // turn/start, so do not claim nothing happened.
+            record_slack_result(
+                &doc,
+                &resume_state.user_message_id,
+                &[MessagePart::Text {
+                    id: "t0".into(),
+                    text: format!(
+                        "The agent could not start ({message}). It may have partly run; check the task in Zuse before retrying."
+                    ),
+                }],
+                DoneStatus::Errored,
+            );
             inner.remove_run(&chat_id, &run_id);
             inner.set_status(&chat_id, SessionStatus::Errored, false);
             return;
@@ -3977,7 +3991,12 @@ async fn drive_run(
                         && !inner.has_pending_steers(&chat_id, &run_id)
                         && !inner.continues_with_sent_message(&chat_id))
                         .then(|| entry_id.clone());
-                    if completed_turn.is_some(){record_slack_result(&doc,&source_message_id,&folded,DoneStatus::Completed);}
+                    // The Slack receipt only needs this message's output. It must
+                    // not wait on the notification rules above: a follow-up steer
+                    // in flight would otherwise leave the Slack thread waiting.
+                    if !folded.is_empty() || writer.is_some() {
+                        record_slack_result(&doc, &source_message_id, &folded, DoneStatus::Completed);
+                    }
                     if !folded.is_empty() || writer.is_some() {
                         if let Err(err) = finish_segment(
                             doc_ref,

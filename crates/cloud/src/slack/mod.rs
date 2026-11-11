@@ -121,6 +121,7 @@ impl Slack {
             .route("/v1/cloud/slack", get(http::connections))
             .route("/v1/cloud/slack/connect", post(http::connect))
             .route("/v1/cloud/slack/disconnect", post(http::disconnect))
+            .route("/v1/cloud/slack/confirm", post(http::confirm))
             .layer(DefaultBodyLimit::max(256 * 1024))
             .with_state(self)
     }
@@ -129,8 +130,12 @@ impl Slack {
         let service = self.clone();
         tokio::spawn(async move {
             loop {
-                if let Err(error) = service.work_once().await {
-                    tracing::warn!(code = error.code, "Slack delivery deferred");
+                // Drain due work back to back; idle and errors wait. A processed
+                // step has already pushed its own `next_at`, so this cannot spin.
+                match service.work_once().await {
+                    Ok(true) => continue,
+                    Ok(false) => {}
+                    Err(error) => tracing::warn!(code = error.code, "Slack delivery deferred"),
                 }
                 tokio::time::sleep(Duration::from_secs(2)).await;
             }
