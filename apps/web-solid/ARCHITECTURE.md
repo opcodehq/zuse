@@ -68,7 +68,7 @@ node e2e/defects.mjs                        # regression checks for reviewed def
 node e2e/review-fixes.mjs                   # later review round: desync freeze, queue edit reload, find in chat, focus, …
 node e2e/transcript/long-reply.mjs [4]      # a 120K+ char streamed reply from a real engine; LONG_REPLY_BASELINE=1 compares
 node e2e/transcript/stream-bench.mjs [4]    # per-frame cost of a streaming list/table/paragraph; BENCH_CODE=1500 for code
-zuse-server --assets dist/web-solid         # serve the production build
+zuse serve --assets dist/web-solid          # serve the production build
 ```
 
 `e2e/harness.mjs` provides `buildApp()`, `startEngine({ assets, agent: { reply, chunks } })` with a fixture agent and a disposable profile, and `openBrowser(url)` with `eval`, `waitFor`, `click`, `press`, `type`, `key` and `screenshot`. `window.__zuse` exposes `{ state, view }` read-only for tests.

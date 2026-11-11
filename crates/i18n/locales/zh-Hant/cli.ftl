@@ -78,7 +78,7 @@ cli-unlink = 停止透過你的帳號提供這台電腦
 
 cli-status = 顯示帳號和網路狀態
 
-cli-server_unavailable = 代理連接埠 { $port } 上沒有執行 Zuse 伺服器。請先啟動 zuse-server，或指定 --ipc-port。
+cli-server_unavailable = 代理連接埠 { $port } 上沒有執行 Zuse 伺服器。請先啟動 zuse serve，或指定 --ipc-port。
 
 cli-default_device = 新裝置
 
@@ -90,7 +90,7 @@ cli-certificate_warning = 首次開啟時，瀏覽器會提示這台電腦的私
 
 cli-link_warning = 任何持有此連結的人都可以使用這台電腦。未使用的連結將在 10 分鐘後失效。
 
-cli-local_only = 此連結僅在這台電腦上有效。請使用 --lan 或 --account 啟動 zuse-server 以連線其他裝置。
+cli-local_only = 此連結僅在這台電腦上有效。請使用 --lan 或 --account 啟動 zuse serve 以連線其他裝置。
 
 cli-sign_in_prompt = 開啟 { $url } 並確認代碼 { $code }
 
@@ -117,3 +117,61 @@ cli-status_no_routes = 網路：僅限這台電腦
 cli-assets_missing = 找不到瀏覽器檔案。請指定 --assets 或設定 ZUSE_WEB_ASSETS，否則瀏覽器無法開啟此伺服器。
 
 cli-invitation_failed = 無法建立連線連結
+
+cli-zuse_about = 適用於程式設計代理程式的多裝置控制器
+
+cli-arguments = 引數
+
+cli-version = 顯示版本
+
+cli-engine_port = 引擎的回送 RPC 連接埠，預設為 ZUSE_IPC_PORT 或 27654；用於 serve 時，0 表示選擇可用連接埠
+
+cli-lan = 允許此網路和 tailnet 中已配對的裝置直接連線，全程端對端加密
+
+cli-lan_port = --lan 連線使用的連接埠
+
+cli-tailscale_serve = 同時透過 Tailscale HTTPS 發布 --lan，供瀏覽器存取
+
+cli-headless = 在沒有視窗的情況下執行引擎
+
+cli-overview_status = 顯示工作區、引擎和遠端存取狀態
+
+cli-session_login = 登入，並在下次啟動引擎時開啟工作區同步
+
+cli-login_no_browser = 輸出登入連結，而不是在這台電腦上開啟瀏覽器
+
+cli-session_logout = 刪除已儲存的工作階段；下次啟動引擎時僅限本機
+
+cli-sync = 顯示執行中引擎的即時同步狀態
+
+cli-daemon = 將 Zuse 作為背景服務執行
+
+cli-daemon_install = 安裝、啟用並啟動服務
+
+cli-daemon_serve = 使用後面的引數執行 zuse serve，而不是 zuse headless
+
+cli-daemon_serve_args = zuse serve 的引數
+
+cli-daemon_uninstall = 停止並移除服務
+
+cli-daemon_start = 啟動已安裝的服務
+
+cli-daemon_stop = 停止服務
+
+cli-daemon_restart = 重新啟動服務
+
+cli-daemon_status = 顯示服務狀態
+
+cli-update = 檢查新版本並安裝
+
+cli-update_check = 只報告是否有可用更新
+
+cli-appshot = 在執行中的應用程式中擷取 Appshot
+
+cli-open_url = 要開啟的 Zuse 連結
+
+cli-paired_link_file = 包含配對連結的私密檔案，用於連線
+
+cli-desktop_missing = 這裡沒有安裝 Zuse 桌面應用程式，因此無法開啟視窗。請改用下列指令。
+
+cli-status_remote = 遠端存取

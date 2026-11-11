@@ -7,7 +7,7 @@ import {engine,fixture,artifact,sleep} from './harness.mjs';
 let host;
 try {
   const target=process.env.CARGO_TARGET_DIR??execFileSync('python3',['scripts/cargo_dev.py','--print-target-dir'],{encoding:'utf8'}).trim();
-  host=await engine('zot-issues',{binary:path.join(target,'debug/zuse-server')});
+  host=await engine('zot-issues',{binary:path.join(target,'debug/zuse-cli')});
   const info=await host.call('EngineInfo');
   const repo=path.join(host.root,'repo'),trees=path.join(host.root,'worktrees'),proof=path.join(host.root,'proof.json');fs.mkdirSync(repo);fs.mkdirSync(trees);
   execFileSync('git',['init','-b','main'],{cwd:repo,stdio:'ignore'});

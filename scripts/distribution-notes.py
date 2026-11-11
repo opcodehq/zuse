@@ -5,6 +5,8 @@ import sys
 from distribution import release_version
 
 version = release_version(sys.argv[1])
+# Releases before the standalone CLI archive regenerate notes without it.
+cli_archives = '--cli-archives' in sys.argv[3:]
 tag = 'v' + version
 old = Path(sys.argv[2]).read_text()
 notice = 'This is a preview release for testing.' if '-' in version else ''
@@ -14,6 +16,11 @@ if start in old and end in old:
 # Replace the original three-platform download preface, retaining the changelog.
 if old.startswith('Download the package for your computer below.') and '### Added' in old:
     old = old[old.index('### Added'):]
+cli_section = f'''### Command line only
+
+For servers and other machines without a display, `zuse-cli-{version}-<platform>-<arch>.tar.gz` (`.zip` on Windows) holds just the `zuse` command and the browser app it serves, with no desktop libraries required. Extract it and run `bin/zuse serve --lan` or `bin/zuse serve --account`; `bin/zuse-server` keeps the previous command name working.
+
+''' if cli_archives else ''
 print(f'''{start}
 ## Downloads and installation
 
@@ -49,7 +56,7 @@ sudo dnf install ./zuse-{version}-linux-x86_64.rpm
 
 For ARM64, use the `linux-aarch64` package. To remove only the terminal install's launchers, rerun the shell installer with `--uninstall`; profiles are retained. System packages are removed with apt/dnf. Agent CLIs and provider logins are separate.
 
-`SHA256SUMS` covers every download, including `install.sh`. {notice}
+{cli_section}`SHA256SUMS` covers every download, including `install.sh`. {notice}
 {end}
 
 {old.strip()}

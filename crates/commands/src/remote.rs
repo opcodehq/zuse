@@ -1,5 +1,4 @@
 //! Terminal controls for pairing and account access on a running engine.
-use crate::Command;
 use anyhow::Context;
 use serde_json::{Value, json};
 use std::io::IsTerminal;
@@ -12,28 +11,70 @@ pub(crate) fn plain(text: String) -> String {
     text.replace(['\u{2068}', '\u{2069}'], "")
 }
 
-pub(crate) async fn run(command: Command, port: u16, l10n: &Localizer) -> anyhow::Result<()> {
+pub(crate) enum Action {
+    Pair {
+        label: Option<String>,
+        app: bool,
+    },
+    /// Only `zuse-server login`; `zuse link` signs in as it links.
+    SignIn,
+    SignOut,
+    Link {
+        name: Option<String>,
+    },
+    Unlink,
+    Status,
+}
+
+pub(crate) async fn run(action: Action, port: u16, l10n: &Localizer) -> anyhow::Result<()> {
     let client = connect_ws(&format!("ws://127.0.0.1:{port}"))
         .await
         .map_err(|_| anyhow::anyhow!(plain(m::server_unavailable(l10n, port.to_string()))))?;
-    match command {
-        Command::Mcp => unreachable!("handled before connecting"),
-        Command::Pair { label, app } => invite(&client, label, app, l10n).await,
-        Command::Login => sign_in(&client, l10n).await,
-        Command::Logout => {
+    execute(&client, action, l10n).await
+}
+
+async fn execute(client: &RpcClient, action: Action, l10n: &Localizer) -> anyhow::Result<()> {
+    match action {
+        Action::Pair { label, app } => invite(client, label, app, l10n).await,
+        Action::SignIn => sign_in(client, l10n).await,
+        Action::SignOut => {
             client
                 .call(methods::CLOUD_ACCOUNT_SIGN_OUT, json!({}))
                 .await?;
             println!("{}", m::signed_out(l10n));
             Ok(())
         }
-        Command::Link { name } => link(&client, name, l10n).await,
-        Command::Unlink => {
+        Action::Link { name } => {
+            sign_in(client, l10n).await?;
+            link(client, name, l10n).await
+        }
+        Action::Unlink => {
             client.call(methods::UNLINK_MANAGED_HOST, json!({})).await?;
             println!("{}", m::unlinked(l10n));
             Ok(())
         }
-        Command::Status => status(&client, l10n).await,
+        Action::Status => {
+            for line in status(client, l10n).await? {
+                println!("{line}");
+            }
+            Ok(())
+        }
+    }
+}
+
+/// The remote-access part of `zuse status`, when an engine answers on `port`.
+/// Anything short of a full answer prints nothing.
+pub(crate) async fn status_section(port: u16, l10n: &Localizer) {
+    let lines = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let client = connect_ws(&format!("ws://127.0.0.1:{port}")).await.ok()?;
+        status(&client, l10n).await.ok()
+    })
+    .await;
+    if let Ok(Some(lines)) = lines {
+        println!("\n{}:", m::status_remote(l10n));
+        for line in lines {
+            println!("  {line}");
+        }
     }
 }
 
@@ -189,44 +230,42 @@ pub(crate) async fn link(
     Ok(())
 }
 
-async fn status(client: &RpcClient, l10n: &Localizer) -> anyhow::Result<()> {
+async fn status(client: &RpcClient, l10n: &Localizer) -> anyhow::Result<Vec<String>> {
+    let mut lines = vec![];
     let account = client
         .subscribe(methods::CLOUD_ACCOUNT_STATUS, json!({}))
         .await?
         .recv()
         .await
         .unwrap_or_default();
-    match account["user"]["email"].as_str() {
-        Some(email) => println!("{}", plain(m::status_signed_in(l10n, email))),
-        None => println!("{}", m::status_signed_out(l10n)),
-    }
+    lines.push(match account["user"]["email"].as_str() {
+        Some(email) => plain(m::status_signed_in(l10n, email)),
+        None => m::status_signed_out(l10n),
+    });
     let host = client.call(methods::MANAGED_HOST_STATUS, json!({})).await?;
-    if host["configured"] == true {
-        println!(
-            "{}",
-            plain(m::status_linked(
-                l10n,
-                host["label"].as_str().unwrap_or_default(),
-                host["endpoint"]["httpBaseUrl"].as_str().unwrap_or_default(),
-            ))
-        );
+    lines.push(if host["configured"] == true {
+        plain(m::status_linked(
+            l10n,
+            host["label"].as_str().unwrap_or_default(),
+            host["endpoint"]["httpBaseUrl"].as_str().unwrap_or_default(),
+        ))
     } else {
-        println!("{}", m::status_unlinked(l10n));
-    }
+        m::status_unlinked(l10n)
+    });
     let direct = client
         .call(methods::DIRECT_ACCESS_STATUS, json!({}))
         .await?;
     let routes: Vec<Route> = serde_json::from_value(direct["routes"].clone()).unwrap_or_default();
     if routes.is_empty() {
-        println!("{}", m::status_no_routes(l10n));
+        lines.push(m::status_no_routes(l10n));
     }
     for route in routes {
-        println!("{}: {}", route.kind.label(), route.origin);
+        lines.push(format!("{}: {}", route.kind.label(), route.origin));
     }
     if let Some(origin) = direct["browserOrigin"].as_str() {
-        println!("{}", plain(m::browser_link(l10n, origin)));
+        lines.push(plain(m::browser_link(l10n, origin)));
     }
-    Ok(())
+    Ok(lines)
 }
 
 #[cfg(test)]
@@ -325,6 +364,9 @@ mod tests {
                     zuse_rpc::RpcReply::value(&json!({"url":"https://sign.in","userCode":"ABCD"}))
                 }
                 methods::MANAGED_HOST_STATUS => zuse_rpc::RpcReply::value(&self.host),
+                methods::DIRECT_ACCESS_STATUS => zuse_rpc::RpcReply::value(
+                    &json!({"routes":[],"browserOrigin":"https://box.example"}),
+                ),
                 methods::LINK_MANAGED_HOST => zuse_rpc::RpcReply::value(&json!({
                     "configured":true,
                     "label":"laptop",
@@ -409,6 +451,62 @@ mod tests {
         );
         link(&client, Some("laptop".into()), &l10n).await.unwrap();
         assert!(!called(&service, methods::LINK_MANAGED_HOST));
+    }
+
+    #[tokio::test]
+    async fn status_lines_cover_account_computer_and_routes() {
+        let (_, client) = account(
+            vec![json!({"user":{"email":USER}})],
+            json!({"configured":true,"label":"box","endpoint":{"httpBaseUrl":"https://box.example"}}),
+        );
+        let lines = status(&client, &Localizer::new(zuse_i18n::Locale::En))
+            .await
+            .unwrap();
+        assert_eq!(
+            lines,
+            [
+                format!("Account: {USER}"),
+                "Computer: box at https://box.example".into(),
+                "Network: this computer only".into(),
+                "Browser: https://box.example".into(),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn status_section_is_silent_without_an_engine() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        status_section(port, &Localizer::new(zuse_i18n::Locale::En)).await;
+    }
+
+    #[tokio::test]
+    async fn linking_a_signed_out_computer_signs_in_first() {
+        let (service, client) = account(
+            vec![
+                json!({"user":null,"login":null}),
+                json!({"user":null,"login":{"url":"https://sign.in"}}),
+                json!({"user":{"email":USER},"login":null}),
+            ],
+            json!({"configured":false}),
+        );
+        let l10n = Localizer::new(zuse_i18n::Locale::En);
+        execute(&client, Action::Link { name: None }, &l10n)
+            .await
+            .unwrap();
+        let order: Vec<_> = service
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(method, _)| method.clone())
+            .collect();
+        let signed_in = order
+            .iter()
+            .position(|m| m == methods::CLOUD_ACCOUNT_SIGN_IN);
+        let linked = order.iter().position(|m| m == methods::LINK_MANAGED_HOST);
+        assert!(signed_in.unwrap() < linked.unwrap(), "{order:?}");
     }
 
     #[test]

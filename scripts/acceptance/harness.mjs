@@ -45,8 +45,10 @@ export async function engine(prefix, options = {}) {
   fs.mkdirSync(root, {mode:0o700,recursive:true});
   const log = path.join(root, options.profileRoot ? `server-${randomUUID()}.private.log` : 'server.private.log');
   const descriptor = fs.openSync(log, 'a', 0o600);
-  const child = spawn(options.binary ?? path.join(workspace, 'target/debug/zuse-server'), [
-    '--listen=127.0.0.1:0','--ipc-port=0',`--data-dir=${path.join(root,'profile')}`,`--assets=${path.join(workspace,'dist/web')}`,
+  const binary = options.binary ?? path.join(workspace, 'target/debug/zuse-cli');
+  // A binary still named zuse-server takes the serve flags directly.
+  const child = spawn(binary, [
+    ...(path.basename(binary).startsWith('zuse-server') ? [] : ['serve']),'--listen=127.0.0.1:0','--ipc-port=0',`--data-dir=${path.join(root,'profile')}`,`--assets=${path.join(workspace,'dist/web')}`,
   ], {stdio:['ignore',descriptor,descriptor], env:{...process.env,...options.env,RUST_LOG:'error'}});
   fs.closeSync(descriptor);
   let socket;

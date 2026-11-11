@@ -98,7 +98,7 @@ function blockedText() {
     case "accountRequired":
       return "Return to the controller and select this computer again.";
     default:
-      return "Open the access link printed by zuse-server.";
+      return "Open the access link printed by zuse serve.";
   }
 }
 

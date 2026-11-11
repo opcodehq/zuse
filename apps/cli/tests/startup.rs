@@ -1,12 +1,27 @@
 #![cfg(unix)]
 //! Real server/agent boundary: independent ephemeral listeners and graceful exit.
 use serde_json::{Value, json};
-use std::{path::Path, process::Stdio, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    process::Stdio,
+    time::Duration,
+};
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
     process::{Child, ChildStdout, Command},
 };
 use zuse_rpc::{RpcClient, connect_ws, methods};
+
+const ZUSE: &str = env!("CARGO_BIN_EXE_zuse-cli");
+
+/// The same binary under its old name, as packages still install it.
+fn legacy_server(directory: &Path) -> PathBuf {
+    let link = directory.join("zuse-server");
+    if !link.exists() {
+        std::os::unix::fs::symlink(ZUSE, &link).unwrap();
+    }
+    link
+}
 
 struct Server {
     child: Child,
@@ -19,8 +34,15 @@ impl Server {
             std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
         ))
         .unwrap();
-        let mut child = Command::new(env!("CARGO_BIN_EXE_zuse-server"))
-            .args(["--listen", "127.0.0.1:0", "--ipc-port", "0", "--data-dir"])
+        let mut child = Command::new(ZUSE)
+            .args([
+                "serve",
+                "--listen",
+                "127.0.0.1:0",
+                "--ipc-port",
+                "0",
+                "--data-dir",
+            ])
             .current_dir(profile.parent().unwrap())
             .arg(profile.file_name().unwrap())
             .env("PATH", path)
@@ -350,8 +372,15 @@ async fn direct_https_authenticates_browser_rpc_and_drains_open_websockets_on_si
     let key = root.path().join("key.pem");
     std::fs::write(&certificate, cert.pem()).unwrap();
     std::fs::write(&key, signing_key.serialize_pem()).unwrap();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_zuse-server"))
-        .args(["--listen", "127.0.0.1:0", "--ipc-port", "0", "--data-dir"])
+    let mut child = Command::new(ZUSE)
+        .args([
+            "serve",
+            "--listen",
+            "127.0.0.1:0",
+            "--ipc-port",
+            "0",
+            "--data-dir",
+        ])
         .arg(root.path().join("profile"))
         .arg("--tls-cert")
         .arg(&certificate)
@@ -491,41 +520,93 @@ async fn pair_command_creates_links_on_the_running_server_and_says_when_none_run
     let root = tempfile::tempdir().unwrap();
     let bin = root.path().join("bin");
     std::fs::create_dir(&bin).unwrap();
+    let legacy = legacy_server(root.path());
     let mut server = Server::start(
         &root.path().join("profile"),
         &bin,
         &root.path().join("mcp.json"),
     )
     .await;
-    let pair = |port: u16| {
-        Command::new(env!("CARGO_BIN_EXE_zuse-server"))
-            .args(["--language", "en", "pair", "--label", "Phone", "--ipc-port"])
+    let pair = |program: &Path, label: &str, port: u16| {
+        Command::new(program)
+            .args(["--language", "en", "pair", "--label", label, "--ipc-port"])
             .arg(port.to_string())
             .kill_on_drop(true)
             .output()
     };
-    let output = pair(server.port).await.unwrap();
-    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-    assert!(output.status.success(), "{output:?}");
-    assert!(stdout.contains("/#pair="), "{stdout}");
-    assert!(stdout.contains("only works on this computer"), "{stdout}");
+    for (program, label) in [(Path::new(ZUSE), "Phone"), (legacy.as_path(), "Tablet")] {
+        let output = pair(program, label, server.port).await.unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        assert!(output.status.success(), "{output:?}");
+        assert!(stdout.contains("/#pair="), "{stdout}");
+        assert!(stdout.contains("only works on this computer"), "{stdout}");
+    }
     let pairings = server
         .client()
         .await
         .call(methods::LIST_PAIRINGS, json!({}))
         .await
         .unwrap();
-    assert_eq!(pairings[0]["label"], "Phone");
+    let mut labels: Vec<_> = pairings
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|pairing| pairing["label"].as_str().unwrap())
+        .collect();
+    labels.sort();
+    assert_eq!(labels, ["Phone", "Tablet"]);
+    // `zuse status` adds the running engine's remote access to the local report.
+    let status = Command::new(ZUSE)
+        .args(["--language", "en", "status", "--ipc-port"])
+        .arg(server.port.to_string())
+        .env("ZUSE_DATA_DIR", root.path().join("status-profile"))
+        .kill_on_drop(true)
+        .output()
+        .await
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&status.stdout).into_owned();
+    assert!(stdout.contains("Mode:"), "{stdout}");
+    assert!(stdout.contains("Remote access:"), "{stdout}");
+    assert!(stdout.contains("Account: not signed in"), "{stdout}");
     let port = server.port;
     server.stop().await;
-    let output = pair(port).await.unwrap();
+    let output = pair(Path::new(ZUSE), "Phone", port).await.unwrap();
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("No Zuse server is running"));
+    let status = Command::new(ZUSE)
+        .args(["--language", "en", "status", "--ipc-port"])
+        .arg(port.to_string())
+        .env("ZUSE_DATA_DIR", root.path().join("status-profile"))
+        .kill_on_drop(true)
+        .output()
+        .await
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&status.stdout).into_owned();
+    assert!(stdout.contains("IPC:      not listening"), "{stdout}");
+    assert!(!stdout.contains("Remote access"), "{stdout}");
+}
+
+#[tokio::test]
+async fn without_a_command_the_standalone_binary_explains_and_shows_help() {
+    let output = Command::new(ZUSE)
+        .args(["--language", "en"])
+        .kill_on_drop(true)
+        .output()
+        .await
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("desktop app is not installed"), "{stderr}");
+    assert!(
+        stderr.contains("serve") && stderr.contains("pair"),
+        "{stderr}"
+    );
 }
 
 #[tokio::test]
 async fn invalid_network_configuration_fails_before_starting_the_engine() {
     let root = tempfile::tempdir().unwrap();
+    let legacy = legacy_server(root.path());
     for (name, arguments, expected) in [
         (
             "unencrypted-lan",
@@ -538,24 +619,28 @@ async fn invalid_network_configuration_fails_before_starting_the_engine() {
             "--tls-key",
         ),
     ] {
-        let profile = root.path().join(name);
-        let output = tokio::time::timeout(
-            Duration::from_secs(5),
-            Command::new(env!("CARGO_BIN_EXE_zuse-server"))
-                .args(arguments)
-                .arg("--data-dir")
-                .arg(&profile)
-                .env_remove("ZUSE_TLS_CERT")
-                .env_remove("ZUSE_TLS_KEY")
-                .env_remove("ZUSE_PUBLIC_ORIGIN")
-                .kill_on_drop(true)
-                .output(),
-        )
-        .await
-        .unwrap()
-        .unwrap();
-        assert!(!output.status.success());
-        assert!(String::from_utf8_lossy(&output.stderr).contains(expected));
-        assert!(!profile.exists());
+        // `zuse serve` and the old `zuse-server` refuse alike.
+        for (program, serve) in [(Path::new(ZUSE), true), (legacy.as_path(), false)] {
+            let profile = root.path().join(format!("{name}-{serve}"));
+            let output = tokio::time::timeout(
+                Duration::from_secs(5),
+                Command::new(program)
+                    .args(serve.then_some("serve"))
+                    .args(&arguments)
+                    .arg("--data-dir")
+                    .arg(&profile)
+                    .env_remove("ZUSE_TLS_CERT")
+                    .env_remove("ZUSE_TLS_KEY")
+                    .env_remove("ZUSE_PUBLIC_ORIGIN")
+                    .kill_on_drop(true)
+                    .output(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert!(!output.status.success());
+            assert!(String::from_utf8_lossy(&output.stderr).contains(expected));
+            assert!(!profile.exists());
+        }
     }
 }

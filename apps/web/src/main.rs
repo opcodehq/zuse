@@ -66,7 +66,7 @@ mod browser {
             .dyn_into()?;
         if !response.ok() {
             return Err(wasm_bindgen::JsValue::from_str(
-                "Engine authentication failed. Open the access link printed by zuse-server.",
+                "Engine authentication failed. Open the access link printed by zuse serve.",
             ));
         }
         window

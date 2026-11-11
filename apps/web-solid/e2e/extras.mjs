@@ -1,7 +1,7 @@
 // Extras end to end: palette, shortcut help, import chat, visuals, voice failure, notifications, toasts and
 // reconnects, in headless Chromium against a disposable engine. Usage: ZUSE_SHOTS=/tmp/dir node e2e/extras.mjs
 // The engine runs with a temporary HOME and no user tool directories on PATH, so no real agent or voice runtime is reachable.
-import { buildApp, openBrowser, repo, startEngine } from "./harness.mjs";
+import { buildApp, openBrowser, repo, serveCommand, startEngine } from "./harness.mjs";
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -606,8 +606,8 @@ printf '%s\\n' '{"type":"result","subtype":"success","session_id":"slow","is_err
     console.log("    warning:", JSON.stringify(warn));
     expect(warn.files === 1 && warn.banners.length === 1 && warn.banners[0].title === "Connection unavailable", "expected one connection-loss warning");
     // Same port, same profile: the page reconnects on its own.
-    const binary = [join(repo, "target/release/zuse-server"), join(repo, "target/debug/zuse-server")].find(existsSync);
-    respawned = spawn(binary, ["--listen", `127.0.0.1:${port}`, "--ipc-port", "0", "--data-dir", join(engine.root, "profile"), "--language", "en", "--assets", assets], {
+    const binary = [join(repo, "target/release/zuse-cli"), join(repo, "target/debug/zuse-cli")].find(existsSync);
+    respawned = spawn(binary, [...serveCommand(binary), "--listen", `127.0.0.1:${port}`, "--ipc-port", "0", "--data-dir", join(engine.root, "profile"), "--language", "en", "--assets", assets], {
       env: { ...process.env, HOME: home, CLAUDE_CONFIG_DIR: claudeDir, CODEX_HOME: join(home, ".codex"), PATH: `${join(engine.root, "bin")}:${process.env.PATH.split(":").filter((d) => !d.startsWith(userHome)).join(":")}`, CLAUDE_CODE_EXECUTABLE: join(engine.root, "bin", "claude"), RUST_LOG: "error" },
       stdio: "ignore",
     });

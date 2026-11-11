@@ -23,6 +23,14 @@ from distribution import retrying
 
 ROOT = Path(__file__).resolve().parent.parent
 BINS = ("zuse", "zuse-server", "zuse-relay")
+# zuse-server is the standalone command, which cargo names zuse-cli beside the
+# desktop app's zuse. Under its old name it keeps the old interface.
+CARGO_NAMES = {"zuse-server": "zuse-cli"}
+
+
+def built(name):
+    """The cargo executable a packaged name comes from."""
+    return CARGO_NAMES.get(name, name)
 HOST_SYSTEMS = {"Linux": "linux", "Darwin": "macos", "Windows": "windows"}
 HOST_ARCHES = {"x86_64": "x86_64", "AMD64": "x86_64", "aarch64": "aarch64", "arm64": "aarch64", "ARM64": "aarch64"}
 
@@ -226,9 +234,21 @@ def assemble(destination, binaries, assets, system, arch, version, provenance):
         icons.mkdir(parents=True)
         shutil.copyfile(ROOT / "dist/app-icon.png", icons / "sh.zuse.app.png")
         shutil.copyfile(ROOT / "scripts/install-linux.py", destination / "install.py")
+    copy_legal(resources / "legal")
+    if macos:
+        # Everything inside the app must be in place before it is sealed.
+        sign_macos(destination / "Zuse.app")
+    (destination / "docs").mkdir()
+    shutil.copyfile(ROOT / "internal-docs/development.md", destination / "docs/development.md")
+    readme = (ROOT / "internal-docs/packaging.md").read_text().replace("(development.md)", "(docs/development.md)")
+    (destination / "README.md").write_text(readme)
+    write_manifest(destination, {"format": 1, "version": version, "platform": system, "arch": arch,
+                                 "provenance": provenance})
+
+
+def copy_legal(legal):
     # Preserve the relative locations used by the root notices, including fonts,
     # embedded bridge code, and the toolkit's source notices.
-    legal = resources / "legal"
     files = [(ROOT / path, Path(path)) for path in (
         "LICENSE", "THIRD_PARTY_NOTICES.md", "Cargo.lock", "internal-docs/third-party-native-license.txt")]
     for tree, prefix in ((ROOT / "crates", Path("crates")), (toolkit_source(), Path("vendor/zkit"))):
@@ -242,21 +262,94 @@ def assemble(destination, binaries, assets, system, arch, version, provenance):
         target = legal / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, target)
-    if macos:
-        # Everything inside the app must be in place before it is sealed.
-        sign_macos(destination / "Zuse.app")
-    (destination / "docs").mkdir()
-    shutil.copyfile(ROOT / "internal-docs/development.md", destination / "docs/development.md")
-    readme = (ROOT / "internal-docs/packaging.md").read_text().replace("(development.md)", "(docs/development.md)")
-    (destination / "README.md").write_text(readme)
-    manifest = {"format": 1, "version": version, "platform": system, "arch": arch,
-                "provenance": provenance, "files": {}}
+
+
+def write_manifest(destination, manifest):
+    """Checksum every file; symlinks are listed with their targets instead."""
+    manifest["files"] = {}
     for path in sorted(destination.rglob("*")):
-        if path.is_file():
+        relative = path.relative_to(destination).as_posix()
+        if path.is_symlink():
+            manifest.setdefault("links", {})[relative] = os.readlink(path)
+        elif path.is_file():
             with path.open("rb") as stream:
-                manifest["files"][str(path.relative_to(destination))] = hashlib.file_digest(
-                    stream, "sha256").hexdigest()
+                manifest["files"][relative] = hashlib.file_digest(stream, "sha256").hexdigest()
     (destination / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+
+
+def cli_server_launcher():
+    # A .cmd cannot rename the executable, so it names the old interface.
+    return '@"%~dp0zuse.exe" --as-zuse-server %*\r\n'
+
+
+def sign_macos_binary(binary, run=subprocess.run):
+    """Sign a bare executable and, with Apple credentials, notarize it. A bare
+    binary cannot be stapled; Gatekeeper looks the ticket up online."""
+    identity = os.environ.get("ZUSE_MACOS_SIGN_IDENTITY")
+    if not identity:
+        return False
+    keychain = os.environ.get("ZUSE_MACOS_KEYCHAIN")
+    apple = retrying(run)
+    command = ["codesign", "--force", "--timestamp", "--options", "runtime", "--sign", identity]
+    if keychain:
+        command += ["--keychain", keychain]
+    apple(command + [str(binary)], check=True)
+    run(["codesign", "--verify", "--strict", "--verbose=2", str(binary)], check=True)
+    apple_id, password, team = (os.environ.get(key) for key in (
+        "APPLE_ID", "APPLE_APP_SPECIFIC_PASSWORD", "APPLE_TEAM_ID"))
+    if not (apple_id and password and team):
+        return True
+    with tempfile.TemporaryDirectory(prefix="zuse-notarize-") as temporary:
+        upload = Path(temporary) / "zuse.zip"
+        run(["ditto", "-c", "-k", "--keepParent", str(binary), str(upload)], check=True)
+        submitted = apple(["xcrun", "notarytool", "submit", str(upload), "--apple-id", apple_id,
+                           "--password", password, "--team-id", team, "--wait",
+                           "--output-format", "json"], check=True, capture_output=True, text=True)
+        result = json.loads(submitted.stdout)
+        if result.get("status") != "Accepted":
+            raise ValueError(f"Notarization was not accepted: {result.get('status')}")
+    return True
+
+
+def assemble_cli(destination, binary, assets, system, arch, version, provenance):
+    """The standalone command for machines without the desktop app: bin/zuse,
+    bin/zuse-server for the old interface, and share/zuse/web, where `zuse
+    serve` looks for the browser client."""
+    if binary_target(binary) != (system, arch):
+        raise ValueError(f"Executable target does not match {system}/{arch}: {binary}")
+    if not (assets / "index.html").is_file() or not any(assets.rglob("*.wasm")):
+        raise ValueError("Browser assets must contain index.html and a built WASM module")
+    destination.mkdir()
+    bin_dir = destination / "bin"
+    bin_dir.mkdir()
+    if system == "windows":
+        shutil.copyfile(binary, bin_dir / "zuse.exe")
+        (bin_dir / "zuse-server.cmd").write_bytes(cli_server_launcher().encode())
+    else:
+        shutil.copyfile(binary, bin_dir / "zuse")
+        (bin_dir / "zuse").chmod(0o755)
+        (bin_dir / "zuse-server").symlink_to("zuse")
+    share = destination / "share/zuse"
+    copy_tree(assets, share / "web")
+    copy_legal(share / "legal")
+    if system == "macos":
+        sign_macos_binary(bin_dir / "zuse")
+    readme = (ROOT / "internal-docs/packaging.md").read_text().replace(
+        "(development.md)", "(https://github.com/opcodehq/zuse/blob/main/internal-docs/development.md)")
+    (destination / "README.md").write_text(readme)
+    write_manifest(destination, {"format": 1, "kind": "cli", "version": version, "platform": system,
+                                 "arch": arch, "provenance": provenance})
+
+
+def write_archive(stage, name, archive):
+    """Write `stage` as `archive` under the top-level directory `name`."""
+    if archive.suffix == ".zip":
+        with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as bundle:
+            for path in sorted(stage.rglob("*")):
+                bundle.write(path, Path(name) / path.relative_to(stage))
+    else:
+        with tarfile.open(archive, "w:gz", compresslevel=6) as bundle:
+            bundle.add(stage, arcname=name)
 
 
 def main():
@@ -311,27 +404,29 @@ def main():
     else:
         provenance = {"inputs": "prebuilt", "profile": "unspecified"}
     name = f"zuse-{version}-{system}-{arch}"
+    cli_name = f"zuse-cli-{version}-{system}-{arch}"
     args.output.mkdir(parents=True, exist_ok=True)
     # Windows users expect a zip; Explorer opens it without extra tools.
-    archive = args.output / f"{name}.zip" if system == "windows" else args.output / f"{name}.tar.gz"
-    if archive.exists():
-        parser.error(f"Refusing to replace {archive}; choose a new --output directory")
+    extension = ".zip" if system == "windows" else ".tar.gz"
+    archive, cli_archive = (args.output / f"{base}{extension}" for base in (name, cli_name))
+    for existing in (archive, cli_archive):
+        if existing.exists():
+            parser.error(f"Refusing to replace {existing}; choose a new --output directory")
     # A failure never publishes a half-assembled archive.
     with tempfile.TemporaryDirectory(prefix=".zuse-package-", dir=args.output) as temporary:
-        stage = Path(temporary) / name
         suffix = ".exe" if system == "windows" else ""
-        assemble(stage, [args.binaries / f"{binary}{suffix}" for binary in BINS], args.assets,
+        executables = {binary: args.binaries / f"{built(binary)}{suffix}" for binary in BINS}
+        assemble(Path(temporary) / name, list(executables.values()), args.assets,
                  system, arch, version, provenance)
-        pending = Path(temporary) / archive.name
-        if system == "windows":
-            with zipfile.ZipFile(pending, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as bundle:
-                for path in sorted(stage.rglob("*")):
-                    bundle.write(path, Path(name) / path.relative_to(stage))
-        else:
-            with tarfile.open(pending, "w:gz", compresslevel=6) as bundle:
-                bundle.add(stage, arcname=name)
-        os.replace(pending, archive)
+        assemble_cli(Path(temporary) / cli_name, executables["zuse-server"], args.assets,
+                     system, arch, version, provenance)
+        for base, target in ((name, archive), (cli_name, cli_archive)):
+            pending = Path(temporary) / target.name
+            write_archive(Path(temporary) / base, base, pending)
+        for target in (archive, cli_archive):
+            os.replace(Path(temporary) / target.name, target)
     print(archive.resolve())
+    print(cli_archive.resolve())
 
 
 if __name__ == "__main__":

@@ -222,7 +222,7 @@ cached by this feature.
 Run `cargo test -p zuse-serve` for transport, upload, authorization and asset
 delivery regressions, and `node --test apps/web/tests/initializer.mjs` for startup
 progress and recovery. For real browser acceptance, build the matching engine
-with `cargo build -p zuse-cli --bin zuse-server`, then use Node.js 22+:
+with `cargo build -p zuse-cli`, then use Node.js 22+:
 
 ```sh
 CHROME_BIN=/path/to/chromium node scripts/acceptance/slow-network.mjs
@@ -267,7 +267,7 @@ The HTTP connection pool and refresh authority are shared across concurrent agen
 
 ## Local browser engine
 
-`cargo run -p zuse-cli -- --listen 127.0.0.1:27656 --ipc-port 0 --data-dir .context/local-profile` starts an isolated profile with an available agent-tool RPC port. Relative profile paths are resolved before workspace creation. Each launched agent receives this engine's actual RPC endpoint. SIGTERM and Ctrl+C both drain the runtime. Keep the printed browser access link private.
+`cargo run -p zuse-cli -- serve --listen 127.0.0.1:27656 --ipc-port 0 --data-dir .context/local-profile` starts an isolated profile with an available agent-tool RPC port. Relative profile paths are resolved before workspace creation. Each launched agent receives this engine's actual RPC endpoint. SIGTERM and Ctrl+C both drain the runtime. Keep the printed browser access link private.
 
 Direct HTTPS accepts `--tls-cert` / `--tls-key` (or `ZUSE_TLS_CERT` / `ZUSE_TLS_KEY`) for a PEM certificate chain and matching PKCS#8, RSA or SEC1 key. The certificate must cover the hostname/IP used by the browser, and its issuing CA must be trusted on that device. Certificate changes take effect after restarting the server. With a wildcard listener, set `--public-origin https://<LAN-host>:<port>` to print the intended client URL and restrict browser origins to it. The origin has no trailing slash.
 

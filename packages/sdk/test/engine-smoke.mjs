@@ -3,12 +3,14 @@ import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { once } from 'node:events';
 import { createZuseClient } from '../dist/index.js';
 
 const repository = resolve(import.meta.dirname, '../../..');
-const serverBinary = process.env.ZUSE_SERVER_BINARY || join(repository, 'target/debug/zuse-server');
+const serverBinary = process.env.ZUSE_SERVER_BINARY || join(repository, 'target/debug/zuse-cli');
+// A binary still named zuse-server takes the serve flags directly.
+const serveCommand = basename(serverBinary).startsWith('zuse-server') ? [] : ['serve'];
 const controlBinary = process.env.ZUSE_CONTROL_BINARY || join(repository, 'target/debug/zuse-control');
 const root = await mkdtemp(join(tmpdir(), 'zuse-control-smoke-'));
 const discoveryFile = join(root, 'profiles/local/zots/control.json');
@@ -17,7 +19,7 @@ let api;
 let endpoint;
 async function start() {
   let output = '';
-  server = spawn(serverBinary, ['--data-dir', root, '--listen', '127.0.0.1:0', '--ipc-port', '0'], { stdio: ['ignore', 'pipe', 'pipe'] });
+  server = spawn(serverBinary, [...serveCommand, '--data-dir', root, '--listen', '127.0.0.1:0', '--ipc-port', '0'], { stdio: ['ignore', 'pipe', 'pipe'] });
   server.stdout.on('data', chunk => { output = (output + chunk).slice(-65536); });
   server.stderr.on('data', () => {});
   for (let attempt = 0; attempt < 200; attempt++) {

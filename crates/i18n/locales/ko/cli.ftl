@@ -78,7 +78,7 @@ cli-unlink = 계정을 통한 이 컴퓨터 제공을 중단합니다
 
 cli-status = 계정 및 네트워크 상태를 표시합니다
 
-cli-server_unavailable = 에이전트 포트 { $port }에서 실행 중인 Zuse 서버가 없습니다. 먼저 zuse-server를 시작하거나 --ipc-port를 지정하세요.
+cli-server_unavailable = 에이전트 포트 { $port }에서 실행 중인 Zuse 서버가 없습니다. 먼저 zuse serve를 시작하거나 --ipc-port를 지정하세요.
 
 cli-default_device = 새 기기
 
@@ -90,7 +90,7 @@ cli-certificate_warning = 처음에는 브라우저가 이 컴퓨터의 비공�
 
 cli-link_warning = 이 링크가 있는 사람은 누구나 이 컴퓨터를 사용할 수 있습니다. 사용하지 않은 링크는 10분 후 만료됩니다.
 
-cli-local_only = 이 링크는 이 컴퓨터에서만 작동합니다. 다른 기기를 연결하려면 --lan 또는 --account로 zuse-server를 시작하세요.
+cli-local_only = 이 링크는 이 컴퓨터에서만 작동합니다. 다른 기기를 연결하려면 --lan 또는 --account로 zuse serve를 시작하세요.
 
 cli-sign_in_prompt = { $url }을(를) 열고 코드 { $code }을(를) 확인하세요
 
@@ -117,3 +117,61 @@ cli-status_no_routes = 네트워크: 이 컴퓨터만
 cli-assets_missing = 브라우저 파일을 찾을 수 없습니다. --assets를 지정하거나 ZUSE_WEB_ASSETS를 설정해야 브라우저에서 이 서버를 열 수 있습니다.
 
 cli-invitation_failed = 연결 링크를 만들 수 없습니다
+
+cli-zuse_about = 코딩 에이전트를 위한 다중 기기 컨트롤러
+
+cli-arguments = 인수
+
+cli-version = 버전 표시
+
+cli-engine_port = 엔진의 루프백 RPC 포트. 기본값은 ZUSE_IPC_PORT 또는 27654. serve에서는 0이 사용 가능한 포트 선택
+
+cli-lan = 이 네트워크와 tailnet의 페어링된 기기가 직접 연결하도록 허용합니다. 종단 간 암호화됩니다
+
+cli-lan_port = --lan 연결용 포트
+
+cli-tailscale_serve = 브라우저용으로 --lan을 Tailscale HTTPS로도 게시합니다
+
+cli-headless = 창 없이 엔진을 실행합니다
+
+cli-overview_status = 작업 공간, 엔진 및 원격 액세스 상태를 표시합니다
+
+cli-session_login = 로그인하고 다음 엔진 시작 시 작업 공간 동기화를 사용합니다
+
+cli-login_no_browser = 이 컴퓨터에서 브라우저를 여는 대신 로그인 링크를 출력합니다
+
+cli-session_logout = 저장된 세션을 제거합니다. 다음 엔진 시작은 로컬 전용입니다
+
+cli-sync = 실행 중인 엔진의 실시간 동기화 상태를 표시합니다
+
+cli-daemon = Zuse를 백그라운드 서비스로 실행합니다
+
+cli-daemon_install = 서비스를 설치하고 활성화한 뒤 시작합니다
+
+cli-daemon_serve = zuse headless 대신 뒤따르는 인수로 zuse serve를 실행합니다
+
+cli-daemon_serve_args = zuse serve의 인수
+
+cli-daemon_uninstall = 서비스를 중지하고 제거합니다
+
+cli-daemon_start = 설치된 서비스를 시작합니다
+
+cli-daemon_stop = 서비스를 중지합니다
+
+cli-daemon_restart = 서비스를 다시 시작합니다
+
+cli-daemon_status = 서비스 상태를 표시합니다
+
+cli-update = 새 릴리스를 확인하고 설치합니다
+
+cli-update_check = 업데이트가 있는지만 표시합니다
+
+cli-appshot = 실행 중인 앱에서 Appshot을 찍습니다
+
+cli-open_url = 열 Zuse 링크
+
+cli-paired_link_file = 연결에 사용할 페어링 링크가 담긴 비공개 파일
+
+cli-desktop_missing = 이곳에는 Zuse 데스크톱 앱이 설치되어 있지 않아 창을 열 수 없습니다. 대신 다음 명령 중 하나를 사용하세요.
+
+cli-status_remote = 원격 액세스

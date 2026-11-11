@@ -4,12 +4,22 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 
 pub fn data_dir() -> PathBuf {
+    resolve_data_dir(|name| std::env::var_os(name)).expect(MISSING)
+}
+
+/// The default profile, or None when the environment names no home.
+pub fn default_data_dir() -> Option<PathBuf> {
     resolve_data_dir(|name| std::env::var_os(name))
 }
 
-fn resolve_data_dir(mut env: impl FnMut(&str) -> Option<OsString>) -> PathBuf {
+#[cfg(windows)]
+const MISSING: &str = "LOCALAPPDATA and USERPROFILE not set; set ZUSE_DATA_DIR";
+#[cfg(not(windows))]
+const MISSING: &str = "HOME not set";
+
+fn resolve_data_dir(mut env: impl FnMut(&str) -> Option<OsString>) -> Option<PathBuf> {
     if let Some(dir) = env("ZUSE_DATA_DIR") {
-        return PathBuf::from(dir);
+        return Some(PathBuf::from(dir));
     }
     #[cfg(windows)]
     {
@@ -23,14 +33,12 @@ fn resolve_data_dir(mut env: impl FnMut(&str) -> Option<OsString>) -> PathBuf {
                 env("USERPROFILE")
                     .filter(|value| !value.is_empty())
                     .map(|home| PathBuf::from(home).join("AppData").join("Local"))
-            })
-            .expect("LOCALAPPDATA and USERPROFILE not set; set ZUSE_DATA_DIR");
-        local.join("Zuse")
+            })?;
+        Some(local.join("Zuse"))
     }
     #[cfg(not(windows))]
     {
-        let home = PathBuf::from(env("HOME").expect("HOME not set"));
-        home.join(".zuse-native")
+        Some(PathBuf::from(env("HOME")?).join(".zuse-native"))
     }
 }
 
@@ -44,6 +52,7 @@ mod tests {
                 .find(|(key, _)| *key == name)
                 .map(|(_, value)| value.into())
         })
+        .unwrap()
     }
 
     #[test]
@@ -52,6 +61,11 @@ mod tests {
             resolve(&[("ZUSE_DATA_DIR", "custom data")]),
             PathBuf::from("custom data")
         );
+    }
+
+    #[test]
+    fn a_missing_home_is_reported_not_guessed() {
+        assert_eq!(resolve_data_dir(|_| None), None);
     }
 
     #[cfg(windows)]

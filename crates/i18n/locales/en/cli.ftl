@@ -80,7 +80,7 @@ cli-unlink = Stop making this computer available through your account
 
 cli-status = Show account and network status
 
-cli-server_unavailable = No Zuse server is running on agent port { $port }. Start zuse-server first, or pass --ipc-port.
+cli-server_unavailable = No Zuse server is running on agent port { $port }. Start zuse serve first, or pass --ipc-port.
 
 cli-default_device = New device
 
@@ -92,7 +92,7 @@ cli-certificate_warning = Your browser will warn about this computer's private c
 
 cli-link_warning = Anyone with this link can use this computer. Unused links expire in ten minutes.
 
-cli-local_only = This link only works on this computer. Start zuse-server with --lan or --account to connect other devices.
+cli-local_only = This link only works on this computer. Start zuse serve with --lan or --account to connect other devices.
 
 cli-sign_in_prompt = Open { $url } and confirm the code { $code }
 
@@ -119,3 +119,61 @@ cli-status_no_routes = Network: this computer only
 cli-assets_missing = Browser files were not found. Browsers cannot open this server until you pass --assets or set ZUSE_WEB_ASSETS.
 
 cli-invitation_failed = Could not create a connection link
+
+cli-zuse_about = Multi-device controller for coding agents
+
+cli-arguments = Arguments
+
+cli-version = Print version
+
+cli-engine_port = Loopback RPC port of the engine, by default ZUSE_IPC_PORT or 27654; with serve, 0 selects an available port
+
+cli-lan = Let paired devices on this network and tailnet connect directly, end-to-end encrypted
+
+cli-lan_port = Port for --lan connections
+
+cli-tailscale_serve = Also publish --lan over Tailscale HTTPS for browsers
+
+cli-headless = Run the engine without a window
+
+cli-overview_status = Show workspace, engine and remote access status
+
+cli-session_login = Sign in and turn on workspace sync for the next engine start
+
+cli-login_no_browser = Print a sign-in link instead of opening a browser on this computer
+
+cli-session_logout = Remove the saved session; the next engine start is local only
+
+cli-sync = Show live sync state from the running engine
+
+cli-daemon = Run Zuse as a background service
+
+cli-daemon_install = Install, enable and start the service
+
+cli-daemon_serve = Run zuse serve with the arguments that follow, instead of zuse headless
+
+cli-daemon_serve_args = Arguments for zuse serve
+
+cli-daemon_uninstall = Stop and remove the service
+
+cli-daemon_start = Start the installed service
+
+cli-daemon_stop = Stop the service
+
+cli-daemon_restart = Restart the service
+
+cli-daemon_status = Show the service status
+
+cli-update = Check for a newer release and install it
+
+cli-update_check = Only report whether an update is available
+
+cli-appshot = Take an Appshot in the running app
+
+cli-open_url = Zuse link to open
+
+cli-paired_link_file = Private file holding a pairing link to connect with
+
+cli-desktop_missing = The Zuse desktop app is not installed here, so there is no window to open. Use one of these commands instead.
+
+cli-status_remote = Remote access

@@ -80,13 +80,13 @@ jobs:
           import os, shutil, subprocess, sys, time
           from pathlib import Path
           sys.path.insert(0, 'scripts')
-          from package import BINS, binary_target
+          from package import BINS, binary_target, built
           source = Path(os.environ['CARGO_TARGET_DIR']) / os.environ['RELEASE_TARGET'] / 'release'
           destination = Path('unsigned/target/release')
           destination.mkdir(parents=True)
           expected = (os.environ['RELEASE_PLATFORM'], os.environ['RELEASE_ARCH'])
           for name in BINS:
-              binary = source / (name + ('.exe' if expected[0] == 'windows' else ''))
+              binary = source / (built(name) + ('.exe' if expected[0] == 'windows' else ''))
               if binary_target(binary) != expected:
                   raise SystemExit(f'Unexpected executable architecture: {binary}')
               shutil.copy2(binary, destination / binary.name)

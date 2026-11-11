@@ -14336,22 +14336,13 @@ name = "zuse"
 version = "0.26.0"
 dependencies = [
  "anyhow",
- "base64 0.22.1",
  "clap",
  "embed-resource",
- "libc",
  "mimalloc",
- "serde_json",
- "tempfile",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "uuid",
  "windows-sys 0.61.2",
+ "zuse-commands",
  "zuse-engine",
- "zuse-mcp",
  "zuse-remote",
- "zuse-rpc",
  "zuse-ui",
  "zuse-update",
 ]
@@ -14373,11 +14364,8 @@ name = "zuse-cli"
 version = "0.26.0"
 dependencies = [
  "anyhow",
- "async-trait",
  "clap",
  "futures",
- "gethostname",
- "qrcode",
  "rcgen",
  "reqwest 0.12.28",
  "serde_json",
@@ -14385,15 +14373,9 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tokio-tungstenite 0.24.0",
- "tokio-util",
- "tracing-subscriber",
+ "zuse-commands",
  "zuse-engine",
- "zuse-i18n",
- "zuse-mcp",
- "zuse-protocol",
- "zuse-remote",
  "zuse-rpc",
- "zuse-serve",
 ]
 
 [[package]]
@@ -14565,6 +14547,35 @@ dependencies = [
  "zuse-protocol",
  "zuse-providers",
  "zuse-rpc",
+]
+
+[[package]]
+name = "zuse-commands"
+version = "0.26.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "clap",
+ "futures",
+ "gethostname",
+ "libc",
+ "qrcode",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "zuse-engine",
+ "zuse-i18n",
+ "zuse-mcp",
+ "zuse-protocol",
+ "zuse-remote",
+ "zuse-rpc",
+ "zuse-serve",
+ "zuse-update",
 ]
 
 [[package]]
