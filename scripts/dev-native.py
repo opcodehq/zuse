@@ -44,16 +44,22 @@ def ui_only_input(path):
 def start_engine(binary, env, port):
     process = subprocess.Popen([binary, "headless"], cwd=ROOT, env=env, start_new_session=True)
     deadline = time.monotonic() + 30
-    while True:
-        if process.poll() is not None:
-            raise RuntimeError("Development engine exited before opening IPC")
-        try:
-            with socket.create_connection(("127.0.0.1", port), timeout=0.2):
-                return process
-        except OSError:
-            if time.monotonic() > deadline:
-                raise RuntimeError("Development engine did not open IPC within 30 seconds")
-            time.sleep(0.1)
+    try:
+        while True:
+            if process.poll() is not None:
+                raise RuntimeError("Development engine exited before opening IPC")
+            try:
+                with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+                    return process
+            except OSError:
+                if time.monotonic() > deadline:
+                    raise RuntimeError("Development engine did not open IPC within 30 seconds")
+                time.sleep(0.1)
+    except BaseException:
+        # Its own session ignores the terminal's Ctrl+C; an interrupted start
+        # (often mid-restart) must not leave it holding the IPC port.
+        stop(process)
+        raise
 
 
 def stop(process):
@@ -99,7 +105,12 @@ def main():
     try:
         # Never attach a development UI to an unrelated engine on the same port.
         with socket.socket() as probe:
-            probe.bind(("127.0.0.1", args.ipc_port))
+            try:
+                probe.bind(("127.0.0.1", args.ipc_port))
+            except OSError:
+                print(f"IPC port {args.ipc_port} is in use, usually by an engine left from an earlier run. "
+                      f"Stop it with: lsof -ti tcp:{args.ipc_port} | xargs kill", flush=True)
+                return 1
         seen = snapshot()
         target = prepare(env=env)
         if subprocess.call(build, cwd=ROOT, env=env):
