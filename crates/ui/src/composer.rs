@@ -9847,7 +9847,10 @@ impl Composer {
         {
             return true;
         }
-        if state.configuration_blocked() {
+        // A cloud task sends with its own saved settings and wakes a sleeping
+        // computer itself; the chat configuration is read from the computer's
+        // engine, which a sleeping computer never answers.
+        if state.configuration_blocked() && !self.native_cloud_task() {
             return true;
         }
         if state.review_comment_flush_pending(&self.current_key) {
