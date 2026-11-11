@@ -186,6 +186,10 @@ impl CloudConversation {
             || self.history.provisional_read.is_some()
             || self.state.read(cx).engine().is_some()
         {
+            tracing::info!(workspace = %self.target.workspace,
+                fresh = self.history.fresh_received,
+                attached = self.state.read(cx).engine().is_some(),
+                "Cloud chat open: cached history skipped");
             return;
         }
         let target = self.target.clone();
@@ -217,8 +221,11 @@ impl CloudConversation {
                     return;
                 }
                 let Ok(value) = result else {
+                    tracing::info!(workspace = %target.workspace, ms = this.opened_at.elapsed().as_millis() as u64, "Cloud chat open: cached history read failed");
                     return;
                 };
+                tracing::info!(workspace = %target.workspace, ms = this.opened_at.elapsed().as_millis() as u64,
+                    hit = !value["head"].is_null(), "Cloud chat open: cached history read");
                 if value["provisional"] != true
                     || value["accountId"] != target.subject
                     || value["organizationId"].as_str() != target.organization.as_deref()

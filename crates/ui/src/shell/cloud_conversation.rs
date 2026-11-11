@@ -31,6 +31,8 @@ pub(super) struct CloudConversation {
     error: Option<String>,
     authorized: bool,
     access_revoked: bool,
+    /// When this view opened; phase timings in the log are measured from it.
+    pub(super) opened_at: std::time::Instant,
     history_read: Option<Task<()>>,
     history: history::State,
     read_again: bool,
@@ -194,6 +196,7 @@ impl CloudConversation {
             error: None,
             authorized: false,
             access_revoked: false,
+            opened_at: std::time::Instant::now(),
             history_read: None,
             history: history::State::default(),
             read_again: false,
@@ -443,6 +446,7 @@ impl CloudConversation {
                         let alive = this.update(cx, |this, cx| {
                             if owner {
                                 if !this.authorized {
+                                    tracing::info!(workspace = %this.target.workspace, ms = this.opened_at.elapsed().as_millis() as u64, "Cloud chat open: account confirmed");
                                     this.authorized = true;
                                     this.access_revoked = false;
                                     this.read_provisional_history(cx);
@@ -573,6 +577,11 @@ impl CloudConversation {
         }));
     }
     fn apply_history(&mut self, value: Value, cx: &mut Context<Self>) {
+        if !self.history.fresh_received {
+            tracing::info!(workspace = %self.target.workspace, ms = self.opened_at.elapsed().as_millis() as u64,
+                messages = value["head"]["messages"].as_array().map_or(0, Vec::len),
+                "Cloud chat open: fresh history painted");
+        }
         // A validated fresh receipt wins even if the local cache finishes later.
         self.history.fresh_received = true;
         self.history.provisional_read = None;
