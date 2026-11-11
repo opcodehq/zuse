@@ -5,6 +5,12 @@
 //! ProxyCommand that opens [`open_tunnel`]: bytes from sshd stream back as
 //! base64 chunks, and the client sends its bytes with [`write_tunnel`]. No
 //! port is exposed; access rides the same authenticated path as the agent.
+//!
+//! Everything sshd needs lives under `~/.zuse-ssh`, including its host key, so
+//! a computer that restarts without its memory (or only keeps home folders)
+//! comes back with the same identity and restarts sshd on the next tunnel.
+//! Computers with sudo run sshd as root with PAM; root-free computers run it
+//! as the task user, which can then log in only as itself.
 use anyhow::{Context as _, Result, bail, ensure};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use futures::StreamExt as _;
@@ -52,12 +58,23 @@ pub fn valid_public_key(key: &str) -> bool {
         && STANDARD.decode(body).is_ok()
 }
 
-fn sshd_config(dir: &Path, user: &str) -> String {
+fn host_key(dir: &Path) -> PathBuf {
+    dir.join("host_ed25519_key")
+}
+
+/// How sshd runs: as root through sudo (with PAM), or as the task user.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Mode {
+    Sudo,
+    User,
+}
+
+fn sshd_config(dir: &Path, user: &str, mode: Mode) -> String {
+    let pam = if mode == Mode::Sudo { "yes" } else { "no" };
     format!(
         "Port {PORT}\n\
          ListenAddress 127.0.0.1\n\
-         HostKey /etc/ssh/ssh_host_ed25519_key\n\
-         HostKey /etc/ssh/ssh_host_rsa_key\n\
+         HostKey {host}\n\
          AuthorizedKeysFile {keys}\n\
          PasswordAuthentication no\n\
          KbdInteractiveAuthentication no\n\
@@ -65,10 +82,11 @@ fn sshd_config(dir: &Path, user: &str) -> String {
          PermitRootLogin no\n\
          AllowUsers {user}\n\
          StrictModes no\n\
-         UsePAM yes\n\
+         UsePAM {pam}\n\
          PrintMotd no\n\
          PidFile {pid}\n\
          Subsystem sftp /usr/lib/openssh/sftp-server\n",
+        host = host_key(dir).display(),
         keys = dir.join("authorized_keys").display(),
         pid = dir.join("sshd.pid").display(),
     )
@@ -92,28 +110,141 @@ async fn listening() -> bool {
         .is_ok()
 }
 
-async fn sudo(args: &[&str]) -> Result<()> {
-    let status = tokio::process::Command::new("sudo")
-        .arg("-n")
+async fn run(program: &str, args: &[&str]) -> Result<()> {
+    let output = tokio::process::Command::new(program)
         .args(args)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
         .output()
         .await
-        .with_context(|| format!("could not run {}", args.join(" ")))?;
-    if !status.status.success() {
+        .with_context(|| format!("could not run {program}"))?;
+    if !output.status.success() {
         bail!(
             "{} failed: {}",
-            args.first().copied().unwrap_or("command"),
-            String::from_utf8_lossy(&status.stderr).trim()
+            args.iter()
+                .find(|a| !a.starts_with('-'))
+                .copied()
+                .unwrap_or(program),
+            String::from_utf8_lossy(&output.stderr).trim()
         );
     }
     Ok(())
 }
 
+async fn sudo(args: &[&str]) -> Result<()> {
+    let mut all = vec!["-n"];
+    all.extend_from_slice(args);
+    run("sudo", &all).await
+}
+
+async fn mode() -> Mode {
+    if sudo(&["true"]).await.is_ok() {
+        Mode::Sudo
+    } else {
+        Mode::User
+    }
+}
+
+fn login_user() -> String {
+    std::env::var("USER")
+        .or_else(|_| std::env::var("LOGNAME"))
+        .unwrap_or_else(|_| "zuse".into())
+}
+
+/// The host's public key, as `<type> <base64>`, creating the pair once.
+async fn ensure_host_key(dir: &Path) -> Result<String> {
+    let key = host_key(dir);
+    if !key.exists() {
+        let path = key.to_string_lossy().into_owned();
+        run(
+            "ssh-keygen",
+            &[
+                "-q",
+                "-t",
+                "ed25519",
+                "-N",
+                "",
+                "-C",
+                "zuse-cloud-host",
+                "-f",
+                &path,
+            ],
+        )
+        .await?;
+    }
+    let public = std::fs::read_to_string(key.with_extension("pub"))
+        .context("The computer's SSH host key is unreadable.")?;
+    Ok(public
+        .split_whitespace()
+        .take(2)
+        .collect::<Vec<_>>()
+        .join(" "))
+}
+
+/// Stop the sshd recorded in the pid file and wait for its port to free.
+async fn stop_previous(dir: &Path) {
+    let Some(pid) = std::fs::read_to_string(dir.join("sshd.pid"))
+        .ok()
+        .and_then(|pid| pid.trim().parse::<u32>().ok())
+    else {
+        return;
+    };
+    let pid = pid.to_string();
+    if run("kill", &[&pid]).await.is_err() {
+        let _ = sudo(&["kill", &pid]).await;
+    }
+    for _ in 0..30 {
+        if !listening().await {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+}
+
+/// Start the loopback sshd unless it already answers. Needs `prepare` to have
+/// authorized a key once; after that it restarts sshd on its own.
+async fn ensure_running(dir: &Path) -> Result<()> {
+    let config = dir.join("sshd_config");
+    if listening().await {
+        let current = std::fs::read_to_string(&config).unwrap_or_default();
+        if current.contains(&format!("HostKey {}\n", host_key(dir).display())) {
+            return Ok(());
+        }
+        // An sshd started before host keys moved home serves another key.
+        stop_previous(dir).await;
+    }
+    // Some computer images ship without an SSH server. Say so instead of
+    // surfacing a launch error.
+    ensure!(
+        Path::new(SSHD).exists(),
+        "SSH isn't available on this computer yet. Its image has no SSH server."
+    );
+    ensure_host_key(dir).await?;
+    let mode = mode().await;
+    private_write(&config, &sshd_config(dir, &login_user(), mode))?;
+    let config = config.to_string_lossy().into_owned();
+    match mode {
+        Mode::Sudo => {
+            sudo(&["mkdir", "-p", "/run/sshd"]).await?;
+            sudo(&[SSHD, "-f", &config]).await?;
+        }
+        Mode::User => run(SSHD, &["-f", &config]).await?,
+    }
+    let started = tokio::time::Instant::now();
+    while !listening().await {
+        ensure!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "SSH did not start on the computer."
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    Ok(())
+}
+
 /// Authorize `public_key` and make sure the loopback sshd runs. Returns the
-/// user to log in as and the folder sessions should open.
+/// user to log in as, the folder sessions should open, and the host key the
+/// client pins for this computer.
 pub async fn prepare(public_key: &str, workspace_root: Option<&Path>) -> Result<Value> {
     ensure!(
         valid_public_key(public_key),
@@ -138,33 +269,8 @@ pub async fn prepare(public_key: &str, workspace_root: Option<&Path>) -> Result<
         keys.push(key);
     }
     private_write(&keys_path, &(keys.join("\n") + "\n"))?;
-    let user = std::env::var("USER")
-        .or_else(|_| std::env::var("LOGNAME"))
-        .unwrap_or_else(|_| "zuse".into());
-    let config = dir.join("sshd_config");
-    private_write(&config, &sshd_config(&dir, &user))?;
-    if !listening().await {
-        // Some computer images (Daytona's container base today) ship without
-        // an SSH server. Say so instead of surfacing a sudo error.
-        ensure!(
-            Path::new(SSHD).exists(),
-            "SSH isn't available on this computer yet. Its image has no SSH server."
-        );
-        if !Path::new("/etc/ssh/ssh_host_ed25519_key").exists() {
-            sudo(&["ssh-keygen", "-A"]).await?;
-        }
-        sudo(&["mkdir", "-p", "/run/sshd"]).await?;
-        let config = config.to_string_lossy().into_owned();
-        sudo(&[SSHD, "-f", &config]).await?;
-        let started = tokio::time::Instant::now();
-        while !listening().await {
-            ensure!(
-                started.elapsed() < std::time::Duration::from_secs(5),
-                "SSH did not start on the computer."
-            );
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        }
-    }
+    let host_key = ensure_host_key(&dir).await?;
+    ensure_running(&dir).await?;
     let path = workspace_root
         .map(Path::to_path_buf)
         .filter(|path| path.is_dir())
@@ -172,12 +278,17 @@ pub async fn prepare(public_key: &str, workspace_root: Option<&Path>) -> Result<
             let default = home().join("workspace");
             if default.is_dir() { default } else { home() }
         });
-    Ok(json!({"user": user, "path": path, "port": PORT}))
+    Ok(json!({"user": login_user(), "path": path, "port": PORT, "hostKey": host_key}))
 }
 
 /// Connect to the loopback sshd. The stream's first item names the tunnel;
 /// then each item carries `data` (base64) read from sshd, until it closes.
 pub async fn open_tunnel() -> Result<futures::stream::BoxStream<'static, Value>> {
+    let dir = ssh_dir();
+    // sshd doesn't survive a restart without memory; bring it back.
+    if !listening().await && dir.join("authorized_keys").exists() {
+        ensure_running(&dir).await?;
+    }
     ensure!(
         listening().await,
         "SSH is not running on the computer. Open via SSH again from Zuse."
@@ -247,8 +358,14 @@ mod tests {
 
     #[test]
     fn sshd_listens_on_loopback_with_keys_only() {
-        let config = sshd_config(Path::new("/home/zuse/.zuse-ssh"), "zuse");
+        let config = sshd_config(Path::new("/home/zuse/.zuse-ssh"), "zuse", Mode::Sudo);
         assert!(config.contains("ListenAddress 127.0.0.1"));
+        assert!(config.contains("HostKey /home/zuse/.zuse-ssh/host_ed25519_key\n"));
+        assert!(config.contains("UsePAM yes"));
+        // Without root, PAM can't run; the host key still lives in home.
+        let user = sshd_config(Path::new("/home/prized/.zuse-ssh"), "prized", Mode::User);
+        assert!(user.contains("UsePAM no"));
+        assert!(user.contains("AllowUsers prized"));
         assert!(config.contains("PasswordAuthentication no"));
         assert!(config.contains("AllowUsers zuse"));
         assert!(config.contains("AuthorizedKeysFile /home/zuse/.zuse-ssh/authorized_keys"));

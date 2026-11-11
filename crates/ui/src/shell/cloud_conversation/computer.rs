@@ -151,7 +151,7 @@ pub(super) struct State {
     /// Which page of the menu shows.
     page: Page,
     /// SSH access: the host once prepared, the preparation, its failure.
-    ssh: Option<super::ssh::Prepared>,
+    ssh: Option<crate::cloud_ssh::Prepared>,
     ssh_task: Option<Task<()>>,
     ssh_error: Option<String>,
     /// The apps this computer can open a folder in (the shell detects them).
@@ -779,10 +779,10 @@ impl CloudConversation {
         let port = self.boot.ipc_port;
         self.computer.ssh_error = None;
         self.computer.ssh_task = Some(cx.spawn(async move |this, cx| {
-            let result: Result<super::ssh::Prepared, String> = async {
+            let result: Result<crate::cloud_ssh::Prepared, String> = async {
                 let key = cx
                     .background_executor()
-                    .spawn(async { super::ssh::ensure_key() })
+                    .spawn(async { crate::cloud_ssh::ensure_key() })
                     .await?;
                 let prepared = gpui_tokio::Tokio::spawn(cx, async move {
                     engine
@@ -798,12 +798,18 @@ impl CloudConversation {
                     .as_str()
                     .unwrap_or("/home/zuse/workspace")
                     .to_owned();
+                let host_key = prepared["hostKey"].as_str().map(str::to_owned);
                 let host_workspace = workspace.clone();
                 cx.background_executor()
-                    .spawn(async move { super::ssh::install_host(&host_workspace, &user, port) })
+                    .spawn(async move {
+                        if let Some(host_key) = host_key {
+                            crate::cloud_ssh::pin_host_key(&host_workspace, &host_key)?;
+                        }
+                        crate::cloud_ssh::install_host(&host_workspace, &user, port)
+                    })
                     .await?;
-                Ok(super::ssh::Prepared {
-                    host: super::ssh::host_alias(&workspace),
+                Ok(crate::cloud_ssh::Prepared {
+                    host: crate::cloud_ssh::host_alias(&workspace),
                     path,
                 })
             }
@@ -822,9 +828,9 @@ impl CloudConversation {
                                 this.close_computer(cx);
                             }
                             SshAction::Terminal => {
-                                let command = super::ssh::terminal_command(&prepared);
+                                let command = crate::cloud_ssh::terminal_command(&prepared);
                                 cx.background_executor()
-                                    .spawn(async move { super::ssh::open_terminal(&command) })
+                                    .spawn(async move { crate::cloud_ssh::open_terminal(&command) })
                                     .detach();
                                 this.close_computer(cx);
                             }
@@ -842,7 +848,7 @@ impl CloudConversation {
     fn render_ssh_page(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::of(cx).for_popup();
         let busy = self.computer.ssh_task.is_some();
-        let host = super::ssh::host_alias(&self.target.workspace);
+        let host = crate::cloud_ssh::host_alias(&self.target.workspace);
         let mut page = div()
             .id("native-computer-ssh")
             .flex()
