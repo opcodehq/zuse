@@ -1907,7 +1907,7 @@ fn annotation_anchor(annotation: &StagedAnnotation, theme: &Theme) -> AnyElement
                         format!("{}\n{}", annotation.page_url, annotation.target_details())
                     })
                     .unwrap_or_default(),
-            ))
+            )
             .child(
                 icon(icons::BROWSER_SELECT)
                     .size(px(13.0))

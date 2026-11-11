@@ -9503,7 +9503,7 @@ impl Shell {
                             "Unarchive session"
                         } else {
                             ShortcutId::ArchiveSession.label()
-                        }))
+                        })
                 })
                 .child(corner_body)
                 .into_any_element()
@@ -9804,7 +9804,7 @@ impl Shell {
                             "Unarchive session"
                         } else {
                             ShortcutId::ArchiveSession.label()
-                        }))
+                        })
                 })
                 .child(trailing_info);
             // Activity (working, input, done, failed) takes the lead glyph's

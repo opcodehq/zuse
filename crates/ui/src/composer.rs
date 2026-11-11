@@ -12938,7 +12938,7 @@ impl Composer {
                         } else {
                             "Send message".into()
                         },
-                    ))
+                    )
                     .into_any_element()
             }
         }
@@ -13493,7 +13493,7 @@ impl Render for Composer {
                     SharedString::from("Cancel dictation")
                 } else {
                     add_label.clone()
-                }))
+                })
             })
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(move |this, _, window, cx| {
