@@ -265,6 +265,24 @@ impl Pickers {
             plan: false,
         })
     }
+    /// Change a bound cloud task's access mode; its next message carries it.
+    pub(crate) fn set_cloud_task_sandbox(
+        &mut self,
+        level: SandboxLevel,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(mut choice) = self
+            .cloud
+            .task_binding
+            .as_ref()
+            .and_then(|binding| binding.choice.clone())
+        else {
+            return false;
+        };
+        choice.sandbox = level;
+        self.set_cloud_task_choice(choice, cx);
+        true
+    }
     pub(super) fn set_cloud_task_choice(&mut self, choice: ChatConfig, cx: &mut Context<Self>) {
         let Some(binding) = &mut self.cloud.task_binding else {
             return;

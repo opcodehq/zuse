@@ -395,6 +395,10 @@ impl Composer {
     pub(super) fn cached_cloud(&self) -> bool {
         self.cloud.cached.is_some()
     }
+    /// Bound to a cloud task, which sends with its own saved settings.
+    pub(super) fn native_cloud_task(&self) -> bool {
+        self.cloud.native.is_some()
+    }
     pub(crate) fn set_cached_cloud(&mut self, paused: bool, cx: &mut Context<Self>) {
         if self.cloud.cached != Some(paused) {
             self.cloud.cached = Some(paused);
@@ -1175,6 +1179,52 @@ mod cached_tests {
             });
             drop(receive);
         }
+    }
+    #[gpui::test]
+    fn a_sleeping_cloud_task_takes_a_new_access_mode_into_its_next_message(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _entered = runtime.enter();
+        let (send, receive) = tokio::sync::mpsc::channel(1);
+        let (_replies, replies) = tokio::sync::mpsc::channel(1);
+        let controller =
+            crate::state::EngineHandle::from_test_client(zuse_rpc::RpcClient::new(send, replies));
+        let state = cx.new(|_| {
+            let mut state = crate::state::AppState::new();
+            state.apply_cloud_account(json!({"user":{"id":"owner"},"orgId":null}));
+            // Selected, but the configuration lives on the sleeping computer.
+            state.selected_chat = Some("session".into());
+            state
+        });
+        let composer = cx.new(|cx| Composer::new(state.clone(), cx));
+        composer.update(cx, |c, cx| {
+            assert!(c.state.read(cx).configuration_blocked());
+            let target = crate::state::CloudTarget {
+                controller,
+                subject: "owner".into(),
+                organization: None,
+                workspace: "task".into(),
+                initial_session: "session".into(),
+            };
+            c.set_cloud_task(
+                target,
+                json!({"agent":"codex","model":"gpt-6.1-sol","runtimeMode":"auto"}),
+                cx,
+            );
+            c.set_cloud_task_sleeping(true);
+            assert!(c.set_cloud_task_permission(SandboxLevel::DangerFullAccess, cx));
+            assert_eq!(
+                c.pickers.read(cx).cloud_task_choice().unwrap().sandbox,
+                SandboxLevel::DangerFullAccess
+            );
+            assert!(c.send_cloud_task("Go ahead".into(), false, cx));
+            let request = &c.cloud.pending_native.as_ref().unwrap()["action"]["payload"]["request"];
+            assert_eq!(request["sandbox"], json!(SandboxLevel::DangerFullAccess));
+            assert_eq!(request["autoApprove"], true);
+            c.cloud.task = None;
+        });
+        drop(receive);
     }
     #[gpui::test]
     fn new_cloud_request_uses_selected_provider_and_its_model_before_dispatch(

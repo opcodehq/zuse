@@ -44,6 +44,11 @@ impl Composer {
         }
         self.permission_open = false;
         window.focus(&self.input.focus_handle(cx), cx);
+        if self.set_cloud_task_permission(level, cx) {
+            self.remember_permission(level, cx);
+            cx.notify();
+            return;
+        }
         let Some(chat_id) = self.state.read(cx).selected_chat.clone() else {
             self.pickers
                 .update(cx, |pickers, cx| pickers.set_draft_sandbox(level, cx));
@@ -83,6 +88,19 @@ impl Composer {
         }
         cx.notify();
     }
+    /// A cloud task keeps its access mode with its own run settings, which the
+    /// next message sends; the computer's chat configuration (unreachable
+    /// while it sleeps) is not involved. Returns whether it applied.
+    pub(super) fn set_cloud_task_permission(
+        &mut self,
+        level: SandboxLevel,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        self.native_cloud_task()
+            && self
+                .pickers
+                .update(cx, |pickers, cx| pickers.set_cloud_task_sandbox(level, cx))
+    }
     /// Save the new-chat default immediately and refresh permission controls.
     fn remember_permission(&self, level: SandboxLevel, cx: &mut Context<Self>) {
         let mode = zuse_protocol::presentation::PermissionMode::from_sandbox(level);
@@ -117,7 +135,10 @@ impl Composer {
                 window.focus(&self.input.focus_handle(cx), cx);
             }
             "enter" | "space" if !event.is_held => {
-                if self.permission_open && self.state.read(cx).configuration_blocked() {
+                if self.permission_open
+                    && self.state.read(cx).configuration_blocked()
+                    && !self.native_cloud_task()
+                {
                     self.refresh_permission(cx);
                 } else if self.permission_open {
                     self.choose_permission(LEVELS[self.permission_active], window, cx);
@@ -156,8 +177,10 @@ impl Composer {
         let harness = resolved.harness;
         let selected = effective(resolved.sandbox, harness.as_ref());
         let pending = self.state.read(cx).configuration_saving();
-        let unconfirmed =
-            !self.cached_cloud() && !pending && self.state.read(cx).configuration_blocked();
+        let unconfirmed = !self.cached_cloud()
+            && !self.native_cloud_task()
+            && !pending
+            && self.state.read(cx).configuration_blocked();
         // Safe modes rest muted and brighten on hover; full access stays in
         // the warning tone so the unlocked state is never mistaken for them.
         let full_access = selected == SandboxLevel::DangerFullAccess;
