@@ -104,7 +104,10 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
-      - run: sudo apt-get update && sudo apt-get install -y cmake libclang-dev libasound2-dev ripgrep
+      - run: |
+          # GitHub's Azure Ubuntu mirror can stop resolving for hours; use the main archive.
+          sudo sed -i 's#mirror+file:/etc/apt/apt-mirrors.txt#http://archive.ubuntu.com/ubuntu/#' /etc/apt/sources.list.d/ubuntu.sources || true
+          sudo apt-get -o Acquire::Retries=3 update && sudo apt-get -o Acquire::Retries=3 install -y cmake libclang-dev libasound2-dev ripgrep
       - run: cargo fmt --all --check
       - run: cargo check -p zuse-cli -p zuse-relay
       - run: cargo test -p zuse-cli --test startup
@@ -166,7 +169,8 @@ jobs:
           env-vars: "CARGO CC CFLAGS CXX CMAKE RUST HUGEICONS_BUILD_KEY"
       - if: runner.os == 'Linux'
         run: >-
-          sudo apt-get update && sudo apt-get install -y
+          { sudo sed -i 's#mirror+file:/etc/apt/apt-mirrors.txt#http://archive.ubuntu.com/ubuntu/#' /etc/apt/sources.list.d/ubuntu.sources || true; } &&
+          sudo apt-get -o Acquire::Retries=3 update && sudo apt-get -o Acquire::Retries=3 install -y
           build-essential cmake clang libclang-dev pkg-config libssl-dev
           libfontconfig-dev libfreetype-dev libxcb1-dev libxcb-shape0-dev
           libxcb-xfixes0-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev
@@ -267,7 +271,10 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           key: native-model-transport
           cache-on-failure: true
-      - run: sudo apt-get update && sudo apt-get install -y ripgrep
+      - run: |
+          # GitHub's Azure Ubuntu mirror can stop resolving for hours; use the main archive.
+          sudo sed -i 's#mirror+file:/etc/apt/apt-mirrors.txt#http://archive.ubuntu.com/ubuntu/#' /etc/apt/sources.list.d/ubuntu.sources || true
+          sudo apt-get -o Acquire::Retries=3 update && sudo apt-get -o Acquire::Retries=3 install -y ripgrep
       - run: cargo test --locked -p zuse-harness -p zuse-harness-extensions --all-targets
       - run: cargo build --locked --release -p zuse-harness --example harness-evaluate
       - run: python3 scripts/test-harness-evaluation.py --binary target/release/examples/harness-evaluate --output .context/native-transport-fixtures
