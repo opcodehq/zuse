@@ -189,6 +189,7 @@ async fn commands_uploads_and_running_limits_use_the_sandbox_edge() {
             "{outside}"
         );
     }
+    assert!(prized.has_running_limit(), "the worker must visit Prized computers");
     prized.keep_running("sbx_child").await.unwrap();
     assert_eq!(seen.body("timeout"), json!({"inMin":1440}));
     assert_eq!(seen.routes(), ["upload", "timeout"]);

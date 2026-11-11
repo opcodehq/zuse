@@ -395,6 +395,9 @@ impl Provider for Prized {
         .await
         .map(|_| ())
     }
+    fn has_running_limit(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]
