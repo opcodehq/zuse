@@ -29,7 +29,7 @@ const css = `
   .pin {position:fixed;z-index:20;min-width:22px;height:22px;padding:0;border-radius:11px;color:var(--on-primary);background:var(--primary);border:2px solid var(--surface);box-shadow:0 1px 5px var(--shadow);pointer-events:auto;font-weight:600;gap:4px}
   .pin-number {min-width:18px;text-align:center}.pin-tag {max-width:96px;overflow:hidden;text-overflow:ellipsis;padding-right:6px;font-weight:500}
   .pin[aria-pressed=true] {outline:2px solid var(--accent);outline-offset:1px}
-  .target-label {position:fixed;z-index:20;max-width:160px;padding:2px 6px;border-radius:4px;background:var(--accent-fill,var(--accent));color:var(--on-accent,var(--on-primary));font:500 11px/16px var(--font,system-ui,sans-serif);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .target-label {position:fixed;z-index:20;max-width:320px;padding:2px 6px;border-radius:4px;background:var(--accent-fill,var(--accent));color:var(--on-accent,var(--on-primary));font:500 11px/16px var(--font,system-ui,sans-serif);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .panel {position:relative;display:flex;flex-direction:column;width:100%;max-height:inherit;padding:10px;border-radius:10px;overflow-y:auto;overscroll-behavior:contain}
   .heading {display:flex;align-items:center;flex-shrink:0;gap:6px;min-height:22px;margin-bottom:4px;font-size:11px;color:var(--muted)}
   .number {display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;border-radius:5px;background:var(--hover);font-weight:600;color:var(--fg)}.anchor {flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -92,12 +92,14 @@ function rect(note) {
   return {x:r.x-scrollX,y:r.y-scrollY,width:r.width,height:r.height};
 }
 function remember() { history.push(notes.slice()); if(history.length>50) history.shift(); }
+function elementSelector(el) {
+  return (el.localName+(el.id?'#'+CSS.escape(el.id):'')+Array.from(el.classList).slice(0,3).map(c=>'.'+CSS.escape(c)).join('')).slice(0,300);
+}
 function payload(note, comment=note.input.value.trim()) {
   const elements=[];
   if(note.kind==='element') {
     const el=note.node, sensitive=el.closest('input,textarea,select,[contenteditable]');
-    const id=el.id?'#'+CSS.escape(el.id):'';
-    elements.push({tag:el.localName,selector:(el.localName+id+Array.from(el.classList).slice(0,3).map(c=>'.'+CSS.escape(c)).join('')).slice(0,300),text:sensitive?'':(el.innerText||'').replace(/\s+/g,' ').trim().slice(0,300)});
+    elements.push({tag:el.localName,selector:elementSelector(el),text:sensitive?'':(el.innerText||'').replace(/\s+/g,' ').trim().slice(0,300)});
   }
   return JSON.stringify({id:note.id,comment,elements,regions:note.kind==='region'?[note.region]:[],strokes:note.kind==='draw'?[note.stroke]:[],viewport:{width:innerWidth,height:innerHeight,scroll_x:Math.round(scrollX),scroll_y:Math.round(scrollY)},page_title:document.title});
 }
@@ -143,7 +145,7 @@ function createNote(kind, target) {
   const panel=document.createElement('div');panel.className='panel';
   const header=document.createElement('div');header.className='heading';
   const badge=document.createElement('span');badge.className='number';badge.textContent=String(number);
-  const anchor=document.createElement('span');anchor.className='anchor';anchor.textContent=kind==='element'?target.localName+(target.id?'#'+target.id:''):kind==='region'?'Region':'Drawing';
+  const anchor=document.createElement('span');anchor.className='anchor';anchor.textContent=kind==='element'?elementSelector(target):kind==='region'?'Region':'Drawing';anchor.title=anchor.textContent;
   const close=document.createElement('button');close.className='close';close.textContent='×';close.setAttribute('aria-label',`Hide comment for annotation ${number}`);
   header.append(badge,anchor,close);
   const input=document.createElement('textarea');input.rows=1;input.maxLength=4000;input.placeholder='Describe a change…';input.setAttribute('aria-label',`Comment for annotation ${number}`);
@@ -212,8 +214,10 @@ function layout() {
   hoverLabel.hidden=!valid;
   if(valid) {
     const r=hovered.getBoundingClientRect();Object.assign(hover.style,{left:r.x+'px',top:r.y+'px',width:r.width+'px',height:r.height+'px',borderWidth:String(u)+'px'});
-    hoverLabel.textContent=hovered.localName;hoverLabel.style.zoom=String(u);
-    hoverLabel.style.left=Math.max(2,Math.min(r.x/u,viewportWidth-hoverLabel.getBoundingClientRect().width/u-2))+'px';hoverLabel.style.top=Math.max(2,r.y/u-22)+'px';
+    hoverLabel.textContent=elementSelector(hovered);hoverLabel.style.zoom=String(u);hoverLabel.style.maxWidth=Math.max(0,Math.min(320,viewportWidth-4))+'px';
+    const labelRect=hoverLabel.getBoundingClientRect(), labelHeight=labelRect.height/u;
+    hoverLabel.style.left=Math.max(2,Math.min(r.x/u,viewportWidth-labelRect.width/u-2))+'px';
+    hoverLabel.style.top=Math.max(2,r.y/u>=labelHeight+2?r.y/u-labelHeight-2:r.bottom/u+2)+'px';
   }
 }
 function hit(p,r) {return p.x>=r.x && p.y>=r.y && p.x<=r.x+r.width && p.y<=r.y+r.height;}

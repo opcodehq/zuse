@@ -25,7 +25,7 @@ class Site(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         body = (
             b'<style>button,input{display:block;margin:30px;width:200px;height:40px}</style>'
-            b'<button id="pick" onclick="window.clicked=1">Pick this button</button>'
+            b'<button id="pick" class="primary text-2xl font-medium" onclick="window.clicked=1">Pick this button</button>'
             b'<input id="secret" type="password" value="private-value">'
             b'<button id="other" style="margin-top:140px">Another target</button>'
         )
@@ -180,9 +180,13 @@ def main(helper):
                 let r=t.getBoundingClientRect();return {left:r.left,right:r.right,rows:[...t.querySelectorAll('button')].map(b=>b.getBoundingClientRect().top)}})()""")
             assert toolbar['left']>=0 and toolbar['right']<=js('innerWidth'),toolbar
             assert len(set(toolbar['rows']))==1,toolbar
+            target=js("(()=>{let r=document.querySelector('#pick').getBoundingClientRect();return [r.x+r.width/2,r.y+r.height/2]})()")
+            pointer('move',*target)
+            assert js("document.querySelector('[data-zuse-annotation]').shadowRoot.querySelector('.target-label').textContent")=='button#pick.primary.text-2xl.font-medium'
             click_element('#pick')
             until(lambda: js("!!document.activeElement?.hasAttribute('data-zuse-note')"))
             assert js("document.querySelector('[data-zuse-annotation]').shadowRoot.querySelector('.pin-tag').textContent")=='button'
+            assert js("document.querySelector('[data-zuse-note]').shadowRoot.querySelector('.anchor').textContent")=='button#pick.primary.text-2xl.font-medium'
             assert 'system-ui' in js("getComputedStyle(document.querySelector('[data-zuse-note]').shadowRoot.querySelector('.anchor')).fontFamily")
             type_keys('hello world')
             # Pointer placement inside existing text must move the real caret.
