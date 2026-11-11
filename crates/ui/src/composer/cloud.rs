@@ -1286,6 +1286,8 @@ mod cached_tests {
         let state = cx.new(|_| {
             let mut state = crate::state::AppState::new();
             state.apply_cloud_account(json!({"user":{"id":"owner"},"orgId":null}));
+            // A cloud conversation's selected chat is its session.
+            state.selected_chat = Some("session".into());
             state
         });
         let composer = cx.new(|cx| Composer::new(state.clone(), cx));
