@@ -187,9 +187,93 @@ impl Composer {
             );
             self.cloud.pending_native_text = Some(text.clone());
             self.cloud.native_staged = self.staged().to_vec();
+            if !queue {
+                self.show_native_send(&task.target.initial_session.clone(), &message, &text, cx);
+            }
         }
         self.dispatch_cloud_task(cx);
         true
+    }
+    /// The message joins the conversation the moment it is sent; uploading
+    /// its files and server admission continue behind it. A failure puts it
+    /// back in the draft (see [`Self::return_native_send`]).
+    fn show_native_send(
+        &mut self,
+        session: &str,
+        message: &str,
+        text: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let message = message.to_owned();
+        let text = text.to_owned();
+        let session = session.to_owned();
+        self.state.update(cx, |state, cx| {
+            let device = state
+                .selected_chat_row()
+                .map(|chat| chat.device_id.clone())
+                .unwrap_or_default();
+            state.push_echo(
+                &session,
+                zuse_model::SessionMessageEntry {
+                    id: message.clone(),
+                    role: zuse_model::MessageRole::User,
+                    parts: vec![zuse_model::MessagePart::Text {
+                        id: format!("text:{message}"),
+                        text,
+                    }],
+                    created_at: chrono::Utc::now().timestamp_millis(),
+                    device_id: device,
+                    status: None,
+                    continuation_of: None,
+                    duration_ms: None,
+                },
+            );
+            cx.notify();
+        });
+        self.input.update(cx, |input, cx| input.set_text("", cx));
+        if let Some(files) = self.attachments.get_mut(&self.current_key) {
+            let sent = &self.cloud.native_staged;
+            files.retain(|file| !sent.iter().any(|sent| sent.id == file.id));
+        }
+        self.sync_attachment_chips(cx);
+        cx.notify();
+    }
+    /// Undo [`Self::show_native_send`] after a failed send: the message leaves
+    /// the conversation and its text and files return to an empty draft, so
+    /// Retry re-sends the same message identity.
+    fn return_native_send(&mut self, cx: &mut Context<Self>) {
+        let Some(request) = self.cloud.pending_native.clone() else {
+            return;
+        };
+        let (Some(task), Some(message)) = (
+            self.cloud.native.as_ref(),
+            request["action"]["messageId"].as_str(),
+        ) else {
+            return;
+        };
+        if request["action"]["type"] != "submit" {
+            return;
+        }
+        let session = task.target.initial_session.clone();
+        let message = message.to_owned();
+        self.state
+            .update(cx, |state, _| state.remove_echo(&session, &message));
+        if let Some(text) = self.cloud.pending_native_text.clone()
+            && self.input.read(cx).text().is_empty()
+        {
+            self.input.update(cx, |input, cx| input.set_text(text, cx));
+        }
+        let restored = self.cloud.native_staged.clone();
+        let files = self
+            .attachments
+            .entry(self.current_key.clone())
+            .or_default();
+        for file in restored {
+            if !files.iter().any(|existing| existing.id == file.id) {
+                files.push(file);
+            }
+        }
+        self.sync_attachment_chips(cx);
     }
     pub(super) fn interrupt_cloud_task(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(task) = &self.cloud.native else {
@@ -219,13 +303,12 @@ impl Composer {
             let field=if request["action"]["type"]=="queue" {"input"} else {""};
             let assets=if field=="input" {&request["action"]["input"]["attachments"]} else {&request["action"]["attachments"]};
             if !staged.is_empty() && assets.as_array().map_or(true,|assets|assets.len()!=staged.len()) {
-                let mut assets=Vec::new();
-                for attachment in &staged {
-                    match upload_native_asset(&target,attachment).await {
-                        Ok(asset)=>assets.push(asset),
-                        Err(error)=>{let _=this.update(cx,|this,cx|this.cloud_failure(error,cx));return;}
-                    }
-                }
+                // All files upload at once; their order is kept.
+                let uploads=futures::future::try_join_all(staged.iter().map(|attachment|upload_native_asset(&target,attachment))).await;
+                let assets=match uploads {
+                    Ok(assets)=>assets,
+                    Err(error)=>{let _=this.update(cx,|this,cx|{this.return_native_send(cx);this.cloud_failure(error,cx)});return;}
+                };
                 if field=="input" {request["action"]["input"]["attachments"]=json!(assets);} else {request["action"]["attachments"]=json!(assets);}
                 // Retain the exact asset receipts and command before dispatch.
                 let _=this.update(cx,|this,_|this.cloud.pending_native=Some(request.clone()));
@@ -266,8 +349,14 @@ impl Composer {
                         if foreground {cx.emit(ComposerEvent::CloudForegroundAdmitted);}
                         cx.emit(ComposerEvent::CloudLaunchChanged);
                     }
-                    Ok(_) => this.failure = Some("Message admission was not verified. Retry the original message to check its saved identity.".into()),
-                    Err(error) => this.failure = Some(format!("Message admission interrupted: {error}. Retry preserves the same message identity.").into()),
+                    Ok(_) => {
+                        this.return_native_send(cx);
+                        this.failure = Some("Message admission was not verified. Retry the original message to check its saved identity.".into());
+                    }
+                    Err(error) => {
+                        this.return_native_send(cx);
+                        this.failure = Some(format!("Couldn't send: {error} Retry sends the same message.").into());
+                    }
                 }
                 cx.notify();
             });
@@ -996,16 +1085,24 @@ async fn upload_native_asset(
     {
         return Err("Cloud attachments must be non-empty and at most 20 MB.".into());
     }
-    for (seq, bytes) in attachment
-        .bytes()
-        .chunks(zuse_protocol::cloud_assets::CHUNK_BYTES)
-        .enumerate()
-    {
+    // Chunks carry their sequence, so they upload side by side; a screenshot
+    // sent one chunk at a time took 15 s.
+    use futures::{StreamExt as _, TryStreamExt as _};
+    futures::stream::iter(
+        attachment
+            .bytes()
+            .chunks(zuse_protocol::cloud_assets::CHUNK_BYTES)
+            .enumerate(),
+    )
+    .map(|(seq, bytes)| async move {
         target.controller.client().call_scoped(methods::CLOUD_TASK_ASSET,json!({
             "workspaceId":target.workspace,"expectedAccountId":target.subject,"expectedOrganizationId":target.organization,
             "method":methods::UPLOAD_CHUNK,"params":{"uploadId":attachment.id,"seq":seq,"data":base64::engine::general_purpose::STANDARD.encode(bytes)}
-        })).await.map_err(|error|error.to_string())?;
-    }
+        })).await.map_err(|error|error.to_string())
+    })
+    .buffer_unordered(4)
+    .try_collect::<Vec<_>>()
+    .await?;
     let value=target.controller.client().call_scoped(methods::CLOUD_TASK_ASSET,json!({
         "workspaceId":target.workspace,"expectedAccountId":target.subject,"expectedOrganizationId":target.organization,
         "method":methods::UPLOAD_COMMIT,"params":{"uploadId":attachment.id,"fileName":attachment.name}
@@ -1175,6 +1272,56 @@ mod cached_tests {
             });
             drop(receive);
         }
+    }
+    #[gpui::test]
+    fn a_cloud_send_joins_the_chat_at_once_and_returns_to_the_draft_on_failure(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _entered = runtime.enter();
+        let (send, receive) = tokio::sync::mpsc::channel(1);
+        let (_replies, replies) = tokio::sync::mpsc::channel(1);
+        let controller =
+            crate::state::EngineHandle::from_test_client(zuse_rpc::RpcClient::new(send, replies));
+        let state = cx.new(|_| {
+            let mut state = crate::state::AppState::new();
+            state.apply_cloud_account(json!({"user":{"id":"owner"},"orgId":null}));
+            state
+        });
+        let composer = cx.new(|cx| Composer::new(state.clone(), cx));
+        composer.update(cx, |c, cx| {
+            let target = crate::state::CloudTarget {
+                controller,
+                subject: "owner".into(),
+                organization: None,
+                workspace: "task".into(),
+                initial_session: "session".into(),
+            };
+            c.set_cloud_task(
+                target,
+                json!({"agent":"codex","model":"gpt-6.1-sol","runtimeMode":"full-access"}),
+                cx,
+            );
+            c.input.update(cx, |input, cx| input.set_text("Look at this", cx));
+            assert!(c.send_cloud_task("Look at this".into(), false, cx));
+            // Before any upload or admission completes.
+            assert_eq!(c.input.read(cx).text(), "", "the draft clears at once");
+            let echoed = |cx: &App| {
+                state
+                    .read(cx)
+                    .pending_echoes()
+                    .iter()
+                    .any(|entry| matches!(&entry.parts[..], [zuse_model::MessagePart::Text { text, .. }] if text == "Look at this"))
+            };
+            assert!(echoed(cx), "the message is in the chat at once");
+            // Delivery fails: it leaves the chat and returns to the draft.
+            c.cloud.task = None;
+            c.return_native_send(cx);
+            assert!(!echoed(cx));
+            assert_eq!(c.input.read(cx).text(), "Look at this");
+            assert!(c.cloud.pending_native.is_some(), "Retry keeps the same identity");
+        });
+        drop(receive);
     }
     #[gpui::test]
     fn new_cloud_request_uses_selected_provider_and_its_model_before_dispatch(

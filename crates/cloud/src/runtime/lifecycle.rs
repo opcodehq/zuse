@@ -650,12 +650,27 @@ impl RuntimeControl {
     ) -> Result<(), ApiError> {
         let result = self.lifecycle_step(provider, job, now).await;
         if let Err(error) = &result {
-            jobs::retry(&self.pool, &job, clock_ms(), error.code).await?;
+            // A computer its provider no longer has will not come back; after
+            // a few confirmations stop retrying, so the user sees why instead
+            // of an endless "Starting computer".
+            if error.code == MACHINE_MISSING && job.attempts >= MISSING_CONFIRMATIONS {
+                sqlx::query("UPDATE zuse_rust_jobs SET state='failed',last_error_code=$3,lease_token=NULL,lease_expires_at=NULL,updated_at=$4 WHERE job_id=$1 AND lease_token=$2 AND state='running'")
+                    .bind(&job.id).bind(&job.lease_token).bind(error.code).bind(clock_ms()).execute(&self.pool).await?;
+                tracing::warn!(workspace = %job.resource_id, attempts = job.attempts,
+                    "Retained computer missing at its provider; lifecycle stopped");
+            } else {
+                jobs::retry(&self.pool, &job, clock_ms(), error.code).await?;
+            }
             sqlx::query("UPDATE api_cloud_workspaces w SET status_code=$3,revision=revision+1,updated_at=GREATEST(updated_at+1,(extract(epoch from clock_timestamp())*1000)::bigint) WHERE workspace_id=$1 AND request_config->'rustLifecycleOperation'->>'id'=$2 AND desired_state<>'deleted' AND state NOT IN ('deleting','deleted') AND request_config->'rustLifecycleOperation'->>'phase' NOT IN ('paused','ready') AND request_config->'rustMemoryTransportRecovery'->>'operationId' IS DISTINCT FROM $2 AND EXISTS(SELECT 1 FROM zuse_rust_control_owners o WHERE o.resource_kind='workspace' AND o.resource_id=w.workspace_id AND o.backend='rust' AND o.generation=$4)").bind(&job.resource_id).bind(job.payload["operationId"].as_str()).bind(error.code).bind(job.generation).execute(&self.pool).await?;
         }
         result
     }
 }
+/// The provider no longer has the retained computer (in any cluster).
+pub(crate) const MACHINE_MISSING: &str = "cloud_retained_machine_missing";
+/// Consecutive "missing" observations (about 7 s of backoff) before giving up.
+const MISSING_CONFIRMATIONS: i32 = 3;
+
 pub(super) async fn require_resume_capacity(
     pin: Option<&crate::managed_bases::candidate::StagingBasePin>,
     tx: &mut Transaction<'_, Postgres>,

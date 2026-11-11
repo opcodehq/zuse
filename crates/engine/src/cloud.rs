@@ -43,6 +43,26 @@ impl std::fmt::Display for CloudHttpFailure {
 }
 impl std::error::Error for CloudHttpFailure {}
 
+/// What a rejected cloud message or attachment means for the user.
+fn task_rejection(code: &str) -> Option<&'static str> {
+    Some(match code {
+        "cloud_task_model_not_installed" | "cloud_task_model_catalog_missing" => {
+            "This computer doesn't have that model. Pick another model and send again."
+        }
+        "cloud_task_model_required" | "cloud_task_agent_required" => {
+            "Choose an agent and model for this task, then send again."
+        }
+        "cloud_task_model_reasoning_invalid" => {
+            "That reasoning level isn't available for this model. Pick another and send again."
+        }
+        "cloud_task_upload_limit" => {
+            "Too many attachments are still uploading. Wait for them to finish, then send again."
+        }
+        "invalid_launch_asset" => "This attachment couldn't be uploaded. Try attaching it again.",
+        _ => return None,
+    })
+}
+
 pub(crate) fn rpc_error(error: anyhow::Error) -> zuse_rpc::RpcError {
     match error.downcast::<zuse_rpc::RpcError>() {
         Ok(error) => error,
@@ -602,6 +622,19 @@ impl CloudApi {
                     }
                 };
                 anyhow::bail!("{message}");
+            }
+            // Message and attachment rejections name their reason; "busy"
+            // would send the user waiting for something that never ends.
+            if status.is_client_error()
+                && path.first() == Some(&"v1")
+                && path
+                    .iter()
+                    .any(|part| *part == "task-commands" || *part == "assets")
+            {
+                let value: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+                if let Some(message) = value["error"].as_str().and_then(task_rejection) {
+                    anyhow::bail!("{message}");
+                }
             }
             return Err(CloudHttpFailure(status).into());
         }
@@ -1723,6 +1756,15 @@ pub async fn handle(auth: &Auth, method: &str, params: Value) -> Result<Value> {
 #[cfg(test)]
 mod beta_tests {
     use super::*;
+    #[test]
+    fn rejected_messages_say_why_instead_of_busy() {
+        assert!(
+            super::task_rejection("cloud_task_model_not_installed")
+                .unwrap()
+                .contains("model")
+        );
+        assert!(super::task_rejection("something_new").is_none());
+    }
     #[test]
     fn cloud_computers_are_off_in_production_unless_enabled() {
         assert!(!beta_enabled_for(None, "https://api.zuse.sh"));
