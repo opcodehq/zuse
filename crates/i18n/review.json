@@ -967,6 +967,36 @@
     "cli-missing_home": "23e7468487d13e835fd4f4f4124782d57b1de9c38d21151a8ec2ba95be505973",
     "cli-listening": "e4ba78f6cf9d1e110c78cf5ed9ba7c6c6e7405bc7226e45c31b7cd3bbcf18fd8",
     "cli-open": "779942ac5e34065e94b4d55cbd5589ade190ec867583e54d37086d91a58ef8ce",
+    "cli-account": "daa56fcaf730a05a759ba809666151349dc4ec013ad29d237a71e6b553c96a9b",
+    "cli-pair": "19a753a46683ae4dd5525c0bd1b9f286d1e19db14d14106527ee83b1ea9fe21b",
+    "cli-pair_label": "08406c33c6d9f382328410c408dc734fa0a469594ab04ecdc8abda38275017b3",
+    "cli-pair_app": "3c5c4d47924b81170f69dfda5e9d269134ef13f3af92682e67dae5f0cf9301ea",
+    "cli-login": "a2086288eb41ff242e79fde048fde0d4a0b2e02b2a2e29b8f2ebcce4c3bae6b6",
+    "cli-logout": "ee8ece60938d4e59316a4a41363d6b8da09c29a420e2afa343e5c58ab700a0a2",
+    "cli-link": "90ffe4e5aab7ce5d0228dbb55970d995200c23a06484e012920d42dc671527ad",
+    "cli-link_name": "a4a30346f9379f7fde6bd85272ef794681efde28ca7358fbd429cc4b9925a113",
+    "cli-unlink": "b7d31f557480c718de0a3fb48073ec788f4a171fa083344cd70a9f548b006924",
+    "cli-status": "cacb1c15cc653ca2185c7e0afe7ce3ba4cdcdad76651cea9ee9910434c8bc410",
+    "cli-server_unavailable": "7e750cc91f81d9a60f4e4d2854115d049288480cce54d8eb6fc59c0c46cb16b8",
+    "cli-default_device": "30d01a64f9a923c9e8391b7d479b6669e9e62acfed76ab3e539b301eb37acd11",
+    "cli-browser_link": "53e1011fcb29735055ca067834d4f39895d096d7cec39b71553168bf979cdc8d",
+    "cli-app_link": "2934fe411aa06095a1c1130adf2fc50ca5c6b727e865c770ba081f52dbeaf6cc",
+    "cli-certificate_warning": "16e3921ea61ab38325b073a33a0a1d9d1fea8dd7f33c7fb728dd97205035da0f",
+    "cli-link_warning": "fdfc70d7816cd40cfdd77b302a30e4a44cd04208299d455bff0eaea473fb31b8",
+    "cli-local_only": "b5f85c26352cb0f0bf59cae3f1c4666e48ec4df6956e6de00da1d324e777d661",
+    "cli-sign_in_prompt": "5c0e06632b68b082f6e19b06845ca897097f4ac8ea36a1576c8b48792cd34a0d",
+    "cli-signed_in": "5ad7fbafdeb9597c3ce7ddf68d680b650f8596dccb7cf4e6c4fc172ced45d678",
+    "cli-signed_out": "80c6e7caffee367d7a8b9e6db3620dada71015d6f27f1fd07d1a4310075c1548",
+    "cli-sign_in_failed": "40b6a7993d69ead7a76d9270051f891957d9b3a1264ac138a469a88a6733cf85",
+    "cli-linked": "c726a4626f31fffcac05330e3e7d1310ba4c310e688f6042720c2f087e65c707",
+    "cli-unlinked": "df150db40b75a19a7f7c24680fa1b782ba0894f1d92355c98945fddee6966fb4",
+    "cli-status_signed_in": "cc306cb92ff96fa185b23ae97d03c73c195029cac5784fbc4c099b841f3d6ecc",
+    "cli-status_signed_out": "1f7d14a5884d4c7776898dcef1674b6fcd80c2c88c809ec486e954292cba7072",
+    "cli-status_linked": "6b6559d2d97374c371a4a667de45785217fe6c3c799baa4e536bd39be6989158",
+    "cli-status_unlinked": "ff63e7663ed1e274cc71207c982bbebc2bbb62514a272440d82bcf7d724d154a",
+    "cli-status_no_routes": "66ffc77fa2b13743337df61bbae451cd10f5ff71c56d1b11a4f322c4ad153181",
+    "cli-assets_missing": "f9f5c8043a45dab95b046a95768e648c11af8fd2d6c789d8d29b6c04b052a109",
+    "cli-invitation_failed": "5027a53917cec3bdc8dbc7a9edd4b7fa73dd90d905f76fa421eab0994e913a50",
     "commands-commands_no_authenticated_agent": "31371338c8f0e3d12ad8a372bceab0899b0a92caa5f29052cac62b9a01ef5c3b",
     "commands-commands_connect_an_agent_in_cloud_authentication_before_opening_a_new_tab": "eb306000b354573c7793077623eba2eb1113b34b5dd3a1529531212b7b4c1af8",
     "commands-default_keybindings_new_chat": "db18382a249e0206bc28514931d423b77d55dce180c1eb8e4bf35f861c9a50ec",
@@ -1681,7 +1711,7 @@
     "native-archived_threads": "dda67f8a80bad1857117c50fcbab825d58514a44cc9732ac5bc94ba40d1b88aa",
     "native-no_matching_threads": "614e83ef17c13f3cce0846c565e05efa6a3c78788a14163be5ceed3502de903e",
     "native-try_title_project_branch": "6e210ebbc15cb124b936876607b980767b4c9ec53354293897058bb681b05405",
-    "native-composer_placeholder": "29c83f9429eb2a7f0360d241d700061afbb3a55c9525e7add9585d1dc4b134f2",
+    "native-composer_placeholder": "defdc76f30ea7b0f328aa7f0254f14678110cff87963a9631032415e75a4f474",
     "native-agent_default": "90340504c623ec22c4e31f08fa0003726c20337b889dd44cf4fe622553273acb",
     "native-reconnecting": "d5da5009c1233fcfa4f7487dfe33c083b243d988199de74c8aef530b00b4b805",
     "native-loading_account": "e1802082fa4390875307a18f814df1f0db902f50c418bd960461d110964a9023",
@@ -4374,6 +4404,10 @@
       "projects-masters_ask_the_master_to_start_work_it_will_decide_which_tasks_need_separate_agents": {
         "status": "needs-review",
         "sourceHash": "2eb64296aeee20715198611ecc3c6a3f01f3ea34d2e75634bb06a2c208cc2c47"
+      },
+      "native-composer_placeholder": {
+        "status": "needs-review",
+        "sourceHash": "29c83f9429eb2a7f0360d241d700061afbb3a55c9525e7add9585d1dc4b134f2"
       }
     },
     "zh-Hant": {
@@ -4464,6 +4498,10 @@
       "projects-masters_ask_the_master_to_start_work_it_will_decide_which_tasks_need_separate_agents": {
         "status": "needs-review",
         "sourceHash": "2eb64296aeee20715198611ecc3c6a3f01f3ea34d2e75634bb06a2c208cc2c47"
+      },
+      "native-composer_placeholder": {
+        "status": "needs-review",
+        "sourceHash": "29c83f9429eb2a7f0360d241d700061afbb3a55c9525e7add9585d1dc4b134f2"
       }
     },
     "ja": {
@@ -4554,6 +4592,10 @@
       "projects-masters_ask_the_master_to_start_work_it_will_decide_which_tasks_need_separate_agents": {
         "status": "needs-review",
         "sourceHash": "2eb64296aeee20715198611ecc3c6a3f01f3ea34d2e75634bb06a2c208cc2c47"
+      },
+      "native-composer_placeholder": {
+        "status": "needs-review",
+        "sourceHash": "29c83f9429eb2a7f0360d241d700061afbb3a55c9525e7add9585d1dc4b134f2"
       }
     },
     "de": {
@@ -4644,6 +4686,10 @@
       "projects-masters_ask_the_master_to_start_work_it_will_decide_which_tasks_need_separate_agents": {
         "status": "needs-review",
         "sourceHash": "2eb64296aeee20715198611ecc3c6a3f01f3ea34d2e75634bb06a2c208cc2c47"
+      },
+      "native-composer_placeholder": {
+        "status": "needs-review",
+        "sourceHash": "29c83f9429eb2a7f0360d241d700061afbb3a55c9525e7add9585d1dc4b134f2"
       }
     },
     "ko": {
@@ -4734,6 +4780,10 @@
       "projects-masters_ask_the_master_to_start_work_it_will_decide_which_tasks_need_separate_agents": {
         "status": "needs-review",
         "sourceHash": "2eb64296aeee20715198611ecc3c6a3f01f3ea34d2e75634bb06a2c208cc2c47"
+      },
+      "native-composer_placeholder": {
+        "status": "needs-review",
+        "sourceHash": "29c83f9429eb2a7f0360d241d700061afbb3a55c9525e7add9585d1dc4b134f2"
       }
     },
     "fr": {
@@ -4824,6 +4874,10 @@
       "projects-masters_ask_the_master_to_start_work_it_will_decide_which_tasks_need_separate_agents": {
         "status": "needs-review",
         "sourceHash": "2eb64296aeee20715198611ecc3c6a3f01f3ea34d2e75634bb06a2c208cc2c47"
+      },
+      "native-composer_placeholder": {
+        "status": "needs-review",
+        "sourceHash": "29c83f9429eb2a7f0360d241d700061afbb3a55c9525e7add9585d1dc4b134f2"
       }
     }
   }

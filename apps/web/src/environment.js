@@ -29,4 +29,8 @@ export function observeEnvironment(report) {
   try { preference = localStorage.getItem('zuse.language.v1') || 'system'; } catch {}
   report(JSON.stringify({localization: {preference, languages: Array.from(navigator.languages)}}));
   changed();
+  // Software WebGPU keeps every pixel on the CPU; large windows can stall it.
+  navigator.gpu?.requestAdapter({powerPreference: 'high-performance'}).then((adapter) => {
+    if (adapter?.info?.isFallbackAdapter) report(JSON.stringify({softwareRenderer: true}));
+  }).catch(() => {});
 }

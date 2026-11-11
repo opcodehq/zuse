@@ -22,6 +22,7 @@ pub struct PairingCard {
     relay_credential: Entity<ComposerInput>,
     peers: Vec<zuse_remote::PeerMetadata>,
     invitation: Option<zuse_remote::PairedTarget>,
+    browser_link: Option<String>,
     name: Entity<ComposerInput>,
     listen: Entity<ComposerInput>,
     origin: Entity<ComposerInput>,
@@ -92,6 +93,7 @@ impl PairingCard {
             status: Value::Null,
             peers: vec![],
             invitation: None,
+            browser_link: None,
             name,
             listen,
             origin,
@@ -179,6 +181,7 @@ impl PairingCard {
                         if method==methods::CREATE_PAIRING {
                             card.invitation=value["fragment"].as_str().and_then(|fragment|zuse_remote::Invitation::parse_fragment(fragment).ok())
                                 .and_then(|invitation|value["origin"].as_str().and_then(|origin|zuse_remote::PairedTarget::for_route(origin,invitation).ok()));
+                            card.browser_link=value["browserOrigin"].as_str().filter(|origin|value["origin"].as_str()!=Some(*origin)).zip(value["fragment"].as_str()).map(|(origin,fragment)|format!("{origin}/{fragment}"));
                             if card.invitation.is_none(){card.error=Some("The invitation was created, but its connection URL is unavailable. Start browser or relay access before sharing it.".into());}
                         }else if matches!(method, methods::REVOKE_PAIRING | methods::START_DIRECT_ACCESS | methods::STOP_DIRECT_ACCESS | methods::START_RELAY_ACCESS | methods::STOP_RELAY_ACCESS | methods::RESUME_RELAY_ACCESS | methods::SET_RELAY_AUTO_START){card.invitation=None;}
                         if method != methods::CREATE_PAIRING { card.dialog = None; }
@@ -488,6 +491,10 @@ impl PairingCard {
                         body=body.child(r::details("Private connection link","Share this link only with the device you want to connect."))
                             .child(div().flex().gap(px(8.)).child(r::button("native-copy-invitation",crate::localization::text("settings-connect_link_card_copy_link", cx)).on_click(move|_,_,cx|if let Ok(link)=copy.export_link(){cx.write_to_clipboard(ClipboardItem::new_string(link));}))
                                 .child(r::button("native-open-invitation",crate::localization::text("chat-markdown_body_open_link", cx)).on_click(move|_,_,cx|if let Ok(link)=target.export_link(){cx.open_url(&link);} )));
+                        if let Some(link)=self.browser_link.clone() {
+                            body=body.child(r::details("Browser link","Open this link in a web browser. It may warn about this computer's private certificate the first time."))
+                                .child(r::button("native-copy-browser-invitation","Copy browser link").on_click(move|_,_,cx|cx.write_to_clipboard(ClipboardItem::new_string(link.clone()))));
+                        }
                     }
                 }
                 Dialog::Computer => { body=body.child(field(&theme,self.destination.clone())); }

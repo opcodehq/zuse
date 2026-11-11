@@ -700,7 +700,8 @@ impl Repos {
 
     /// Remember an existing repository the user pointed us at.
     pub async fn add(&self, path: &str) -> Result<Repo, EngineError> {
-        let abs = absolutize(Path::new(path));
+        let expanded = expand_home(path).map_err(|error| EngineError::Other(error.into()))?;
+        let abs = absolutize(Path::new(&expanded));
         if !Self::path_exists(&abs).await {
             return Err(EngineError::Other(format!(
                 "No such folder: {}",
@@ -2037,7 +2038,9 @@ impl Repos {
         hang_for_test: bool,
     ) -> Result<FolderListing, EngineError> {
         let target = match path.filter(|p| !p.trim().is_empty()) {
-            Some(p) => absolutize(Path::new(&p)),
+            Some(p) => absolutize(Path::new(
+                &expand_home(&p).map_err(|error| EngineError::Other(error.into()))?,
+            )),
             None => session_home_dir().map_err(|error| EngineError::Other(error.to_string()))?,
         };
         let (tx, rx) = tokio::sync::oneshot::channel();

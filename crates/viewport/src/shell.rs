@@ -5,8 +5,8 @@ use crate::{assets::icon, composer_style as composer};
 use zuse_i18n::messages as msg;
 use zuse_markdown::{Block, InlineRun, parse_full};
 
-pub(super) const BG: u32 = 0x0b0c0b;
-pub(super) const SURFACE: u32 = 0x0e0f0e;
+pub(super) const BG: u32 = 0x151515;
+pub(super) const SURFACE: u32 = 0x1e1e1e;
 pub(super) const RAISED: u32 = 0x191c1a;
 pub(super) const BORDER: u32 = 0x1f211f;
 pub(super) const TEXT: u32 = 0xe8e9e7;
@@ -859,75 +859,6 @@ impl WorkspaceView {
                             .on_click({let text=entry.parts.iter().filter_map(|p|serde_json::to_value(p).ok()).filter_map(|p|p["text"].as_str().map(str::to_owned)).collect::<Vec<_>>().join("\n");move|_,_,cx|cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))})
                     ))
             }))
-            .into_any_element()
-    }
-
-    pub(super) fn project_picker_view(&self, cx: &mut Context<Self>) -> AnyElement {
-        column()
-            .p_6()
-            .gap_4()
-            .flex_1()
-            .child(
-                row()
-                    .child(
-                        div()
-                            .text_size(px(20.))
-                            .child(tr(cx, msg::native::open_a_project)),
-                    )
-                    .child(div().flex_1())
-                    .child(
-                        icon_button("close-project-picker", "close", "Close project picker")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.project_picker = false;
-                                cx.notify();
-                            })),
-                    ),
-            )
-            .child(label(tr(
-                cx,
-                msg::native::choose_a_known_repository_or_enter_a_path_on_the_engine_host,
-            )))
-            .children(self.known_projects().iter().enumerate().map(|(i, p)| {
-                let project = p.clone();
-                column()
-                    .id(("project", i))
-                    .cursor_pointer()
-                    .rounded_lg()
-                    .border_1()
-                    .border_color(rgb(BORDER))
-                    .p_3()
-                    .gap_1()
-                    .hover(|s| s.bg(rgb(RAISED)))
-                    .child(
-                        row()
-                            .gap_2()
-                            .child(icon("folder"))
-                            .child(label(p["name"].as_str().unwrap_or("Project").to_owned())),
-                    )
-                    .child(label(p["path"].as_str().unwrap_or_default().to_owned()))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if !this.new_chat(cx) {
-                            return;
-                        }
-                        this.project = Some(project.clone());
-                        this.project_picker = false;
-                        cx.notify();
-                    }))
-            }))
-            .child(
-                div()
-                    .mt_3()
-                    .p_2()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(rgb(BORDER))
-                    .child(self.project_input.clone()),
-            )
-            .child(
-                control("add-project", tr(cx, msg::native::open_folder))
-                    .bg(rgb(RAISED))
-                    .on_click(cx.listener(|this, _, _, cx| this.add_project(cx))),
-            )
             .into_any_element()
     }
 

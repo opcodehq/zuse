@@ -3,7 +3,7 @@ use super::*;
 use crate::assets::icon;
 use crate::localization::message as tr;
 use crate::shell::{
-    BG, BORDER, FAINT, MUTED, RAISED, TEXT, column, icon_button, label, provider_icon, row,
+    BG, BORDER, FAINT, MUTED, RAISED, SURFACE, TEXT, column, icon_button, label, provider_icon, row,
 };
 use zuse_i18n::messages as msg;
 use zuse_protocol::presentation::{SidebarView, project_identity};
@@ -127,7 +127,7 @@ impl WorkspaceView {
                         .child(icon(provider_icon(provider)).size(px(14.)).text_color(rgb(MUTED)))
                         .child(div().min_w_0().truncate().text_size(px(12.)).child(title))
                         .role(Role::Tab).aria_selected(active).max_w(px(180.)).flex_shrink_0()
-                        .when(active, |d| d.bg(rgb(RAISED)).text_color(rgb(TEXT)))
+                        .when(active, |d| d.bg(rgb(0x303030)).text_color(rgb(TEXT)))
                         .on_click(cx.listener(move |this, _, _, cx| { if this.cloud.cached { let _ = this.requests.unbounded_send(json!({"ui":"selectCachedCloudSession","sessionId":chat["id"]})); } else { this.select(chat.clone(), cx); } }))
                 })))
             .when(selected["archived"] != true, |d| d.child(icon_button("add-thread-conversation", "plus", "New chat in this thread")
@@ -226,7 +226,7 @@ impl WorkspaceView {
             .w_full()
             .h_full()
             .flex_shrink_0()
-            .bg(rgb(BG))
+            .bg(rgb(SURFACE))
             .rounded(px(crate::workspace_style::RADIUS))
             .overflow_hidden()
             .child(
@@ -885,6 +885,10 @@ impl WorkspaceView {
         let value = chat.clone();
         let context = chat.clone();
         let actions = chat.clone();
+        let row_group = SharedString::from(format!(
+            "chat-row-{}",
+            chat["id"].as_str().unwrap_or_default()
+        ));
         column()
             .id(SharedString::from(format!(
                 "chat-{}",
@@ -894,14 +898,15 @@ impl WorkspaceView {
             .aria_label(SharedString::from(
                 chat["title"].as_str().unwrap_or("New thread").to_owned(),
             ))
+            .group(row_group.clone())
             .cursor_pointer()
             .px_2()
-            .py_2()
+            .py(px(if nested { 6. } else { 8. }))
             .gap_1()
             .rounded_lg()
             .when(nested, |d| d.ml_3())
-            .when(selected, |d| d.bg(rgb(0x2a2a2a)))
-            .hover(|d| d.bg(rgb(if selected { 0x303030 } else { 0x202020 })))
+            .when(selected, |d| d.bg(rgb(0x343434)))
+            .hover(|d| d.bg(rgb(if selected { 0x383838 } else { 0x2a2a2a })))
             .when(!nested, |d| {
                 d.child(
                     row()
@@ -945,6 +950,10 @@ impl WorkspaceView {
                             "Thread actions",
                         )
                         .size(px(22.))
+                        .when(nested, |d| {
+                            d.invisible()
+                                .group_hover(row_group.clone(), |d| d.visible())
+                        })
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .on_click(cx.listener(
                             move |this, _, window, cx| {
@@ -963,11 +972,20 @@ impl WorkspaceView {
                         )))
                     })
                     .when(nested && !active, |d| {
-                        d.child(label(age).text_size(px(9.)).text_color(rgb(FAINT)))
+                        d.child(
+                            label(if age == "now" {
+                                age.clone()
+                            } else {
+                                format!("{age} ago")
+                            })
+                            .flex_shrink_0()
+                            .text_size(px(11.))
+                            .text_color(rgb(FAINT)),
+                        )
                     }),
             )
             .when(
-                chat["branch"].as_str().is_some_and(|s| !s.is_empty()),
+                !nested && chat["branch"].as_str().is_some_and(|s| !s.is_empty()),
                 |d| {
                     d.child(
                         row()

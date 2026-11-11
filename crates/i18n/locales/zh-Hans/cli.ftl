@@ -57,3 +57,63 @@ cli-missing_home = 需要 HOME 或 --data-dir
 cli-listening = 智能体工具监听于 127.0.0.1:{ $port }
 
 cli-open = 打开 { $url }
+
+cli-account = 在服务器启动时登录并关联这台电脑
+
+cli-pair = 为其他设备创建私密链接
+
+cli-pair_label = 在“已连接设备”中显示的名称
+
+cli-pair_app = 显示用于 Zuse 应用而非浏览器的二维码
+
+cli-login = 登录你的 Zuse 账号
+
+cli-logout = 退出你的 Zuse 账号
+
+cli-link = 让这台电脑可通过你的 Zuse 账号访问
+
+cli-link_name = 在你的账号中显示的电脑名称
+
+cli-unlink = 停止通过你的账号提供这台电脑
+
+cli-status = 显示账号和网络状态
+
+cli-server_unavailable = 代理端口 { $port } 上没有运行 Zuse 服务器。请先启动 zuse-server，或指定 --ipc-port。
+
+cli-default_device = 新设备
+
+cli-browser_link = 浏览器：{ $url }
+
+cli-app_link = Zuse 应用：{ $url }
+
+cli-certificate_warning = 首次打开时，浏览器会提示这台电脑的私有证书。请仅在可信网络中继续。
+
+cli-link_warning = 任何持有此链接的人都可以使用这台电脑。未使用的链接将在 10 分钟后失效。
+
+cli-local_only = 此链接仅在这台电脑上有效。请使用 --lan 或 --account 启动 zuse-server 以连接其他设备。
+
+cli-sign_in_prompt = 打开 { $url } 并确认代码 { $code }
+
+cli-signed_in = 已登录为 { $email }
+
+cli-signed_out = 已退出登录
+
+cli-sign_in_failed = 登录未完成
+
+cli-linked = 已可通过你的账号访问，名称为 { $name }，地址为 { $url }
+
+cli-unlinked = 这台电脑已无法再通过你的账号访问
+
+cli-status_signed_in = 账号：{ $email }
+
+cli-status_signed_out = 账号：未登录
+
+cli-status_linked = 电脑：{ $name }，地址为 { $url }
+
+cli-status_unlinked = 电脑：未关联账号
+
+cli-status_no_routes = 网络：仅限这台电脑
+
+cli-assets_missing = 未找到浏览器文件。请指定 --assets 或设置 ZUSE_WEB_ASSETS，否则浏览器无法打开此服务器。
+
+cli-invitation_failed = 无法创建连接链接

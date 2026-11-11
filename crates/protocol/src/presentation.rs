@@ -22,8 +22,8 @@ use std::collections::BTreeMap;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SidebarView {
-    #[default]
     Threads,
+    #[default]
     Projects,
 }
 

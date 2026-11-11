@@ -7,6 +7,9 @@ use zuse_i18n::messages as msg;
 
 impl WorkspaceView {
     pub(super) fn refresh_pairings(&mut self) {
+        let _ = self
+            .requests
+            .unbounded_send(json!({"ui":"listSavedComputers"}));
         self.refresh_relay();
         self.refresh_network_access();
         if !self.connected || self.pairing_fetch.is_some() {
@@ -86,12 +89,19 @@ impl WorkspaceView {
             }
             if action {
                 self.pairing_fragment = value["fragment"].as_str().map(str::to_owned);
-                if let Some(origin) = value["origin"]
+                // A browser needs HTTPS; a paired app can use the plain LAN route.
+                let app = value["origin"].as_str();
+                if let Some(origin) = value["browserOrigin"]
                     .as_str()
+                    .or(app)
                     .and_then(|origin| zuse_remote::normalized_origin(origin).ok())
                 {
                     self.pairing_origin = origin;
                 }
+                self.pairing_app_origin = app
+                    .filter(|app| *app != self.pairing_origin)
+                    .map(str::to_owned);
+                self.pairing_self_signed = value["browserSelfSigned"] == true;
                 if let Some(fetch) = self.pairing_fetch.take() {
                     self.cancel(fetch);
                 }
@@ -507,6 +517,7 @@ impl WorkspaceView {
                     ),
                 )
             })
+            .children(self.saved_computers_settings(cx))
             .when(self.paired, |view| {
                 view.child(
                     r::frame("This browser", "Manage the access saved in this tab.", None).child(
@@ -540,6 +551,55 @@ impl WorkspaceView {
             })
             .children(self.remote_access_dialog(cx))
             .into_any_element()
+    }
+    fn saved_computers_settings(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        use crate::remote_access_style as r;
+        let computers = self.saved_computers.as_array().filter(|c| !c.is_empty())?;
+        let rows =
+            computers.iter().enumerate().map(|(index, computer)| {
+                let id = computer["id"].as_str().unwrap_or_default().to_owned();
+                let forget_id = id.clone();
+                let current = computer["current"] == true;
+                s::setting_row(index == 0)
+                    .child(s::details(
+                        computer["origin"]
+                            .as_str()
+                            .unwrap_or("Paired computer")
+                            .to_owned(),
+                        if current { "Open in this tab" } else { "Saved" },
+                    ))
+                    .child(
+                        row()
+                            .gap(px(8.))
+                            .when(!current, |v| {
+                                v.child(
+                                    r::small_button(("open-saved-computer", index), "Open")
+                                        .on_click(cx.listener(move |this, _, _, _| {
+                                            let _ = this.requests.unbounded_send(
+                                                json!({"ui":"openSavedComputer","id":id}),
+                                            );
+                                        })),
+                                )
+                            })
+                            .child(
+                                r::small_button(("forget-saved-computer", index), "Forget")
+                                    .on_click(cx.listener(move |this, _, _, _| {
+                                        let _ = this.requests.unbounded_send(
+                                            json!({"ui":"forgetSavedComputer","id":forget_id}),
+                                        );
+                                    })),
+                            ),
+                    )
+            });
+        Some(
+            r::frame(
+                "Computers in this browser",
+                "Connections saved here reopen without a new link until you forget or revoke them.",
+                None,
+            )
+            .child(s::card().children(rows))
+            .into_any_element(),
+        )
     }
     fn direct_settings(&self, cx: &mut Context<Self>) -> AnyElement {
         use crate::remote_access_style as r;
@@ -806,7 +866,28 @@ impl WorkspaceView {
                                     )
                                     .on_click(move |_, _, cx| cx.open_url(&link)),
                                 ),
-                        );
+                        )
+                        .when(self.pairing_self_signed, |v| {
+                            v.child(s::description_text(
+                                "The browser warns about this computer's private certificate the first time. Continue only on a network you trust.",
+                            ))
+                        })
+                        .when_some(self.pairing_app_origin.clone(), |v, origin| {
+                            let link = format!("{origin}/{fragment}");
+                            v.child(r::details(
+                                "Zuse app link",
+                                "Use this link in the Zuse desktop or mobile app.",
+                            ))
+                            .child(
+                                r::button("copy-pairing-app-link", "Copy app link").on_click(
+                                    move |_, _, cx| {
+                                        cx.write_to_clipboard(ClipboardItem::new_string(
+                                            link.clone(),
+                                        ))
+                                    },
+                                ),
+                            )
+                        });
                 }
             }
             RemoteDialog::Computer => {
@@ -887,7 +968,9 @@ impl WorkspaceView {
                         RemoteDialog::Computer=>{
                             let link=this.remote_ui.destination.read(cx).value(cx);
                             match zuse_remote::PairedTarget::parse_link(link.trim()).and_then(|target|target.export_link()) {
-                                Ok(link)=>{cx.open_url(&link);this.remote_ui.dialog=None;},
+                                // A generated certificate has to be accepted on its own page first.
+                                Ok(link) if zuse_remote::PairedTarget::parse_link(&link).is_ok_and(|target|zuse_remote::routes::classify_origin(target.origin())==zuse_remote::RouteKind::Lan)=>{cx.open_url(&link);this.remote_ui.dialog=None;},
+                                Ok(link)=>{let _=this.requests.unbounded_send(json!({"ui":"addSavedComputer","link":link}));this.remote_ui.dialog=None;},
                                 Err(_)=>this.remote_ui.error=Some("Enter a valid private connection link from the other computer.".into())
                             }
                         },
@@ -919,6 +1002,97 @@ impl WorkspaceView {
 mod tests {
     use super::*;
     use std::prelude::v1::test;
+
+    #[gpui::test]
+    fn a_rejected_project_path_is_reported_and_cleared_on_the_next_try(cx: &mut TestAppContext) {
+        cx.update(initialize);
+        let (requests, mut calls) = futures::channel::mpsc::unbounded();
+        let (_, events) = futures::channel::mpsc::unbounded();
+        let window = cx.add_window(|window, cx| {
+            WorkspaceView::new(Transport { requests, events }, window, cx)
+        });
+        window
+            .update(cx, |view, _, cx| {
+                view.connected = true;
+                view.project_picker = true;
+                view.project_input
+                    .update(cx, |input, cx| input.set_value("/not/a/repo".into(), cx));
+            })
+            .unwrap();
+        window
+            .update(cx, |view, _, cx| {
+                view.add_project(cx);
+                let mut id = None;
+                while let Ok(frame) = calls.try_recv() {
+                    if frame["method"] == methods::ADD_REPO {
+                        id = frame["id"].as_u64();
+                    }
+                }
+                view.receive(
+                    json!({"id":id.unwrap(),"err":"No such folder: /not/a/repo"}),
+                    cx,
+                );
+                assert_eq!(
+                    view.project_error.as_deref(),
+                    Some("No such folder: /not/a/repo")
+                );
+                assert!(
+                    view.project_picker,
+                    "the page stays open to correct the path"
+                );
+                view.add_project(cx);
+                assert_eq!(view.project_error, None);
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn invitations_lead_with_the_browser_link_and_keep_the_app_link(cx: &mut TestAppContext) {
+        cx.update(initialize);
+        let (requests, _calls) = futures::channel::mpsc::unbounded();
+        let (_, events) = futures::channel::mpsc::unbounded();
+        let window = cx.add_window(|window, cx| {
+            WorkspaceView::new(Transport { requests, events }, window, cx)
+        });
+        window
+            .update(cx, |view, _, cx| {
+                view.connected = true;
+                view.pairing_action(methods::CREATE_PAIRING, json!({"label":"Phone"}));
+                let id = view.pairing_action.unwrap();
+                view.receive(
+                    json!({"id":id,"ok":{
+                        "fragment":"#pair=abc",
+                        "origin":"http://192.168.1.2:27657",
+                        "browserOrigin":"https://192.168.1.2:27659",
+                        "browserSelfSigned":true,
+                    }}),
+                    cx,
+                );
+                assert_eq!(view.pairing_origin, "https://192.168.1.2:27659");
+                assert_eq!(
+                    view.pairing_app_origin.as_deref(),
+                    Some("http://192.168.1.2:27657")
+                );
+                assert!(view.pairing_self_signed);
+                view.pairing_action(methods::CREATE_PAIRING, json!({"label":"Tablet"}));
+                let id = view.pairing_action.unwrap();
+                view.receive(
+                    json!({"id":id,"ok":{
+                        "fragment":"#pair=def",
+                        "origin":"https://box.example",
+                        "browserOrigin":"https://box.example",
+                        "browserSelfSigned":false,
+                    }}),
+                    cx,
+                );
+                assert_eq!(view.pairing_origin, "https://box.example");
+                assert_eq!(view.pairing_app_origin, None);
+                assert!(!view.pairing_self_signed);
+                view.receive(json!({"savedComputers":[{"id":"a","origin":"https://box.example","current":true}]}), cx);
+                assert_eq!(view.saved_computers[0]["id"], "a");
+            })
+            .unwrap();
+    }
 
     #[gpui::test]
     fn relay_startup_actions_retire_old_reads_and_reconcile_uncertainty_without_replay(
