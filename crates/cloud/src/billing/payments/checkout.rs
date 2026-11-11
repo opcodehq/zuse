@@ -230,12 +230,21 @@ async fn link_customer(pool: &PgPool, owner: &str, id: &str) -> Result<(), ApiEr
     Ok(())
 }
 impl BillingControl {
-    async fn checkout(&self, owner: &str, offer: &str, now: i64) -> Result<String, ApiError> {
+    async fn checkout(
+        &self,
+        owner: &str,
+        offer: &str,
+        now: i64,
+        key: Option<&str>,
+    ) -> Result<String, ApiError> {
         if !matches!(offer, CLOUD_OFFER | "persistent-standard-v1") {
             return Err(ApiError::bad_request("invalid_machine_offer"));
         }
         if owner.starts_with("organization:") && offer != CLOUD_OFFER {
             return Err(ApiError::forbidden("workspace_scope_not_supported"));
+        }
+        if let Some(url) = self.native_checkout(owner, offer, now, key).await? {
+            return Ok(url);
         }
         let providers = self.payments.as_ref().ok_or_else(unavailable)?;
         let settings = providers
@@ -335,10 +344,20 @@ impl Store {
         offer: &str,
         now: i64,
     ) -> Result<String, ApiError> {
+        self.billing_checkout_with_key(owner, offer, now, None)
+            .await
+    }
+    pub async fn billing_checkout_with_key(
+        &self,
+        owner: &str,
+        offer: &str,
+        now: i64,
+        key: Option<&str>,
+    ) -> Result<String, ApiError> {
         self.billing
             .as_ref()
             .ok_or_else(|| ApiError::unavailable("cloud_billing_writes_disabled"))?
-            .checkout(owner, offer, now)
+            .checkout(owner, offer, now, key)
             .await
     }
     pub async fn checkout_receipt(
@@ -347,14 +366,29 @@ impl Store {
         checkout: Option<&str>,
         now: i64,
     ) -> Option<CheckoutSummary> {
-        let providers = self.billing.as_ref()?.payments.as_ref()?;
-        let settings = providers.checkout.as_ref()?;
-        let claims = settings.signer.verify_checkout(ticket?, now).ok()?;
+        let billing = self.billing.as_ref()?;
+        let signer = billing
+            .native
+            .as_ref()
+            .and_then(|n| n.signer.as_ref())
+            .or_else(|| {
+                billing
+                    .payments
+                    .as_ref()?
+                    .checkout
+                    .as_ref()
+                    .map(|s| &s.signer)
+            })?;
+        let claims = signer.verify_checkout(ticket?, now).ok()?;
         let owner = claims["sub"].as_str()?;
         let id = checkout?.trim();
         if id.is_empty() || id.len() > 1024 || id.contains('{') {
             return None;
         }
+        if id.starts_with("payment:") {
+            return self.billing.as_ref()?.native_receipt(owner, id).await;
+        }
+        let providers = billing.payments.as_ref()?;
         // Unauthenticated browser receipt lookup requires the signed account ticket.
         tokio::time::timeout(Duration::from_secs(2), async {
             for provider in std::iter::once(&providers.default).chain(

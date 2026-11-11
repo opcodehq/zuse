@@ -774,12 +774,18 @@ impl WorkspaceView {
                                     "text" => {
                                         let text = part["text"].as_str().unwrap_or_default();
                                         Some(if user {
-                                            let parsed = zuse_protocol::message_attachments::parse(text);
-                                            column().items_end().gap_3()
+                                            let attribution = zuse_protocol::presentation::zot_message::parse_display(text);
+                                            let parsed = zuse_protocol::message_attachments::parse(attribution.as_ref().map(|(_,body)|*body).unwrap_or(text));
+                                            if let Some((sender, body)) = attribution.as_ref().filter(|(s,_)|s.activity) {
+                                                crate::zot_issues::activity_notice(sender, body, entry.created_at).into_any_element()
+                                            } else { column().when(attribution.is_none(),|d|d.items_end()).gap_3()
+
                                                 .when(!parsed.text.is_empty(), |d|d.child(
-                                                    div().max_w(relative(0.85)).px_4().py_3().rounded_xl()
-                                                        .bg(rgb(0x1d1d1d)).text_size(px(14.)).line_height(px(21.))
-                                                        .child(parsed.text)))
+                                                    div().max_w(relative(if attribution.is_some(){1.0}else{0.85})).px_4().py_3().rounded_xl()
+                                                        .bg(rgb(0x1d1d1d)).text_size(px(if attribution.is_some(){13.}else{14.})).line_height(px(20.))
+                                                        .when_some(attribution.as_ref(),|d,(sender,_)|d.child(crate::zot_issues::sender_header(sender,entry.created_at)))
+                                                        .child(parsed.text.clone())))
+                                                .when(attribution.is_some(),|d|d.child(crate::zot_issues::sender_footer(parsed.text.clone(),entry.created_at)))
                                                 .children(parsed.attachments.iter().map(|attachment| {
                                                     if zuse_protocol::attachment_mentions::is_image_path(&attachment.path) {
                                                         self.image_preview(&attachment.path,&attachment.name,384.,cx)
@@ -789,7 +795,7 @@ impl WorkspaceView {
                                                             .child(label(attachment.name.clone())).into_any_element()
                                                     }
                                                 }))
-                                                .into_any_element()
+                                                .into_any_element() }
                                         } else {
                                             column()
                                                 .text_size(px(14.))
@@ -1297,7 +1303,7 @@ impl Render for WorkspaceView {
 
         let panel_width = if self.selected_zot().is_some() && !self.settings && !self.project_picker
         {
-            320.
+            crate::zots::ZOT_PANEL_WIDTH
         } else if !self.right_open || self.settings || self.project_picker {
             0.
         } else if self.right_tab == "browser" {
@@ -1554,7 +1560,7 @@ impl Render for WorkspaceView {
             )
             .when(
                 self.selected_zot().is_some() && !self.settings && !self.project_picker,
-                |d| d.child(self.zot_panel(cx)),
+                |d| d.child(self.zot_panel(window, cx)),
             )
             .when(self.preview_open.is_some() && !self.settings, |d| {
                 d.child(self.preview_overlay(window, cx))

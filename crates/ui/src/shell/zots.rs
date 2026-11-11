@@ -12,6 +12,13 @@ pub(super) struct ZotUi {
     pub(super) dialog: Option<Form>,
     pub(super) panel_hidden: bool,
     tabs: ZotTabs,
+    pub(super) issues: Option<Entity<zuse_viewport::zot_issues::IssuePanel>>,
+    pub(super) pull_request: Option<String>,
+    pull_request_page: Option<(
+        String,
+        Entity<crate::pull_request_detail::PullRequestDetailPage>,
+    )>,
+    pull_request_subscription: Option<Subscription>,
     files: Vec<ZotFile>,
     /// The Zot `files` came from, kept while a reload is in flight.
     files_zot: Option<String>,
@@ -27,6 +34,9 @@ pub(super) struct ZotUi {
     loading: bool,
     pub(super) pending: bool,
     pub(super) retry: Option<ZotCommand>,
+    /// Set while the issue panel hands a command to `send_zot_command`, so
+    /// only its own results close or fail its editor.
+    pub(super) issue_command: bool,
     history: bool,
     confirm_delete: bool,
 }
@@ -122,7 +132,7 @@ fn thread_action(
         .items_center()
         .justify_center()
         .rounded(px(6.0))
-        .bg(theme.element_active)
+        .bg(gpui::rgb(0x242424))
         .cursor_pointer()
         .text_color(theme.text_muted)
         .hover(|d| d.text_color(theme.text_strong))
@@ -163,7 +173,7 @@ pub(super) fn zot_avatar(zot: &Zot) -> ZotAvatar {
         .unwrap_or_else(|| zot_mascots::default_avatar(&zot.id))
 }
 
-pub(super) const ZOT_PANEL_WIDTH: f32 = 340.0;
+pub(super) const ZOT_PANEL_WIDTH: f32 = 520.0;
 
 /// A document worth listing: seeded placeholders stay empty, and the
 /// instructions file mirrors the purpose edited with the Zot itself.
@@ -351,7 +361,7 @@ impl Shell {
                     .id(SharedString::from(format!("zot-{}", zot.id)))
                     .role(gpui::Role::Button)
                     .aria_label(SharedString::from(zot.config.name.clone()))
-                    .h(px(28.0))
+                    .h(px(26.0))
                     .px(px(6.0))
                     .flex()
                     .items_center()
@@ -795,18 +805,24 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let tabs = self.zot_ui.tabs;
-        let selected_bg = theme.element_active;
+        let detail_open = self.zot_ui.pull_request.is_some()
+            || self
+                .zot_ui
+                .issues
+                .as_ref()
+                .is_some_and(|p| p.read(cx).selected_code().is_some());
+        let selected_bg: gpui::Hsla = gpui::rgb(0x242424).into();
         let mut strip = div().flex().items_center().gap(px(2.0));
         for &tab in visible {
-            let active = tab == tabs.active && !editing;
+            let active = tab == tabs.active && !editing && !detail_open;
             let path = match tab {
-                ZotTab::Overview => icons::WIDGET,
+                ZotTab::Overview => icons::LIST,
+                ZotTab::Issues => icons::CLOCK_CIRCLE,
                 ZotTab::Threads => icons::CHAT_ROUND_LINE,
                 ZotTab::Drive => icons::FOLDER_OPEN,
                 ZotTab::History => icons::HISTORY,
             };
             let label = tab.label();
-            let width = tab.label_width();
             let color = if active {
                 theme.text_strong
             } else {
@@ -816,7 +832,7 @@ impl Shell {
                 .id(SharedString::from(format!("zot-tab-{label}")))
                 .role(gpui::Role::Tab)
                 .aria_label(label)
-                .h(px(28.0))
+                .h(px(26.0))
                 .px(px(7.0))
                 .flex()
                 .items_center()
@@ -828,11 +844,22 @@ impl Shell {
                     d.hover(|d| d.bg(theme.element_hover).text_color(theme.text))
                         .tooltip(crate::settings::widgets::text_tooltip(label))
                 })
-                .child(icon(path).size(px(15.0)).text_color(color))
+                .child(if tab == ZotTab::Issues {
+                    zuse_viewport::zot_issues::status_icon(ZotIssueStatus::Todo).into_any_element()
+                } else {
+                    icon(path)
+                        .size(px(12.))
+                        .text_color(color)
+                        .into_any_element()
+                })
                 .on_click(cx.listener(move |this, _, _, cx| {
                     if this.zot_editor_open(cx) {
                         this.zot_ui.page = None;
                         cx.notify();
+                    }
+                    this.zot_ui.pull_request = None;
+                    if let Some(panel) = &this.zot_ui.issues {
+                        panel.update(cx, |p, cx| p.show_list(cx));
                     }
                     if this.zot_ui.tabs.select(tab) {
                         let history = tab == ZotTab::History;
@@ -843,31 +870,55 @@ impl Shell {
                         cx.notify();
                     }
                 }));
-            // The active tab grows its label; the one it replaced folds back.
-            let reveal = move |el: gpui::Stateful<gpui::Div>, r: f32| {
-                el.bg(selected_bg.opacity(r)).when(r > 0.0, |el| {
-                    el.child(
-                        div()
-                            .ml(px(6.0 * r))
-                            .max_w(px(width * r))
-                            .overflow_hidden()
-                            .whitespace_nowrap()
-                            .opacity(r)
-                            .child(label),
-                    )
-                })
-            };
-            let animating = tabs.epoch > 0 && (active || tabs.previous == Some(tab));
-            strip = strip.child(if animating {
-                base.with_animation(
-                    SharedString::from(format!("zot-tab-{label}-{}", tabs.epoch)),
-                    RESIZE.animation(),
-                    move |el, t| reveal(el, tabs.reveal(tab, t)),
+            strip = strip.child(
+                base.when(
+                    matches!(tab, ZotTab::Overview | ZotTab::Issues | ZotTab::Drive) || active,
+                    |d| d.child(div().ml(px(6.)).child(label)),
                 )
-                .into_any_element()
-            } else {
-                reveal(base, tabs.reveal(tab, 1.0)).into_any_element()
+                .when(active, |d| d.bg(selected_bg)),
+            );
+        }
+        let extra = self
+            .zot_ui
+            .pull_request
+            .as_ref()
+            .map(|u| format!("#{}", u.rsplit('/').next().unwrap_or("")))
+            .or_else(|| {
+                self.zot_ui
+                    .issues
+                    .as_ref()
+                    .and_then(|p| p.read(cx).selected_code())
             });
+        if let Some(code) =
+            extra.filter(|_| !editing && matches!(tabs.active, ZotTab::Issues | ZotTab::Overview))
+        {
+            strip = strip.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .px(px(8.))
+                    .h(px(26.))
+                    .gap(px(6.))
+                    .rounded(px(7.))
+                    .bg(gpui::rgb(0x242424))
+                    .text_color(theme.text)
+                    .child(if self.zot_ui.pull_request.is_some() {
+                        icon(icons::GIT_BRANCH)
+                            .size(px(12.))
+                            .text_color(theme.warning)
+                            .into_any_element()
+                    } else {
+                        zuse_viewport::zot_issues::status_icon(
+                            self.zot_ui
+                                .issues
+                                .as_ref()
+                                .and_then(|p| p.read(cx).selected_status())
+                                .unwrap_or(ZotIssueStatus::Todo),
+                        )
+                        .into_any_element()
+                    })
+                    .child(code),
+            );
         }
         let icon_button = |id: &'static str, path: &'static str, tip: &'static str| {
             div()
@@ -882,7 +933,7 @@ impl Shell {
                 .cursor_pointer()
                 .hover(|d| d.bg(theme.element_hover))
                 .tooltip(crate::settings::widgets::text_tooltip(tip))
-                .child(icon(path).size(px(15.0)).text_color(theme.text_muted))
+                .child(icon(path).size(px(12.0)).text_color(theme.text_muted))
         };
         let zot = self.selected_zot(cx);
         let new_doc = zot.clone();
@@ -975,6 +1026,14 @@ impl Shell {
                 .detach();
             }
         }
+        if self
+            .zot_ui
+            .issues
+            .as_ref()
+            .is_some_and(|p| p.read(cx).zot_id() != zot.id)
+        {
+            self.zot_ui.pull_request = None;
+        }
         // A reload must not read as "no files": that used to hide the tab just
         // clicked and bounce the panel to Overview.
         let files = if self.zot_ui.files_zot.as_deref() == Some(zot.id.as_str()) {
@@ -998,9 +1057,110 @@ impl Shell {
             let editor = self.render_zot_editor(&zot, window, cx);
             return Self::zot_inspector_frame(&theme, tab_bar, editor);
         }
+        if let Some(url) = self.zot_ui.pull_request.clone() {
+            let page = self
+                .zot_ui
+                .pull_request_page
+                .as_ref()
+                .filter(|(loaded, _)| loaded == &url)
+                .map(|(_, page)| page.clone());
+            if let Some(page) = page {
+                let mut content = div().flex_1().min_h_0().flex().flex_col();
+                if let Some(issue) = zot
+                    .issues
+                    .iter()
+                    .find(|i| i.pull_requests.iter().any(|p| p.url == url))
+                {
+                    let id = issue.id.clone();
+                    let mut links = div()
+                        .flex()
+                        .items_center()
+                        .gap(px(12.))
+                        .px(px(16.))
+                        .py(px(10.))
+                        .child(action(
+                            "pr-linked-issue",
+                            format!("‹ {} · {}", issue.code(), issue.details.title),
+                            &theme,
+                            move |this, _, _, cx| {
+                                this.zot_ui.pull_request = None;
+                                if let Some(panel) = &this.zot_ui.issues {
+                                    panel.update(cx, |p, cx| p.show_issue(id.clone(), cx));
+                                }
+                                cx.notify();
+                            },
+                            cx,
+                        ));
+                    if let Some(chat) = issue.threads.first().cloned() {
+                        links = links.child(action(
+                            "pr-linked-thread",
+                            "Thread ↗",
+                            &theme,
+                            move |this, _, _, cx| this.open_chat(chat.clone(), cx),
+                            cx,
+                        ));
+                    }
+                    content = content.child(links);
+                }
+                return Self::zot_inspector_frame(
+                    &theme,
+                    tab_bar,
+                    content.child(page).into_any_element(),
+                );
+            }
+            let device = zot.config.home_device_id.clone();
+            // Page construction starts RPC reads. Defer it until this render
+            // finishes, and keep it inside the Zot inspector's own navigation.
+            cx.defer_in(window, move |this, window, cx| {
+                if this.zot_ui.pull_request.as_ref() != Some(&url)
+                    || this
+                        .zot_ui
+                        .pull_request_page
+                        .as_ref()
+                        .is_some_and(|(loaded, _)| loaded == &url)
+                {
+                    return;
+                }
+                let page = cx.new(|cx| {
+                    crate::pull_request_detail::PullRequestDetailPage::new(
+                        this.state.clone(),
+                        url.clone(),
+                        Some(device),
+                        this.pull_request_cache.clone(),
+                        None,
+                        window,
+                        cx,
+                    )
+                });
+                this.zot_ui.pull_request_subscription =
+                    Some(cx.observe(&page, |_, _, cx| cx.notify()));
+                this.zot_ui.pull_request_page = Some((url, page));
+                cx.notify();
+            });
+            return Self::zot_inspector_frame(
+                &theme,
+                tab_bar,
+                div()
+                    .p(px(16.))
+                    .text_color(theme.text_muted)
+                    .child("Loading pull request…")
+                    .into_any_element(),
+            );
+        }
         let body = match self.zot_ui.tabs.active {
-            ZotTab::Overview => self.zot_overview(&zot, &theme, cx),
-            ZotTab::Threads => self.zot_threads(&zot, &theme, cx),
+            ZotTab::Overview => self.zot_issue_surface(&zot, true, cx),
+            ZotTab::Issues => self.zot_issue_surface(&zot, false, cx),
+            ZotTab::Threads => {
+                let threads = self.zot_threads(&zot, &theme, cx);
+                let overview = self.zot_overview(&zot, &theme, cx);
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(18.))
+                    .child(threads)
+                    .child(overview)
+                    .into_any_element()
+            }
             ZotTab::Drive => self.zot_drive(&zot, files, &theme, cx),
             ZotTab::History => self.zot_history(&zot, files, &theme, cx),
         };
@@ -1009,7 +1169,7 @@ impl Shell {
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
-            .px(px(18.0))
+            .px(px(16.0))
             .py(px(16.0))
             .flex()
             .flex_col()
@@ -1022,6 +1182,7 @@ impl Shell {
     fn zot_inspector_frame(theme: &Theme, tab_bar: AnyElement, body: AnyElement) -> AnyElement {
         div()
             .id("zot-inspector")
+            .bg(zuse_viewport::palette::rgb(0x101010))
             .w(px(ZOT_PANEL_WIDTH))
             .h_full()
             .flex_none()
@@ -1036,6 +1197,57 @@ impl Shell {
             .into_any_element()
     }
 
+    fn zot_issue_surface(
+        &mut self,
+        zot: &Zot,
+        overview: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        use zuse_viewport::zot_issues::{IssueEvent, IssuePanel};
+        if self.zot_ui.issues.is_none() {
+            let panel = cx.new(|_| IssuePanel::new(zot.clone(), overview));
+            cx.subscribe(&panel, |this, _, event, cx| match event {
+                IssueEvent::Command(action, revision) => {
+                    if let Some(zot) = this.selected_zot(cx) {
+                        let mut action = action.clone();
+                        if let ZotAction::Delegate { model, .. } = &mut action {
+                            *model = this.zot_thread_model(&zot, cx);
+                        }
+                        this.zot_ui.issue_command = true;
+                        this.send_zot_command(zot.id, Some(*revision), action, ZotAfter::Stay, cx);
+                    }
+                }
+                IssueEvent::OpenThread(id) => this.open_chat(id.clone(), cx),
+                IssueEvent::OpenDocument(file) => {
+                    if let Some(zot) = this.selected_zot(cx) {
+                        this.open_zot_dialog(zot, Kind::File(file.clone()), cx);
+                    }
+                }
+                IssueEvent::OpenPullRequest(url) => {
+                    this.zot_ui.pull_request = Some(url.clone());
+                    cx.notify();
+                }
+            })
+            .detach();
+            cx.observe(&panel, |_, _, cx| cx.notify()).detach();
+            self.zot_ui.issues = Some(panel);
+        }
+        let panel = self.zot_ui.issues.as_ref().unwrap().clone();
+        panel.update(cx, |p, cx| {
+            p.sync(zot.clone(), overview, self.zot_ui.pending, cx);
+            p.files(self.zot_ui.files.clone(), cx);
+            p.thread_titles(
+                self.state
+                    .read(cx)
+                    .chats
+                    .iter()
+                    .filter_map(|c| Some((c.id.clone(), c.title.clone()?)))
+                    .collect(),
+                cx,
+            );
+        });
+        panel.into_any_element()
+    }
     fn zot_overview(&mut self, zot: &Zot, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         use zuse_protocol::SessionStatus as S;
         let working: Vec<_> = zot
@@ -1851,7 +2063,7 @@ mod tests {
         ];
         assert_eq!(
             visible_tabs(&seeded, None),
-            [ZotTab::Overview, ZotTab::Threads]
+            [ZotTab::Overview, ZotTab::Issues, ZotTab::Threads]
         );
         assert!(visible_tabs(&[], Some(ZotTab::History)).contains(&ZotTab::History));
         let written = [file("NOTES.md", 2, "Decided on Tuesday")];

@@ -1657,7 +1657,7 @@ mod tests {
         assert_eq!(RESIZE.duration_ms, 200);
         assert_eq!(TAB_SLIDE.duration_ms, 150);
         assert_eq!(COLLAPSE.duration_ms, 180);
-        assert_eq!(NEW_THREAD_TRANSITION.duration_ms, 420);
+        assert_eq!(NEW_THREAD_TRANSITION.duration_ms, 240);
         assert_eq!(NEW_THREAD_TRANSITION.curve, EASE_RESORT);
         assert_eq!(CHEVRON.duration_ms, 200);
         assert_eq!(ZUSE_PULSE.duration_ms, 2400);

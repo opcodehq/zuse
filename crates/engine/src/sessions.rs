@@ -2596,6 +2596,12 @@ impl Inner {
                     .and_then(|zots| zots.coordinator(chat_id).ok().flatten())
                     .map(|zot| ("ZUSE_ZOT_ID".into(), zot.id)),
             )
+            .chain(
+                self.zots
+                    .get()
+                    .and_then(|zots| zots.worker_home(chat_id).ok().flatten())
+                    .map(|(id, _)| ("ZUSE_ZOT_WORKER_ID".into(), id)),
+            )
             .collect(),
         })
     }

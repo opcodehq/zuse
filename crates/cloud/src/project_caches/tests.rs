@@ -505,6 +505,30 @@ async fn preparation_is_project_scoped_reconciled_and_cache_hits_require_certifi
     );
     let original:(String,bool)=sqlx::query_as("SELECT resource_id,absent_observed_at IS NOT NULL FROM zuse_rust_project_cache_resources WHERE operation_id='cache-lost' AND resource_kind='builder'").fetch_one(&pool).await.unwrap();
     assert_eq!(original, ("original-unconfirmed-builder".into(), true));
+    // Worker clocks can move backwards between observing an original resource
+    // and confirming its absence. Accounting must retain valid event ordering
+    // without dropping the absence receipt or inventing one on an ordinary poll.
+    let row = json!({"operation_id":"clock-skew", "owner_id":"user-alice", "project_id":"project", "provider":"boxd"});
+    let mut tx = pool.begin().await.unwrap();
+    for (now, absent, expected_absence) in [
+        (300_000, false, None),
+        (299_990, false, None),
+        (299_990, true, Some(300_000)),
+        (400_000, true, Some(300_000)),
+        (500_000, false, Some(300_000)),
+    ] {
+        super::retirement::account_tx(
+            &mut tx,
+            &row,
+            &json!({"builderId":"clock-skew-builder", "builderAbsent":absent}),
+            now,
+        )
+        .await
+        .unwrap();
+        let observed: (i64, i64, Option<i64>) = sqlx::query_as("SELECT first_observed_at,last_observed_at,absent_observed_at FROM zuse_rust_project_cache_resources WHERE operation_id='clock-skew'").fetch_one(&mut *tx).await.unwrap();
+        assert_eq!(observed, (300_000, now.max(300_000), expected_absence));
+    }
+    tx.commit().await.unwrap();
     // Optional-schema startup is harmless, but authorization must NEVER turn
     // missing schema or disabled preparation into permission to mint a proof.
     sqlx::query("DROP TABLE zuse_rust_project_cache_resources")

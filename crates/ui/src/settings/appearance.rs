@@ -4331,7 +4331,7 @@ mod tests {
         );
         assert_eq!(
             registry.variants_for(zuse_theme::Appearance::Dark).count(),
-            20
+            19
         );
     }
 
@@ -4374,7 +4374,13 @@ mod tests {
         assert_eq!(labels.len(), 5);
         assert_eq!(
             labels,
-            ["Geist", "Geist Mono", "System UI", "Arial", "Menlo"]
+            [
+                "Geist",
+                "Geist Mono",
+                UiFontFamily::System.label(),
+                "Arial",
+                "Menlo"
+            ]
         );
         let unique = labels.into_iter().collect::<std::collections::HashSet<_>>();
         assert_eq!(unique.len(), 5);
@@ -4456,29 +4462,25 @@ mod tests {
             vec![UiFontFamily::Geist, UiFontFamily::GeistMono]
         );
 
-        // "Menlo" prefix-matches, so it outranks the "System UI" substring hit.
+        // "Menlo" prefix-matches, so it outranks the substring hits. The system
+        // face's label differs per platform, so it only joins when it contains "m".
         let matches = filter_families("m", &catalog);
-        assert_eq!(
-            matches,
-            vec![
-                UiFontFamily::Installed("Menlo".into()),
-                UiFontFamily::GeistMono,
-                UiFontFamily::System,
-            ]
-        );
+        let mut expected = vec![
+            UiFontFamily::Installed("Menlo".into()),
+            UiFontFamily::GeistMono,
+        ];
+        if UiFontFamily::System.label().to_lowercase().contains('m') {
+            expected.push(UiFontFamily::System);
+        }
+        assert_eq!(matches, expected);
+        let last = expected.last().cloned().unwrap();
         // Stepping never escapes the filtered list.
-        assert_eq!(
-            step_font(&UiFontFamily::System, 1, &matches, FontKind::Ui, &all),
-            UiFontFamily::System
-        );
+        assert_eq!(step_font(&last, 1, &matches, FontKind::Ui, &all), last);
         assert_eq!(
             first_available(&matches, FontKind::Ui, &all),
             UiFontFamily::Installed("Menlo".into())
         );
-        assert_eq!(
-            last_available(&matches, FontKind::Ui, &all),
-            UiFontFamily::System
-        );
+        assert_eq!(last_available(&matches, FontKind::Ui, &all), last);
     }
 
     #[test]

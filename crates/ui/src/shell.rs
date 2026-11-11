@@ -4468,6 +4468,32 @@ impl Shell {
                         this.add_browser_surface(url.clone(), window, cx);
                     }
                 }
+                crate::browser::BrowserEvent::ElementSelected(details) => {
+                    if this.panel_key(cx) == owner
+                        && this.resolved_right_active(cx) == RightSurface::Browser(id)
+                    {
+                        let composer = this.composer.clone();
+                        let details = details.clone();
+                        let draft_key = composer.read(cx).current_key.clone();
+                        cx.defer(move |cx| {
+                            composer.update(cx, |composer, cx| {
+                                composer.stage_browser_annotation(draft_key, details, cx);
+                            })
+                        });
+                    }
+                }
+                crate::browser::BrowserEvent::AnnotationRemoved(id) => {
+                    if this.panel_key(cx) == owner {
+                        let composer = this.composer.clone();
+                        let draft_key = composer.read(cx).current_key.clone();
+                        let id = id.clone();
+                        cx.defer(move |cx| {
+                            composer.update(cx, |composer, cx| {
+                                composer.remove_browser_annotation(draft_key, &id, cx)
+                            })
+                        });
+                    }
+                }
                 crate::browser::BrowserEvent::Close => {
                     this.close_right_surface(RightSurface::Browser(id), window, cx)
                 }
@@ -16372,8 +16398,9 @@ mod tests {
 
     #[test]
     fn sidebar_drag_stays_exact_in_range_and_reduced_motion_never_nudges() {
-        let middle = sidebar_drag_sample(312.0, None, false);
-        assert_eq!(middle.width, 312.0);
+        let inside = (SIDEBAR_MIN + SIDEBAR_MAX) / 2.0;
+        let middle = sidebar_drag_sample(inside, None, false);
+        assert_eq!(middle.width, inside);
         assert_eq!(middle.edge, None);
         assert!(!middle.starts_bounce);
 
@@ -20377,6 +20404,19 @@ impl Shell {
 
     pub fn fixture_focus_mounted(&self, window: &Window, cx: &App) -> bool {
         self.shortcut_focus.contains_focused(window, cx)
+    }
+    pub fn fixture_browser_annotation_comments(&self, cx: &App) -> Vec<String> {
+        let composer = self.composer.read(cx);
+        self.state
+            .read(cx)
+            .context_items(&composer.current_key)
+            .iter()
+            .filter_map(|item| {
+                item.browser_annotation
+                    .as_ref()
+                    .map(|annotation| annotation.comment.clone())
+            })
+            .collect()
     }
     pub fn fixture_active_browser(
         &self,

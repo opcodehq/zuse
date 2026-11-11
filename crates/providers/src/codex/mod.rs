@@ -1351,6 +1351,18 @@ async fn run_session(session: Session) {
             );
         }
         configure_internal_observations(&mut p, internal_tool_observations && !title_only);
+        if !title_only {
+            // Zuse runs every chat in Codex's Default collaboration mode, where
+            // `request_user_input` is unavailable unless this flag is on.
+            p.entry("config")
+                .or_insert_with(|| json!({}))
+                .as_object_mut()
+                .expect("thread/start config overrides are an object")
+                .insert(
+                    "features.default_mode_request_user_input".into(),
+                    true.into(),
+                );
+        }
         p.insert("cwd".into(), Value::String(request.cwd.clone()));
         if let Some(mcp) = request.mcp.as_ref().filter(|_| !title_only) {
             // Zuse's own MCP server as dotted config overrides on top of the

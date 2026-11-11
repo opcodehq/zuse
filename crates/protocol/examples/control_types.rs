@@ -33,6 +33,12 @@ fn main() {
         ZotStatus,
         ZotWorker,
         ZotDecision,
+        ZotIssueStatus,
+        ZotIssuePriority,
+        ZotIssueDetails,
+        ZotIssuePullRequest,
+        ZotIssueActivity,
+        ZotIssue,
         Zot,
         ZotFile,
         ZotAction,
@@ -48,6 +54,12 @@ fn main() {
         serde_json::to_string(zuse_protocol::control::METHODS).unwrap()
     ));
     text.push_str("export type ControlMethod = typeof METHODS[number];\n");
+    let text = text
+        .lines()
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../packages/sdk/src/generated.ts");
     if std::env::args().any(|arg| arg == "--check") {

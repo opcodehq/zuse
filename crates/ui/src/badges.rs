@@ -180,6 +180,30 @@ pub fn render_with(
     window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
+    render_with_style(id, badge, theme, trailing, false, window, cx)
+}
+
+/// A compact browser element reference in the composer.
+pub fn render_browser_context(
+    id: impl Into<SharedString>,
+    badge: &MessageBadge,
+    theme: &Theme,
+    trailing: Option<AnyElement>,
+    window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
+    render_with_style(id, badge, theme, trailing, true, window, cx)
+}
+
+fn render_with_style(
+    id: impl Into<SharedString>,
+    badge: &MessageBadge,
+    theme: &Theme,
+    trailing: Option<AnyElement>,
+    browser: bool,
+    window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
     let id: SharedString = id.into();
     let has_trailing = trailing.is_some();
     let has_card = !badge.details.is_empty() || badge.markdown.is_some();
@@ -192,7 +216,11 @@ pub fn render_with(
             crate::icons::icon(badge.icon)
                 .flex_none()
                 .size(px(ICON_SIZE))
-                .text_color(theme.text_muted),
+                .text_color(if browser {
+                    theme.accent
+                } else {
+                    theme.text_muted
+                }),
         )
         .child(div().min_w_0().truncate().child(badge.label.clone()));
     let body = div()
@@ -213,7 +241,7 @@ pub fn render_with(
             BadgePopover::default()
         });
     let open = popover.read(cx).open;
-    let card = open.then(|| card(&id, badge, &popover, theme, window, cx));
+    let card = open.then(|| card(&id, badge, &popover, theme, browser, window, cx));
     let hover_state = popover.clone();
     let click_state = popover.clone();
     div()
@@ -223,12 +251,20 @@ pub fn render_with(
         .flex_none()
         .child(
             pill(id.clone(), theme)
+                .when(browser, |pill| {
+                    pill.bg(gpui::transparent_black())
+                        .border_color(gpui::transparent_black())
+                        .px(px(4.0))
+                        .text_color(theme.accent)
+                })
                 .when(has_trailing, |pill| pill.pr(px(4.0)))
                 .cursor_pointer()
                 .role(gpui::Role::Button)
                 .aria_label(badge.label.clone())
                 .on_hover(move |hovered, _, cx| {
-                    hover_state.update(cx, |popover, cx| popover.hover_trigger(*hovered, cx))
+                    if !browser {
+                        hover_state.update(cx, |popover, cx| popover.hover_trigger(*hovered, cx));
+                    }
                 })
                 .on_click(move |_, _, cx| {
                     cx.stop_propagation();
@@ -242,59 +278,131 @@ pub fn render_with(
         .into_any_element()
 }
 
+/// Read current annotation bodies while retaining older selected-element cards.
+fn browser_card_details(badge: &MessageBadge) -> (String, String) {
+    let body = badge.markdown.as_deref().unwrap_or("");
+    let page = body
+        .lines()
+        .find_map(|line| line.strip_prefix("Page: "))
+        .or_else(|| {
+            body.lines().find_map(|line| {
+                line.strip_prefix("Selected browser element from ")
+                    .map(|page| page.trim_end_matches(':'))
+            })
+        })
+        .unwrap_or("");
+    let host = url::Url::parse(page)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .unwrap_or_default();
+    let summary = body
+        .split_once("Requested change:\n")
+        .and_then(|(_, rest)| {
+            rest.rsplit_once("\n\nSelected elements:")
+                .map(|(comment, _)| comment.trim())
+        })
+        .unwrap_or_else(|| {
+            badge
+                .label
+                .split_once(" · ")
+                .map_or("", |(_, summary)| summary)
+        });
+    (host, summary.to_owned())
+}
+
 fn card(
     id: &SharedString,
     badge: &MessageBadge,
     popover: &Entity<BadgePopover>,
     theme: &Theme,
+    browser: bool,
     window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
     let theme = &theme.for_popup();
     let viewport = f32::from(window.viewport_size().width);
-    let width = CARD_WIDTH.min(viewport - 32.0).max(120.0);
-    let content: AnyElement = match &badge.markdown {
-        Some(markdown) => {
-            let tree = popover.update(cx, |popover, _| {
-                popover
-                    .tree
-                    .get_or_insert_with(|| {
-                        Arc::new(crate::markdown::parse_full(
-                            &crate::context_items::display_markdown(markdown),
-                        ))
-                    })
-                    .clone()
-            });
-            let options = crate::markdown::render::RenderOptions {
-                tasks: None,
-                media: None,
-                row_key: format!("{id}-md").into(),
-                veil: None,
-                cache: None,
-                now: Instant::now(),
-                copy: None,
-                link: None,
-                workspace_root: None,
-                code: None,
-            };
-            div()
-                .min_w_0()
-                .px(px(4.0))
-                .child(crate::markdown::render::render_tree(
-                    &tree,
-                    &options,
-                    theme,
-                    window,
-                    &|_| None,
-                ))
-                .into_any_element()
-        }
-        None => div()
+    let width = (if browser { 300.0_f32 } else { CARD_WIDTH })
+        .min(viewport - 32.0)
+        .max(120.0);
+    let content: AnyElement = if browser {
+        let (host, summary) = browser_card_details(badge);
+        div()
+            .p(px(4.0))
+            .font_family(theme.font_sans.clone())
             .flex()
             .flex_col()
-            .gap(px(4.0))
-            .children(badge.details.iter().map(|detail| detail_row(detail, theme)))
-            .into_any_element(),
+            .gap(px(6.0))
+            .when(!summary.is_empty(), |el| {
+                el.child(
+                    div()
+                        .px(px(8.0))
+                        .py(px(6.0))
+                        .rounded(px(5.0))
+                        .bg(theme.muted_fill())
+                        .text_size(px(13.0))
+                        .text_color(theme.text_strong)
+                        .child(summary.to_owned()),
+                )
+            })
+            .child(
+                div()
+                    .text_size(px(12.0))
+                    .text_color(theme.text)
+                    .child(badge.label.clone()),
+            )
+            .when(!host.is_empty(), |el| {
+                el.child(
+                    div()
+                        .text_size(px(11.0))
+                        .text_color(theme.text_muted)
+                        .child(host),
+                )
+            })
+            .into_any_element()
+    } else {
+        match &badge.markdown {
+            Some(markdown) => {
+                let tree = popover.update(cx, |popover, _| {
+                    popover
+                        .tree
+                        .get_or_insert_with(|| {
+                            Arc::new(crate::markdown::parse_full(
+                                &crate::context_items::display_markdown(markdown),
+                            ))
+                        })
+                        .clone()
+                });
+                let options = crate::markdown::render::RenderOptions {
+                    tasks: None,
+                    media: None,
+                    row_key: format!("{id}-md").into(),
+                    veil: None,
+                    cache: None,
+                    now: Instant::now(),
+                    copy: None,
+                    link: None,
+                    workspace_root: None,
+                    code: None,
+                };
+                div()
+                    .min_w_0()
+                    .px(px(4.0))
+                    .child(crate::markdown::render::render_tree(
+                        &tree,
+                        &options,
+                        theme,
+                        window,
+                        &|_| None,
+                    ))
+                    .into_any_element()
+            }
+            None => div()
+                .flex()
+                .flex_col()
+                .gap(px(4.0))
+                .children(badge.details.iter().map(|detail| detail_row(detail, theme)))
+                .into_any_element(),
+        }
     };
     let hover_state = popover.clone();
     let out_state = popover.clone();
@@ -384,6 +492,40 @@ fn detail_row(detail: &BadgeDetail, theme: &Theme) -> gpui::Div {
 mod tests {
     use super::*;
     use crate::comments::{CommentSide, ReviewComment, with_comments};
+
+    #[test]
+    fn browser_cards_show_the_host_and_requested_change_from_real_annotations() {
+        let annotation = crate::context_items::BrowserAnnotation::from_selection(
+            "https://example.com/settings",
+            &serde_json::json!({"comment":"Make this button larger\nUse the accent color", "elements":[{"tag":"button", "selector":"button#save", "text":"Save"}]}).to_string(),
+        ).unwrap();
+        let context = crate::context_items::ContextItem::from_browser_annotation(annotation);
+        let (_, badges) = split(&crate::context_items::with_contexts(
+            "Apply this",
+            &[context],
+        ));
+        let badge = &badges[0];
+        assert_eq!(badge.label.as_ref(), "example.com · 1 element");
+        assert_eq!(
+            browser_card_details(badge),
+            (
+                "example.com".into(),
+                "Make this button larger\nUse the accent color".into()
+            )
+        );
+    }
+
+    #[test]
+    fn legacy_browser_cards_keep_their_host_and_selected_text() {
+        let badge=MessageBadge {
+            icon:crate::icons::BROWSER_SELECT, label:"button · Save".into(), details:vec![],
+            markdown:Some("Selected browser element from https://example.com/:\nElement: button#save\nText: Save".into()),
+        };
+        assert_eq!(
+            browser_card_details(&badge),
+            ("example.com".into(), "Save".into())
+        );
+    }
 
     #[test]
     fn a_plain_message_carries_no_badges() {

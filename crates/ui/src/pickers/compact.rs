@@ -382,24 +382,8 @@ impl Pickers {
 
     /// "Search N models": the count of everything the list can show.
     pub(super) fn compact_search_placeholder(&self, cx: &App) -> SharedString {
-        if let Some(scope) = self.model_scope {
-            return format!(
-                "in {}…",
-                self.rail_descriptors(cx)
-                    .iter()
-                    .find(|p| p.id == scope)
-                    .map(|p| p.name.as_str())
-                    .unwrap_or("this provider")
-            )
-            .into();
-        }
-        let count: usize = self
-            .rail_descriptors(cx)
-            .iter()
-            .filter_map(|p| self.model_catalog(cx).get(&p.id).and_then(Loadable::ready))
-            .map(Vec::len)
-            .sum();
-        format!("Search {count} models").into()
+        let _ = cx;
+        "Search models".into()
     }
 
     /// Keep the search's model count current as catalogs land while open.
@@ -545,7 +529,8 @@ impl Pickers {
         if self.is_settings_model() || !self.model_configuration_available(cx) {
             return None;
         }
-        let levels = self.trait_ladder(cx);
+        let mut levels = self.trait_ladder(cx);
+        levels.sort();
         if !levels.is_empty() {
             let current = self.effective_reasoning(cx);
             return Some(CompactEffort {
@@ -560,26 +545,45 @@ impl Pickers {
             .get(&option.id)
             .and_then(|v| v.as_str())
             .unwrap_or(&option.default_choice);
+        let mut choices: Vec<_> = option.choices.iter().collect();
+        // Preserve provider-specific ladders unless every label has a known rank.
+        fn rank(value: &str) -> Option<u8> {
+            match value
+                .to_ascii_lowercase()
+                .replace([' ', '-', '_'], "")
+                .as_str()
+            {
+                "minimal" => Some(0),
+                "low" => Some(1),
+                "medium" => Some(2),
+                "high" => Some(3),
+                "xhigh" | "extrahigh" => Some(4),
+                "max" => Some(5),
+                "ultra" => Some(6),
+                "ultracode" => Some(7),
+                "ultrathink" => Some(8),
+                _ => None,
+            }
+        }
+        if choices
+            .iter()
+            .all(|c| rank(&c.id).or_else(|| rank(&c.label)).is_some())
+        {
+            choices.sort_by_key(|c| rank(&c.id).or_else(|| rank(&c.label)).unwrap());
+        }
         Some(CompactEffort {
-            labels: option
-                .choices
+            labels: choices
                 .iter()
                 .map(|c| SharedString::from(c.label.clone()))
                 .collect(),
-            selected: option
-                .choices
+            selected: choices
                 .iter()
                 .position(|c| c.id == current)
-                .or_else(|| {
-                    option
-                        .choices
-                        .iter()
-                        .position(|choice| choice.id == option.default_choice)
-                })
+                .or_else(|| choices.iter().position(|c| c.id == option.default_choice))
                 .unwrap_or(0),
             stops: EffortStops::Option {
                 id: option.id.clone(),
-                choices: option.choices.iter().map(|c| c.id.clone()).collect(),
+                choices: choices.iter().map(|c| c.id.clone()).collect(),
                 default: option.default_choice.clone(),
             },
         })

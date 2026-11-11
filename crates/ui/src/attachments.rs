@@ -1839,9 +1839,22 @@ mod generated_image_tests {
         }
     }
 
-    #[tokio::test]
-    async fn generated_image_chunk_reader_targets_owner_and_bounds_decode() {
-        let executor = gpui_platform::background_executor();
+    // The platform executor builds the real macOS platform, which aborts off
+    // the main thread; the test dispatcher is the same executor type without it.
+    #[gpui::test]
+    async fn generated_image_chunk_reader_targets_owner_and_bounds_decode(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = runtime.enter();
+        // The engine answers from a real thread; let the test wait for it
+        // rather than treating an idle executor as a passing deadline.
+        cx.executor().allow_parking();
+        let executor = cx.executor();
         for (width, target, expected, succeeds) in [
             (64, Some("remote-owner"), "image/png", true),
             (64, None, "image/png", true),

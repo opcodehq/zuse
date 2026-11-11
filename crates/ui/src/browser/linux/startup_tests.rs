@@ -62,6 +62,7 @@ while True:
                 helper_override: Some(self.path().join("helper.py")),
                 ..Default::default()
             },
+            ..Default::default()
         }
     }
 

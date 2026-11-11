@@ -305,7 +305,7 @@ impl Shell {
             })
     }
 
-    fn zot_thread_model(&self, zot: &Zot, cx: &App) -> ZotModel {
+    pub(super) fn zot_thread_model(&self, zot: &Zot, cx: &App) -> ZotModel {
         self.state
             .read(cx)
             .chats
@@ -462,6 +462,7 @@ impl Shell {
                 let zot = latest.as_ref().or(form.zot.as_ref()).unwrap();
                 let base = values[1].trim();
                 ZotAction::Delegate {
+                    issue_id: None,
                     worker: ZotWorker {
                         chat_id: String::new(),
                         device_id: repository.device_id.clone(),
@@ -490,6 +491,7 @@ impl Shell {
         after: ZotAfter,
         cx: &mut Context<Self>,
     ) {
+        let from_issue_panel = std::mem::take(&mut self.zot_ui.issue_command);
         if self.zot_ui.pending {
             return;
         }
@@ -522,6 +524,7 @@ impl Shell {
         if let Some(previous) = &self.zot_ui.retry {
             let mut comparable = command.clone();
             comparable.command_id = previous.command_id.clone();
+            comparable.expected_revision = previous.expected_revision;
             if let ZotAction::Delegate { worker, .. } = &mut comparable.action {
                 worker.chat_id = format!("zot-worker-{}", previous.command_id);
             }
@@ -545,6 +548,11 @@ impl Shell {
                 match result {
                     Ok(value) => {
                         this.zot_ui.retry = None;
+                        if let Some(panel) =
+                            this.zot_ui.issues.as_ref().filter(|_| from_issue_panel)
+                        {
+                            panel.update(cx, |p, cx| p.committed(cx));
+                        }
                         this.zot_ui.loaded = None;
                         let coordinator = serde_json::from_value::<Option<Zot>>(value)
                             .ok()
@@ -553,6 +561,16 @@ impl Shell {
                         this.finish_zot_command(after, coordinator, cx);
                     }
                     Err(error) => {
+                        // The engine answered: nothing was written, so the
+                        // next attempt is a new command at the current revision.
+                        if !zuse_protocol::zots::command_outcome_unknown(&error.to_string()) {
+                            this.zot_ui.retry = None;
+                        }
+                        if let Some(panel) =
+                            this.zot_ui.issues.as_ref().filter(|_| from_issue_panel)
+                        {
+                            panel.update(cx, |p, cx| p.failed(error.to_string(), cx));
+                        }
                         this.show_notice(crate::toast::ToastKind::Error, error.to_string(), cx)
                     }
                 }

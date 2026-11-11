@@ -31,6 +31,9 @@ impl RuntimeControl {
         if self.creation_accounts.is_empty() || !self.task_command_delivery_available().await? {
             return Ok(false);
         }
+        if self.credit_sleep_once(now).await? {
+            return Ok(true);
+        }
         // Coalesced terminal writes must each receive at least the full idle
         // interval. Older guests already have durable command timestamps, so
         // upgrading the API cannot mistake a recent completed turn for idle.
@@ -66,12 +69,59 @@ impl RuntimeControl {
         if busy {
             return Ok(false);
         }
+        self.admit_credit_or_idle_sleep(tx, row, generation, now, "idle-timeout")
+            .await
+    }
+    async fn credit_sleep_once(&self, now: i64) -> Result<bool, ApiError> {
+        let installed: bool =
+            sqlx::query_scalar("SELECT to_regclass('zuse_brokeboy_compute_charges') IS NOT NULL")
+                .fetch_one(&self.pool)
+                .await?;
+        if !installed {
+            return Ok(false);
+        }
+        let candidate: Option<String> = sqlx::query_scalar(include_str!("credit_candidates.sql"))
+            .bind(&self.creation_accounts)
+            .bind(now)
+            .bind(now)
+            .bind(zuse_protocol::cloud_task_commands::MODE)
+            .fetch_optional(&self.pool)
+            .await?;
+        let Some(id) = candidate else {
+            return Ok(false);
+        };
+        let mut tx = self.pool.begin().await?;
+        let (row, generation, _) = locking::workspace(&mut tx, &id, true).await?;
+        if !eligible(&row) {
+            return Ok(false);
+        }
+        let held:Option<bool>=sqlx::query_scalar("SELECT shared_credit_hold FROM api_cloud_billing_periods WHERE account_id=$1 AND shared_credit_account AND period_start<=$2 AND period_end>$2 ORDER BY period_start DESC LIMIT 1 FOR SHARE").bind(required(&row,"account_id")?).bind(now).fetch_optional(&mut *tx).await?;
+        if held != Some(true) {
+            return Ok(false);
+        }
+        self.admit_credit_or_idle_sleep(tx, row, generation, now, "credits-exhausted")
+            .await
+    }
+    async fn admit_credit_or_idle_sleep(
+        &self,
+        mut tx: sqlx::Transaction<'_, sqlx::Postgres>,
+        row: Value,
+        generation: i64,
+        now: i64,
+        reason: &str,
+    ) -> Result<bool, ApiError> {
+        let id = required(&row, "workspace_id")?;
         let operation = uuid::Uuid::new_v4().to_string();
         let mut config = row["request_config"].clone();
         progress(&mut config, &operation, Action::Pause, "quiescing");
-        config["rustLifecycleOperation"]["reason"] = json!("idle-timeout");
+        config["rustLifecycleOperation"]["reason"] = json!(reason);
         let command = format!(
-            "idle:{generation}:{}",
+            "{}:{generation}:{}",
+            if reason == "idle-timeout" {
+                "idle"
+            } else {
+                "credit"
+            },
             row["next_action_at"].as_i64().unwrap_or(0)
         );
         sqlx::query("INSERT INTO zuse_rust_lifecycle_operations(operation_id,workspace_id,command_id,generation,source_machine_id,storage_incarnation_id,action,phase,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,'pause','quiescing',$7,$7)")

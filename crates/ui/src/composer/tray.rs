@@ -40,8 +40,8 @@ const ICON_SLOT: f32 = 16.0;
 const GLYPH: f32 = 14.0;
 pub(crate) const ICON_ACTION: f32 = 24.0;
 const TEXT_ACTION_HEIGHT: f32 = 28.0;
-/// Compact staged-image tiles in the attachment row.
 const THUMB: f32 = 40.0;
+const THUMB_RADIUS: f32 = 7.0;
 
 fn is_configuration_notice(
     message: &str,
@@ -50,7 +50,6 @@ fn is_configuration_notice(
 ) -> bool {
     notice.is_some_and(|(chat, text)| key == Some(chat.as_str()) && message == text)
 }
-const THUMB_RADIUS: f32 = 7.0;
 /// `ContextPill` hover intent: open after a short dwell, close after a grace
 /// that carries the pointer across the gap to the preview card.
 const PREVIEW_OPEN_DELAY: Duration = Duration::from_millis(200);
@@ -696,15 +695,24 @@ impl Composer {
 
     // ---- attachments and annotations ----
 
-    /// Staged annotations (one pill) and attachments without a chip in the
-    /// draft (compact thumbnails), wrapping in one row.
+    /// Annotation previews and attachments without an inline draft chip.
     fn attachment_row(
         &mut self,
         theme: &Theme,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let comments = self.staged_comments(cx);
+        let mut comments: Vec<StagedAnnotation> = self
+            .staged_comments(cx)
+            .into_iter()
+            .map(StagedAnnotation::Code)
+            .collect();
+        comments.extend(
+            self.staged_contexts(cx)
+                .into_iter()
+                .filter(|item| item.browser_annotation.is_some())
+                .map(StagedAnnotation::Browser),
+        );
         let tiles: Vec<StagedTile> = self
             .tiled_attachments(cx)
             .into_iter()
@@ -717,7 +725,11 @@ impl Composer {
         if comments.is_empty() {
             self.tray.annotations = AnnotationPreview::default();
         }
-        let contexts = self.staged_contexts(cx);
+        let contexts: Vec<_> = self
+            .staged_contexts(cx)
+            .into_iter()
+            .filter(|context| context.browser_annotation.is_none())
+            .collect();
         if comments.is_empty() && tiles.is_empty() && contexts.is_empty() {
             return None;
         }
@@ -887,7 +899,12 @@ impl Composer {
                     .text_color(theme.text_muted),
             )
             .into_any_element();
-        crate::badges::render_with(
+        let render = if context.source_key.starts_with("browser-element:") {
+            crate::badges::render_browser_context
+        } else {
+            crate::badges::render_with
+        };
+        render(
             format!("tray-context-{}", context.id),
             &badge,
             theme,
@@ -901,7 +918,7 @@ impl Composer {
     /// the preview card listing each one.
     fn annotation_pill(
         &mut self,
-        comments: &[crate::comments::ReviewComment],
+        comments: &[StagedAnnotation],
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -982,6 +999,15 @@ impl Composer {
                         let key = this.current_key.clone();
                         this.state.update(cx, |state, cx| {
                             state.take_review_comments(&key);
+                            let ids: Vec<_> = state
+                                .context_items(&key)
+                                .iter()
+                                .filter(|item| item.browser_annotation.is_some())
+                                .map(|item| item.id.clone())
+                                .collect();
+                            for id in ids {
+                                state.remove_context_item(&key, &id);
+                            }
                             cx.notify();
                         });
                         this.tray.annotations = AnnotationPreview::default();
@@ -1004,7 +1030,7 @@ impl Composer {
     /// remove ×.
     fn annotation_card(
         &mut self,
-        comments: &[crate::comments::ReviewComment],
+        comments: &[StagedAnnotation],
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -1017,12 +1043,12 @@ impl Composer {
             .map(|edit| (edit.id.clone(), edit.input.clone()));
         let hover = theme.element_hover;
         let rows = comments.iter().enumerate().map(|(ix, comment)| {
-            let group: SharedString = format!("tray-annotation-{}", comment.id).into();
+            let group: SharedString = format!("tray-annotation-{}", comment.id()).into();
             let editing_this = editing
                 .as_ref()
-                .filter(|(id, _)| *id == comment.id)
+                .filter(|(id, _)| *id == comment.id())
                 .map(|(_, input)| input.clone());
-            let id = comment.id.clone();
+            let id = comment.id().clone();
             let edit_button = if editing_this.is_some() {
                 tray_icon_action(
                     ("tray-annotation-save", ix),
@@ -1033,7 +1059,7 @@ impl Composer {
                 )
                 .on_click(cx.listener(|this, _, _, cx| this.commit_annotation_edit(cx)))
             } else {
-                let body = comment.body.clone();
+                let body = comment.comment().to_owned();
                 tray_icon_action(
                     ("tray-annotation-edit", ix),
                     icons::PEN,
@@ -1041,13 +1067,14 @@ impl Composer {
                     ICON_ACTION,
                     &theme,
                 )
-                .opacity(0.0)
+                .opacity(0.65)
                 .group_hover(group.clone(), |s| s.opacity(1.0))
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.begin_annotation_edit(id.clone(), body.clone(), window, cx)
                 }))
             };
-            let remove_id = comment.id.clone();
+            let remove_id = comment.id().clone();
+            let browser_annotation = matches!(comment, StagedAnnotation::Browser(_));
             let remove = tray_icon_action(
                 ("tray-annotation-remove", ix),
                 icons::CLOSE,
@@ -1061,7 +1088,11 @@ impl Composer {
                 let key = this.current_key.clone();
                 let id = remove_id.clone();
                 this.state.update(cx, |state, cx| {
-                    state.remove_review_comment(&key, &id);
+                    if browser_annotation {
+                        state.remove_context_item(&key, &id);
+                    } else {
+                        state.remove_review_comment(&key, &id);
+                    }
                     cx.notify();
                 });
                 if this
@@ -1100,7 +1131,7 @@ impl Composer {
                     .text_size(px(12.0))
                     .line_height(px(18.0))
                     .text_color(theme.text)
-                    .child(SharedString::from(comment.body.clone()))
+                    .child(SharedString::from(comment.comment().to_owned()))
                     .into_any_element(),
             };
             div()
@@ -1118,7 +1149,20 @@ impl Composer {
                 .when(ix > 0, |el| {
                     el.border_t_1().border_color(theme.border.opacity(0.35))
                 })
-                .child(annotation_file_chip(comment, &theme))
+                .child(
+                    div()
+                        .size(px(20.0))
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded_full()
+                        .bg(theme.muted_fill())
+                        .text_color(theme.text_muted)
+                        .text_size(px(10.0))
+                        .child((ix + 1).to_string()),
+                )
+                .child(annotation_anchor(comment, &theme))
                 .child(div().flex_1())
                 .child(edit_button)
                 .child(remove)
@@ -1143,6 +1187,28 @@ impl Composer {
                     this.close_annotation_preview(cx);
                 }
             }))
+            .child(
+                div()
+                    .px(px(8.0))
+                    .pt(px(2.0))
+                    .pb(px(8.0))
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.0))
+                    .child(
+                        div()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_size(px(12.0))
+                            .text_color(theme.text)
+                            .child("Annotations"),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.0))
+                            .text_color(theme.text_muted)
+                            .child("Review, edit, or remove before sending."),
+                    ),
+            )
             .child(
                 div()
                     .id("tray-annotations-list")
@@ -1249,7 +1315,17 @@ impl Composer {
         if !body.is_empty() {
             let key = self.current_key.clone();
             self.state.update(cx, |state, cx| {
-                state.update_review_comment_body(&key, &edit.id, body);
+                if let Some(mut context) = state
+                    .context_items(&key)
+                    .iter()
+                    .find(|item| item.id == edit.id && item.browser_annotation.is_some())
+                    .cloned()
+                {
+                    context.update_browser_comment(body);
+                    state.add_context_item(&key, context);
+                } else {
+                    state.update_review_comment_body(&key, &edit.id, body);
+                }
                 cx.notify();
             });
         }
@@ -1785,6 +1861,69 @@ impl Composer {
 }
 
 /// What a thumbnail needs, copied out so rendering can borrow the composer.
+enum StagedAnnotation {
+    Code(crate::comments::ReviewComment),
+    Browser(crate::context_items::ContextItem),
+}
+impl StagedAnnotation {
+    fn id(&self) -> String {
+        match self {
+            Self::Code(item) => item.id.clone(),
+            Self::Browser(item) => item.id.clone(),
+        }
+    }
+    fn comment(&self) -> &str {
+        match self {
+            Self::Code(item) => &item.body,
+            Self::Browser(item) => item
+                .browser_annotation
+                .as_ref()
+                .map_or("", |annotation| annotation.comment.as_str()),
+        }
+    }
+}
+fn annotation_anchor(annotation: &StagedAnnotation, theme: &Theme) -> AnyElement {
+    match annotation {
+        StagedAnnotation::Code(item) => annotation_file_chip(item, theme),
+        StagedAnnotation::Browser(item) => div()
+            .id(gpui::SharedString::from(format!(
+                "annotation-anchor-{}",
+                item.id
+            )))
+            .min_w_0()
+            .max_w(px(260.0))
+            .flex()
+            .items_center()
+            .gap(px(5.0))
+            .px(px(6.0))
+            .py(px(3.0))
+            .rounded(px(5.0))
+            .bg(theme.muted_fill())
+            .tooltip(crate::settings::widgets::text_tooltip(
+                item.browser_annotation
+                    .as_ref()
+                    .map(|annotation| {
+                        format!("{}\n{}", annotation.page_url, annotation.target_details())
+                    })
+                    .unwrap_or_default(),
+            ))
+            .child(
+                icon(icons::BROWSER_SELECT)
+                    .size(px(13.0))
+                    .text_color(theme.accent),
+            )
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(px(11.0))
+                    .text_color(theme.text_muted)
+                    .child(item.label.clone()),
+            )
+            .into_any_element(),
+    }
+}
+
 struct StagedTile {
     id: String,
     name: String,
@@ -2081,6 +2220,42 @@ impl Composer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[gpui::test]
+    fn browser_annotations_stage_without_focus_and_edit_without_losing_other_notes(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (_dir, handle) = super::super::tests::composer_focus_window(cx);
+        handle.update(cx, |composer, window, cx| {
+            composer.focus_pending = false;
+            for comment in ["First browser note", "Second browser note"] {
+                let annotation = crate::context_items::BrowserAnnotation::from_selection("https://example.com", &serde_json::json!({"comment":comment,"elements":[{"tag":"button","selector":"button#save","text":"Save"}]}).to_string()).unwrap();
+                composer.stage_browser_annotation(composer.current_key.clone(), crate::context_items::ContextItem::from_browser_annotation(annotation), cx);
+            }
+            assert!(!composer.focus_pending, "Staging a browser comment must not take page focus");
+            let contexts = composer.staged_contexts(cx);
+            assert_eq!(contexts.len(), 2);
+            let key = composer.current_key.clone();
+            composer.state.update(cx, |state, _| {
+                state.add_review_comment(&key, crate::comments::ReviewComment::new("src/app.rs", crate::comments::CommentSide::New, 4, "Code note"));
+            });
+            assert_eq!(composer.staged_note_count(cx), 3);
+            let id = contexts[0].id.clone();
+            composer.begin_annotation_edit(id.clone(), "First browser note".into(), window, cx);
+            composer.tray.annotations.editing.as_ref().unwrap().input.update(cx, |input, cx| input.set_text("Updated browser note", cx));
+            composer.commit_annotation_edit(cx);
+            let contexts = composer.staged_contexts(cx);
+            assert!(contexts[0].body.contains("Updated browser note"));
+            assert!(!contexts[0].body.contains("First browser note"));
+            assert!(contexts[1].body.contains("Second browser note"));
+            assert_eq!(composer.staged_comments(cx).len(), 1);
+            // The edit field may outlive an item removed or sent meanwhile.
+            composer.begin_annotation_edit(id.clone(), "Stale edit".into(), window, cx);
+            composer.state.update(cx, |state, _| state.remove_context_item(&key, &id));
+            composer.commit_annotation_edit(cx);
+            assert_eq!(composer.staged_contexts(cx).len(), 1);
+        }).unwrap();
+    }
 
     #[test]
     fn configuration_notice_title_never_relabels_an_actual_or_foreign_send_failure() {

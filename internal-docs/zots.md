@@ -22,7 +22,7 @@ them. Instructions, worker rules, notes and digest are separate versioned files.
 Files and decisions remain in private storage after deleting the coordinator;
 worker conversations and repository files are preserved.
 
-The coordinator runs in plan mode in its private workspace. It delegates repository
+The coordinator runs in its private workspace and delegates repository edits. It delegates repository
 writes through scoped Zot tools. Worker requests use the existing conversation
 queue, isolated worktree creation and provider permissions. Model reports cannot
 grant authority. Agent follow-ups always debit the configured automatic limit;
@@ -108,3 +108,69 @@ checksum failures, previous-version retention and unchanged project lockfiles.
 Authenticated cloud/provider smoke tests, a full native UI walkthrough and actual
 npm publication remain release gates. An isolated Rust UI type check cannot
 replace the native WebKitGTK/browser build or desktop interaction acceptance.
+
+## Issues and linked delivery
+
+A Zot owns a durable issue backlog in its home profile. The Overview groups
+issues by status, followed by threads, pull requests and Drive documents. The
+Issues page supports search, assigned-to-Zot and mention filters, grouped/collapsible
+statuses and issue details. Native and browser clients embed the same GPUI
+component for these surfaces and for attributed Zot message headers.
+
+Issues have stable caller-minted IDs, sequential display numbers within their
+Zot, title, description, status, priority, assignment, optional calendar due date,
+labels and relations to other issues in that Zot. Assignment is to the owning
+Zot; threads are linked work, not assignees. Issues are local application records,
+not synchronized copies of an external issue tracker. The current surface does
+not move issues between Zot homes.
+
+The public `ZotCommand` actions are:
+
+- `createIssue` and `editIssue`: `issueId` and `details` (`title`, `description`,
+  `status`, `priority`, `assigned`, `dueDate`, `labels`, `relations`).
+- `linkIssueThread`: `issueId` and a `chatId` belonging to this Zot.
+- `linkIssuePullRequest`: `issueId`, canonical HTTPS GitHub PR `url`, and `title`.
+- `unlinkIssueThread` and `unlinkIssuePullRequest`: remove a link using its
+  `chatId` or `url`; unlinking does not release or stop a worker.
+- `commentIssue`: `issueId` and `text`.
+- `delegate`: optional `issueId` alongside the existing worker, model and base.
+  The issue must be assigned and open. Linking the new thread, moving the issue
+  to `inProgress`, worker membership and durable delivery commit together.
+
+These use the same revision preconditions and command receipts as every other
+Zot mutation. Replays preserve the original result and do not duplicate comments,
+links, notifications or worker launches. Old stored Zots default to an empty
+issue list. Issue activity survives engine restart.
+
+Human assignment, edits, comments and PR links wake an active coordinator through
+durable events. Coordinator-authored mutations do not wake themselves. Paused
+Zots retain these events until resumed. Worker reports enter linked issue activity
+once; failures, unavailable placement and input requests mark open issues blocked.
+A settled worker turn never automatically marks an issue done. The coordinator
+must inspect verification, link the PR when applicable, and explicitly advance
+review/completion. Terminal issues are not reopened by delayed worker reports.
+
+Local and paired workers receive their linked issue IDs in their host context.
+Their live, engine-issued credentials allow only comments and PR links on issues
+linked to their own thread. The Zot home rechecks membership and issue scope;
+workers cannot edit assignment/status, create unrelated issues or close work.
+
+Zot-delivered messages store a display envelope with the sender's name, avatar
+and coordinator chat identity. Both clients render this above a left-aligned
+message bubble. The envelope is display context, not a permission grant. Existing
+chat-to-chat attribution remains supported. Model-free activity notices carry a
+separate display flag and render as compact rows. Host instructions and linked
+issue context stay outside the visible message body. Reports retain the final
+assistant text, capped at 16,384 characters with an explicit truncation marker.
+Coordinator activity uses its stable chat identity so renames and fresh
+conversations retain readable authorship. Linked PR pages provide issue/thread
+backlinks and keep their navigation inside the Zot inspector.
+
+Checks cover persistence/retry, stale revisions, atomic delegation/rollback,
+link validation, scoped worker writes, legacy records and report deduplication.
+The real-engine acceptance scenario uses a deterministic ACP coordinator and
+worker, exercises isolated checkout and scoped writes, and verifies clean visible
+kickoff text, hidden issue context, activity notices and explicit acceptance.
+Browser and Linux native walkthroughs cover the issue surface, attributed
+messages and linked PR navigation. The native verification build excludes the
+unused WebKit helper; it does not verify WebKit integration or macOS rendering.

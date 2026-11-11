@@ -22,6 +22,9 @@ async fn pause(cx: &mut AsyncApp, ms: u64) {
 }
 
 fn capture(directory: &std::path::Path, name: &str) -> anyhow::Result<()> {
+    if std::env::var_os("ZUSE_BROWSER_ANNOTATION_ONLY").is_some() {
+        return Ok(());
+    }
     let path = directory.join(format!("{name}.png"));
     #[cfg(target_os = "macos")]
     let status = {
@@ -242,7 +245,7 @@ fn main() -> anyhow::Result<()> {
                     return transcript_links::exercise(window, state.clone(), &_origin, &output, cx).await;
                 }
                 state.update(cx, |s, cx| {
-                    let entries = serde_json::from_value(serde_json::json!([
+                    let entries: Vec<zuse_doc::SessionMessageEntry> = serde_json::from_value(serde_json::json!([
                         {"id":"fixture-user","role":"user","parts":[{"id":"text","kind":"text","text":"Build a calm, thoughtful workspace for Fieldnotes. Let’s preview the landing page beside this conversation."}],"createdAt":1788900000000_i64,"deviceId":"local"},
                         {"id":"fixture-assistant","role":"assistant","parts":[{"id":"text","kind":"text","text":"The first layout is ready to review.\n\nIt uses warm neutrals, generous spacing, and a simple hierarchy. The workspace cards stay readable as the preview gets narrower.\n\nOpen **Browser** from the sidebar’s **+** menu to keep the page beside your work."}],"createdAt":1788900001000_i64,"deviceId":"local","status":"complete"}
                     ])).unwrap();
@@ -302,6 +305,11 @@ fn main() -> anyhow::Result<()> {
                 drop(second);
                 #[cfg(target_os = "linux")]
                 linux::exercise(window, first.clone(), &output, cx).await?;
+                #[cfg(target_os = "linux")]
+                if std::env::var_os("ZUSE_BROWSER_ANNOTATION_ONLY").is_some() {
+                    std::fs::write(output.join("result.txt"), "PASS: annotation typing through the production GPUI shell\n")?;
+                    return Ok(());
+                }
                 #[cfg(target_os = "macos")]
                 let mut recording;
                 #[cfg(target_os = "macos")]

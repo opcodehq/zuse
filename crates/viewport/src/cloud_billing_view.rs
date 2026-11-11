@@ -175,54 +175,71 @@ pub fn usage<T: 'static>(
             }
             rows = rows.child(setting_row(
                 first,
-                SharedString::from(format!(
-                    "{} of {} included used",
-                    usd(summary.included_used_micros),
-                    usd(summary.included_provider_cost_micros)
-                )),
-                SharedString::from(format!(
-                    "{} remaining · {} overage · {} invoice estimate before tax",
-                    usd(summary.included_remaining_micros),
-                    usd(summary.overage_charge_micros),
-                    usd(summary.current_invoice_estimate_micros)
-                )),
+                SharedString::from(if summary.shared_credits {
+                    format!(
+                        "{} credits remaining",
+                        usd(summary.included_remaining_micros)
+                    )
+                } else {
+                    format!(
+                        "{} of {} included used",
+                        usd(summary.included_used_micros),
+                        usd(summary.included_provider_cost_micros)
+                    )
+                }),
+                SharedString::from(if summary.shared_credits {
+                    format!(
+                        "{} monthly credits · {} subscription before tax",
+                        usd(summary.included_provider_cost_micros),
+                        usd(summary.base_price_micros)
+                    )
+                } else {
+                    format!(
+                        "{} remaining · {} overage · {} invoice estimate before tax",
+                        usd(summary.included_remaining_micros),
+                        usd(summary.overage_charge_micros),
+                        usd(summary.current_invoice_estimate_micros)
+                    )
+                }),
                 None,
             ));
-            let busy = data.pending.cap;
-            let disabled = data.pending.loading || busy;
-            rows = rows.child(setting_row(
-                false,
-                "Monthly overage cap",
-                "Builds and running workspaces pause when this pre-tax limit is reached.",
-                Some(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(6.))
-                        .child(
-                            div()
-                                .w(px(80.))
-                                .h(px(28.))
-                                .flex()
-                                .items_center()
-                                .px(px(9.))
-                                .rounded(px(7.))
-                                .border_1()
-                                .border_color(palette::rgb(BORDER))
-                                .child(cap),
-                        )
-                        .child(
-                            button("save-cloud-cap", "Save", true, disabled, busy).on_click(
-                                cx.listener(move |this, _, window, cx| {
-                                    if !disabled {
-                                        act(this, Action::SaveCap, window, cx)
-                                    }
-                                }),
-                            ),
-                        )
-                        .into_any_element(),
-                ),
-            ));
+            if !summary.shared_credits {
+                let busy = data.pending.cap;
+                let disabled = data.pending.loading || busy;
+                rows = rows.child(setting_row(
+                    false,
+                    "Monthly overage cap",
+                    "Builds and running workspaces pause when this pre-tax limit is reached.",
+                    Some(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.))
+                            .child(
+                                div()
+                                    .w(px(80.))
+                                    .h(px(28.))
+                                    .flex()
+                                    .items_center()
+                                    .px(px(9.))
+                                    .rounded(px(7.))
+                                    .border_1()
+                                    .border_color(palette::rgb(BORDER))
+                                    .child(cap),
+                            )
+                            .child(
+                                button("save-cloud-cap", "Save", true, disabled, busy).on_click(
+                                    cx.listener(move |this, _, window, cx| {
+                                        if !disabled {
+                                            act(this, Action::SaveCap, window, cx)
+                                        }
+                                    }),
+                                ),
+                            )
+                            .into_any_element(),
+                    ),
+                ));
+            }
             let recent = if data.usage.is_empty() {
                 "No completed sandbox runs in this billing period.".to_owned()
             } else {
@@ -307,9 +324,11 @@ pub fn usage<T: 'static>(
             let paused = summary.status == BillingStatus::BillingHold;
             group(
                 "Usage and billing",
-                Some(
-                    "$40/month includes $35 of sandbox compute and image storage. Additional usage has a 5% markup.",
-                ),
+                Some(if summary.shared_credits {
+                    "$40/month includes $40 of shared credits for compute, storage and Zuse-billed models."
+                } else {
+                    "$40/month includes $35 of sandbox compute and image storage. Additional usage has a 5% markup."
+                }),
                 Some(
                     badge(if paused { "Paused" } else { "Active" }, paused, false)
                         .into_any_element(),
@@ -420,7 +439,13 @@ fn credits_body<T: 'static>(
                     .flex_wrap()
                     .items_center()
                     .gap(px(8.))
-                    .child(s::title_text(tr(cx, msg::settings::prepaid_title)))
+                    .child(s::title_text(
+                        if data.credits.is_some_and(|b| b.funding == "shared-credits") {
+                            "Zuse credits".to_owned()
+                        } else {
+                            tr(cx, msg::settings::prepaid_title)
+                        },
+                    ))
                     .child(
                         div()
                             .rounded(px(7.))
@@ -461,6 +486,17 @@ fn credits_body<T: 'static>(
                 .child(format!(
                     "{} owed on future invoices",
                     cents(balance.debit_cents)
+                )),
+        );
+    }
+    if let Some(credit) = data.credits.and_then(|b| b.invoice_credit_cents) {
+        credits = credits.child(
+            div()
+                .text_size(px(12.))
+                .text_color(palette::rgb(MUTED))
+                .child(format!(
+                    "{} in legacy invoice credit, applied by Stripe to subscription invoices.",
+                    cents(credit)
                 )),
         );
     }
@@ -578,7 +614,7 @@ fn credits_body<T: 'static>(
             .text_size(px(12.))
             .line_height(px(19.5))
             .text_color(palette::rgb(MUTED))
-            .child(tr(cx, msg::settings::prepaid_description)),
+            .child(if data.credits.is_some_and(|b|b.funding=="shared-credits") { "Your subscription adds $40 in credits each month. Cloud compute and models billed by Zuse use this balance. Top-ups add to it. Your own agent subscriptions are billed separately.".to_owned() } else { tr(cx, msg::settings::prepaid_description) }),
     );
     if data.credits.is_some_and(|b| !b.available) {
         credits = credits.child(

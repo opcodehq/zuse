@@ -5,6 +5,9 @@ use crate::shell::{BORDER, FAINT, MUTED, RAISED, TEXT, column, icon_button, row}
 use zuse_protocol::presentation::zot_panel::{ZotTab, ZotTabs, zot_owns_chat};
 use zuse_protocol::{control as api, zots::*};
 
+/// The selected Zapper's inspector width; the shell reserves the same space.
+pub(crate) const ZOT_PANEL_WIDTH: f32 = 520.;
+
 #[derive(Default)]
 pub(super) struct ZotView {
     pub items: Vec<Zot>,
@@ -15,8 +18,15 @@ pub(super) struct ZotView {
     files: Vec<ZotFile>,
     events: Vec<ZotEvent>,
     tabs: ZotTabs,
+    issues: Option<Entity<crate::zot_issues::IssuePanel>>,
+    pull_request: Option<String>,
+    document: Option<ZotFile>,
     history: bool,
     pending: Option<u64>,
+    /// Whether the pending command came from the issue panel, so only its own
+    /// results close or fail the panel's editor.
+    pending_issue: bool,
+    issue_command: bool,
     selection: Option<String>,
     retry: Option<ZotCommand>,
     file_request: Option<u64>,
@@ -101,6 +111,19 @@ impl WorkspaceView {
                 self.error = Some(error.into());
             }
             if self.zots.pending == Some(id) {
+                // The engine answered: nothing was written, so the next
+                // attempt is a new command at the current revision.
+                if !command_outcome_unknown(error) {
+                    self.zots.retry = None;
+                }
+                if let Some(panel) = self
+                    .zots
+                    .issues
+                    .as_ref()
+                    .filter(|_| self.zots.pending_issue)
+                {
+                    panel.update(cx, |p, cx| p.failed(error.to_owned(), cx));
+                }
                 self.zots.pending = None;
             }
             self.pending.remove(&id);
@@ -138,6 +161,14 @@ impl WorkspaceView {
                 api::ZOT_COMMAND if self.zots.pending == Some(id) => {
                     self.zots.pending = None;
                     self.zots.retry = None;
+                    if let Some(panel) = self
+                        .zots
+                        .issues
+                        .as_ref()
+                        .filter(|_| self.zots.pending_issue)
+                    {
+                        panel.update(cx, |p, cx| p.committed(cx));
+                    }
                     self.zots.form = None;
                     if let Ok(Some(zot)) = serde_json::from_value::<Option<Zot>>(value.clone()) {
                         if let Some(chat) = self
@@ -215,7 +246,7 @@ impl WorkspaceView {
                     .id(SharedString::from(format!("zot-{}", z.id)))
                     .role(Role::Button)
                     .aria_label(SharedString::from(z.config.name.clone()))
-                    .h(px(28.))
+                    .h(px(26.))
                     .px(px(6.))
                     .gap_2()
                     .rounded(px(7.))
@@ -426,6 +457,7 @@ impl WorkspaceView {
         action: ZotAction,
         cx: &mut Context<Self>,
     ) {
+        let from_issue_panel = std::mem::take(&mut self.zots.issue_command);
         if self.zots.pending.is_some() || !self.require_connection(cx) {
             return;
         }
@@ -441,6 +473,7 @@ impl WorkspaceView {
         if let Some(previous) = &self.zots.retry {
             let mut comparison = command.clone();
             comparison.command_id = previous.command_id.clone();
+            comparison.expected_revision = previous.expected_revision;
             if let ZotAction::Delegate { worker, .. } = &mut comparison.action {
                 worker.chat_id = format!("zot-worker-{}", previous.command_id);
             }
@@ -452,6 +485,7 @@ impl WorkspaceView {
         let mut params = serde_json::to_value(command).unwrap();
         params["targetDeviceId"] = json!(home);
         self.zots.pending = Some(self.call(api::ZOT_COMMAND, params));
+        self.zots.pending_issue = from_issue_panel;
         cx.notify();
     }
     fn save_zot(&mut self, cx: &mut Context<Self>) {
@@ -552,6 +586,7 @@ impl WorkspaceView {
                     return;
                 };
                 ZotAction::Delegate {
+                    issue_id: None,
                     worker: ZotWorker {
                         chat_id: String::new(),
                         device_id: repository.device_id.clone(),
@@ -1012,17 +1047,22 @@ impl WorkspaceView {
     }
     fn zot_tab_bar(&self, zot: &Zot, cx: &mut Context<Self>) -> AnyElement {
         let tabs = self.zots.tabs;
+        let detail_open = self.zots.pull_request.is_some()
+            || self
+                .zots
+                .issues
+                .as_ref()
+                .is_some_and(|p| p.read(cx).selected_code().is_some());
         let mut strip = row().gap(px(2.));
         for tab in ZotTab::ALL {
-            let active = tab == tabs.active;
+            let active = tab == tabs.active && !detail_open;
             let name = tab.label();
-            let width = tab.label_width();
             let color = rgb(if active { TEXT } else { FAINT });
             let base = row()
                 .id(SharedString::from(format!("zot-tab-{name}")))
                 .role(Role::Tab)
                 .aria_label(name)
-                .h(px(28.))
+                .h(px(26.))
                 .px(px(7.))
                 .rounded(px(8.))
                 .cursor_pointer()
@@ -1030,8 +1070,19 @@ impl WorkspaceView {
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(color)
                 .when(!active, |d| d.hover(|d| d.text_color(rgb(MUTED))))
-                .child(icon(tab.icon()).size(px(15.)).text_color(color))
+                .child(if tab == ZotTab::Issues {
+                    crate::zot_issues::status_icon(ZotIssueStatus::Todo).into_any_element()
+                } else {
+                    icon(tab.icon())
+                        .size(px(12.))
+                        .text_color(color)
+                        .into_any_element()
+                })
                 .on_click(cx.listener(move |this, _, _, cx| {
+                    this.zots.pull_request = None;
+                    if let Some(panel) = &this.zots.issues {
+                        panel.update(cx, |p, cx| p.show_list(cx));
+                    }
                     if this.zots.tabs.select(tab) {
                         let history = tab == ZotTab::History;
                         if this.zots.history != history {
@@ -1042,31 +1093,53 @@ impl WorkspaceView {
                         cx.notify();
                     }
                 }));
-            // The active tab grows its label; the one it replaced folds back.
-            let reveal = move |el: Stateful<Div>, r: f32| {
-                el.bg(rgb(RAISED).opacity(r)).when(r > 0., |el| {
-                    el.child(
-                        div()
-                            .ml(px(6. * r))
-                            .max_w(px(width * r))
-                            .overflow_hidden()
-                            .whitespace_nowrap()
-                            .opacity(r)
-                            .child(name),
-                    )
-                })
-            };
-            let animating = tabs.epoch > 0 && (active || tabs.previous == Some(tab));
-            strip = strip.child(if animating {
-                base.with_animation(
-                    SharedString::from(format!("zot-tab-{name}-{}", tabs.epoch)),
-                    Animation::new(std::time::Duration::from_millis(220)).with_easing(ease_in_out),
-                    move |el, t| reveal(el, tabs.reveal(tab, t)),
+            strip = strip.child(
+                base.when(
+                    matches!(tab, ZotTab::Overview | ZotTab::Issues | ZotTab::Drive) || active,
+                    |d| d.child(div().ml(px(6.)).child(name)),
                 )
-                .into_any_element()
-            } else {
-                reveal(base, tabs.reveal(tab, 1.)).into_any_element()
+                .when(active, |d| d.bg(rgb(RAISED))),
+            );
+        }
+        let extra = self
+            .zots
+            .pull_request
+            .as_ref()
+            .map(|u| format!("#{}", u.rsplit('/').next().unwrap_or("")))
+            .or_else(|| {
+                self.zots
+                    .issues
+                    .as_ref()
+                    .and_then(|p| p.read(cx).selected_code())
             });
+        if let Some(code) =
+            extra.filter(|_| matches!(tabs.active, ZotTab::Issues | ZotTab::Overview))
+        {
+            strip = strip.child(
+                row()
+                    .px(px(8.))
+                    .h(px(26.))
+                    .gap(px(6.))
+                    .rounded(px(7.))
+                    .bg(rgb(RAISED))
+                    .text_color(rgb(TEXT))
+                    .child(if self.zots.pull_request.is_some() {
+                        icon("git-branch")
+                            .size(px(12.))
+                            .text_color(rgb(0xd9bf60))
+                            .into_any_element()
+                    } else {
+                        crate::zot_issues::status_icon(
+                            self.zots
+                                .issues
+                                .as_ref()
+                                .and_then(|p| p.read(cx).selected_status())
+                                .unwrap_or(ZotIssueStatus::Todo),
+                        )
+                        .into_any_element()
+                    })
+                    .child(code),
+            );
         }
         let doc = zot.clone();
         let settings = zot.clone();
@@ -1110,22 +1183,82 @@ impl WorkspaceView {
             .into_any_element()
     }
     /// The panel floats as its own rounded surface beside the conversation.
-    pub(super) fn zot_panel(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn zot_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let Some(zot) = self.selected_zot() else {
             return Empty.into_any_element();
         };
+        if self
+            .zots
+            .issues
+            .as_ref()
+            .is_some_and(|p| p.read(cx).zot_id() != zot.id)
+        {
+            self.zots.pull_request = None;
+            self.zots.document = None;
+        }
+        if let Some(file) = self.zots.document.take() {
+            self.open_zot_form(Some(zot.clone()), FormKind::File(file), window, cx);
+        }
         let body = match self.zots.tabs.active {
-            ZotTab::Overview => self.zot_overview(&zot, cx),
-            ZotTab::Threads => self.zot_threads(&zot, cx),
+            ZotTab::Issues => self.zot_issue_surface(&zot, false, cx),
+            ZotTab::Overview => self.zot_issue_surface(&zot, true, cx),
+            ZotTab::Threads => column()
+                .gap(px(18.))
+                .child(self.zot_threads(&zot, cx))
+                .child(self.zot_overview(&zot, cx))
+                .into_any_element(),
             ZotTab::Drive => self.zot_drive(&zot, cx),
             ZotTab::History => self.zot_history(&zot, cx),
         };
+        let body = if let Some(url) = self.zots.pull_request.clone() {
+            let mut pr = column().gap(px(12.));
+            if let Some(issue) = zot
+                .issues
+                .iter()
+                .find(|i| i.pull_requests.iter().any(|p| p.url == url))
+            {
+                let id = issue.id.clone();
+                let mut links = row().gap(px(12.)).child(
+                    div()
+                        .id("pr-linked-issue")
+                        .cursor_pointer()
+                        .text_size(px(12.))
+                        .text_color(rgb(MUTED))
+                        .child(format!("‹ {} · {}", issue.code(), issue.details.title))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.zots.pull_request = None;
+                            if let Some(panel) = &this.zots.issues {
+                                panel.update(cx, |p, cx| p.show_issue(id.clone(), cx));
+                            }
+                            cx.notify();
+                        })),
+                );
+                if let Some(chat) = issue.threads.first().cloned() {
+                    links = links.child(
+                        div()
+                            .id("pr-linked-thread")
+                            .cursor_pointer()
+                            .text_size(px(12.))
+                            .text_color(rgb(MUTED))
+                            .child("Thread ↗")
+                            .on_click(
+                                cx.listener(move |this, _, _, cx| this.open_zot_chat(&chat, cx)),
+                            ),
+                    );
+                }
+                pr = pr.child(links);
+            }
+            pr.child(self.pull_requests_view(cx)).into_any_element()
+        } else {
+            body
+        };
         crate::workspace_style::column()
-            .w(px(336.))
+            .w(px(ZOT_PANEL_WIDTH))
             .flex_none()
             .pr(px(crate::workspace_style::GUTTER))
             .child(
                 crate::workspace_style::surface()
+                    .bg(rgb(0x101010))
                     .child(self.zot_tab_bar(&zot, cx))
                     .child(
                         column()
@@ -1133,8 +1266,8 @@ impl WorkspaceView {
                             .flex_1()
                             .min_h_0()
                             .overflow_y_scroll()
-                            .px(px(12.))
-                            .pt(px(4.))
+                            .px(px(16.))
+                            .pt(px(16.))
                             .pb(px(16.))
                             .gap(px(18.))
                             .child(body),
@@ -1142,6 +1275,77 @@ impl WorkspaceView {
             )
             .children(self.zot_thread_menu(&zot, cx))
             .into_any_element()
+    }
+    fn zot_issue_surface(
+        &mut self,
+        zot: &Zot,
+        overview: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        use crate::zot_issues::{IssueEvent, IssuePanel};
+        if self.zots.issues.is_none() {
+            let panel = cx.new(|_| IssuePanel::new(zot.clone(), overview));
+            cx.subscribe(&panel, |this, _, event, cx| match event {
+                IssueEvent::Command(action, revision) => {
+                    if let Some(zot) = this.selected_zot() {
+                        let mut action = action.clone();
+                        if let ZotAction::Delegate { model, .. } = &mut action {
+                            if let Some(config) = this
+                                .chats
+                                .iter()
+                                .find(|c| c["id"] == zot.coordinator_chat_id)
+                                .and_then(|c| c.get("config"))
+                            {
+                                if let Some(harness) = config["harness"].as_str() {
+                                    *model = ZotModel {
+                                        harness: harness.into(),
+                                        model: config["model"].as_str().map(str::to_owned),
+                                    };
+                                }
+                            }
+                        }
+                        this.zots.issue_command = true;
+                        this.send_zot(
+                            zot.id,
+                            Some(*revision),
+                            zot.config.home_device_id,
+                            action,
+                            cx,
+                        );
+                    }
+                }
+                IssueEvent::OpenThread(id) => this.open_zot_chat(id, cx),
+                IssueEvent::OpenDocument(file) => {
+                    this.zots.document = Some(file.clone());
+                    cx.notify();
+                }
+                IssueEvent::OpenPullRequest(url) => {
+                    this.zots.pull_request = Some(url.clone());
+                    this.open_pr_url(url.clone(), String::new(), cx);
+                }
+            })
+            .detach();
+            cx.observe(&panel, |_, _, cx| cx.notify()).detach();
+            self.zots.issues = Some(panel);
+        }
+        let panel = self.zots.issues.as_ref().unwrap().clone();
+        panel.update(cx, |p, cx| {
+            p.sync(zot.clone(), overview, self.zots.pending.is_some(), cx);
+            p.files(self.zots.files.clone(), cx);
+            p.thread_titles(
+                self.chats
+                    .iter()
+                    .filter_map(|c| {
+                        Some((
+                            c["id"].as_str()?.to_owned(),
+                            c["title"].as_str()?.to_owned(),
+                        ))
+                    })
+                    .collect(),
+                cx,
+            );
+        });
+        panel.into_any_element()
     }
     fn zot_overview(&self, zot: &Zot, cx: &mut Context<Self>) -> AnyElement {
         let working = zot
@@ -1871,7 +2075,7 @@ fn quiet_icon(id: impl Into<ElementId>, glyph: &'static str, name: &'static str)
         .rounded(px(7.))
         .text_color(rgb(FAINT))
         .hover(|d| d.bg(rgb(RAISED)).text_color(rgb(TEXT)))
-        .child(icon(glyph).size(px(15.)))
+        .child(icon(glyph).size(px(12.)))
 }
 fn chip(id: impl Into<ElementId>, name: String, active: bool) -> Stateful<Div> {
     row()
