@@ -32,7 +32,12 @@ codex_start() {
   local ms=$(( $(now) - t ))
   kill "$CX_PID" 2>/dev/null
   wait "$CX_PID" 2>/dev/null
-  case "$line" in *'"id":1'*) echo "$ms" ;; *) echo -1 ;; esac
+  # Only a successful initialize counts; an error response also carries id 1.
+  case "$line" in
+  *'"error"'*) echo -1 ;;
+  *'"id":1'*'"result"'* | *'"result"'*'"id":1'*) echo "$ms" ;;
+  *) echo -1 ;;
+  esac
 }
 
 case "$mode" in
@@ -45,7 +50,7 @@ fresh)
   echo retained > "$STATE/disk-marker" && sync
   printf '{"runtimeSha256":"%s","runtimeVersion":"%s","claudeAnswers":%s,"codexInitializeMs":%s,"git":%s,"sudo":%s,"sshd":%s,"taskUser":%s,"cpus":%s}\n' \
     "$runtime_sha" "$runtime_version" "$claude_ok" "$codex_ms" \
-    "$(ok git --version)" "$(ok sudo -n true)" "$(ok test -x /usr/sbin/sshd)" "$(ok id zuse)" "$(nproc)"
+    "$(ok git --version)" "$(ok as_task sudo -n true)" "$(ok test -x /usr/sbin/sshd)" "$(ok id zuse)" "$(nproc)"
   ;;
 before)
   mkdir -p "$STATE"

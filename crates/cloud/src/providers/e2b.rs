@@ -38,7 +38,10 @@ impl E2b {
         })
     }
     pub fn with_max_timeout(mut self, seconds: u32) -> Result<Self, ProviderError> {
-        if !(60..=86400).contains(&seconds) {
+        // The keep-running worker renews every INTERVAL_SECS; a shorter limit
+        // would end busy computers between passes.
+        let floor = 2 * crate::runtime::keep_running::INTERVAL_SECS as u32;
+        if !(floor..=86400).contains(&seconds) {
             return Err(ProviderError::Rejected);
         }
         self.max_timeout_seconds = seconds;
@@ -360,6 +363,9 @@ impl Provider for E2b {
         )
         .await
         .map(|_| ())
+    }
+    fn has_running_limit(&self) -> bool {
+        true
     }
     async fn delete(&self, id: &str) -> Result<ProviderOperation, ProviderError> {
         match self.call(Method::DELETE, &["sandboxes", id], None).await {

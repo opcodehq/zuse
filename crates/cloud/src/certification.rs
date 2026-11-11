@@ -239,6 +239,17 @@ pub async fn certify(provider: &dyn Provider, target: &Target, options: &Options
         Ok(machine) => Some(machine),
         // A lost response may still have created it; reconcile by name.
         Err(error) => match provider.find_allocation(&name).await {
+            // An unknown outcome may still be creating; an empty lookup now
+            // doesn't prove absence, so leave it for cleanup by name.
+            Ok(None) if matches!(error, crate::providers::ProviderError::OutcomeUnknown) => {
+                checks.push(Check {
+                    name: "create",
+                    passed: false,
+                    detail: json!({"error":format!("{error:?}"),
+                        "cleanup":"uncertain; reconcile by name"}),
+                });
+                None
+            }
             Ok(found) => found,
             Err(lookup) => {
                 checks.push(Check {

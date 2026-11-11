@@ -174,6 +174,11 @@ pub trait Provider: Send + Sync {
     async fn keep_running(&self, _id: &str) -> Result<(), ProviderError> {
         Ok(())
     }
+    /// Whether [`Self::keep_running`] does anything, so the worker only visits
+    /// computers whose provider can end them mid-task.
+    fn has_running_limit(&self) -> bool {
+        false
+    }
 }
 
 pub(super) fn observed(receipt: &ProviderOperation, machine: Option<&Machine>) -> OperationState {

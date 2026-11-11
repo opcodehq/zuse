@@ -385,7 +385,18 @@ async fn main() -> Result<()> {
             let report =
                 zuse_cloud::certification::certify(adapter.as_ref(), &target, &options).await;
             std::fs::create_dir_all(&output)?;
-            let path = output.join(format!("{release_id}-certification.json"));
+            // Release ids may contain '/' or '.'; keep report files inside --output.
+            let stem: String = release_id
+                .chars()
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                        c
+                    } else {
+                        '_'
+                    }
+                })
+                .collect();
+            let path = output.join(format!("{stem}-certification.json"));
             std::fs::write(&path, serde_json::to_vec_pretty(&report)?)?;
             for check in &report.checks {
                 println!(
@@ -402,7 +413,7 @@ async fn main() -> Result<()> {
             }
             let release = zuse_cloud::certification::release(&candidate, &report)
                 .map_err(|e| anyhow::anyhow!(e))?;
-            let release_path = output.join(format!("{release_id}-release.json"));
+            let release_path = output.join(format!("{stem}-release.json"));
             std::fs::write(&release_path, serde_json::to_vec_pretty(&release)?)?;
             println!(
                 "Certified. Register with: register-managed-base --release {}",
