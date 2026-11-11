@@ -8,7 +8,7 @@ import socket
 import subprocess
 import time
 
-from cargo_dev import build_environment
+from cargo_dev import STAGING_IPC_PORT, build_environment, staging_environment, staging_profile
 from build_cache import prepare
 
 
@@ -72,12 +72,24 @@ def interrupted(*_):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--data-dir", default=os.environ.get("ZUSE_DATA_DIR", str(ROOT / ".context/native-profile")))
-    parser.add_argument("--ipc-port", type=int, default=int(os.environ.get("ZUSE_IPC_PORT", "27664")))
+    parser.add_argument("--staging", action="store_true",
+                        help="use the staging cloud with one shared profile (~/.zuse-dev/staging)")
+    parser.add_argument("--data-dir")
+    parser.add_argument("--ipc-port", type=int)
     args = parser.parse_args()
+    if args.staging:
+        data_dir = args.data_dir or staging_profile()
+        args.ipc_port = args.ipc_port or STAGING_IPC_PORT
+    else:
+        data_dir = args.data_dir or os.environ.get("ZUSE_DATA_DIR", str(ROOT / ".context/native-profile"))
+        args.ipc_port = args.ipc_port or int(os.environ.get("ZUSE_IPC_PORT", "27664"))
     if not 0 < args.ipc_port < 65536:
         parser.error("--ipc-port must be between 1 and 65535")
-    env = dict(build_environment(), ZUSE_DATA_DIR=str(Path(args.data_dir).resolve()), ZUSE_IPC_PORT=str(args.ipc_port))
+    Path(data_dir).mkdir(parents=True, exist_ok=True)
+    env = dict(build_environment(), ZUSE_DATA_DIR=str(Path(data_dir).resolve()), ZUSE_IPC_PORT=str(args.ipc_port))
+    if args.staging:
+        env.update(staging_environment())
+        print(f"Staging profile: {env['ZUSE_DATA_DIR']} (IPC {args.ipc_port})", flush=True)
     # Use a separate local development profile unless the caller opts into sync.
     env.setdefault("ZUSE_WORKOS_CLIENT_ID", "")
     engine = ui = None
