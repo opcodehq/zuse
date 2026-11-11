@@ -396,7 +396,11 @@ async fn main() -> Result<()> {
             }
         },
     };
-    receipt.record("create", json!({"ms":create_ms,"machineId":machine.id}))?;
+    // A failed receipt write must not skip the delete below; stdout still
+    // carries the full receipt.
+    if let Err(error) = receipt.record("create", json!({"ms":create_ms,"machineId":machine.id})) {
+        eprintln!("receipt write failed: {error:#}; continuing to cleanup");
+    }
     eprintln!("created {} ({}) in {create_ms}ms", machine.id, name);
 
     let outcome = lifecycle(
@@ -408,7 +412,9 @@ async fn main() -> Result<()> {
     )
     .await;
     if let Err(error) = &outcome {
-        receipt.record("lifecycleError", json!(format!("{error:#}")))?;
+        if let Err(write) = receipt.record("lifecycleError", json!(format!("{error:#}"))) {
+            eprintln!("receipt write failed: {write:#}; continuing to cleanup");
+        }
     }
 
     // Always clean up, even after a failed step.

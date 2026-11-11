@@ -12,3 +12,7 @@ agent_start(){
   kill "$CX_PID" 2>/dev/null; as_task pkill -f 'codex app-server' 2>/dev/null; wait "$CX_PID" 2>/dev/null
   case "$line" in *'"id":1'*) echo "$ms";; *) echo "-1";; esac
 }
+# True when PID $1 is the Codex app-server itself, not the shell that started it.
+is_codex(){ [ -n "$1" ] && [ "$(tr '\0' '\n' </proc/"$1"/cmdline 2>/dev/null | head -2 | tr '\n' ' ')" = "$CODEX app-server " ]; }
+# PID of the running Codex app-server, if any.
+codex_pid(){ local p; for p in $(pgrep -f 'codex app-server'); do is_codex "$p" && { echo "$p"; return; }; done; }

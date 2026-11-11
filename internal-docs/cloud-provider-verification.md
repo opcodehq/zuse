@@ -1,4 +1,4 @@
-# Cloud verification against Boxd and Boat
+# Cloud provider verification
 
 ## November 10, 2026: time to a ready agent, per provider
 
@@ -57,14 +57,15 @@ again from a cold disk (about 22 s before the agent is ready, plus the app's
 reconnect). Daytona loses processes on every stop but its disk is local, so the
 restart is fast.
 
-## November 9, 2026: adapter lifecycle on all four providers
+## November 9, 2026: adapter lifecycle on Boat, E2B and Daytona
 
 `crates/cloud/examples/provider_lifecycle_probe.rs` drives our Rust provider
 adapters directly against the staging accounts. For each provider it creates a
 computer from the newest staging managed base, waits for the installed runtime,
 writes a disk marker, sleeps and resumes, rechecks the runtime and marker, then
 deletes and confirms absence. `--runtime PATH` also uploads and runs a current
-runtime build, and environment checks record what app features need.
+runtime build, and environment checks record what app features need. Boxd ran
+the same probe earlier; its timings are in the November 10 tables above.
 
 | Provider | Create | Runtime ready | Sleep settled | Resume to runtime | Disk kept |
 | --- | ---: | ---: | ---: | ---: | --- |
@@ -82,7 +83,8 @@ runtime build, and environment checks record what app features need.
 - Daytona computers are containers, so `/proc` reports the host (48 CPUs,
   ~395 GB). The Performance panel now reads cgroup limits when set; on
   Daytona it reports 1 CPU and 2 GiB. VMs are unchanged.
-- Sixteen probe computers were created and all were confirmed deleted.
+- Sixteen probe computers (including Boxd runs) were created and all were
+  confirmed deleted.
 
 Verified October 29, 2026 against the configured live provider accounts. Provider
 infrastructure works, but **the deployed cloud application is not ready end to
@@ -135,7 +137,7 @@ cannot be assumed indefinitely.
 | Staging API `api-rust-stag.zuse.sh/readyz` | HTTP 200 with public TLS, verified from owner Mac |
 | External application schema | Eleven checksummed migrations in each private Supabase environment schema; no customer data imported |
 | API ticket/enrollment and gateway routing | Co-located in deployed Rust API on Hetzner; valid real-runtime/client pair acceptance remains pending |
-| Rust Boat integration | Missing: only Boxd has a provider adapter and the allocation worker selects Boxd |
+| Rust provider integration | Superseded: Boxd, Boat, E2B and Daytona adapters pass the lifecycle probe (see the November 9 and 10 sections above) |
 | Complete provider → runtime → relay → user chat flow | Not verified; blocked by the above deployment/integration gaps |
 
 The localhost gateway test is a separate component regression, not a live
@@ -171,8 +173,8 @@ The [Hetzner hosting rollout](hetzner-deployment.md) is live. Remaining work is 
 real-agent flow: standalone model account/credential authority, GitHub scoped access,
 attested Rust guest and harness base/provider builds, artifact/history configuration,
 account/entitlement migration with encryption-key handling, and authenticated
-message/reconnect/pause/resume acceptance. Boat also needs its Rust adapter and cold
-runtime restart path. Creation remains disabled until those checks pass.
+message/reconnect/pause/resume acceptance. (Boat's adapter and cold runtime restart
+path have since landed; see the sections above.) Creation remains disabled until those checks pass.
 
 The [delivery checklist](cloud-computers-delivery.md) tracks agent authentication,
 versioned environment setup and optional prepared artifacts. Consult its current

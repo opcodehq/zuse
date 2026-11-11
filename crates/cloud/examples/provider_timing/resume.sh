@@ -1,6 +1,8 @@
 . /tmp/zuse-timing-common.sh
 [ "$(cat /proc/sys/kernel/random/boot_id)" = "$(cat $HOME/.zuse-boot-id)" ] && same_boot=true || same_boot=false
-pid=$(cat $HOME/.zuse-agent-pid); [ -n "$pid" ] && [ -d "/proc/$pid" ] && alive=true || alive=false
+pid=$(cat $HOME/.zuse-agent-pid)
+# A new boot can reuse the PID, so survival needs the same boot and the same program.
+[ "$same_boot" = true ] && is_codex "$pid" && alive=true || alive=false
 restart=0; runtime=0
 if [ "$alive" = false ]; then
   # Everything restarts: the runtime process, then the agent, from a cold disk.
