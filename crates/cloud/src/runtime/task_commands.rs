@@ -17,7 +17,8 @@ mod sessions;
 mod validation;
 pub const MIGRATION: &str = include_str!("../../migrations/0026_task_command_admission.sql");
 /// Runtime paths are resolved on the guest; this ciphertext persists the
-/// immutable selected task policy independently of expiring launch intents.
+/// selected task policy independently of expiring launch intents. Its access
+/// mode follows the latest message; agent and catalogs are fixed.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct Policy {

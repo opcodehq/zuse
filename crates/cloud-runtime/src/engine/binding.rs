@@ -136,10 +136,16 @@ impl EngineExecutor {
                 .as_ref()
                 .ok_or_else(|| anyhow::anyhow!("cloud_command_permission_policy_missing"))?;
             ensure!(
-                request.sandbox == config.sandbox
-                    && request.auto_approve == (config.sandbox == SandboxLevel::DangerFullAccess),
+                request.auto_approve == (request.sandbox == SandboxLevel::DangerFullAccess),
                 "cloud_command_permission_policy_changed"
             );
+            // Access is chosen per message and the server has already admitted
+            // this one under the task policy: carry the mode into the thread.
+            if request.sandbox != config.sandbox {
+                let mut updated = config.clone();
+                updated.sandbox = request.sandbox;
+                self.core.workspace.set_chat_config(&self.thread, &updated)?;
+            }
             if let Some(registration) = &binding.session {
                 ensure!(
                     registration.session_id == payload.session_id
