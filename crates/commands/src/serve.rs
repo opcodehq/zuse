@@ -124,6 +124,12 @@ async fn serve(args: ServeArgs, ipc_port: u16, l10n: &Localizer) -> anyhow::Resu
         remote::plain(m::open(l10n, format!("{origin}/#token={token}")))
     );
     if args.lan {
+        // The LAN and Tailscale listeners serve the same app as this one.
+        runtime
+            .core()
+            .direct_access
+            .control()
+            .use_app_assets(assets.clone());
         match runtime
             .core()
             .direct_access
