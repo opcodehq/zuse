@@ -31,6 +31,7 @@ pub mod project_caches;
 pub mod providers;
 pub mod routes;
 pub mod runtime;
+pub mod runtime_releases;
 pub mod store;
 pub mod tickets;
 pub mod tunnels;

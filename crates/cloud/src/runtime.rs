@@ -42,6 +42,7 @@ pub mod recovery;
 pub mod recreation;
 pub mod repair;
 pub mod restore;
+pub mod runtime_updates;
 pub mod scope;
 mod startup_binding;
 mod statement_batch;
@@ -143,6 +144,7 @@ pub struct RuntimeControl {
     recovery_workspaces: Vec<String>,
     object_writes: Arc<tokio::sync::Semaphore>,
     pub(crate) mailbox_changes: tokio::sync::broadcast::Sender<()>,
+    runtime_releases: runtime_updates::RuntimeReleaseConfig,
 }
 
 pub use zuse_protocol::cloud::{
@@ -251,6 +253,7 @@ impl RuntimeControl {
             .map_err(|_| anyhow::anyhow!("Cannot connect runtime-control database"))?;
         let mut control = Self::from_pool(pool, config.master, config.signer);
         control.transcript_objects = crate::objects::R2::from_env()?;
+        control.runtime_releases = runtime_updates::RuntimeReleaseConfig::from_env()?;
         control.idle_ms = config.idle_ms;
         control.command_admission_creation = config.command_admission_creation;
         control.recovery_enabled = config.recovery_enabled;
@@ -329,6 +332,7 @@ impl RuntimeControl {
             transcript_objects: None,
             object_writes: Arc::new(tokio::sync::Semaphore::new(1)),
             mailbox_changes: tokio::sync::broadcast::channel(128).0,
+            runtime_releases: runtime_updates::RuntimeReleaseConfig::default(),
         }
     }
     pub async fn ready(&self) -> Result<(), ApiError> {
@@ -818,26 +822,13 @@ impl RuntimeControl {
         now: i64,
     ) -> Result<(Value, String), ApiError> {
         use zuse_protocol::cloud::CloudStoragePhase;
-        if request.capabilities.as_ref().is_some_and(|caps| {
-            caps.len() > 12
-                || caps.iter().any(|cap| {
-                    !matches!(
-                        cap.as_str(),
-                        "rust-rpc-v1"
-                            | "rust-session-commands-v1"
-                            | "rust-workspace-lifecycle-v1"
-                            | "rust-memory-sleep-v1"
-                            | "rust-transcript-projection-v1"
-                            | "rust-full-state-recovery-v1"
-                            | "rust-organization-execution-v1"
-                            | "rust-computer-recreation-v1"
-                            | zuse_protocol::cloud_task_commands::CAPABILITY
-                            | zuse_protocol::cloud_task_commands::DIRECT_UPLOADS_CAPABILITY
-                            | zuse_protocol::cloud_task_commands::MESSAGE_ACCESS_MODE_CAPABILITY
-                            | zuse_cloud_runtime::project_cache::CAPABILITY
-                    )
-                })
-        }) {
+        // Unknown names are kept: a newer runtime can know capabilities this
+        // server does not (for example after a server rollback).
+        if request
+            .capabilities
+            .as_ref()
+            .is_some_and(|caps| !crate::runtime_releases::names_valid(caps))
+        {
             return Err(ApiError::bad_request("invalid_runtime_capabilities"));
         }
         let id = required(row, "workspace_id")?;
@@ -1636,11 +1627,10 @@ fn native_commands_supported(row: &Value) -> bool {
         })
 }
 /// Whether the guest runtime on this computer advertised `capability` at its
-/// last bootstrap. A sleeping computer is judged by
-/// that last bootstrap: its image, and so its runtime, only changes when the
-/// computer is recreated. A computer that never stored any capabilities is
-/// treated as an old runtime, since a guest that predates a capability never
-/// advertised it either.
+/// last bootstrap, or in its last committed runtime update attestation (which
+/// replaces the stored set). A sleeping computer is judged by that record. A
+/// computer that never stored any capabilities is treated as an old runtime,
+/// since a guest that predates a capability never advertised it either.
 pub(crate) fn runtime_capable(row: &Value, capability: &str) -> bool {
     // Only the bootstrap receipt: it is replaced on every bootstrap, while a
     // storage enrollment can outlive a replaced guest.

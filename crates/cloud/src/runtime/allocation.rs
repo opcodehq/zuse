@@ -274,6 +274,7 @@ impl RuntimeControl {
             .map_err(|_| ApiError::unavailable("cloud_boot_grant_unavailable"))?;
         sqlx::query("INSERT INTO zuse_rust_allocations (operation_id,workspace_id,generation,snapshot_id,machine_name,storage_incarnation_id,sealed_boot_token,boot_expires_at,phase,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'planned',$9,$9)")
             .bind(&operation).bind(id).bind(generation).bind(snapshot).bind(name).bind(&incarnation).bind(sealed).bind(now+BOOT_TTL).bind(now).execute(&mut **tx).await?;
+        super::runtime_updates::fresh_machine(&mut config);
         config["runtimeGeneration"] = json!(generation);
         config["gatewayEpoch"] = json!(epoch);
         config["runtimeRpcProtocol"] = json!(zuse_protocol::cloud_gateway::RUST_RPC);

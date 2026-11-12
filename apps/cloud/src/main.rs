@@ -84,6 +84,22 @@ enum Command {
         #[arg(long)]
         release: std::path::PathBuf,
     },
+    /// Register a signed guest runtime release using an operator database role.
+    /// The signature is checked against the release key before anything is written.
+    RegisterRuntimeRelease {
+        #[arg(long)]
+        release: std::path::PathBuf,
+        /// Channel state to register (or move) the release into.
+        #[arg(long, default_value = "candidate", value_parser = ["candidate", "staging", "stable", "retired"])]
+        state: String,
+    },
+    /// Move a registered runtime release to another channel state.
+    SetRuntimeReleaseState {
+        #[arg(long)]
+        sha256: String,
+        #[arg(long, value_parser = ["candidate", "staging", "stable", "retired"])]
+        state: String,
+    },
     /// Stage an uncertified artifact for one explicitly pinned staging owner.
     StageManagedBaseCandidate {
         #[arg(long)]
@@ -445,6 +461,42 @@ async fn main() -> Result<()> {
                 release.provider.as_str(),
                 release.release_id
             );
+        }
+        Command::RegisterRuntimeRelease { release, state } => {
+            let bytes = std::fs::read(release).context("Runtime release file unavailable")?;
+            anyhow::ensure!(bytes.len() <= 64 * 1024, "Runtime release file too large");
+            let release: zuse_cloud::runtime_releases::ReleaseFile = serde_json::from_slice(&bytes)
+                .map_err(|_| anyhow::anyhow!("Invalid runtime release file"))?;
+            let state = zuse_cloud::runtime_releases::ReleaseState::parse(&state)
+                .context("Invalid runtime release state")?;
+            let key = zuse_cloud::runtime_releases::contract_verifying_key();
+            // Verify before reading any database credential.
+            release
+                .verify(&key)
+                .map_err(|e| anyhow::anyhow!("{}", e.code))?;
+            let url = env::var("ZUSE_CLOUD_RELEASE_DATABASE_URL")
+                .context("Registration requires explicit ZUSE_CLOUD_RELEASE_DATABASE_URL with operator permissions")?;
+            release
+                .register_url(&url, &key, state, now_ms())
+                .await
+                .map_err(|e| anyhow::anyhow!("{}", e.code))?;
+            println!(
+                "Runtime release registered: {} {} {} ({})",
+                release.release.architecture,
+                release.release.version,
+                release.release.sha256,
+                state.as_str()
+            );
+        }
+        Command::SetRuntimeReleaseState { sha256, state } => {
+            let state = zuse_cloud::runtime_releases::ReleaseState::parse(&state)
+                .context("Invalid runtime release state")?;
+            let url = env::var("ZUSE_CLOUD_RELEASE_DATABASE_URL")
+                .context("Changing a release requires explicit ZUSE_CLOUD_RELEASE_DATABASE_URL with operator permissions")?;
+            zuse_cloud::runtime_releases::set_state_url(&url, &sha256, state, now_ms())
+                .await
+                .map_err(|e| anyhow::anyhow!("{}", e.code))?;
+            println!("Runtime release {sha256} is now {}", state.as_str());
         }
         Command::StageManagedBaseCandidate {
             candidate,

@@ -247,6 +247,114 @@ fn sign_query(
         hex(&hmac(&key, &to_sign))
     )
 }
+/// SigV4 query-string signature for a GET: only `host` is signed and the
+/// payload is unsigned, so any client holding the URL can fetch the object
+/// until `expires_secs` after `date`.
+fn presign_get_query(
+    access: &str,
+    secret: &str,
+    region: &str,
+    host: &str,
+    path: &str,
+    date: &str,
+    expires_secs: u32,
+) -> String {
+    let scope = format!("{}/{region}/s3/aws4_request", &date[..8]);
+    let query = format!(
+        "X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential={}&X-Amz-Date={date}&X-Amz-Expires={expires_secs}&X-Amz-SignedHeaders=host",
+        encode(&format!("{access}/{scope}"), false)
+    );
+    let canonical = format!("GET\n{path}\n{query}\nhost:{host}\n\nhost\nUNSIGNED-PAYLOAD");
+    let to_sign = format!(
+        "AWS4-HMAC-SHA256\n{date}\n{scope}\n{}",
+        hex(&Sha256::digest(canonical.as_bytes()))
+    );
+    let day = hmac(format!("AWS4{secret}").as_bytes(), &date[..8]);
+    let region = hmac(&day, region);
+    let service = hmac(&region, "s3");
+    let key = hmac(&service, "aws4_request");
+    format!("{query}&X-Amz-Signature={}", hex(&hmac(&key, &to_sign)))
+}
+
+/// Short-lived download links for runtime release artifacts
+/// (`runtime/<arch>/<sha256>.zst`). Artifacts are large, so guests fetch them
+/// straight from R2 instead of through the API.
+pub struct ArtifactLinks {
+    endpoint: reqwest::Url,
+    bucket: String,
+    access: String,
+    secret: zeroize::Zeroizing<String>,
+}
+impl ArtifactLinks {
+    /// Lifetime of one link. A guest polls again for a fresh one.
+    pub const EXPIRES_SECS: u32 = 600;
+    /// Dedicated `ZUSE_CLOUD_RUNTIME_R2_*` settings, else the transcript
+    /// bucket's credentials (artifact keys all live under `runtime/`).
+    pub fn from_env() -> anyhow::Result<Option<Self>> {
+        for prefix in ["ZUSE_CLOUD_RUNTIME_R2", "CLOUD_TRANSCRIPT_R2"] {
+            let values = ["ENDPOINT", "BUCKET", "ACCESS_KEY_ID", "SECRET_ACCESS_KEY"]
+                .map(|k| env::var(format!("{prefix}_{k}")).ok());
+            if values.iter().all(Option::is_none) {
+                continue;
+            }
+            let [endpoint, bucket, access, secret] = values.map(|v| v.unwrap_or_default());
+            return Self::new(&endpoint, &bucket, &access, &secret).map(Some);
+        }
+        Ok(None)
+    }
+    pub fn new(endpoint: &str, bucket: &str, access: &str, secret: &str) -> anyhow::Result<Self> {
+        // Same validation as the object store; its HTTP client is unused.
+        let checked = R2::new(endpoint, bucket, access, secret)?;
+        Ok(Self {
+            endpoint: checked.endpoint,
+            bucket: checked.bucket,
+            access: checked.access,
+            secret: checked.secret,
+        })
+    }
+    /// A presigned GET URL for `key` and the Unix ms at which it expires.
+    pub fn get_url(&self, key: &str, now_ms: i64) -> Result<(String, i64), ApiError> {
+        let invalid = || ApiError::unavailable("cloud_runtime_release_store_unavailable");
+        if !key.starts_with("runtime/")
+            || key.len() > 512
+            || key
+                .split('/')
+                .any(|s| s.is_empty() || s == "." || s == "..")
+        {
+            return Err(invalid());
+        }
+        let date = chrono::DateTime::from_timestamp_millis(now_ms)
+            .ok_or_else(invalid)?
+            .format("%Y%m%dT%H%M%SZ")
+            .to_string();
+        let path = format!("/{}/{}", self.bucket, encode(key, true));
+        let host = match self.endpoint.port() {
+            Some(port) => format!("{}:{port}", self.endpoint.host_str().ok_or_else(invalid)?),
+            None => self.endpoint.host_str().ok_or_else(invalid)?.into(),
+        };
+        let query = presign_get_query(
+            &self.access,
+            &self.secret,
+            "auto",
+            &host,
+            &path,
+            &date,
+            Self::EXPIRES_SECS,
+        );
+        let mut url = self.endpoint.clone();
+        url.set_path(&path);
+        url.set_query(Some(&query));
+        if url.path() != path {
+            return Err(invalid());
+        }
+        let signed_at = now_ms.div_euclid(1000) * 1000;
+        Ok((
+            url.to_string(),
+            signed_at + i64::from(Self::EXPIRES_SECS) * 1000,
+        ))
+    }
+}
+
 async fn bounded(mut response: reqwest::Response, limit: usize) -> Result<Vec<u8>, ApiError> {
     if response.content_length().is_some_and(|n| n > limit as u64) {
         return Err(failed());
@@ -456,6 +564,46 @@ mod tests {
         );
         assert!(R2::new("http://localhost/", "bucket", "access", "secret").is_err());
         assert!(R2::new("https://host/path", "bucket", "access", "secret").is_err());
+    }
+    #[test]
+    fn presigned_get_matches_the_published_sigv4_example() {
+        // The query-string example from the S3 SigV4 documentation.
+        assert_eq!(
+            presign_get_query(
+                "AKIAIOSFODNN7EXAMPLE",
+                "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+                "us-east-1",
+                "examplebucket.s3.amazonaws.com",
+                "/test.txt",
+                "20130524T000000Z",
+                86400,
+            ),
+            "X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAIOSFODNN7EXAMPLE%2F20130524%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20130524T000000Z&X-Amz-Expires=86400&X-Amz-SignedHeaders=host&X-Amz-Signature=aeeed9bbccd4d02ee5c0109b86d86835f995330da4c265957d157751f604d404"
+        );
+    }
+    #[test]
+    fn artifact_links_are_scoped_short_lived_and_never_leak_the_secret() {
+        let links = ArtifactLinks::new(
+            "https://account.r2.cloudflarestorage.com/",
+            "zuse-runtime",
+            "access",
+            "very-secret-value",
+        )
+        .unwrap();
+        let now = 1_763_000_000_123;
+        let sha = "a".repeat(64);
+        let (url, expires) = links
+            .get_url(&format!("runtime/x86_64/{sha}.zst"), now)
+            .unwrap();
+        assert!(url.starts_with(&format!(
+            "https://account.r2.cloudflarestorage.com/zuse-runtime/runtime/x86_64/{sha}.zst?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=access%2F"
+        )));
+        assert!(url.contains("&X-Amz-Expires=600&X-Amz-SignedHeaders=host&X-Amz-Signature="));
+        assert!(!url.contains("very-secret-value"));
+        assert_eq!(expires, 1_763_000_000_000 + 600_000);
+        for key in ["workspaces/a/head.json", "runtime/../x", "runtime//x"] {
+            assert!(links.get_url(key, now).is_err(), "{key}");
+        }
     }
     #[tokio::test]
     async fn immutable_transport_checks_existing_bytes_and_rejects_redirects() {

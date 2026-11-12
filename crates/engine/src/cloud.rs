@@ -117,6 +117,12 @@ fn task_rejection(code: &str) -> Option<&'static str> {
         zuse_protocol::cloud_task_commands::RUNTIME_OUTDATED => {
             "This computer is on an older version that can't take files or a different access mode yet. Send without them for now; it will update itself soon."
         }
+        zuse_protocol::cloud_runtime_updates::RUNTIME_UPDATING => {
+            "Updating this computer to take this message. It will be ready in a few seconds; send it again then."
+        }
+        zuse_protocol::cloud_runtime_updates::RUNTIME_UPDATE_UNAVAILABLE => {
+            "This computer needs an update to take files or a different access mode. Use Update computer."
+        }
         _ => return None,
     })
 }
@@ -1834,6 +1840,16 @@ mod beta_tests {
                 .contains("model")
         );
         assert!(super::task_rejection("something_new").is_none());
+    }
+    #[test]
+    fn runtime_update_rejections_say_what_happens_next() {
+        let updating =
+            super::task_rejection(zuse_protocol::cloud_runtime_updates::RUNTIME_UPDATING).unwrap();
+        assert!(updating.starts_with("Updating this computer to take this message"));
+        let unavailable =
+            super::task_rejection(zuse_protocol::cloud_runtime_updates::RUNTIME_UPDATE_UNAVAILABLE)
+                .unwrap();
+        assert!(unavailable.contains("Update computer"));
     }
     #[test]
     fn an_outdated_computer_runtime_is_a_definitive_rejection_naming_the_fix() {

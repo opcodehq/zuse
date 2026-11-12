@@ -565,6 +565,18 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
                 post(runtime_lifecycle).layer(DefaultBodyLimit::max(4096)),
             )
             .route(
+                "/v1/cloud/workspaces/{id}/runtime/update",
+                get(runtime_update_offer),
+            )
+            .route(
+                "/v1/cloud/workspaces/{id}/runtime/update/attestation",
+                post(runtime_update_attestation).layer(DefaultBodyLimit::max(16 * 1024)),
+            )
+            .route(
+                "/v1/cloud/workspaces/{id}/runtime-update",
+                get(runtime_update_status),
+            )
+            .route(
                 "/v1/cloud/workspaces/{id}/runtime/providers/{provider}/grant",
                 post(provider_grant).layer(DefaultBodyLimit::max(24 * 1024)),
             )
@@ -1934,6 +1946,62 @@ async fn runtime_lifecycle(
             )
             .await?,
     ))
+}
+
+async fn runtime_update_offer(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<zuse_protocol::cloud_runtime_updates::UpdateOffer>, ApiError> {
+    let runtime = state
+        .runtime
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("cloud_runtime_disabled"))?;
+    Ok(Json(
+        runtime
+            .runtime_update_offer(
+                &id,
+                runtime_bearer(&headers)?,
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .await?,
+    ))
+}
+async fn runtime_update_attestation(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    body: Result<Json<zuse_protocol::cloud_runtime_updates::RuntimeAttestation>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(attestation) =
+        body.map_err(|_| ApiError::bad_request("invalid_runtime_attestation"))?;
+    let runtime = state
+        .runtime
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("cloud_runtime_disabled"))?;
+    Ok(Json(
+        runtime
+            .runtime_update_attest(
+                &id,
+                runtime_bearer(&headers)?,
+                attestation,
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .await?,
+    ))
+}
+async fn runtime_update_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<zuse_protocol::cloud_runtime_updates::UpdateStatus>, ApiError> {
+    let access = state.access(&headers, AccessKind::Content).await?;
+    let workspace = state.store.workspace(&access, &id).await?;
+    let runtime = state
+        .runtime
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("cloud_runtime_disabled"))?;
+    Ok(Json(runtime.runtime_update_status(&workspace.row).await?))
 }
 
 async fn transcript_get(
