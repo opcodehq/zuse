@@ -305,6 +305,9 @@ struct Inner {
     provider_context: OnceLock<ProviderContext>,
     execution_observer: OnceLock<crate::execution_progress::Observer>,
     zots: OnceLock<crate::zots::Zots>,
+    /// Host settings a run must carry before it is routed (which Claude
+    /// connection it launches against). Absent in bare tests.
+    request_stamp: OnceLock<RequestStamp>,
 }
 
 struct FilesystemAdmission {
@@ -325,6 +328,10 @@ impl Drop for FilesystemAdmission {
 
 /// Awaited before provider/mailbox delivery. Idle prewarming and startup retries
 /// retain the existing base rather than inventing another user turn.
+/// Edits a run request on the host before it is routed (see
+/// [`Sessions::set_request_stamp`]).
+pub type RequestStamp = Arc<dyn Fn(HarnessId, &mut RunRequest) + Send + Sync>;
+
 pub type TurnListener =
     Arc<dyn Fn(String, String) -> futures::future::BoxFuture<'static, ()> + Send + Sync>;
 
@@ -469,6 +476,7 @@ impl SessionsEngine {
                 provider_context: OnceLock::new(),
                 execution_observer: OnceLock::new(),
                 zots: OnceLock::new(),
+                request_stamp: OnceLock::new(),
             }),
         }
     }
@@ -538,6 +546,13 @@ impl SessionsEngine {
     /// completed exchange the run task fires it for still-untitled chats.
     pub fn set_titles(&self, titles: crate::titles::TitleGenerator) {
         let _ = self.inner.titles.set(titles);
+    }
+
+    /// Wire the request stamp (called once at engine assembly). It runs on
+    /// every dispatch before routing, so a stamped value that differs from the
+    /// live runtime's replaces that runtime instead of reusing it.
+    pub fn set_request_stamp(&self, stamp: RequestStamp) {
+        let _ = self.inner.request_stamp.set(stamp);
     }
 
     /// Wire the turn-start listener (called once at engine assembly).
@@ -1007,6 +1022,9 @@ impl SessionsEngine {
             .unwrap_or_else(|| crate::repos::home_dir().join(".zuse").join("scratch"));
         request.cwd = crate::repos::resolve_chat_cwd(&request.cwd, &scratch_root)
             .map_err(EngineError::Other)?;
+        if let Some(stamp) = self.inner.request_stamp.get() {
+            stamp(harness_id, &mut request);
+        }
         // Native-only catalog entries have no portable file fallback. Reject
         // cross-harness delivery before recording or routing the user turn.
         zuse_protocol::invocation::validate_harness_invocations(&request.prompt, harness_id)

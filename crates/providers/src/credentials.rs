@@ -3,6 +3,10 @@ pub mod redaction;
 use crate::{HarnessError, process::Command};
 use async_trait::async_trait;
 use zeroize::Zeroizing;
+use zuse_protocol::RunRequest;
+
+/// Environment a host injects into one agent process: a brokered credential,
+/// or a whole endpoint (base URL plus access key).
 pub struct ChildEnvironment {
     values: Vec<(String, Zeroizing<String>)>,
 }
@@ -28,6 +32,13 @@ impl ChildEnvironment {
         workload.extend(self.values);
         self.values = workload;
         self
+    }
+    /// The value set for `key`, if any.
+    pub fn get(&self, key: &str) -> Option<&str> {
+        self.values
+            .iter()
+            .find(|(name, _)| name == key)
+            .map(|(_, value)| value.as_str())
     }
     pub(crate) fn external_grok_auth(&self) -> bool {
         self.values
@@ -69,6 +80,20 @@ pub trait CredentialResolver: Send + Sync {
     /// bypass cached grants here, without forcing an OAuth-token refresh.
     async fn before_turn(&self) -> Result<ChildEnvironment, HarnessError> {
         self.environment().await
+    }
+    /// The environment for one run, which may carry host stamps (a Claude
+    /// connection). `Ok(None)` leaves the process on whatever login it would
+    /// use anyway. Defaults to [`Self::environment`].
+    async fn environment_for(
+        &self,
+        _request: Option<&zuse_protocol::RunRequest>,
+    ) -> Result<Option<ChildEnvironment>, HarnessError> {
+        self.environment().await.map(Some)
+    }
+    /// Whether a retained process re-checks this authority before each turn.
+    /// A resolver whose runs are restarted by their own stamps opts out.
+    fn revalidates(&self) -> bool {
+        true
     }
 }
 
