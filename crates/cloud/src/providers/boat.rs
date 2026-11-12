@@ -10,6 +10,9 @@ use reqwest::Method;
 use serde_json::{Value, json};
 use zuse_protocol::cloud_computers::ProviderId;
 
+/// The installed runtime runs: the restored disk serves the files a boot needs.
+pub(crate) const RUNTIME_ANSWERS: &str = "/usr/local/bin/zuse-cloud-runtime --version";
+
 pub struct Boat {
     pub(super) rest: Rest,
 }
@@ -92,7 +95,25 @@ impl Provider for Boat {
         let hydrated = sandbox["hydrated"]
             .as_bool()
             .ok_or(ProviderError::InvalidResponse)?;
-        Ok(hydrated && machine.state == MachineState::Running)
+        if machine.state != MachineState::Running {
+            return Ok(false);
+        }
+        if hydrated {
+            return Ok(true);
+        }
+        // Boat restores disks lazily: full hydration took 11–21 s after create
+        // or cold resume, while the installed runtime answered after 2–9 s.
+        // Reads block until their blocks arrive and earlier writes survive
+        // hydration and a cold restore (verified live, November 10, 2026), so
+        // a runtime that answers is enough to deliver the boot credential.
+        Ok(matches!(
+            tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                self.execute(id, RUNTIME_ANSWERS),
+            )
+            .await,
+            Ok(Ok(result)) if result.exit_code == 0
+        ))
     }
     async fn verify_initial_source(
         &self,
@@ -124,7 +145,7 @@ impl Provider for Boat {
         if machine.id != id
             || machine.name != name
             || machine.state != MachineState::Running
-            || sandbox["hydrated"] != true
+            || !sandbox["hydrated"].is_boolean()
         {
             return Err(ProviderError::Rejected);
         }

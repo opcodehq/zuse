@@ -259,7 +259,7 @@ impl Composer {
                     theme.accent.opacity(0.18),
                 ))
                 .on_hover(motion::hover_listener(hover_key))
-                .tooltip(crate::settings::widgets::text_tooltip(exit))
+                .tip(exit)
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(|this, _, _, cx| this.toggle_plan_mode(cx)))
                 .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {

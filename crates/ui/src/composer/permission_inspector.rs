@@ -280,7 +280,7 @@ impl Composer {
                             .border_1()
                             .border_color(theme.border.opacity(0.6))
                             .bg(theme.muted_fill().opacity(0.2))
-                            .tooltip(crate::settings::widgets::text_tooltip(hint))
+                            .tip(hint)
                             .child(
                                 icons::icon(icons::HISTORY)
                                     .size(px(14.))
@@ -445,9 +445,7 @@ impl Composer {
                     .font_family(theme.font_mono.clone())
                     .text_size(px(12.))
                     .text_color(theme.text)
-                    .tooltip(crate::settings::widgets::text_tooltip(
-                        action.detail().to_owned(),
-                    ))
+                    .tip(action.detail().to_owned())
                     .child(action.detail().to_owned()),
             )
             .child(
@@ -706,7 +704,7 @@ fn icon_button(
         .text_color(tint)
         .hover(|view| view.bg(hover_fill))
         .on_hover(motion::hover_listener(hover_key))
-        .tooltip(crate::settings::widgets::text_tooltip(label.to_owned()))
+        .tip(label.to_owned())
         .child(
             icons::icon(icon)
                 .size(px(if icon == icons::CLOSE || icon == icons::REFRESH {

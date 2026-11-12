@@ -5,6 +5,7 @@
 //! reset, then the harness's other accounts. Clicking one switches to it, the
 //! same `ActivateAgentAccount` Settings → Accounts runs. Both views share
 //! [`AccountsSnapshotCache`], so a switch in either shows up in the other.
+use crate::tooltip::TooltipExt as _;
 use std::time::{Duration, Instant};
 
 use gpui::{
@@ -463,10 +464,7 @@ impl AccountUsage {
                     popover::menu_row(theme, false, format!("account-usage-row-{ix}"))
                         .id(("account-usage-row", ix))
                         .when(!account.usage_windows.is_empty(), |row| {
-                            row.tooltip(widgets::text_tooltip(accounts::usage_resets(
-                                &account.usage_windows,
-                                now,
-                            )))
+                            row.tip(accounts::usage_resets(&account.usage_windows, now))
                         })
                         .on_click(cx.listener(move |usage, _, _, cx| {
                             usage.switch(&switch_to, cx);

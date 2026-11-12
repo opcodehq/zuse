@@ -6,6 +6,7 @@ use super::{
     contract::Provider,
     daytona::{Daytona, SandboxClass},
     e2b::E2b,
+    prized::Prized,
 };
 use std::{collections::BTreeMap, sync::Arc};
 use zuse_protocol::cloud_computers::ProviderId;
@@ -27,6 +28,7 @@ impl Registry {
                 ProviderId::Boxd => "BOXD_API_KEY",
                 ProviderId::E2b => "E2B_API_KEY",
                 ProviderId::Daytona => "DAYTONA_API_KEY",
+                ProviderId::Prized => "PRIZED_API_KEY",
             };
             let Some(secret) = env(name).filter(|s| !s.is_empty()) else {
                 continue;
@@ -48,6 +50,7 @@ impl Registry {
                         None => Ok(p),
                     })
                     .map(|p| Arc::new(p) as Arc<dyn Provider>),
+                ProviderId::Prized => Prized::new(secret).map(|p| Arc::new(p) as Arc<dyn Provider>),
                 ProviderId::Daytona => {
                     let class = match env("DAYTONA_SANDBOX_CLASS")
                         .as_deref()

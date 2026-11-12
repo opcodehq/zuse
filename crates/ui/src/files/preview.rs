@@ -1,4 +1,5 @@
 use crate::localization::message as tr;
+use crate::tooltip::TooltipExt as _;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     rc::Rc,
@@ -502,20 +503,7 @@ pub(super) struct FileEditorTooltip {
 
 impl Render for FileEditorTooltip {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = Theme::of(cx);
-        let card = div()
-            .max_w(px(360.0))
-            .px(px(9.0))
-            .py(px(6.0))
-            .rounded(px(6.0))
-            .border_1()
-            .border_color(theme.border)
-            .bg(crate::popover::surface_bg(theme))
-            .font_family(theme.font_sans.clone())
-            .text_size(px(10.5))
-            .text_color(theme.text_muted)
-            .child(self.text.clone());
-        crate::frost::frosted(6.0, crate::frost::MENU_BLUR, card)
+        crate::tooltip::chip(self.text.clone(), Theme::of(cx))
     }
 }
 
@@ -2438,7 +2426,7 @@ impl FilesSurface {
             );
         }
         crumbs = crumbs
-            .tooltip(move |_, cx| {
+            .anchored_tooltip(crate::tooltip::Placement::Below, move |_, cx| {
                 cx.new(|_| FileEditorTooltip {
                     text: tooltip_path.clone(),
                 })
@@ -2528,7 +2516,7 @@ impl FilesSurface {
                         })
                         .when_some(detail, |element, detail| {
                             element
-                                .tooltip(move |_, cx| {
+                                .anchored_tooltip(crate::tooltip::Placement::Below, move |_, cx| {
                                     cx.new(|_| FileEditorTooltip {
                                         text: detail.clone(),
                                     })
@@ -3073,7 +3061,7 @@ impl FilesSurface {
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.remove_editor_comment(&id, cx)
                             }))
-                            .tooltip(crate::settings::widgets::text_tooltip("Remove comment"))
+                            .tip("Remove comment")
                             .child(
                                 icon(icons::CLOSE_CIRCLE)
                                     .size(px(12.0))

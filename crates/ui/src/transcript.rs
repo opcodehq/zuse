@@ -26,6 +26,7 @@
 //! streaming has advanced beyond the last measured frame.
 
 use crate::localization::message as tr;
+use crate::tooltip::TooltipExt as _;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ops::Range;
@@ -1442,6 +1443,10 @@ pub fn rows_for_entry(
     let entry_id: SharedString = entry.id.clone().into();
 
     if entry.role == MessageRole::User {
+        let source = entry.parts.iter().find_map(|part| match part {
+            MessagePart::MessageSource { source, .. } => Some(source.clone()),
+            _ => None,
+        });
         let raw: String = entry
             .parts
             .iter()
@@ -1451,6 +1456,7 @@ pub fn rows_for_entry(
             })
             .collect::<Vec<_>>()
             .join("\n\n");
+        let raw = source.as_ref().map(|s| s.text().to_owned()).unwrap_or(raw);
         // Attachment refs ride the plain text (the `withAttachments`
         // transport); split them back out for the thumbnail strip.
         let parsed = crate::attachments::parse_user_message_images(&raw);
@@ -1464,6 +1470,8 @@ pub fn rows_for_entry(
             Some((sender, body)) => (Some(sender), body.to_owned()),
             None => (None, agent_message_display(&body)),
         };
+        // A Slack request reads like any message sent on someone's behalf.
+        let sender = sender.or_else(|| source.as_ref().map(|s| s.sender()));
         // Draft chips become attachment references above the sent bubble.
         // Resolve uploads before lifting their spans so ordinary text and links
         // keep their original meaning; the draft editor is unaffected.
@@ -1514,7 +1522,14 @@ pub fn rows_for_entry(
         let turn_start = rows.is_empty();
         rows.push(Row {
             id: entry.id.clone().into(),
-            version: (raw.len() as u64) << 1 | pending as u64 | ((!turn_start) as u64) << 62,
+            version: if source.is_some() {
+                fnv1a(
+                    &serde_json::to_vec(&(raw.as_str(), &source, pending, turn_start))
+                        .unwrap_or_default(),
+                )
+            } else {
+                (raw.len() as u64) << 1 | pending as u64 | ((!turn_start) as u64) << 62
+            },
             turn_start,
             kind: RowKind::User {
                 sender,
@@ -1916,6 +1931,7 @@ pub fn rows_for_entry(
                     // nothing reaches here.
                     MessagePart::Tool { .. }
                     | MessagePart::Reasoning { .. }
+                    | MessagePart::MessageSource { .. }
                     | MessagePart::AgentContext { .. } => {}
                 }
             }
@@ -4539,10 +4555,10 @@ impl Transcript {
             .text_color(theme.text_faint);
         if self.history_loading || auto {
             return strip
-                .child(crate::loaders::dither_ring(
+                .child(crate::loaders::retro_loader(
                     "history-loader-ring",
                     12.0,
-                    theme.text_faint,
+                    theme.loader_glyph(),
                 ))
                 .child(tr(cx, msg::chat::cloud_history_loading))
                 .into_any_element();
@@ -6666,7 +6682,7 @@ impl Transcript {
                 None => crate::loaders::mini_glyph_spinner(
                     format!("chip-sending-{row_id}-{ix}"),
                     2.0,
-                    theme.glyph,
+                    theme.loader_glyph(),
                     cx.entity_id(),
                     cx,
                 )
@@ -7096,7 +7112,7 @@ impl Transcript {
                         cx.stop_propagation();
                         this.dispatch_fork_menu(index, cx)
                     }))
-                    .tooltip(crate::settings::widgets::text_tooltip(tooltip))
+                    .tip(tooltip)
                     .tooltip_show_delay(std::time::Duration::from_millis(500))
                     .child(
                         crate::icons::icon(crate::icons::FORK)
@@ -7946,7 +7962,7 @@ impl Transcript {
                     .max_w_full()
                     .min_w_0()
                     .flex()
-                    .tooltip(crate::settings::widgets::text_tooltip(path.clone()))
+                    .tip(path.clone())
                     .child(user_file_pill(
                         SharedString::from(format!("{row_id}#mention-pill{fix}")),
                         name,
@@ -8144,7 +8160,7 @@ impl Transcript {
             let mut chip =
                 crate::badges::pill(SharedString::from(format!("{row_id}#att{aix}")), &theme)
                     .pl(px(6.0))
-                    .tooltip(crate::settings::widgets::text_tooltip(att.name.clone()));
+                    .tip(att.name.clone());
             let thumb: AnyElement = match state {
                 AttachmentSnapshot::Loaded(image) => {
                     let preview = crate::attachments::PreviewImage::new(
@@ -8430,10 +8446,10 @@ impl Transcript {
             .gap(px(Theme::SPACE_SM))
             .pt(px(Theme::SPACE_LG))
             .text_size(crate::typography::text_xs())
-            .child(crate::loaders::dither_ring(
+            .child(crate::loaders::retro_loader(
                 format!("working-mark-{}", cx.entity_id()),
                 14.0,
-                theme.text_muted,
+                theme.loader_glyph(),
             ))
             .child(
                 div()
@@ -8868,7 +8884,7 @@ impl Transcript {
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.copy_message(entry_id.clone(), text.clone(), cx)
                         }))
-                        .tooltip(crate::settings::widgets::text_tooltip("Copy message"))
+                        .tip("Copy message")
                         .child(
                             crate::icons::icon(if copied_message {
                                 crate::icons::CHECK
@@ -8914,9 +8930,7 @@ impl Transcript {
                             cx.stop_propagation();
                             this.toggle_fork_menu(entry_id.clone(), chat_id.clone(), window, cx);
                         }))
-                        .when(!fork_menu_here, |button| {
-                            button.tooltip(crate::settings::widgets::text_tooltip("Fork chat"))
-                        })
+                        .when(!fork_menu_here, |button| button.tip("Fork chat"))
                         .child(
                             crate::icons::icon(crate::icons::FORK)
                                 .size(px(14.0))
@@ -10295,9 +10309,7 @@ impl gpui::Element for ChipOverlays {
                             )
                         )
                     })
-                    .when(link, |target| {
-                        target.tooltip(crate::settings::widgets::text_tooltip(path.to_string()))
-                    })
+                    .when(link, |target| target.tip(path.to_string()))
                     .on_click(move |event, window, cx| {
                         // A drag that selects text across the chip is not a click.
                         if event.click_count() == 1
@@ -11742,7 +11754,10 @@ fn entry_fingerprint(entry: &SessionMessageEntry, pending: bool) -> u64 {
     for part in &entry.parts {
         acc.extend_from_slice(part.id().as_bytes());
         acc.extend_from_slice(&(part.byte_len() as u64).to_le_bytes());
-        if matches!(part, MessagePart::AgentContext { .. }) {
+        if matches!(
+            part,
+            MessagePart::AgentContext { .. } | MessagePart::MessageSource { .. }
+        ) {
             acc.extend_from_slice(&serde_json::to_vec(part).unwrap_or_default());
         }
         if let MessagePart::Tool {
@@ -18516,5 +18531,30 @@ impl Transcript {
         if let Some(action) = action {
             self.dispatch_image_menu(action, cx);
         }
+    }
+}
+
+#[cfg(test)]
+mod slack_tests {
+    use super::*;
+    #[test]
+    fn slack_bubble_shows_the_sender_channel_and_original_words() {
+        let entry:SessionMessageEntry=serde_json::from_value(serde_json::json!({"id":"slack-message","role":"user","parts":[{"kind":"text","id":"t","text":"Full prompt including prior Slack thread"},{"kind":"messageSource","id":"source","source":{"_tag":"slack","text":"Fix the test","author":"Ada Lovelace","channel":"engineering"}}],"createdAt":1,"deviceId":"runtime"})).unwrap();
+        let rows = rows_for_entry(&entry, false, false, &mut |_, _| {
+            panic!("User messages do not parse assistant markdown")
+        });
+        let RowKind::User {
+            text,
+            sender: Some(sender),
+            ..
+        } = &rows[0].kind
+        else {
+            panic!("Slack user row missing")
+        };
+        assert_eq!(text.as_ref(), "Fix the test");
+        // Shown with the shared "Sent by …" header.
+        assert_eq!(sender.name, "Ada Lovelace in #engineering · Slack");
+        assert!(!sender.activity);
+        assert!(!text.contains("prior Slack thread"));
     }
 }

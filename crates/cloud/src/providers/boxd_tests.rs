@@ -447,3 +447,57 @@ async fn memory_sleep_observation_never_certifies_disk_hibernation_or_stop() {
         server.abort();
     }
 }
+
+#[tokio::test]
+async fn a_machine_from_before_a_cluster_override_is_found_and_driven_where_it_lives() {
+    let wire: Value =
+        serde_json::from_str(include_str!("../../tests/fixtures/boxd-wire.json")).unwrap();
+    let fixture = |missing: bool| {
+        let mut wire = wire.clone();
+        if missing {
+            // This cluster has never heard of the machine.
+            wire["missingRequest"] = wire["machineRequest"].clone();
+        }
+        Fixture {
+            wire: Arc::new(wire),
+            exchanges: Arc::new(AtomicUsize::new(0)),
+            creates: Arc::new(AtomicUsize::new(0)),
+            truncate_create: Arc::new(AtomicBool::new(false)),
+            reject: Arc::new(AtomicBool::new(false)),
+            methods: Arc::new(Mutex::new(vec![])),
+        }
+    };
+    let serve = |fixture: Fixture| async move {
+        let app = axum::Router::new()
+            .route("/token", post(exchange))
+            .route("/boxd.api.v1.BoxdApi/{method}", post(rpc))
+            .with_state(fixture);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        (
+            address,
+            tokio::spawn(async move { axum::serve(listener, app).await.unwrap() }),
+        )
+    };
+    let (configured, default) = (fixture(true), fixture(false));
+    let (configured_address, a) = serve(configured.clone()).await;
+    let (default_address, b) = serve(default.clone()).await;
+    let mut provider = Boxd::new("fixture-api-key".into(), Some("fixture-org".into())).unwrap();
+    provider.set_test_endpoint(format!("http://{configured_address}"));
+    provider.set_test_default_endpoint(format!("http://{default_address}"));
+
+    let machine = provider.inspect("vm-fixture").await.unwrap();
+    assert!(
+        machine.is_some(),
+        "not missing: it lives in the default cluster"
+    );
+    provider.hibernate("vm-fixture").await.unwrap();
+    assert_eq!(&*configured.methods.lock().unwrap(), &["GetVm"]);
+    assert_eq!(
+        &*default.methods.lock().unwrap(),
+        &["GetVm", "HibernateVm"],
+        "later calls go where the machine lives"
+    );
+    a.abort();
+    b.abort();
+}

@@ -590,7 +590,7 @@ fn status_glyph(
         TodoStatus::InProgress if live => crate::loaders::mini_glyph_spinner(
             format!("todo-active-{ix}"),
             2.5,
-            theme.glyph,
+            theme.loader_glyph(),
             view,
             cx,
         )

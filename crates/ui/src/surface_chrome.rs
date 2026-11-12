@@ -1,6 +1,7 @@
 //! Shared metrics for sidebar surface toolbars and their controls.
 
 use crate::localization::message as tr;
+use crate::tooltip::TooltipExt as _;
 use gpui::{Div, div, prelude::*, px};
 use zuse_i18n::messages as msg;
 
@@ -211,7 +212,7 @@ pub(crate) fn tab_chip(
                 .relative()
                 .role(gpui::Role::Button)
                 .aria_label(tr(cx, msg::commands::default_keybindings_close_tab))
-                .tooltip(crate::settings::widgets::text_tooltip("Close tab"))
+                .tip("Close tab")
                 .hover(|s| s.bg(theme.surface))
                 // The tab owns a drag payload. Claim the close press before
                 // it reaches that parent or GPUI starts a tab drag instead of

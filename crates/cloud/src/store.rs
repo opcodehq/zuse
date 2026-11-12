@@ -416,11 +416,11 @@ impl Store {
         if !present {
             return Ok(vec![]);
         }
-        let rows = sqlx::query("SELECT to_jsonb(p) AS data, (SELECT jsonb_build_object('modelConfigurationVersion',b.settings->'rustLaunchModelConfigVersion') FROM api_cloud_project_builds b WHERE b.account_id=p.account_id AND (b.settings->>'rustRuntimeCheckoutProjectId'=p.project_id OR b.settings->'rustRuntimeRepositoryLayouts' ? p.project_id) AND b.provider='boxd' AND b.state='ready' AND b.settings->>'runtimeRpcProtocol'='zuse-rpc-v1' AND b.settings->>'rustRuntimeStorageFormat'='zuse-rust-engine-v1' AND b.settings->>'rustSessionCommandVersion'='1' AND NOT EXISTS(SELECT 1 FROM api_cloud_snapshots s WHERE (s.provider=b.provider OR (b.provider='boxd' AND s.provider='box')) AND s.snapshot_id=b.snapshot_id AND s.state IN ('deleting','deleted')) ORDER BY b.updated_at DESC,b.build_id DESC LIMIT 1) AS runtime FROM api_cloud_projects p WHERE p.account_id=$1 AND p.included=true ORDER BY p.project_id").bind(owner).fetch_all(&self.pool).await?;
+        let rows = sqlx::query("SELECT to_jsonb(p) AS data, (SELECT jsonb_build_object('modelConfigurationVersion',b.settings->'rustLaunchModelConfigVersion','slackVersion',b.settings->'rustSlackVersion') FROM api_cloud_project_builds b WHERE b.account_id=p.account_id AND (b.settings->>'rustRuntimeCheckoutProjectId'=p.project_id OR b.settings->'rustRuntimeRepositoryLayouts' ? p.project_id) AND b.provider='boxd' AND b.state='ready' AND b.settings->>'runtimeRpcProtocol'='zuse-rpc-v1' AND b.settings->>'rustRuntimeStorageFormat'='zuse-rust-engine-v1' AND b.settings->>'rustSessionCommandVersion'='1' AND NOT EXISTS(SELECT 1 FROM api_cloud_snapshots s WHERE (s.provider=b.provider OR (b.provider='boxd' AND s.provider='box')) AND s.snapshot_id=b.snapshot_id AND s.state IN ('deleting','deleted')) ORDER BY b.updated_at DESC,b.build_id DESC LIMIT 1) AS runtime FROM api_cloud_projects p WHERE p.account_id=$1 AND p.included=true ORDER BY p.project_id").bind(owner).fetch_all(&self.pool).await?;
         Ok(rows.into_iter().map(|r| {
             let row: Value = r.get("data");
             let runtime: Option<Value> = r.get("runtime");
-            json!({"projectId":row["project_id"],"repositoryIdentity":row["repository_identity"],"displayName":row["display_name"].as_str().or(row["repository_url"].as_str()).or(row["project_id"].as_str()),"repositoryUrl":row["repository_url"],"defaultBranch":row["default_branch"].as_str().unwrap_or("main"),"state":row["state"],"prepared":runtime.is_some(),"supportsModelConfiguration":runtime.as_ref().is_some_and(|value| value["modelConfigurationVersion"] == 1),"providerId":"boxd"})
+            json!({"projectId":row["project_id"],"repositoryIdentity":row["repository_identity"],"displayName":row["display_name"].as_str().or(row["repository_url"].as_str()).or(row["project_id"].as_str()),"repositoryUrl":row["repository_url"],"defaultBranch":row["default_branch"].as_str().unwrap_or("main"),"state":row["state"],"prepared":runtime.is_some(),"supportsSlack":runtime.as_ref().is_some_and(|v|v["slackVersion"]==1),"supportsModelConfiguration":runtime.as_ref().is_some_and(|value| value["modelConfigurationVersion"] == 1),"providerId":"boxd"})
         }).collect())
     }
 
@@ -533,6 +533,12 @@ impl Workspace {
             ),
         ] {
             out[to] = row[from].clone();
+        }
+        // How the computer last woke: from memory, or restarted from disk.
+        let wake = &config["rustLastWake"];
+        if wake["at"].is_i64() {
+            out["lastWake"] = json!({"fromMemory":wake["fromMemory"].as_bool(),
+                "at":wake["at"],"ms":wake["ms"].as_i64()});
         }
         if let Some(operation) = config.get("rustDeleteOperation") {
             out["deletion"] = json!({"operationId":operation["id"],"phase":operation["phase"]});

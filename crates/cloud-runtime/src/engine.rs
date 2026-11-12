@@ -198,7 +198,7 @@ impl crate::mailbox::Executor for EngineExecutor {
         )?;
         self.core
             .doc_host
-            .admit_mailbox_command(&payload.session_id, entry)
+            .admit_mailbox_command_with_source(&payload.session_id, entry, payload.source.as_ref())
             .await?;
         Ok(())
     }

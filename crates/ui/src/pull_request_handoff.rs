@@ -479,7 +479,7 @@ impl PullRequestDetailPage {
                         .text_color(theme.text_muted),
                 )
                 .child(kind.label())
-                .tooltip(widgets::text_tooltip(summary))
+                .tip(summary)
                 .on_click(cx.listener(move |page, _, window, cx| {
                     page.prepare_handoff(prompt.clone(), Some(context.clone()), window, cx)
                 }))

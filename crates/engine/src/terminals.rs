@@ -36,6 +36,15 @@ const MAX_INPUT_BYTES: usize = 64 * 1024;
 const MAX_REPLAY_BYTES: usize = 1024 * 1024;
 const EXITED_TTL: Duration = Duration::from_secs(30 * 60);
 const REAPER_INTERVAL: Duration = Duration::from_secs(60);
+const RESTARTED_BANNER: &str =
+    "\r\n\x1b[2m[Computer restarted: this is a new shell; the previous session ended]\x1b[0m\r\n";
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Restorable {
+    id: String,
+    owner: String,
+    cwd: String,
+}
 
 struct LiveTerminal {
     owner: Option<String>,
@@ -96,7 +105,20 @@ impl LiveTerminal {
 
 struct TerminalsInner {
     sessions: Mutex<HashMap<String, Arc<Mutex<LiveTerminal>>>>,
+    /// Where open chat terminals are remembered, so a computer that restarts
+    /// without its memory reopens them. Unset: terminals are not remembered.
+    restore_path: Mutex<Option<std::path::PathBuf>>,
+    /// Held from snapshot through publication, so concurrent opens and closes
+    /// publish in order and the newest state wins.
+    save_lock: Mutex<()>,
     host_environment: Mutex<Arc<std::collections::BTreeMap<String, zeroize::Zeroizing<String>>>>,
+}
+
+/// First event sequence for a restored shell (see [`Terminals::restore`]).
+fn restored_seq_base() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_micros() as u64)
 }
 
 impl Drop for TerminalsInner {
@@ -161,6 +183,8 @@ impl Terminals {
         let terminals = Self {
             inner: Arc::new(TerminalsInner {
                 sessions: Mutex::new(HashMap::new()),
+                restore_path: Mutex::new(None),
+                save_lock: Mutex::new(()),
                 host_environment: Mutex::new(Arc::new(std::collections::BTreeMap::new())),
             }),
         };
@@ -195,7 +219,108 @@ impl Terminals {
         let session = self.open(cwd, cols, rows)?;
         let live = self.session(&session.id)?;
         lock(&live).owner = Some(owner.into());
+        self.remember();
         Ok(session)
+    }
+
+    /// Remember open chat terminals in `path` from now on.
+    pub fn persist_to(&self, path: std::path::PathBuf) {
+        *lock(&self.inner.restore_path) = Some(path);
+    }
+
+    fn restorable(&self) -> Vec<Restorable> {
+        let sessions = lock(&self.inner.sessions);
+        let mut entries = sessions
+            .values()
+            .filter_map(|session| {
+                let session = lock(session);
+                let owner = session.owner.clone()?;
+                (!session.exited).then(|| Restorable {
+                    id: session.description.id.clone(),
+                    owner,
+                    cwd: session.description.cwd.clone(),
+                })
+            })
+            .collect::<Vec<_>>();
+        entries.sort_by(|a, b| a.id.cmp(&b.id));
+        entries
+    }
+
+    fn save(&self, entries: &[Restorable]) {
+        let Some(path) = lock(&self.inner.restore_path).clone() else {
+            return;
+        };
+        let write = || -> std::io::Result<()> {
+            let temporary = path.with_extension("tmp");
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create(true).truncate(true);
+            #[cfg(unix)]
+            std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+            let mut file = options.open(&temporary)?;
+            file.write_all(&serde_json::to_vec(entries).unwrap_or_default())?;
+            file.sync_all()?;
+            std::fs::rename(&temporary, &path)
+        };
+        if let Err(error) = write() {
+            tracing::debug!(%error, "open terminals not remembered");
+        }
+    }
+
+    fn remember(&self) {
+        let _publishing = lock(&self.inner.save_lock);
+        let entries = self.restorable();
+        self.save(&entries);
+    }
+
+    /// Reopen the chat terminals remembered before the process last ended, with
+    /// their original ids so attached views reconnect. Each is a fresh shell
+    /// (the old process is gone) that starts by saying so. Returns how many.
+    pub fn restore(&self) -> usize {
+        let Some(path) = lock(&self.inner.restore_path).clone() else {
+            return 0;
+        };
+        let entries: Vec<Restorable> = std::fs::read(&path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default();
+        let mut restored = 0;
+        for entry in entries.into_iter().take(MAX_TERMINALS) {
+            if entry.id.is_empty()
+                || entry.id.len() > 128
+                || entry.id.chars().any(char::is_control)
+                || lock(&self.inner.sessions).contains_key(&entry.id)
+            {
+                continue;
+            }
+            let Ok(session) = self.open_session(
+                &entry.cwd,
+                80,
+                24,
+                None,
+                &HashMap::new(),
+                None,
+                Some(entry.id),
+            ) else {
+                continue;
+            };
+            if let Ok(live) = self.session(&session.id) {
+                let mut live = lock(&live);
+                live.owner = Some(entry.owner);
+                // Same id, new shell: start its events past any cursor a
+                // client kept from the old one, so a reconnect with that
+                // `afterSeq` still replays the restart notice. Microseconds
+                // since the epoch outrun the old shell's per-chunk counter.
+                live.seq = live.seq.max(restored_seq_base());
+                let seq = live.next_seq();
+                live.emit(TerminalEvent::Data {
+                    seq,
+                    data: BASE64.encode(RESTARTED_BANNER),
+                });
+                restored += 1;
+            }
+        }
+        self.remember();
+        restored
     }
 
     pub fn list_owned(&self, owner: &str) -> Vec<TerminalSession> {
@@ -243,7 +368,7 @@ impl Terminals {
         shell: Option<&str>,
         environment: &HashMap<String, String>,
     ) -> Result<TerminalSession, EngineError> {
-        self.open_session(cwd, cols, rows, shell, environment, None)
+        self.open_session(cwd, cols, rows, shell, environment, None, None)
     }
 
     /// Run an exact command in a fresh interactive login shell. On Unix, only a
@@ -256,9 +381,10 @@ impl Terminals {
         environment: &HashMap<String, String>,
         command: &str,
     ) -> Result<TerminalSession, EngineError> {
-        self.open_session(cwd, cols, rows, None, environment, Some(command))
+        self.open_session(cwd, cols, rows, None, environment, Some(command), None)
     }
 
+    #[allow(clippy::too_many_arguments)]
     #[allow(clippy::too_many_arguments)]
     fn open_session(
         &self,
@@ -268,6 +394,7 @@ impl Terminals {
         shell: Option<&str>,
         environment: &HashMap<String, String>,
         command: Option<&str>,
+        id: Option<String>,
     ) -> Result<TerminalSession, EngineError> {
         if lock(&self.inner.sessions).len() >= MAX_TERMINALS {
             return Err(EngineError::Other(format!(
@@ -347,7 +474,7 @@ impl Terminals {
             .take_writer()
             .map_err(|e| EngineError::Other(format!("pty writer: {e}")))?;
 
-        let id = new_id();
+        let id = id.unwrap_or_else(new_id);
         let session = Arc::new(Mutex::new(LiveTerminal {
             cwd: std::path::PathBuf::from(cwd),
             owner: None,
@@ -513,6 +640,7 @@ impl Terminals {
         let session = lock(&self.inner.sessions)
             .remove(terminal_id)
             .ok_or_else(|| EngineError::Other("Terminal not found".into()))?;
+        self.remember();
         if dispose(&session, true) {
             Ok(())
         } else {
@@ -542,6 +670,11 @@ impl Terminals {
 
     /// Engine shutdown: kill every live shell.
     pub fn shutdown(&self) {
+        // Remember what was open before killing it: a computer that does not
+        // keep memory reopens these when it wakes.
+        self.remember();
+        // Nothing after this point may overwrite that list.
+        *lock(&self.inner.restore_path) = None;
         let sessions: Vec<_> = lock(&self.inner.sessions).drain().map(|(_, s)| s).collect();
         for session in sessions {
             dispose(&session, true);
@@ -1179,6 +1312,7 @@ mod initial_command_tests {
                     wrapper.to_str(),
                     &HashMap::new(),
                     Some(&command),
+                    None,
                 )
                 .unwrap();
             let script = lock(&terminals.session(&session.id).unwrap())
@@ -1224,6 +1358,7 @@ mod initial_command_tests {
                 Some("/bin/sh"),
                 &HashMap::new(),
                 Some("sleep 0.1; exit 7"),
+                None,
             )
             .unwrap();
         let script = lock(&terminals.session(&session.id).unwrap())
@@ -1253,6 +1388,7 @@ mod initial_command_tests {
                     Some("/nonexistent/zuse-test-shell"),
                     &HashMap::new(),
                     Some("echo test"),
+                    None,
                 )
                 .is_err()
         );
@@ -1262,3 +1398,64 @@ mod initial_command_tests {
 
 #[cfg(all(test, unix))]
 mod workload_tests;
+
+#[cfg(all(test, unix))]
+mod restore_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn open_chat_terminals_reopen_after_a_restart_with_their_ids() {
+        let root = tempfile::tempdir().unwrap();
+        let state = root.path().join("terminals.json");
+        let cwd = root.path().to_str().unwrap();
+        let before = Terminals::new();
+        before.persist_to(state.clone());
+        let kept = before.open_owned("chat-one", cwd, 80, 24).unwrap();
+        let closed = before.open_owned("chat-one", cwd, 80, 24).unwrap();
+        before.close(&closed.id).unwrap();
+        // An action terminal is not a chat terminal and is never remembered.
+        before.open(cwd, 80, 24).unwrap();
+        before.shutdown();
+
+        let after = Terminals::new();
+        after.persist_to(state.clone());
+        assert_eq!(after.restore(), 1);
+        let open = after.list_owned("chat-one");
+        assert_eq!(open.len(), 1);
+        assert_eq!(open[0].id, kept.id, "attached views reconnect by id");
+        let mut events = after.subscribe(&kept.id, None).unwrap();
+        let TerminalEvent::Data { data, .. } = events.recv().await.unwrap() else {
+            panic!("expected the restart notice first");
+        };
+        let text = String::from_utf8(BASE64.decode(data).unwrap()).unwrap();
+        assert!(text.contains("Computer restarted"), "{text}");
+        // A view reconnecting with the old shell's cursor still gets the notice.
+        let mut stale = after.subscribe(&kept.id, Some(50_000)).unwrap();
+        assert!(
+            matches!(stale.recv().await, Some(TerminalEvent::Data { .. })),
+            "the restart notice replays past an old cursor"
+        );
+        assert_eq!(
+            after.restore(),
+            0,
+            "already open terminals are not duplicated"
+        );
+
+        after.close(&kept.id).unwrap();
+        after.shutdown();
+        let third = Terminals::new();
+        third.persist_to(state);
+        assert_eq!(third.restore(), 0, "a closed terminal stays closed");
+    }
+
+    #[tokio::test]
+    async fn without_a_restore_file_nothing_is_remembered() {
+        let root = tempfile::tempdir().unwrap();
+        let terminals = Terminals::new();
+        terminals
+            .open_owned("chat-one", root.path().to_str().unwrap(), 80, 24)
+            .unwrap();
+        terminals.shutdown();
+        assert_eq!(Terminals::new().restore(), 0);
+    }
+}

@@ -272,7 +272,7 @@ impl PullRequestDetailPage {
                     .child(crate::loaders::mini_glyph_spinner(
                         "pr-comment-pending-spinner",
                         1.5,
-                        theme.glyph,
+                        theme.loader_glyph(),
                         cx.entity_id(),
                         cx,
                     ))
@@ -421,7 +421,7 @@ impl PullRequestDetailPage {
                                     .child(crate::loaders::mini_glyph_spinner(
                                         "pr-send-spinner",
                                         1.5,
-                                        theme.glyph,
+                                        theme.loader_glyph(),
                                         cx.entity_id(),
                                         cx,
                                     ))

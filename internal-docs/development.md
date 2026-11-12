@@ -85,22 +85,21 @@ General settings signs in through the browser (WorkOS AuthKit with a loopback
 from the optional workspace/device/relay identity using `ZUSE_EDGE_URL` and
 `/auth/*`. The cloud REST API is not an auth-edge replacement.
 
-For the owner-only staging pilot, stop the previous development runner with
-Ctrl+C before starting the engine with the staging environment:
+For staging, run:
 
 ```bash
-ZUSE_API_URL=https://api-rust-stag.zuse.sh \
-ZUSE_CLOUD_API_URL=https://api-rust-stag.zuse.sh \
-ZUSE_WORKOS_CLIENT_ID=client_01KW6ZEZKVMZ0G429A89XZD83Q \
-python3 scripts/dev-native.py --data-dir .context/native-staging-profile
+python3 scripts/dev-native.py --staging
 ```
 
-The explicit staging profile leaves the existing development/production profile
-untouched and avoids loading its saved workspace identity. Then use
-**Settings → General → Sign in**. Restarting only the UI does not update
-an already running engine's environment. For an installed daemon, run its install
-command with the same environment before restarting it; installation captures
-both API overrides and the public client. No private WorkOS key belongs on the Mac.
+It points the engine at `https://api-rust-stag.zuse.sh` (account and cloud API)
+with the public staging sign-in client, and always uses one profile at
+`~/.zuse-dev/staging` (override with `ZUSE_STAGING_DATA_DIR`). The profile lives
+outside the checkout, so every workspace and worktree reuses the same sign-in
+and data; sign in once under **Settings → General → Sign in**. It listens on
+IPC port 27665, so it can run beside the default development profile. An
+already running engine keeps its old environment: stop it before switching.
+For an installed daemon, run its install command with the same environment
+before restarting it. No private WorkOS key belongs on the Mac.
 
 `ZUSE_API_URL` selects General account services, model connections and managed
 access; `ZUSE_CLOUD_API_URL` selects cloud task operations. If only one is set,
@@ -397,3 +396,7 @@ watchers retain their contract. Browser response queues hold byte admission
 through the actual write, so dequeue alone cannot free an 8 MiB traffic budget.
 An intact larger response acquires the budget exclusively. These bounds apply
 to direct, paired and account browser sessions and the paired relay path.
+
+## Slack integration
+
+The first-party Slack app runs alongside `zuse-cloud-api` behind an explicit feature flag. See [Slack setup and recovery](slack-app.md) for server-only secrets, the additive migration, manifest, runtime image compatibility and fixture tests. Settings → Cloud → Slack shares one component across native and browser hosts; each connected member chooses a Zuse workspace and prepared repository before authorizing Slack.

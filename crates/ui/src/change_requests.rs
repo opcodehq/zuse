@@ -4,6 +4,7 @@
 //! pull-request metadata is host-local, short-lived capability state and is
 //! deliberately never written back into a synced document.
 
+use crate::tooltip::TooltipExt as _;
 use std::collections::{HashMap, HashSet};
 
 use gpui::{AnyElement, Context, Render, SharedString, Window, div, prelude::*, px};
@@ -81,10 +82,9 @@ pub(crate) struct ChangeRequestTooltip {
 impl Render for ChangeRequestTooltip {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx);
-        let card = div()
-            .max_w(px(320.0))
-            .px(px(9.0))
-            .py(px(7.0))
+        let card = crate::tooltip::surface(theme)
+            .max_w(px(crate::tooltip::MAX_WIDTH))
+            .py(px(4.5))
             .flex()
             .flex_col()
             .gap(px(3.0))
@@ -95,7 +95,7 @@ impl Render for ChangeRequestTooltip {
             .when(!theme.is_frost(), |el| el.shadow_md())
             .child(
                 div()
-                    .text_size(px(11.0))
+                    .text_size(px(crate::tooltip::TEXT_SIZE))
                     .font_weight(gpui::FontWeight::MEDIUM)
                     .text_color(self.model.tone.color(theme))
                     .child(SharedString::from(format!(
@@ -108,11 +108,11 @@ impl Render for ChangeRequestTooltip {
                     .min_w_0()
                     .truncate()
                     .whitespace_nowrap()
-                    .text_size(px(11.0))
+                    .text_size(px(crate::tooltip::TEXT_SIZE))
                     .text_color(theme.text_muted)
                     .child(self.model.title.clone()),
             );
-        crate::frost::frosted(6.0, crate::frost::MENU_BLUR, card)
+        crate::tooltip::frost(card)
     }
 }
 
@@ -164,9 +164,7 @@ pub(crate) fn unavailable_badge(id: SharedString, error: String, theme: &Theme) 
         .flex_none()
         .text_color(theme.warning)
         .aria_label(format!("PR status unavailable: {error}"))
-        .tooltip(crate::settings::widgets::text_tooltip(format!(
-            "Could not refresh PR status. {error}"
-        )))
+        .tip(format!("Could not refresh PR status. {error}"))
         .child(crate::icons::icon(crate::icons::ALERT_CIRCLE).size(px(12.0)))
         .into_any_element()
 }
@@ -262,7 +260,7 @@ pub(crate) fn pull_request_state_inline(
                     cx.stop_propagation();
                     crate::pull_request_detail::open_on_device(&url, device.clone(), window, cx);
                 })
-                .tooltip(move |_, cx| {
+                .anchored_tooltip(crate::tooltip::Placement::Below, move |_, cx| {
                     cx.new(|_| ChangeRequestTooltip {
                         model: tooltip_model.clone(),
                     })
@@ -354,7 +352,7 @@ fn render_badge_model(
                     cx.stop_propagation();
                     crate::pull_request_detail::open_on_device(&url, device.clone(), window, cx);
                 })
-                .tooltip(move |_, cx| {
+                .anchored_tooltip(crate::tooltip::Placement::Below, move |_, cx| {
                     cx.new(|_| ChangeRequestTooltip {
                         model: tooltip_model.clone(),
                     })

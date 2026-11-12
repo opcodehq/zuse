@@ -11,6 +11,7 @@ pub(crate) mod boxd_wire;
 pub mod contract;
 pub mod daytona;
 pub mod e2b;
+pub mod prized;
 pub mod registry;
 mod transport;
 

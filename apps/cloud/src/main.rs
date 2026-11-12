@@ -65,6 +65,20 @@ enum Command {
     },
     /// Verify staging object storage with an isolated immutable write/read/delete.
     ObjectStoreCheck,
+    /// Certify a staged managed-base candidate on its provider: one computer is
+    /// created, checked end to end and deleted. Writes the report, and the
+    /// registrable release only when every check passed.
+    CertifyManagedBase {
+        #[arg(long)]
+        provider: String,
+        #[arg(long)]
+        release_id: String,
+        #[arg(long, default_value = ".")]
+        output: std::path::PathBuf,
+        /// Seconds between sleep and resume (660 certifies Boat's cold restore).
+        #[arg(long, default_value_t = 0)]
+        sleep_wait_secs: u64,
+    },
     /// Register an already certified immutable platform base using an operator database role.
     RegisterManagedBase {
         #[arg(long)]
@@ -345,6 +359,65 @@ async fn main() -> Result<()> {
             anyhow::ensure!(
                 report.status == "passed",
                 "Staging object store verification failed"
+            );
+        }
+        Command::CertifyManagedBase {
+            provider,
+            release_id,
+            output,
+            sleep_wait_secs,
+        } => {
+            let url = env::var("ZUSE_CLOUD_DATABASE_URL")
+                .context("Certification reads the candidate through ZUSE_CLOUD_DATABASE_URL")?;
+            let candidate = zuse_cloud::certification::candidate(&url, &provider, &release_id)
+                .await
+                .map_err(|e| anyhow::anyhow!(e))?;
+            let target = zuse_cloud::certification::Target::from_candidate(&candidate)
+                .map_err(|e| anyhow::anyhow!(e))?;
+            let registry = zuse_cloud::providers::registry::Registry::from_environment();
+            let adapter = registry
+                .get(target.provider)
+                .with_context(|| format!("{provider} is not configured on this host"))?;
+            let options = zuse_cloud::certification::Options {
+                sleep_wait: std::time::Duration::from_secs(sleep_wait_secs),
+                ..Default::default()
+            };
+            let report =
+                zuse_cloud::certification::certify(adapter.as_ref(), &target, &options).await;
+            std::fs::create_dir_all(&output)?;
+            // Release ids may contain '/' or '.'; keep report files inside --output.
+            let stem: String = release_id
+                .chars()
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                        c
+                    } else {
+                        '_'
+                    }
+                })
+                .collect();
+            let path = output.join(format!("{stem}-certification.json"));
+            std::fs::write(&path, serde_json::to_vec_pretty(&report)?)?;
+            for check in &report.checks {
+                println!(
+                    "{} {:<26} {}",
+                    if check.passed { "pass" } else { "FAIL" },
+                    check.name,
+                    check.detail
+                );
+            }
+            println!("traits {}", report.traits);
+            println!("report {} sha256 {}", path.display(), report.sha256());
+            if !report.passed {
+                anyhow::bail!("Certification failed; the base is not registrable");
+            }
+            let release = zuse_cloud::certification::release(&candidate, &report)
+                .map_err(|e| anyhow::anyhow!(e))?;
+            let release_path = output.join(format!("{stem}-release.json"));
+            std::fs::write(&release_path, serde_json::to_vec_pretty(&release)?)?;
+            println!(
+                "Certified. Register with: register-managed-base --release {}",
+                release_path.display()
             );
         }
         Command::RegisterManagedBase { release } => {
@@ -730,6 +803,27 @@ async fn main() -> Result<()> {
                     }
                 }))
             };
+            // Provider running limits (E2B: one hour) must not pause a busy computer.
+            let keep_running_task = if once {
+                None
+            } else {
+                let runtime = runtime.clone();
+                let registry = registry.clone();
+                Some(tokio::spawn(async move {
+                    loop {
+                        if let Err(error) = runtime
+                            .keep_running_registry_once(&registry, now_ms())
+                            .await
+                        {
+                            tracing::warn!(code = error.code, "Provider running limits deferred");
+                        }
+                        tokio::time::sleep(std::time::Duration::from_secs(
+                            zuse_cloud::runtime::keep_running::INTERVAL_SECS,
+                        ))
+                        .await;
+                    }
+                }))
+            };
             // Remote object cleanup is independent of the latency-sensitive
             // lifecycle hint loop. Unknown PUT receipts survive cancellation.
             let object_cleanup_task = if once {
@@ -961,6 +1055,9 @@ async fn main() -> Result<()> {
             if let Some(task) = object_cleanup_task {
                 task.abort();
             }
+            if let Some(task) = keep_running_task {
+                task.abort();
+            }
             if let Some(task) = recovery_task {
                 task.abort();
             }
@@ -1170,14 +1267,28 @@ async fn main() -> Result<()> {
                 .collect::<Result<Vec<_>, _>>()?;
             let listener = tokio::net::TcpListener::bind(config.listen).await?;
             tracing::info!(address = %listener.local_addr()?,runtime_control=runtime_enabled, "Zuse cloud API listening");
-            let app = router(state, origins);
+            let app = router(state.clone(), origins);
             #[cfg(feature = "hosted-browser")]
             let app = if let Some(extension) = hosted_browser.as_ref() {
                 app.merge(extension.router())
             } else {
                 app
             };
+            let mut app = app;
+            let slack_worker = if let Some(slack_config) = zuse_cloud::slack::Config::from_env()? {
+                let slack =
+                    zuse_cloud::slack::Slack::connect(state, slack_config, &config.database_url)
+                        .await?;
+                let worker = slack.start_worker();
+                app = app.merge(slack.router());
+                Some(worker)
+            } else {
+                None
+            };
             axum_serve(listener, app).await?;
+            if let Some(worker) = slack_worker {
+                worker.abort();
+            }
             billing_shutdown
                 .close_native_billing()
                 .await
