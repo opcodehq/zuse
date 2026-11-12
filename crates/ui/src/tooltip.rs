@@ -20,7 +20,7 @@ pub fn surface(theme: &Theme) -> Div {
         .bg(crate::popover::surface_bg(theme))
         .font_family(theme.font_sans.clone())
         .text_size(px(TEXT_SIZE))
-        .text_color(theme.text_strong)
+        .text_color(theme.text_strong.opacity(0.92))
 }
 
 /// Backdrop blur behind a [`surface`] card.
