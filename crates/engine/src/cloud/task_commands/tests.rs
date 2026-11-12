@@ -371,6 +371,41 @@ fn a_queued_message_keeps_files_on_the_computer_apart_from_server_assets() {
 }
 
 #[test]
+fn a_run_keeps_files_uploaded_to_the_computer_and_refuses_this_devices_paths() {
+    let computer = "/home/zuse/.zuse-data/uploads/a1b2c3d4-shot.png".to_owned();
+    let reference = asset_ref(&asset()).unwrap();
+    let value = serde_json::to_value(
+        normalize(
+            methods::QUEUE_COMMAND,
+            &run(".", vec![computer.clone(), reference]),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    // The computer's file rides on the run; the server-held one binds apart.
+    assert_eq!(
+        value["action"]["payload"]["request"]["attachments"],
+        json!([computer])
+    );
+    assert_eq!(value["action"]["attachments"][0]["assetId"], "asset-a");
+    assert_eq!(value["action"]["payload"]["request"]["prompt"], "inspect");
+    for local in [
+        "/Users/test/secret.txt",
+        "/home/zuse/.zuse-data/uploads/../../etc/passwd",
+        "uploads/a-shot.png",
+    ] {
+        assert!(
+            normalize(methods::QUEUE_COMMAND, &run(".", vec![local.into()])).is_err(),
+            "{local}"
+        );
+    }
+    let many = (0..9)
+        .map(|n| format!("/data/uploads/{n}-a.png"))
+        .collect::<Vec<_>>();
+    assert!(normalize(methods::QUEUE_COMMAND, &run(".", many)).is_err());
+}
+
+#[test]
 fn queue_rows_list_files_on_the_computer_by_their_path_there() {
     let page = queue_shape(json!({"items":[{"id":"row","attachments":[asset()],
         "computerFiles":["/home/zuse/.zuse-data/uploads/u1/shot.png"],"createdAt":5}]}))

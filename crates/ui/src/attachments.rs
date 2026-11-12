@@ -20,7 +20,7 @@ use zuse_i18n::messages as msg;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use futures::TryStreamExt as _;
+use futures::{FutureExt as _, TryStreamExt as _};
 use gpui::{
     AnyElement, BackgroundExecutor, Image, ImageFormat, SharedString, Size, div, prelude::*, px,
 };
@@ -536,6 +536,36 @@ pub async fn upload_attachment(
     attachment: &StagedAttachment,
     progress: Option<Arc<std::sync::atomic::AtomicU64>>,
 ) -> Result<String, String> {
+    let call = |method: &'static str, params: serde_json::Value, timeout: Duration| {
+        call_with_timeout(
+            engine,
+            executor,
+            method,
+            with_target(params, target_device_id),
+            timeout,
+        )
+        .boxed_local()
+    };
+    upload_with(&call, executor, upload_id, attachment, progress).await
+}
+
+/// One upload call (`UploadChunk` or `UploadCommit`) raced against a timeout.
+pub(crate) type UploadCall<'a> = dyn Fn(
+        &'static str,
+        serde_json::Value,
+        Duration,
+    ) -> futures::future::LocalBoxFuture<'a, Result<serde_json::Value, String>>
+    + 'a;
+
+/// [`upload_attachment`]'s chunk plan, retries and deadline, with each call
+/// routed by `call`.
+pub(crate) async fn upload_with<'a>(
+    call: &UploadCall<'a>,
+    executor: &BackgroundExecutor,
+    upload_id: &str,
+    attachment: &StagedAttachment,
+    progress: Option<Arc<std::sync::atomic::AtomicU64>>,
+) -> Result<String, String> {
     let b64 = BASE64.encode(attachment.bytes());
     let ranges = chunk_ranges(b64.len());
     let deadline = executor.timer(attachment_deadline(ranges.len()));
@@ -546,14 +576,11 @@ pub async fn upload_attachment(
                 let upload_id = &upload_id;
                 let b64 = &b64;
                 async move {
-                    let params = with_target(
-                        serde_json::json!({
-                            "uploadId": upload_id,
-                            "seq": seq,
-                            "data": &b64[range.clone()],
-                        }),
-                        target_device_id,
-                    );
+                    let params = serde_json::json!({
+                        "uploadId": upload_id,
+                        "seq": seq,
+                        "data": &b64[range.clone()],
+                    });
                     // The first WINDOW (not just seq 0) gets the cold-dial
                     // allowance — its chunks all start before the link is warm.
                     let timeout = if seq < UPLOAD_CONCURRENCY as u64 {
@@ -566,15 +593,7 @@ pub async fn upload_attachment(
                     // safe (timeouts retry too).
                     let mut attempt = 0u32;
                     loop {
-                        match call_with_timeout(
-                            engine,
-                            executor,
-                            methods::UPLOAD_CHUNK,
-                            params.clone(),
-                            timeout,
-                        )
-                        .await
-                        {
+                        match call(methods::UPLOAD_CHUNK, params.clone(), timeout).await {
                             Ok(_) => break,
                             Err(err) if attempt < 2 => {
                                 attempt += 1;
@@ -604,18 +623,8 @@ pub async fn upload_attachment(
                 }
             })
             .await?;
-        let params = with_target(
-            serde_json::json!({ "uploadId": upload_id, "fileName": attachment.name }),
-            target_device_id,
-        );
-        let reply = call_with_timeout(
-            engine,
-            executor,
-            methods::UPLOAD_COMMIT,
-            params,
-            COMMIT_TIMEOUT,
-        )
-        .await?;
+        let params = serde_json::json!({ "uploadId": upload_id, "fileName": attachment.name });
+        let reply = call(methods::UPLOAD_COMMIT, params, COMMIT_TIMEOUT).await?;
         reply
             .get("path")
             .and_then(|v| v.as_str())

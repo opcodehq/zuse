@@ -110,6 +110,11 @@ impl Composer {
         self.input.update(cx, |input, cx| input.set_text("", cx));
         cx.notify();
     }
+    /// Whether this composer belongs to a cloud chat, whose files go
+    /// straight to its computer.
+    pub(crate) fn is_native_cloud(&self) -> bool {
+        self.cloud.native.is_some()
+    }
     pub(crate) fn set_cloud_task_sleeping(&mut self, sleeping: bool) {
         if let Some(task) = &mut self.cloud.native {
             task.wake = sleeping;
@@ -360,31 +365,17 @@ impl Composer {
                 // A message's files go straight to its computer, never to server
                 // storage, whether it runs now or waits in the queue: wake it,
                 // wait for its connection, then upload.
-                let _=this.update(cx,|_,cx|cx.emit(ComposerEvent::CloudWakeRequested));
-                let started=std::time::Instant::now();
-                let engine=loop {
-                    let ready=this.read_with(cx,|this,cx|{
-                        let state=this.state.read(cx);
-                        (state.connection==crate::state::ConnectionStatus::Ready).then(||state.engine().cloned()).flatten()
-                    });
-                    match ready {
-                        Ok(Some(engine))=>break engine,
-                        Ok(None)=>{}
-                        Err(_)=>return,
-                    }
-                    if started.elapsed()>std::time::Duration::from_secs(180) {
-                        let _=this.update(cx,|this,cx|{this.return_native_send(cx);this.cloud_failure("The computer didn't start in time to receive the files. Send again to retry.".into(),cx)});
+                let engine=match computer_engine(&this,cx).await {
+                    Ok(engine)=>engine,
+                    Err(ComputerWait::Gone)=>return,
+                    Err(ComputerWait::TimedOut)=>{
+                        let _=this.update(cx,|this,cx|{this.return_native_send(cx);this.cloud_failure(COMPUTER_TIMEOUT.into(),cx)});
                         return;
                     }
-                    cx.background_executor().timer(std::time::Duration::from_millis(250)).await;
                 };
-                let executor=cx.background_executor().clone();
-                // Two files at a time: each upload holds its whole encoded file.
-                use futures::{StreamExt as _, TryStreamExt as _};
-                let uploads=futures::stream::iter(staged.iter()).map(|attachment|attachments::upload_attachment(&engine,&executor,Some(attachments::COMPUTER),&attachment.id,attachment,None)).buffered(2).try_collect::<Vec<_>>().await;
-                let paths=match uploads {
+                let paths=match upload_to_computer(&engine,cx.background_executor(),&staged).await {
                     Ok(paths)=>paths,
-                    Err(error)=>{let _=this.update(cx,|this,cx|{this.return_native_send(cx);this.cloud_failure(format!("The files couldn't reach the computer: {error}"),cx)});return;}
+                    Err(error)=>{let _=this.update(cx,|this,cx|{this.return_native_send(cx);this.cloud_failure(error,cx)});return;}
                 };
                 set_computer_files(&mut request, paths);
                 // Retain the uploaded paths so a retry doesn't upload again.
@@ -1186,6 +1177,78 @@ impl Composer {
     }
 }
 
+/// A cloud chat's computer was asked to wake but isn't connected yet.
+pub(crate) enum ComputerWait {
+    /// The composer went away while waiting.
+    Gone,
+    /// The computer didn't connect within [`COMPUTER_WAIT`].
+    TimedOut,
+}
+/// How long a message's files wait for their computer to connect.
+pub(crate) const COMPUTER_WAIT: std::time::Duration = std::time::Duration::from_secs(180);
+pub(crate) const COMPUTER_TIMEOUT: &str =
+    "The computer didn't start in time to receive the files. Send again to retry.";
+/// Wake a cloud chat's computer if it sleeps and wait up to
+/// [`COMPUTER_WAIT`] for its connection, so files can go straight to it
+/// instead of server storage.
+pub(crate) async fn computer_engine(
+    this: &gpui::WeakEntity<Composer>,
+    cx: &mut gpui::AsyncApp,
+) -> Result<crate::state::EngineHandle, ComputerWait> {
+    let ready = |cx: &mut gpui::AsyncApp| {
+        this.read_with(cx, |this, cx| {
+            let state = this.state.read(cx);
+            (state.connection == crate::state::ConnectionStatus::Ready)
+                .then(|| state.engine().cloned())
+                .flatten()
+        })
+    };
+    match ready(cx) {
+        Ok(Some(engine)) => return Ok(engine),
+        Ok(None) => {}
+        Err(_) => return Err(ComputerWait::Gone),
+    }
+    let _ = this.update(cx, |_, cx| cx.emit(ComposerEvent::CloudWakeRequested));
+    let started = std::time::Instant::now();
+    loop {
+        if started.elapsed() > COMPUTER_WAIT {
+            return Err(ComputerWait::TimedOut);
+        }
+        cx.background_executor()
+            .timer(std::time::Duration::from_millis(250))
+            .await;
+        match ready(cx) {
+            Ok(Some(engine)) => return Ok(engine),
+            Ok(None) => {}
+            Err(_) => return Err(ComputerWait::Gone),
+        }
+    }
+}
+/// Upload files straight to a connected cloud computer, two at a time (each
+/// upload holds its whole encoded file), keeping their order. Returns their
+/// paths on the computer.
+pub(crate) async fn upload_to_computer(
+    engine: &crate::state::EngineHandle,
+    executor: &gpui::BackgroundExecutor,
+    staged: &[StagedAttachment],
+) -> Result<Vec<String>, String> {
+    use futures::{StreamExt as _, TryStreamExt as _};
+    futures::stream::iter(staged.iter())
+        .map(|attachment| {
+            attachments::upload_attachment(
+                engine,
+                executor,
+                Some(attachments::COMPUTER),
+                &attachment.id,
+                attachment,
+                None,
+            )
+        })
+        .buffered(2)
+        .try_collect::<Vec<_>>()
+        .await
+        .map_err(|error| format!("The files couldn't reach the computer: {error}"))
+}
 /// Whether a message's files already reached its computer: a run carries
 /// their paths in its request, a queued message in its input.
 fn computer_files_delivered(request: &Value, files: usize) -> bool {
