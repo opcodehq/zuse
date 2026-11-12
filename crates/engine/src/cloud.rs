@@ -16,6 +16,7 @@ mod sidebar_cache;
 #[cfg(unix)]
 pub mod sync;
 pub mod task_commands;
+mod unknown_outcome;
 #[cfg(test)]
 mod workspace_missing_tests;
 // The cloud modules share this account authority, independently of workspace login.
@@ -90,6 +91,9 @@ fn task_rejection(code: &str) -> Option<&'static str> {
 pub(crate) fn rpc_error(error: anyhow::Error) -> zuse_rpc::RpcError {
     if let Some(rejection) = error.downcast_ref::<TaskRejection>() {
         return rejection.rpc();
+    }
+    if let Some(unknown) = error.downcast_ref::<unknown_outcome::UnknownOutcome>() {
+        return unknown.rpc();
     }
     match error.downcast::<zuse_rpc::RpcError>() {
         Ok(error) => error,
@@ -659,6 +663,12 @@ impl CloudApi {
                     .any(|part| *part == "task-commands" || *part == "assets")
             {
                 let value: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+                if let Some(unknown) = value["error"]
+                    .as_str()
+                    .and_then(unknown_outcome::UnknownOutcome::from_code)
+                {
+                    return Err(unknown.into());
+                }
                 if let Some(message) = value["error"].as_str().and_then(task_rejection) {
                     return Err(TaskRejection(message).into());
                 }

@@ -3,6 +3,7 @@ use super::*;
 use crate::localization::message as tr;
 use serde_json::{Value, json};
 use zuse_i18n::messages as msg;
+mod unknown;
 mod wake;
 #[derive(Default)]
 pub(super) struct Launch {
@@ -25,6 +26,8 @@ pub(super) struct Launch {
     native_staged: Vec<StagedAttachment>,
     rejected_drafts: Vec<(String, Vec<StagedAttachment>)>,
     pause_command: Option<String>,
+    /// An earlier message whose delivery outcome is unknown.
+    pub(super) unknown: unknown::State,
     /// The cloud computer's stage, set by the conversation that owns this
     /// composer and shown in the tray's single status line.
     status: Option<(String, bool)>,
@@ -96,6 +99,7 @@ impl Composer {
     }
     pub(crate) fn clear_cloud_task(&mut self, cx: &mut Context<Self>) {
         self.cloud.task = None;
+        self.cloud.unknown = Default::default();
         self.cloud.native = None;
         self.cloud.pending_native = None;
         self.cloud.pending_native_text = None;
@@ -117,12 +121,18 @@ impl Composer {
         queue: bool,
         cx: &mut Context<Self>,
     ) -> bool {
-        let Some(task) = &self.cloud.native else {
+        if self.cloud.native.is_none() {
             return false;
-        };
+        }
         if self.cloud.task.is_some() {
             return true;
         }
+        if self.cloud_unknown_blocks_send(cx) {
+            return true;
+        }
+        let Some(task) = &self.cloud.native else {
+            return false;
+        };
         if queue
             && task.queue_selection_version
                 != zuse_protocol::cloud_task_commands::QUEUE_RUN_SELECTION_VERSION
@@ -214,6 +224,23 @@ impl Composer {
         text: &str,
         cx: &mut Context<Self>,
     ) {
+        self.push_cloud_echo(session, message, text, cx);
+        self.input.update(cx, |input, cx| input.set_text("", cx));
+        if let Some(files) = self.attachments.get_mut(&self.current_key) {
+            let sent = &self.cloud.native_staged;
+            files.retain(|file| !sent.iter().any(|sent| sent.id == file.id));
+        }
+        self.sync_attachment_chips(cx);
+        cx.notify();
+    }
+    /// Put a sent message in the conversation before the server confirms it.
+    fn push_cloud_echo(
+        &mut self,
+        session: &str,
+        message: &str,
+        text: &str,
+        cx: &mut Context<Self>,
+    ) {
         let message = message.to_owned();
         let text = text.to_owned();
         let session = session.to_owned();
@@ -240,13 +267,6 @@ impl Composer {
             );
             cx.notify();
         });
-        self.input.update(cx, |input, cx| input.set_text("", cx));
-        if let Some(files) = self.attachments.get_mut(&self.current_key) {
-            let sent = &self.cloud.native_staged;
-            files.retain(|file| !sent.iter().any(|sent| sent.id == file.id));
-        }
-        self.sync_attachment_chips(cx);
-        cx.notify();
     }
     /// Undo [`Self::show_native_send`] after a failed send: the message leaves
     /// the conversation and its text and files return to an empty draft, so
@@ -375,6 +395,7 @@ impl Composer {
                         let foreground=request["action"]["type"]=="submit" && request["action"]["payload"]["kind"]=="run";
                         if foreground {
                             this.cloud.admitted_native=Some(json!({"commandId":request["commandId"],"messageId":request["action"]["messageId"]}));
+                            this.remember_cloud_run(&request);
                         }
                         this.cloud.pending_native = None;
                         let sent=std::mem::take(&mut this.cloud.native_staged);
@@ -415,6 +436,17 @@ impl Composer {
                         this.cloud.native_staged.clear();
                         let message = code.trim_start_matches(zuse_protocol::cloud_task_commands::TASK_REJECTED_PREFIX).to_owned();
                         this.failure = Some(format!("Couldn't send: {message}").into());
+                    }
+                    Err(zuse_rpc::RpcError::Capability(code)) if code.starts_with(zuse_protocol::cloud_task_commands::TASK_UNKNOWN_OUTCOME_PREFIX) => {
+                        // An earlier message's outcome is unknown, so nothing was
+                        // admitted. Keep the draft and read history, which shows
+                        // that message with Retry and Discard.
+                        this.return_native_send(cx);
+                        this.cloud.pending_native = None;
+                        this.cloud.pending_native_text = None;
+                        this.cloud.native_staged.clear();
+                        this.failure = Some("Your earlier message didn't go through. Retry or discard it first. Your draft is kept.".into());
+                        cx.emit(ComposerEvent::CloudLaunchChanged);
                     }
                     Err(error) => {
                         this.return_native_send(cx);
@@ -495,6 +527,9 @@ impl Composer {
                 true,
             ));
         }
+        if self.cloud_unknown_retrying() {
+            return Some(("Sending message…", true));
+        }
         self.cloud
             .admitted_native
             .as_ref()
@@ -521,6 +556,7 @@ impl Composer {
         admissions: &Value,
         cx: &mut Context<Self>,
     ) {
+        self.observe_cloud_unknown(admissions, cx);
         let Some(pending) = self.cloud.admitted_native.as_ref() else {
             return;
         };

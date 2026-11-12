@@ -20,19 +20,21 @@ pub(super) fn command(
 ) -> Option<Activity> {
     let rows = rows.as_array()?;
     // A held queue is not inference. These are execution records, not queue items.
+    // A message with an unknown outcome is not progress either: the composer
+    // shows it with Retry and Discard instead.
     let eligible = |row: &&Value| {
         row["messageId"].as_str().is_some_and(|id| {
             !id.is_empty()
                 && (matches!(
                     row["executionState"].as_str(),
-                    Some("running" | "waiting-input" | "outcome-unknown")
+                    Some("running" | "waiting-input")
                 ) || !zuse_viewport::cloud_response_started(messages, id))
         }) && row["text"].is_string()
     };
     let active = |row: &&Value| {
         matches!(
             row["executionState"].as_str(),
-            Some("starting" | "running" | "waiting-input" | "outcome-unknown")
+            Some("starting" | "running" | "waiting-input")
         )
     };
     let row = rows
@@ -55,7 +57,6 @@ pub(super) fn command(
         "starting" => ("Starting agent turn…", true),
         "running" => ("Agent working…", true),
         "waiting-input" => ("Agent needs your input", false),
-        "outcome-unknown" => ("Checking message outcome — review before retrying", false),
         _ => ("Waiting for agent…", true),
     };
     Some(Activity {
@@ -153,7 +154,13 @@ mod tests {
             .busy
         );
         assert!(preparation(&json!({"state":"paused"}), true).is_none());
-        for terminal in ["completed", "failed", "cancelled", "rejected"] {
+        for terminal in [
+            "completed",
+            "failed",
+            "cancelled",
+            "rejected",
+            "outcome-unknown",
+        ] {
             assert!(
                 command(&json!([{"executionState":terminal,"messageId":"message","text":"test"}]))
                     .is_none()
@@ -176,12 +183,5 @@ mod tests {
             "control rows are not inference"
         );
         assert_eq!(command(&json!([{"executionState":"queued","messageId":"q","text":"queued","createdAt":2},{"executionState":"running","messageId":"r","text":"run","createdAt":1}])).unwrap().label,"Agent working…");
-        assert!(
-            !command(
-                &json!([{"executionState":"outcome-unknown","messageId":"message","text":"test"}])
-            )
-            .unwrap()
-            .busy
-        );
     }
 }

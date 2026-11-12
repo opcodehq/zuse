@@ -15,6 +15,11 @@ pub const EDIT_LEASE_MS: i64 = 30_000;
 /// command (bad model, access mode, attachment …). The rest is the message
 /// to show; the client may build a fresh command instead of retrying it.
 pub const TASK_REJECTED_PREFIX: &str = "cloud_task_rejected:";
+/// Prefix of a capability error about a message whose delivery outcome is
+/// unknown. `review-required`: the server refuses new runs on the
+/// conversation until that message is reviewed (retried or discarded).
+/// `not-found`: a review found nothing unknown left to review.
+pub const TASK_UNKNOWN_OUTCOME_PREFIX: &str = "cloud_task_unknown_outcome:";
 
 /// No implicit resume occurs merely because work was persisted.
 #[derive(Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
