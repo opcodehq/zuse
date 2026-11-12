@@ -1632,21 +1632,17 @@ fn native_commands_supported(row: &Value) -> bool {
         })
 }
 /// Whether the guest runtime on this computer advertised `capability` at its
-/// last bootstrap (or storage enrollment). A sleeping computer is judged by
+/// last bootstrap. A sleeping computer is judged by
 /// that last bootstrap: its image, and so its runtime, only changes when the
 /// computer is recreated. A computer that never stored any capabilities is
 /// treated as an old runtime, since a guest that predates a capability never
 /// advertised it either.
 pub(crate) fn runtime_capable(row: &Value, capability: &str) -> bool {
-    let config = &row["request_config"];
-    [
-        &config["runtimeBootstrapReceipt"]["capabilities"],
-        &config["rustStorageEnrollment"]["capabilities"],
-    ]
-    .into_iter()
-    .filter_map(Value::as_array)
-    .flatten()
-    .any(|cap| cap == capability)
+    // Only the bootstrap receipt: it is replaced on every bootstrap, while a
+    // storage enrollment can outlive a replaced guest.
+    row["request_config"]["runtimeBootstrapReceipt"]["capabilities"]
+        .as_array()
+        .is_some_and(|caps| caps.iter().any(|cap| cap == capability))
 }
 fn native_commands_accepted(row: &Value) -> bool {
     native_commands_supported(row)
