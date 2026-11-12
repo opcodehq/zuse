@@ -38,7 +38,10 @@ impl E2b {
         })
     }
     pub fn with_max_timeout(mut self, seconds: u32) -> Result<Self, ProviderError> {
-        if !(60..=86400).contains(&seconds) {
+        // The keep-running worker renews every INTERVAL_SECS; a shorter limit
+        // would end busy computers between passes.
+        let floor = 2 * crate::runtime::keep_running::INTERVAL_SECS as u32;
+        if !(floor..=86400).contains(&seconds) {
             return Err(ProviderError::Rejected);
         }
         self.max_timeout_seconds = seconds;
@@ -349,6 +352,21 @@ impl Provider for E2b {
             desired: DesiredState::Running,
         })
     }
+    /// E2B pauses a computer when its timeout ends, even mid-turn, and plans
+    /// cap the timeout (one hour on the staging account). Resetting it while
+    /// the computer is in use keeps long runs going.
+    async fn keep_running(&self, id: &str) -> Result<(), ProviderError> {
+        self.call(
+            Method::POST,
+            &["sandboxes", id, "timeout"],
+            Some(&json!({"timeout":self.max_timeout_seconds})),
+        )
+        .await
+        .map(|_| ())
+    }
+    fn has_running_limit(&self) -> bool {
+        true
+    }
     async fn delete(&self, id: &str) -> Result<ProviderOperation, ProviderError> {
         match self.call(Method::DELETE, &["sandboxes", id], None).await {
             Ok(_) | Err(ProviderError::NotFound) => {}
@@ -530,6 +548,44 @@ mod tests {
         Arc,
         atomic::{AtomicUsize, Ordering},
     };
+    #[tokio::test]
+    async fn keeping_a_busy_computer_running_resets_its_timeout_to_the_plan_limit() {
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let seen = requests.clone();
+        let app = Router::new().route(
+            "/sandboxes/original-one/timeout",
+            post(move |headers: HeaderMap, Json(body): Json<Value>| {
+                let seen = seen.clone();
+                async move {
+                    assert_eq!(headers["x-api-key"], "infrastructure-key");
+                    seen.lock().unwrap().push(body);
+                    StatusCode::NO_CONTENT
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        }));
+        for (configured, expected) in [(None, 3600), (Some(1200), 1200)] {
+            let mut provider = E2b::new("infrastructure-key".into()).unwrap();
+            if let Some(seconds) = configured {
+                provider = provider.with_max_timeout(seconds).unwrap();
+            }
+            provider.rest.test_endpoint(endpoint.clone());
+            provider.keep_running("original-one").await.unwrap();
+            assert_eq!(
+                requests.lock().unwrap().pop().unwrap(),
+                json!({"timeout":expected})
+            );
+            assert_eq!(
+                provider.keep_running("missing").await,
+                Err(ProviderError::NotFound)
+            );
+        }
+    }
+
     #[tokio::test]
     async fn allocation_and_every_resume_respect_the_deployment_timeout_limit() {
         for (configured, requested, expected) in [

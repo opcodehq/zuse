@@ -539,7 +539,7 @@ pub(super) async fn maybe_forward(
         let result=api.request_scoped(&token,&["v1","cloud","workspaces",&workspace,"task-commands"],Some(serde_json::to_value(&request)?),organization.as_deref(),&[]).await;
         // The exact typed body/ID is retained by this owned operation. A lost HTTP
         // response never becomes a different command or an opaque guest RPC.
-        let result=match result {Ok(value)=>value,Err(original)=>{
+        let result=match result {Ok(value)=>value,Err(original) if original.downcast_ref::<super::TaskRejection>().is_some()=>return Err(original),Err(original)=>{
             scoped(&auth,&account,organization.as_deref())?;
             match api.request_scoped(&token,&["v1","cloud","workspaces",&workspace,"task-commands"],Some(serde_json::to_value(&request)?),organization.as_deref(),&[]).await{
                 Ok(value)=>value,Err(_)=>return Err(original),
@@ -559,7 +559,7 @@ pub(super) async fn maybe_forward(
             .uploads
             .revoke(&cleanup.1, cleanup.2.as_deref(), &cleanup.3);
     }
-    run.map_err(|error|RpcError::Failed(if error.to_string().contains("cloud_task_steer_selection_changed") {"This queued message uses different agent settings, or the active settings could not be verified. It is still queued. Stop the current turn and use Send now, or let it run afterward.".into()} else if error.to_string().contains("cannot save the selected agent") {error.to_string()} else {"The cloud action was not confirmed. Your draft is preserved; check the queue before retrying the same action.".into()}))
+    run.map_err(|error|if let Some(rejection)=error.downcast_ref::<super::TaskRejection>() {rejection.rpc()} else {RpcError::Failed(if error.to_string().contains("cloud_task_steer_selection_changed") {"This queued message uses different agent settings, or the active settings could not be verified. It is still queued. Stop the current turn and use Send now, or let it run afterward.".into()} else if error.to_string().contains("cannot save the selected agent") {error.to_string()} else {"The cloud action was not confirmed. Your draft is preserved; check the queue before retrying the same action.".into()})})
 }
 
 /// Read-only projection of a durable initial admission, visibly distinct from

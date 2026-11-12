@@ -1,5 +1,6 @@
 //! Queue rows share their delivery policy with the native composer.
 use super::*;
+use crate::tooltip::TooltipExt as _;
 use crate::{
     assets::icon,
     shell::{column, control, icon_button, label, row},
@@ -51,19 +52,6 @@ impl Render for QueueDrag {
             .bg(rgb(crate::shell::RAISED))
             .text_size(px(12.))
             .child(self.title.clone())
-    }
-}
-struct QueueTooltip(&'static str);
-impl Render for QueueTooltip {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .px_2()
-            .py_1()
-            .rounded(px(6.))
-            .bg(rgb(crate::shell::RAISED))
-            .text_color(rgb(crate::shell::TEXT))
-            .text_size(px(11.))
-            .child(self.0)
     }
 }
 impl WorkspaceView {
@@ -232,9 +220,7 @@ impl WorkspaceView {
                                 .size(px(24.))
                                 .aria_label(action.label())
                                 .aria_description(action.tooltip())
-                                .tooltip(move |_, cx| {
-                                    cx.new(|_| QueueTooltip(action.tooltip())).into()
-                                })
+                                .tip(action.tooltip())
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.queue_action(action.action(), &send, None, cx)
                                 })),

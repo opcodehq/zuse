@@ -633,7 +633,7 @@ impl Shell {
                     .id(SharedString::from(format!("zot-mascot-{}", mascot.id)))
                     .role(gpui::Role::RadioButton)
                     .aria_label(mascot.name)
-                    .tooltip(widgets::text_tooltip(mascot.name))
+                    .tip(mascot.name)
                     .size(px(46.0))
                     .flex()
                     .items_center()

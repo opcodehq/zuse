@@ -1,4 +1,90 @@
-# Cloud verification against Boxd and Boat
+# Cloud provider verification
+
+## November 10, 2026: time to a ready agent, per provider
+
+Measured inside each computer with `provider_lifecycle_probe --scripts
+crates/cloud/examples/provider_timing`. "Agent ready" is the Codex app-server
+answering `initialize`. These are one to three samples per provider, not
+percentiles, and they exclude the app's own work (allocation, enrollment,
+credentials, gateway), which staging measured on Boxd:
+
+| Boxd staging start (Nov 9) | From request |
+| --- | ---: |
+| Computer allocated | 1.6 s |
+| Guest enrolled | 2.9 s |
+| Agent ready | 4.2 s |
+| First message accepted (after a 7.8 s repository checkout) | 11.9 s |
+
+### Fresh start
+
+| | Boxd | Boat | E2B | Daytona |
+| --- | ---: | ---: | ---: | ---: |
+| Create request | 0.5–0.7 s | 0.4–0.6 s | 1.0–1.3 s | 0.8–1.2 s |
+| Then first command | 0.1–0.4 s | 4.7–7.1 s | 0.7–0.9 s | 0.2 s |
+| Shallow clone (tokio) | 0.6 s | 1.1–3.1 s | 1.0–2.2 s | 0.7–0.9 s |
+| First agent start, cold disk | 0.2–0.3 s | 4.0–4.7 s | 2.8–12.6 s | 0.1–0.3 s |
+| Same agent start again | <0.1 s | <0.1 s | <0.1 s | <0.1 s |
+
+The cold first start is the agent's ~300 MB binary being read from a lazily
+restored disk. The guest now reads the selected agent's binary in the
+background right after enrollment, overlapping credentials and the checkout.
+With that overlap, clone plus agent ready took 7.7 s on E2B (the binary read
+alone took 7.6 s) instead of 14.8 s, and 5.2 s on Boat, where the agent still
+needed 2.1 s after the read.
+
+### Resume after 11 minutes asleep
+
+| | Boxd | Boat | E2B | Daytona |
+| --- | --- | --- | --- | --- |
+| Agent process | Survives | Lost (new boot) | Survives | Lost |
+| Resume request to first command | 0.8 s | 6.2 s | 1.4 s | 1.8 s |
+| Restart before the agent is ready | None | Home files readable at ~14 s, then agent 7.6 s | None | Agent 0.1 s |
+
+### Boat waited for full hydration
+
+The worker treated a Boat computer as ready for its boot credential only once
+Boat reported the disk fully hydrated: 12–21 s after create and 10–11 s after a
+cold resume, while the installed runtime already answered after 2–9 s. Files
+written before hydration (64 MB of data, a credential-like file) survived
+hydration and a cold restore, and binaries read before hydration matched their
+hashes. Boat readiness is now "running and hydrated, or running and the
+installed runtime answers": 4.4 s after create and 3.0 s after a cold resume.
+
+Boat keeps a stopped machine in memory for ten minutes; within that window
+resume took 0.8–1.1 s with the agent alive. After it, resume is a cold restore
+from disk: `/tmp` and every process are gone, and the runtime and agent start
+again from a cold disk (about 22 s before the agent is ready, plus the app's
+reconnect). Daytona loses processes on every stop but its disk is local, so the
+restart is fast.
+
+## November 9, 2026: adapter lifecycle on Boat, E2B and Daytona
+
+`crates/cloud/examples/provider_lifecycle_probe.rs` drives our Rust provider
+adapters directly against the staging accounts. For each provider it creates a
+computer from the newest staging managed base, waits for the installed runtime,
+writes a disk marker, sleeps and resumes, rechecks the runtime and marker, then
+deletes and confirms absence. `--runtime PATH` also uploads and runs a current
+runtime build, and environment checks record what app features need. Boxd ran
+the same probe earlier; its timings are in the November 10 tables above.
+
+| Provider | Create | Runtime ready | Sleep settled | Resume to runtime | Disk kept |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Boat | 0.4–0.9 s | 4.6–16.7 s | 2.0–5.6 s | 0.8 s | Yes |
+| E2B | 1.1–1.2 s | 0.8–2.7 s | 0.1 s | 0.6–0.7 s | Yes |
+| Daytona | 0.8–2.2 s | 0.1–0.2 s | 1.6–2.1 s | 0.9–1.0 s | Yes |
+
+- The bases are from October 31 (runtime 0.25.1). Runtime 0.26.0
+  (`7ae4b2179f3e`, from this branch) also runs on all three and reports its
+  capabilities. Republish each base before an end-to-end app test.
+- `sshd` and passwordless `sudo` exist on Boxd, Boat and E2B. Daytona's
+  container base has no `sshd`: the installer now adds the binary (no
+  listening service, no shared host keys), and the guest explains the gap
+  until the base is republished.
+- Daytona computers are containers, so `/proc` reports the host (48 CPUs,
+  ~395 GB). The Performance panel now reads cgroup limits when set; on
+  Daytona it reports 1 CPU and 2 GiB. VMs are unchanged.
+- Sixteen probe computers (including Boxd runs) were created and all were
+  confirmed deleted.
 
 Verified October 29, 2026 against the configured live provider accounts. Provider
 infrastructure works, but **the deployed cloud application is not ready end to
@@ -51,7 +137,7 @@ cannot be assumed indefinitely.
 | Staging API `api-rust-stag.zuse.sh/readyz` | HTTP 200 with public TLS, verified from owner Mac |
 | External application schema | Eleven checksummed migrations in each private Supabase environment schema; no customer data imported |
 | API ticket/enrollment and gateway routing | Co-located in deployed Rust API on Hetzner; valid real-runtime/client pair acceptance remains pending |
-| Rust Boat integration | Missing: only Boxd has a provider adapter and the allocation worker selects Boxd |
+| Rust provider integration | Superseded: Boxd, Boat, E2B and Daytona adapters pass the lifecycle probe (see the November 9 and 10 sections above) |
 | Complete provider → runtime → relay → user chat flow | Not verified; blocked by the above deployment/integration gaps |
 
 The localhost gateway test is a separate component regression, not a live
@@ -87,8 +173,8 @@ The [Hetzner hosting rollout](hetzner-deployment.md) is live. Remaining work is 
 real-agent flow: standalone model account/credential authority, GitHub scoped access,
 attested Rust guest and harness base/provider builds, artifact/history configuration,
 account/entitlement migration with encryption-key handling, and authenticated
-message/reconnect/pause/resume acceptance. Boat also needs its Rust adapter and cold
-runtime restart path. Creation remains disabled until those checks pass.
+message/reconnect/pause/resume acceptance. (Boat's adapter and cold runtime restart
+path have since landed; see the sections above.) Creation remains disabled until those checks pass.
 
 The [delivery checklist](cloud-computers-delivery.md) tracks agent authentication,
 versioned environment setup and optional prepared artifacts. Consult its current

@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Zuse's single entry point on a Prized computer (home-directory base, no root).
+# The worker runs it as:
+#   env ZUSE_CLOUD_WORKSPACE_ID=… ZUSE_API_URL=… ZUSE_RUNTIME_GENERATION=… ZUSE_STORAGE_INCARNATION_ID=…
+#     [ZUSE_RUNTIME_OPERATION_ID=… ZUSE_RUNTIME_BOOT_TOKEN_FILE=/home/prized/.zuse/state/rust-boot-<op>
+#      | ZUSE_RUNTIME_RETAINED=true ZUSE_RUNTIME_RESUME_OPERATION_ID=…] /home/prized/.zuse/lib/zuse-launch
+# It makes sure a supervisor is serving (a cold boot has none), then hands the
+# launch to it through the repository launcher.
+set -euo pipefail
+umask 077
+R=/home/prized/.zuse
+export ZUSE_USER_DATA=/home/prized/.zuse-data
+export ZUSE_CLOUD_WORKSPACE_ROOT=/home/prized/workspace
+export ZUSE_WORKSPACE_RUNTIME_STATUS_DIR="$R/status"
+export ZUSE_RUNTIME_BINARY="$R/bin/zuse-cloud-runtime"
+export ZUSE_RUNTIME_SUPERVISOR="$R/lib/runtime-supervisor.py"
+export ZUSE_HARNESS_ROOT="$R/harnesses"
+export ZUSE_HARNESS_CHANNEL=staging
+export ZUSE_HARNESS_RELEASE_TOOL="$R/lib/harness-release.py"
+export ZUSE_RECOVERY_STATUS_ROOT="$R/recovery"
+
+# The supervisor accepts a boot credential only at <status dir>/rust-boot-<op>.
+# The worker installs it under R/state; move it (same filesystem, mode kept).
+if [[ "${ZUSE_RUNTIME_RETAINED:-false}" != true && -n "${ZUSE_RUNTIME_BOOT_TOKEN_FILE:-}" ]]; then
+  operation="${ZUSE_RUNTIME_OPERATION_ID:?}"
+  [[ "$operation" =~ ^[A-Za-z0-9_.:-]{1,160}$ ]]
+  wanted="$ZUSE_WORKSPACE_RUNTIME_STATUS_DIR/rust-boot-$operation"
+  if [[ "$ZUSE_RUNTIME_BOOT_TOKEN_FILE" == "$R/state/rust-boot-$operation" ]]; then
+    mkdir -p -m 700 "$ZUSE_WORKSPACE_RUNTIME_STATUS_DIR"
+    if [[ -f "$ZUSE_RUNTIME_BOOT_TOKEN_FILE" && ! -L "$ZUSE_RUNTIME_BOOT_TOKEN_FILE" ]]; then
+      mv -fT -- "$ZUSE_RUNTIME_BOOT_TOKEN_FILE" "$wanted"
+    fi
+    export ZUSE_RUNTIME_BOOT_TOKEN_FILE="$wanted"
+  fi
+fi
+
+"$R/lib/zuse-supervise"
+exec "$R/lib/launch-rust-runtime" "$@"

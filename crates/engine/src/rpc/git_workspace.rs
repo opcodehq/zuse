@@ -304,6 +304,13 @@ impl EngineRpc {
                     crate::git_workspace::snapshot(&this.repos, &actual.root, &target.chat_id)
                         .await
                         .map_err(|e| RpcError::Failed(e.to_string()))?;
+                // A PR opened from the conversation is followed through like
+                // one its agent opened.
+                if let (Some(url), Some(watches)) = (&created, &this.pr_watches)
+                    && let Err(error) = watches.adopt(&target.chat_id, url)
+                {
+                    tracing::debug!(%error, "created pull request not watched");
+                }
                 updated.created_pull_request_url = created;
                 this.change_requests.invalidate();
                 this.github.invalidate_watches();

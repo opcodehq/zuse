@@ -1,5 +1,6 @@
 //! Native PR inspection and explicit comment submission.
 use crate::localization::message as tr;
+use crate::tooltip::TooltipExt as _;
 use zuse_i18n::messages as msg;
 #[path = "pull_request_code.rs"]
 mod code;
@@ -1320,7 +1321,7 @@ impl PullRequestDetailPage {
                             .font_family(theme.font_mono.clone())
                             .text_size(px(11.0))
                             .text_color(theme.text_muted)
-                            .tooltip(widgets::text_tooltip(location.clone()))
+                            .tip(location.clone())
                             .child(short_location(&location))
                             .when_some(link, |el, url| {
                                 el.debug_selector(move || format!("pr-inline-link-{index}"))
@@ -1928,9 +1929,7 @@ impl PullRequestDetailPage {
                             ),
                     )
                     .rounded_full()
-                    .when(compact, |el| {
-                        el.tooltip(crate::settings::widgets::text_tooltip(label))
-                    })
+                    .when(compact, |el| el.tip(label))
                     .on_click(cx.listener(move |page, _, _, cx| page.select_tab(tab, cx)))
                     .on_key_down(cx.listener(
                         move |page, event: &gpui::KeyDownEvent, window, cx| {
@@ -2410,7 +2409,7 @@ fn action(id: &'static str, label: &'static str, theme: &Theme) -> gpui::Statefu
                 .px_0()
                 .py_0()
                 .justify_center()
-                .tooltip(widgets::text_tooltip(label))
+                .tip(label)
         })
         .children(glyph.map(|glyph| {
             crate::icons::icon(glyph)

@@ -534,6 +534,12 @@ impl Workspace {
         ] {
             out[to] = row[from].clone();
         }
+        // How the computer last woke: from memory, or restarted from disk.
+        let wake = &config["rustLastWake"];
+        if wake["at"].is_i64() {
+            out["lastWake"] = json!({"fromMemory":wake["fromMemory"].as_bool(),
+                "at":wake["at"],"ms":wake["ms"].as_i64()});
+        }
         if let Some(operation) = config.get("rustDeleteOperation") {
             out["deletion"] = json!({"operationId":operation["id"],"phase":operation["phase"]});
         }

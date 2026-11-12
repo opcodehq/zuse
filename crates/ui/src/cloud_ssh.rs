@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 /// What a prepared host needs to be opened or copied.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct Prepared {
+pub struct Prepared {
     pub host: String,
     pub path: String,
 }
@@ -22,8 +22,33 @@ fn key_path() -> PathBuf {
     root().join("id_ed25519")
 }
 
-pub(super) fn host_alias(workspace: &str) -> String {
+pub fn host_alias(workspace: &str) -> String {
     format!("zuse-{workspace}")
+}
+
+/// The one-line known-hosts file for a workspace's computer.
+fn known_hosts(workspace: &str) -> PathBuf {
+    root().join("hosts").join(format!("{workspace}.known"))
+}
+
+/// Trust exactly the host key the computer reported over the app's own
+/// authenticated connection. Rewritten on every prepare, so a computer that
+/// is replaced keeps working without a "host key changed" warning. Blocking.
+pub fn pin_host_key(workspace: &str, host_key: &str) -> Result<(), String> {
+    let mut parts = host_key.split_whitespace();
+    let (Some(kind), Some(body), None) = (parts.next(), parts.next(), parts.next()) else {
+        return Err("The computer reported an invalid SSH host key.".into());
+    };
+    if !kind.starts_with("ssh-") && !kind.starts_with("ecdsa-") {
+        return Err("The computer reported an invalid SSH host key.".into());
+    }
+    let hosts = root().join("hosts");
+    private_dir(&hosts).map_err(|e| e.to_string())?;
+    private_write(
+        &known_hosts(workspace),
+        &format!("{} {kind} {body}\n", host_alias(workspace)),
+    )
+    .map_err(|e| e.to_string())
 }
 
 fn quote(value: &str) -> String {
@@ -52,7 +77,7 @@ fn private_write(path: &Path, contents: &str) -> std::io::Result<()> {
 }
 
 /// This device's public key, creating the pair on first use. Blocking.
-pub(super) fn ensure_key() -> Result<String, String> {
+pub fn ensure_key() -> Result<String, String> {
     private_dir(&root()).map_err(|e| e.to_string())?;
     let key = key_path();
     if !key.exists() {
@@ -72,9 +97,8 @@ pub(super) fn ensure_key() -> Result<String, String> {
 }
 
 /// The managed host entry for one workspace.
-pub(super) fn host_entry(workspace: &str, user: &str, proxy: &str) -> String {
+pub fn host_entry(workspace: &str, user: &str, proxy: &str) -> String {
     let host = host_alias(workspace);
-    let root = root();
     format!(
         "Host {host}\n\
          \x20 HostName {host}\n\
@@ -86,13 +110,13 @@ pub(super) fn host_entry(workspace: &str, user: &str, proxy: &str) -> String {
          \x20 UserKnownHostsFile {known}\n\
          \x20 ServerAliveInterval 30\n",
         key = key_path().display(),
-        known = root.join("known_hosts").display(),
+        known = known_hosts(workspace).display(),
     )
 }
 
 /// Write the host entry and make `~/.ssh/config` include the managed config,
 /// so `ssh zuse-<workspace>` works from any terminal or editor. Blocking.
-pub(super) fn install_host(workspace: &str, user: &str, ipc_port: u16) -> Result<(), String> {
+pub fn install_host(workspace: &str, user: &str, ipc_port: u16) -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let proxy = format!(
         "{} ssh-proxy --ipc-port {ipc_port}",
@@ -128,7 +152,7 @@ pub(super) fn install_host(workspace: &str, user: &str, ipc_port: u16) -> Result
 }
 
 /// The command a terminal runs: a login shell in the repository.
-pub(super) fn terminal_command(prepared: &Prepared) -> String {
+pub fn terminal_command(prepared: &Prepared) -> String {
     format!(
         "ssh -t {} {}",
         prepared.host,
@@ -140,7 +164,7 @@ pub(super) fn terminal_command(prepared: &Prepared) -> String {
 }
 
 /// Open the system terminal running `command`. Blocking.
-pub(super) fn open_terminal(command: &str) -> Result<(), String> {
+pub fn open_terminal(command: &str) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
         let script = format!(
@@ -184,7 +208,14 @@ mod tests {
             "  ProxyCommand '/Applications/Zuse.app/zuse' ssh-proxy --ipc-port 27654 %h\n"
         ));
         assert!(entry.contains("IdentitiesOnly yes"));
-        assert!(entry.contains("known_hosts"));
+        assert!(entry.contains("hosts/workspace_1.known\n"));
+    }
+
+    #[test]
+    fn pinned_host_keys_reject_anything_but_one_key() {
+        assert!(pin_host_key("w", "ssh-ed25519 AAAA\nzuse-other ssh-ed25519 BBBB").is_err());
+        assert!(pin_host_key("w", "not-a-key AAAA").is_err());
+        assert!(pin_host_key("w", "ssh-ed25519").is_err());
     }
 
     #[test]

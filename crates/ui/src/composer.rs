@@ -9,6 +9,7 @@
 
 use crate::localization::message as tr;
 use crate::settings::keybindings::Command;
+use crate::tooltip::TooltipExt as _;
 use zuse_i18n::messages as msg;
 mod add_menu;
 mod archive;
@@ -486,18 +487,7 @@ struct AppshotActionTooltip(SharedString);
 
 impl Render for AppshotActionTooltip {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = Theme::of(cx);
-        div()
-            .px(px(8.0))
-            .py(px(6.0))
-            .rounded(px(6.0))
-            .border_1()
-            .border_color(theme.border_strong)
-            .bg(theme.surface_raised)
-            .shadow_md()
-            .text_size(px(11.0))
-            .text_color(theme.text)
-            .child(self.0.clone())
+        crate::tooltip::chip(self.0.clone(), Theme::of(cx))
     }
 }
 
@@ -6665,6 +6655,8 @@ pub struct Composer {
     /// Whether the modifier overlay should currently reveal the queue hint.
     /// The shell owns modifier tracking and clears this on window deactivation.
     queue_shortcut_revealed: bool,
+    /// The selected chat's open PR `(chat, url)` and its auto-fix button.
+    pr_auto_fix: Option<(String, String, Entity<crate::pr_watch::PrWatchControl>)>,
     /// Interrupt/answer commands get their own slot: assigning `send_task`
     /// DROPPED an in-flight send future mid-upload — no banner, no cleanup,
     /// `sending` stuck true forever (2026-08-19 incident, "press Stop while
@@ -7131,6 +7123,51 @@ impl Composer {
         }
     }
 
+    /// The auto-fix button for the selected chat's open PR, kept for as long
+    /// as the chat and PR stay the same so its watch stream survives renders.
+    fn pr_auto_fix_button(&mut self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let open = {
+            let state = self.state.read(cx);
+            state
+                .selected_chat_row()
+                .filter(|_| !state.selected_chat_is_zot_coordinator())
+                .and_then(|chat| {
+                    let summary = state.change_request_for_chat(chat)?;
+                    (summary.state == zuse_protocol::ChangeRequestState::Open).then(|| {
+                        let target = (state.local_device_id.as_deref()
+                            != Some(chat.device_id.as_str()))
+                        .then(|| chat.device_id.clone());
+                        (chat.id.clone(), summary.url.clone(), target)
+                    })
+                })
+        };
+        let Some((chat, url, target)) = open else {
+            self.pr_auto_fix = None;
+            return None;
+        };
+        if !self
+            .pr_auto_fix
+            .as_ref()
+            .is_some_and(|(c, u, _)| *c == chat && *u == url)
+        {
+            let state = self.state.clone();
+            let control = cx.new(|cx| {
+                crate::pr_watch::PrWatchControl::button(
+                    state,
+                    chat.clone(),
+                    url.clone(),
+                    target,
+                    cx,
+                )
+            });
+            cx.observe(&control, |_, _, cx| cx.notify()).detach();
+            self.pr_auto_fix = Some((chat, url, control));
+        }
+        self.pr_auto_fix
+            .as_ref()
+            .map(|(.., control)| control.clone().into_any_element())
+    }
+
     pub(crate) fn set_queue_shortcut_revealed(&mut self, revealed: bool, cx: &mut Context<Self>) {
         if self.queue_shortcut_revealed != revealed {
             self.queue_shortcut_revealed = revealed;
@@ -7374,6 +7411,7 @@ impl Composer {
             tray: Default::default(),
             todo_scroll: gpui::ScrollHandle::new(),
             queue_shortcut_revealed: false,
+            pr_auto_fix: None,
             last_available_width: None,
             last_input_width: 0.0,
             flip_morph: None,
@@ -8153,7 +8191,7 @@ impl Composer {
                 .overflow_hidden()
                 .cursor_pointer()
                 .hover(|style| style.bg(crate::theme::ink(0.045)))
-                .tooltip(move |_, cx| {
+                .anchored_tooltip(crate::tooltip::Placement::Below, move |_, cx| {
                     cx.new(|_| AppshotActionTooltip(preview_label.clone()))
                         .into()
                 })
@@ -8271,7 +8309,7 @@ impl Composer {
                     .shadow_sm()
                     .opacity(0.0)
                     .group_hover(group, |style| style.opacity(1.0))
-                    .tooltip(move |_, cx| {
+                    .anchored_tooltip(crate::tooltip::Placement::Below, move |_, cx| {
                         cx.new(|_| AppshotActionTooltip(remove_label.clone()))
                             .into()
                     })
@@ -11110,7 +11148,7 @@ impl Composer {
                         .child(crate::loaders::mini_glyph_spinner(
                             "composer-worktree-progress-spinner",
                             1.5,
-                            theme.glyph,
+                            theme.loader_glyph(),
                             cx.entity_id(),
                             cx,
                         ))
@@ -11708,10 +11746,7 @@ impl Composer {
                                         .hover(|style| style.bg(theme.element_hover))
                                         .role(Role::Button)
                                         .aria_label(tr(cx, msg::chat::stash_delete))
-                                        .tooltip(crate::settings::widgets::text_tooltip(tr(
-                                            cx,
-                                            msg::chat::stash_delete,
-                                        )))
+                                        .tip(tr(cx, msg::chat::stash_delete))
                                         .on_click(cx.listener(move |this, _, _, cx| {
                                             cx.stop_propagation();
                                             this.delete_stashed_at(ix, cx);
@@ -12484,7 +12519,7 @@ impl Composer {
                     .justify_center()
                     .rounded(px(6.))
                     .cursor_pointer()
-                    .tooltip(crate::settings::widgets::text_tooltip("Set up voice input"))
+                    .tip("Set up voice input")
                     .on_click(|_, window, cx| window.dispatch_action(Box::new(SetupDictation), cx))
                     .child(
                         crate::icons::icon(crate::icons::DITHER_MIC)
@@ -12558,7 +12593,7 @@ impl Composer {
                 glass::accent(el, &theme, t, glow).hover(|style| style.opacity(0.85))
             })
             .focus_visible(|style| style.border_1().border_color(theme.accent))
-            .tooltip(crate::settings::widgets::text_tooltip(tooltip))
+            .tip(tooltip)
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| this.press_dictation(HoldSource::Pointer, cx)),
@@ -12932,7 +12967,7 @@ impl Composer {
                 .cursor_pointer()
                 .hover(|s| s.opacity(0.85))
                 .on_click(cx.listener(|this, _, _, cx| this.interrupt_selected(cx)))
-                .tooltip(crate::settings::widgets::text_tooltip("Stop"))
+                .tip("Stop")
                 .child(zuse_viewport::dither::fill_color(theme.text_muted, 7.0))
                 .child(div().size(px(10.0)).rounded(px(1.0)).bg(gpui::white()))
                 .into_any_element(),
@@ -12953,7 +12988,7 @@ impl Composer {
                     .when(!blocked, |el| {
                         el.on_click(cx.listener(|this, _, _, cx| this.on_submit(cx)))
                     })
-                    .tooltip(crate::settings::widgets::text_tooltip(
+                    .tip(
                         if mode == SendButtonMode::Queue
                             && crate::settings::direct_steer_enabled(cx)
                         {
@@ -12963,7 +12998,7 @@ impl Composer {
                         } else {
                             "Send message".into()
                         },
-                    ))
+                    )
                     .into_any_element()
             }
         }
@@ -13280,10 +13315,11 @@ impl Render for Composer {
         // its chips (one attached surface growing upward); in a thread they
         // form their own surface tucked behind the card's top edge.
         // The chat's pull request and diff size, above everything else.
+        let auto_fix = (!new_chat).then(|| self.pr_auto_fix_button(cx)).flatten();
         let chips = (!new_chat)
             .then(|| {
                 let theme = Theme::of(cx).clone();
-                crate::pull_request_card::composer_chips(self.state.read(cx), &theme, cx)
+                crate::pull_request_card::composer_chips(self.state.read(cx), &theme, auto_fix, cx)
             })
             .flatten();
         let container = container.when_some(chips, |el, chips| el.child(chips));
@@ -13514,11 +13550,11 @@ impl Render for Composer {
                 el.debug_selector(|| "dictation-dismiss".into())
             })
             .when(!self.add_menu_open, |el| {
-                el.tooltip(crate::settings::widgets::text_tooltip(if dictating {
+                el.tip(if dictating {
                     SharedString::from("Cancel dictation")
                 } else {
                     add_label.clone()
-                }))
+                })
             })
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(move |this, _, window, cx| {
@@ -13709,7 +13745,7 @@ impl Render for Composer {
             .on_hover(motion::hover_listener(plugins_hover_key.clone()))
             .role(Role::Button)
             .aria_label(tr(cx, msg::plugins::plugins_back))
-            .tooltip(crate::settings::widgets::text_tooltip("Plugins"))
+            .tip("Plugins")
             .opacity(beneath_voice)
             .on_click(cx.listener(|_, _, _, cx| {
                 cx.emit(ComposerEvent::WorkspaceCommand(WorkspaceCommand::Plugins));
@@ -13751,7 +13787,7 @@ impl Render for Composer {
             .aria_label(stash_label.clone())
             .aria_expanded(stash_open)
             .tab_index(0)
-            .tooltip(crate::settings::widgets::text_tooltip(stash_label))
+            .tip(stash_label)
             .hover(|style| style.bg(theme.muted_fill().opacity(0.6)))
             .focus_visible(|style| style.border_1().border_color(theme.accent))
             .on_click(cx.listener(|this, _, _, cx| this.toggle_stash_list(cx)))

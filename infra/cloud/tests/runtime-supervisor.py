@@ -304,4 +304,34 @@ class ConnectionReadinessTest(unittest.TestCase):
             with self.assertRaises(OSError):helper.rpc(Path(directory),{'version':1,'action':'ping'},connect_timeout=.05)
             self.assertLess(time.monotonic()-started,.5)
 
+class AgentWarmupTest(unittest.TestCase):
+    def test_boot_reads_only_the_recorded_agent_inside_harness_releases(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);releases=root/'releases';agent=releases/'release-1'/'codex'
+            agent.parent.mkdir(parents=True);agent.write_bytes(b'x'*(3<<20))
+            data=root/'data';data.mkdir()
+            self.assertIsNone(helper.warm_agent(data,releases),'no record yet: nothing to read')
+            (data/helper.AGENT_RECORD).write_text(str(agent))
+            reader=helper.warm_agent(data,releases);self.assertIsNotNone(reader)
+            self.assertEqual(reader.wait(5),0,'a separate reader process reads it through')
+            outside=root/'elsewhere';outside.write_bytes(b'secret')
+            (data/helper.AGENT_RECORD).write_text(str(outside))
+            self.assertIsNone(helper.warm_agent(data,releases),'paths outside harness releases are ignored')
+            (data/helper.AGENT_RECORD).write_text(str(agent.parent))
+            self.assertIsNone(helper.warm_agent(data,releases),'directories are ignored')
+            link=releases/'release-1'/'link';link.symlink_to(outside)
+            (data/helper.AGENT_RECORD).write_text(str(link))
+            self.assertIsNone(helper.warm_agent(data,releases),'symlinks leaving releases are ignored')
+            record=data/helper.AGENT_RECORD;record.unlink();os.mkfifo(record)
+            started=time.monotonic()
+            self.assertIsNone(helper.warm_agent(data,releases),'a FIFO record is ignored without blocking')
+            self.assertLess(time.monotonic()-started,1)
+            record.unlink();record.symlink_to(data/'elsewhere-record')
+            self.assertIsNone(helper.warm_agent(data,releases),'a linked record is not followed')
+            record.unlink();record.write_text(str(agent)+' '*5000)
+            self.assertIsNone(helper.warm_agent(data,releases),'an oversized record is ignored')
+            (releases/'loop-a').symlink_to(releases/'loop-b');(releases/'loop-b').symlink_to(releases/'loop-a')
+            record.write_text(str(releases/'loop-a'))
+            self.assertIsNone(helper.warm_agent(data,releases),'a symlink loop is ignored')
+
 if __name__=='__main__':unittest.main()

@@ -259,7 +259,7 @@ fn status_badge(status: crate::changes::FileStatus, theme: &Theme) -> gpui::Stat
         .rounded(px(4.0))
         .border_1()
         .border_color(color.opacity(0.85))
-        .tooltip(widgets::text_tooltip(label))
+        .tip(label)
         .child(mark)
 }
 

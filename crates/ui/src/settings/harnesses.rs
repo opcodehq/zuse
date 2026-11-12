@@ -20,6 +20,7 @@
 //! self-corrects from the RPC reply.
 
 use crate::localization::message as tr;
+use crate::tooltip::TooltipExt as _;
 use gpui::{
     AnyElement, Context, Entity, IntoElement, Render, SharedString, Task, Window, div, prelude::*,
     px,
@@ -1055,7 +1056,7 @@ impl HarnessesPage {
                         .gap(px(4.0))
                         .role(gpui::Role::Button)
                         .aria_label(label)
-                        .tooltip(widgets::text_tooltip(tooltip))
+                        .tip(tooltip)
                         .rounded(px(6.0))
                         .text_size(crate::typography::text_xs())
                         .font_weight(gpui::FontWeight::MEDIUM)
