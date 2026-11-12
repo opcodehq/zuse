@@ -169,6 +169,7 @@ impl PrWatchControl {
                 crate::icons::icon(crate::icons::PR_REPAIR)
                     .size(px(13.0))
                     .flex_none()
+                    .text_color(if fixing { gold } else { theme.text_muted })
                     .into_any_element()
             })
             .child(label)

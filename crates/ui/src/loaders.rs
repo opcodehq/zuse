@@ -487,7 +487,7 @@ pub fn retro_loader(
     size: f32,
     palette: crate::theme::GlyphPalette,
 ) -> AnyElement {
-    let cell_px = (size / 5.0).max(1.5).round_to_half();
+    let cell_px = (size / 4.0).max(1.5).round_to_half();
     div()
         .size(px(size))
         .flex_none()
