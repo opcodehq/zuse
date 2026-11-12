@@ -280,6 +280,8 @@ impl Identity {
                 "rust-rpc-v1".into(),
                 "rust-session-commands-v1".into(),
                 zuse_protocol::cloud_task_commands::CAPABILITY.into(),
+                zuse_protocol::cloud_task_commands::DIRECT_UPLOADS_CAPABILITY.into(),
+                zuse_protocol::cloud_task_commands::MESSAGE_ACCESS_MODE_CAPABILITY.into(),
                 "rust-organization-execution-v1".into(),
                 "rust-workload-secrets-v1".into(),
                 zuse_protocol::cloud_lifecycle::CAPABILITY.into(),

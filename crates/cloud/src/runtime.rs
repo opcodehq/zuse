@@ -819,7 +819,7 @@ impl RuntimeControl {
     ) -> Result<(Value, String), ApiError> {
         use zuse_protocol::cloud::CloudStoragePhase;
         if request.capabilities.as_ref().is_some_and(|caps| {
-            caps.len() > 10
+            caps.len() > 12
                 || caps.iter().any(|cap| {
                     !matches!(
                         cap.as_str(),
@@ -832,6 +832,8 @@ impl RuntimeControl {
                             | "rust-organization-execution-v1"
                             | "rust-computer-recreation-v1"
                             | zuse_protocol::cloud_task_commands::CAPABILITY
+                            | zuse_protocol::cloud_task_commands::DIRECT_UPLOADS_CAPABILITY
+                            | zuse_protocol::cloud_task_commands::MESSAGE_ACCESS_MODE_CAPABILITY
                             | zuse_cloud_runtime::project_cache::CAPABILITY
                     )
                 })
@@ -1628,6 +1630,23 @@ fn native_commands_supported(row: &Value) -> bool {
                         .iter()
                         .any(|cap| cap == zuse_protocol::cloud_task_commands::CAPABILITY))
         })
+}
+/// Whether the guest runtime on this computer advertised `capability` at its
+/// last bootstrap (or storage enrollment). A sleeping computer is judged by
+/// that last bootstrap: its image, and so its runtime, only changes when the
+/// computer is recreated. A computer that never stored any capabilities is
+/// treated as an old runtime, since a guest that predates a capability never
+/// advertised it either.
+pub(crate) fn runtime_capable(row: &Value, capability: &str) -> bool {
+    let config = &row["request_config"];
+    [
+        &config["runtimeBootstrapReceipt"]["capabilities"],
+        &config["rustStorageEnrollment"]["capabilities"],
+    ]
+    .into_iter()
+    .filter_map(Value::as_array)
+    .flatten()
+    .any(|cap| cap == capability)
 }
 fn native_commands_accepted(row: &Value) -> bool {
     native_commands_supported(row)
