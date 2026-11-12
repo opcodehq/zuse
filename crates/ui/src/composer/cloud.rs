@@ -1230,6 +1230,40 @@ mod cached_tests {
         drop(receive);
     }
     #[gpui::test]
+    fn a_cloud_task_opened_without_saved_settings_waits_for_them_before_send(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _entered = runtime.enter();
+        let (send, receive) = tokio::sync::mpsc::channel(1);
+        let (_replies, replies) = tokio::sync::mpsc::channel(1);
+        let controller =
+            crate::state::EngineHandle::from_test_client(zuse_rpc::RpcClient::new(send, replies));
+        let state = cx.new(|_| {
+            let mut state = crate::state::AppState::new();
+            state.apply_cloud_account(json!({"user":{"id":"owner"},"orgId":null}));
+            state.selected_chat = Some("session".into());
+            state
+        });
+        let composer = cx.new(|cx| Composer::new(state.clone(), cx));
+        composer.update(cx, |c, cx| {
+            let target = crate::state::CloudTarget {
+                controller,
+                subject: "owner".into(),
+                organization: None,
+                workspace: "task".into(),
+                initial_session: "session".into(),
+            };
+            // A sidebar row carries no agent or model.
+            c.set_cloud_task(target, json!({"workspaceId":"task"}), cx);
+            assert!(
+                c.send_blocked(cx),
+                "Send waits for the task's saved choices instead of failing"
+            );
+        });
+        drop(receive);
+    }
+    #[gpui::test]
     fn new_cloud_request_uses_selected_provider_and_its_model_before_dispatch(
         cx: &mut gpui::TestAppContext,
     ) {

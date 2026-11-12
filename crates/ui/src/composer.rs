@@ -9850,7 +9850,16 @@ impl Composer {
         // A cloud task sends with its own saved settings and wakes a sleeping
         // computer itself; the chat configuration is read from the computer's
         // engine, which a sleeping computer never answers.
-        if state.configuration_blocked() && !self.native_cloud_task() {
+        // Until its saved choices load, a cloud task cannot build a message.
+        if self.native_cloud_task() && self.pickers.read(cx).cloud_task_choice().is_none() {
+            return true;
+        }
+        // A cloud task needs no configuration read from its (perhaps sleeping)
+        // computer, but an access change still saving must land first, or the
+        // message could carry the previous mode.
+        if state.configuration_blocked()
+            && (!self.native_cloud_task() || state.configuration_write_unsettled())
+        {
             return true;
         }
         if state.review_comment_flush_pending(&self.current_key) {
