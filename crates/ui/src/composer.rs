@@ -54,7 +54,7 @@ use crate::state::{AppState, Indicator};
 use crate::theme::Theme;
 
 mod chip;
-mod cloud;
+pub(crate) mod cloud;
 mod editing;
 mod message_recall;
 pub use editing::StashedPrompt;
@@ -6630,6 +6630,9 @@ pub struct Composer {
     pub(crate) queue_edit_finishing: bool,
     pub(crate) queue_edit_task: Option<Task<()>>,
     pub(crate) queue_edit_renew_task: Option<Task<()>>,
+    /// A cloud chat's saved edit still sending its files to the computer; the
+    /// composer is free meanwhile (see [`Composer::save_cloud_queue_edit`]).
+    pub(crate) queue_edit_saving: Option<Task<()>>,
     /// Focus once on mount, navigation, or after opening/closing a queue edit.
     pub(crate) focus_pending: bool,
     dictation_hold: Option<DictationHold>,
@@ -7401,6 +7404,7 @@ impl Composer {
             queue_edit_finishing: false,
             queue_edit_task: None,
             queue_edit_renew_task: None,
+            queue_edit_saving: None,
             focus_pending: true,
             dictation_hold: None,
             queue_drag: None,
@@ -9867,7 +9871,7 @@ impl Composer {
 
     /// New chats need a runnable agent, but may target the device's home
     /// directory without a project. Existing chats carry their own run config.
-    fn send_blocked(&self, cx: &App) -> bool {
+    pub(crate) fn send_blocked(&self, cx: &App) -> bool {
         if self.pickers.read(cx).importing_chat(cx) {
             return true;
         }

@@ -241,6 +241,20 @@ fn queue_attachment_labels(text: &str, paths: &[String]) -> Vec<String> {
         .collect()
 }
 
+/// A cloud chat's edit being saved behind the composer: its lease and what
+/// the user wrote, so a failed save can bring it back.
+pub(crate) struct CloudQueueEdit {
+    id: String,
+    lease_id: String,
+    base_text_hash: Option<String>,
+    revision: Option<i64>,
+    chat_id: String,
+    host_device_id: String,
+    text: String,
+    files: Vec<crate::attachments::StagedAttachment>,
+    appshots: Vec<crate::appshots::CapturedAppshot>,
+}
+
 /// Names the attachments folded into the "+N" chip, so they stay discoverable.
 fn queue_hidden_attachments_label(labels: &[String], shown: usize) -> Option<String> {
     let hidden = labels.get(shown..).filter(|hidden| !hidden.is_empty())?;
@@ -1448,6 +1462,7 @@ impl Composer {
     pub(crate) fn begin_queue_edit(&mut self, id: String, cx: &mut Context<Self>) {
         if self.queue_edit_pending_id.is_some()
             || self.queue_edit_finishing
+            || self.queue_edit_saving.is_some()
             || self.editing_queued.is_some()
             || !self.can_edit_queue_in_composer()
         {
@@ -1691,6 +1706,8 @@ impl Composer {
         }
         if text.trim().is_empty() && self.staged().is_empty() && self.staged_appshots().is_empty() {
             self.finish_queue_edit("discard", None, cx);
+        } else if self.is_native_cloud() {
+            self.save_cloud_queue_edit(text, cx);
         } else {
             self.finish_queue_edit("commit", Some(text), cx);
         }
@@ -1842,6 +1859,171 @@ impl Composer {
             }).ok();
         });
         self.queue_edit_task = Some(task);
+    }
+
+    /// Save a cloud chat's edit. Its files go straight to the computer, never
+    /// to server storage, which can mean waking it first; so the edit leaves
+    /// the composer at once (the row shows the new text, the draft returns and
+    /// Send stays free) and the lease keeps renewing behind it. If the files
+    /// or the save fail, the edit comes back with its text and files and the
+    /// error, under the same lease.
+    pub(crate) fn save_cloud_queue_edit(&mut self, text: String, cx: &mut Context<Self>) {
+        if self.queue_edit_finishing || self.queue_edit_saving.is_some() {
+            return;
+        }
+        let (Some(id), Some(lease_id), Some(chat_id), Some(host_device_id)) = (
+            self.editing_queued.clone(),
+            self.queue_edit_lease_id.clone(),
+            self.queue_edit_chat_id.clone(),
+            self.queue_edit_host_device_id.clone(),
+        ) else {
+            self.failure = Some("The edit lease was lost; your text is still in the editor".into());
+            cx.notify();
+            return;
+        };
+        let lease = CloudQueueEdit {
+            id: id.clone(),
+            lease_id: lease_id.clone(),
+            base_text_hash: self.queue_edit_base_text_hash.clone(),
+            revision: self.queue_edit_revision,
+            chat_id: chat_id.clone(),
+            host_device_id: host_device_id.clone(),
+            text: text.clone(),
+            files: self.staged().to_vec(),
+            appshots: self.staged_appshots().to_vec(),
+        };
+        let mut params = serde_json::json!({
+            "chatId": chat_id,
+            "id": id,
+            "leaseId": lease_id,
+            "action": "commit",
+            "text": text,
+            "expectedTextHash": lease.base_text_hash,
+            "revision": lease.revision,
+            "targetDeviceId": host_device_id,
+        });
+        let mut staged = lease.files.clone();
+        staged.extend(lease.appshots.iter().map(|shot| shot.screenshot.clone()));
+        let appshots = lease.appshots.clone();
+        // The row shows the edit now; the queue's next update confirms it.
+        if !text.trim().is_empty() {
+            self.state.update(cx, |state, _| {
+                if let Some(row) = state.queue.iter_mut().find(|row| row.id == id) {
+                    row.text = text.clone();
+                }
+            });
+        }
+        let renewal = self.queue_edit_renew_task.take();
+        self.failure = None;
+        self.clear_queue_edit_local(cx);
+        self.queue_edit_saving = Some(cx.spawn(async move |this, cx| {
+            // Renewal keeps the row out of delivery while the files travel.
+            let renewal = renewal;
+            let result: Result<serde_json::Value, String> = async {
+                let engine = match crate::composer::cloud::computer_engine(&this, cx).await {
+                    Ok(engine) => engine,
+                    Err(crate::composer::cloud::ComputerWait::Gone) => {
+                        return Err(String::new());
+                    }
+                    Err(crate::composer::cloud::ComputerWait::TimedOut) => {
+                        return Err(crate::composer::cloud::COMPUTER_TIMEOUT.into());
+                    }
+                };
+                let paths = crate::composer::cloud::upload_to_computer(
+                    &engine,
+                    cx.background_executor(),
+                    &staged,
+                )
+                .await?;
+                let appshot_paths = staged
+                    .iter()
+                    .zip(&paths)
+                    .map(|(attachment, path)| (attachment.id.clone(), path.clone()))
+                    .collect();
+                params["text"] = crate::appshots::with_appshots(
+                    params["text"].as_str().unwrap_or_default(),
+                    &appshots,
+                    &appshot_paths,
+                )
+                .into();
+                if params["text"]
+                    .as_str()
+                    .is_some_and(|text| text.trim().is_empty())
+                    && !paths.is_empty()
+                {
+                    params["text"] = crate::attachments::attachment_only_text(&paths).into();
+                }
+                params["attachments"] = serde_json::json!(paths);
+                crate::attachments::call_with_timeout(
+                    &engine,
+                    cx.background_executor(),
+                    methods::FINISH_QUEUED_MESSAGE_EDIT,
+                    params,
+                    std::time::Duration::from_secs(30),
+                )
+                .await
+                .map_err(|err| format!("Couldn't save the edit: {err}"))
+            }
+            .await;
+            let _ = this.update(cx, |composer, cx| {
+                composer.queue_edit_saving = None;
+                let error = match result {
+                    Ok(reply) => match reply.get("outcome").and_then(|v| v.as_str()) {
+                        Some("committed") => {
+                            cx.notify();
+                            return;
+                        }
+                        Some("conflict") => {
+                            "This message changed on another device; your edit was kept locally"
+                                .to_owned()
+                        }
+                        Some("missing") => {
+                            "The queued message was removed; your edit was kept locally".to_owned()
+                        }
+                        _ => "The edit lease changed; your text is still in the editor".to_owned(),
+                    },
+                    Err(error) if error.is_empty() => return,
+                    Err(error) => error,
+                };
+                tracing::warn!(error = %error, "cloud queue edit save failed");
+                composer.restore_cloud_queue_edit(lease, renewal, error, cx);
+            });
+        }));
+    }
+
+    /// Bring a cloud edit that couldn't be saved back into the composer, with
+    /// its text, files and lease, and say why.
+    pub(crate) fn restore_cloud_queue_edit(
+        &mut self,
+        edit: CloudQueueEdit,
+        renewal: Option<gpui::Task<()>>,
+        error: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.failure = Some(error.into());
+        if self.editing_queued.is_some()
+            || self.queue_edit_pending_id.is_some()
+            || self.state.read(cx).selected_chat.as_deref() != Some(edit.chat_id.as_str())
+        {
+            cx.notify();
+            return;
+        }
+        self.editing_queued = Some(edit.id);
+        self.queue_edit_lease_id = Some(edit.lease_id);
+        self.queue_edit_base_text_hash = edit.base_text_hash;
+        self.queue_edit_revision = edit.revision;
+        self.queue_edit_chat_id = Some(edit.chat_id);
+        self.queue_edit_host_device_id = Some(edit.host_device_id);
+        self.swap_in_queued_draft(edit.text, edit.files, edit.appshots, cx);
+        match renewal {
+            Some(task) => self.queue_edit_renew_task = Some(task),
+            None => {
+                if let Some(engine) = self.state.read(cx).engine().cloned() {
+                    self.start_queue_edit_renewal(engine, cx);
+                }
+            }
+        }
+        cx.notify();
     }
 
     fn start_queue_edit_renewal(
@@ -2596,6 +2778,292 @@ mod appshot_edit_tests {
             assert_eq!(composer.staged_appshots().len(), 2);
             assert_eq!(composer.staged_appshots()[1].id, "during-save");
             assert!(composer.editing_queued.is_none());
+        });
+    }
+}
+
+#[cfg(test)]
+mod cloud_edit_tests {
+    use super::*;
+    use crate::attachments::StagedAttachment;
+    use gpui::{AppContext, Entity, TestAppContext};
+    use serde_json::{Value, json};
+
+    /// A cloud chat whose computer is connected, with a queued row being
+    /// edited in the composer over an earlier draft.
+    fn editing_cloud_row(
+        cx: &mut TestAppContext,
+    ) -> (
+        Entity<Composer>,
+        Entity<crate::state::AppState>,
+        tokio::sync::mpsc::Receiver<String>,
+        tokio::sync::mpsc::Sender<String>,
+    ) {
+        let (out, requests) = tokio::sync::mpsc::channel::<String>(64);
+        let (replies, inbound) = tokio::sync::mpsc::channel::<String>(64);
+        let (controller_out, _) = tokio::sync::mpsc::channel::<String>(1);
+        let (_, controller_in) = tokio::sync::mpsc::channel::<String>(1);
+        let controller = crate::state::EngineHandle::from_test_client(zuse_rpc::RpcClient::new(
+            controller_out,
+            controller_in,
+        ));
+        let state = cx.new(|_| {
+            let mut state = crate::state::AppState::new();
+            state.set_test_engine(crate::state::EngineHandle::from_test_client(
+                zuse_rpc::RpcClient::new(out, inbound),
+            ));
+            state.connection = crate::state::ConnectionStatus::Ready;
+            state.selected_chat = Some("session".into());
+            state.queue = vec![
+                serde_json::from_value(json!({"id":"row","text":"old text",
+                    "issuedBy":"cloud:task","issuedAt":1}))
+                .unwrap(),
+            ];
+            state
+        });
+        let composer = cx.new(|cx| Composer::new(state.clone(), cx));
+        composer.update(cx, |c, cx| {
+            c.set_cloud_task(
+                crate::state::CloudTarget {
+                    controller,
+                    subject: "owner".into(),
+                    organization: None,
+                    workspace: "task".into(),
+                    initial_session: "session".into(),
+                },
+                json!({"agent":"codex","model":"gpt-6.1-sol","sandbox":"workspace-write"}),
+                cx,
+            );
+            c.input
+                .update(cx, |input, cx| input.set_text("my own draft", cx));
+            c.editing_queued = Some("row".into());
+            c.queue_edit_lease_id = Some("lease".into());
+            c.queue_edit_base_text_hash = Some("hash".into());
+            c.queue_edit_revision = Some(3);
+            c.queue_edit_chat_id = Some("session".into());
+            c.queue_edit_host_device_id = Some("cloud:task".into());
+            c.swap_in_queued_draft("old text".into(), Vec::new(), Vec::new(), cx);
+            c.input
+                .update(cx, |input, cx| input.set_text("new text", cx));
+            let key = c.current_key.clone();
+            c.attachments
+                .entry(key)
+                .or_default()
+                .push(StagedAttachment::from_file(
+                    "notes.txt",
+                    b"edited bytes".to_vec(),
+                ));
+        });
+        (composer, state, requests, replies)
+    }
+
+    /// Answer the computer's calls until nothing new arrives; return every
+    /// request seen. `commit` answers an upload commit.
+    fn serve(
+        runtime: &tokio::runtime::Runtime,
+        cx: &mut TestAppContext,
+        requests: &mut tokio::sync::mpsc::Receiver<String>,
+        replies: &tokio::sync::mpsc::Sender<String>,
+        commit: impl Fn(&zuse_rpc::ClientFrame) -> Value,
+    ) -> Vec<zuse_rpc::ClientFrame> {
+        let mut seen = Vec::new();
+        let mut idle = 0;
+        while idle < 20 {
+            cx.run_until_parked();
+            let mut any = false;
+            while let Ok(line) = requests.try_recv() {
+                any = true;
+                let frame: zuse_rpc::ClientFrame = serde_json::from_str(&line).unwrap();
+                let reply = match frame.method.as_deref() {
+                    Some(methods::UPLOAD_CHUNK) => json!({"id":frame.id,"ok":{}}),
+                    Some(methods::UPLOAD_COMMIT) => commit(&frame),
+                    Some(methods::FINISH_QUEUED_MESSAGE_EDIT) => {
+                        json!({"id":frame.id,"ok":{"outcome":"committed"}})
+                    }
+                    _ => json!({"id":frame.id,"err":"unexpected"}),
+                };
+                replies.try_send(reply.to_string()).unwrap();
+                seen.push(frame);
+            }
+            idle = if any { 0 } else { idle + 1 };
+            runtime.block_on(tokio::time::sleep(std::time::Duration::from_millis(5)));
+        }
+        seen
+    }
+
+    #[gpui::test]
+    fn a_cloud_queue_edit_leaves_at_once_and_sends_its_files_to_the_computer(
+        cx: &mut TestAppContext,
+    ) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _entered = runtime.enter();
+        let (composer, state, mut requests, replies) = editing_cloud_row(cx);
+        composer.update(cx, |c, cx| {
+            assert!(c.commit_queue_edit(cx));
+            // The edit leaves the composer at once; the earlier draft returns
+            // and Send stays free while the file travels.
+            assert!(c.editing_queued.is_none());
+            assert!(!c.queue_edit_finishing);
+            assert!(c.queue_edit_saving.is_some());
+            assert_eq!(c.input.read(cx).text(), "my own draft");
+            assert!(c.staged().is_empty());
+            assert!(!c.send_blocked(cx));
+            assert!(!c.input.read(cx).read_only);
+            assert_eq!(state.read(cx).queue[0].text, "new text");
+        });
+        let seen = serve(
+            &runtime,
+            cx,
+            &mut requests,
+            &replies,
+            |frame| json!({"id":frame.id,"ok":{"path":"/home/zuse/.zuse-data/uploads/abcd1234-notes.txt"}}),
+        );
+        let uploads: Vec<_> = seen
+            .iter()
+            .filter(|f| {
+                matches!(
+                    f.method.as_deref(),
+                    Some(methods::UPLOAD_CHUNK | methods::UPLOAD_COMMIT)
+                )
+            })
+            .collect();
+        assert!(uploads.len() >= 2);
+        for upload in &uploads {
+            assert_eq!(upload.params["computer"], true, "files go to the computer");
+            assert!(upload.params.get("targetDeviceId").is_none());
+        }
+        assert!(
+            seen.iter()
+                .all(|f| f.method.as_deref() != Some(methods::CLOUD_TASK_ASSET)),
+            "nothing goes to server asset storage"
+        );
+        let finish = seen
+            .iter()
+            .find(|f| f.method.as_deref() == Some(methods::FINISH_QUEUED_MESSAGE_EDIT))
+            .expect("the edit is saved after its file lands");
+        assert_eq!(finish.params["action"], "commit");
+        assert_eq!(finish.params["leaseId"], "lease");
+        assert_eq!(finish.params["revision"], 3);
+        assert_eq!(finish.params["text"], "new text");
+        assert_eq!(
+            finish.params["attachments"],
+            json!(["/home/zuse/.zuse-data/uploads/abcd1234-notes.txt"])
+        );
+        composer.update(cx, |c, _| {
+            assert!(c.queue_edit_saving.is_none());
+            assert!(c.editing_queued.is_none());
+            assert!(c.failure.is_none());
+        });
+    }
+
+    #[gpui::test]
+    fn a_cloud_queue_edit_whose_file_fails_comes_back_with_its_text_files_and_lease(
+        cx: &mut TestAppContext,
+    ) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _entered = runtime.enter();
+        let (composer, _state, mut requests, replies) = editing_cloud_row(cx);
+        composer.update(cx, |c, cx| assert!(c.commit_queue_edit(cx)));
+        let seen = serve(
+            &runtime,
+            cx,
+            &mut requests,
+            &replies,
+            |frame| json!({"id":frame.id,"err":"disk full"}),
+        );
+        assert!(
+            seen.iter()
+                .all(|f| f.method.as_deref() != Some(methods::FINISH_QUEUED_MESSAGE_EDIT)),
+            "an edit whose file didn't land isn't saved"
+        );
+        composer.update(cx, |c, cx| {
+            assert!(c.queue_edit_saving.is_none());
+            assert_eq!(c.editing_queued.as_deref(), Some("row"));
+            assert_eq!(c.queue_edit_lease_id.as_deref(), Some("lease"));
+            assert_eq!(c.queue_edit_revision, Some(3));
+            assert_eq!(c.input.read(cx).text(), "new text");
+            assert_eq!(c.staged().len(), 1);
+            assert_eq!(c.staged()[0].name, "notes.txt");
+            let failure = c.failure.as_deref().unwrap();
+            assert!(failure.contains("couldn't reach the computer"), "{failure}");
+            assert!(failure.contains("disk full"), "{failure}");
+            // The earlier draft waits behind the edit again.
+            assert_eq!(c.queue_edit_draft.as_ref().unwrap().0, "my own draft");
+            // Save again works: nothing is left disabled.
+            assert!(!c.queue_edit_finishing);
+            assert!(!c.input.read(cx).read_only);
+        });
+    }
+
+    #[gpui::test]
+    fn a_cloud_queue_edit_wakes_a_sleeping_computer_before_its_files_upload(
+        cx: &mut TestAppContext,
+    ) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _entered = runtime.enter();
+        let (composer, state, mut requests, _replies) = editing_cloud_row(cx);
+        let wakes = std::rc::Rc::new(std::cell::Cell::new(0));
+        let woke = wakes.clone();
+        let _subscription = cx.update(|cx| {
+            cx.subscribe(&composer, move |_, event, _| {
+                if matches!(event, crate::composer::ComposerEvent::CloudWakeRequested) {
+                    woke.set(woke.get() + 1);
+                }
+            })
+        });
+        // The computer went to sleep during the edit.
+        state.update(cx, |state, _| {
+            state.connection = crate::state::ConnectionStatus::Connecting
+        });
+        composer.update(cx, |c, cx| {
+            assert!(c.commit_queue_edit(cx));
+            assert!(c.editing_queued.is_none());
+            assert_eq!(c.input.read(cx).text(), "my own draft");
+        });
+        cx.run_until_parked();
+        assert_eq!(wakes.get(), 1);
+        assert!(
+            requests.try_recv().is_err(),
+            "nothing uploads before it wakes"
+        );
+        composer.update(cx, |c, cx| {
+            // A save that times out brings the edit back, as any failure does.
+            c.queue_edit_saving = None;
+            let edit = CloudQueueEdit {
+                id: "row".into(),
+                lease_id: "lease".into(),
+                base_text_hash: Some("hash".into()),
+                revision: Some(3),
+                chat_id: "session".into(),
+                host_device_id: "cloud:task".into(),
+                text: "new text".into(),
+                files: vec![StagedAttachment::from_file("notes.txt", b"x".to_vec())],
+                appshots: Vec::new(),
+            };
+            c.restore_cloud_queue_edit(
+                edit,
+                None,
+                crate::composer::cloud::COMPUTER_TIMEOUT.into(),
+                cx,
+            );
+            assert_eq!(c.editing_queued.as_deref(), Some("row"));
+            assert_eq!(c.input.read(cx).text(), "new text");
+            assert_eq!(c.staged().len(), 1);
+            assert!(
+                c.failure
+                    .as_deref()
+                    .unwrap()
+                    .contains("didn't start in time")
+            );
         });
     }
 }

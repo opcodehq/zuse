@@ -347,6 +347,7 @@ impl Shared {
         let target = self.target.clone();
         let events = self.events.clone();
         self.picker = Some(cx.spawn(async move |this, cx| {
+            let executor = cx.background_executor().clone();
             let stage = cx
                 .background_executor()
                 .spawn(async move {
@@ -360,7 +361,7 @@ impl Shared {
                 })
                 .await;
             let result = match stage {
-                Ok(files) => upload_files(&target, &frame, &events, files).await,
+                Ok(files) => upload_files(&target, &executor, &frame, &events, files).await,
                 Err(error) => Err(error),
             };
             if let Err(error) = result {
@@ -391,56 +392,153 @@ fn decorate(source: &Value, mut value: Value) -> Value {
     }
     value
 }
+/// Files picked for a computer go straight to it, never to server storage:
+/// it wakes if asleep, and the upload waits up to 180 s for its connection,
+/// then sends two files at a time. Files for a chat that has no computer yet
+/// stage on this device for its first message.
 async fn upload_files(
     target: &CloudTarget,
+    executor: &gpui::BackgroundExecutor,
     frame: &Value,
     events: &mpsc::UnboundedSender<Value>,
     files: Vec<crate::attachments::StagedAttachment>,
 ) -> Result<(), String> {
-    use base64::{Engine as _, engine::general_purpose::STANDARD};
     let _ = events.unbounded_send(decorate(
         frame,
         json!({"uploading":files.len(),"generation":frame["generation"]}),
     ));
-    for file in files {
+    for file in &files {
         if file.bytes().is_empty() || file.bytes().len() > zuse_protocol::cloud_assets::MAX_BYTES {
-            return Err("Cloud attachments must contain at most20MB.".into());
+            return Err("Cloud attachments must be non-empty and at most 20 MB.".into());
         }
-        let workspace = frame["cloudWorkspaceId"].as_str();
-        for (seq, part) in file
-            .bytes()
-            .chunks(zuse_protocol::cloud_assets::CHUNK_BYTES)
-            .enumerate()
-        {
-            let params = json!({"uploadId":file.id,"seq":seq,"data":STANDARD.encode(part)});
-            if let Some(workspace) = workspace {
-                target.controller.client().call(methods::CLOUD_TASK_ASSET,json!({"workspaceId":workspace,"expectedAccountId":target.subject,"expectedOrganizationId":target.organization,"method":methods::UPLOAD_CHUNK,"params":params})).await.map_err(|e|e.to_string())?;
-            } else {
-                target
-                    .controller
-                    .client()
-                    .call(methods::UPLOAD_CHUNK, params)
+    }
+    let attached = |file: &crate::attachments::StagedAttachment, path: String| {
+        let _ = events.unbounded_send(decorate(
+            frame,
+            json!({"attachment":{"path":path,"name":file.name,"fileName":file.name,"uploadId":file.id},"generation":frame["generation"]}),
+        ));
+    };
+    let Some(workspace) = frame["cloudWorkspaceId"].as_str() else {
+        for file in &files {
+            let path = crate::attachments::upload_attachment(
+                &target.controller,
+                executor,
+                None,
+                &file.id,
+                file,
+                None,
+            )
+            .await?;
+            attached(file, path);
+        }
+        return Ok(());
+    };
+    // Holding the environment keeps the computer's connection open while the
+    // files upload.
+    let _environment = computer_ready(target, workspace, executor).await?;
+    let call = |method: &'static str, params: Value, timeout: std::time::Duration| {
+        computer_call(target, workspace, executor, method, params, timeout).boxed_local()
+    };
+    use futures::{FutureExt as _, TryStreamExt as _};
+    let mut uploads = futures::stream::iter(files.iter())
+        .map(|file| {
+            let call = &call;
+            async move {
+                crate::attachments::upload_with(call, executor, &file.id, file, None)
                     .await
-                    .map_err(|e| e.to_string())?;
+                    .map(|path| (file, path))
             }
-        }
-        let params = json!({"uploadId":file.id,"fileName":file.name});
-        let receipt = if let Some(workspace) = workspace {
-            target.controller.client().call(methods::CLOUD_TASK_ASSET,json!({"workspaceId":workspace,"expectedAccountId":target.subject,"expectedOrganizationId":target.organization,"method":methods::UPLOAD_COMMIT,"params":params})).await.map_err(|e|e.to_string())?["data"].clone()
-        } else {
-            target
-                .controller
-                .client()
-                .call(methods::UPLOAD_COMMIT, params)
-                .await
-                .map_err(|e| e.to_string())?
-        };
-        let path = receipt["path"]
-            .as_str()
-            .ok_or_else(|| "Upload ended without a committed attachment.".to_owned())?;
-        let _=events.unbounded_send(decorate(frame,json!({"attachment":{"path":path,"name":file.name,"fileName":file.name,"uploadId":file.id},"generation":frame["generation"]})));
+        })
+        .buffered(2);
+    while let Some((file, path)) = uploads
+        .try_next()
+        .await
+        .map_err(|error| format!("The files couldn't reach the computer: {error}"))?
+    {
+        attached(file, path);
     }
     Ok(())
+}
+/// How long picked files wait for their computer to connect.
+const COMPUTER_WAIT: std::time::Duration = std::time::Duration::from_secs(180);
+/// Wake the computer if it sleeps and wait for its connection. The returned
+/// subscription keeps the connection open while held.
+async fn computer_ready(
+    target: &CloudTarget,
+    workspace: &str,
+    executor: &gpui::BackgroundExecutor,
+) -> Result<zuse_rpc::RpcSubscription, String> {
+    let mut status = target
+        .controller
+        .client()
+        .subscribe_scoped(
+            methods::CLOUD_ENVIRONMENT,
+            json!({"workspaceId":workspace,"expectedAccountId":target.subject,
+                "expectedOrganizationId":target.organization,"interactiveResume":true}),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    let ready = async {
+        while let Some(value) = status.recv().await {
+            if value["state"] == "ready" {
+                return Ok(());
+            }
+        }
+        Err("The computer's connection closed before the files could upload.".to_owned())
+    };
+    let timer = executor.timer(COMPUTER_WAIT);
+    let outcome = {
+        futures::pin_mut!(ready);
+        match futures::future::select(ready, timer).await {
+            futures::future::Either::Left((result, _)) => result,
+            futures::future::Either::Right(_) => Err(
+                "The computer didn't start in time to receive the files. Attach them again to retry."
+                    .into(),
+            ),
+        }
+    };
+    outcome.map(|()| status)
+}
+/// One upload call to the computer itself, through its connection.
+async fn computer_call(
+    target: &CloudTarget,
+    workspace: &str,
+    executor: &gpui::BackgroundExecutor,
+    method: &'static str,
+    mut params: Value,
+    timeout: std::time::Duration,
+) -> Result<Value, String> {
+    params["computer"] = json!(true);
+    let call = async {
+        let mut reply = target
+            .controller
+            .client()
+            .subscribe_scoped(
+                methods::CLOUD_RPC,
+                json!({"workspaceId":workspace,"expectedAccountId":target.subject,
+                    "expectedOrganizationId":target.organization,"requestId":0,
+                    "method":method,"params":params}),
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+        let frame = reply
+            .recv()
+            .await
+            .ok_or_else(|| "The computer ended the upload without a reply.".to_owned())?;
+        if let Some(error) = frame["err"].as_str() {
+            return Err(error.to_owned());
+        }
+        frame
+            .get("ok")
+            .cloned()
+            .ok_or_else(|| "The computer ended the upload without a reply.".to_owned())
+    };
+    let timer = executor.timer(timeout);
+    futures::pin_mut!(call);
+    match futures::future::select(call, timer).await {
+        futures::future::Either::Left((result, _)) => result,
+        futures::future::Either::Right(_) => Err(format!("{method} timed out")),
+    }
 }
 impl Render for Shared {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -625,4 +723,165 @@ pub(crate) fn fixture(
     )
     .unwrap()
     .into()
+}
+
+#[cfg(test)]
+mod upload_tests {
+    use super::*;
+    use crate::attachments::StagedAttachment;
+
+    fn target(client: zuse_rpc::RpcClient) -> CloudTarget {
+        CloudTarget {
+            controller: crate::state::EngineHandle::from_test_client(client),
+            subject: "owner".into(),
+            organization: None,
+            workspace: "project:p".into(),
+            initial_session: String::new(),
+        }
+    }
+
+    /// Answer the controller until nothing new arrives: the computer's
+    /// environment turns ready after `wake` updates, and upload calls reply
+    /// through its connection.
+    fn serve(
+        runtime: &tokio::runtime::Runtime,
+        cx: &mut gpui::TestAppContext,
+        requests: &mut tokio::sync::mpsc::Receiver<String>,
+        replies: &tokio::sync::mpsc::Sender<String>,
+        fail_commit: bool,
+    ) -> Vec<zuse_rpc::ClientFrame> {
+        let mut seen = Vec::new();
+        let mut idle = 0;
+        while idle < 20 {
+            cx.run_until_parked();
+            let mut any = false;
+            while let Ok(line) = requests.try_recv() {
+                any = true;
+                let frame: zuse_rpc::ClientFrame = serde_json::from_str(&line).unwrap();
+                let reply: Vec<Value> = match frame.method.as_deref() {
+                    Some(methods::CLOUD_ENVIRONMENT) => vec![
+                        json!({"id":frame.id,"item":{"state":"connecting","message":"Waking…"}}),
+                        json!({"id":frame.id,"item":{"state":"ready","epoch":1}}),
+                    ],
+                    Some(methods::CLOUD_RPC) => {
+                        let inner = match frame.params["method"].as_str() {
+                            Some(methods::UPLOAD_COMMIT) if fail_commit => {
+                                json!({"id":0,"err":"no space left"})
+                            }
+                            Some(methods::UPLOAD_COMMIT) => json!({"id":0,"ok":{"path":format!(
+                                "/home/zuse/.zuse-data/uploads/{}-{}",
+                                &frame.params["params"]["uploadId"].as_str().unwrap()[..8],
+                                frame.params["params"]["fileName"].as_str().unwrap())}}),
+                            _ => json!({"id":0,"ok":{}}),
+                        };
+                        vec![
+                            json!({"id":frame.id,"item":inner}),
+                            json!({"id":frame.id,"done":true}),
+                        ]
+                    }
+                    _ => vec![json!({"id":frame.id,"err":"unexpected"})],
+                };
+                for reply in reply {
+                    replies.try_send(reply.to_string()).unwrap();
+                }
+                seen.push(frame);
+            }
+            idle = if any { 0 } else { idle + 1 };
+            runtime.block_on(tokio::time::sleep(std::time::Duration::from_millis(5)));
+        }
+        seen
+    }
+
+    fn run(
+        cx: &mut gpui::TestAppContext,
+        fail_commit: bool,
+    ) -> (Vec<zuse_rpc::ClientFrame>, Vec<Value>, Result<(), String>) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _entered = runtime.enter();
+        let (out, mut requests) = tokio::sync::mpsc::channel::<String>(64);
+        let (replies, inbound) = tokio::sync::mpsc::channel::<String>(64);
+        let target = target(zuse_rpc::RpcClient::new(out, inbound));
+        let (events, mut delivered) = mpsc::unbounded();
+        let frame = json!({"ui":"pickAttachments","cloudWorkspaceId":"task","generation":4,
+            "cloudEpoch":2,"cloudViewport":"view"});
+        let files = vec![
+            StagedAttachment::from_file("a.txt", b"first".to_vec()),
+            StagedAttachment::from_file("b.txt", b"second".to_vec()),
+        ];
+        let result = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let done = result.clone();
+        cx.spawn(async move |cx| {
+            let executor = cx.background_executor().clone();
+            *done.borrow_mut() =
+                Some(upload_files(&target, &executor, &frame, &events, files).await);
+        })
+        .detach();
+        let seen = serve(&runtime, cx, &mut requests, &replies, fail_commit);
+        let mut sent = Vec::new();
+        while let Ok(event) = delivered.try_recv() {
+            sent.push(event);
+        }
+        let result = result.borrow_mut().take().expect("the upload finished");
+        (seen, sent, result)
+    }
+
+    #[gpui::test]
+    fn files_picked_for_a_computer_wake_it_and_go_straight_to_it(cx: &mut gpui::TestAppContext) {
+        let (seen, sent, result) = run(cx, false);
+        assert_eq!(result, Ok(()));
+        let environment = seen
+            .iter()
+            .position(|f| f.method.as_deref() == Some(methods::CLOUD_ENVIRONMENT))
+            .expect("the upload asks for the computer");
+        assert_eq!(seen[environment].params["interactiveResume"], true);
+        assert_eq!(seen[environment].params["workspaceId"], "task");
+        let uploads: Vec<_> = seen
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| f.method.as_deref() == Some(methods::CLOUD_RPC))
+            .collect();
+        assert_eq!(uploads.len(), 4, "a chunk and a commit per file");
+        for (at, upload) in &uploads {
+            assert!(
+                *at > environment,
+                "nothing uploads before the computer is ready"
+            );
+            assert_eq!(upload.params["workspaceId"], "task");
+            assert_eq!(upload.params["expectedAccountId"], "owner");
+            assert_eq!(upload.params["params"]["computer"], true);
+        }
+        assert!(
+            seen.iter().all(|f| !matches!(
+                f.method.as_deref(),
+                Some(methods::CLOUD_TASK_ASSET | methods::UPLOAD_CHUNK | methods::UPLOAD_COMMIT)
+            )),
+            "nothing goes to server asset storage"
+        );
+        assert_eq!(sent[0]["uploading"], 2);
+        let attached: Vec<_> = sent
+            .iter()
+            .filter_map(|e| e["attachment"]["path"].as_str())
+            .collect();
+        assert_eq!(attached.len(), 2);
+        assert!(attached[0].ends_with("-a.txt") && attached[1].ends_with("-b.txt"));
+        assert!(
+            attached
+                .iter()
+                .all(|p| p.starts_with("/home/zuse/.zuse-data/uploads/"))
+        );
+        assert!(sent.iter().all(|e| e["generation"] == 4 && e["epoch"] == 2));
+        assert!(sent.iter().all(|e| e["cloudViewport"] == "view"));
+    }
+
+    #[gpui::test]
+    fn a_file_that_cant_reach_the_computer_says_why(cx: &mut gpui::TestAppContext) {
+        let (_, sent, result) = run(cx, true);
+        let error = result.unwrap_err();
+        assert!(error.contains("couldn't reach the computer"), "{error}");
+        assert!(error.contains("no space left"), "{error}");
+        assert!(sent.iter().all(|e| e["attachment"]["path"].is_null()));
+    }
 }

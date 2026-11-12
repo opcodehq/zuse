@@ -113,6 +113,24 @@ pub fn is_command_method(name: &str) -> bool {
             | methods::STEER_QUEUED_MESSAGE_NOW
     )
 }
+/// Whether `path` has the shape of a file uploaded to a cloud computer
+/// (`<data>/uploads/<id>-<name>`). The computer itself checks it is one of its
+/// own uploads before a run reads it.
+fn computer_upload_path(path: &str) -> bool {
+    let path = std::path::Path::new(path);
+    path.is_absolute()
+        && path.as_os_str().len() <= 1024
+        && path.components().all(|part| {
+            matches!(
+                part,
+                std::path::Component::RootDir | std::path::Component::Normal(_)
+            )
+        })
+        && path
+            .parent()
+            .and_then(|parent| parent.file_name())
+            .is_some_and(|name| name == "uploads")
+}
 /// Splits a queued message's files: `cloud-asset://` refs are files a server
 /// still holds, and absolute paths are files already uploaded straight to the
 /// computer (a queued row lists both kinds under `attachments`).
@@ -178,7 +196,18 @@ pub(super) fn normalize(name: &str, p: &Value) -> Result<wire::Request> {
         methods::QUEUE_COMMAND => {
             let mut payload: SessionCommandPayload = serde_json::from_value(p["command"].clone())?;
             let attachments = if let SessionCommandPayload::Run { request, .. } = &mut payload {
-                let assets = paths(&serde_json::to_value(&request.attachments)?)?;
+                // Files already uploaded straight to the computer stay on the
+                // run by their path there; `cloud-asset://` refs are files a
+                // server still holds. Any other path (this device's) fails.
+                let (computer, held): (Vec<String>, Vec<String>) =
+                    std::mem::take(&mut request.attachments)
+                        .into_iter()
+                        .partition(|path| computer_upload_path(path));
+                let assets = paths(&serde_json::to_value(&held)?)?;
+                ensure!(
+                    assets.len() + computer.len() <= zuse_protocol::cloud_assets::MAX_ASSETS,
+                    "Attach up to eight files."
+                );
                 // Local cwd, worktree and MCP configuration are never guest authority.
                 ensure!(
                     request.worktree.is_none() && request.mcp.is_none() && request.resume.is_none(),
@@ -200,7 +229,7 @@ pub(super) fn normalize(name: &str, p: &Value) -> Result<wire::Request> {
                 if request.cwd.is_empty() {
                     request.cwd = ".".into();
                 }
-                request.attachments.clear();
+                request.attachments = computer;
                 assets
             } else {
                 if let SessionCommandPayload::Steer { prompt, .. } = &payload {
@@ -511,9 +540,9 @@ pub(super) async fn maybe_forward(
 ) -> Result<Option<zuse_rpc::RpcReply>, zuse_rpc::RpcError> {
     use futures::StreamExt;
     use zuse_rpc::{RpcError, RpcReply};
-    // Files for a run or a queued message go straight to the awake computer;
-    // the server never stores them, and they read back from the computer.
-    // Files added while editing a queued message still stage on the server.
+    // Files for a run, a queued message or a queued message's edit go straight
+    // to the awake computer; the server never stores them, and they read back
+    // from the computer. Server-held files of older clients still read back.
     if computer_file_call(name, &p) {
         return Ok(None);
     }
