@@ -29,6 +29,9 @@ import androidx.compose.ui.semantics.*
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.*
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.launch
 import sh.zuse.core.*
 
@@ -214,10 +217,13 @@ private fun HomePane(
         workspace.refreshComputerInboxes(quiet = true)
     }
     // Keep previews and run status fresh while the list is on screen.
-    LaunchedEffect(Unit) {
-        while (true) {
-            kotlinx.coroutines.delay(30_000)
-            workspace.refreshComputerInboxes(quiet = true)
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            while (true) {
+                kotlinx.coroutines.delay(30_000)
+                workspace.refreshComputerInboxes(quiet = true)
+            }
         }
     }
     val places = workspace.places

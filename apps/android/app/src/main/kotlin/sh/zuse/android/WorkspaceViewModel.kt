@@ -561,6 +561,7 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
 
     /** Reloads every computer's chats; [quiet] refreshes in place without a progress indicator. */
     fun refreshComputerInboxes(quiet: Boolean = false) {
+        if (!foreground) return
         inboxJob?.cancel()
         val targets =
             devices.map { "device:${it.id}" to ComputerInbox(Source.Device(it), it.label) } +
@@ -890,6 +891,7 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
         foreground = value
         if (!value) {
             persistDraft()
+            inboxJob?.cancel()
             connectionJob?.cancel()
             timelineJob?.cancel()
             rpc?.close()
@@ -1415,7 +1417,9 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
                 for (item in queued) {
                     if (current != sessionGeneration || !synced) break
                     val retry = requestedRetries.remove(item.id)
-                    if ((item.attempted || item.rejected != null) && !retry) continue
+                    // A refused message holds the queue so later messages cannot overtake it.
+                    if (item.rejected != null && !retry) break
+                    if (item.attempted && !retry) continue
                     val archive =
                         vault.updateMetadata(key) {
                             it.copy(
@@ -1627,6 +1631,7 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun loadBranches() = action {
         val project = selectedProject ?: return@action
+        branches.clear()
         val epoch = generation
         val result: List<Branch> =
             rpc?.let {

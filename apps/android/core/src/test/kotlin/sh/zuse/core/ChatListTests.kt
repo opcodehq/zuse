@@ -138,6 +138,36 @@ class ChatListTests {
     }
 
     @Test
+    fun `an unreadable reply after sending is uncertain`() = runBlocking {
+        val server = MockWebServer()
+        server.enqueue(
+            MockResponse()
+                .withWebSocketUpgrade(
+                    object : WebSocketListener() {
+                        override fun onMessage(socket: WebSocket, text: String) {
+                            val frame = WireJson.parseToJsonElement(text)
+                            val id = frame.field("id")
+                            if (frame.text("method") == "QueueCommand")
+                                socket.send("{\"id\":$id,\"ok\":")
+                            else socket.send(obj("id" to id, "ok" to obj()).toString())
+                        }
+                    }
+                )
+        )
+        server.start()
+        val client = RpcClient(server.url("/api/rpc").toString().replace("http:", "ws:"))
+        try {
+            client.connect()
+            val failure = assertFails { client.call("QueueCommand") }
+            assertIs<ClientException>(failure)
+            assertTrue(RequestOutcome.uncertain(failure))
+        } finally {
+            client.close()
+            server.shutdown()
+        }
+    }
+
+    @Test
     fun `canonical chats carry list details and refuse impossible requests before sending`() =
         runBlocking {
             val sent = java.util.concurrent.LinkedBlockingQueue<String>()
