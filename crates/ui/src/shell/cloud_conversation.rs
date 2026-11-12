@@ -135,6 +135,9 @@ impl CloudConversation {
                 ComposerEvent::CloudForegroundAdmitted => this.foreground_admitted(cx),
                 ComposerEvent::CloudSleepRequested => this.sleep(cx),
                 ComposerEvent::CloudWakeRequested => this.wake_for_upload(cx),
+                ComposerEvent::CloudComputerRecreating { recreation } => {
+                    this.computer_recreation_started(recreation.clone(), cx)
+                }
                 ComposerEvent::Sent {
                     chat_id,
                     message_id,

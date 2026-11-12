@@ -5921,6 +5921,11 @@ pub enum ComposerEvent {
     CloudSleepRequested,
     /// A message with files needs its computer awake before they upload.
     CloudWakeRequested,
+    /// Update computer started recreating the task's computer; the
+    /// conversation reconnects as it does after Recreate computer.
+    CloudComputerRecreating {
+        recreation: serde_json::Value,
+    },
     /// An accepted task selects the current native conversation surface.
     CloudAdmitted {
         workspace: serde_json::Value,

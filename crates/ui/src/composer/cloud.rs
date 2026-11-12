@@ -3,6 +3,7 @@ use super::*;
 use crate::localization::message as tr;
 use serde_json::{Value, json};
 use zuse_i18n::messages as msg;
+mod runtime_update;
 mod unknown;
 mod wake;
 #[derive(Default)]
@@ -28,6 +29,8 @@ pub(super) struct Launch {
     pause_command: Option<String>,
     /// An earlier message whose delivery outcome is unknown.
     pub(super) unknown: unknown::State,
+    /// Messages waiting while their computer updates its runtime.
+    pub(super) runtime: runtime_update::State,
     /// The cloud computer's stage, set by the conversation that owns this
     /// composer and shown in the tray's single status line.
     status: Option<(String, bool)>,
@@ -100,6 +103,7 @@ impl Composer {
     pub(crate) fn clear_cloud_task(&mut self, cx: &mut Context<Self>) {
         self.cloud.task = None;
         self.cloud.unknown = Default::default();
+        self.cloud.runtime = Default::default();
         self.cloud.native = None;
         self.cloud.pending_native = None;
         self.cloud.pending_native_text = None;
@@ -227,6 +231,12 @@ impl Composer {
         {
             // Retry of a queued message: it leaves the draft again.
             self.clear_sent_draft(cx);
+        }
+        if self.cloud_runtime_update_holds() {
+            // The computer is updating: the message is in the chat and goes
+            // out with the others once it's done.
+            self.hold_cloud_send(cx);
+            return true;
         }
         self.dispatch_cloud_task(cx);
         true
@@ -417,6 +427,13 @@ impl Composer {
                         }
                         if foreground {cx.emit(ComposerEvent::CloudForegroundAdmitted);}
                         cx.emit(ComposerEvent::CloudLaunchChanged);
+                        // Messages held for a computer update go out one by one.
+                        this.send_next_ready_cloud_message(cx);
+                    }
+                    Err(zuse_rpc::RpcError::Capability(code)) if runtime_update::refusal(&code).is_some() => {
+                        // The computer's runtime must update first. The message
+                        // stays in the chat and is sent again once it has.
+                        if let Some(refusal) = runtime_update::refusal(&code) { this.hold_cloud_refusal(refusal, cx); }
                     }
                     Ok(_) => {
                         this.return_native_send(cx);
@@ -432,6 +449,7 @@ impl Composer {
                         this.cloud.native_staged.clear();
                         let message = code.trim_start_matches(zuse_protocol::cloud_task_commands::TASK_REJECTED_PREFIX).to_owned();
                         this.failure = Some(format!("Couldn't send: {message}").into());
+                        this.release_ready_cloud_messages(cx);
                     }
                     Err(zuse_rpc::RpcError::Capability(code)) if code.starts_with(zuse_protocol::cloud_task_commands::TASK_UNKNOWN_OUTCOME_PREFIX) => {
                         // An earlier message's outcome is unknown, so nothing was
@@ -442,6 +460,7 @@ impl Composer {
                         this.cloud.pending_native_text = None;
                         this.cloud.native_staged.clear();
                         this.failure = Some("Your earlier message didn't go through. Retry or discard it first. Your draft is kept.".into());
+                        this.release_ready_cloud_messages(cx);
                         cx.emit(ComposerEvent::CloudLaunchChanged);
                     }
                     Err(error) => {

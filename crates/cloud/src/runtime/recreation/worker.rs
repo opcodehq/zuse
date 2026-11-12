@@ -89,7 +89,12 @@ impl RuntimeControl {
         if Some(generation) != expected
             || row["account_id"] != op["owner_id"]
             || row["provider"] != op["provider_id"]
-            || row["managed_release_id"] != op["managed_release_id"]
+            // The source release until the restore is queued; after that an
+            // "Update computer" recreation is pinned to its target release.
+            || (row["managed_release_id"] != op["managed_release_id"]
+                && !(restoring
+                    && super::target_release(&row)
+                        .is_some_and(|target| row["managed_release_id"] == target)))
             || row["request_config"]["rustRuntimeStorage"]["storageIncarnationId"]
                 != op["storage_incarnation_id"]
             || row["request_config"]["rustRecreation"]["operationId"] != operation
@@ -220,6 +225,28 @@ impl RuntimeControl {
                     if artifact != op["source_artifact_id"] {
                         return Err(fenced());
                     }
+                    // "Update computer": the original is gone and the verified
+                    // capture is about to land on the target base, so repin
+                    // the computer there in the same transaction. Restore then
+                    // resolves (and boot-verifies) the new base like any other.
+                    let row = match super::target_release(&row) {
+                        Some(target) if row["managed_release_id"] != target => {
+                            let release = crate::managed_bases::recreation_target(
+                                &mut tx,
+                                required(&row, "provider")?,
+                                target,
+                            )
+                            .await?;
+                            if release.artifact_id != artifact {
+                                return Err(fenced());
+                            }
+                            let mut config = row["request_config"].clone();
+                            super::repin_config(&mut config, &release.settings)?;
+                            sqlx::query("UPDATE api_cloud_workspaces SET managed_release_id=$2,request_config=$3,revision=revision+1,updated_at=GREATEST(updated_at+1,$4) WHERE workspace_id=$1").bind(&workspace).bind(&release.release_id).bind(config).bind(now).execute(&mut *tx).await?;
+                            locked_workspace(&mut tx, &workspace).await?.0
+                        }
+                        _ => row,
+                    };
                     self.queue_restore_tx(
                         &mut tx,
                         &row,

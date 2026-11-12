@@ -328,6 +328,7 @@ fn allowed(method: &str) -> bool {
             | methods::CLOUD_TASK_COMMAND
             | methods::CLOUD_TASK_ASSET
             | methods::CLOUD_COMPUTER_RECREATION
+            | methods::CLOUD_RUNTIME_UPDATE_STATUS
             | methods::CLOUD_ALLOCATION_RETRY
             | methods::CLOUD_RUNTIME_REPAIR
             | methods::CLOUD_PROJECTS
