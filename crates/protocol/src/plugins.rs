@@ -91,6 +91,11 @@ pub enum PluginRequest {
         tenant_id: String,
         connection_id: String,
     },
+    Rename {
+        tenant_id: String,
+        connection_id: String,
+        label: String,
+    },
     SetEnabled {
         tenant_id: String,
         connection_id: String,
@@ -110,6 +115,7 @@ impl PluginRequest {
             | Self::Cancel { tenant_id, .. }
             | Self::Complete { tenant_id, .. }
             | Self::Disconnect { tenant_id, .. }
+            | Self::Rename { tenant_id, .. }
             | Self::SetEnabled { tenant_id, .. } => Some(tenant_id),
         }
     }

@@ -449,10 +449,19 @@ struct AttachmentDraft {
 
 /// A staged attachment offered by the `@` list.
 struct AttachmentRow {
+    /// A connected plugin offered by `@`, rather than a staged attachment.
+    plugin: Option<MentionPlugin>,
     index: u32,
     label: String,
     /// The picture, for an image.
     image: Option<std::sync::Arc<gpui::Image>>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct MentionPlugin {
+    pub id: String,
+    pub name: String,
+    pub domain: String,
 }
 
 /// What the composer holds that a send could carry. A staged image or diff
@@ -1352,6 +1361,17 @@ impl TextProjection {
                 }),
         );
         links.extend(
+            zuse_protocol::plugin_mentions::plugin_mention_links(raw)
+                .into_iter()
+                .map(|link| FileMentionLink {
+                    range: link.range,
+                    basename: link.name,
+                    path: link.plugin_id,
+                    kind: ChipKind::Plugin,
+                    attachment: None,
+                }),
+        );
+        links.extend(
             zuse_protocol::attachment_mentions::attachment_mentions(raw)
                 .into_iter()
                 .map(|mention| FileMentionLink {
@@ -1539,8 +1559,7 @@ fn mention_display_labels(links: &[FileMentionLink]) -> Vec<String> {
                         .collect();
                     // A chat's "path" is its id: always show its title.
                     // A link's label is its own: never a path suffix.
-                    if duplicates.is_empty() || matches!(link.kind, ChipKind::Chat | ChipKind::Link)
-                    {
+                    if duplicates.is_empty() || matches!(link.kind, ChipKind::Chat | ChipKind::Plugin | ChipKind::Link) {
                         return link.basename.clone();
                     }
                     let parts: Vec<_> = link.path.split('/').collect();
@@ -1595,6 +1614,7 @@ fn has_mention_scheme(raw: &str) -> bool {
         || raw.contains(zuse_protocol::attachment_mentions::IMAGE_MENTION_SCHEME)
         || raw.contains(zuse_protocol::attachment_mentions::ATTACHMENT_MENTION_SCHEME)
         || raw.contains(zuse_protocol::chat_mentions::CHAT_MENTION_SCHEME)
+        || raw.contains(zuse_protocol::plugin_mentions::PLUGIN_MENTION_SCHEME)
 }
 
 /// Project a sent message's raw Markdown for transcript display: mention links
@@ -6383,6 +6403,8 @@ struct FileMentionState {
     /// user can act on (host daemon too old for `SearchFiles`, device
     /// offline), and the empty state hid them (user report).
     error: Option<SharedString>,
+    /// Connected plugins, refreshed whenever an `@` token opens or changes.
+    plugins: Vec<MentionPlugin>,
     /// Full token text, not just the cursor-relative query: moving within a
     /// dismissed token keeps it closed, while any edit re-enables completion.
     dismissed: Option<(Range<usize>, String)>,
@@ -8726,6 +8748,11 @@ impl Composer {
         // response lands — clearing here made the popup bounce through the
         // skeleton (and a different height) on every keystroke.
         let refining = self.mention.token.is_some() && token.is_some();
+        self.mention.plugins = if token.is_some() {
+            crate::settings::plugins::connected_mention_plugins(self.state.clone(), cx)
+        } else {
+            Vec::new()
+        };
         self.mention.token = token.clone();
         if !refining {
             self.mention.results.clear();
@@ -8812,13 +8839,16 @@ impl Composer {
     }
 
     fn move_mention(&mut self, delta: isize, cx: &mut Context<Self>) {
-        let attachments = self.mention_attachment_matches().len();
+        let local = self.mention_attachment_matches();
+        let attachments = local.len();
+        let staged = local.iter().filter(|row| row.plugin.is_none()).count();
         let rows = attachments + self.mention.results.len();
         self.mention.active = crate::popover::menu_step(self.mention.active, rows, delta);
         if let Some(active) = self.mention.active {
             // Keep the keyboard cursor visible in the scrolled row stack,
             // past the section headings above it.
-            let headings = usize::from(attachments > 0)
+            let headings = usize::from(staged > 0)
+                + usize::from(active >= staged && attachments > staged)
                 + usize::from(active >= attachments && !self.mention.results.is_empty());
             self.mention_scroll.scroll_to_item(active + headings);
         }
@@ -8863,6 +8893,7 @@ impl Composer {
                     att.name.clone()
                 };
                 normalize(&label).contains(&wanted).then(|| AttachmentRow {
+                    plugin: None,
                     index,
                     label,
                     image: att.image().cloned(),
@@ -8870,6 +8901,22 @@ impl Composer {
             })
             .collect();
         rows.sort_by_key(|row| row.index);
+        // Connected plugins follow attachments, above file results.
+        rows.extend(
+            self.mention
+                .plugins
+                .iter()
+                .filter(|plugin| {
+                    normalize(&plugin.name).contains(&wanted)
+                        || normalize(&plugin.id).contains(&wanted)
+                })
+                .map(|plugin| AttachmentRow {
+                    plugin: Some(plugin.clone()),
+                    index: 0,
+                    label: plugin.name.clone(),
+                    image: None,
+                }),
+        );
         rows
     }
 
@@ -8881,7 +8928,16 @@ impl Composer {
         let Some(active) = self.mention.active else {
             return;
         };
-        if let Some(row) = rows.get(active) {
+        if let Some(plugin) = rows.get(active).and_then(|row| row.plugin.as_ref()) {
+            let Some(link) =
+                zuse_protocol::plugin_mentions::plugin_mention_link(&plugin.id, &plugin.name)
+            else {
+                return;
+            };
+            self.input.update(cx, |input, cx| {
+                input.replace_mention_link(token.range, &link, cx)
+            });
+        } else if let Some(row) = rows.get(active) {
             let link = zuse_protocol::attachment_mentions::attachment_mention_link(
                 row.index,
                 row.image.is_none().then_some(row.label.as_str()),
@@ -8965,12 +9021,45 @@ impl Composer {
                     .pt(px(if first { 2.0 } else { 6.0 }))
                     .into_any_element()
             };
-            if !attachment_rows.is_empty() {
+            let staged = attachment_rows.iter().filter(|row| row.plugin.is_none()).count();
+            if staged > 0 {
                 rows.push(heading("Attachments", true));
             }
             // Staged attachments stay pinned above every file result.
             for (ix, row) in attachment_rows.iter().enumerate() {
                 let selected = self.mention.active == Some(ix);
+                if let Some(plugin) = &row.plugin {
+                    if ix == staged {
+                        rows.push(heading("Plugins", staged == 0));
+                    }
+                    rows.push(
+                        crate::popover::menu_row(
+                            theme,
+                            selected,
+                            format!("plugin-mention-result-{ix}"),
+                        )
+                        .id(("plugin-mention-result", ix))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.mention.active = Some(ix);
+                            this.accept_mention(cx);
+                        }))
+                        .child(crate::popover::completion_row_content(
+                            theme,
+                            crate::settings::plugins::catalog_ui::plugin_logo(
+                                theme,
+                                &plugin.domain,
+                                &plugin.name,
+                                16.,
+                            )
+                            .rounded(px(4.))
+                            .into_any_element(),
+                            plugin.name.clone().into(),
+                            "Connected plugin".into(),
+                        ))
+                        .into_any_element(),
+                    );
+                    continue;
+                }
                 let (icon, detail) = match &row.image {
                     Some(image) => (
                         img(image.clone())

@@ -486,3 +486,14 @@ Android Open Source Project, under Apache-2.0. CJK outlines are scaled to common
 font units and unencoded glyphs and hints are removed. The full license and notice
 are retained in `crates/viewport/assets/fonts/NOTICE.Droid`; source and derivative
 fingerprints are in `sources.json`.
+
+## Executor v2
+
+The cloud plugin worker embeds the Executor SDK from
+https://github.com/UsefulSoftwareCo/executor at revision
+`50bea37fe5d146701990901a878ea940c5012564`, through the Zuse adapter originally
+vendored at `swarajbachu/zuse` revision `e98e3050e65532f3222d56d8d0a47d45990a6bf4`.
+The retained source archive and checksum are in
+`packages/executor-v2/vendor/provenance.json`. Generated bundles retain inline
+third-party legal comments; build dependencies and their patches are pinned in
+`packages/executor-v2/toolchain`.

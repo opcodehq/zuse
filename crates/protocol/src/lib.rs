@@ -9,6 +9,7 @@ pub mod branch_graph;
 pub mod change_request_assessment;
 pub mod chat_config;
 pub mod chat_mentions;
+pub mod plugin_mentions;
 pub mod cloud;
 pub mod cloud_billing;
 pub mod cloud_catalog;

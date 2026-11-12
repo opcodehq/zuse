@@ -48,6 +48,44 @@ impl Authority {
             origin: parsed,
         })
     }
+    pub async fn plugin_tools(
+        &self,
+        bootstrap: &CloudRuntimeBootstrap,
+        request: &zuse_protocol::plugins::PluginToolRequest,
+    ) -> Result<Value> {
+        ensure!(
+            bootstrap.runtime_credential_expires_at > now_ms(),
+            "runtime_plugin_credential_expired"
+        );
+        let mut url = self.origin.clone();
+        url.path_segments_mut()
+            .map_err(|_| anyhow::anyhow!("runtime_api_origin_invalid"))?
+            .extend(["v1", "plugins", "runtime", &bootstrap.workspace_id, "tools"]);
+        let mut response = self
+            .client
+            .post(url)
+            .bearer_auth(&bootstrap.runtime_credential)
+            .timeout(Duration::from_secs(60))
+            .json(request)
+            .send()
+            .await
+            .map_err(|_| anyhow::anyhow!("runtime_plugins_unavailable"))?;
+        ensure!(response.status().is_success(), "runtime_plugins_rejected");
+        let mut body = Vec::new();
+        while let Some(part) = response
+            .chunk()
+            .await
+            .map_err(|_| anyhow::anyhow!("runtime_plugins_unavailable"))?
+        {
+            ensure!(
+                body.len() + part.len() <= 8 * 1024 * 1024,
+                "runtime_plugins_response_too_large"
+            );
+            body.extend_from_slice(&part);
+        }
+        serde_json::from_slice(&body)
+            .map_err(|_| anyhow::anyhow!("runtime_plugins_invalid_response"))
+    }
     pub async fn asset(
         &self,
         bootstrap: &CloudRuntimeBootstrap,

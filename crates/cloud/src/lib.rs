@@ -54,3 +54,4 @@ pub mod images;
 #[cfg(feature = "hosted-browser")]
 pub mod hosted_browser;
 pub mod slack;
+pub mod plugins;

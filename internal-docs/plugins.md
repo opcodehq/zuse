@@ -1,6 +1,6 @@
 # Hosted plugins and agent workspaces
 
-The engine connects native and browser settings plus every agent's shared MCP tools to the hosted Executor v2 service. Provider adapters do not receive cloud access tokens or plugin credentials. Session policy permits discovery in read-only chats but rejects external tool calls before sending a request. Plugin calls are not automatically replayed after an uncertain response.
+The engine connects native and browser settings plus every agent's shared MCP tools to the hosted plugin API. The [Rust API with Executor v2](cloud-native-plugins.md) uses the actual pinned SDK with PostgreSQL persistence behind the management and tool contracts. Provider adapters do not receive cloud access tokens or plugin credentials. Session policy permits discovery in read-only chats but rejects external tool calls before sending a request. Plugin calls are not automatically replayed after an uncertain response.
 
 ## Workspace selection
 

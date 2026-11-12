@@ -6318,3 +6318,5 @@ mod launch_assets;
 
 #[path = "cases/startup_binding.rs"]
 mod startup_binding;
+#[path = "cases/plugins.rs"]
+mod plugins;

@@ -60,3 +60,5 @@ pub mod github;
 pub mod native_sockets;
 
 pub mod project_cache;
+#[cfg(feature = "engine")]
+pub mod plugins;
