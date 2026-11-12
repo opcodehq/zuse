@@ -159,6 +159,11 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           key: cloud
           cache-on-failure: true
+      # The plugin Postgres tests run the bundled Executor v2 worker under Bun,
+      # pinned to the version the API image ships.
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.10
       - run: sudo apt-get update && sudo apt-get install -y cmake libclang-dev libasound2-dev ripgrep
       # The guest binary backs the runtime and Postgres recovery tests below.
       - run: cargo build --locked -p zuse-cloud-guest

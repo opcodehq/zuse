@@ -25,7 +25,11 @@ fn valid_plugin_id(id: &str) -> bool {
 
 fn clean_name(name: &str) -> String {
     let name = name.split_whitespace().collect::<Vec<_>>().join(" ");
-    if name.is_empty() { "Plugin".into() } else { name }
+    if name.is_empty() {
+        "Plugin".into()
+    } else {
+        name
+    }
 }
 
 /// `[name](zuse-plugin:<id>)`, or `None` for an id that isn't a plain slug.

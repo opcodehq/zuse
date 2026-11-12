@@ -352,7 +352,6 @@ impl Executor {
 mod tests {
     use super::*;
     #[tokio::test]
-    #[ignore = "requires Bun"]
     async fn executor_deadline_kills_worker_without_retrying() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -361,8 +360,9 @@ mod tests {
             post(|| async { std::future::pending::<StatusCode>().await }),
         );
         let proxy = tokio::spawn(async move { axum::serve(listener, server).await.unwrap() });
-        let child = tokio::process::Command::new("bun")
-            .args(["-e", "setInterval(()=>{},1000)"])
+        // Any long-lived child stands in for a stalled worker.
+        let child = tokio::process::Command::new("sleep")
+            .arg("60")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())

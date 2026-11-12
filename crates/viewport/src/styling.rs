@@ -31,8 +31,12 @@ pub fn dither_background(primary: bool, enabled: bool) -> AnyElement {
                     // Clip to the button's rounded rectangle: canvas cells
                     // are not masked by the parent's corner radius.
                     let (cx, cy) = (x as f32 * 2. + 1., y as f32 * 2. + 1.);
-                    let dx = (DITHER_RADIUS - cx).max(cx - (width - DITHER_RADIUS)).max(0.);
-                    let dy = (DITHER_RADIUS - cy).max(cy - (height - DITHER_RADIUS)).max(0.);
+                    let dx = (DITHER_RADIUS - cx)
+                        .max(cx - (width - DITHER_RADIUS))
+                        .max(0.);
+                    let dy = (DITHER_RADIUS - cy)
+                        .max(cy - (height - DITHER_RADIUS))
+                        .max(0.);
                     let edge = if dx > 0. && dy > 0. {
                         DITHER_RADIUS - (dx * dx + dy * dy).sqrt()
                     } else {

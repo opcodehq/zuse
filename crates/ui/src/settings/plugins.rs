@@ -1060,7 +1060,13 @@ impl PluginsCard {
                 )
                 .rounded_full()
                 .bg(theme.settings_frame_bg())
-                .when(!connected && (self.busy || self.plugins.active_attempt() || self.plugins.snapshot["canManage"] == false), |v|v.opacity(0.5).cursor_default())
+                .when(
+                    !connected
+                        && (self.busy
+                            || self.plugins.active_attempt()
+                            || self.plugins.snapshot["canManage"] == false),
+                    |v| v.opacity(0.5).cursor_default(),
+                )
                 .on_click(cx.listener(move |this, _, window, cx| {
                     if connected {
                         this.browse_selected = Some(definition.id.clone());

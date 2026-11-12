@@ -1559,7 +1559,12 @@ fn mention_display_labels(links: &[FileMentionLink]) -> Vec<String> {
                         .collect();
                     // A chat's "path" is its id: always show its title.
                     // A link's label is its own: never a path suffix.
-                    if duplicates.is_empty() || matches!(link.kind, ChipKind::Chat | ChipKind::Plugin | ChipKind::Link) {
+                    if duplicates.is_empty()
+                        || matches!(
+                            link.kind,
+                            ChipKind::Chat | ChipKind::Plugin | ChipKind::Link
+                        )
+                    {
                         return link.basename.clone();
                     }
                     let parts: Vec<_> = link.path.split('/').collect();
@@ -9021,7 +9026,10 @@ impl Composer {
                     .pt(px(if first { 2.0 } else { 6.0 }))
                     .into_any_element()
             };
-            let staged = attachment_rows.iter().filter(|row| row.plugin.is_none()).count();
+            let staged = attachment_rows
+                .iter()
+                .filter(|row| row.plugin.is_none())
+                .count();
             if staged > 0 {
                 rows.push(heading("Attachments", true));
             }
