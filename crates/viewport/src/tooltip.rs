@@ -56,7 +56,7 @@ impl Render for FallbackTooltip {
             .border_1()
             .border_color(crate::settings_style::card_border())
             .bg(crate::settings_style::card_bg())
-            .font_weight(gpui::FontWeight::NORMAL)
+            .font_weight(gpui::FontWeight::LIGHT)
             .text_size(px(TEXT_SIZE))
             .text_color(crate::palette::rgb(crate::shell::TEXT))
             .child(self.0.clone())
