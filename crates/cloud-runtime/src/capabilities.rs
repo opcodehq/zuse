@@ -22,7 +22,7 @@ pub struct CommandAdmissionReceipt {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub managed_agent_version: Option<u32>,
 }
-fn binary_sha256(path: &Path) -> Result<String> {
+pub(crate) fn binary_sha256(path: &Path) -> Result<String> {
     let mut file = File::open(path)?;
     let mut hash = Sha256::new();
     let mut buffer = [0u8; 65536];

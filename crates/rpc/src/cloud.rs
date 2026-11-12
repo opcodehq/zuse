@@ -266,6 +266,16 @@ enum Control {
     Close { connection_id: String },
     #[serde(rename = "runtime.command")]
     Command,
+    /// `zuse_protocol::cloud_runtime_updates::POLL_NOW_METHOD`.
+    #[serde(rename = "runtime.update.pollNow")]
+    RuntimeUpdatePollNow,
+}
+/// Woken when the gateway asks this runtime to poll for a runtime update now.
+/// Like `runtime.command`, the nudge carries no authority: the runtime still
+/// fetches and verifies the signed directive itself.
+pub fn runtime_update_poll_requests() -> &'static tokio::sync::Notify {
+    static REQUESTS: std::sync::OnceLock<tokio::sync::Notify> = std::sync::OnceLock::new();
+    REQUESTS.get_or_init(tokio::sync::Notify::new)
 }
 /// Runs the already assembled engine on one authenticated gateway attachment.
 /// Returning tears down transport subscriptions; the caller retains engine ownership.
@@ -337,6 +347,7 @@ pub async fn serve_guest_connected(
                         Control::Close {connection_id}=>{peers.remove(&connection_id);}
                         // Notifications grant no execution authority; the guest polls its durable mailbox.
                         Control::Command=>{},
+                        Control::RuntimeUpdatePollNow=>runtime_update_poll_requests().notify_one(),
                     }
                 }
                 Some(Ok(Message::Binary(bytes)))=> {
@@ -365,6 +376,21 @@ pub async fn serve_guest_connected(
     Ok(())
 }
 
+#[cfg(test)]
+mod control_tests {
+    use super::*;
+    #[test]
+    fn poll_now_control_matches_the_update_contract() {
+        let text = format!(
+            "{{\"type\":\"{}\"}}",
+            zuse_protocol::cloud_runtime_updates::POLL_NOW_METHOD
+        );
+        assert!(matches!(
+            serde_json::from_str::<Control>(&text).unwrap(),
+            Control::RuntimeUpdatePollNow
+        ));
+    }
+}
 #[cfg(test)]
 mod liveness_tests {
     use super::*;
