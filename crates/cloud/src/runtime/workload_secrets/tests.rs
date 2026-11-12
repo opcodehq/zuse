@@ -246,3 +246,12 @@ async fn workload_vault_is_encrypted_scoped_versioned_and_recipient_fenced() {
         .unwrap();
     admin.close().await;
 }
+#[test]
+fn every_cloud_provider_key_is_a_reserved_workload_secret_name() {
+    use zuse_protocol::cloud_computers::ProviderId;
+    for id in ProviderId::ALL {
+        assert!(!valid_name(id.api_key_env()), "{id:?} key accepted");
+    }
+    assert!(!valid_name("PRIZED_API_KEY"));
+    assert!(valid_name("PROJECT_REGISTRY_TOKEN"));
+}

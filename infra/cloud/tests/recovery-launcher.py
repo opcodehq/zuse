@@ -1,10 +1,20 @@
 """Exercise the installed launcher contract without provider credentials or compute."""
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
 import time
+
+
+def provider_keys():
+    """Every ProviderId::api_key_env value, read from the Rust source of truth."""
+    source = (Path(__file__).resolve().parents[3] / "crates/protocol/src/cloud_computers.rs").read_text()
+    body = source[source.index("fn api_key_env"):]
+    keys = re.findall(r'Self::\w+ => "([A-Z0-9_]+)"', body[:body.index("\n    }\n")])
+    assert "PRIZED_API_KEY" in keys and len(keys) == len(set(keys)) >= 5, keys
+    return keys
 
 
 def wait_for(predicate):
@@ -24,8 +34,8 @@ with tempfile.TemporaryDirectory(prefix="zuse-recovery-launcher-") as directory:
     helper.write_text('''#!/usr/bin/env bash
 set -euo pipefail
 [[ "$1" == recover && "$ZUSE_ARCHIVE_CONFIG" == '{}' ]]
-[[ -z "${BOXD_API_KEY:-}" && -z "${CLOUD_DATA_ENCRYPTION_KEY:-}" ]]
-echo invoked >>"$TEST_ROOT/invocations"
+[[ -z "${CLOUD_DATA_ENCRYPTION_KEY:-}" ]]
+''' + "".join(f'[[ -z "${{{key}:-}}" ]]\n' for key in provider_keys()) + '''echo invoked >>"$TEST_ROOT/invocations"
 if [[ "${TEST_LONG:-}" == yes ]]; then
   sleep 60 &
   echo "$!" >"$TEST_ROOT/child"
@@ -39,7 +49,8 @@ fi
 ''')
     helper.chmod(0o700)
     env = dict(os.environ, ZUSE_RECOVERY_STATUS_ROOT=str(root), ZUSE_RUNTIME_BINARY=str(helper),
-               TEST_ROOT=str(root), ZUSE_RUNTIME_PROVIDER="boat", ZUSE_RUNTIME_PERSISTENT_EXEC_CERTIFIED="1", BOXD_API_KEY="must-be-removed", CLOUD_DATA_ENCRYPTION_KEY="must-be-removed")
+               TEST_ROOT=str(root), ZUSE_RUNTIME_PROVIDER="boat", ZUSE_RUNTIME_PERSISTENT_EXEC_CERTIFIED="1", CLOUD_DATA_ENCRYPTION_KEY="must-be-removed",
+               **{key: "must-be-removed" for key in provider_keys()})
 
     def launch(operation, *args, **extra):
         subprocess.run([str(launcher), operation, *args], env=dict(env, **extra), check=True)
