@@ -106,9 +106,9 @@ jobs:
           cache-on-failure: true
       - run: bash scripts/ci-ubuntu-dependencies.sh cmake libclang-dev libasound2-dev ripgrep
       - run: cargo fmt --all --check
-      - run: cargo check -p zuse-cli -p zuse-relay
+      - run: cargo check -p zuse-cli -p zuse-commands -p zuse-relay
       - run: cargo test -p zuse-cli --test startup
-      - run: cargo test -p zuse-cli --bin zuse-server localization_tests
+      - run: cargo test -p zuse-commands
       - run: cargo test -p zuse-relay --test startup
       - run: cargo test -p zuse-remote
       - run: cargo test -p zuse-plugins

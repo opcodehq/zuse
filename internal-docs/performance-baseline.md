@@ -388,7 +388,7 @@ tests and the previously recorded plugin-form mouse-focus failure at
 `plugin_setup.rs:871`; it is not fully green.
 
 Reproduce with Node 22+, a WebGPU Chromium executable and matching compiled
-`dist/web` and `target/debug/zuse-server`:
+`dist/web` and `target/debug/zuse-cli`:
 
 ```sh
 CHROME_BIN=/path/to/chrome ZUSE_RUNTIME_ONLY=1 \

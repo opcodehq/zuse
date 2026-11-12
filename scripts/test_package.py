@@ -43,7 +43,7 @@ class PackagingTests(unittest.TestCase):
         # Minimal, format-labelled inputs exercise assembly, never app execution.
         self.binaries = []
         for name in package.BINS:
-            binary = self.source / name
+            binary = self.source / package.built(name)
             binary.write_bytes(b"\x7fELF\x02\x01" + bytes(12) + struct.pack("<H", 62) + bytes(12))
             self.binaries.append(binary)
         self.assets = self.source / "assets"
@@ -270,6 +270,73 @@ class PackagingTests(unittest.TestCase):
         self.assertEqual(manifest["version"], version)
         self.assertIn("zuse.exe", manifest["files"])
         self.assertIn("web/app.wasm", manifest["files"])
+        cli = output / f"zuse-cli-{version}-windows-x86_64.zip"
+        with zipfile.ZipFile(cli) as bundle:
+            self.assertIsNone(bundle.testzip())
+            names = set(bundle.namelist())
+        root = f"zuse-cli-{version}-windows-x86_64/"
+        for relative in ("bin/zuse.exe", "bin/zuse-server.cmd", "share/zuse/web/app.wasm", "manifest.json"):
+            self.assertIn(root + relative, names)
+        self.assertFalse(any("libexec" in name for name in names))
+
+    def test_cli_archive_is_the_standalone_command_with_its_web_files(self):
+        stage = self.root / "cli"
+        package.assemble_cli(stage, self.binaries[1], self.assets, "linux", "x86_64",
+                             "0.26.0", {"inputs": "test fixture"})
+        self.assertEqual((stage / "bin/zuse").read_bytes(), self.binaries[1].read_bytes())
+        self.assertTrue(os.access(stage / "bin/zuse", os.X_OK))
+        # The old name selects the old interface by argv[0]; a relative link
+        # survives extraction anywhere.
+        self.assertEqual(os.readlink(stage / "bin/zuse-server"), "zuse")
+        self.assertTrue((stage / "share/zuse/web/app.wasm").is_file())
+        self.assertTrue((stage / "share/zuse/legal/LICENSE").is_file())
+        manifest = json.loads((stage / "manifest.json").read_text())
+        self.assertEqual((manifest["kind"], manifest["platform"]), ("cli", "linux"))
+        self.assertEqual(manifest["links"], {"bin/zuse-server": "zuse"})
+        self.assertNotIn("bin/zuse-server", manifest["files"])
+        for relative, digest in manifest["files"].items():
+            self.assertEqual(hashlib.sha256((stage / relative).read_bytes()).hexdigest(), digest)
+        self.assertFalse((stage / "libexec").exists())
+
+    def test_windows_cli_archive_names_the_old_interface_in_its_launcher(self):
+        for binary in self.binaries:
+            binary.write_bytes(b"MZ" + bytes(0x3A) + struct.pack("<I", 0x40)
+                               + b"PE\0\0" + struct.pack("<H", 0x8664) + bytes(18))
+        stage = self.root / "cli"
+        package.assemble_cli(stage, self.binaries[1], self.assets, "windows", "x86_64",
+                             "0.26.0", {"inputs": "test fixture"})
+        launcher = (stage / "bin/zuse-server.cmd").read_bytes().decode()
+        self.assertEqual(launcher, '@"%~dp0zuse.exe" --as-zuse-server %*\r\n')
+        self.assertIn("--as-zuse-server", Path(package.ROOT / "crates/commands/src/legacy.rs").read_text())
+        self.assertTrue((stage / "bin/zuse.exe").is_file())
+        self.assertNotIn("links", json.loads((stage / "manifest.json").read_text()))
+
+    def test_every_layout_keeps_web_files_where_serve_discovers_them(self):
+        discovery = (package.ROOT / "crates/engine/src/browser_access.rs").read_text()
+        # Linux and Windows apps, the macOS bundle, and the standalone archive.
+        for relative in ('join("web")', 'join("../Resources/web")', 'join("../share/zuse/web")'):
+            self.assertIn(relative, discovery)
+        self.assemble()
+        self.assertTrue((self.destination / "libexec/web/index.html").is_file())
+        self.assertTrue((self.destination / "libexec/zuse").is_file())
+
+    def test_macos_cli_binary_is_signed_then_notarized(self):
+        binary = self.root / "zuse"
+        binary.write_bytes(b"fixture")
+        calls = []
+
+        def run(command, **options):
+            calls.append(command)
+            return subprocess.CompletedProcess(command, 0, stdout=json.dumps({"status": "Accepted"}))
+
+        self.assertFalse(package.sign_macos_binary(binary, run))
+        environment = {"ZUSE_MACOS_SIGN_IDENTITY": "identity", "APPLE_ID": "id",
+                       "APPLE_APP_SPECIFIC_PASSWORD": "password", "APPLE_TEAM_ID": "team"}
+        with patch.dict(os.environ, environment):
+            self.assertTrue(package.sign_macos_binary(binary, run))
+        tools = [command[1] if command[0] == "xcrun" else command[0] for command in calls]
+        self.assertEqual(tools, ["codesign", "codesign", "ditto", "notarytool"])
+        self.assertIn("runtime", calls[0])
 
     def test_release_version_rejects_wrong_base_and_path_characters_before_building(self):
         for version in ("0.27.0-preview.1", "0.26.0-../../escape", "0.26.0-", "0.26.0-preview\n"):

@@ -396,6 +396,8 @@ struct Shared {
     closed: CancellationToken,
     refresh: Notify,
     cloud_vm: tokio::sync::OnceCell<bool>,
+    /// Web files chosen by the host process; otherwise the installed ones.
+    app_assets: std::sync::Mutex<Option<PathBuf>>,
     state: Mutex<State>,
 }
 #[derive(Clone)]
@@ -436,6 +438,7 @@ impl Owner {
             closed: CancellationToken::new(),
             refresh: Notify::new(),
             cloud_vm: Default::default(),
+            app_assets: Default::default(),
             state: Mutex::new(state),
         })))
     }
@@ -492,7 +495,13 @@ impl DirectAccess {
         tailscale: bool,
     ) -> anyhow::Result<BrowserApp> {
         let mut app = BrowserApp::default();
-        let Some(assets) = crate::browser_access::discover_assets() else {
+        let chosen = self
+            .0
+            .app_assets
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let Some(assets) = chosen.or_else(crate::browser_access::discover_assets) else {
             return Ok(app);
         };
         let any = |port| SocketAddr::from(([0, 0, 0, 0], port));
@@ -580,6 +589,11 @@ impl DirectAccess {
         drop(state);
         self.refresh_routes().await;
         Ok(self.0.state.lock().await.status())
+    }
+    /// Serve these web files on the browser listeners, matching the host's
+    /// own listener instead of whatever installation discovery finds.
+    pub fn use_app_assets(&self, assets: PathBuf) {
+        *self.0.app_assets.lock().unwrap_or_else(|e| e.into_inner()) = Some(assets);
     }
     pub async fn start(
         &self,

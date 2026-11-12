@@ -133,7 +133,7 @@ Useful checks:
 python3 scripts/check-localization.py
 python3 -m unittest discover -s scripts -p test_localization.py
 cargo test -p zuse-i18n
-cargo test -p zuse-cli --bin zuse-server localization_tests
+cargo test -p zuse-commands
 cargo test -p zuse-viewport --lib localization::tests
 cargo test -p zuse-viewport --lib language_fonts::tests
 cargo test -p zuse-ui --lib localization::tests

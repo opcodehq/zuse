@@ -61,7 +61,7 @@ Three real-engine/control scenarios exercise start/stop/restart with a native pa
 
 `zuse-relay` serves the browser assets and two rendezvous endpoints. Hosts authenticate `/api/paired-host/{pairId}` with an independent 64-hex-character operator token in an Authorization header. Clients use the existing `/api/paired-rpc/{pairId}` path. The broker forwards binary records and has no Noise secrets or canonical RPC dispatcher. A host must register before a client can connect. Client text frames are rejected. There are at most 256 host sockets and eight idle registrations per pair ID, with RAII route cleanup, bounded WebSocket messages, five-second send deadlines and link heartbeats.
 
-`zuse-server --relay-origin ORIGIN --relay-host-token-file FILE` maintains four standby outbound sockets per saved grant, within the 32-grant profile limit. Claimed sockets become independent session workers and are replaced in the standby pool; completion retires them. Freshly created invitations register automatically. Expiry, revocation and shutdown cancel workers and sessions. Disconnection retries host registration with bounded backoff; each client connection performs fresh Noise authentication and application proof through the same host session as direct access. The existing shared 64-session host admission limit also applies to relayed RPC. Restarting a connector preserves grants and cannot replay actions. Private routing files are bounded and made 0600 on Unix; their contents are never in URLs or status metadata.
+`zuse serve --relay-origin ORIGIN --relay-host-token-file FILE` maintains four standby outbound sockets per saved grant, within the 32-grant profile limit. Claimed sockets become independent session workers and are replaced in the standby pool; completion retires them. Freshly created invitations register automatically. Expiry, revocation and shutdown cancel workers and sessions. Disconnection retries host registration with bounded backoff; each client connection performs fresh Noise authentication and application proof through the same host session as direct access. The existing shared 64-session host admission limit also applies to relayed RPC. Restarting a connector preserves grants and cannot replay actions. Private routing files are bounded and made 0600 on Unix; their contents are never in URLs or status metadata.
 
 The foreground server advertises the broker origin for invitations while its local owner browser remains on the direct origin. Creation returns that public origin to native/browser controls. Browser-held capabilities therefore use the normal paired adapter without a second transport policy.
 
@@ -129,7 +129,7 @@ The production native paired scenario restarts an actual encrypted WebSocket ser
 
 A paired host can be reached many ways, and the choice is automatic. `Link` and `RouteTable` in `zuse-remote` own the decisions; native desktop (`zuse_rpc::paired_link`), the browser and the mobile apps apply them. Noise authenticates the host and encrypts everything end to end, so a route is only a pipe: a stale address reaches another machine, fails the handshake and learns nothing. This is also why plain `ws://` is acceptable on private addresses.
 
-Hosts report their reachable addresses in the attach reply and whenever they change. Learned routes replace earlier learned routes, invitation addresses stay, and they are saved without secrets for the next launch. Settings → Devices → Direct connections, or `zuse-server --lan`, starts a listener serving only paired RPC to private peers. Tailscale HTTPS is an option because it is the one direct route an HTTPS page can open. A shared-address-space IPv4 address is advertised as a tailnet only with Tailscale evidence, and cloud machines offer only their tailnet.
+Hosts report their reachable addresses in the attach reply and whenever they change. Learned routes replace earlier learned routes, invitation addresses stay, and they are saved without secrets for the next launch. Settings → Devices → Direct connections, or `zuse serve --lan`, starts a listener serving only paired RPC to private peers. Tailscale HTTPS is an option because it is the one direct route an HTTPS page can open. A shared-address-space IPv4 address is advertised as a tailnet only with Tailscale evidence, and cloud machines offer only their tailnet.
 
 Connecting starts this network's last winner and adds other routes every 200 ms; the first through Noise wins. A connected client measures other routes with a real handshake and encrypted heartbeat. It moves when a route is at least 30% and 15 ms faster on two consecutive probes, or at equal speed when the route is a better class (LAN, then tailnet, direct, relay). It then rests for 30 seconds. A route that passes probes but fails to take over cools down for five minutes. Probing stops on LAN and only looks at better classes when the current route is already under the margin.
 
@@ -147,13 +147,17 @@ Evidence: `zuse-remote` state-machine tests; `crates/serve/tests/paired_link.rs`
 
 ## Running on another machine
 
-`zuse-server` finds the packaged web files itself, so one installed command is enough. Three commands cover the common cases:
+`zuse serve` finds the packaged web files itself, so one installed command is enough. The desktop app's `zuse` has it, and so does the standalone `zuse-cli` archive for machines without a display, which needs no desktop libraries. Three commands cover the common cases:
 
-- `zuse-server --lan` serves this network and prints a private link and QR code.
-- `zuse-server --account` signs in with a device code, links this computer to the account, and prints a link that works from anywhere.
-- `zuse-server --lan --tailscale-serve` also publishes over Tailscale HTTPS, which browsers trust without a warning.
+- `zuse serve --lan` serves this network and prints a private link and QR code.
+- `zuse serve --account` signs in with a device code, links this computer to the account, and prints a link that works from anywhere.
+- `zuse serve --lan --tailscale-serve` also publishes over Tailscale HTTPS, which browsers trust without a warning.
 
-With a server already running, `zuse-server pair` creates another link, `pair --app` shows the QR code for the Zuse apps, and `login`, `logout`, `link`, `unlink` and `status` act on the same engine over its loopback port. Pass `--ipc-port` when the server does not use the default.
+With a server already running, `zuse pair` creates another link and `pair --app` shows the QR code for the Zuse apps. `zuse link` makes the computer available through the account, signing in with a device code first when needed, and `zuse unlink` reverses it. `zuse status` reports the local workspace and, when an engine answers on the loopback port, its account, linked computer, routes and browser origin. Pass `--ipc-port` when the server does not use the default (`ZUSE_IPC_PORT`, else 27654). `zuse login` and `zuse logout` are unrelated to remote access: they manage the workspace sync session.
+
+`zuse daemon install --serve [serve flags]` keeps the server running as a systemd user unit or launchd agent; plain `zuse daemon install` runs `zuse headless` as before. The flags are written into the unit as given and checked at install time.
+
+`zuse-server` is the old name of `zuse serve`. Packages still install it, and invoked under that name the standalone binary keeps the old interface: `zuse-server [serve flags]`, plus `pair`, `login`, `logout`, `link`, `unlink`, `status` and `mcp`, where `login` and `logout` are the engine's account sign-in.
 
 ### Why LAN browsers use HTTPS
 

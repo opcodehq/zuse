@@ -26,7 +26,7 @@ pub mod change_requests;
 pub mod changes;
 mod chat_configuration;
 pub(crate) mod chat_find;
-pub mod cloud_ssh;
+pub use zuse_engine::cloud_ssh;
 mod comment_ui;
 pub mod comments;
 pub mod composer;

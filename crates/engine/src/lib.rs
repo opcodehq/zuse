@@ -1801,3 +1801,4 @@ fn replace_empty_device_id(temp_path: &Path, path: &Path) -> std::io::Result<()>
 }
 
 pub mod cloud;
+pub mod cloud_ssh;

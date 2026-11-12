@@ -78,7 +78,7 @@ cli-unlink = Ne plus rendre cet ordinateur accessible via votre compte
 
 cli-status = Afficher l'état du compte et du réseau
 
-cli-server_unavailable = Aucun serveur Zuse ne s'exécute sur le port d'agent { $port }. Démarrez d'abord zuse-server ou indiquez --ipc-port.
+cli-server_unavailable = Aucun serveur Zuse ne s'exécute sur le port d'agent { $port }. Démarrez d'abord zuse serve ou indiquez --ipc-port.
 
 cli-default_device = Nouvel appareil
 
@@ -90,7 +90,7 @@ cli-certificate_warning = La première fois, votre navigateur signalera le certi
 
 cli-link_warning = Toute personne disposant de ce lien peut utiliser cet ordinateur. Les liens inutilisés expirent après dix minutes.
 
-cli-local_only = Ce lien ne fonctionne que sur cet ordinateur. Démarrez zuse-server avec --lan ou --account pour connecter d'autres appareils.
+cli-local_only = Ce lien ne fonctionne que sur cet ordinateur. Démarrez zuse serve avec --lan ou --account pour connecter d'autres appareils.
 
 cli-sign_in_prompt = Ouvrez { $url } et confirmez le code { $code }
 
@@ -117,3 +117,61 @@ cli-status_no_routes = Réseau : cet ordinateur uniquement
 cli-assets_missing = Fichiers du navigateur introuvables. Les navigateurs ne pourront pas ouvrir ce serveur tant que vous n'aurez pas indiqué --assets ou défini ZUSE_WEB_ASSETS.
 
 cli-invitation_failed = Impossible de créer un lien de connexion
+
+cli-zuse_about = Contrôleur multi-appareils pour agents de code
+
+cli-arguments = Arguments
+
+cli-version = Afficher la version
+
+cli-engine_port = Port RPC local du moteur, par défaut ZUSE_IPC_PORT ou 27654 ; avec serve, 0 choisit un port disponible
+
+cli-lan = Permettre aux appareils associés de ce réseau et du tailnet de se connecter directement, avec chiffrement de bout en bout
+
+cli-lan_port = Port des connexions --lan
+
+cli-tailscale_serve = Publier aussi --lan en HTTPS via Tailscale pour les navigateurs
+
+cli-headless = Exécuter le moteur sans fenêtre
+
+cli-overview_status = Afficher l’état de l’espace de travail, du moteur et de l’accès à distance
+
+cli-session_login = Se connecter et activer la synchronisation de l’espace de travail au prochain démarrage du moteur
+
+cli-login_no_browser = Afficher un lien de connexion au lieu d’ouvrir un navigateur sur cet ordinateur
+
+cli-session_logout = Supprimer la session enregistrée ; le prochain démarrage du moteur sera uniquement local
+
+cli-sync = Afficher l’état de synchronisation du moteur en cours d’exécution
+
+cli-daemon = Exécuter Zuse comme service en arrière-plan
+
+cli-daemon_install = Installer, activer et démarrer le service
+
+cli-daemon_serve = Exécuter zuse serve avec les arguments qui suivent, au lieu de zuse headless
+
+cli-daemon_serve_args = Arguments pour zuse serve
+
+cli-daemon_uninstall = Arrêter et supprimer le service
+
+cli-daemon_start = Démarrer le service installé
+
+cli-daemon_stop = Arrêter le service
+
+cli-daemon_restart = Redémarrer le service
+
+cli-daemon_status = Afficher l’état du service
+
+cli-update = Rechercher une version plus récente et l’installer
+
+cli-update_check = Indiquer seulement si une mise à jour est disponible
+
+cli-appshot = Prendre un Appshot dans l’application ouverte
+
+cli-open_url = Lien Zuse à ouvrir
+
+cli-paired_link_file = Fichier privé contenant un lien d’association pour se connecter
+
+cli-desktop_missing = L’application de bureau Zuse n’est pas installée ici, aucune fenêtre ne peut donc s’ouvrir. Utilisez plutôt l’une de ces commandes.
+
+cli-status_remote = Accès à distance

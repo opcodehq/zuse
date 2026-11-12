@@ -1,6 +1,6 @@
 // Sidebar against live engine behaviour: ages, a working agent, a failed run, a long virtualized
 // list, real pointer drag, keyboard-only use, and an engine restart with actions while it is down.
-import { openBrowser, buildApp, repo, writeFixtureAgent } from "./harness.mjs";
+import { openBrowser, buildApp, repo, serveCommand, writeFixtureAgent } from "./harness.mjs";
 import { spawn, execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync, writeFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -30,7 +30,7 @@ const init = line({ type: "system", subtype: "init", session_id: "fixture", mode
 const replyEvents = (text) => [line({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text }] } }), line({ type: "result", subtype: "success", session_id: "fixture", is_error: false, result: text })].join("\n");
 
 const assets = process.env.ZUSE_ASSETS ?? buildApp();
-const binary = process.env.ZUSE_SERVER ?? [join(repo, "target/release/zuse-server"), join(repo, "target/debug/zuse-server")].find(existsSync);
+const binary = process.env.ZUSE_SERVER ?? [join(repo, "target/release/zuse-cli"), join(repo, "target/debug/zuse-cli")].find(existsSync);
 let child;
 let listen = "127.0.0.1:0";
 let url;
@@ -41,7 +41,7 @@ function engineEnv() {
   return env;
 }
 async function boot() {
-  child = spawn(binary, ["--listen", listen, "--ipc-port", "0", "--data-dir", join(root, "profile"), "--language", "en", "--assets", assets], {
+  child = spawn(binary, [...serveCommand(binary), "--listen", listen, "--ipc-port", "0", "--data-dir", join(root, "profile"), "--language", "en", "--assets", assets], {
     env: engineEnv(),
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -51,7 +51,7 @@ async function boot() {
   url = undefined;
   ipcPort = undefined;
   for (let i = 0; i < 200 && !(url && ipcPort); i++) {
-    if (child.exitCode !== null) throw new Error(`zuse-server exited:\n${log}`);
+    if (child.exitCode !== null) throw new Error(`zuse serve exited:\n${log}`);
     url = log.match(/Open (http\S+)/)?.[1];
     ipcPort = log.match(/Agent tools listen on 127\.0\.0\.1:(\d+)/)?.[1];
     await sleep(100);

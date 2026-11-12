@@ -977,13 +977,13 @@
     "cli-link_name": "a4a30346f9379f7fde6bd85272ef794681efde28ca7358fbd429cc4b9925a113",
     "cli-unlink": "b7d31f557480c718de0a3fb48073ec788f4a171fa083344cd70a9f548b006924",
     "cli-status": "cacb1c15cc653ca2185c7e0afe7ce3ba4cdcdad76651cea9ee9910434c8bc410",
-    "cli-server_unavailable": "7e750cc91f81d9a60f4e4d2854115d049288480cce54d8eb6fc59c0c46cb16b8",
+    "cli-server_unavailable": "b14aee407a13610f6ff4780e7b81817ab0381b1476bc1190709f60c37e67ff2e",
     "cli-default_device": "30d01a64f9a923c9e8391b7d479b6669e9e62acfed76ab3e539b301eb37acd11",
     "cli-browser_link": "53e1011fcb29735055ca067834d4f39895d096d7cec39b71553168bf979cdc8d",
     "cli-app_link": "2934fe411aa06095a1c1130adf2fc50ca5c6b727e865c770ba081f52dbeaf6cc",
     "cli-certificate_warning": "16e3921ea61ab38325b073a33a0a1d9d1fea8dd7f33c7fb728dd97205035da0f",
     "cli-link_warning": "fdfc70d7816cd40cfdd77b302a30e4a44cd04208299d455bff0eaea473fb31b8",
-    "cli-local_only": "b5f85c26352cb0f0bf59cae3f1c4666e48ec4df6956e6de00da1d324e777d661",
+    "cli-local_only": "95c5f7930ba13852b2e3991f21da907921b924c5a57979513f1d4865a5d69a63",
     "cli-sign_in_prompt": "5c0e06632b68b082f6e19b06845ca897097f4ac8ea36a1576c8b48792cd34a0d",
     "cli-signed_in": "5ad7fbafdeb9597c3ce7ddf68d680b650f8596dccb7cf4e6c4fc172ced45d678",
     "cli-signed_out": "80c6e7caffee367d7a8b9e6db3620dada71015d6f27f1fd07d1a4310075c1548",
@@ -997,6 +997,35 @@
     "cli-status_no_routes": "66ffc77fa2b13743337df61bbae451cd10f5ff71c56d1b11a4f322c4ad153181",
     "cli-assets_missing": "f9f5c8043a45dab95b046a95768e648c11af8fd2d6c789d8d29b6c04b052a109",
     "cli-invitation_failed": "5027a53917cec3bdc8dbc7a9edd4b7fa73dd90d905f76fa421eab0994e913a50",
+    "cli-zuse_about": "eff181896b56b756a8ce8de2f11fe3e967678c468c83afbba3c020c88a8d7cc0",
+    "cli-arguments": "7f816072c1c6a23b88dfde54c5aa48559a81803890d297d21f17943c4f2b643d",
+    "cli-version": "d1594877b41846e54442f5a0b81a90c0267293b3906e120dfbb092291aa2f5fb",
+    "cli-engine_port": "fbeca89f48f08fc51128c3dc01b1888d28f66d0a70a9f63af4be49428d8a9d86",
+    "cli-lan": "4ae2e0523cf4640f60b88b3dd3aa8be220f9d76b36d754d236152db7493c645d",
+    "cli-lan_port": "250fc216d6cea9ecb2121e9e074c37dba2cef31066872df1aa9adcffba26edee",
+    "cli-tailscale_serve": "916003c9ad88ab2dc08059a879aeafa4a795da02eb1d70468275338955561c7b",
+    "cli-headless": "ef63dfef2b448b5a5f55e7f88927fcbed8d8084d0df9d6a5bd5fd1bf07f83447",
+    "cli-overview_status": "47eac3bbc098af6ee5941ee3353900a912ffacb34924a06df1d02d501af80eb0",
+    "cli-session_login": "f432f0c94d760212d285bf0134167361162199a64b0eb273f48736a06bc4aa51",
+    "cli-login_no_browser": "40ee7ac0df0cea635b0a2d52ff03543e82fda03c659401562297649bccdcaaa4",
+    "cli-session_logout": "05d9d120e7acf946a6b2888b519b3abb4f2568a248746b6a9c064be76a8a9b20",
+    "cli-sync": "e9b5b3d1292daa11725b8876a8fff78ed38467d17802a2a8da8538729cd2318a",
+    "cli-daemon": "e5c5e7ab51967339eb5e83ca2c6089319186eab17be83179fc7815f7b88e9117",
+    "cli-daemon_install": "7a604dfdfb140a169218398754ddfdceb1fe999ee7fed86e4e5e4b9d42c9022e",
+    "cli-daemon_serve": "ee9d90893c34b00fc16ac3e44724bd1aa9f79ce46bf78f8620c0fea168a7a767",
+    "cli-daemon_serve_args": "955be12ad714df32e444fa14ac98f65d16df7842d31cfd5ea72ec7d7231cb95c",
+    "cli-daemon_uninstall": "ee7f2ae0873569442f3025af68165d8d9539996576913bf3127e1b351b26b190",
+    "cli-daemon_start": "d10963a0245d06289a64561a9131fdcac0518d18347cd0dab7427337ad60d47c",
+    "cli-daemon_stop": "8ecc9111ccbee0a2538b6c30c636e0216c917c13f1fa57719afbd89c87436172",
+    "cli-daemon_restart": "548789b1afce3836d1c26a285d674abe9531e413c08924fc368191cbe28e7fb5",
+    "cli-daemon_status": "b7a65ef0882ebd601024f65a9fb7ad29b1cc3f00e7a0d1dc9495c54d008f6fff",
+    "cli-update": "b4dea94f69c2c0afc978036aae00943b1a072a7141e0900f6ce1fdae1016a633",
+    "cli-update_check": "51bac72bc7ea178656aace2d3468a1250f586440227de38c893c98887e40ac6d",
+    "cli-appshot": "97d302d71cd04c36f20b25e99dfb850b9f4d647940ff3abf634cc9b73aa6c557",
+    "cli-open_url": "b82ec66d2292555ec05986894f09ddf12826c5451c76ad328a7572e4d4e0a66d",
+    "cli-paired_link_file": "720f7209a23ddf2638cd1ce98e58212c4e729dffcff4c6b7167aff65202cf5b3",
+    "cli-desktop_missing": "0c4f1e4d0fb41ddfd99e65c2366536bd4b7513d0e267be1086f91ece6f4a9af5",
+    "cli-status_remote": "66354a1d3225edbf01146504d06aaea1242dcf50424054c3001fc6fa2ddece0f",
     "commands-commands_no_authenticated_agent": "31371338c8f0e3d12ad8a372bceab0899b0a92caa5f29052cac62b9a01ef5c3b",
     "commands-commands_connect_an_agent_in_cloud_authentication_before_opening_a_new_tab": "eb306000b354573c7793077623eba2eb1113b34b5dd3a1529531212b7b4c1af8",
     "commands-default_keybindings_new_chat": "db18382a249e0206bc28514931d423b77d55dce180c1eb8e4bf35f861c9a50ec",
@@ -4481,6 +4510,14 @@
       "native-composer_placeholder": {
         "status": "needs-review",
         "sourceHash": "29c83f9429eb2a7f0360d241d700061afbb3a55c9525e7add9585d1dc4b134f2"
+      },
+      "cli-server_unavailable": {
+        "status": "needs-review",
+        "sourceHash": "7e750cc91f81d9a60f4e4d2854115d049288480cce54d8eb6fc59c0c46cb16b8"
+      },
+      "cli-local_only": {
+        "status": "needs-review",
+        "sourceHash": "b5f85c26352cb0f0bf59cae3f1c4666e48ec4df6956e6de00da1d324e777d661"
       }
     },
     "zh-Hant": {
@@ -4575,6 +4612,14 @@
       "native-composer_placeholder": {
         "status": "needs-review",
         "sourceHash": "29c83f9429eb2a7f0360d241d700061afbb3a55c9525e7add9585d1dc4b134f2"
+      },
+      "cli-server_unavailable": {
+        "status": "needs-review",
+        "sourceHash": "7e750cc91f81d9a60f4e4d2854115d049288480cce54d8eb6fc59c0c46cb16b8"
+      },
+      "cli-local_only": {
+        "status": "needs-review",
+        "sourceHash": "b5f85c26352cb0f0bf59cae3f1c4666e48ec4df6956e6de00da1d324e777d661"
       }
     },
     "ja": {
@@ -4669,6 +4714,14 @@
       "native-composer_placeholder": {
         "status": "needs-review",
         "sourceHash": "29c83f9429eb2a7f0360d241d700061afbb3a55c9525e7add9585d1dc4b134f2"
+      },
+      "cli-server_unavailable": {
+        "status": "needs-review",
+        "sourceHash": "7e750cc91f81d9a60f4e4d2854115d049288480cce54d8eb6fc59c0c46cb16b8"
+      },
+      "cli-local_only": {
+        "status": "needs-review",
+        "sourceHash": "b5f85c26352cb0f0bf59cae3f1c4666e48ec4df6956e6de00da1d324e777d661"
       }
     },
     "de": {
@@ -4763,6 +4816,14 @@
       "native-composer_placeholder": {
         "status": "needs-review",
         "sourceHash": "29c83f9429eb2a7f0360d241d700061afbb3a55c9525e7add9585d1dc4b134f2"
+      },
+      "cli-server_unavailable": {
+        "status": "needs-review",
+        "sourceHash": "7e750cc91f81d9a60f4e4d2854115d049288480cce54d8eb6fc59c0c46cb16b8"
+      },
+      "cli-local_only": {
+        "status": "needs-review",
+        "sourceHash": "b5f85c26352cb0f0bf59cae3f1c4666e48ec4df6956e6de00da1d324e777d661"
       }
     },
     "ko": {
@@ -4857,6 +4918,14 @@
       "native-composer_placeholder": {
         "status": "needs-review",
         "sourceHash": "29c83f9429eb2a7f0360d241d700061afbb3a55c9525e7add9585d1dc4b134f2"
+      },
+      "cli-server_unavailable": {
+        "status": "needs-review",
+        "sourceHash": "7e750cc91f81d9a60f4e4d2854115d049288480cce54d8eb6fc59c0c46cb16b8"
+      },
+      "cli-local_only": {
+        "status": "needs-review",
+        "sourceHash": "b5f85c26352cb0f0bf59cae3f1c4666e48ec4df6956e6de00da1d324e777d661"
       }
     },
     "fr": {
@@ -4951,6 +5020,14 @@
       "native-composer_placeholder": {
         "status": "needs-review",
         "sourceHash": "29c83f9429eb2a7f0360d241d700061afbb3a55c9525e7add9585d1dc4b134f2"
+      },
+      "cli-server_unavailable": {
+        "status": "needs-review",
+        "sourceHash": "7e750cc91f81d9a60f4e4d2854115d049288480cce54d8eb6fc59c0c46cb16b8"
+      },
+      "cli-local_only": {
+        "status": "needs-review",
+        "sourceHash": "b5f85c26352cb0f0bf59cae3f1c4666e48ec4df6956e6de00da1d324e777d661"
       }
     }
   }

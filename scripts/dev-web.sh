@@ -5,7 +5,7 @@ cd "$(dirname "$0")/.."
 
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   cat <<'USAGE'
-Usage: bash scripts/dev-web.sh [zuse-server options]
+Usage: bash scripts/dev-web.sh [zuse serve options]
 
 Build the browser and start its matching local engine. Open the private link
 printed by the server in a WebGPU-capable browser.
@@ -50,4 +50,4 @@ for option in ipc-port assets data-dir; do
 done
 
 bash scripts/build-web.sh
-exec python3 scripts/cargo_dev.py +stable run --locked -p zuse-cli --bin zuse-server -- "${server_defaults[@]}" "$@"
+exec python3 scripts/cargo_dev.py +stable run --locked -p zuse-cli --bin zuse-cli -- serve "${server_defaults[@]}" "$@"

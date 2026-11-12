@@ -158,9 +158,10 @@ pub async fn logout(config: EngineConfig) -> anyhow::Result<()> {
 }
 
 /// `zuse status`: report the fixed scope a new engine would select, optional
-/// auth, and engine liveness. Local-only is a healthy signed-out state.
-pub async fn status(config: EngineConfig) -> anyhow::Result<()> {
-    let auth = Engine::build_auth(&config).await;
+/// auth, and engine liveness. Local-only is a healthy signed-out state; the
+/// caller exits nonzero when the account needs attention.
+pub async fn status(config: &EngineConfig) -> anyhow::Result<bool> {
+    let auth = Engine::build_auth(config).await;
     let next_scope = Engine::initial_workspace_scope(&auth);
     let scope = live_engine_scope(config.ipc_port)
         .await
@@ -185,10 +186,7 @@ pub async fn status(config: EngineConfig) -> anyhow::Result<()> {
         },
         config.ipc_port
     );
-    if !account.healthy {
-        std::process::exit(1);
-    }
-    Ok(())
+    Ok(account.healthy)
 }
 
 /// Prefer the immutable scope of a live runtime. Falling back to the next-boot

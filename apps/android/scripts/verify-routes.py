@@ -120,7 +120,7 @@ with tempfile.TemporaryDirectory(prefix="zuse-route-check-") as data:
     logs = open(root_dir / "log", "w")
     relay = subprocess.Popen([str(target / "zuse-relay"), "--listen", f"127.0.0.1:{relay_port}", "--assets", str(root_dir / "assets"), "--host-token-file", str(token_file)], stdout=logs, stderr=logs)
     server = subprocess.Popen(
-        [str(target / "zuse-server"), "--listen", f"127.0.0.1:{port}", "--ipc-port", "0", "--data-dir", str(root_dir / "engine"), "--assets", str(root_dir / "assets"), "--lan", "--lan-port", str(lan_port), "--relay-origin", relay_origin, "--relay-host-token-file", str(token_file)],
+        [str(target / "zuse-cli"), "serve", "--listen", f"127.0.0.1:{port}", "--ipc-port", "0", "--data-dir", str(root_dir / "engine"), "--assets", str(root_dir / "assets"), "--lan", "--lan-port", str(lan_port), "--relay-origin", relay_origin, "--relay-host-token-file", str(token_file)],
         cwd=root, env=env, stdout=subprocess.PIPE, stderr=logs, text=True)
     filename = "host-test-" + secrets.token_hex(8) + ".json"
     try:
