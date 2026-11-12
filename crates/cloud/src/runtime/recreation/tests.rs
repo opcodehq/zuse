@@ -11,9 +11,8 @@ impl crate::objects::Objects for NeverObjects {
         panic!("test never writes backup")
     }
 }
-#[tokio::test]
-#[ignore = "requires isolated localhost PostgreSQL"]
-async fn computer_recreation_admission_and_verification_fault_matrix() {
+/// Isolated schema with one recreatable Boxd computer `ws-bob` on base `base`.
+async fn fixture() -> (PgPool, PgPool, String, RuntimeControl, i64, Value) {
     let url = std::env::var("ZUSE_CLOUD_TEST_DATABASE_URL").unwrap();
     assert!(matches!(
         reqwest::Url::parse(&url).unwrap().host_str(),
@@ -52,7 +51,7 @@ async fn computer_recreation_admission_and_verification_fault_matrix() {
         include_str!("../../../migrations/0012_provider_receipts.sql"),
         include_str!("../../../migrations/0013_recovery_receipts.sql"),
         include_str!("../../../migrations/0014_restore_receipts.sql"),
-        "ALTER TABLE api_cloud_workspaces ADD COLUMN managed_release_id text;CREATE TABLE cloud_managed_bases(provider text,release_id text,artifact_id text,state text,runtime_manifest jsonb);CREATE TABLE zuse_rust_account_event_outbox(owner_id text,kind text,resource_id text,workspace_id text,payload jsonb,created_at bigint)",
+        "ALTER TABLE api_cloud_workspaces ADD COLUMN managed_release_id text;CREATE TABLE cloud_managed_bases(provider text,release_id text,artifact_id text,state text,runtime_manifest jsonb,created_at bigint NOT NULL DEFAULT 0);CREATE TABLE zuse_rust_account_event_outbox(owner_id text,kind text,resource_id text,workspace_id text,payload jsonb,created_at bigint)",
         include_str!("../../../migrations/0023_managed_base_admission_lock.sql"),
     ] {
         sqlx::raw_sql(sql).execute(&pool).await.unwrap();
@@ -93,6 +92,12 @@ async fn computer_recreation_admission_and_verification_fault_matrix() {
         .unwrap();
     let config = json!({"runtimeGeneration":1,"gatewayEpoch":1,"runtimeRpcProtocol":zuse_protocol::cloud_gateway::RUST_RPC,"runtimeBootstrapReceipt":{"workspaceId":"ws-bob","generation":1,"gatewayEpoch":1},"runtimeCredentialKeyThumbprint":"key","runtimeSigningKeyThumbprint":"signing","managedReleaseId":"base","providerAuthMode":"broker-v1","rustRecreationVersion":1,"rustMemorySleepVersion":1,"rustRuntimeStorage":{"format":zuse_protocol::cloud::RUST_RUNTIME_STORAGE_FORMAT,"storageIncarnationId":"disk"},"rustStorageEnrollment":{"phase":"committed","generation":1,"sourceSandboxId":"machine-bob","storageIncarnationId":"disk","credentialKeyThumbprint":"key","signingKeyThumbprint":"signing","capabilities":[recovery::CAPABILITY,zuse_protocol::cloud_lifecycle::CAPABILITY,zuse_protocol::cloud_lifecycle::RECREATION_CAPABILITY]}});
     sqlx::query("UPDATE api_cloud_workspaces SET managed_release_id='base',request_config=$1,wrapped_transcript_key=$2 WHERE workspace_id='ws-bob'").bind(&config).bind(wrapped).execute(&pool).await.unwrap();
+    (admin, pool, schema, c, now, config)
+}
+#[tokio::test]
+#[ignore = "requires isolated localhost PostgreSQL"]
+async fn computer_recreation_admission_and_verification_fault_matrix() {
+    let (admin, pool, schema, c, now, config) = fixture().await;
     let bob = Access {
         actor: Principal {
             account_id: "user-bob".into(),
@@ -103,21 +108,27 @@ async fn computer_recreation_admission_and_verification_fault_matrix() {
     };
     let key = uuid::Uuid::new_v4().to_string();
     let op = c
-        .recreate_computer("ws-bob", &bob, &key, now)
+        .recreate_computer("ws-bob", &bob, &key, None, now)
         .await
         .unwrap();
     let id = op["operationId"].as_str().unwrap();
     assert_eq!(op["state"], "quiescing");
     assert_eq!(
-        c.recreate_computer("ws-bob", &bob, &key, now + 1)
+        c.recreate_computer("ws-bob", &bob, &key, None, now + 1)
             .await
             .unwrap()["operationId"],
         id
     );
     assert!(
-        c.recreate_computer("ws-bob", &bob, &uuid::Uuid::new_v4().to_string(), now + 1)
-            .await
-            .is_err()
+        c.recreate_computer(
+            "ws-bob",
+            &bob,
+            &uuid::Uuid::new_v4().to_string(),
+            None,
+            now + 1
+        )
+        .await
+        .is_err()
     );
     let pause: Value = sqlx::query_scalar(
         "SELECT to_jsonb(l) FROM zuse_rust_lifecycle_operations l WHERE action='pause'",
@@ -364,6 +375,7 @@ async fn computer_recreation_admission_and_verification_fault_matrix() {
             "ws-alice",
             &alice,
             &uuid::Uuid::new_v4().to_string(),
+            None,
             now + 11000,
         )
         .await
@@ -503,6 +515,189 @@ async fn computer_recreation_admission_and_verification_fault_matrix() {
         .unwrap(),
         0
     );
+    pool.close().await;
+    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+        .execute(&admin)
+        .await
+        .unwrap();
+    admin.close().await;
+}
+
+#[tokio::test]
+#[ignore = "requires isolated localhost PostgreSQL"]
+async fn update_computer_recreates_onto_the_newest_compatible_base() {
+    let (admin, pool, schema, c, now, mut config) = fixture().await;
+    let base: Value = sqlx::query_scalar(
+        "SELECT runtime_manifest FROM cloud_managed_bases WHERE release_id='base'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    for (release, artifact, arch, created) in [
+        ("base-v2", "snapshot-v2", "x86_64", 10_i64),
+        // Newer, but another architecture cannot restore this computer's disk.
+        ("base-arm", "snapshot-arm", "aarch64", 20),
+    ] {
+        let mut manifest = base.clone();
+        manifest["releaseId"] = json!(release);
+        manifest["artifactId"] = json!(artifact);
+        manifest["architecture"] = json!(arch);
+        manifest["manifest"]["buildId"] = json!(release);
+        manifest["manifest"]["rustRecreationVersion"] = json!(1);
+        manifest["manifest"]["rustRuntimeRepairVersion"] = json!(1);
+        let parsed: crate::managed_bases::ManagedBaseRelease =
+            serde_json::from_value(manifest.clone()).unwrap();
+        parsed.validate().unwrap();
+        sqlx::query("INSERT INTO cloud_managed_bases VALUES('boxd',$1,$2,'verified',$3,$4)")
+            .bind(release)
+            .bind(artifact)
+            .bind(manifest)
+            .bind(created)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    config["agent"] = json!("codex");
+    sqlx::query("UPDATE api_cloud_workspaces SET request_config=$1 WHERE workspace_id='ws-bob'")
+        .bind(&config)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let bob = Access {
+        actor: Principal {
+            account_id: "user-bob".into(),
+        },
+        scope: Scope::Personal,
+        owner_id: "user-bob".into(),
+        membership: None,
+    };
+    let key = uuid::Uuid::new_v4().to_string();
+    let invalid = c
+        .recreate_computer("ws-bob", &bob, &key, Some("newest"), now)
+        .await
+        .unwrap_err();
+    assert_eq!(invalid.code, "invalid_recreation_target_release");
+    let op = c
+        .recreate_computer("ws-bob", &bob, &key, Some(TARGET_LATEST), now)
+        .await
+        .unwrap();
+    assert_eq!(op["targetReleaseId"], "base-v2");
+    let id = op["operationId"].as_str().unwrap();
+    let stored: Value = sqlx::query_scalar(
+        "SELECT to_jsonb(r) FROM zuse_rust_computer_recreations r WHERE operation_id=$1",
+    )
+    .bind(id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(stored["managed_release_id"], "base", "source release kept");
+    assert_eq!(stored["source_artifact_id"], "snapshot-v2");
+    // Same path as an ordinary recreation: full pause, capture, retire.
+    let pause: Value = sqlx::query_scalar(
+        "SELECT to_jsonb(l) FROM zuse_rust_lifecycle_operations l WHERE action='pause'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    sqlx::query("UPDATE api_cloud_workspaces SET state='paused',runtime_state='offline',request_config=jsonb_set(request_config,'{rustLifecycleOperation,phase}','\"paused\"') WHERE workspace_id='ws-bob'").execute(&pool).await.unwrap();
+    sqlx::query("UPDATE zuse_rust_lifecycle_operations SET phase='paused' WHERE operation_id=$1")
+        .bind(pause["operation_id"].as_str())
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE zuse_rust_jobs SET state='completed' WHERE kind=$1 AND resource_id='ws-bob'",
+    )
+    .bind(lifecycle::JOB_KIND)
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(c.recreation_once(now + 2).await.unwrap());
+    let row: Value = sqlx::query_scalar(
+        "SELECT to_jsonb(w) FROM api_cloud_workspaces w WHERE workspace_id='ws-bob'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(capture_intent(&row), "code={}", row["status_code"]);
+    assert_eq!(
+        row["managed_release_id"], "base",
+        "not repinned before the original is retired"
+    );
+    let archive = recovery::archive(&row).unwrap();
+    let manifest = json!({"version":1,"operationId":archive.id,"workspaceId":"ws-bob","chatId":"chat-bob","sessionId":"session-bob","chunks":["a".repeat(64)],"archiveSha256":"b".repeat(64)});
+    let mut verified = archive.clone();
+    verified.phase = ArchivePhase::Retiring;
+    verified.verified_chunks = 1;
+    verified.manifest = Some(serde_json::from_value(manifest.clone()).unwrap());
+    sqlx::query("UPDATE api_cloud_workspaces SET request_config=jsonb_set(request_config,'{recoveryArchive}',$1) WHERE workspace_id='ws-bob'").bind(json!(verified)).execute(&pool).await.unwrap();
+    sqlx::query("UPDATE zuse_rust_recovery_operations SET phase='retiring',manifest=$1,verified_at=$2,verified_archive_sha256=$3 WHERE operation_id=$4").bind(&manifest).bind(now+5000).bind("b".repeat(64)).bind(&archive.id).execute(&pool).await.unwrap();
+    c.recreation_once(now + 6000).await.unwrap();
+    let phase = |pool: PgPool, id: String| async move {
+        sqlx::query_scalar::<_, String>(
+            "SELECT phase FROM zuse_rust_computer_recreations WHERE operation_id=$1",
+        )
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+    };
+    assert_eq!(phase(pool.clone(), id.into()).await, "retiring");
+    let remote = LostRetirement {
+        pool: pool.clone(),
+        calls: Default::default(),
+        completed: Default::default(),
+    };
+    sqlx::query("UPDATE zuse_rust_jobs SET due_at=0,lease_expires_at=0 WHERE kind=$1")
+        .bind(recovery::JOB_KIND)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(c.recovery_once(&remote, now + 6002).await.is_err());
+    remote
+        .completed
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    sqlx::query("UPDATE zuse_rust_jobs SET due_at=0,lease_expires_at=0 WHERE kind=$1")
+        .bind(recovery::JOB_KIND)
+        .execute(&pool)
+        .await
+        .unwrap();
+    c.recovery_once(&remote, now + 6003).await.unwrap();
+    sqlx::query("INSERT INTO api_cloud_billing_periods VALUES('recreate-period','user-bob','polar',NULL,'manual','USD',$1,$2,1000,1000,500,500,$1)").bind(now-1000).bind(now+86400000).execute(&pool).await.unwrap();
+    c.recreation_once(now + 8000).await.unwrap();
+    let restored: Value = sqlx::query_scalar(
+        "SELECT to_jsonb(w) FROM api_cloud_workspaces w WHERE workspace_id='ws-bob'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        restored["request_config"]["rustRecreation"]["phase"], "restoring",
+        "code={}",
+        restored["status_code"]
+    );
+    assert_eq!(restored["managed_release_id"], "base-v2");
+    assert_eq!(restored["request_config"]["managedReleaseId"], "base-v2");
+    assert_eq!(restored["request_config"]["rustRuntimeRepairVersion"], 1);
+    assert_eq!(restored["request_config"]["rustRecreationVersion"], 1);
+    assert!(
+        restored["request_config"]["rustMemorySleepVersion"].is_null(),
+        "release flags follow the new base"
+    );
+    assert_eq!(
+        restored["request_config"]["rustRuntimeStorage"]["storageIncarnationId"], "disk",
+        "the same captured state is restored"
+    );
+    let restore: Value = sqlx::query_scalar("SELECT to_jsonb(r) FROM zuse_rust_restores r")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(restore["snapshot_id"], "snapshot-v2");
+    // Later steps accept the new pin instead of fencing the operation.
+    c.recreation_once(now + 10000).await.unwrap();
+    assert_eq!(phase(pool.clone(), id.into()).await, "restoring");
+    let status = c.recreation_status("ws-bob", id, &bob).await.unwrap();
+    assert_eq!(status["targetReleaseId"], "base-v2");
     pool.close().await;
     sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
         .execute(&admin)

@@ -2271,6 +2271,26 @@ impl AppState {
         }
     }
 
+    /// Give an echo a new message id in place: a message sent again under a
+    /// new identity keeps its spot and time in the chat. False when absent.
+    pub(crate) fn rekey_echo(&mut self, chat_id: &str, from: &str, to: &str) -> bool {
+        let Some(echo) = self
+            .echoes
+            .get_mut(chat_id)
+            .and_then(|echoes| echoes.iter_mut().find(|e| e.id == from))
+        else {
+            return false;
+        };
+        echo.id = to.to_owned();
+        for part in &mut echo.parts {
+            if let zuse_model::MessagePart::Text { id, .. } = part {
+                *id = format!("text:{to}");
+            }
+        }
+        self.transcript_revision = self.transcript_revision.wrapping_add(1);
+        true
+    }
+
     /// Drop a cloud message that only the server's admission record shows
     /// (it never reached the transcript) — it was discarded or retried.
     pub(crate) fn remove_admission_message(&mut self, chat_id: &str, message_id: &str) {

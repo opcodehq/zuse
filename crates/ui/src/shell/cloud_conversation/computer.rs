@@ -507,6 +507,29 @@ impl CloudConversation {
         }));
         cx.notify();
     }
+    /// The composer's Update computer started a recreation: follow it like
+    /// one started from this menu.
+    pub(super) fn computer_recreation_started(
+        &mut self,
+        recreation: Value,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.authorized {
+            return;
+        }
+        self.computer.metadata["computerRecreation"] = recreation;
+        self.execution = None;
+        self.terminal = None;
+        self.status = json!({"state":"connecting","message":"Updating computer…"});
+        self.state.update(cx, |state, cx| {
+            state.detach_cloud_conversation_execution(cx)
+        });
+        self.environment = None;
+        self.watch_environment(false, cx);
+        self.refresh_computer(cx);
+        self.refresh_history(cx);
+        cx.notify();
+    }
     fn sync_body(&self) -> Value {
         json!({"expectedAccountId":self.target.subject,"expectedOrganizationId":self.target.organization,"workspaceId":self.target.workspace})
     }

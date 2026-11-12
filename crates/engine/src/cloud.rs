@@ -11,6 +11,7 @@ pub mod local_terminal;
 pub mod mirror;
 mod recreation;
 mod repair;
+mod runtime_update;
 #[cfg(not(target_arch = "wasm32"))]
 mod sidebar_cache;
 #[cfg(unix)]
@@ -230,6 +231,7 @@ pub fn handles(method: &str) -> bool {
             | zuse_protocol::methods::CLOUD_SYNC_CONFIGURE
             | zuse_protocol::methods::CLOUD_SYNC_RETRY
             | zuse_protocol::methods::CLOUD_COMPUTER_RECREATION
+            | zuse_protocol::methods::CLOUD_RUNTIME_UPDATE_STATUS
             | zuse_protocol::methods::CLOUD_ALLOCATION_RETRY
             | zuse_protocol::methods::CLOUD_RUNTIME_REPAIR
             | zuse_protocol::methods::CLOUD_PAUSE
@@ -701,6 +703,11 @@ impl CloudApi {
                     .and_then(unknown_outcome::UnknownOutcome::from_code)
                 {
                     return Err(unknown.into());
+                }
+                // The app acts on these itself (waits for the update, or offers
+                // Update computer), so it gets the code rather than a sentence.
+                if let Some(code) = value["error"].as_str().and_then(runtime_update::rejection) {
+                    return Err(TaskRejection(code).into());
                 }
                 if let Some(message) = value["error"].as_str().and_then(task_rejection) {
                     return Err(TaskRejection(message).into());
@@ -1480,6 +1487,10 @@ impl CloudApi {
             }
             zuse_protocol::methods::CLOUD_COMPUTER_RECREATION => {
                 self.computer_recreation(&token, &account, organization.as_deref(), &params)
+                    .await?
+            }
+            zuse_protocol::methods::CLOUD_RUNTIME_UPDATE_STATUS => {
+                self.runtime_update_status(&token, &account, organization.as_deref(), &params)
                     .await?
             }
             zuse_protocol::methods::CLOUD_ALLOCATION_RETRY => {

@@ -9,6 +9,8 @@ use zuse_protocol::cloud::ArchivePhase;
 pub(super) mod environment;
 mod worker;
 pub const MIGRATION: &str = include_str!("../../migrations/0027_computer_recreations.sql");
+/// `targetRelease` value asking recreation for the newest compatible base.
+pub const TARGET_LATEST: &str = "latest";
 const WORKLOAD_LIMIT: &str = "Recreation restores repositories, Zuse data and supported agent session files. Other home files and software installed outside the environment setup are not copied. Record installation commands in Environment setup before recreating.";
 fn fenced() -> ApiError {
     ApiError::conflict("computer_recreation_fenced")
@@ -16,13 +18,57 @@ fn fenced() -> ApiError {
 fn unavailable() -> ApiError {
     ApiError::conflict("computer_recreation_unavailable")
 }
-fn public(operation: &Value) -> Value {
-    json!({"operationId":operation["operation_id"],"workspaceId":operation["workspace_id"],"state":operation["phase"],"requiresAttention":operation["phase"]=="attention-required","failedStage":operation["retry_phase"],"errorCode":operation["error_code"],"recoveryVerified":operation["verified_archive_sha256"].is_string(),"createdAt":operation["created_at"],"updatedAt":operation["updated_at"],"softwareNotice":WORKLOAD_LIMIT})
+/// `intent` is the workspace's `rustRecreation`; it carries the target base.
+fn public(operation: &Value, intent: &Value) -> Value {
+    let target = if intent["operationId"] == operation["operation_id"] {
+        intent["targetReleaseId"].clone()
+    } else {
+        Value::Null
+    };
+    json!({"operationId":operation["operation_id"],"workspaceId":operation["workspace_id"],"state":operation["phase"],"requiresAttention":operation["phase"]=="attention-required","failedStage":operation["retry_phase"],"errorCode":operation["error_code"],"recoveryVerified":operation["verified_archive_sha256"].is_string(),"createdAt":operation["created_at"],"updatedAt":operation["updated_at"],"targetReleaseId":target,"softwareNotice":WORKLOAD_LIMIT})
+}
+/// The newer base an "Update computer" recreation moves onto, if any. Server
+/// owned; only meaningful while that recreation is active.
+pub(super) fn target_release(row: &Value) -> Option<&str> {
+    leases_blocked(row)
+        .then(|| row["request_config"]["rustRecreation"]["targetReleaseId"].as_str())
+        .flatten()
+}
+/// Release-derived workspace flags; mirrors managed creation.
+const RELEASE_FLAGS: &[&str] = &[
+    "rustGithubCliVersion",
+    "rustRecreationVersion",
+    "rustRuntimeRepairVersion",
+    "rustRuntimeSupervisorVersion",
+    "rustToolOutputVersion",
+    "rustMemorySleepVersion",
+];
+const RELEASE_KEYS: &[&str] = &["providerArtifactBinding", "initialRuntimeBootstrap"];
+/// Repin a workspace config onto `settings` (a `ManagedBaseRelease::settings()`).
+pub(super) fn repin_config(config: &mut Value, settings: &Value) -> Result<(), ApiError> {
+    let object = config.as_object_mut().ok_or_else(fenced)?;
+    for flag in RELEASE_FLAGS {
+        if settings[*flag] == 1 {
+            object.insert((*flag).into(), json!(1));
+        } else {
+            object.remove(*flag);
+        }
+    }
+    for key in RELEASE_KEYS {
+        if settings[*key].is_null() {
+            object.remove(*key);
+        } else {
+            object.insert((*key).into(), settings[*key].clone());
+        }
+    }
+    let release = settings["managedReleaseId"].as_str().ok_or_else(fenced)?;
+    object.insert("managedReleaseId".into(), json!(release));
+    Ok(())
 }
 pub(crate) fn workspace_metadata(row: &Value) -> Value {
     let config = &row["request_config"];
     let operation = &config["rustRecreation"];
-    json!({"computerRecreation":if operation["operationId"].is_string(){json!({"operationId":operation["operationId"],"state":operation["phase"],"requiresAttention":operation["phase"]=="attention-required","errorCode":if operation["phase"]=="attention-required"{row["status_code"].clone()}else{Value::Null},"softwareNotice":WORKLOAD_LIMIT})}else{Value::Null}})
+    json!({"computerRecreation":if operation["operationId"].is_string(){json!({"operationId":operation["operationId"],"state":operation["phase"],"requiresAttention":operation["phase"]=="attention-required","errorCode":if operation["phase"]=="attention-required"{row["status_code"].clone()}else{Value::Null},"targetReleaseId":operation["targetReleaseId"],"softwareNotice":WORKLOAD_LIMIT})}else{Value::Null}})
 }
 /// Config is server-owned. All source identities remain bound while the archive
 /// worker uses the explicit paused-computer capture mode.
@@ -133,6 +179,15 @@ impl RuntimeControl {
         if row["request_config"]["managedReleaseId"] != release {
             return Err(fenced());
         }
+        if let Some(target) = target_release(row) {
+            return Ok(crate::managed_bases::recreation_target(
+                tx,
+                required(row, "provider")?,
+                target,
+            )
+            .await?
+            .artifact_id);
+        }
         if row["request_config"]["managedCandidateSha256"].is_string() {
             let pin = self
                 .staging_candidate
@@ -160,10 +215,14 @@ impl RuntimeControl {
         id: &str,
         access: &Access,
         key: &str,
+        target: Option<&str>,
         now: i64,
     ) -> Result<Value, ApiError> {
         if uuid::Uuid::parse_str(key).is_err() {
             return Err(ApiError::bad_request("invalid_recreation_idempotency_key"));
+        }
+        if target.is_some_and(|target| target != TARGET_LATEST) {
+            return Err(ApiError::bad_request("invalid_recreation_target_release"));
         }
         self.recreation_schema().await?;
         self.recovery_ready().await?;
@@ -189,7 +248,7 @@ impl RuntimeControl {
                 ));
             }
             tx.commit().await?;
-            return Ok(public(&prior));
+            return Ok(public(&prior, &row["request_config"]["rustRecreation"]));
         }
         if !self.recreation_eligible(&row) {
             return Err(unavailable());
@@ -204,7 +263,31 @@ impl RuntimeControl {
         if recovery::archive(&row).is_ok_and(|archive| archive.phase != ArchivePhase::Restored) {
             return Err(ApiError::conflict("archive_operation_in_progress"));
         }
-        let artifact = self.recreation_source(&mut tx, &row, now).await?;
+        let mut artifact = self.recreation_source(&mut tx, &row, now).await?;
+        // "Update computer": restore the verified capture onto the newest
+        // compatible base. A staging-candidate pin is an exact operator
+        // selection, so those computers keep it.
+        let mut target_release_id = None;
+        if target == Some(TARGET_LATEST)
+            && row["request_config"]["managedCandidateSha256"].is_null()
+        {
+            let config = &row["request_config"];
+            let latest = crate::managed_bases::latest_recreation_target(
+                &mut tx,
+                required(&row, "provider")?,
+                required(&row, "managed_release_id")?,
+                &crate::managed_bases::RecreationNeeds {
+                    agent: required(config, "agent")?,
+                    size: config["computerSizeId"].as_str().unwrap_or("default"),
+                    organization: required(&row, "account_id")?.starts_with("organization:"),
+                },
+            )
+            .await?;
+            if row["managed_release_id"] != latest.release_id.as_str() {
+                artifact = latest.artifact_id;
+                target_release_id = Some(latest.release_id);
+            }
+        }
         let source = required(&row, "provider_sandbox_id")?;
         let incarnation = required(
             &row["request_config"]["rustRuntimeStorage"],
@@ -249,8 +332,11 @@ impl RuntimeControl {
         config["rustLifecycleOperation"] =
             json!({"id":linked,"action":if asleep {"resume"}else{"pause"},"phase":phase});
         config["rustRecreation"] = json!({"operationId":operation,"actorId":access.actor.account_id,"phase":phase,"sourceGeneration":generation,"sourceMachineId":source,"storageIncarnationId":incarnation});
+        if let Some(target) = &target_release_id {
+            config["rustRecreation"]["targetReleaseId"] = json!(target);
+        }
         sqlx::query("UPDATE api_cloud_workspaces SET state=$2,desired_state=$3,request_config=$4,status_code=$5,revision=revision+1,updated_at=GREATEST(updated_at+1,$6),next_action_at=$6 WHERE workspace_id=$1")
-            .bind(id).bind(if asleep {"resuming"}else{"pausing"}).bind(if asleep {"ready"}else{"paused"}).bind(config).bind(format!("computer-recreate-{phase}")).bind(now).execute(&mut *tx).await?;
+            .bind(id).bind(if asleep {"resuming"}else{"pausing"}).bind(if asleep {"ready"}else{"paused"}).bind(&config).bind(format!("computer-recreate-{phase}")).bind(now).execute(&mut *tx).await?;
         let job = jobs::enqueue(
             &mut tx,
             &format!("lifecycle:{linked}"),
@@ -272,7 +358,7 @@ impl RuntimeControl {
         .fetch_one(&mut *tx)
         .await?;
         tx.commit().await?;
-        Ok(public(&operation))
+        Ok(public(&operation, &config["rustRecreation"]))
     }
     pub async fn recreation_status(
         &self,
@@ -286,7 +372,7 @@ impl RuntimeControl {
         let row:Value=sqlx::query_scalar("SELECT to_jsonb(w) FROM api_cloud_workspaces w WHERE workspace_id=$1 AND account_id=$2").bind(id).bind(&access.owner_id).fetch_optional(&self.pool).await?.ok_or_else(||ApiError::not_found("cloud_workspace_not_found"))?;
         access.workspace_permission(&access.owner_id, &row["request_config"])?;
         let op:Value=sqlx::query_scalar("SELECT to_jsonb(r) FROM zuse_rust_computer_recreations r WHERE operation_id=$1 AND workspace_id=$2 AND owner_id=$3").bind(operation).bind(id).bind(&access.owner_id).fetch_optional(&self.pool).await?.ok_or_else(||ApiError::not_found("computer_recreation_not_found"))?;
-        Ok(public(&op))
+        Ok(public(&op, &row["request_config"]["rustRecreation"]))
     }
 }
 
@@ -362,7 +448,7 @@ impl RuntimeControl {
         let op:Value=sqlx::query_scalar("SELECT to_jsonb(r) FROM zuse_rust_computer_recreations r WHERE operation_id=$1 AND workspace_id=$2 AND owner_id=$3 FOR UPDATE").bind(operation).bind(id).bind(&access.owner_id).fetch_optional(&mut *tx).await?.ok_or_else(||ApiError::not_found("computer_recreation_not_found"))?;
         if op["phase"] != "attention-required" {
             tx.commit().await?;
-            return Ok(public(&op));
+            return Ok(public(&op, &row["request_config"]["rustRecreation"]));
         }
         if op["actor_id"] != access.actor.account_id {
             return Err(ApiError::forbidden("computer_recreation_requestor_changed"));
@@ -383,7 +469,7 @@ impl RuntimeControl {
         .fetch_one(&mut *tx)
         .await?;
         tx.commit().await?;
-        Ok(public(&current))
+        Ok(public(&current, &row["request_config"]["rustRecreation"]))
     }
 }
 

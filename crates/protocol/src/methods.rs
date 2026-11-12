@@ -309,6 +309,9 @@ pub const CLOUD_RUNTIME_REPAIR: &str = "CloudRuntimeRepair";
 pub const CLOUD_ALLOCATION_RETRY: &str = "CloudAllocationRetry";
 /// Verified backup followed by explicit replacement of the task computer.
 pub const CLOUD_COMPUTER_RECREATION: &str = "CloudComputerRecreation";
+/// Read a cloud computer's in-place runtime update
+/// ([`crate::cloud_runtime_updates::UpdateStatus`]) while a message waits on it.
+pub const CLOUD_RUNTIME_UPDATE_STATUS: &str = "CloudRuntimeUpdateStatus";
 pub const CLOUD_WORKSPACE: &str = "CloudWorkspace";
 pub const CLOUD_ACCOUNT_STATUS: &str = "CloudAccountStatus";
 pub const CLOUD_ACCOUNT_SIGN_IN: &str = "CloudAccountSignIn";
@@ -404,7 +407,8 @@ pub fn retryable_read(method: &str, params: &serde_json::Value) -> bool {
         | crate::project_creation::DEFAULT_PARENT
         | crate::project_creation::GITHUB_STATUS
         | crate::project_creation::GITHUB_REPOS
-        | SEARCH_FILES => true,
+        | SEARCH_FILES
+        | CLOUD_RUNTIME_UPDATE_STATUS => true,
         CLOUD_ENVIRONMENT => {
             params.get("interactiveResume") == Some(&serde_json::Value::Bool(false))
         }
