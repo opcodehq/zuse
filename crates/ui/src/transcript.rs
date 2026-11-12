@@ -26,6 +26,7 @@
 //! streaming has advanced beyond the last measured frame.
 
 use crate::localization::message as tr;
+use crate::tooltip::TooltipExt as _;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ops::Range;
@@ -7111,7 +7112,7 @@ impl Transcript {
                         cx.stop_propagation();
                         this.dispatch_fork_menu(index, cx)
                     }))
-                    .tooltip(crate::settings::widgets::text_tooltip(tooltip))
+                    .tip(tooltip)
                     .tooltip_show_delay(std::time::Duration::from_millis(500))
                     .child(
                         crate::icons::icon(crate::icons::FORK)
@@ -7961,7 +7962,7 @@ impl Transcript {
                     .max_w_full()
                     .min_w_0()
                     .flex()
-                    .tooltip(crate::settings::widgets::text_tooltip(path.clone()))
+                    .tip(path.clone())
                     .child(user_file_pill(
                         SharedString::from(format!("{row_id}#mention-pill{fix}")),
                         name,
@@ -8159,7 +8160,7 @@ impl Transcript {
             let mut chip =
                 crate::badges::pill(SharedString::from(format!("{row_id}#att{aix}")), &theme)
                     .pl(px(6.0))
-                    .tooltip(crate::settings::widgets::text_tooltip(att.name.clone()));
+                    .tip(att.name.clone());
             let thumb: AnyElement = match state {
                 AttachmentSnapshot::Loaded(image) => {
                     let preview = crate::attachments::PreviewImage::new(
@@ -8883,7 +8884,7 @@ impl Transcript {
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.copy_message(entry_id.clone(), text.clone(), cx)
                         }))
-                        .tooltip(crate::settings::widgets::text_tooltip("Copy message"))
+                        .tip("Copy message")
                         .child(
                             crate::icons::icon(if copied_message {
                                 crate::icons::CHECK
@@ -8929,9 +8930,7 @@ impl Transcript {
                             cx.stop_propagation();
                             this.toggle_fork_menu(entry_id.clone(), chat_id.clone(), window, cx);
                         }))
-                        .when(!fork_menu_here, |button| {
-                            button.tooltip(crate::settings::widgets::text_tooltip("Fork chat"))
-                        })
+                        .when(!fork_menu_here, |button| button.tip("Fork chat"))
                         .child(
                             crate::icons::icon(crate::icons::FORK)
                                 .size(px(14.0))
@@ -10310,9 +10309,7 @@ impl gpui::Element for ChipOverlays {
                             )
                         )
                     })
-                    .when(link, |target| {
-                        target.tooltip(crate::settings::widgets::text_tooltip(path.to_string()))
-                    })
+                    .when(link, |target| target.tip(path.to_string()))
                     .on_click(move |event, window, cx| {
                         // A drag that selects text across the chip is not a click.
                         if event.click_count() == 1

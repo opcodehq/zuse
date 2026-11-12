@@ -1,5 +1,6 @@
 //! Compact chat/PR permission controls, backed by the owning engine's watch.
 use crate::localization::message as tr;
+use crate::tooltip::TooltipExt as _;
 use crate::{state::AppState, theme::Theme};
 use gpui::{Context, Entity, SharedString, Subscription, Task, Window, div, prelude::*, px};
 use std::time::Duration;
@@ -275,10 +276,7 @@ impl Render for PrWatchControl {
             .rounded(px(5.0))
             .when(!fix_ready, |el| el.opacity(0.45))
             .focus_visible(move |el| el.border_1().border_color(theme.accent))
-            .tooltip(crate::settings::widgets::text_tooltip(tr(
-                cx,
-                msg::native::pr_watch_auto_fix_help,
-            )))
+            .tip(tr(cx, msg::native::pr_watch_auto_fix_help))
             .when(fix_ready, |el| {
                 el.cursor_pointer()
                     .on_click(cx.listener(move |control, _, _, cx| {

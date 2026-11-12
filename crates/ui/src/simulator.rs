@@ -1,5 +1,6 @@
 //! Simulator picker, setup requirements, and a bounded native image viewer.
 use crate::localization::message as tr;
+use crate::tooltip::TooltipExt as _;
 use crate::{state::EngineHandle, theme::Theme};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use gpui::{
@@ -661,7 +662,7 @@ impl SimulatorPane {
             .justify_center()
             .rounded(px(5.))
             .cursor_pointer()
-            .tooltip(crate::settings::widgets::text_tooltip(label))
+            .tip(label)
             .focus_visible(|s| s.border_1().border_color(theme.accent))
             .hover(|s| s.bg(theme.muted_fill()))
             .child(

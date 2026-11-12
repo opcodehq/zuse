@@ -345,9 +345,7 @@ impl Shell {
             device,
         )
         .id("session-info-device")
-        .when_some(project.map(|(_, path)| path), |row, path| {
-            row.tooltip(crate::settings::widgets::text_tooltip(path))
-        })
+        .when_some(project.map(|(_, path)| path), |row, path| row.tip(path))
         .when(!local, |row| {
             row.child(
                 row_meta(&theme).child(div().size(px(6.0)).rounded_full().bg(if online {
@@ -364,9 +362,7 @@ impl Shell {
             Some(branch) => Some(
                 info_row(&theme, row_glyph(icons::GIT_BRANCH, &theme), branch.clone())
                     .id("session-info-branch")
-                    .tooltip(crate::settings::widgets::text_tooltip(
-                        checkout_path.clone().unwrap_or(branch),
-                    ))
+                    .tip(checkout_path.clone().unwrap_or(branch))
                     .into_any_element(),
             ),
             None => checkout.map(|(worktree, path)| {
@@ -378,7 +374,7 @@ impl Shell {
                 info_row(&theme, row_glyph(glyph, &theme), label.into())
                     .id("session-info-checkout")
                     .debug_selector(|| "session-info-checkout".into())
-                    .tooltip(crate::settings::widgets::text_tooltip(path))
+                    .tip(path)
                     .into_any_element()
             }),
         };
@@ -691,7 +687,7 @@ impl Shell {
         let folder = synced.map(|path| {
             let reveal_path = path.clone();
             action_row(&theme, "cloud-session-info-folder")
-                .tooltip(crate::settings::widgets::text_tooltip(path))
+                .tip(path)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.close_session_info_overlay(cx);
                     cx.reveal_path(std::path::Path::new(&reveal_path));
@@ -856,7 +852,7 @@ impl Shell {
                     .justify_center()
                     .rounded(px(4.0))
                     .cursor_pointer()
-                    .tooltip(crate::settings::widgets::text_tooltip("Stop"))
+                    .tip("Stop")
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.stop_background_task(&chat_id, &id, cx);
                     }))
@@ -888,7 +884,7 @@ impl Shell {
                     .min_h(px(SUMMARY_ROW_HEIGHT))
                     .text_color(theme.text)
                     .gap(px(8.0))
-                    .tooltip(crate::settings::widgets::text_tooltip(tooltip))
+                    .tip(tooltip)
                     .child(
                         div()
                             .flex_1()
@@ -1194,7 +1190,7 @@ impl Shell {
                             .invisible()
                             .group_hover(group, |style| style.visible())
                             .hover(|style| style.bg(crate::theme::ink(0.08)))
-                            .tooltip(crate::settings::widgets::text_tooltip("Edit action"))
+                            .tip("Edit action")
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 cx.stop_propagation();
                                 this.close_session_info_overlay(cx);

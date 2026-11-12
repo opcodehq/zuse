@@ -792,7 +792,7 @@ impl Shell {
                     .pr(px(4.))
                     .debug_selector(move || selector.clone())
                     .when_some(path, |chip, path| {
-                        chip.tooltip(crate::settings::widgets::text_tooltip(path))
+                        chip.tip(path)
                             .tooltip_show_delay(std::time::Duration::from_millis(350))
                     })
                     .when_some(drag, |chip, drag| {
@@ -966,7 +966,7 @@ impl Shell {
                 .rounded(px(7.))
                 .cursor_pointer()
                 .hover(|d| d.bg(theme.muted_fill().opacity(0.6)))
-                .tooltip(crate::settings::widgets::text_tooltip(label))
+                .tip(label)
                 .child(icon(glyph).size(px(14.)).text_color(theme.text_muted))
         };
         let history_open = self.conversation_history.get().is_some();

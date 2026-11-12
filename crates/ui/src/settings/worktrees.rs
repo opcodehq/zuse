@@ -1,6 +1,7 @@
 //! Settings → General: device-addressed worktree destination settings.
 
 use crate::localization::message as tr;
+use crate::tooltip::TooltipExt as _;
 use gpui::{AnyElement, Context, Entity, Render, Task, Window, div, prelude::*, px};
 use zuse_i18n::messages as msg;
 use zuse_protocol::{FolderListing, WorktreeSettings, WorktreeSettingsStatus};
@@ -453,7 +454,7 @@ impl Render for WorktreeSettingsCard {
                         .tab_index(0)
                         .role(gpui::Role::Button)
                         .aria_label(tr(cx, msg::native::use_the_default_worktree_location))
-                        .tooltip(widgets::text_tooltip("Reset to default"))
+                        .tip("Reset to default")
                         .focus_visible(|s| s.border_2().border_color(theme.accent))
                         .child(
                             icons::icon(icons::REFRESH)

@@ -1,26 +1,12 @@
 //! Compact Cloud frames and controls shared by hosting, billing and setup.
+use crate::tooltip::TooltipExt as _;
 use crate::{
     assets::icon,
     palette, settings_style as s,
     shell::{BORDER, MUTED, TEXT},
 };
 use gpui::{prelude::*, *};
-struct Help(&'static str);
-impl Render for Help {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .max_w(px(300.))
-            .p(px(8.))
-            .rounded(px(7.))
-            .bg(palette::tone(hsla(132. / 360., 0.05, 0.105, 1.), white()))
-            .border_1()
-            .border_color(palette::rgb(BORDER))
-            .text_size(px(11.))
-            .line_height(px(16.))
-            .text_color(palette::rgb(TEXT))
-            .child(self.0)
-    }
-}
+
 fn badge_base(warning: bool, outline: bool) -> Div {
     let bg = if outline {
         s::frame_bg().opacity(0.5)
@@ -128,7 +114,7 @@ pub(crate) fn group(
                 .text_color(palette::rgb(MUTED))
                 .hover(|v| v.text_color(palette::rgb(TEXT)))
                 .child(icon("information").size(px(12.)))
-                .tooltip(move |_, cx| cx.new(|_| Help(help)).into()),
+                .tip(help),
         );
     }
     let mut header = div()
