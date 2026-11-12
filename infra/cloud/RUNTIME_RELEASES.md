@@ -146,3 +146,10 @@ cargo test --locked -p zuse-protocol cloud_runtime_updates
 
 The Python tests use throwaway keys and a local fake bucket. They make no
 network requests.
+
+## Capability names
+
+`release.json` carries two capability views:
+
+- `capabilities`: the command-admission receipt object from `runtime-capabilities` (what `runtime-update.py` re-probes on install).
+- `bootstrapCapabilities`: the capability **names** the runtime advertises at bootstrap, from `bootstrap-capabilities`. The server uses these to decide whether updating a computer to this release gives it a feature a waiting message needs. A runtime without the `bootstrap-capabilities` subcommand predates in-place updates and cannot be released through this pipeline.

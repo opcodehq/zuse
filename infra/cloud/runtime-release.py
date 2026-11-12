@@ -144,6 +144,39 @@ def run_capabilities(binary):
     return receipt
 
 
+def run_bootstrap_capabilities(binary):
+    """Capability names the runtime advertises at bootstrap (what the server
+    gates features on), printed by `bootstrap-capabilities` as a JSON array."""
+    try:
+        completed = subprocess.run(
+            [str(binary), "bootstrap-capabilities"],
+            env={"PATH": "/usr/bin:/bin"},
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=CAPABILITIES_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        raise ReleaseError("bootstrap-capabilities timed out") from None
+    if completed.returncode != 0:
+        raise ReleaseError(
+            f"bootstrap-capabilities exited {completed.returncode}; "
+            "the runtime predates in-place updates and cannot be released this way"
+        )
+    try:
+        names = json.loads(completed.stdout)
+    except ValueError:
+        raise ReleaseError("bootstrap-capabilities did not print JSON") from None
+    if (
+        not isinstance(names, list)
+        or not names
+        or len(names) > 64
+        or not all(isinstance(n, str) and 0 < len(n) <= 100 for n in names)
+    ):
+        raise ReleaseError("bootstrap-capabilities must print a JSON array of capability names")
+    return names
+
+
 def build_artifact(binary, version, architecture, out, storage_formats):
     binary = Path(binary)
     if not binary.is_file() or not os.access(binary, os.X_OK):
@@ -158,6 +191,7 @@ def build_artifact(binary, version, architecture, out, storage_formats):
     })
     # The receipt is the exact guest probe `runtime-update.py` repeats on install.
     receipt = run_capabilities(binary)
+    names = run_bootstrap_capabilities(binary)
     if receipt.get("runtimeSha256", "").lower() != digest:
         raise ReleaseError("runtime-capabilities runtimeSha256 does not match the binary")
     if receipt.get("storageFormat") not in formats:
@@ -176,6 +210,7 @@ def build_artifact(binary, version, architecture, out, storage_formats):
         "artifactKey": artifact_key(release),
         "compressedSizeBytes": compressed.stat().st_size,
         "capabilities": receipt,
+        "bootstrapCapabilities": names,
     }
     write_json(out / "release.json", manifest)
     return manifest
