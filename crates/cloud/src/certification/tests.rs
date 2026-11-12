@@ -2,6 +2,9 @@ use super::*;
 use crate::providers::{ExecResult, Machine, MachineState, ProviderError, contract::DesiredState};
 use std::sync::{Arc, Mutex};
 
+/// The fake provider is E2B, a root-layout base.
+const RUNTIME: &str = "/usr/local/bin/zuse-cloud-runtime --version";
+const SCRIPT: &str = "/tmp/zuse-certification.sh";
 const RUNTIME_SHA: &str = "7ae4b2179f3e8360d4f52f6f2dd5ce7de443a429b08f7cfaf27fa1006a904dda";
 
 /// A computer whose behavior each test chooses.

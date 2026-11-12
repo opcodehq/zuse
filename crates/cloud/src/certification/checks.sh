@@ -13,9 +13,13 @@ as_task() {
   fi
 }
 ok() { if "$@" >/dev/null 2>&1; then echo true; else echo false; fi; }
-CODEX=$(find /opt/zuse/harnesses/releases -maxdepth 5 -type f -name codex -perm -u+x 2>/dev/null | head -1)
-CLAUDE=$(find /opt/zuse/harnesses/releases -maxdepth 5 -type f -name claude -perm -u+x 2>/dev/null | head -1)
+RUNTIME="${ZUSE_RUNTIME_BINARY:-/usr/local/bin/zuse-cloud-runtime}"
+RELEASES="${ZUSE_HARNESS_RELEASES:-/opt/zuse/harnesses/releases}"
+CODEX=$(find "$RELEASES" -maxdepth 5 -type f -name codex -perm -u+x 2>/dev/null | head -1)
+CLAUDE=$(find "$RELEASES" -maxdepth 5 -type f -name claude -perm -u+x 2>/dev/null | head -1)
 STATE="$HOME/.zuse-certification"
+# Root bases run agents as the zuse task user; a home base (Prized) as itself.
+if id zuse >/dev/null 2>&1; then TASK_USER=zuse; else TASK_USER=$(id -un); fi
 
 # True when PID $1 is the Codex app-server itself, not the shell that started it.
 is_codex() { [ -n "$1" ] && [ "$(tr '\0' '\n' </proc/"$1"/cmdline 2>/dev/null | head -2 | tr '\n' ' ')" = "$CODEX app-server " ]; }
@@ -42,8 +46,8 @@ codex_start() {
 
 case "$mode" in
 fresh)
-  runtime_sha=$(sha256sum /usr/local/bin/zuse-cloud-runtime 2>/dev/null | cut -d' ' -f1)
-  runtime_version=$(as_task /usr/local/bin/zuse-cloud-runtime --version 2>/dev/null)
+  runtime_sha=$(sha256sum "$RUNTIME" 2>/dev/null | cut -d' ' -f1)
+  runtime_version=$(as_task "$RUNTIME" --version 2>/dev/null)
   claude_ok=$(ok as_task "$CLAUDE" --version)
   codex_ms=$(codex_start)
   mkdir -p "$STATE"
@@ -58,7 +62,7 @@ before)
   # A resident agent, as the runtime keeps one between turns.
   as_task setsid bash -c "sleep 1000000 | $CODEX app-server >/dev/null 2>&1" </dev/null >/dev/null 2>&1 &
   sleep 2
-  codex_pid zuse > "$STATE/agent-pid"
+  codex_pid "$TASK_USER" > "$STATE/agent-pid"
   printf '{"agentRunning":%s}\n' "$( [ -s "$STATE/agent-pid" ] && echo true || echo false )"
   ;;
 resume)

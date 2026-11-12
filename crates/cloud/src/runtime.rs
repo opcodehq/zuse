@@ -32,6 +32,7 @@ pub mod grants;
 mod internal_observations;
 pub mod keep_running;
 pub mod lifecycle;
+pub(crate) mod machine_layout;
 pub mod mailbox;
 mod object_writes;
 pub mod preparation;

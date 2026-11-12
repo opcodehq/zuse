@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Recovery entry point on a Prized computer. The repository launcher
+# (installed as lib/recovery-core/launch-rust-recovery, keeping
+# the file name its cancel path matches) defaults its supervisor and binary
+# to root-base paths; this supplies the home-directory layout. The worker runs
+#   ZUSE_USER_DATA=… ZUSE_RECOVERY_STATUS_ROOT=… /home/prized/.zuse/lib/launch-rust-recovery <op> [--cancel]
+# and the supervisor runs it with `<op> --foreground`.
+set -euo pipefail
+R=/home/prized/.zuse
+export ZUSE_USER_DATA="${ZUSE_USER_DATA:-/home/prized/.zuse-data}"
+export ZUSE_RECOVERY_STATUS_ROOT="${ZUSE_RECOVERY_STATUS_ROOT:-$R/recovery}"
+export ZUSE_RUNTIME_SUPERVISOR="${ZUSE_RUNTIME_SUPERVISOR:-$R/lib/runtime-supervisor.py}"
+export ZUSE_RUNTIME_BINARY="${ZUSE_RUNTIME_BINARY:-$R/bin/zuse-cloud-runtime}"
+if [[ "${2:-}" != --foreground ]]; then
+  # A recovery request is an RPC to the resident supervisor; a cold boot has none.
+  "$R/lib/zuse-supervise"
+fi
+exec "$R/lib/recovery-core/launch-rust-recovery" "$@"

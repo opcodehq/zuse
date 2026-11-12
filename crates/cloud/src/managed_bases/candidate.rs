@@ -266,11 +266,21 @@ impl StagingBasePin {
             .filter(|v| !v.is_empty())
             .map(str::to_owned)
             .collect();
+        let now = chrono::Utc::now().timestamp_millis();
+        // An expired pin no longer offers its candidate; it must not stop the
+        // API from starting (a routine restart after expiry took staging down).
+        if pin.expires_at <= now {
+            tracing::warn!(
+                provider = pin.provider.as_str(),
+                "Staging candidate pin expired; starting without it"
+            );
+            return Ok(None);
+        }
         pin.deployment(
             &std::env::var("ZUSE_DEPLOYMENT_ENVIRONMENT").unwrap_or_default(),
             creation_accounts,
             &auth,
-            chrono::Utc::now().timestamp_millis(),
+            now,
         )
         .map_err(|e| anyhow::anyhow!("{}", e.code))?;
         Ok(Some(Arc::new(pin)))
