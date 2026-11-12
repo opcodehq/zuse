@@ -17,6 +17,8 @@ pub fn now_ms() -> i64 {
 #[cfg(unix)]
 pub mod parking;
 pub mod supervisor;
+#[cfg(unix)]
+pub mod updates;
 
 pub mod mailbox;
 
