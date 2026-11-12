@@ -173,7 +173,7 @@ impl RuntimeControl {
         let mut submissions = 1;
         if let Some(effect) = prior
             .as_ref()
-            .filter(|e| !matches!(e.state.as_str(), "rejected" | "not-applied"))
+            .filter(|e| !matches!(e.state.as_str(), "rejected" | "not-applied" | "reverted"))
         {
             let receipt = effect.receipt.clone().unwrap_or(ProviderOperation {
                 resource_id: source.clone(),
@@ -405,7 +405,7 @@ impl RuntimeControl {
     /// Stop this recovery job in `tx` and surface `code` on the computer and
     /// on any Update computer capturing through it. Returns the error the
     /// stage reports. A retry (Update computer Retry) re-pends the job.
-    async fn recovery_attention(
+    pub(super) async fn recovery_attention(
         &self,
         mut tx: Transaction<'static, Postgres>,
         job: &jobs::Job,
@@ -571,6 +571,45 @@ impl RuntimeControl {
         );
         Ok(Some(self.recovery_attention(tx, job, &row, code).await?))
     }
+    /// Record why verification failed and decide: a full scratch disk or an
+    /// archive that does not verify needs attention now; a transient failure
+    /// is retried a bounded number of times. Returns the error to report.
+    pub(super) async fn recovery_verification_failed(
+        &self,
+        job: &jobs::Job,
+        reason: &str,
+    ) -> Result<ApiError, ApiError> {
+        let failure = classify_verification(reason);
+        let (mut tx, row, op) = self.recovery_stage_locked(job, "verifying").await?;
+        let attempts = op["provider_effects"]["verification"]["attempts"]
+            .as_i64()
+            .unwrap_or(0)
+            + 1;
+        let now = clock_ms();
+        sqlx::query("UPDATE zuse_rust_recovery_operations SET provider_effects=jsonb_set(provider_effects,'{verification}',$2),updated_at=$3 WHERE operation_id=$1")
+            .bind(required(&op,"operation_id")?).bind(json!({"attempts":attempts,"lastReason":reason,"lastFailedAtMs":now})).bind(now).execute(&mut *tx).await?;
+        tracing::warn!(
+            reason,
+            attempt = attempts,
+            ?failure,
+            "Recovery verification failed"
+        );
+        let code = match failure {
+            VerificationFailure::ScratchFull => "archive-verification-scratch-full",
+            VerificationFailure::Rejected => "archive-verification-rejected",
+            VerificationFailure::Transient if attempts >= VERIFICATION_MAX_ATTEMPTS => {
+                "archive-verification-failed"
+            }
+            VerificationFailure::Transient => {
+                tx.commit().await?;
+                return Ok(ApiError::unavailable("archive-verification-unavailable"));
+            }
+        };
+        // A retry starts a fresh count.
+        sqlx::query("UPDATE zuse_rust_recovery_operations SET provider_effects=jsonb_set(provider_effects,'{verification,attempts}','0'::jsonb) WHERE operation_id=$1")
+            .bind(required(&op,"operation_id")?).execute(&mut *tx).await?;
+        self.recovery_attention(tx, job, &row, code).await
+    }
     pub(super) async fn recovery_prepare_verification(
         &self,
         provider: &dyn RecoveryProvider,
@@ -594,6 +633,21 @@ impl RuntimeControl {
                     let (mut tx, _, current) = self.recovery_stage_locked(job, "verifying").await?;
                     sqlx::query("UPDATE zuse_rust_recovery_operations SET helper_stopped=true,updated_at=$2 WHERE operation_id=$1").bind(required(&current,"operation_id")?).bind(clock_ms()).execute(&mut *tx).await?;
                     tx.commit().await?;
+                }
+                if op["provider_effects"]["pause"]["state"] == "completed" {
+                    // Something woke the source after its pause completed (a
+                    // guest command, an auto-wake). That pause is spent;
+                    // without this the stage would wait on it forever.
+                    let (mut tx, _, current) = self.recovery_stage_locked(job, "verifying").await?;
+                    if current["provider_effects"]["pause"]["requestId"]
+                        != op["provider_effects"]["pause"]["requestId"]
+                    {
+                        return Err(fenced());
+                    }
+                    sqlx::query("UPDATE zuse_rust_recovery_operations SET provider_effects=jsonb_set(provider_effects,'{pause,state}','\"reverted\"'::jsonb),updated_at=$2 WHERE operation_id=$1")
+                        .bind(required(&current,"operation_id")?).bind(clock_ms()).execute(&mut *tx).await?;
+                    tx.commit().await?;
+                    tracing::warn!("Recovery source woke after its pause; pausing it again");
                 }
                 self.recovery_effect(
                     provider,

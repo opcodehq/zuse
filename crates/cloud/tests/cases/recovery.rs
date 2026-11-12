@@ -589,9 +589,10 @@ async fn corrupt_backup_retains_source_and_unarchive_cancels_before_the_barrier(
         .unwrap();
     f.upload().await;
     f.objects.corrupt.store(true, Ordering::SeqCst);
+    // A corrupt archive cannot verify on retry: it needs attention at once.
     assert_eq!(
         f.tick().await.unwrap_err().code,
-        "archive-verification-failed"
+        "archive-verification-rejected"
     );
     assert_eq!(f.phase().await, "verifying");
     assert!(f.machine.retired.lock().unwrap().is_empty());

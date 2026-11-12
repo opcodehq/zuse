@@ -262,6 +262,12 @@ async fn full_native_wal_round_trip_retains_history_journals_work_and_fresh_iden
     let verifier = Recovery::acquire(binding(), verifier_layout.clone(), key()).unwrap();
     verifier.verify(&objects).await.unwrap();
     assert!(verifier_layout.work.join("verified").exists());
+    let stage = verifier_layout.work.join("remote-verification");
+    assert!(stage.join("data").is_dir());
+    assert!(
+        !stage.join("repositories").exists(),
+        "verification validates repositories without writing them to scratch"
+    );
     let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(
         File::open(layout.work.join("capture.tar.gz")).unwrap(),
     ));
@@ -876,4 +882,15 @@ async fn populated_restored_storage_requires_matching_authority_and_installation
         )
         .is_err()
     );
+}
+
+#[test]
+fn verification_refuses_to_start_when_scratch_cannot_hold_it() {
+    files::ensure_space(1 << 30, 100 << 20).unwrap();
+    let error = files::ensure_space(132 << 20, 373 << 20).unwrap_err();
+    assert_eq!(error.to_string(), "recovery_scratch_insufficient");
+    // The margin is kept free even when the payload alone would fit.
+    assert!(files::ensure_space(100 << 20, 90 << 20).is_err());
+    let temp = tempfile::tempdir().unwrap();
+    assert!(files::available(temp.path()).unwrap() > 0);
 }
