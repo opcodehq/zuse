@@ -95,6 +95,16 @@ fn current_sha(config: &Value) -> Option<&str> {
         .filter(|s| registry::sha256_valid(s))
 }
 
+/// A fresh machine (allocation, restore, recreation, unarchive) boots the
+/// base image's runtime; only a retained resume keeps an updated one. Drop
+/// the pin so target selection judges the computer by its base runtime and
+/// offers the update again.
+pub(super) fn fresh_machine(config: &mut Value) {
+    if let Some(config) = config.as_object_mut() {
+        config.remove("runtimeRelease");
+    }
+}
+
 fn short_code(code: &str) -> bool {
     !code.is_empty()
         && code.len() <= 64
@@ -497,5 +507,23 @@ impl RuntimeControl {
         }
         tx.commit().await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn a_fresh_machine_is_judged_by_its_base_runtime_again() {
+        let base = "b".repeat(64);
+        let updated = "c".repeat(64);
+        let mut config = json!({
+            "initialRuntimeBootstrap": {"runtimeSha256": base},
+            "runtimeRelease": {"sha256": updated, "version": "1.1.0"},
+        });
+        assert_eq!(current_sha(&config), Some(updated.as_str()));
+        fresh_machine(&mut config);
+        assert!(config.get("runtimeRelease").is_none());
+        assert_eq!(current_sha(&config), Some(base.as_str()));
     }
 }

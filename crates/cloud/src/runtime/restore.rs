@@ -168,6 +168,7 @@ impl RuntimeControl {
         ] {
             config.as_object_mut().ok_or_else(fenced)?.remove(key);
         }
+        super::runtime_updates::fresh_machine(&mut config);
         config["runtimeGeneration"] = json!(generation);
         config["gatewayEpoch"] = json!(epoch);
         config["recoveryArchive"] = serde_json::to_value(a).map_err(|_| failed())?;
