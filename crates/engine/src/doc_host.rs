@@ -6824,6 +6824,14 @@ impl DocHost {
 
     /// Automation never interrupts an active turn, bypasses a queued message,
     /// or thaws a queue the user paused with Stop.
+    /// The conversation's persisted messages, for engine-side readers.
+    pub(crate) fn chat_entries(
+        &self,
+        chat_id: &str,
+    ) -> Result<Vec<zuse_model::SessionMessageEntry>, EngineError> {
+        Ok(self.open(chat_id)?.doc.read_entries()?)
+    }
+
     pub(crate) fn ci_repair_idle(&self, chat_id: &str) -> Result<bool, EngineError> {
         let Some(sessions) = self.sessions() else {
             return Ok(false);

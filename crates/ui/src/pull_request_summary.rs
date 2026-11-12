@@ -352,7 +352,7 @@ fn checks_summary(detail: &ChangeRequestDetail, theme: &Theme) -> gpui::Div {
         parts.join(", ")
     };
     let mark = if state == CiState::Pending {
-        crate::loaders::terminal_spinner("pr-checks-running", 14.0, theme.warning)
+        crate::loaders::retro_loader("pr-checks-running", 14.0, theme.loader_glyph())
     } else {
         let (glyph, color) = match state {
             CiState::Failed => (crate::icons::CLOSE_CIRCLE, theme.danger),
@@ -598,10 +598,10 @@ impl PullRequestDetailPage {
                             .text_size(crate::typography::text_xs())
                             .text_color(theme.text_muted)
                             .when(waiting, |el| {
-                                el.child(crate::loaders::terminal_spinner(
+                                el.child(crate::loaders::retro_loader(
                                     "pr-merge-waiting",
                                     12.0,
-                                    theme.warning,
+                                    theme.loader_glyph(),
                                 ))
                             })
                             .child(heading)
@@ -1253,7 +1253,11 @@ impl PullRequestDetailPage {
             .items_center()
             .gap(px(8.0))
             .child(if tone == StatusTone::Warning {
-                crate::loaders::terminal_spinner(format!("pr-check-running-{index}"), 14.0, color)
+                crate::loaders::retro_loader(
+                    format!("pr-check-running-{index}"),
+                    14.0,
+                    theme.loader_glyph(),
+                )
             } else {
                 crate::icons::icon(glyph)
                     .size(px(14.0))

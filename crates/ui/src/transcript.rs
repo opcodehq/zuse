@@ -4555,10 +4555,10 @@ impl Transcript {
             .text_color(theme.text_faint);
         if self.history_loading || auto {
             return strip
-                .child(crate::loaders::dither_ring(
+                .child(crate::loaders::retro_loader(
                     "history-loader-ring",
                     12.0,
-                    theme.text_faint,
+                    theme.loader_glyph(),
                 ))
                 .child(tr(cx, msg::chat::cloud_history_loading))
                 .into_any_element();
@@ -6682,7 +6682,7 @@ impl Transcript {
                 None => crate::loaders::mini_glyph_spinner(
                     format!("chip-sending-{row_id}-{ix}"),
                     2.0,
-                    theme.glyph,
+                    theme.loader_glyph(),
                     cx.entity_id(),
                     cx,
                 )
@@ -8446,10 +8446,10 @@ impl Transcript {
             .gap(px(Theme::SPACE_SM))
             .pt(px(Theme::SPACE_LG))
             .text_size(crate::typography::text_xs())
-            .child(crate::loaders::dither_ring(
+            .child(crate::loaders::retro_loader(
                 format!("working-mark-{}", cx.entity_id()),
                 14.0,
-                theme.text_muted,
+                theme.loader_glyph(),
             ))
             .child(
                 div()
