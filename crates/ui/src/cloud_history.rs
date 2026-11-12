@@ -123,6 +123,10 @@ impl CloudHistory {
             else {
                 continue;
             };
+            // A reviewed unknown was discarded or retried as a new message.
+            if entry["executionState"] == "outcome-unknown" && entry["unknownReviewed"] == true {
+                continue;
+            }
             if !seen.insert(id.to_owned()) {
                 continue;
             }
