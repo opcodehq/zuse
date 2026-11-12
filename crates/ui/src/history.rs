@@ -1295,7 +1295,7 @@ impl Render for GitHistoryFetchButton {
                 crate::loaders::mini_glyph_spinner(
                     "history-fetch-all-spinner",
                     1.75,
-                    theme.glyph,
+                    theme.loader_glyph(),
                     cx.entity_id(),
                     cx,
                 )
@@ -1441,7 +1441,7 @@ impl Render for GitHistorySearchControl {
             crate::loaders::mini_glyph_spinner(
                 "history-search-spinner",
                 1.5,
-                theme.glyph,
+                theme.loader_glyph(),
                 cx.entity_id(),
                 cx,
             )

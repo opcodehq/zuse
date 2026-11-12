@@ -891,7 +891,7 @@ impl Shell {
                                 .child(crate::loaders::mini_glyph_spinner(
                                     "cloud-launch-working",
                                     2.5,
-                                    theme.glyph,
+                                    theme.loader_glyph(),
                                     cx.entity_id(),
                                     cx,
                                 ))

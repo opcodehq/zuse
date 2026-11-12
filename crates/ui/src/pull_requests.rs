@@ -1336,7 +1336,7 @@ impl PullRequestsPage {
                                 el.child(crate::loaders::mini_glyph_spinner(
                                     "pr-project-resolving",
                                     1.5,
-                                    theme.glyph,
+                                    theme.loader_glyph(),
                                     cx.entity_id(),
                                     cx,
                                 ))
@@ -1870,7 +1870,7 @@ impl PullRequestsPage {
                             el.opacity(0.7).child(crate::loaders::mini_glyph_spinner(
                                 "pull-requests-more-spinner",
                                 1.5,
-                                theme.glyph,
+                                theme.loader_glyph(),
                                 cx.entity_id(),
                                 cx,
                             ))
@@ -2399,7 +2399,7 @@ impl Render for PullRequestsPage {
                                         crate::loaders::mini_glyph_spinner(
                                             "pull-requests-refresh-spinner",
                                             1.75,
-                                            theme.glyph,
+                                            theme.loader_glyph(),
                                             cx.entity_id(),
                                             cx,
                                         )

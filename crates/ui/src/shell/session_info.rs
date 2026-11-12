@@ -835,10 +835,10 @@ impl Shell {
         for task in &running {
             let stopping = self.background_stops.contains(&task.id);
             let control: AnyElement = if stopping {
-                crate::loaders::dither_ring(
+                crate::loaders::retro_loader(
                     SharedString::from(format!("session-info-background-stopping-{}", task.id)),
                     12.0,
-                    theme.text_muted,
+                    theme.loader_glyph(),
                 )
             } else if task.stoppable {
                 let (chat_id, id) = (chat_id.to_owned(), task.id.clone());

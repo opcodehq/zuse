@@ -6655,6 +6655,8 @@ pub struct Composer {
     /// Whether the modifier overlay should currently reveal the queue hint.
     /// The shell owns modifier tracking and clears this on window deactivation.
     queue_shortcut_revealed: bool,
+    /// The selected chat's open PR `(chat, url)` and its auto-fix button.
+    pr_auto_fix: Option<(String, String, Entity<crate::pr_watch::PrWatchControl>)>,
     /// Interrupt/answer commands get their own slot: assigning `send_task`
     /// DROPPED an in-flight send future mid-upload — no banner, no cleanup,
     /// `sending` stuck true forever (2026-08-19 incident, "press Stop while
@@ -7121,6 +7123,51 @@ impl Composer {
         }
     }
 
+    /// The auto-fix button for the selected chat's open PR, kept for as long
+    /// as the chat and PR stay the same so its watch stream survives renders.
+    fn pr_auto_fix_button(&mut self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let open = {
+            let state = self.state.read(cx);
+            state
+                .selected_chat_row()
+                .filter(|_| !state.selected_chat_is_zot_coordinator())
+                .and_then(|chat| {
+                    let summary = state.change_request_for_chat(chat)?;
+                    (summary.state == zuse_protocol::ChangeRequestState::Open).then(|| {
+                        let target = (state.local_device_id.as_deref()
+                            != Some(chat.device_id.as_str()))
+                        .then(|| chat.device_id.clone());
+                        (chat.id.clone(), summary.url.clone(), target)
+                    })
+                })
+        };
+        let Some((chat, url, target)) = open else {
+            self.pr_auto_fix = None;
+            return None;
+        };
+        if !self
+            .pr_auto_fix
+            .as_ref()
+            .is_some_and(|(c, u, _)| *c == chat && *u == url)
+        {
+            let state = self.state.clone();
+            let control = cx.new(|cx| {
+                crate::pr_watch::PrWatchControl::button(
+                    state,
+                    chat.clone(),
+                    url.clone(),
+                    target,
+                    cx,
+                )
+            });
+            cx.observe(&control, |_, _, cx| cx.notify()).detach();
+            self.pr_auto_fix = Some((chat, url, control));
+        }
+        self.pr_auto_fix
+            .as_ref()
+            .map(|(.., control)| control.clone().into_any_element())
+    }
+
     pub(crate) fn set_queue_shortcut_revealed(&mut self, revealed: bool, cx: &mut Context<Self>) {
         if self.queue_shortcut_revealed != revealed {
             self.queue_shortcut_revealed = revealed;
@@ -7364,6 +7411,7 @@ impl Composer {
             tray: Default::default(),
             todo_scroll: gpui::ScrollHandle::new(),
             queue_shortcut_revealed: false,
+            pr_auto_fix: None,
             last_available_width: None,
             last_input_width: 0.0,
             flip_morph: None,
@@ -11088,7 +11136,7 @@ impl Composer {
                         .child(crate::loaders::mini_glyph_spinner(
                             "composer-worktree-progress-spinner",
                             1.5,
-                            theme.glyph,
+                            theme.loader_glyph(),
                             cx.entity_id(),
                             cx,
                         ))
@@ -13255,10 +13303,11 @@ impl Render for Composer {
         // its chips (one attached surface growing upward); in a thread they
         // form their own surface tucked behind the card's top edge.
         // The chat's pull request and diff size, above everything else.
+        let auto_fix = (!new_chat).then(|| self.pr_auto_fix_button(cx)).flatten();
         let chips = (!new_chat)
             .then(|| {
                 let theme = Theme::of(cx).clone();
-                crate::pull_request_card::composer_chips(self.state.read(cx), &theme, cx)
+                crate::pull_request_card::composer_chips(self.state.read(cx), &theme, auto_fix, cx)
             })
             .flatten();
         let container = container.when_some(chips, |el, chips| el.child(chips));

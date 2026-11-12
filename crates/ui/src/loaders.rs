@@ -479,114 +479,36 @@ fn progress_arc(
     arc_canvas(0.0, frac, diameter, RING_STROKE, track, arc)
 }
 
-/// The dithered ring: a bright tail sweeping a faint dotted track, on one
-/// logical pixel cells. Repaints from its own cached view, like the mini
-/// spinner; reduced motion holds a still frame.
-pub fn dither_ring(key: impl Into<SharedString>, size: f32, tint: gpui::Hsla) -> AnyElement {
-    DitherRing {
-        key: key.into(),
-        size,
-        tint,
-    }
-    .into_any_element()
-}
-
-#[derive(IntoElement)]
-struct DitherRing {
-    key: SharedString,
+/// The retro pixel loader: the dithered 2×3 chase from the tabs, centered in
+/// a `size` box so it drops into any icon slot. Every action and working
+/// chat uses it, in the golden [`Theme::loader_glyph`] palette.
+pub fn retro_loader(
+    key: impl Into<SharedString>,
     size: f32,
-    tint: gpui::Hsla,
-}
-
-impl RenderOnce for DitherRing {
-    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let view = window.with_global_id(self.key.into(), |id, window| {
-            window.with_element_state(id, |previous: Option<Entity<DitherRingView>>, _| {
-                let view = previous.unwrap_or_else(|| {
-                    cx.new(|_| DitherRingView {
-                        size: self.size,
-                        tint: self.tint,
-                    })
-                });
-                view.update(cx, |view, cx| {
-                    if view.size != self.size || view.tint != self.tint {
-                        view.size = self.size;
-                        view.tint = self.tint;
-                        cx.notify();
-                    }
-                });
-                (view.clone(), view)
-            })
-        });
-        view.cached(
-            gpui::StyleRefinement::default()
-                .size(px(self.size))
-                .flex_none(),
-        )
-    }
-}
-
-struct DitherRingView {
-    size: f32,
-    tint: gpui::Hsla,
-}
-
-impl Render for DitherRingView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        use zkit_dither::{LoaderVariant::Ring, Matrix};
-        let (size, tint) = (self.size, self.tint);
-        let t = motion::pulse_seconds(cx.entity_id(), cx).unwrap_or(Ring.still_time());
-        gpui::canvas(
-            |_, _, _| {},
-            move |bounds, _, window, _| {
-                let (cols, rows) = Ring.grid(size.round() as usize);
-                for y in 0..rows {
-                    for x in 0..cols {
-                        if Ring.tone(cols, rows, x, y, t) > Matrix::Bayer4.threshold(x, y) {
-                            let at = bounds.origin + gpui::point(px(x as f32), px(y as f32));
-                            window.paint_quad(gpui::fill(
-                                gpui::Bounds::new(at, gpui::size(px(1.0), px(1.0))),
-                                tint,
-                            ));
-                        }
-                    }
-                }
-            },
-        )
-        .size_full()
-    }
-}
-
-/// Braille frames of the classic terminal "dots" spinner.
-const TERMINAL_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-/// One full lap of [`TERMINAL_FRAMES`]: 80ms a frame, as in the terminal.
-const TERMINAL_LAP_MS: u64 = 800;
-
-/// An indeterminate terminal-style spinner: a braille glyph stepping through
-/// the "dots" frames, centered in a fixed `size` box so the frames never
-/// nudge the layout — the running mark on sidebar session rows.
-pub fn terminal_spinner(id: impl Into<gpui::ElementId>, size: f32, tint: gpui::Hsla) -> AnyElement {
-    use gpui::AnimationExt as _;
+    palette: crate::theme::GlyphPalette,
+) -> AnyElement {
+    let cell_px = (size / 5.0).max(1.5).round_to_half();
     div()
         .size(px(size))
         .flex_none()
         .flex()
         .items_center()
         .justify_center()
-        .font_family("Menlo")
-        .text_size(px(size))
-        .line_height(px(size))
-        .text_color(tint)
-        .with_animation(
-            id,
-            gpui::Animation::new(std::time::Duration::from_millis(TERMINAL_LAP_MS)).repeat(),
-            |el, t| {
-                let frame =
-                    ((t * TERMINAL_FRAMES.len() as f32) as usize).min(TERMINAL_FRAMES.len() - 1);
-                el.child(TERMINAL_FRAMES[frame])
-            },
-        )
+        .child(MiniSpinner {
+            key: key.into(),
+            cell_px,
+            row_tints: palette.rows(),
+        })
         .into_any_element()
+}
+
+trait RoundToHalf {
+    fn round_to_half(self) -> Self;
+}
+impl RoundToHalf for f32 {
+    fn round_to_half(self) -> Self {
+        (self * 2.0).round() / 2.0
+    }
 }
 
 /// A full track plus an arc of `sweep` turns starting `start` turns

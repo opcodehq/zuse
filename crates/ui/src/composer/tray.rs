@@ -1630,7 +1630,7 @@ impl Composer {
             pill.icon_element(crate::loaders::mini_glyph_spinner(
                 "tray-sign-in-spinner",
                 2.5,
-                theme.glyph,
+                theme.loader_glyph(),
                 cx.entity_id(),
                 cx,
             ))

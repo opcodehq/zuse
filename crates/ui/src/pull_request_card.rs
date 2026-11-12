@@ -31,10 +31,6 @@ use crate::pull_request_detail::{PullRequestRepair, failure_reason, repair_messa
 use crate::state::AppState;
 use crate::theme::Theme;
 
-/// What the composer's Create PR chip asks the agent; the card follows once
-/// `gh pr create` runs.
-pub const CREATE_PR_PROMPT: &str = "Create PR: commit what's left, push the branch, and open the pull request with `gh pr create`.";
-
 /// Send `.0` to the focused chat's agent as the user's next message.
 #[derive(Clone, PartialEq, Action)]
 #[action(namespace = shell, no_json)]
@@ -913,7 +909,7 @@ fn chip(text: SharedString, color: Hsla, theme: &Theme) -> AnyElement {
 }
 
 fn spinner(id: &'static str, theme: &Theme) -> AnyElement {
-    crate::loaders::dither_ring(id, 12.0, theme.text_muted)
+    crate::loaders::retro_loader(id, 12.0, theme.loader_glyph())
 }
 
 fn button(
@@ -1945,124 +1941,75 @@ impl gpui::Render for PullRequestCard {
 // The composer's chips
 // ---------------------------------------------------------------------------
 
-/// The selected chat's pull request and diff size as chips above the
-/// composer: "#128 · 3 conflicts" opens the PR, "+482 −37" its size. A Git
-/// chat with changes and no PR offers Create PR instead. `None` when the
-/// chat has neither.
-pub fn composer_chips(state: &AppState, theme: &Theme, cx: &App) -> Option<AnyElement> {
+/// The selected chat's open pull request above the composer: its chip on
+/// the left ("#128 · 3 conflicts" opens the PR) and `auto_fix`, the PR's
+/// auto-fix button, on the right. `None` when the chat has no PR.
+pub fn composer_chips(
+    state: &AppState,
+    theme: &Theme,
+    auto_fix: Option<AnyElement>,
+    cx: &App,
+) -> Option<AnyElement> {
     // A Zot's coordinator spans repositories; pull requests belong to its threads.
     if state.selected_chat_is_zot_coordinator() {
         return None;
     }
     let chat = state.selected_chat_row()?;
-    let summary = state.change_request_for_chat(chat).cloned();
-    let diff = state.diff_stat_for_chat(chat);
-    if summary.is_none() && diff.is_none() {
-        return None;
-    }
-    let pill = |id: &'static str| {
+    let summary = state.change_request_for_chat(chat).cloned()?;
+    let stage = cx
+        .try_global::<PullRequestStages>()
+        .and_then(|stages| stages.0.get(&summary.url))
+        .cloned()
+        .unwrap_or(match summary.state {
+            zuse_protocol::ChangeRequestState::Merged => Stage::Merged,
+            zuse_protocol::ChangeRequestState::Closed => Stage::Closed,
+            zuse_protocol::ChangeRequestState::Open => Stage::Loading,
+        });
+    let (label, tone) = match stage {
+        Stage::Loading | Stage::Checking => ("Open".into(), theme.success),
+        stage => (stage.chip_label(), stage.tone(theme)),
+    };
+    let url = summary.url.clone();
+    let device = (state.local_device_id.as_deref() != Some(chat.device_id.as_str()))
+        .then(|| chat.device_id.clone());
+    let chip = div()
+        .id("composer-pr-chip")
+        .debug_selector(|| "composer-pr-chip".to_owned())
+        .flex_none()
+        .h(px(24.0))
+        .px(px(9.0))
+        .flex()
+        .items_center()
+        .gap(px(6.0))
+        .rounded_full()
+        .border_1()
+        .border_color(theme.border)
+        .bg(theme.surface_card)
+        .text_size(px(12.0))
+        .cursor_pointer()
+        .hover(|style| style.bg(theme.element_hover))
+        .on_click(move |_, window, cx| {
+            crate::pull_request_detail::open_on_device(&url, device.clone(), window, cx)
+        })
+        .child(div().size(px(6.0)).rounded_full().bg(tone))
+        .child(
+            div()
+                .text_color(theme.text)
+                .child(SharedString::from(format!("#{}", summary.number))),
+        )
+        .child(div().text_color(tone).child(label));
+    Some(
         div()
-            .id(id)
-            .debug_selector(move || id.to_owned())
-            .flex_none()
-            .h(px(24.0))
-            .px(px(9.0))
+            .w_full()
             .flex()
             .items_center()
+            .justify_between()
             .gap(px(6.0))
-            .rounded_full()
-            .border_1()
-            .border_color(theme.border)
-            .bg(theme.surface_card)
-            .text_size(px(12.0))
-    };
-    let mut row = div().flex().items_center().gap(px(6.0)).px(px(4.0));
-    let working = state
-        .session_for(&chat.id)
-        .is_some_and(|session| session.status == SessionStatus::Working);
-    if summary.is_none() && diff.is_some() && chat.source_context.is_some() && !working {
-        row = row.child(
-            pill("composer-create-pr")
-                .cursor_pointer()
-                .text_color(theme.text)
-                .hover(|style| style.bg(theme.element_hover))
-                .on_click(|_, window, cx| {
-                    window.dispatch_action(Box::new(SendToChat(CREATE_PR_PROMPT.into())), cx)
-                })
-                .child(
-                    icon(icons::PULL_REQUEST)
-                        .size(px(13.0))
-                        .text_color(theme.text_muted),
-                )
-                .child(tr(cx, msg::chat::top_bar_create_pr)),
-        );
-    }
-    if let Some(summary) = summary {
-        let stage = cx
-            .try_global::<PullRequestStages>()
-            .and_then(|stages| stages.0.get(&summary.url))
-            .cloned()
-            .unwrap_or(match summary.state {
-                zuse_protocol::ChangeRequestState::Merged => Stage::Merged,
-                zuse_protocol::ChangeRequestState::Closed => Stage::Closed,
-                zuse_protocol::ChangeRequestState::Open => Stage::Loading,
-            });
-        let (label, tone) = match stage {
-            Stage::Loading | Stage::Checking => ("Open".into(), theme.success),
-            stage => (stage.chip_label(), stage.tone(theme)),
-        };
-        let url = summary.url.clone();
-        let device = (state.local_device_id.as_deref() != Some(chat.device_id.as_str()))
-            .then(|| chat.device_id.clone());
-        row = row.child(
-            pill("composer-pr-chip")
-                .cursor_pointer()
-                .hover(|style| style.bg(theme.element_hover))
-                .on_click(move |_, window, cx| {
-                    crate::pull_request_detail::open_on_device(&url, device.clone(), window, cx)
-                })
-                .child(div().size(px(6.0)).rounded_full().bg(tone))
-                .child(
-                    div()
-                        .text_color(theme.text)
-                        .child(SharedString::from(format!("#{}", summary.number))),
-                )
-                .child(div().text_color(tone).child(label)),
-        );
-    }
-    if let Some((additions, deletions)) = diff {
-        // Five blocks, like GitHub's: green for additions, red for
-        // deletions, the rest empty for small changes.
-        let total = (additions + deletions).max(1) as f32;
-        let filled = ((total.log10() + 1.0).floor() as usize).clamp(1, 5);
-        let green = ((additions as f32 / total) * filled as f32).round() as usize;
-        let red = filled - green.min(filled);
-        let blocks = (0..5).map(|ix| {
-            let color = if ix < green {
-                theme.success
-            } else if ix < green + red {
-                theme.danger
-            } else {
-                theme.text_muted.opacity(0.25)
-            };
-            div().size(px(6.0)).rounded(px(1.5)).bg(color)
-        });
-        row = row.child(
-            pill("composer-diff-chip")
-                .child(
-                    div()
-                        .text_color(theme.success)
-                        .child(SharedString::from(format!("+{additions}"))),
-                )
-                .child(
-                    div()
-                        .text_color(theme.danger)
-                        .child(SharedString::from(format!("\u{2212}{deletions}"))),
-                )
-                .child(div().flex().gap(px(2.0)).children(blocks)),
-        );
-    }
-    Some(row.into_any_element())
+            .px(px(4.0))
+            .child(chip)
+            .children(auto_fix)
+            .into_any_element(),
+    )
 }
 
 #[cfg(test)]

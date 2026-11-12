@@ -797,6 +797,11 @@ impl TerminalColors {
 }
 
 impl Theme {
+    /// The golden three-tone palette of the retro pixel loader that marks
+    /// work in progress (actions, working chats), whatever the accent.
+    pub fn loader_glyph(&self) -> GlyphPalette {
+        AccentColor::Amber.tokens(self.appearance).glyph
+    }
     // ---- numbers drive layout (px) ----
     /// Frost translucency over the blurred window background (macOS vibrancy
     /// or Windows Acrylic). Linux stays opaque because compositor blur is not

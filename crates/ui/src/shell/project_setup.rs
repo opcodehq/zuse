@@ -1396,7 +1396,7 @@ fn creation_badge(op: &ProjectCreation, theme: &Theme, key: String) -> Option<An
                 theme.danger
             })
             .child(if running {
-                loaders::dither_ring(SharedString::from(key), 12.0, theme.accent)
+                loaders::retro_loader(SharedString::from(key), 12.0, theme.loader_glyph())
             } else {
                 icon(icons::DANGER_TRIANGLE)
                     .size(px(13.0))
