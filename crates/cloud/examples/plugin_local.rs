@@ -119,6 +119,17 @@ async fn main() -> anyhow::Result<()> {
             policy: Policy::Loopback,
         },
     )?;
+    // Same maintenance as the API service: expire abandoned sign-ins.
+    let maintenance = host.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+        loop {
+            interval.tick().await;
+            if let Err(error) = maintenance.sweep().await {
+                eprintln!("Plugin maintenance failed: {}", error.code);
+            }
+        }
+    });
     let state = AppState {
         store: Store::from_pool(pool).with_plugin_control(host),
         identity: Arc::new(LocalIdentity),
