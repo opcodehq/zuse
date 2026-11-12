@@ -144,7 +144,9 @@ impl EngineExecutor {
             if request.sandbox != config.sandbox {
                 let mut updated = config.clone();
                 updated.sandbox = request.sandbox;
-                self.core.workspace.set_chat_config(&self.thread, &updated)?;
+                self.core
+                    .workspace
+                    .set_chat_config(&self.thread, &updated)?;
             }
             if let Some(registration) = &binding.session {
                 ensure!(
