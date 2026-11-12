@@ -460,6 +460,19 @@ impl super::recovery::RecoveryProvider for RuntimeProvider {
         }
         Ok(())
     }
+    async fn capture_status(
+        &self,
+        id: &str,
+        operation: &str,
+    ) -> Result<super::recovery::CaptureStatus, ProviderError> {
+        let layout = super::machine_layout::Layout::for_provider(self.provider.id());
+        let command = super::recovery::capture_status_command(
+            layout.run_as_task(),
+            layout.recovery_status_root(),
+            operation,
+        );
+        super::recovery::capture_status(&self.provider.execute(id, &command).await?)
+    }
     async fn stop_capture(&self, id: &str, operation: &str) -> Result<(), ProviderError> {
         let layout = super::machine_layout::Layout::for_provider(self.provider.id());
         let command = format!(

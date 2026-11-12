@@ -201,6 +201,12 @@ fn link_inside(relative: &Path, target: &Path) -> bool {
 #[derive(PartialEq, Eq)]
 struct Fingerprint(u64, u64, u64, i64, i64, u32);
 fn fingerprint(m: &Metadata) -> Fingerprint {
+    if m.is_dir() {
+        // A directory's size/mtime also move when an excluded entry (a lock,
+        // a supervisor record replaced by rename) changes. Its captured
+        // contents are compared by name instead; see `Seen::unchanged`.
+        return Fingerprint(m.dev(), m.ino(), 0, 0, 0, m.mode());
+    }
     Fingerprint(
         m.dev(),
         m.ino(),
@@ -210,13 +216,86 @@ fn fingerprint(m: &Metadata) -> Fingerprint {
         m.mode(),
     )
 }
+/// One captured path and what must still hold for the archive to be consistent.
+pub(super) struct Seen {
+    path: PathBuf,
+    before: Fingerprint,
+    /// For a directory: the sorted names of its captured entries.
+    entries: Option<Vec<std::ffi::OsString>>,
+}
+fn captured_entries(root: &str, path: &Path, relative: &Path) -> Result<Vec<std::ffi::OsString>> {
+    let mut names = fs::read_dir(path)?
+        .map(|entry| entry.map(|e| e.file_name()))
+        .collect::<std::io::Result<Vec<_>>>()?
+        .into_iter()
+        .filter(|name| allowed(root, &relative.join(name)))
+        .collect::<Vec<_>>();
+    names.sort();
+    Ok(names)
+}
+impl Seen {
+    pub(super) fn observe(root: &str, base: &Path, relative: &Path) -> Result<Self> {
+        let path = base.join(relative);
+        let meta = fs::symlink_metadata(&path)?;
+        let entries = if meta.is_dir() {
+            Some(captured_entries(root, &path, relative)?)
+        } else {
+            None
+        };
+        Ok(Self {
+            path,
+            before: fingerprint(&meta),
+            entries,
+        })
+    }
+    /// Re-read after capture. A directory is unchanged when its identity and
+    /// captured entry names are; excluded entries may come and go.
+    pub(super) fn unchanged(&self, root: &str, relative: &Path) -> Result<bool> {
+        if fingerprint(&fs::symlink_metadata(&self.path)?) != self.before {
+            return Ok(false);
+        }
+        Ok(match &self.entries {
+            Some(names) => captured_entries(root, &self.path, relative)? == *names,
+            None => true,
+        })
+    }
+}
+/// Partial archives from earlier attempts. Only one capture runs per
+/// operation (runner lock), so any left behind is abandoned.
+pub(super) fn remove_partial_captures(path: &Path) -> Result<()> {
+    let (Some(directory), Some(stem)) = (path.parent(), path.file_stem()) else {
+        return Ok(());
+    };
+    let prefix = format!("{}.", stem.to_string_lossy());
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with(&prefix) && name.ends_with(".next") && entry.file_type()?.is_file() {
+            fs::remove_file(entry.path())?;
+        }
+    }
+    Ok(())
+}
+/// Removes a partial archive unless the capture completed.
+struct Partial<'a>(&'a Path, bool);
+impl Drop for Partial<'_> {
+    fn drop(&mut self) {
+        if !self.1 {
+            let _ = fs::remove_file(self.0);
+        }
+    }
+}
 pub(super) fn capture(layout: &Layout, path: &Path) -> Result<()> {
     ensure!(
         layout.data.is_dir() && layout.repositories.is_dir(),
         "recovery_required_root_missing"
     );
+    // Failed attempts must never accumulate multi-GB partial files.
+    remove_partial_captures(path)?;
     let next = path.with_extension(format!("{}.next", uuid::Uuid::new_v4()));
     let out = private_file(&next)?;
+    let mut partial = Partial(&next, false);
     let mut tar = Builder::new(GzEncoder::new(out, Compression::default()));
     let mut observed = vec![];
     fn add(
@@ -224,12 +303,13 @@ pub(super) fn capture(layout: &Layout, path: &Path) -> Result<()> {
         base: &Path,
         relative: &Path,
         tar: &mut Builder<GzEncoder<File>>,
-        observed: &mut Vec<(PathBuf, Fingerprint)>,
+        observed: &mut Vec<(String, PathBuf, Seen)>,
     ) -> Result<()> {
         if !allowed(root, relative) {
             return Ok(());
         }
         let path = base.join(relative);
+        let seen = Seen::observe(root, base, relative)?;
         let meta = fs::symlink_metadata(&path)?;
         let before = fingerprint(&meta);
         let mut header = Header::new_gnu();
@@ -242,10 +322,8 @@ pub(super) fn capture(layout: &Layout, path: &Path) -> Result<()> {
             header.set_entry_type(EntryType::Directory);
             header.set_size(0);
             tar.append_data(&mut header, &name, std::io::empty())?;
-            let mut entries = fs::read_dir(&path)?.collect::<std::io::Result<Vec<_>>>()?;
-            entries.sort_by_key(|e| e.file_name());
-            for entry in entries {
-                add(root, base, &relative.join(entry.file_name()), tar, observed)?;
+            for entry in seen.entries.clone().unwrap_or_default() {
+                add(root, base, &relative.join(entry), tar, observed)?;
             }
         } else if meta.is_file() {
             let mut file = OpenOptions::new()
@@ -272,7 +350,7 @@ pub(super) fn capture(layout: &Layout, path: &Path) -> Result<()> {
         } else {
             anyhow::bail!("recovery_unsupported_entry")
         }
-        observed.push((path, before));
+        observed.push((root.to_owned(), relative.to_owned(), seen));
         Ok(())
     }
     for (root, source) in roots(layout) {
@@ -289,13 +367,11 @@ pub(super) fn capture(layout: &Layout, path: &Path) -> Result<()> {
     }
     let out = tar.into_inner()?.finish()?;
     out.sync_all()?;
-    for (path, before) in observed {
-        ensure!(
-            fingerprint(&fs::symlink_metadata(path)?) == before,
-            "recovery_source_changed"
-        );
+    for (root, relative, seen) in observed {
+        ensure!(seen.unchanged(&root, &relative)?, "recovery_source_changed");
     }
-    fs::rename(next, path)?;
+    fs::rename(&next, path)?;
+    partial.1 = true;
     File::open(&layout.work)?.sync_all()?;
     Ok(())
 }

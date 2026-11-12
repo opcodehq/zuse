@@ -5,12 +5,17 @@ use serde::{Deserialize, Serialize};
 /// How long an unanswered effect is given before an unchanged machine proves
 /// it never happened. Covers the provider's own request timeout and a status
 /// that lags an accepted request.
-pub(super) const EFFECT_SETTLE_MS: i64 = 90_000;
+pub(in crate::runtime) const EFFECT_SETTLE_MS: i64 = 90_000;
 /// An effect still unresolved after this long needs a person, not more polling.
-pub(super) const EFFECT_WAIT_LIMIT_MS: i64 = 10 * 60_000;
+pub(in crate::runtime) const EFFECT_WAIT_LIMIT_MS: i64 = 10 * 60_000;
 /// Submissions of one effect that may each be proven not to have happened
 /// before the operation stops and asks for attention.
-pub(super) const EFFECT_MAX_SUBMISSIONS: u32 = 3;
+pub(in crate::runtime) const EFFECT_MAX_SUBMISSIONS: u32 = 3;
+/// A launched capture helper that is neither running nor finished after
+/// this long never started (or died without a result).
+pub(super) const CAPTURE_START_GRACE_MS: i64 = 60_000;
+/// The whole capture and upload must finish within this.
+pub(super) const CAPTURE_LIMIT_MS: i64 = 30 * 60_000;
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -388,18 +393,6 @@ impl RuntimeControl {
         };
         sqlx::query("UPDATE zuse_rust_recovery_operations SET provider_effects=jsonb_set(provider_effects,$2,$3),updated_at=$4 WHERE operation_id=$1")
             .bind(required(&current,"operation_id")?).bind(vec![key]).bind(json!(record)).bind(now).execute(&mut *tx).await?;
-        let stopped=sqlx::query("UPDATE zuse_rust_jobs SET state='failed',lease_token=NULL,lease_expires_at=NULL,last_error_code=$3,updated_at=$4 WHERE job_id=$1 AND lease_token=$2 AND state='running'")
-            .bind(&job.id).bind(&job.lease_token).bind(code).bind(now).execute(&mut *tx).await?;
-        if stopped.rows_affected() != 1 {
-            return Err(fenced());
-        }
-        sqlx::query("UPDATE api_cloud_workspaces SET status_code=$2,revision=revision+1,updated_at=GREATEST(updated_at+1,$3) WHERE workspace_id=$1")
-            .bind(&job.resource_id).bind(code).bind(now).execute(&mut *tx).await?;
-        let recreation = super::super::recreation::capture_intent(&row)
-            .then(|| row["request_config"]["rustRecreation"]["operationId"].as_str())
-            .flatten()
-            .map(str::to_owned);
-        tx.commit().await?;
         tracing::warn!(
             code,
             key,
@@ -407,10 +400,36 @@ impl RuntimeControl {
             error = effect.error.as_deref().unwrap_or("unknown"),
             "Recovery provider effect needs attention"
         );
+        Err(self.recovery_attention(tx, job, &row, code).await?)
+    }
+    /// Stop this recovery job in `tx` and surface `code` on the computer and
+    /// on any Update computer capturing through it. Returns the error the
+    /// stage reports. A retry (Update computer Retry) re-pends the job.
+    async fn recovery_attention(
+        &self,
+        mut tx: Transaction<'static, Postgres>,
+        job: &jobs::Job,
+        row: &Value,
+        code: &'static str,
+    ) -> Result<ApiError, ApiError> {
+        let now = clock_ms();
+        let stopped=sqlx::query("UPDATE zuse_rust_jobs SET state='failed',lease_token=NULL,lease_expires_at=NULL,last_error_code=$3,updated_at=$4 WHERE job_id=$1 AND lease_token=$2 AND state='running'")
+            .bind(&job.id).bind(&job.lease_token).bind(code).bind(now).execute(&mut *tx).await?;
+        if stopped.rows_affected() != 1 {
+            return Err(fenced());
+        }
+        sqlx::query("UPDATE api_cloud_workspaces SET status_code=$2,revision=revision+1,updated_at=GREATEST(updated_at+1,$3) WHERE workspace_id=$1")
+            .bind(&job.resource_id).bind(code).bind(now).execute(&mut *tx).await?;
+        let recreation = super::super::recreation::capture_intent(row)
+            .then(|| row["request_config"]["rustRecreation"]["operationId"].as_str())
+            .flatten()
+            .map(str::to_owned);
+        tx.commit().await?;
+        tracing::warn!(code, "Recovery needs attention");
         if let Some(operation) = recreation {
             self.recreation_attention(&operation, code, now).await?;
         }
-        Err(ApiError::conflict(code))
+        Ok(ApiError::conflict(code))
     }
     pub(super) async fn recovery_upload(
         &self,
@@ -456,15 +475,9 @@ impl RuntimeControl {
         }
         match machine.state {
             MachineState::Running => {
-                let (tx, row, op) = self.recovery_stage_locked(job, "uploading").await?;
-                let plan = self.capture_plan(&row, &archive(&row)?, op["binding"].clone())?;
-                tx.commit().await?;
-                // The helper's durable operation ID/runner lock/uploaded receipt makes
-                // repeated launch of this same capture idempotent, including a lost exec reply.
-                provider
-                    .capture(&plan)
-                    .await
-                    .map_err(|_| ApiError::unavailable("archive-capture-failed"))?;
+                if let Some(error) = self.recovery_capture(provider, job).await? {
+                    return Err(error);
+                }
             }
             MachineState::Starting => {}
             _ => return Err(failed()),
@@ -472,6 +485,91 @@ impl RuntimeControl {
         // Capture can publish its manifest before execute returns. Advancing to
         // verification is legitimate progress, but cancellation/deletion still fences us.
         self.recovery_stage_defer(job, "upload-complete").await
+    }
+    /// Launch the capture helper once per attempt, then only read its status.
+    ///
+    /// Relaunching on every pass is not harmless: each handoff touches the
+    /// guest's data directory, which fails a capture already in flight. A
+    /// failed helper, one that never starts, or one past the upload limit
+    /// stops the job with an attention code instead of looping.
+    async fn recovery_capture(
+        &self,
+        provider: &dyn RecoveryProvider,
+        job: &jobs::Job,
+    ) -> Result<Option<ApiError>, ApiError> {
+        let now = clock_ms();
+        let (mut tx, row, op) = self.recovery_stage_locked(job, "uploading").await?;
+        let record = &op["provider_effects"]["capture"];
+        let launched = (record["state"] == "launched")
+            .then(|| record["launchedAtMs"].as_i64())
+            .flatten();
+        let Some(launched) = launched else {
+            let mut a = archive(&row)?;
+            // The helper's capability must outlive the whole upload window.
+            // Renewing it later would revoke a helper already in flight.
+            if a.expires_at_ms <= now + CAPTURE_LIMIT_MS + CAPTURE_START_GRACE_MS {
+                a.expires_at_ms = now + TTL;
+                sqlx::query(
+                    "UPDATE zuse_rust_recovery_operations SET expires_at=$2 WHERE operation_id=$1",
+                )
+                .bind(&a.id)
+                .bind(a.expires_at_ms)
+                .execute(&mut *tx)
+                .await?;
+                save(&mut tx, &row, &a, "archive-uploading", now).await?;
+            }
+            let plan = self.capture_plan(&row, &a, op["binding"].clone())?;
+            let attempt = record["attempt"].as_i64().unwrap_or(0) + 1;
+            tx.commit().await?;
+            provider
+                .capture(&plan)
+                .await
+                .map_err(|_| ApiError::unavailable("archive-capture-failed"))?;
+            let (mut tx, _, current) = self.recovery_stage_locked(job, "uploading").await?;
+            sqlx::query("UPDATE zuse_rust_recovery_operations SET provider_effects=jsonb_set(provider_effects,'{capture}',$2),updated_at=$3 WHERE operation_id=$1")
+                .bind(required(&current,"operation_id")?).bind(json!({"state":"launched","launchedAtMs":now,"attempt":attempt})).bind(clock_ms()).execute(&mut *tx).await?;
+            tx.commit().await?;
+            return Ok(None);
+        };
+        tx.commit().await?;
+        let code = if now - launched > CAPTURE_LIMIT_MS {
+            Some("archive-capture-timeout")
+        } else {
+            let status = provider
+                .capture_status(
+                    required(&op, "source_machine_id")?,
+                    required(&op, "operation_id")?,
+                )
+                .await
+                .map_err(|_| ApiError::unavailable("archive-capture-status-unavailable"))?;
+            match status {
+                CaptureStatus::Running | CaptureStatus::Uploaded => None,
+                CaptureStatus::Failed => Some("archive-capture-failed"),
+                CaptureStatus::Idle if now - launched > CAPTURE_START_GRACE_MS => {
+                    Some("archive-capture-failed")
+                }
+                CaptureStatus::Idle => None,
+            }
+        };
+        let Some(code) = code else {
+            return Ok(None);
+        };
+        let (mut tx, row, current) = self.recovery_stage_locked(job, "uploading").await?;
+        if current["provider_effects"]["capture"]["launchedAtMs"] != json!(launched) {
+            return Err(fenced());
+        }
+        // A retry launches a fresh attempt.
+        let mut ended = current["provider_effects"]["capture"].clone();
+        ended["state"] = json!("ended");
+        ended["endedCode"] = json!(code);
+        sqlx::query("UPDATE zuse_rust_recovery_operations SET provider_effects=jsonb_set(provider_effects,'{capture}',$2),updated_at=$3 WHERE operation_id=$1")
+            .bind(required(&current,"operation_id")?).bind(ended).bind(now).execute(&mut *tx).await?;
+        tracing::warn!(
+            code,
+            attempt = current["provider_effects"]["capture"]["attempt"].as_i64(),
+            "Recovery capture did not complete"
+        );
+        Ok(Some(self.recovery_attention(tx, job, &row, code).await?))
     }
     pub(super) async fn recovery_prepare_verification(
         &self,

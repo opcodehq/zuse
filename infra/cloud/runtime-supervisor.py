@@ -374,7 +374,10 @@ class Supervisor:
             require(all(self.record['identity'].get(key)==value for key,value in binding.items()),'runtime_supervisor_fenced')
         else:require(config.get('mode')=='restore','runtime_supervisor_recovery_unbound')
         require(config.get('home')==str(self.data.parent) and config.get('repositoriesPath')==str(self.checkout),'supervisor_recovery_layout_invalid')
-        self.recovery_binding=binding;atomic(self.recovery_binding_path,binding)
+        # A repeated handoff must not touch the data directory: an in-flight
+        # capture fingerprints it, and a rewrite fails that capture.
+        if self.recovery_binding!=binding or not self.recovery_binding_path.exists():atomic(self.recovery_binding_path,binding)
+        self.recovery_binding=binding
         child=self.recoveries.get(operation)
         if child is None or child.poll() is not None:
             require(not(directory/'cancelled').exists(),'supervisor_recovery_cancelled')
