@@ -83,6 +83,9 @@ fn task_rejection(code: &str) -> Option<&'static str> {
             "Too many attachments are still uploading. Wait for them to finish, then send again."
         }
         "invalid_launch_asset" => "This attachment couldn't be uploaded. Try attaching it again.",
+        zuse_protocol::cloud_task_commands::RUNTIME_OUTDATED => {
+            "This computer runs an older version that can't receive files or change access per message. Send without files, or recreate the computer to update it."
+        }
         _ => return None,
     })
 }
@@ -1791,6 +1794,22 @@ mod beta_tests {
                 .contains("model")
         );
         assert!(super::task_rejection("something_new").is_none());
+    }
+    #[test]
+    fn an_outdated_computer_runtime_is_a_definitive_rejection_naming_the_fix() {
+        let message =
+            super::task_rejection(zuse_protocol::cloud_task_commands::RUNTIME_OUTDATED).unwrap();
+        assert!(message.contains("older version"));
+        assert!(message.contains("recreate the computer"));
+        let rpc = TaskRejection(message).rpc();
+        assert!(matches!(
+            rpc,
+            zuse_rpc::RpcError::Capability(code)
+                if code == format!(
+                    "{}{message}",
+                    zuse_protocol::cloud_task_commands::TASK_REJECTED_PREFIX
+                )
+        ));
     }
     #[test]
     fn cloud_computers_are_off_in_production_unless_enabled() {

@@ -323,6 +323,15 @@ async fn v2_initial_write_is_atomic_under_the_actual_restricted_role() {
         now,
     )
     .await;
+    runtime_outdated::exercise(
+        &control,
+        &application,
+        &access,
+        &master,
+        |id| plan(id, false),
+        now,
+    )
+    .await;
     // A partially installed optional schema must fail before acknowledging
     // any new queue/control mutation, even when all table grants are present.
     sqlx::query("ALTER TABLE zuse_rust_task_command_execution RENAME COLUMN priority TO incomplete_priority").execute(&pool).await.unwrap();
@@ -375,3 +384,5 @@ mod queue_drain;
 mod interrupts;
 
 mod agent_switch;
+
+mod runtime_outdated;
