@@ -143,7 +143,7 @@ class NativeLayoutTests {
     fun nativeBackNavigatesSettingsBeforeDismissing() {
         compose.onNodeWithContentDescription("Settings").performClick()
         compose.onNodeWithText("Computers").performClick()
-        compose.onNodeWithText("Pair a computer").assertExists()
+        compose.onNodeWithText("Add manually").assertExists()
         compose.runOnUiThread {
             val window =
                 android.view.inspector.WindowInspector.getGlobalWindowViews().last { it.isShown }
@@ -151,7 +151,7 @@ class NativeLayoutTests {
                 .onBackPressedDispatcher
                 .onBackPressed()
         }
-        compose.onNodeWithText("Pair a computer").assertDoesNotExist()
+        compose.onNodeWithText("Add manually").assertDoesNotExist()
         compose.onNodeWithText("Zuse Cloud").assertExists()
     }
 
@@ -163,8 +163,8 @@ class NativeLayoutTests {
         compose
             .onNodeWithContentDescription("New chat message")
             .performTextInput("Keep this new chat draft")
-        compose.onNodeWithContentDescription("Close new chat").performClick()
-        compose.onNodeWithContentDescription("Chat actions").performClick()
+        compose.onNodeWithContentDescription("Back to chats").performClick()
+        compose.onNodeWithContentDescription("New chat message").assertDoesNotExist()
         compose.onNodeWithText("New chat").performClick()
         compose
             .onNodeWithContentDescription("New chat message")
@@ -359,25 +359,96 @@ class NativeLayoutTests {
     }
 
     @Test
-    fun phoneHomeShowsCompactChatRowsAndComputerNames() {
+    fun phoneHomeListsChatsByProjectWithoutComputerRows() {
+        preview()
+        val workspace = ViewModelProvider(compose.activity)[WorkspaceViewModel::class.java]
+        val now = java.time.Instant.now()
+        compose.runOnUiThread {
+            workspace.projects.add(Project(CanonicalWorkspace.PROJECTLESS, ChatList.NO_PROJECT))
+            listOf(
+                    Session(
+                        "demo-1",
+                        "preview-project",
+                        "Review the Android composer",
+                        "claude",
+                        "Sonnet · demo",
+                        preview = "The composer now opens into a card.",
+                        activityAt = now.minusSeconds(300).toString(),
+                        branch = "feature/composer",
+                    ),
+                    Session(
+                        "demo-2",
+                        "preview-project",
+                        "Fix reconnect recovery",
+                        "claude",
+                        "Sonnet · demo",
+                        activityAt = now.minusSeconds(60).toString(),
+                        status = "working",
+                    ),
+                    Session(
+                        "demo-3",
+                        CanonicalWorkspace.PROJECTLESS,
+                        "Plan the release notes",
+                        "claude",
+                        "Sonnet · demo",
+                        activityAt = now.minusSeconds(7200).toString(),
+                        status = "awaitingInput",
+                    ),
+                )
+                .forEach(workspace.sessions::add)
+        }
+        compose.onNodeWithContentDescription("Back to chats").performClick()
+        compose.onNodeWithText("Chats").assertIsDisplayed()
+        compose.onNodeWithText("zuse").assertIsDisplayed()
+        compose.onNodeWithText(ChatList.NO_PROJECT).assertIsDisplayed()
+        compose.onNodeWithText("Fix reconnect recovery").assertIsDisplayed()
+        compose.onNodeWithText("Working…").assertIsDisplayed()
+        compose.onNodeWithText("Needs input").assertIsDisplayed()
+        compose.onNodeWithText("The composer now opens into a card.").assertIsDisplayed()
+        compose.onNodeWithText("feature/composer").assertIsDisplayed()
+        compose.onNodeWithText("5m").assertIsDisplayed()
+        // One place to run chats: nothing about computers, and no refresh or add buttons.
+        compose.onNodeWithText("All computers").assertDoesNotExist()
+        compose.onNodeWithText("Computers & chats").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Refresh computers").assertDoesNotExist()
+        compose.onNodeWithText("Connected").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Search chats").performTextInput("release")
+        compose.onNodeWithText("Plan the release notes").assertIsDisplayed()
+        compose.onNodeWithText("Fix reconnect recovery").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Clear search").performClick()
+        screenshot("phone-home")
+    }
+
+    @Test
+    fun severalComputersShowOneCompactSwitcher() {
         preview()
         val workspace = ViewModelProvider(compose.activity)[WorkspaceViewModel::class.java]
         compose.runOnUiThread {
-            listOf(
-                    "Review the Android composer",
-                    "Fix reconnect recovery",
-                    "Add tablet navigation",
-                    "Polish connection settings",
+            workspace.devices.addAll(
+                listOf(
+                    SavedDevice("mac", "MacBook Pro · demo", "wss://macbook.invalid/rpc", ""),
+                    SavedDevice("server", "Home server · demo", "wss://server.invalid/rpc", ""),
                 )
-                .forEachIndexed { index, title ->
-                    workspace.sessions.add(
-                        Session("demo-$index", "preview-project", title, "claude", "Sonnet · demo")
-                    )
-                }
+            )
         }
         compose.onNodeWithContentDescription("Back to chats").performClick()
-        compose.onNodeWithText("Your workspace").assertDoesNotExist()
-        screenshot("phone-home")
+        compose.onNodeWithText("All computers").performClick()
+        compose.onNodeWithText("MacBook Pro · demo").assertIsDisplayed()
+        compose.onNodeWithText("Home server · demo").performClick()
+        compose.onNodeWithText("Home server · demo").assertIsDisplayed()
+        compose.onNodeWithText("All computers").assertDoesNotExist()
+        org.junit.Assert.assertEquals("device:server", workspace.activePlaceFilter)
+        screenshot("phone-home-switcher")
+    }
+
+    @Test
+    fun nothingPairedShowsConnectYourComputer() {
+        compose.onNodeWithText("Connect your computer").assertIsDisplayed()
+        compose.onNodeWithText("Sign in to Zuse Cloud").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Search chats").assertDoesNotExist()
+        compose.onNodeWithText("Pair a computer").performClick()
+        compose.onNodeWithText("Pairing link").assertExists()
+        screenshot("phone-empty")
     }
 
     @Test
@@ -409,7 +480,7 @@ class NativeLayoutTests {
     }
 
     @Test
-    fun newChatShowsProjectBranchAndModelChoices() {
+    fun newChatOpensFullScreenAndNeverDefaultsToAWorktreeWithoutAProject() {
         preview()
         val workspace = ViewModelProvider(compose.activity)[WorkspaceViewModel::class.java]
         compose.runOnUiThread {
@@ -419,17 +490,45 @@ class NativeLayoutTests {
                     ModelChoice("codex", "codex-demo", "Codex · demo"),
                 )
             )
-            compose.activity.setContent {
-                ZuseTheme { Surface(Modifier.fillMaxSize()) { NewChatSheet(workspace, {}, {}) } }
-            }
+            workspace.projects.add(Project(CanonicalWorkspace.PROJECTLESS, ChatList.NO_PROJECT))
         }
-        compose.onNodeWithText("Where").assertExists()
-        compose.onNodeWithText("Project").assertExists()
-        compose.onNodeWithContentDescription("New chat message").assertExists()
-        compose.onNodeWithText("Mode").assertExists()
+        compose.onNodeWithContentDescription("Chat actions").performClick()
+        compose.onNodeWithText("New chat").performClick()
+        // The chat screen itself, not a sheet: same header and composer, focused for writing.
+        compose.onNodeWithContentDescription("New chat message").assertIsFocused()
+        compose.onNodeWithContentDescription("Chat transcript").assertDoesNotExist()
+        compose.onNodeWithText("Where").assertDoesNotExist()
+        compose.onNodeWithText("Project").assertIsDisplayed()
+        compose.onNodeWithText("Mode").assertIsDisplayed()
+        compose.onNodeWithText(CheckoutMode.Local.label).assertIsDisplayed()
         screenshot("phone-new-chat")
+        compose.onNodeWithText("zuse").performClick()
+        compose.onNodeWithText(ChatList.NO_PROJECT).performClick()
+        compose.waitUntil(5000) { workspace.selectedProject?.id == CanonicalWorkspace.PROJECTLESS }
+        // Without a project only working locally is possible, so there is nothing to choose.
+        compose.onNodeWithText("Mode").assertDoesNotExist()
+        compose.onNodeWithText(CheckoutMode.Worktree.label).assertDoesNotExist()
         compose.onNodeWithText("Sonnet · demo").performClick()
         compose.onNodeWithText("Codex · demo").assertExists()
         screenshot("phone-model-picker")
+    }
+
+    @Test
+    fun newChatRemembersTheLastModePerProject() {
+        preview()
+        val workspace = ViewModelProvider(compose.activity)[WorkspaceViewModel::class.java]
+        compose.runOnUiThread {
+            workspace.rememberCheckoutMode("preview-project", CheckoutMode.Worktree)
+            workspace.rememberCheckoutMode(CanonicalWorkspace.PROJECTLESS, CheckoutMode.Worktree)
+        }
+        org.junit.Assert.assertEquals(CheckoutMode.Worktree, workspace.checkoutMode("preview-project"))
+        org.junit.Assert.assertEquals(
+            CheckoutMode.Local,
+            workspace.checkoutMode(CanonicalWorkspace.PROJECTLESS),
+        )
+        compose.onNodeWithContentDescription("Chat actions").performClick()
+        compose.onNodeWithText("New chat").performClick()
+        compose.onNodeWithText(CheckoutMode.Worktree.label).assertIsDisplayed()
+        compose.onNodeWithText("Changes stay in a separate worktree.").assertIsDisplayed()
     }
 }
