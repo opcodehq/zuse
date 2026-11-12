@@ -3,6 +3,88 @@
 use super::*;
 use std::ffi::OsString;
 pub const MANAGED_GH: &str = "/usr/bin/gh";
+
+/// Where the managed gh lives. Root bases own it as root so the task user
+/// cannot replace it. A home base (Prized has no root) installs it under
+/// /home/prized/.zuse, owned by the only user there; the same exact-bytes and
+/// mode checks apply, but nothing is protected from that user.
+struct GhLayout {
+    gh: &'static str,
+    wrapper: &'static str,
+    wrapper_bytes: &'static [u8],
+    profile: &'static str,
+    profile_bytes: &'static [u8],
+    ancestors: &'static [&'static str],
+    home: &'static str,
+    user: &'static str,
+    path: &'static str,
+    /// Per-task profile marker naming the task's gh launcher.
+    marker: &'static str,
+    owned_by_task_user: bool,
+}
+static ROOT_LAYOUT: GhLayout = GhLayout {
+    gh: MANAGED_GH,
+    wrapper: MANAGED_WRAPPER,
+    wrapper_bytes: MANAGED_WRAPPER_BYTES,
+    profile: MANAGED_PROFILE,
+    profile_bytes: MANAGED_PROFILE_BYTES,
+    ancestors: &[
+        "/opt",
+        "/opt/zuse",
+        "/opt/zuse/bin",
+        "/etc",
+        "/etc/profile.d",
+    ],
+    home: "/home/zuse",
+    user: "zuse",
+    path: "/opt/zuse/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    marker: "/home/zuse/.zuse-github-cli",
+    owned_by_task_user: false,
+};
+static HOME_LAYOUT: GhLayout = GhLayout {
+    gh: "/home/prized/.zuse/libexec/gh",
+    wrapper: "/home/prized/.zuse/bin/gh",
+    wrapper_bytes:
+        b"#!/bin/sh\nexec /home/prized/.zuse/bin/zuse-cloud-runtime github-from-profile \"$@\"\n",
+    profile: "/home/prized/.zuse/profile.d/zz-zuse-managed-bin.sh",
+    profile_bytes: br#"# Zuse managed commands; retain an existing task-specific PATH prefix.
+case ":${PATH:-}:" in
+  *":/home/prized/.zuse/bin:"*) ;;
+  *) PATH="/home/prized/.zuse/bin:${PATH:-/usr/bin:/bin}" ;;
+esac
+export PATH
+"#,
+    ancestors: &[
+        "/home/prized/.zuse",
+        "/home/prized/.zuse/bin",
+        "/home/prized/.zuse/profile.d",
+    ],
+    home: "/home/prized",
+    user: "prized",
+    path: "/home/prized/.zuse/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    marker: "/home/prized/.zuse-github-cli",
+    owned_by_task_user: true,
+};
+/// The runtime runs from the base it was installed with.
+fn gh_layout() -> &'static GhLayout {
+    let home = std::env::current_exe().is_ok_and(|exe| exe.starts_with("/home/prized/.zuse/"));
+    if home { &HOME_LAYOUT } else { &ROOT_LAYOUT }
+}
+/// Owner of the managed files: root, or the task user on a home base.
+fn managed_owner(layout: &GhLayout) -> u32 {
+    if layout.owned_by_task_user {
+        unsafe { libc::geteuid() }
+    } else {
+        0
+    }
+}
+fn task_uid(layout: &GhLayout) -> u32 {
+    if layout.owned_by_task_user {
+        unsafe { libc::geteuid() }
+    } else {
+        10001
+    }
+}
 fn supported_args(args: &[OsString]) -> bool {
     if args.first().is_some_and(|a| a == "auth") && args.get(1).is_none_or(|a| a != "status") {
         return false;
@@ -57,7 +139,8 @@ fn supported_args(args: &[OsString]) -> bool {
     true
 }
 pub fn managed_cli_version() -> Result<String> {
-    let path = Path::new(MANAGED_GH);
+    let layout = gh_layout();
+    let path = Path::new(layout.gh);
     ensure!(
         std::fs::symlink_metadata(path)?.file_type().is_file(),
         "github_cli_managed_binary_missing"
@@ -65,7 +148,7 @@ pub fn managed_cli_version() -> Result<String> {
     use std::os::unix::fs::MetadataExt;
     let metadata = std::fs::metadata(path)?;
     ensure!(
-        metadata.uid() == 0 && metadata.permissions().mode() & 0o022 == 0,
+        metadata.uid() == managed_owner(layout) && metadata.permissions().mode() & 0o022 == 0,
         "github_cli_managed_binary_untrusted"
     );
     let output = std::process::Command::new(path)
@@ -108,7 +191,7 @@ fn controlled_directory(path: &Path, uid: u32) -> Result<()> {
     );
     Ok(())
 }
-fn managed_profile(path: &Path, uid: u32) -> Result<()> {
+fn managed_profile(path: &Path, uid: u32, expected: &[u8]) -> Result<()> {
     use std::io::Read;
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
     let file = std::fs::OpenOptions::new()
@@ -126,13 +209,10 @@ fn managed_profile(path: &Path, uid: u32) -> Result<()> {
     );
     let mut bytes = Vec::new();
     file.take(4097).read_to_end(&mut bytes)?;
-    ensure!(
-        bytes == MANAGED_PROFILE_BYTES,
-        "github_cli_managed_profile_invalid"
-    );
+    ensure!(bytes == expected, "github_cli_managed_profile_invalid");
     Ok(())
 }
-fn wrapper_sha(path: &Path, expected_uid: u32) -> Result<String> {
+fn wrapper_sha(path: &Path, expected_uid: u32, expected: &[u8]) -> Result<String> {
     use std::io::Read;
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
     let file = std::fs::OpenOptions::new()
@@ -151,13 +231,10 @@ fn wrapper_sha(path: &Path, expected_uid: u32) -> Result<String> {
     );
     let mut bytes = Vec::new();
     file.take(4097).read_to_end(&mut bytes)?;
-    ensure!(
-        bytes == MANAGED_WRAPPER_BYTES,
-        "github_cli_managed_wrapper_invalid"
-    );
+    ensure!(bytes == expected, "github_cli_managed_wrapper_invalid");
     Ok(format!("{:x}", Sha256::digest(&bytes)))
 }
-fn login_shell_proof(stdout: &[u8], success: bool, version: &str) -> bool {
+fn login_shell_proof(stdout: &[u8], success: bool, version: &str, wrapper: &str) -> bool {
     if !success || stdout.len() > 4096 {
         return false;
     }
@@ -165,26 +242,22 @@ fn login_shell_proof(stdout: &[u8], success: bool, version: &str) -> bool {
         return false;
     };
     let mut lines = text.lines();
-    lines.next() == Some(MANAGED_WRAPPER) && lines.next() == Some(version)
+    lines.next() == Some(wrapper) && lines.next() == Some(version)
 }
 pub fn managed_cli_receipt() -> Result<crate::image::GithubCliReceipt> {
     let version = managed_cli_version()?;
+    let layout = gh_layout();
+    let owner = managed_owner(layout);
     ensure!(
-        std::fs::metadata(MANAGED_GH)?.len() <= 128 * 1024 * 1024,
+        std::fs::metadata(layout.gh)?.len() <= 128 * 1024 * 1024,
         "github_cli_managed_binary_invalid"
     );
-    let bytes = std::fs::read(MANAGED_GH)?;
-    for path in [
-        "/opt",
-        "/opt/zuse",
-        "/opt/zuse/bin",
-        "/etc",
-        "/etc/profile.d",
-    ] {
-        controlled_directory(Path::new(path), 0)?;
+    let bytes = std::fs::read(layout.gh)?;
+    for path in layout.ancestors {
+        controlled_directory(Path::new(path), owner)?;
     }
-    managed_profile(Path::new(MANAGED_PROFILE), 0)?;
-    let wrapper_sha256 = wrapper_sha(Path::new(MANAGED_WRAPPER), 0)?;
+    managed_profile(Path::new(layout.profile), owner, layout.profile_bytes)?;
+    let wrapper_sha256 = wrapper_sha(Path::new(layout.wrapper), owner, layout.wrapper_bytes)?;
     // Image-only probe: no task profile or credential is provisioned. GNU
     // timeout bounds profile startup; only command resolution/version run.
     let shell = std::process::Command::new("/usr/bin/timeout")
@@ -196,16 +269,18 @@ pub fn managed_cli_receipt() -> Result<crate::image::GithubCliReceipt> {
             "command -v gh && gh --version",
         ])
         .env_clear()
-        .env("HOME", "/home/zuse")
-        .env("USER", "zuse")
-        .env("LOGNAME", "zuse")
-        .env(
-            "PATH",
-            "/opt/zuse/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-        )
+        .env("HOME", layout.home)
+        .env("USER", layout.user)
+        .env("LOGNAME", layout.user)
+        .env("PATH", layout.path)
         .output()?;
     ensure!(
-        login_shell_proof(&shell.stdout, shell.status.success(), &version),
+        login_shell_proof(
+            &shell.stdout,
+            shell.status.success(),
+            &version,
+            layout.wrapper
+        ),
         "github_cli_managed_login_path_invalid"
     );
     Ok(crate::image::GithubCliReceipt {
@@ -235,7 +310,7 @@ impl GithubAuth {
         crate::identity::atomic_write(&path, script.as_bytes())?;
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))?;
         crate::identity::atomic_write(
-            Path::new(PROFILE),
+            Path::new(gh_layout().marker),
             &serde_json::to_vec(
                 &json!({"version":1,"workspaceId":self.broker.recipient.workspace,"launcher":path}),
             )?,
@@ -254,7 +329,7 @@ pub fn run_cli(socket: &Path, repository: &str, args: &[OsString]) -> Result<i32
         .block_on(helper(socket, "get", input.as_bytes()))?;
     let secret = token(&response)?;
     exec_child(
-        Path::new(MANAGED_GH),
+        Path::new(gh_layout().gh),
         args,
         &secret,
         &socket.with_extension("gh-config"),
@@ -324,6 +399,26 @@ fn child(binary: &Path, args: &[OsString], secret: &str, config: &Path) -> Resul
 mod tests {
     use super::*;
     #[test]
+    fn a_home_base_keeps_the_managed_gh_under_its_user_home() {
+        let wrapper = std::str::from_utf8(HOME_LAYOUT.wrapper_bytes).unwrap();
+        assert!(wrapper.contains("/home/prized/.zuse/bin/zuse-cloud-runtime github-from-profile"));
+        let profile = std::str::from_utf8(HOME_LAYOUT.profile_bytes).unwrap();
+        assert!(profile.contains("PATH=\"/home/prized/.zuse/bin:"));
+        assert!(HOME_LAYOUT.path.starts_with("/home/prized/.zuse/bin:"));
+        for path in [
+            HOME_LAYOUT.gh,
+            HOME_LAYOUT.wrapper,
+            HOME_LAYOUT.profile,
+            HOME_LAYOUT.marker,
+        ] {
+            assert!(path.starts_with("/home/prized/"), "{path}");
+        }
+        assert!(HOME_LAYOUT.owned_by_task_user && !ROOT_LAYOUT.owned_by_task_user);
+        assert_eq!(ROOT_LAYOUT.wrapper, "/opt/zuse/bin/gh");
+        // Tests run from target/, so the root layout applies.
+        assert!(std::ptr::eq(gh_layout(), &ROOT_LAYOUT));
+    }
+    #[test]
     fn managed_receipt_requires_exact_private_wrapper_and_actual_login_resolution() {
         use std::os::unix::fs::PermissionsExt;
         let directory = tempfile::tempdir().unwrap();
@@ -331,35 +426,44 @@ mod tests {
         std::fs::write(&path, MANAGED_WRAPPER_BYTES).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
         let uid = unsafe { libc::geteuid() };
-        assert_eq!(wrapper_sha(&path, uid).unwrap().len(), 64);
-        assert!(wrapper_sha(&path, u32::MAX).is_err());
+        assert_eq!(
+            wrapper_sha(&path, uid, MANAGED_WRAPPER_BYTES)
+                .unwrap()
+                .len(),
+            64
+        );
+        assert!(wrapper_sha(&path, u32::MAX, MANAGED_WRAPPER_BYTES).is_err());
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o777)).unwrap();
-        assert!(wrapper_sha(&path, uid).is_err());
+        assert!(wrapper_sha(&path, uid, MANAGED_WRAPPER_BYTES).is_err());
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
         std::fs::write(&path, b"#!/bin/sh\nexec gh \"$@\"\n").unwrap();
-        assert!(wrapper_sha(&path, uid).is_err());
+        assert!(wrapper_sha(&path, uid, MANAGED_WRAPPER_BYTES).is_err());
         let alias = directory.path().join("alias");
         std::os::unix::fs::symlink(&path, &alias).unwrap();
-        assert!(wrapper_sha(&alias, uid).is_err());
+        assert!(wrapper_sha(&alias, uid, MANAGED_WRAPPER_BYTES).is_err());
         assert!(login_shell_proof(
             b"/opt/zuse/bin/gh\ngh version 2.79.0\nrelease info\n",
             true,
-            "gh version 2.79.0"
+            "gh version 2.79.0",
+            MANAGED_WRAPPER
         ));
         assert!(!login_shell_proof(
             b"/usr/bin/gh\ngh version 2.79.0\n",
             true,
-            "gh version 2.79.0"
+            "gh version 2.79.0",
+            MANAGED_WRAPPER
         ));
         assert!(!login_shell_proof(
             b"/opt/zuse/bin/gh\ngh version 2.78.0\n",
             true,
-            "gh version 2.79.0"
+            "gh version 2.79.0",
+            MANAGED_WRAPPER
         ));
         assert!(!login_shell_proof(
             b"/opt/zuse/bin/gh\ngh version 2.79.0\n",
             false,
-            "gh version 2.79.0"
+            "gh version 2.79.0",
+            MANAGED_WRAPPER
         ));
     }
     #[test]
@@ -380,16 +484,17 @@ mod tests {
         let profile = temporary.path().join("profile");
         std::fs::write(&profile, MANAGED_PROFILE_BYTES).unwrap();
         std::fs::set_permissions(&profile, std::fs::Permissions::from_mode(0o644)).unwrap();
-        managed_profile(&profile, uid).unwrap();
+        managed_profile(&profile, uid, MANAGED_PROFILE_BYTES).unwrap();
         std::fs::set_permissions(&profile, std::fs::Permissions::from_mode(0o664)).unwrap();
-        assert!(managed_profile(&profile, uid).is_err());
+        assert!(managed_profile(&profile, uid, MANAGED_PROFILE_BYTES).is_err());
         std::fs::set_permissions(&profile, std::fs::Permissions::from_mode(0o644)).unwrap();
         std::fs::write(&profile, b"export PATH=/wrong").unwrap();
-        assert!(managed_profile(&profile, uid).is_err());
+        assert!(managed_profile(&profile, uid, MANAGED_PROFILE_BYTES).is_err());
         assert!(!login_shell_proof(
             b"/usr/local/bin/gh\ngh version 2.79.0\n",
             true,
-            "gh version 2.79.0"
+            "gh version 2.79.0",
+            MANAGED_WRAPPER
         ));
     }
     #[test]
@@ -525,7 +630,6 @@ mod tests {
     }
 }
 
-const PROFILE: &str = "/home/zuse/.zuse-github-cli";
 fn profile_launcher_at(marker: &Path, uid: u32) -> Result<PathBuf> {
     use std::{
         io::Read,
@@ -591,25 +695,27 @@ pub fn run_profile(args: &[OsString]) -> Result<i32> {
     use std::os::unix::process::CommandExt;
     if args.len() == 1 && matches!(args[0].to_str(), Some("--version" | "-v")) {
         managed_cli_version()?;
-        return Err(std::process::Command::new(MANAGED_GH)
+        return Err(std::process::Command::new(gh_layout().gh)
             .arg("--version")
             .env_remove("GH_TOKEN")
             .env_remove("GITHUB_TOKEN")
             .exec()
             .into());
     }
-    let path = profile_launcher_at(Path::new(PROFILE), 10001)?;
+    let layout = gh_layout();
+    let path = profile_launcher_at(Path::new(layout.marker), task_uid(layout))?;
     Err(std::process::Command::new(path).args(args).exec().into())
 }
 pub(super) fn clear_profile(directory: &Path) {
-    if let Ok(value) = std::fs::read(PROFILE)
+    let marker = gh_layout().marker;
+    if let Ok(value) = std::fs::read(marker)
         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).map_err(std::io::Error::other))
     {
         if value["launcher"]
             .as_str()
             .is_some_and(|p| Path::new(p).starts_with(directory))
         {
-            let _ = std::fs::remove_file(PROFILE);
+            let _ = std::fs::remove_file(marker);
         }
     }
 }

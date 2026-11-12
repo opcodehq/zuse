@@ -820,7 +820,8 @@ async fn memory_suspend_requires_bound_park_and_reconciles_the_original_operatio
                             &workspace,
                             "memory-credential",
                             RuntimeRequest::Resumed {
-                                operation_id: "wrong-original-operation".into()
+                                operation_id: "wrong-original-operation".into(),
+                                wake: None,
                             },
                             at + 2
                         )
@@ -834,6 +835,7 @@ async fn memory_suspend_requires_bound_park_and_reconciles_the_original_operatio
                         "memory-credential",
                         RuntimeRequest::Resumed {
                             operation_id: resume.clone(),
+                            wake: Some(zuse_protocol::cloud_lifecycle::Wake { from_memory: false }),
                         },
                         at + 3,
                     )
@@ -874,6 +876,7 @@ async fn memory_suspend_requires_bound_park_and_reconciles_the_original_operatio
                         "memory-credential",
                         RuntimeRequest::Resumed {
                             operation_id: resume.clone(),
+                            wake: None,
                         },
                         at + 500,
                     )
@@ -885,6 +888,12 @@ async fn memory_suspend_requires_bound_park_and_reconciles_the_original_operatio
                     (at + 3, at + 3),
                     "duplicate ACK preserves first readiness/completion timings"
                 );
+                let wake: Value = sqlx::query_scalar("SELECT request_config->'rustLastWake' FROM api_cloud_workspaces WHERE workspace_id=$1").bind(&workspace).fetch_one(&pool).await.unwrap();
+                assert_eq!(
+                    wake["fromMemory"], false,
+                    "a fresh process reports a restart"
+                );
+                assert_eq!(wake["at"], at + 3, "a duplicate ACK keeps the first wake");
             }
             // Exercise the actual request admission (not a hand-written intent):
             // durable operation, updated public row and exactly one pending job.

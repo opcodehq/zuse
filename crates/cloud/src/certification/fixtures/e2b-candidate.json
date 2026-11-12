@@ -1,0 +1,406 @@
+{
+ "architecture": "x86_64",
+ "artifactId": "v5gogdmyrgpmnkk7bmss",
+ "capabilities": {
+  "commandAdmissionVersion": 2,
+  "configured": true,
+  "id": "e2b",
+  "managedBaseReady": true,
+  "preservesDisk": true,
+  "preservesMemory": true,
+  "sizes": [
+   {
+    "diskGib": 11,
+    "id": "default",
+    "label": "Standard",
+    "memoryMib": 2048,
+    "vcpus": 2
+   }
+  ],
+  "supportsDocker": false,
+  "supportsSnapshots": true,
+  "unavailableReason": null
+ },
+ "harnessRelease": "badfff31936b17eccef74a754d506a2e97a1354e7597dbde35d460edf03f565d",
+ "harnesses": [
+  {
+   "agent": "claude",
+   "catalog": {
+    "defaultModel": "sonnet",
+    "id": "claude-code",
+    "models": [
+     {
+      "id": "sonnet",
+      "label": "Sonnet",
+      "options": [],
+      "reasoningLevels": []
+     }
+    ],
+    "name": "Claude Code"
+   },
+   "sha256": "4487042b4c4f5d88d4568f68ae98aae0b1ffae58864cf57fb868641bc5f84594",
+   "version": "2.1.314"
+  },
+  {
+   "agent": "codex",
+   "catalog": {
+    "defaultModel": "gpt-6.1-sol",
+    "id": "codex",
+    "models": [
+     {
+      "description": "Latest workhorse model for coding and everyday work.",
+      "id": "gpt-6.1-sol",
+      "label": "GPT-6.1-Sol",
+      "options": [
+       {
+        "choices": [
+         {
+          "id": "default",
+          "label": "Standard"
+         },
+         {
+          "id": "fast",
+          "label": "Fast"
+         }
+        ],
+        "defaultChoice": "default",
+        "id": "serviceTier",
+        "label": "Service Tier"
+       }
+      ],
+      "reasoningLevels": [
+       "low",
+       "medium",
+       "high",
+       "xhigh",
+       "max",
+       "ultra"
+      ]
+     },
+     {
+      "description": "Frontier intelligence for the most demanding work.",
+      "id": "gpt-6-astra",
+      "label": "GPT-6-Astra",
+      "options": [
+       {
+        "choices": [
+         {
+          "id": "default",
+          "label": "Standard"
+         },
+         {
+          "id": "fast",
+          "label": "Fast"
+         }
+        ],
+        "defaultChoice": "default",
+        "id": "serviceTier",
+        "label": "Service Tier"
+       }
+      ],
+      "reasoningLevels": [
+       "low",
+       "medium",
+       "high",
+       "xhigh",
+       "max",
+       "ultra"
+      ]
+     },
+     {
+      "description": "GPT-6.1 Terra Codex model.",
+      "id": "gpt-6.1-terra",
+      "label": "GPT-6.1 Terra",
+      "options": [
+       {
+        "choices": [
+         {
+          "id": "default",
+          "label": "Standard"
+         },
+         {
+          "id": "fast",
+          "label": "Fast"
+         }
+        ],
+        "defaultChoice": "default",
+        "id": "serviceTier",
+        "label": "Service Tier"
+       }
+      ],
+      "reasoningLevels": [
+       "low",
+       "medium",
+       "high",
+       "xhigh",
+       "max",
+       "ultra"
+      ]
+     },
+     {
+      "description": "Previous generation workhorse model.",
+      "id": "gpt-6-sol",
+      "label": "GPT-6-Sol",
+      "options": [
+       {
+        "choices": [
+         {
+          "id": "default",
+          "label": "Standard"
+         },
+         {
+          "id": "fast",
+          "label": "Fast"
+         }
+        ],
+        "defaultChoice": "default",
+        "id": "serviceTier",
+        "label": "Service Tier"
+       }
+      ],
+      "reasoningLevels": [
+       "low",
+       "medium",
+       "high",
+       "xhigh",
+       "max",
+       "ultra"
+      ]
+     },
+     {
+      "description": "Fast and affordable model for easier tasks.",
+      "id": "gpt-6-luna",
+      "label": "GPT-6-Luna",
+      "options": [
+       {
+        "choices": [
+         {
+          "id": "default",
+          "label": "Standard"
+         },
+         {
+          "id": "fast",
+          "label": "Fast"
+         }
+        ],
+        "defaultChoice": "default",
+        "id": "serviceTier",
+        "label": "Service Tier"
+       }
+      ],
+      "reasoningLevels": [
+       "low",
+       "medium",
+       "high",
+       "xhigh",
+       "max"
+      ]
+     },
+     {
+      "description": "Older generation workhorse model.",
+      "id": "gpt-5.6-sol",
+      "label": "GPT-5.6-Sol",
+      "options": [
+       {
+        "choices": [
+         {
+          "id": "default",
+          "label": "Standard"
+         },
+         {
+          "id": "fast",
+          "label": "Fast"
+         }
+        ],
+        "defaultChoice": "default",
+        "id": "serviceTier",
+        "label": "Service Tier"
+       }
+      ],
+      "reasoningLevels": [
+       "low",
+       "medium",
+       "high",
+       "xhigh",
+       "max",
+       "ultra"
+      ]
+     },
+     {
+      "description": "Older balanced model for straightforward work.",
+      "id": "gpt-5.6-terra",
+      "label": "GPT-5.6-Terra",
+      "options": [
+       {
+        "choices": [
+         {
+          "id": "default",
+          "label": "Standard"
+         },
+         {
+          "id": "fast",
+          "label": "Fast"
+         }
+        ],
+        "defaultChoice": "default",
+        "id": "serviceTier",
+        "label": "Service Tier"
+       }
+      ],
+      "reasoningLevels": [
+       "low",
+       "medium",
+       "high",
+       "xhigh",
+       "max",
+       "ultra"
+      ]
+     },
+     {
+      "description": "Older fast and efficient model.",
+      "id": "gpt-5.6-luna",
+      "label": "GPT-5.6-Luna",
+      "options": [
+       {
+        "choices": [
+         {
+          "id": "default",
+          "label": "Standard"
+         },
+         {
+          "id": "fast",
+          "label": "Fast"
+         }
+        ],
+        "defaultChoice": "default",
+        "id": "serviceTier",
+        "label": "Service Tier"
+       }
+      ],
+      "reasoningLevels": [
+       "low",
+       "medium",
+       "high",
+       "xhigh",
+       "max"
+      ]
+     }
+    ],
+    "name": "Codex"
+   },
+   "sha256": "b8a11fedf24b2dfb59a70c9e52b030f9a508dcd49cd2dd0d41956f4c785156b8",
+   "version": "0.166.0"
+  },
+  {
+   "agent": "grok",
+   "catalog": {
+    "defaultModel": "grok-4.7",
+    "id": "grok",
+    "models": [
+     {
+      "id": "grok-4.7",
+      "label": "Grok 4.7",
+      "options": [],
+      "reasoningLevels": [
+       "xhigh",
+       "high",
+       "medium",
+       "low"
+      ]
+     },
+     {
+      "id": "grok-4.7-build-fast",
+      "label": "Grok 4.7 Fast",
+      "options": [],
+      "reasoningLevels": [
+       "xhigh",
+       "high",
+       "medium",
+       "low"
+      ]
+     },
+     {
+      "id": "grok-4.6",
+      "label": "Grok 4.6",
+      "options": [],
+      "reasoningLevels": [
+       "xhigh",
+       "high",
+       "medium",
+       "low"
+      ]
+     },
+     {
+      "description": "xAI's coding model \u2014 500k context",
+      "id": "grok-4.5",
+      "label": "Grok 4.5",
+      "options": [],
+      "reasoningLevels": [
+       "low",
+       "medium",
+       "high"
+      ]
+     }
+    ],
+    "name": "Grok"
+   },
+   "sha256": "22d281c5964c5444147328096ba2a221f3f0874c6858e27c825656a80f6e58e9",
+   "version": "1.0.70"
+  }
+ ],
+ "manifest": {
+  "buildId": "zuse-base-77eeb70518ceb60c4040b9cb619c18e2",
+  "commandAdmission": {
+   "commandAdmissionVersion": 2,
+   "executionProgressVersion": 1,
+   "managedAgentVersion": 1,
+   "runtimeRpcProtocol": "zuse-rpc-v1",
+   "runtimeSha256": "a49bc39802417f8fc02cd43529b63f0c5e30cff7f769dbb23ccfedc89fc34e5e",
+   "sessionCommandVersion": 1,
+   "storageFormat": "zuse-rust-engine-v1",
+   "version": 1
+  },
+  "configurationDigest": "zuse-base-77eeb70518ceb60c4040b9cb619c18e2",
+  "credentialsRemoved": true,
+  "githubCli": {
+   "loginShellResolvedManaged": true,
+   "sha256": "2fd925d68889746976958342fb749bf102bc7dc8bcba3abfa533a80ad7791673",
+   "version": "gh version 2.45.0 (2025-07-18 Ubuntu 2.45.0-1ubuntu0.3)",
+   "wrapperSha256": "b078a758ee8f2a1e91bdc4539f17adb4460bdae9df666bc385933c79f0db9037"
+  },
+  "managedBase": true,
+  "planDigest": "bfa36d98e06920b9adfb7dc8532de243c7177550010581b576ca7e1ac438f2b9",
+  "repositories": [],
+  "runtimeRpcProtocol": "zuse-rpc-v1",
+  "rustCommandAdmissionVersion": 2,
+  "rustEnvironmentRecipeVersion": 1,
+  "rustGithubCliVersion": 1,
+  "rustGithubCredentialsVersion": 1,
+  "rustLaunchAssetsVersion": 1,
+  "rustLaunchModelConfigVersion": 1,
+  "rustMemorySleepVersion": 1,
+  "rustOrganizationExecutionVersion": 1,
+  "rustRecreationVersion": 1,
+  "rustRepositoryFetchVersion": 1,
+  "rustRuntimeRepairVersion": 1,
+  "rustRuntimeStorageFormat": "zuse-rust-engine-v1",
+  "rustRuntimeSupervisorVersion": 1,
+  "rustSessionCommandVersion": 1,
+  "rustToolOutputVersion": 1,
+  "templateVersion": "zuse-base-77eeb70518ceb60c4040b9cb619c18e2",
+  "version": 1
+ },
+ "provenanceReportSha256": "876a94700f1907eed68f6cfe10c229a080e9965d3fda26e9f098512b389c14fc",
+ "provider": "e2b",
+ "providerArtifactBinding": {
+  "artifactId": "v5gogdmyrgpmnkk7bmss",
+  "artifactName": "zuse-e2b-stage-3b60a095f7d34f689b41d202d7dc165a",
+  "artifactVersion": "675f8aca-a00a-4aff-a94c-c50ff24a0701",
+  "manifestSha256": "e443f0db336762e4ae26bb6e6b561af5d505e19540b46e9b077eb4e7cfd164fe",
+  "mode": "private-single-build",
+  "runtimeSha256": "a49bc39802417f8fc02cd43529b63f0c5e30cff7f769dbb23ccfedc89fc34e5e",
+  "version": 1
+ },
+ "releaseId": "zuse-base-77eeb70518ceb60c4040b9cb619c18e2-canary-5acff7724ed1b8b6",
+ "runtimeSha256": "a49bc39802417f8fc02cd43529b63f0c5e30cff7f769dbb23ccfedc89fc34e5e"
+}

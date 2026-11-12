@@ -169,7 +169,7 @@ impl Shell {
                     this.open_branch_menu(cx);
                 }
             }))
-            .tooltip(crate::settings::widgets::text_tooltip(label.clone()))
+            .tip(label.clone())
             .tooltip_show_delay(Duration::from_millis(350))
             .child(div().min_w_0().max_w(px(144.0)).truncate().child(label))
             .when(target.dirty > 0, |d| {

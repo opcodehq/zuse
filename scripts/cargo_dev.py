@@ -30,6 +30,31 @@ def target_directory(root, env):
     return cache / "zuse" / "cargo" / identity
 
 
+STAGING_API = "https://api-rust-stag.zuse.sh"
+# Public WorkOS client for staging sign-in; not a secret.
+STAGING_WORKOS_CLIENT_ID = "client_01KW6ZEZKVMZ0G429A89XZD83Q"
+STAGING_IPC_PORT = 27665
+
+
+def staging_profile(env=None, home=None):
+    """One staging profile per user, outside every checkout, so each workspace
+    and worktree reuses the same sign-in and data. ZUSE_STAGING_DATA_DIR
+    overrides the location."""
+    env = os.environ if env is None else env
+    home = Path.home() if home is None else Path(home)
+    return Path(env.get("ZUSE_STAGING_DATA_DIR") or home / ".zuse-dev" / "staging")
+
+
+def staging_environment(env=None):
+    """Staging API origins and sign-in client, unless the caller set them."""
+    env = os.environ if env is None else env
+    return {
+        "ZUSE_API_URL": env.get("ZUSE_API_URL") or STAGING_API,
+        "ZUSE_CLOUD_API_URL": env.get("ZUSE_CLOUD_API_URL") or STAGING_API,
+        "ZUSE_WORKOS_CLIENT_ID": env.get("ZUSE_WORKOS_CLIENT_ID") or STAGING_WORKOS_CLIENT_ID,
+    }
+
+
 def build_environment(root=ROOT, env=None):
     result = dict(os.environ if env is None else env)
     result["CARGO_TARGET_DIR"] = str(target_directory(root, result))

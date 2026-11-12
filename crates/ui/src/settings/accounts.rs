@@ -12,6 +12,7 @@
 //! the methods exist.
 
 use crate::localization::message as tr;
+use crate::tooltip::TooltipExt as _;
 use chrono::{DateTime, Utc};
 use gpui::{
     AnyElement, Context, Entity, Hsla, SharedString, Subscription, Task, Window, div, prelude::*,
@@ -1225,7 +1226,7 @@ impl AccountsPage {
                 .flex()
                 .flex_col()
                 .gap(px(2.0))
-                .tooltip(widgets::text_tooltip(resets))
+                .tip(resets)
                 .children(
                     account
                         .usage_windows
@@ -1289,7 +1290,7 @@ impl AccountsPage {
             .tab_index(0)
             .role(gpui::Role::Button)
             .aria_label(format!("Actions for {email}"))
-            .tooltip(widgets::text_tooltip("Account actions"))
+            .tip("Account actions")
             .aria_expanded(menu_open)
             .focus_visible(|s| s.border_2().border_color(theme.accent))
             .on_mouse_down(
@@ -1384,7 +1385,7 @@ impl AccountsPage {
                         theme.wash(0.04),
                     ))
                     .on_hover(crate::motion::hover_listener(hover_key))
-                    .tooltip(widgets::text_tooltip("Switch to this account"))
+                    .tip("Switch to this account")
                     .on_click(cx.listener(move |page, _, _, cx| {
                         page.account_action(methods::ACTIVATE_AGENT_ACCOUNT, &switch_account, cx);
                     }))
@@ -1948,7 +1949,7 @@ impl AccountsPage {
                             .when(refreshing, |el| el.opacity(0.5))
                             .role(gpui::Role::Button)
                             .aria_label(tr(cx, msg::settings::model_connections_refresh))
-                            .tooltip(widgets::text_tooltip("Refresh usage"))
+                            .tip("Refresh usage")
                             .tab_index(0)
                             .focus_visible(|s| s.border_2().border_color(theme.accent))
                             .on_click(cx.listener(|page, _, _, cx| {

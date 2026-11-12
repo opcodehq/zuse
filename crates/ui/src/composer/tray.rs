@@ -11,6 +11,7 @@
 //! below; the rest renders on [`Composer`].
 
 use crate::localization::message as tr;
+use crate::tooltip::TooltipExt as _;
 use std::collections::HashMap;
 use std::time::Duration;
 use zuse_i18n::messages as msg;
@@ -402,7 +403,7 @@ pub(crate) fn tray_icon_action(
         .role(gpui::Role::Button)
         .aria_label(label.clone())
         .hover(move |s| s.bg(hover))
-        .tooltip(crate::settings::widgets::text_tooltip(label))
+        .tip(label)
         .child(icon(glyph).size(px(GLYPH)).text_color(theme.text_muted))
 }
 
@@ -777,7 +778,7 @@ impl Composer {
             .overflow_hidden()
             .border_1()
             .border_color(crate::theme::hairline(0.10))
-            .tooltip(crate::settings::widgets::text_tooltip(tile.name.clone()));
+            .tip(tile.name.clone());
         let frame = match tile.image {
             Some(image) => {
                 let preview =
@@ -994,7 +995,7 @@ impl Composer {
                     .hover(move |s| s.bg(hover))
                     .role(gpui::Role::Button)
                     .aria_label(format!("Remove {label}"))
-                    .tooltip(crate::settings::widgets::text_tooltip("Remove all"))
+                    .tip("Remove all")
                     .on_click(cx.listener(|this, _, _, cx| {
                         let key = this.current_key.clone();
                         this.state.update(cx, |state, cx| {
@@ -1629,7 +1630,7 @@ impl Composer {
             pill.icon_element(crate::loaders::mini_glyph_spinner(
                 "tray-sign-in-spinner",
                 2.5,
-                theme.glyph,
+                theme.loader_glyph(),
                 cx.entity_id(),
                 cx,
             ))
@@ -1899,14 +1900,14 @@ fn annotation_anchor(annotation: &StagedAnnotation, theme: &Theme) -> AnyElement
             .py(px(3.0))
             .rounded(px(5.0))
             .bg(theme.muted_fill())
-            .tooltip(crate::settings::widgets::text_tooltip(
+            .tip(
                 item.browser_annotation
                     .as_ref()
                     .map(|annotation| {
                         format!("{}\n{}", annotation.page_url, annotation.target_details())
                     })
                     .unwrap_or_default(),
-            ))
+            )
             .child(
                 icon(icons::BROWSER_SELECT)
                     .size(px(13.0))

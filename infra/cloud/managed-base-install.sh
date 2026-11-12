@@ -21,6 +21,24 @@ fi
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq ca-certificates git gh openssh-client ripgrep python3 build-essential sudo util-linux zlib1g
+# SSH access starts its own loopback-only sshd on demand. Images without an SSH
+# server (Daytona's container base) get the binary, never a listening service,
+# and no shared host keys: each computer generates its own on first use.
+if [[ ! -x /usr/sbin/sshd ]]; then
+  created_policy=0
+  if [[ ! -e /usr/sbin/policy-rc.d ]]; then
+    printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d
+    chmod 755 /usr/sbin/policy-rc.d
+    created_policy=1
+  fi
+  apt-get install -y -qq --no-install-recommends openssh-server
+  if [[ "$created_policy" == 1 ]]; then rm -f /usr/sbin/policy-rc.d; fi
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl disable ssh.service ssh.socket >/dev/null 2>&1 || true
+  fi
+  rm -f /etc/ssh/ssh_host_*_key /etc/ssh/ssh_host_*_key.pub
+  [[ -x /usr/sbin/sshd ]]
+fi
 # Authenticate gh at command time through the task broker; never gh auth login.
 [[ -f /usr/bin/gh && ! -L /usr/bin/gh ]]
 /usr/bin/gh --version | head -n 1 | grep -E '^gh version 2\.' >/dev/null
