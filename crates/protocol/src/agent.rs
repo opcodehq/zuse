@@ -247,6 +247,80 @@ pub struct Model {
     pub options: Vec<ModelOption>,
 }
 
+/// A model ID the user added for a provider (Settings → Providers → Models).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomModel {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
+/// One provider's model choices on a device: hidden catalog models and
+/// added model IDs.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderModelPrefs {
+    #[serde(default)]
+    pub hidden: Vec<String>,
+    #[serde(default)]
+    pub custom: Vec<CustomModel>,
+}
+
+/// A model as Settings lists it: the full catalog plus added IDs, flagged.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderModel {
+    pub id: String,
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub custom: bool,
+    #[serde(default)]
+    pub hidden: bool,
+}
+
+/// How Claude Code reaches Anthropic on a device.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ClaudeConnectionMode {
+    /// The CLI's own claude.ai login (Accounts).
+    #[default]
+    Account,
+    /// A local Anthropic-compatible proxy the user runs.
+    Proxy,
+}
+
+/// Whether the configured proxy answered just now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProxyHealth {
+    Connected,
+    Unreachable,
+    Rejected,
+}
+
+/// `GetClaudeConnection` / `SetClaudeConnection` reply. The access key never
+/// leaves the engine; `has_key` says whether one is saved.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeConnection {
+    pub mode: ClaudeConnectionMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+    #[serde(default)]
+    pub has_key: bool,
+    /// Run on the account when the proxy doesn't answer at launch.
+    #[serde(default)]
+    pub fallback: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health: Option<ProxyHealth>,
+    /// Why the proxy isn't usable, in words.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelOption {

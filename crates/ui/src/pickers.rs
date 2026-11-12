@@ -6138,7 +6138,8 @@ fn visible_harnesses_impl(list: &[HarnessDescriptor], allow_mock: bool) -> Vec<H
 /// catalog device's enabled set AND installed CLIs (Settings → Providers is
 /// per-device state, so a space on another device follows THAT device's
 /// toggles; a default-enabled agent whose CLI is missing would only
-/// manufacture NotInstalled errors at send). The dev-rig mock opt-in
+/// manufacture NotInstalled errors at send, and one that needs a login it
+/// doesn't have would only fail on auth). The dev-rig mock opt-in
 /// survives the filter. There is NO fallback: a catalog where nothing is
 /// both enabled and installed offers nothing, and the composer surfaces the
 /// no-agents empty state + blocks new sends — resurrecting descriptors that
@@ -6152,6 +6153,9 @@ fn offered_harnesses_impl(list: &[HarnessDescriptor], allow_mock: bool) -> Vec<H
         .into_iter()
         .filter(|d| {
             d.installed
+                // An agent that only runs signed in, without a login (or a
+                // key/proxy standing in for one), would only fail at send.
+                && d.signed_in != Some(false)
                 && (zuse_engine::registry::descriptor_enabled(d)
                     || (allow_mock && d.id == HarnessId::Mock))
         })
@@ -9003,6 +9007,7 @@ mod tests {
             reasoning_levels: Vec::new(),
             steering_mode: zuse_protocol::SteeringMode::StepBoundary,
             supports_steering: false,
+            signed_in: None,
         }
     }
     #[gpui::test]
@@ -10329,6 +10334,7 @@ mod tests {
             installed: true,
             can_install: false,
             enabled: None,
+            signed_in: None,
         };
         let mixed = vec![
             descriptor(HarnessId::Mock, "Mock"),
@@ -10346,6 +10352,31 @@ mod tests {
     }
 
     #[test]
+    fn offered_harnesses_leave_out_agents_that_need_a_missing_login() {
+        let descriptor = |id: HarnessId, signed_in: Option<bool>| HarnessDescriptor {
+            id,
+            name: format!("{id:?}"),
+            supports_steering: true,
+            steering_mode: zuse_protocol::SteeringMode::StepBoundary,
+            reasoning_levels: vec![],
+            installed: true,
+            can_install: false,
+            enabled: Some(true),
+            signed_in,
+        };
+        let catalog = vec![
+            descriptor(HarnessId::ClaudeCode, Some(true)),
+            descriptor(HarnessId::Codex, Some(false)),
+            descriptor(HarnessId::Opencode, None),
+        ];
+        let offered: Vec<_> = offered_harnesses_impl(&catalog, false)
+            .into_iter()
+            .map(|d| d.id)
+            .collect();
+        assert_eq!(offered, [HarnessId::ClaudeCode, HarnessId::Opencode]);
+    }
+
+    #[test]
     fn offered_harnesses_follow_the_catalog_enabled_flags() {
         let descriptor = |id: HarnessId, name: &str, enabled: Option<bool>| HarnessDescriptor {
             id,
@@ -10356,6 +10387,7 @@ mod tests {
             installed: true,
             can_install: false,
             enabled,
+            signed_in: None,
         };
         let catalog = |claude: Option<bool>, codex: Option<bool>, grok: Option<bool>| {
             vec![
@@ -10409,6 +10441,7 @@ mod tests {
                 installed,
                 can_install: false,
                 enabled,
+                signed_in: None,
             };
         // Enabled-but-missing-CLI agents stay out of the rail; an installed
         // enabled one rides along. A live engine no longer stamps that
@@ -10486,6 +10519,7 @@ impl Pickers {
             reasoning_levels: Vec::new(),
             steering_mode: zuse_protocol::SteeringMode::StepBoundary,
             supports_steering: false,
+            signed_in: None,
         };
         self.harnesses = Loadable::Ready(vec![
             descriptor(HarnessId::ClaudeCode, "Claude Code"),

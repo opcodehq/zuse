@@ -30,6 +30,15 @@ pub const SET_TITLE_SETTINGS: &str = "SetTitleSettings";
 /// replies with the device's fresh `ListHarnesses` catalog.
 pub const SET_HARNESS_ENABLED: &str = "SetHarnessEnabled";
 pub const LIST_MODELS: &str = "ListModels";
+/// Settings' model list for one provider: `{harness, force?}` → `[ProviderModel]`.
+pub const LIST_PROVIDER_MODELS: &str = "ListProviderModels";
+/// `{harness, prefs: ProviderModelPrefs}` → `[ProviderModel]`.
+pub const SET_PROVIDER_MODELS: &str = "SetProviderModels";
+/// `{}` → `ClaudeConnection` (checks the proxy's health when one is set).
+pub const GET_CLAUDE_CONNECTION: &str = "GetClaudeConnection";
+/// `{mode, baseUrl?, apiKey?, fallback?}` → `ClaudeConnection`. Choosing the
+/// proxy without an address looks for a local one first.
+pub const SET_CLAUDE_CONNECTION: &str = "SetClaudeConnection";
 pub const LIST_SKILLS: &str = "ListSkills";
 pub const LIST_COMMANDS: &str = "ListCommands";
 /// Transient secret submission; never enqueue or persist its parameters.
@@ -369,6 +378,8 @@ pub fn retryable_read(method: &str, params: &serde_json::Value) -> bool {
         | LIST_REPOS
         | MODEL_CONNECTIONS
         | LIST_MODELS
+        | LIST_PROVIDER_MODELS
+        | GET_CLAUDE_CONNECTION
         | LIST_AGENT_ACCOUNTS
         | WATCH_DOC_MESSAGES
         | WATCH_QUEUE

@@ -37,6 +37,7 @@ use zuse_sync::DocsStore;
 pub mod account;
 pub mod agent_accounts;
 mod api_origins;
+pub mod model_prefs;
 pub mod archives;
 pub mod auth;
 mod branch_graph;
@@ -422,6 +423,27 @@ impl EngineCore {
         // the P2P service, which serves it to that device alone.
         let agent_accounts =
             AgentAccounts::with_callback_routes(agent_accounts_config, previews.callback_routes());
+        // Claude runs launch against the connection picked in Accounts — the
+        // CLI's own login, or a local proxy (see `agent_accounts::connection`).
+        let connections: Arc<dyn zuse_providers::credentials::CredentialResolver> =
+            Arc::new(agent_accounts::ClaudeConnections(agent_accounts.clone()));
+        registry.set_factory(
+            HarnessId::ClaudeCode,
+            Box::new(move || {
+                Ok(Arc::new(
+                    zuse_providers::ClaudeHarness::new().with_credentials(connections.clone()),
+                ) as Arc<dyn zuse_providers::Harness>)
+            }),
+        );
+        let stamp_accounts = agent_accounts.clone();
+        sessions.set_request_stamp(Arc::new(move |harness, request| {
+            if harness == HarnessId::ClaudeCode {
+                request.model_options.insert(
+                    zuse_providers::claude::CONNECTION_OPTION.into(),
+                    stamp_accounts.claude_connection().into(),
+                );
+            }
+        }));
         let harness_updates =
             harness_updates::HarnessUpdateCoordinator::new(data_dir, registry.clone());
         harness_updates.start();

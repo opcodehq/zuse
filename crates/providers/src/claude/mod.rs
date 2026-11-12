@@ -174,6 +174,15 @@ fn option_is_on(options: &serde_json::Map<String, Value>, key: &str) -> bool {
     }
 }
 
+/// Run option the host stamps on every Claude request: which connection
+/// (`direct`, or a host-defined endpoint id) the process launches against.
+/// Its environment is fixed at spawn, so a different value needs a new process.
+pub const CONNECTION_OPTION: &str = "zuseClaudeConnection";
+
+fn same_connection(live: &RunRequest, next: &RunRequest) -> bool {
+    live.model_options.get(CONNECTION_OPTION) == next.model_options.get(CONNECTION_OPTION)
+}
+
 /// The Claude Code harness. Construct with [`ClaudeHarness::new`]; tests point
 /// it at a fake CLI with [`ClaudeHarness::with_executable`].
 pub struct ClaudeHarness {
@@ -341,8 +350,10 @@ impl ClaudeHarness {
     async fn probe_initialize(&self, cwd: Option<&std::path::Path>) -> Result<Value, HarnessError> {
         let exe = self.resolve_executable()?;
         let mut cmd = Command::new(&exe);
-        if let Some(credentials) = &self.credentials {
-            credentials.environment().await?.apply(&mut cmd);
+        if let Some(credentials) = &self.credentials
+            && let Some(environment) = credentials.environment_for(None).await?
+        {
+            environment.apply(&mut cmd);
         }
         if let Some(cwd) = cwd {
             cmd.current_dir(cwd);
@@ -509,7 +520,8 @@ impl Harness for ClaudeHarness {
     }
     /// Same launch arguments and cwd, including the read-only permission mode.
     fn same_runtime(&self, live: &RunRequest, next: &RunRequest) -> bool {
-        live.cwd == next.cwd
+        same_connection(live, next)
+            && live.cwd == next.cwd
             && live.sandbox == next.sandbox
             && live.plan == next.plan
             && live.auto_approve == next.auto_approve
@@ -519,7 +531,8 @@ impl Harness for ClaudeHarness {
     /// change on the live process (`set_model`, `apply_flag_settings`). Only
     /// the directory and the permission mode it launched with need a new one.
     fn reconfigures_in_place(&self, live: &RunRequest, next: &RunRequest) -> bool {
-        live.cwd == next.cwd
+        same_connection(live, next)
+            && live.cwd == next.cwd
             && live.auto_approve == next.auto_approve
             && live.sandbox == next.sandbox
             && live.plan == next.plan
@@ -654,13 +667,17 @@ impl ClaudeHarness {
         let live_credentials = if let Some(credentials) = &self.credentials {
             let environment = tokio::select! {biased;
                 _=controls.interrupt.cancelled()=>return Ok(interrupted_start(request.resume.clone())),
-                environment=credentials.environment()=>environment?,
+                environment=credentials.environment_for(Some(&request))=>environment?,
             };
-            environment.apply(&mut cmd);
-            Some(crate::credentials::LiveCredentials::new(
-                credentials.clone(),
-                &environment,
-            ))
+            match environment {
+                Some(environment) => {
+                    environment.apply(&mut cmd);
+                    credentials.revalidates().then(|| {
+                        crate::credentials::LiveCredentials::new(credentials.clone(), &environment)
+                    })
+                }
+                None => None,
+            }
         } else {
             None
         };
@@ -1659,6 +1676,29 @@ mod tests {
         );
         assert_eq!(questions.len(), 1);
         assert!(questions[0].approval.is_none());
+    }
+
+    #[test]
+    fn a_different_connection_needs_a_new_process() {
+        let harness = ClaudeHarness::new();
+        let request = |connection: Option<&str>| {
+            let mut request: RunRequest = serde_json::from_value(
+                json!({"prompt":"hi","cwd":"/tmp","sandbox":"workspace-write"}),
+            )
+            .unwrap();
+            if let Some(connection) = connection {
+                request
+                    .model_options
+                    .insert(CONNECTION_OPTION.into(), connection.into());
+            }
+            request
+        };
+        let direct = request(Some("direct"));
+        assert!(harness.same_runtime(&direct, &request(Some("direct"))));
+        let proxied = request(Some("0123456789abcdef"));
+        assert!(!harness.same_runtime(&direct, &proxied));
+        assert!(!harness.reconfigures_in_place(&direct, &proxied));
+        assert!(!harness.same_runtime(&request(None), &proxied));
     }
 
     #[test]
