@@ -3750,13 +3750,13 @@ impl EngineRpc {
                     prefs: Option<zuse_protocol::ProviderModelPrefs>,
                 }
                 let p: Params = parse_params(params)?;
-                let prefs = self
-                    .registry
-                    .model_prefs()
-                    .cloned()
-                    .ok_or_else(|| RpcError::Failed("Model settings are unavailable here.".into()))?;
+                let prefs = self.registry.model_prefs().cloned().ok_or_else(|| {
+                    RpcError::Failed("Model settings are unavailable here.".into())
+                })?;
                 if method == methods::SET_PROVIDER_MODELS {
-                    let next = p.prefs.ok_or_else(|| RpcError::Failed("prefs required".into()))?;
+                    let next = p
+                        .prefs
+                        .ok_or_else(|| RpcError::Failed("prefs required".into()))?;
                     prefs
                         .set(p.harness, next)
                         .map_err(|e| RpcError::Failed(e.to_string()))?;

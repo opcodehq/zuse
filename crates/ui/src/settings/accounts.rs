@@ -587,7 +587,6 @@ impl AccountsPage {
         page
     }
 
-
     /// Review fixture: one live Claude login with usage meters.
     #[cfg(feature = "browser-fixture")]
     pub(crate) fn fixture_seed(&mut self, cx: &mut Context<Self>) {

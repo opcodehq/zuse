@@ -401,10 +401,9 @@ impl zuse_providers::credentials::CredentialResolver for ClaudeConnections {
     async fn environment(
         &self,
     ) -> Result<zuse_providers::credentials::ChildEnvironment, zuse_providers::HarnessError> {
-        self.0
-            .claude_launch_environment(None)
-            .await
-            .ok_or_else(|| zuse_providers::HarnessError::Protocol("claude-connection-is-direct".into()))
+        self.0.claude_launch_environment(None).await.ok_or_else(|| {
+            zuse_providers::HarnessError::Protocol("claude-connection-is-direct".into())
+        })
     }
     async fn environment_for(
         &self,

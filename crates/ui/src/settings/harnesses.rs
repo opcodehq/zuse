@@ -41,14 +41,14 @@ use crate::settings::widgets;
 use crate::state::AppState;
 use crate::theme::Theme;
 
+#[path = "accounts_panel.rs"]
+mod accounts_panel;
+#[path = "acp_setup.rs"]
+mod acp_setup;
 #[path = "completion.rs"]
 mod completion;
 #[path = "provider_browser.rs"]
 mod provider_browser;
-#[path = "acp_setup.rs"]
-mod acp_setup;
-#[path = "accounts_panel.rs"]
-mod accounts_panel;
 
 use crate::composer::{ComposerInput, ComposerInputEvent};
 

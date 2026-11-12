@@ -94,8 +94,8 @@ use zuse_protocol::{
 use crate::repos::home_dir;
 use crate::{EngineError, new_id, now_ms};
 
-mod dictation;
 mod connection;
+mod dictation;
 mod login_status;
 mod oauth;
 #[cfg(test)]
