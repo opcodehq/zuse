@@ -175,6 +175,18 @@ mod tests {
             )
         );
     }
+    /// The release pipeline (`infra/cloud/runtime-release.py`) signs the same
+    /// fixture; both sides must produce these exact bytes.
+    #[test]
+    fn signing_bytes_match_the_release_pipeline_fixture() {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../fixtures/runtime-release-v1.json")).unwrap();
+        let release: SignedRelease = serde_json::from_value(fixture["release"].clone()).unwrap();
+        assert_eq!(
+            String::from_utf8(release.signing_bytes()).unwrap(),
+            fixture["signingBytes"].as_str().unwrap()
+        );
+    }
     #[test]
     fn public_key_is_32_bytes() {
         use base64::Engine as _;

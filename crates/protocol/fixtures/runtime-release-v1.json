@@ -1,0 +1,15 @@
+{
+  "_comment": "Shared by crates/protocol (Rust) and infra/cloud/tests/runtime-release.py (Python). The test key is throwaway; its private half was discarded.",
+  "release": {
+    "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+    "version": "0.26.0+g66fab12b",
+    "architecture": "x86_64",
+    "storageFormats": [
+      "zuse-rust-engine-v1",
+      "zuse-rust-engine-v2"
+    ]
+  },
+  "signingBytes": "zuse-runtime-release-v1\n{\"sha256\":\"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\",\"version\":\"0.26.0+g66fab12b\",\"architecture\":\"x86_64\",\"storageFormats\":[\"zuse-rust-engine-v1\",\"zuse-rust-engine-v2\"]}",
+  "testPublicKey": "feeZJH2+7Sx47EYnh/WbzARWFVbagnnB3nn+VYN+RH8=",
+  "testSignature": "NhJ1b8FBt4a+4uAc47VJ27Wqp62KQ5YJ4F5WQrSGkCL+8oCGpQOncdFk31gwOpvQqMrq5fsLK7dg8wXoMKesAw=="
+}
