@@ -126,7 +126,7 @@ pub async fn run(ipc_port: u16, host: &str) -> Result<()> {
     }
     // Re-authorize this device and refresh the pinned host key before ssh
     // checks it, so a computer that restarted or was replaced still connects.
-    if let Ok(key) = tokio::task::spawn_blocking(zuse_ui::cloud_ssh::ensure_key).await? {
+    if let Ok(key) = tokio::task::spawn_blocking(zuse_engine::cloud_ssh::ensure_key).await? {
         let prepared = unary(
             &client,
             &scope,
@@ -136,7 +136,7 @@ pub async fn run(ipc_port: u16, host: &str) -> Result<()> {
         )
         .await?;
         if let Some(host_key) = prepared["hostKey"].as_str() {
-            zuse_ui::cloud_ssh::pin_host_key(&workspace, host_key).map_err(|e| anyhow!(e))?;
+            zuse_engine::cloud_ssh::pin_host_key(&workspace, host_key).map_err(|e| anyhow!(e))?;
         }
     }
     let mut tunnel_stream = client
