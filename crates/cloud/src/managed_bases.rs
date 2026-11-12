@@ -556,14 +556,35 @@ pub(crate) struct RecreationNeeds<'a> {
     pub organization: bool,
 }
 
+/// The restore-relevant identity of a base, verified release or staging
+/// candidate alike.
+pub(crate) struct RecreationBase<'a> {
+    pub provider: ProviderId,
+    pub architecture: &'a str,
+    pub capabilities: &'a ProviderCapabilities,
+    pub manifest: &'a ImageManifest,
+    pub harnesses: &'a [PinnedHarness],
+}
+impl<'a> From<&'a ManagedBaseRelease> for RecreationBase<'a> {
+    fn from(r: &'a ManagedBaseRelease) -> Self {
+        Self {
+            provider: r.provider,
+            architecture: &r.architecture,
+            capabilities: &r.capabilities,
+            manifest: &r.manifest,
+            harnesses: &r.harnesses,
+        }
+    }
+}
+
 /// The archive written by the current base must be restorable on the target:
 /// same provider and architecture, the same wire protocol and storage format,
 /// and explicit recreation (verified archive restore) support. The computer's
 /// agent and size must still be offered, under the same supervisor and
 /// organization rules as new computers.
-fn recreation_compatible(
-    current: &ManagedBaseRelease,
-    candidate: &ManagedBaseRelease,
+pub(crate) fn recreation_compatible(
+    current: RecreationBase<'_>,
+    candidate: RecreationBase<'_>,
     needs: &RecreationNeeds<'_>,
 ) -> bool {
     let agent = if needs.agent == "claude-code" {
@@ -590,9 +611,9 @@ fn recreation_compatible(
             || candidate.manifest.rust_runtime_supervisor_version == Some(1))
         && (!needs.organization
             || candidate.manifest.rust_organization_execution_version == Some(1))
-        && feature_versions(&current.manifest)
+        && feature_versions(current.manifest)
             .into_iter()
-            .zip(feature_versions(&candidate.manifest))
+            .zip(feature_versions(candidate.manifest))
             .all(|(had, has)| had.is_none() || has.is_some_and(|has| Some(has) >= had))
 }
 
@@ -663,7 +684,7 @@ pub(crate) async fn latest_recreation_target(
         let Some(candidate) = locked_release(tx, provider, &id, &["verified"]).await? else {
             continue;
         };
-        if recreation_compatible(&current, &candidate, needs) {
+        if recreation_compatible((&current).into(), (&candidate).into(), needs) {
             return Ok(RecreationTarget {
                 release_id: candidate.release_id.clone(),
                 artifact_id: candidate.artifact_id.clone(),
@@ -718,11 +739,15 @@ mod tests {
             size: "default",
             organization: false,
         };
-        assert!(recreation_compatible(&current, &newer, &needs));
+        assert!(recreation_compatible(
+            (&current).into(),
+            (&newer).into(),
+            &needs
+        ));
         let rejected = |change: fn(&mut ManagedBaseRelease)| {
             let mut other = newer.clone();
             change(&mut other);
-            !recreation_compatible(&current, &other, &needs)
+            !recreation_compatible((&current).into(), (&other).into(), &needs)
         };
         assert!(rejected(|r| r.architecture = "aarch64".into()));
         assert!(rejected(|r| r.provider = ProviderId::E2b));
@@ -741,8 +766,8 @@ mod tests {
         // A feature the computer already relies on cannot disappear.
         assert!(rejected(|r| r.manifest.rust_launch_assets_version = None));
         assert!(!recreation_compatible(
-            &current,
-            &newer,
+            (&current).into(),
+            (&newer).into(),
             &RecreationNeeds {
                 organization: true,
                 ..needs

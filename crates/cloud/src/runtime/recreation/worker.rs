@@ -91,10 +91,14 @@ impl RuntimeControl {
             || row["provider"] != op["provider_id"]
             // The source release until the restore is queued; after that an
             // "Update computer" recreation is pinned to its target release.
+            // A staging-candidate target also binds the exact candidate.
             || (row["managed_release_id"] != op["managed_release_id"]
                 && !(restoring
                     && super::target_release(&row)
-                        .is_some_and(|target| row["managed_release_id"] == target)))
+                        .is_some_and(|target| row["managed_release_id"] == target)
+                    && super::target_candidate(&row).is_none_or(|candidate| {
+                        row["request_config"]["managedCandidateSha256"] == candidate
+                    })))
             || row["request_config"]["rustRuntimeStorage"]["storageIncarnationId"]
                 != op["storage_incarnation_id"]
             || row["request_config"]["rustRecreation"]["operationId"] != operation
@@ -229,14 +233,16 @@ impl RuntimeControl {
                     // capture is about to land on the target base, so repin
                     // the computer there in the same transaction. Restore then
                     // resolves (and boot-verifies) the new base like any other.
+                    // A staging-candidate computer moves onto the exact
+                    // candidate pin chosen at admission, still current.
                     let row = match super::target_release(&row) {
-                        Some(target) if row["managed_release_id"] != target => {
-                            let release = crate::managed_bases::recreation_target(
-                                &mut tx,
-                                required(&row, "provider")?,
-                                target,
-                            )
-                            .await?;
+                        Some(target)
+                            if row["managed_release_id"] != target
+                                || super::target_candidate(&row).is_some_and(|candidate| {
+                                    row["request_config"]["managedCandidateSha256"] != candidate
+                                }) =>
+                        {
+                            let release = self.chosen_target(&mut tx, &row, target, now).await?;
                             if release.artifact_id != artifact {
                                 return Err(fenced());
                             }

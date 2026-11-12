@@ -706,6 +706,330 @@ async fn update_computer_recreates_onto_the_newest_compatible_base() {
     admin.close().await;
 }
 
+/// Stage an owner-only candidate for `user-bob` registered at `created`.
+async fn stage_candidate(
+    pool: &PgPool,
+    release: &str,
+    runtime: char,
+    architecture: &str,
+    created: i64,
+    now: i64,
+) -> crate::managed_bases::candidate::StagingBasePin {
+    let mut candidate = crate::managed_bases::candidate::fixture_project_cache_candidate();
+    candidate.release_id = release.into();
+    candidate.artifact_id = format!("{release}-artifact");
+    candidate.architecture = architecture.into();
+    candidate.manifest.rust_recreation_version = Some(1);
+    candidate.runtime_sha256 = runtime.to_string().repeat(64);
+    let bootstrap = candidate.initial_runtime_bootstrap.as_mut().unwrap();
+    bootstrap.runtime_sha256 = runtime.to_string().repeat(64);
+    candidate.validate().unwrap();
+    let pin = candidate.pin("user-bob", now + 3_600_000, true).unwrap();
+    candidate.stage(pool, &pin, created).await.unwrap();
+    pin
+}
+/// The current pin, still serving `old` to ws-bob through a retained binding.
+fn retaining(
+    mut pin: crate::managed_bases::candidate::StagingBasePin,
+    old: &crate::managed_bases::candidate::StagingBasePin,
+) -> Arc<crate::managed_bases::candidate::StagingBasePin> {
+    pin.retained_workspaces = vec![crate::managed_bases::candidate::RetainedWorkspaceBinding {
+        workspace_id: "ws-bob".into(),
+        provider: None,
+        release_id: old.release_id.clone(),
+        artifact_id: old.artifact_id.clone(),
+        harness_release: old.harness_release.clone(),
+        manifest_sha256: old.manifest_sha256.clone(),
+        candidate_sha256: old.candidate_sha256.clone(),
+    }];
+    Arc::new(pin)
+}
+/// Put ws-bob on staging candidate `old`, carrying an in-place runtime update.
+async fn pin_computer_to_candidate(
+    pool: &PgPool,
+    config: &mut Value,
+    old: &crate::managed_bases::candidate::StagingBasePin,
+) {
+    let staged: Value = sqlx::query_scalar(
+        "SELECT candidate_manifest FROM cloud_managed_bases WHERE release_id=$1",
+    )
+    .bind(&old.release_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    config["agent"] = json!("codex");
+    config["managedReleaseId"] = json!(old.release_id);
+    config["managedCandidateSha256"] = json!(old.candidate_sha256);
+    config["managedCandidateArtifactId"] = json!(old.artifact_id);
+    config["managedBaseReadiness"] = json!("uncertified-staging");
+    config["initialRuntimeBootstrap"] = staged["initialRuntimeBootstrap"].clone();
+    config["runtimeRelease"] = json!({"sha256":"8".repeat(64),"version":"2.0.0","previousSha256":"1".repeat(64),"appliedAt":1});
+    sqlx::query(
+        "UPDATE api_cloud_workspaces SET managed_release_id=$1,request_config=$2 WHERE workspace_id='ws-bob'",
+    )
+    .bind(&old.release_id)
+    .bind(&*config)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+fn bob() -> Access {
+    Access {
+        actor: Principal {
+            account_id: "user-bob".into(),
+        },
+        scope: Scope::Personal,
+        owner_id: "user-bob".into(),
+        membership: None,
+    }
+}
+#[tokio::test]
+#[ignore = "requires isolated localhost PostgreSQL"]
+async fn update_computer_moves_a_staging_candidate_computer_to_the_current_pin() {
+    let (admin, pool, schema, mut c, now, mut config) = fixture().await;
+    sqlx::raw_sql("ALTER TABLE cloud_managed_bases ADD COLUMN architecture text,ADD COLUMN capabilities jsonb,ADD COLUMN candidate_manifest jsonb")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let old = stage_candidate(&pool, "cand-old", '1', "x86_64", now - 20, now).await;
+    let new = stage_candidate(&pool, "cand-new", '9', "x86_64", now - 10, now).await;
+    pin_computer_to_candidate(&pool, &mut config, &old).await;
+    let bob = bob();
+    // The deployment pin moved on and no longer serves this computer: a clear
+    // code, not a generic fence.
+    c.staging_candidate = Some(Arc::new(new.clone()));
+    let lost = c
+        .recreate_computer(
+            "ws-bob",
+            &bob,
+            &uuid::Uuid::new_v4().to_string(),
+            Some(TARGET_LATEST),
+            now,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(lost.code, "staging_managed_base_candidate_not_selected");
+    c.staging_candidate = Some(retaining(new.clone(), &old));
+    let op = c
+        .recreate_computer(
+            "ws-bob",
+            &bob,
+            &uuid::Uuid::new_v4().to_string(),
+            Some(TARGET_LATEST),
+            now,
+        )
+        .await
+        .unwrap();
+    assert_eq!(op["targetReleaseId"], "cand-new");
+    let id = op["operationId"].as_str().unwrap().to_owned();
+    let stored: Value = sqlx::query_scalar(
+        "SELECT to_jsonb(r) FROM zuse_rust_computer_recreations r WHERE operation_id=$1",
+    )
+    .bind(&id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(stored["managed_release_id"], "cand-old", "source kept");
+    assert_eq!(stored["candidate_sha256"], json!(old.candidate_sha256));
+    assert_eq!(stored["source_artifact_id"], "cand-new-artifact");
+    let row: Value = sqlx::query_scalar(
+        "SELECT to_jsonb(w) FROM api_cloud_workspaces w WHERE workspace_id='ws-bob'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        row["request_config"]["rustRecreation"]["targetCandidateSha256"],
+        json!(new.candidate_sha256)
+    );
+    drive_to_restore(&c, &pool, &id, now).await;
+    let restored: Value = sqlx::query_scalar(
+        "SELECT to_jsonb(w) FROM api_cloud_workspaces w WHERE workspace_id='ws-bob'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let config = &restored["request_config"];
+    assert_eq!(
+        config["rustRecreation"]["phase"], "restoring",
+        "code={}",
+        restored["status_code"]
+    );
+    assert_eq!(restored["managed_release_id"], "cand-new");
+    assert_eq!(config["managedReleaseId"], "cand-new");
+    assert_eq!(
+        config["managedCandidateSha256"],
+        json!(new.candidate_sha256)
+    );
+    assert_eq!(config["managedCandidateArtifactId"], "cand-new-artifact");
+    assert_eq!(config["managedBaseReadiness"], "uncertified-staging");
+    assert_eq!(
+        config["initialRuntimeBootstrap"]["runtimeSha256"],
+        "9".repeat(64)
+    );
+    assert!(
+        config.get("runtimeRelease").is_none(),
+        "the fresh machine boots the new candidate's own runtime"
+    );
+    let restore: Value = sqlx::query_scalar("SELECT to_jsonb(r) FROM zuse_rust_restores r")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(restore["snapshot_id"], "cand-new-artifact");
+    // Later steps accept the new candidate instead of fencing the operation.
+    c.recreation_once(now + 10000).await.unwrap();
+    let phase: String = sqlx::query_scalar(
+        "SELECT phase FROM zuse_rust_computer_recreations WHERE operation_id=$1",
+    )
+    .bind(&id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(phase, "restoring");
+    let current: Value = sqlx::query_scalar(
+        "SELECT to_jsonb(w) FROM api_cloud_workspaces w WHERE workspace_id='ws-bob'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    c.candidate_row_allowed(&current, now + 10000)
+        .await
+        .expect("the repinned computer runs on the current pin");
+    pool.close().await;
+    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+        .execute(&admin)
+        .await
+        .unwrap();
+    admin.close().await;
+}
+#[tokio::test]
+#[ignore = "requires isolated localhost PostgreSQL"]
+async fn update_computer_keeps_a_candidate_the_current_pin_cannot_restore() {
+    let (admin, pool, schema, mut c, now, mut config) = fixture().await;
+    sqlx::raw_sql("ALTER TABLE cloud_managed_bases ADD COLUMN architecture text,ADD COLUMN capabilities jsonb,ADD COLUMN candidate_manifest jsonb")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let old = stage_candidate(&pool, "cand-old", '1', "x86_64", now - 20, now).await;
+    // Newer, but its disk layout is not this computer's. (Candidate validation
+    // already pins the storage format and wire protocol; architecture is the
+    // compatibility rule a valid candidate can still break.)
+    let other = stage_candidate(&pool, "cand-arm", '9', "aarch64", now - 10, now).await;
+    pin_computer_to_candidate(&pool, &mut config, &old).await;
+    c.staging_candidate = Some(retaining(other, &old));
+    let op = c
+        .recreate_computer(
+            "ws-bob",
+            &bob(),
+            &uuid::Uuid::new_v4().to_string(),
+            Some(TARGET_LATEST),
+            now,
+        )
+        .await
+        .unwrap();
+    assert!(op["targetReleaseId"].is_null(), "{op}");
+    let id = op["operationId"].as_str().unwrap().to_owned();
+    let stored: Value = sqlx::query_scalar(
+        "SELECT to_jsonb(r) FROM zuse_rust_computer_recreations r WHERE operation_id=$1",
+    )
+    .bind(&id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(stored["source_artifact_id"], "cand-old-artifact");
+    // An ordinary recreation of the retained candidate still restores it.
+    drive_to_restore(&c, &pool, &id, now).await;
+    let restored: Value = sqlx::query_scalar(
+        "SELECT to_jsonb(w) FROM api_cloud_workspaces w WHERE workspace_id='ws-bob'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        restored["request_config"]["rustRecreation"]["phase"], "restoring",
+        "code={}",
+        restored["status_code"]
+    );
+    assert_eq!(restored["managed_release_id"], "cand-old");
+    assert_eq!(
+        restored["request_config"]["managedCandidateSha256"],
+        json!(old.candidate_sha256)
+    );
+    let restore: Value = sqlx::query_scalar("SELECT to_jsonb(r) FROM zuse_rust_restores r")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(restore["snapshot_id"], "cand-old-artifact");
+    pool.close().await;
+    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+        .execute(&admin)
+        .await
+        .unwrap();
+    admin.close().await;
+}
+/// Full pause, verified capture, original retired, restore queued.
+async fn drive_to_restore(c: &RuntimeControl, pool: &PgPool, id: &str, now: i64) {
+    let pause: Value = sqlx::query_scalar(
+        "SELECT to_jsonb(l) FROM zuse_rust_lifecycle_operations l WHERE action='pause'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    sqlx::query("UPDATE api_cloud_workspaces SET state='paused',runtime_state='offline',request_config=jsonb_set(request_config,'{rustLifecycleOperation,phase}','\"paused\"') WHERE workspace_id='ws-bob'").execute(pool).await.unwrap();
+    sqlx::query("UPDATE zuse_rust_lifecycle_operations SET phase='paused' WHERE operation_id=$1")
+        .bind(pause["operation_id"].as_str())
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE zuse_rust_jobs SET state='completed' WHERE kind=$1 AND resource_id='ws-bob'",
+    )
+    .bind(lifecycle::JOB_KIND)
+    .execute(pool)
+    .await
+    .unwrap();
+    assert!(c.recreation_once(now + 2).await.unwrap());
+    let row: Value = sqlx::query_scalar(
+        "SELECT to_jsonb(w) FROM api_cloud_workspaces w WHERE workspace_id='ws-bob'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert!(capture_intent(&row), "code={}", row["status_code"]);
+    let archive = recovery::archive(&row).unwrap();
+    let manifest = json!({"version":1,"operationId":archive.id,"workspaceId":"ws-bob","chatId":"chat-bob","sessionId":"session-bob","chunks":["a".repeat(64)],"archiveSha256":"b".repeat(64)});
+    let mut verified = archive.clone();
+    verified.phase = ArchivePhase::Retiring;
+    verified.verified_chunks = 1;
+    verified.manifest = Some(serde_json::from_value(manifest.clone()).unwrap());
+    sqlx::query("UPDATE api_cloud_workspaces SET request_config=jsonb_set(request_config,'{recoveryArchive}',$1) WHERE workspace_id='ws-bob'").bind(json!(verified)).execute(pool).await.unwrap();
+    sqlx::query("UPDATE zuse_rust_recovery_operations SET phase='retiring',manifest=$1,verified_at=$2,verified_archive_sha256=$3 WHERE operation_id=$4").bind(&manifest).bind(now+5000).bind("b".repeat(64)).bind(&archive.id).execute(pool).await.unwrap();
+    c.recreation_once(now + 6000).await.unwrap();
+    let phase: String = sqlx::query_scalar(
+        "SELECT phase FROM zuse_rust_computer_recreations WHERE operation_id=$1",
+    )
+    .bind(id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(phase, "retiring");
+    let remote = LostRetirement {
+        pool: pool.clone(),
+        calls: Default::default(),
+        completed: Default::default(),
+    };
+    remote
+        .completed
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    sqlx::query("UPDATE zuse_rust_jobs SET due_at=0,lease_expires_at=0 WHERE kind=$1")
+        .bind(recovery::JOB_KIND)
+        .execute(pool)
+        .await
+        .unwrap();
+    c.recovery_once(&remote, now + 6003).await.unwrap();
+    c.recreation_once(now + 8000).await.unwrap();
+}
+
 struct LostRetirement {
     pool: PgPool,
     calls: std::sync::atomic::AtomicUsize,
