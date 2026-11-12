@@ -1,0 +1,102 @@
+name: Cloud runtime release
+
+# Builds the guest runtime exactly as infra/cloud/runtime.Dockerfile does,
+# packages it as a signed, content-addressed release and uploads it to R2.
+# Registering the release with the server is a manual operator step; see
+# infra/cloud/RUNTIME_RELEASES.md.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - apps/cloud-runtime/**
+      - crates/cloud-runtime/**
+      - crates/protocol/**
+      - infra/cloud/runtime-release.py
+      - infra/cloud/runtime.Dockerfile
+      - .github/workflows/cloud-runtime-release.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloud-runtime-release-${{ github.ref }}
+  # Never cancel a release halfway through an upload.
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    # Must equal the build stage of infra/cloud/runtime.Dockerfile (checked
+    # below) so released runtimes link against the same glibc as base runtimes.
+    container: rust:1.99-bookworm
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_INCREMENTAL: 0
+      HAS_SIGNING_KEY: ${{ secrets.ZUSE_RUNTIME_RELEASE_SIGNING_KEY != '' }}
+      HAS_R2: ${{ secrets.ZUSE_CLOUD_RUNTIME_R2_BUCKET != '' && secrets.ZUSE_CLOUD_RUNTIME_R2_ENDPOINT != '' && secrets.ZUSE_CLOUD_RUNTIME_R2_ACCESS_KEY_ID != '' && secrets.ZUSE_CLOUD_RUNTIME_R2_SECRET_ACCESS_KEY != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Builder image matches runtime.Dockerfile
+        run: |
+          grep -qx 'FROM rust:1.99-bookworm AS build' infra/cloud/runtime.Dockerfile || {
+            echo "::error::Update this workflow's container to match infra/cloud/runtime.Dockerfile's build stage"
+            exit 1
+          }
+      - run: apt-get update && apt-get install -y --no-install-recommends cmake libclang-dev libasound2-dev pkg-config python3 zstd openssl
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: cloud-runtime-release
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: python3 infra/cloud/tests/runtime-release.py
+      - run: cargo build --locked --release -p zuse-cloud-guest
+      - name: Package release
+        id: package
+        run: |
+          workspace_version=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
+          version="${workspace_version}+g${GITHUB_SHA::12}"
+          python3 infra/cloud/runtime-release.py build-artifact \
+            --binary target/release/zuse-cloud-runtime --version "$version" --arch x86_64 --out out
+          echo "sha256=$(python3 -c 'import json; print(json.load(open("out/release.json"))["release"]["sha256"])')" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Sign release
+        if: env.HAS_SIGNING_KEY == 'true'
+        env:
+          SIGNING_KEY: ${{ secrets.ZUSE_RUNTIME_RELEASE_SIGNING_KEY }}
+        run: |
+          umask 077
+          key="$RUNNER_TEMP/runtime-release-signing.pem"
+          trap 'rm -f "$key"' EXIT
+          printf '%s\n' "$SIGNING_KEY" > "$key"
+          python3 infra/cloud/runtime-release.py sign --release out/release.json --key "$key"
+          python3 infra/cloud/runtime-release.py verify --release out/release.json
+      - name: Upload to R2
+        if: env.HAS_SIGNING_KEY == 'true' && env.HAS_R2 == 'true'
+        env:
+          ZUSE_CLOUD_RUNTIME_R2_BUCKET: ${{ secrets.ZUSE_CLOUD_RUNTIME_R2_BUCKET }}
+          ZUSE_CLOUD_RUNTIME_R2_ENDPOINT: ${{ secrets.ZUSE_CLOUD_RUNTIME_R2_ENDPOINT }}
+          ZUSE_CLOUD_RUNTIME_R2_ACCESS_KEY_ID: ${{ secrets.ZUSE_CLOUD_RUNTIME_R2_ACCESS_KEY_ID }}
+          ZUSE_CLOUD_RUNTIME_R2_SECRET_ACCESS_KEY: ${{ secrets.ZUSE_CLOUD_RUNTIME_R2_SECRET_ACCESS_KEY }}
+        run: python3 infra/cloud/runtime-release.py upload --release out/release.json --artifact out
+      - name: Summary
+        env:
+          SHA256: ${{ steps.package.outputs.sha256 }}
+          VERSION: ${{ steps.package.outputs.version }}
+        run: |
+          {
+            echo "### Cloud runtime $VERSION"
+            echo
+            echo "- sha256: \`$SHA256\`"
+            if [ "$HAS_SIGNING_KEY" = true ]; then echo "- signed: yes"; else echo "- signed: **no** (signing key not available; nothing uploaded)"; fi
+            if [ "$HAS_SIGNING_KEY" = true ] && [ "$HAS_R2" = true ]; then echo "- uploaded: \`runtime/x86_64/$SHA256.zst\`"; else echo "- uploaded: **no**"; fi
+            echo
+            echo "Register (operator DB role): \`zuse-cloud-api register-runtime-release --release release.json --state staging\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cloud-runtime-release-${{ steps.package.outputs.sha256 }}
+          path: out/release.json
+          retention-days: 90

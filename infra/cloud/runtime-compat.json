@@ -1,0 +1,4 @@
+{
+  "_comment": "Previous stable runtime releases (newest first, at most 3) that CI runs the current server suite against. Entries are {sha256, version, architecture} of releases already uploaded by infra/cloud/runtime-release.py. Empty until the first releases exist. See infra/cloud/RUNTIME_RELEASES.md.",
+  "releases": []
+}

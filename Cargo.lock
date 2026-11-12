@@ -14877,6 +14877,7 @@ dependencies = [
 name = "zuse-protocol"
 version = "0.26.0"
 dependencies = [
+ "base64 0.22.1",
  "chrono",
  "pulldown-cmark",
  "schemars",
