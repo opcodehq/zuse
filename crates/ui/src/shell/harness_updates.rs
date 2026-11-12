@@ -752,7 +752,7 @@ impl Shell {
                         })
                         .children(row_action)
                         .when_some(tooltip, |el, text| {
-                            el.tooltip(move |_, cx| {
+                            el.anchored_tooltip(crate::tooltip::Placement::Below, move |_, cx| {
                                 cx.new(|_| SurfaceTabTooltip {
                                     text: text.clone().into(),
                                 })
@@ -834,7 +834,7 @@ impl Shell {
                 )
             })
             .when_some(single_tooltip, |el, text| {
-                el.tooltip(move |_, cx| {
+                el.anchored_tooltip(crate::tooltip::Placement::Below, move |_, cx| {
                     cx.new(|_| SurfaceTabTooltip {
                         text: text.clone().into(),
                     })

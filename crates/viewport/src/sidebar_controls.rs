@@ -1,5 +1,6 @@
 //! Sidebar account and provider limits, shared by both hosts.
 use crate::localization::message as tr;
+use crate::tooltip::TooltipExt as _;
 use crate::{assets::icon, creation_style as ui, palette, settings_style as s};
 use gpui::{prelude::*, *};
 use serde_json::{Value, json};
@@ -642,7 +643,7 @@ impl Render for SidebarControls {
         let account = footer_button("sidebar-account", label.clone())
             .debug_selector(|| "sidebar-account".into())
             .aria_description(tip.clone())
-            .tooltip(move |_, cx| cx.new(|_| ControlTip(tip.clone().into())).into())
+            .tip(tip.clone())
             .track_focus(&self.account_focus.clone().tab_stop(!disabled))
             .tab_index(if disabled { -1 } else { 0 })
             .when(disabled, |v| v.opacity(0.5).cursor_default())
@@ -674,9 +675,7 @@ impl Render for SidebarControls {
             .on_click(cx.listener(|this, _, _, cx| this.account_action(cx)));
         let mut usage = footer_button("sidebar-usage", "Usage limits")
             .debug_selector(|| "sidebar-usage".into())
-            .when(!self.usage_open, |v| {
-                v.tooltip(|_, cx| cx.new(|_| ControlTip("Usage limits".into())).into())
-            })
+            .when(!self.usage_open, |v| v.tip("Usage limits"))
             .w(px(28.))
             .relative()
             .track_focus(&self.usage_focus)
@@ -812,24 +811,6 @@ fn dither_meter(left: f32, warning: bool) -> Div {
             palette::rgb(if warning { 0xfcd34d } else { 0x89ca21 }).into(),
             gpui::Hsla::from(palette::rgb(crate::shell::MUTED)).opacity(0.3),
         ))
-}
-struct ControlTip(SharedString);
-impl Render for ControlTip {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .max_w(px(280.))
-            .px(px(8.))
-            .py(px(6.))
-            .rounded(px(7.))
-            .border_1()
-            .border_color(s::card_border())
-            .bg(s::card_bg())
-            .text_color(palette::rgb(crate::shell::TEXT))
-            .text_size(px(11.))
-            .line_height(px(16.))
-            .shadow_sm()
-            .child(self.0.clone())
-    }
 }
 
 fn menu_surface(width: f32) -> Div {

@@ -2122,18 +2122,7 @@ struct SidebarViewOptionsTooltip;
 
 impl Render for SidebarViewOptionsTooltip {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = Theme::of(cx);
-        div()
-            .px(px(8.0))
-            .py(px(6.0))
-            .rounded(px(6.0))
-            .border_1()
-            .border_color(theme.border_strong)
-            .bg(theme.surface_raised)
-            .shadow_md()
-            .text_size(crate::typography::text_xs())
-            .text_color(theme.text)
-            .child(tr(cx, msg::native::view_options))
+        crate::tooltip::chip(tr(cx, msg::native::view_options), Theme::of(cx))
     }
 }
 
@@ -2410,7 +2399,7 @@ fn sidebar_project_action(
         .aria_label(label)
         .hover(|el| el.bg(theme.glass_hover()))
         .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-        .tooltip(crate::settings::widgets::text_tooltip_above(label))
+        .tip_above(label)
         .child(icon(glyph).size(px(14.0)).text_color(theme.text_muted))
 }
 
@@ -4721,7 +4710,7 @@ impl Shell {
                     .rounded(px(5.0))
                     .text_color(theme.text_muted)
                     .hover(|el| el.bg(theme.glass_hover()).text_color(theme.text))
-                    .tooltip(crate::settings::widgets::text_tooltip("Clear filter"))
+                    .tip("Clear filter")
                     .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(cx.listener(|this, _, _, cx| {
                         cx.stop_propagation();
@@ -4801,16 +4790,14 @@ impl Shell {
                 el.child(
                     sidebar_header_button("sidebar-new-project", icons::FOLDER_WITH_FILES, theme)
                         .aria_label(tr(cx, msg::projects::projects_sidebar_new_project))
-                        .tooltip(crate::settings::widgets::text_tooltip("New project"))
+                        .tip("New project")
                         .on_click(cx.listener(|this, _, _, cx| this.open_add_space(cx))),
                 )
             })
             .child(
                 sidebar_header_button("sidebar-new-chat", icons::PLUS, theme)
                     .aria_label(tr(cx, msg::chat::chat_view_new_chat))
-                    .tooltip(crate::settings::widgets::text_tooltip(
-                        ShortcutId::NewSession.label(),
-                    ))
+                    .tip(ShortcutId::NewSession.label())
                     .on_click(cx.listener(|this, _, _, cx| this.open_new_session(None, cx))),
             )
             .into_any_element()
@@ -4830,7 +4817,7 @@ impl Shell {
         .aria_label(tr(cx, msg::native::filter_by_project))
         .aria_expanded(open)
         .when(active || open, |el| el.bg(theme.glass_hover()))
-        .tooltip(crate::settings::widgets::text_tooltip("Filter by project"))
+        .tip("Filter by project")
         .on_mouse_down(
             gpui::MouseButton::Left,
             cx.listener(|this, _, _, _| this.spaces_menu.note_trigger_press()),
@@ -4922,7 +4909,9 @@ impl Shell {
                     }
                 }
             }))
-            .tooltip(|_, cx| cx.new(|_| SidebarViewOptionsTooltip).into())
+            .anchored_tooltip(crate::tooltip::Placement::Below, |_, cx| {
+                cx.new(|_| SidebarViewOptionsTooltip).into()
+            })
             .tooltip_show_delay(std::time::Duration::from_millis(350))
             .child(
                 icon(icons::MORE_HORIZONTAL)
@@ -7426,9 +7415,7 @@ impl Shell {
                     )
                 })
                 .child(div().max_w(px(180.0)).truncate().child(spec.name.clone()))
-                .when(long, |el| {
-                    el.tooltip(crate::settings::widgets::text_tooltip(spec.name.clone()))
-                });
+                .when(long, |el| el.tip(spec.name.clone()));
             // The open crumb is where you already are: no hover, no click.
             if !spec.current {
                 el = el
@@ -7529,7 +7516,7 @@ impl Shell {
                     .cursor_pointer()
                     .role(gpui::Role::Button)
                     .aria_label(back_label)
-                    .tooltip(crate::settings::widgets::text_tooltip(back_label))
+                    .tip(back_label)
                     .hover(|s| s.bg(theme.element_hover))
                     .on_click(cx.listener(|this, _, window, cx| {
                         if this.add_space.as_ref().map(|f| f.step) == Some(ProjectStep::Devices) {

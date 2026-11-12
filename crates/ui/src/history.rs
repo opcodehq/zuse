@@ -4,6 +4,7 @@
 //! data and rendering so it can move intact into the future right-panel tabs.
 
 use crate::localization::message as tr;
+use crate::tooltip::TooltipExt as _;
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -942,28 +943,23 @@ impl Render for HistoryRefTooltip {
             .max()
             .unwrap_or_default();
         let width = (longest as f32 * 6.4 + 16.0).clamp(72.0, 360.0);
-        div()
-            .w(px(width))
-            .px(px(8.0))
-            .py(px(6.0))
-            .flex()
-            .flex_col()
-            .gap(px(3.0))
-            .rounded(px(5.0))
-            .border_1()
-            .border_color(theme.border_strong)
-            .bg(theme.surface_raised)
-            .shadow_md()
-            .text_size(px(11.0))
-            .text_color(theme.text_muted)
-            .children(self.descriptions.iter().cloned().map(|description| {
-                div()
-                    .min_w_0()
-                    .truncate()
-                    .whitespace_nowrap()
-                    .font_family(theme.font_mono.clone())
-                    .child(description)
-            }))
+        crate::tooltip::frost(
+            crate::tooltip::surface(theme)
+                .w(px(width))
+                .py(px(4.5))
+                .flex()
+                .flex_col()
+                .gap(px(2.0))
+                .text_color(theme.text_muted)
+                .children(self.descriptions.iter().cloned().map(|description| {
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .whitespace_nowrap()
+                        .font_family(theme.font_mono.clone())
+                        .child(description)
+                })),
+        )
     }
 }
 
@@ -973,22 +969,7 @@ struct HistoryAuthorTooltip {
 
 impl Render for HistoryAuthorTooltip {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = Theme::of(cx);
-        let width = (self.name.chars().count() as f32 * 6.2 + 16.0).clamp(72.0, 260.0);
-        div()
-            .w(px(width))
-            .px(px(8.0))
-            .py(px(5.0))
-            .rounded(px(5.0))
-            .border_1()
-            .border_color(theme.border_strong)
-            .bg(theme.surface_raised)
-            .shadow_md()
-            .truncate()
-            .whitespace_nowrap()
-            .text_size(px(11.0))
-            .text_color(theme.text_muted)
-            .child(self.name.clone())
+        crate::tooltip::chip(self.name.clone(), Theme::of(cx))
     }
 }
 
@@ -1393,7 +1374,7 @@ impl Render for GitHistoryViewButton {
                         theme.text_muted
                     }),
             )
-            .tooltip(move |_, cx| {
+            .anchored_tooltip(crate::tooltip::Placement::Below, move |_, cx| {
                 cx.new(|_| HistoryRefTooltip {
                     descriptions: vec![tooltip.into()],
                 })
@@ -1437,7 +1418,7 @@ impl Render for GitHistorySearchControl {
                         .size(px(crate::surface_chrome::ICON_SIZE))
                         .text_color(theme.text_muted),
                 )
-                .tooltip(|_, cx| {
+                .anchored_tooltip(crate::tooltip::Placement::Below, |_, cx| {
                     cx.new(|_| HistoryRefTooltip {
                         descriptions: vec!["Search commits".into()],
                     })
@@ -1523,7 +1504,7 @@ impl Render for GitHistorySearchControl {
                         cx.stop_propagation();
                         control.update(cx, |control, cx| control.clear(cx)).ok();
                     })
-                    .tooltip(|_, cx| {
+                    .anchored_tooltip(crate::tooltip::Placement::Below, |_, cx| {
                         cx.new(|_| HistoryRefTooltip {
                             descriptions: vec!["Close search".into()],
                         })
@@ -1649,7 +1630,7 @@ impl Render for GitHistoryCount {
                                                     ))),
                                             )
                                         })
-                                        .tooltip(move |_, cx| {
+                                        .anchored_tooltip(crate::tooltip::Placement::Below, move |_, cx| {
                                             cx.new(|_| HistoryRefTooltip {
                                                 descriptions: vec![
                                                     format!(
@@ -3398,7 +3379,7 @@ impl GitHistory {
                     .size(px(9.0))
                     .text_color(color.opacity(0.9)),
                 )
-                .tooltip(move |_, cx| {
+                .anchored_tooltip(crate::tooltip::Placement::Below, move |_, cx| {
                     cx.new(|_| HistoryRefTooltip {
                         descriptions: vec![tooltip.clone().into()],
                     })
@@ -3486,7 +3467,7 @@ impl GitHistory {
                     .truncate()
                     .child(SharedString::from(reference.label)),
             )
-            .tooltip(move |_, cx| {
+            .anchored_tooltip(crate::tooltip::Placement::Below, move |_, cx| {
                 cx.new(|_| HistoryRefTooltip {
                     descriptions: vec![description.clone()],
                 })
@@ -3525,7 +3506,7 @@ impl GitHistory {
                         .text_size(px(10.0))
                         .text_color(theme.text_faint)
                         .child(SharedString::from(format!("+{hidden_count}")))
-                        .tooltip(move |_, cx| {
+                        .anchored_tooltip(crate::tooltip::Placement::Below, move |_, cx| {
                             cx.new(|_| HistoryRefTooltip {
                                 descriptions: hidden_descriptions.clone(),
                             })
@@ -3594,7 +3575,7 @@ impl GitHistory {
                                     .child(initial),
                             )
                         })
-                        .tooltip(move |_, cx| {
+                        .anchored_tooltip(crate::tooltip::Placement::Below, move |_, cx| {
                             cx.new(|_| HistoryAuthorTooltip {
                                 name: tooltip_name.clone(),
                             })
@@ -3989,7 +3970,7 @@ impl Render for GitHistory {
                     this.open_column_menu(event.position, cx);
                 }),
             )
-            .tooltip(|_, cx| {
+            .anchored_tooltip(crate::tooltip::Placement::Below, |_, cx| {
                 cx.new(|_| HistoryRefTooltip {
                     descriptions: vec!["Columns".into()],
                 })

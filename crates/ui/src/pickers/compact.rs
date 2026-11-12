@@ -1,6 +1,7 @@
 //! Alternate presentation of the same model and option mutations.
 use super::*;
 use crate::localization::message as tr;
+use crate::tooltip::TooltipExt as _;
 use zuse_i18n::messages as msg;
 
 pub(super) const COMPACT_ROW_HEIGHT: f32 = 32.0;
@@ -144,7 +145,7 @@ impl Pickers {
             .role(gpui::Role::ListBoxOption)
             .aria_label(accessible_name)
             .aria_selected(selected)
-            .tooltip(crate::settings::widgets::text_tooltip(details))
+            .tip(details)
             .tooltip_show_delay(std::time::Duration::from_millis(500))
             .h(px(COMPACT_ROW_HEIGHT))
             .pl(px(8.0))
@@ -214,7 +215,7 @@ impl Pickers {
                         gpui::Toggled::False
                     })
                     .aria_keyshortcuts("Meta+Shift+F")
-                    .tooltip(crate::settings::widgets::text_tooltip(favorite_tooltip))
+                    .tip(favorite_tooltip)
                     .size(px(24.0))
                     .rounded(px(6.0))
                     .flex()
@@ -748,7 +749,7 @@ impl Pickers {
                         .aria_label(SharedString::from(format!(
                             "Reasoning effort: {effort_label}"
                         )))
-                        .tooltip(crate::settings::widgets::text_tooltip(effort_label.clone()))
+                        .tip(effort_label.clone())
                         .aria_numeric_value(selected as f64)
                         .aria_min_numeric_value(0.)
                         .aria_max_numeric_value(count.saturating_sub(1) as f64)
@@ -1002,9 +1003,7 @@ fn fast_toggle(theme: &Theme, on: bool) -> gpui::Stateful<gpui::Div> {
             gpui::Toggled::False
         })
         .aria_keyshortcuts("F")
-        .tooltip(crate::settings::widgets::text_tooltip_above(
-            "1.5× speed\nMore usage",
-        ))
+        .tip_above("1.5× speed\nMore usage")
         .size(px(24.0))
         .rounded(px(6.0))
         .flex()

@@ -5,10 +5,23 @@ import subprocess
 import tempfile
 import unittest
 
-from cargo_dev import ROOT, build_environment, icon_fingerprint, target_directory
+from cargo_dev import (
+    ROOT, STAGING_API, build_environment, icon_fingerprint, staging_environment,
+    staging_profile, target_directory,
+)
 
 
 class CargoDevTests(unittest.TestCase):
+    def test_staging_uses_one_profile_outside_every_checkout(self):
+        home = Path("/home/someone")
+        self.assertEqual(staging_profile({}, home), home / ".zuse-dev" / "staging")
+        self.assertFalse(str(staging_profile({}, home)).startswith(str(ROOT)))
+        self.assertEqual(staging_profile({"ZUSE_STAGING_DATA_DIR": "/data/stg"}, home), Path("/data/stg"))
+        env = staging_environment({})
+        self.assertEqual((env["ZUSE_API_URL"], env["ZUSE_CLOUD_API_URL"]), (STAGING_API, STAGING_API))
+        self.assertTrue(env["ZUSE_WORKOS_CLIENT_ID"].startswith("client_"))
+        self.assertEqual(staging_environment({"ZUSE_CLOUD_API_URL": "https://other"})["ZUSE_CLOUD_API_URL"], "https://other")
+
     def test_worktrees_share_target_but_independent_repositories_do_not(self):
         with tempfile.TemporaryDirectory(prefix="zuse build ") as temporary:
             base = Path(temporary)

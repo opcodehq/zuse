@@ -1,6 +1,7 @@
 //! Workspace file browsing surface.
 
 use crate::localization::message as tr;
+use crate::tooltip::TooltipExt as _;
 use std::{
     collections::HashMap,
     sync::atomic::{AtomicU64, Ordering},
@@ -83,7 +84,7 @@ pub(super) fn toolbar_button(id: &'static str, label: &'static str) -> gpui::Sta
             window.prevent_default()
         })
         .hover(|style| style.bg(crate::theme::wash(0.14)))
-        .tooltip(move |_, cx| {
+        .anchored_tooltip(crate::tooltip::Placement::Below, move |_, cx| {
             cx.new(|_| preview::FileEditorTooltip { text: label.into() })
                 .into()
         })

@@ -136,7 +136,7 @@ fn thread_action(
         .cursor_pointer()
         .text_color(theme.text_muted)
         .hover(|d| d.text_color(theme.text_strong))
-        .tooltip(crate::settings::widgets::text_tooltip(label))
+        .tip(label)
         .child(icon(glyph).size(px(13.0)))
         .on_click(cx.listener(move |this, event, window, cx| {
             cx.stop_propagation();
@@ -302,7 +302,7 @@ impl Shell {
                     .cursor_pointer()
                     .when(creating, |d| d.bg(theme.bg_selected))
                     .hover(|d| d.bg(theme.element_hover))
-                    .tooltip(crate::settings::widgets::text_tooltip("New Zapper"))
+                    .tip("New Zapper")
                     .child(
                         icon(icons::PLUS)
                             .size(px(13.0))
@@ -405,7 +405,7 @@ impl Shell {
                             div()
                                 .id(SharedString::from(format!("zot-decisions-{}", zot.id)))
                                 .aria_label(SharedString::from(waiting.clone()))
-                                .tooltip(crate::settings::widgets::text_tooltip(waiting.clone()))
+                                .tip(waiting.clone())
                                 .child(
                                     icon(icons::STATUS_QUESTION)
                                         .size(px(13.0))
@@ -501,7 +501,7 @@ impl Shell {
                         ))
                         .child(div().flex_1().min_w_0().truncate().child(title))
                         .when(matches!(phase, ThreadPhase::NotStarted), |d| {
-                            d.tooltip(crate::settings::widgets::text_tooltip("Hasn't started yet"))
+                            d.tip("Hasn't started yet")
                         })
                         .child(
                             div()
@@ -842,7 +842,7 @@ impl Shell {
                 .text_color(color)
                 .when(!active, |d| {
                     d.hover(|d| d.bg(theme.element_hover).text_color(theme.text))
-                        .tooltip(crate::settings::widgets::text_tooltip(label))
+                        .tip(label)
                 })
                 .child(if tab == ZotTab::Issues {
                     zuse_viewport::zot_issues::status_icon(ZotIssueStatus::Todo).into_any_element()
@@ -932,7 +932,7 @@ impl Shell {
                 .rounded(px(7.0))
                 .cursor_pointer()
                 .hover(|d| d.bg(theme.element_hover))
-                .tooltip(crate::settings::widgets::text_tooltip(tip))
+                .tip(tip)
                 .child(icon(path).size(px(12.0)).text_color(theme.text_muted))
         };
         let zot = self.selected_zot(cx);

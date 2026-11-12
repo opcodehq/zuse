@@ -154,7 +154,7 @@ impl Composer {
                     .py(px(4.))
                     .rounded(px(6.))
                     .text_size(px(11.))
-                    .tooltip(crate::settings::widgets::text_tooltip("Escape".to_owned()))
+                    .tip("Escape".to_owned())
                     .on_click(cx.listener(move |this, _, _, cx| this.answer_permission(&deny, cx))),
                 )
                 .child(
@@ -207,9 +207,7 @@ impl Composer {
                         .tab_index(0)
                         .ml(px(4.))
                         .text_size(px(11.))
-                        .tooltip(crate::settings::widgets::text_tooltip(
-                            "⌘ / Ctrl + Enter".to_owned(),
-                        ))
+                        .tip("⌘ / Ctrl + Enter".to_owned())
                         .on_click(
                             cx.listener(move |this, _, _, cx| this.answer_permission(&allow, cx)),
                         ),
