@@ -4,6 +4,7 @@ import ctypes
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import signal
 import subprocess
@@ -13,6 +14,16 @@ import time
 import unittest
 
 ROOT = Path(__file__).resolve().parents[3]
+
+
+def provider_keys():
+    """Every ProviderId::api_key_env value, read from the Rust source of truth."""
+    source = (Path(__file__).resolve().parents[3] / "crates/protocol/src/cloud_computers.rs").read_text()
+    body = source[source.index("fn api_key_env"):]
+    keys = re.findall(r'Self::\w+ => "([A-Z0-9_]+)"', body[:body.index("\n    }\n")])
+    assert "PRIZED_API_KEY" in keys and len(keys) == len(set(keys)) >= 5, keys
+    return keys
+
 
 @unittest.skipUnless(sys.platform == 'linux' and shutil.which('setsid'), 'Linux provider process groups')
 class RuntimeLaunchTest(unittest.TestCase):
@@ -29,8 +40,8 @@ class RuntimeLaunchTest(unittest.TestCase):
             binary = root / 'fixture-runtime'
             binary.write_text('''#!/usr/bin/python3
 import json,os,signal,time
-assert not any(k in os.environ for k in ('BOXD_API_KEY','BOAT_API_KEY','ZUSE_WORKSPACE_RUNTIME_LOCK_FD'))
-with open(os.environ['ZUSE_TEST_PID_FILE'],'w') as f:
+assert not any(k in os.environ for k in %r)
+''' % ((*provider_keys(), 'ZUSE_WORKSPACE_RUNTIME_LOCK_FD'),) + '''with open(os.environ['ZUSE_TEST_PID_FILE'],'w') as f:
  json.dump({'pid':os.getpid(),'group':os.getpgrp()},f)
 while True:time.sleep(1)
 ''')
@@ -43,8 +54,8 @@ while True:time.sleep(1)
                 ZUSE_USER_DATA=str(root / 'data'), ZUSE_CLOUD_WORKSPACE_ROOT=str(root / 'checkout'),
                 ZUSE_WORKSPACE_RUNTIME_STATUS_DIR=str(root / 'status'),
                 ZUSE_TEST_PID_FILE=str(root / 'runtime-pid.json'), ZUSE_RUNTIME_PROVIDER='boat',
-                ZUSE_RUNTIME_PERSISTENT_EXEC_CERTIFIED='1', BOXD_API_KEY='fixture-only',
-                BOAT_API_KEY='fixture-only', ZUSE_WORKSPACE_RUNTIME_LOCK_FD='42')
+                ZUSE_RUNTIME_PERSISTENT_EXEC_CERTIFIED='1', ZUSE_WORKSPACE_RUNTIME_LOCK_FD='42',
+                **{key: 'fixture-only' for key in provider_keys()})
             for name in ('ZUSE_HARNESS_ROOT','ZUSE_RUNTIME_RETAINED','ZUSE_RUNTIME_RESUME_OPERATION_ID'):
                 environment.pop(name, None)
             process = subprocess.Popen([str(launcher)], env=environment, start_new_session=True,

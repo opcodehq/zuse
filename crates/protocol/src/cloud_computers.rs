@@ -28,6 +28,20 @@ impl ProviderId {
             Self::Prized => "prized",
         }
     }
+    /// The worker-only environment variable holding this provider's API key.
+    /// Every list of reserved or scrubbed provider credentials derives from it.
+    pub fn api_key_env(self) -> &'static str {
+        match self {
+            Self::Boat => "BOAT_API_KEY",
+            Self::Boxd => "BOXD_API_KEY",
+            Self::E2b => "E2B_API_KEY",
+            Self::Daytona => "DAYTONA_API_KEY",
+            Self::Prized => "PRIZED_API_KEY",
+        }
+    }
+    pub fn is_api_key_env(name: &str) -> bool {
+        Self::ALL.iter().any(|id| id.api_key_env() == name)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

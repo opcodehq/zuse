@@ -23,14 +23,7 @@ impl Registry {
     fn configured(env: impl Fn(&str) -> Option<String>) -> Self {
         let mut registry = Self::default();
         for id in ProviderId::ALL {
-            let name = match id {
-                ProviderId::Boat => "BOAT_API_KEY",
-                ProviderId::Boxd => "BOXD_API_KEY",
-                ProviderId::E2b => "E2B_API_KEY",
-                ProviderId::Daytona => "DAYTONA_API_KEY",
-                ProviderId::Prized => "PRIZED_API_KEY",
-            };
-            let Some(secret) = env(name).filter(|s| !s.is_empty()) else {
+            let Some(secret) = env(id.api_key_env()).filter(|s| !s.is_empty()) else {
                 continue;
             };
             let provider: Result<Arc<dyn Provider>, ProviderError> = match id {
@@ -120,6 +113,19 @@ mod tests {
             Some(&"cloud_provider_configuration_invalid")
         );
         assert!(Registry::configured(|_| None).configured_ids().is_empty());
+    }
+    #[test]
+    fn each_provider_key_alone_configures_only_that_provider() {
+        let names: std::collections::BTreeSet<_> =
+            ProviderId::ALL.iter().map(|id| id.api_key_env()).collect();
+        assert_eq!(names.len(), ProviderId::ALL.len());
+        assert!(ProviderId::is_api_key_env("PRIZED_API_KEY"));
+        for id in ProviderId::ALL {
+            let registry = Registry::configured(|name| {
+                (name == id.api_key_env()).then(|| "synthetic-private-key".into())
+            });
+            assert_eq!(registry.configured_ids(), vec![id], "{id:?}");
+        }
     }
     #[test]
     fn invalid_e2b_timeout_does_not_disable_other_providers() {

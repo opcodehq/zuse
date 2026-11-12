@@ -99,3 +99,12 @@ fn workload_recipient_rejects_cross_task_key_expiry_and_unselected_bindings() {
             .is_err()
     );
 }
+#[test]
+fn every_cloud_provider_key_is_a_reserved_workload_secret_name() {
+    use zuse_protocol::cloud_computers::ProviderId;
+    for id in ProviderId::ALL {
+        assert!(!valid_name(id.api_key_env()), "{id:?} key accepted");
+    }
+    assert!(!valid_name("PRIZED_API_KEY"));
+    assert!(valid_name("PROJECT_REGISTRY_TOKEN"));
+}

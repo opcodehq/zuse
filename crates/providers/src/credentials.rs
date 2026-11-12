@@ -54,10 +54,6 @@ impl ChildEnvironment {
             .env_remove("OPENAI_API_KEY")
             .env_remove("CODEX_API_KEY")
             .env_remove("CODEX_ACCESS_TOKEN")
-            .env_remove("BOXD_API_KEY")
-            .env_remove("BOAT_API_KEY")
-            .env_remove("E2B_API_KEY")
-            .env_remove("DAYTONA_API_KEY")
             .env_remove("CLOUD_DATA_ENCRYPTION_KEY")
             .env_remove("CLOUD_CREDENTIAL_VAULT_KEY")
             .env_remove("RELAY_MINT_PRIVATE_JWK")
@@ -68,6 +64,9 @@ impl ChildEnvironment {
             .env_remove("ZUSE_GROK_AUTH_SOCKET")
             .env_remove("GROK_OIDC_ISSUER")
             .env_remove("GROK_OIDC_CLIENT_ID");
+        for id in zuse_protocol::cloud_computers::ProviderId::ALL {
+            command.env_remove(id.api_key_env());
+        }
         for (key, value) in &self.values {
             command.env(key, value.as_str());
         }
@@ -174,6 +173,24 @@ mod retained_tests {
         assert!(!error.contains("private"));
         *resolver.0.lock().unwrap() = None;
         assert!(live.validate().await.is_err());
+    }
+    #[test]
+    fn apply_removes_every_cloud_provider_key() {
+        let mut command = Command::new("probe");
+        ChildEnvironment::empty().apply(&mut command);
+        let removed: Vec<String> = command
+            .as_std_mut()
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(key, _)| key.to_string_lossy().into_owned())
+            .collect();
+        for id in zuse_protocol::cloud_computers::ProviderId::ALL {
+            assert!(
+                removed.iter().any(|key| key == id.api_key_env()),
+                "{} reaches brokered processes",
+                id.api_key_env()
+            );
+        }
     }
 }
 

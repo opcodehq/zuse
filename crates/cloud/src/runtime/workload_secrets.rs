@@ -59,15 +59,13 @@ pub fn valid_name(name: &str) -> bool {
             "GH_HOST",
             "GH_CONFIG_DIR",
             "GH_DEBUG",
-            "BOXD_API_KEY",
-            "BOAT_API_KEY",
-            "E2B_API_KEY",
-            "DAYTONA_API_KEY",
             "CLOUD_DATA_ENCRYPTION_KEY",
             "CLOUD_CREDENTIAL_VAULT_KEY",
             "WORKOS_API_KEY",
         ]
         .contains(&name)
+        // Every cloud-computer provider key, so a new provider is reserved by default.
+        && !zuse_protocol::cloud_computers::ProviderId::is_api_key_env(name)
 }
 fn context(owner: &str, project: &str, id: &str, revision: i64) -> String {
     format!("workload-secret:{owner}:{project}:{id}:{revision}")

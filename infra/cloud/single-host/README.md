@@ -33,7 +33,7 @@ authority image before enabling it. The auth worker has its own CPU, memory, pro
 and temporary-storage limits. The deployment preflight uses `auth-worker --check`,
 which validates tooling/schema without claiming a pending user login.
 
-Keep `BOXD_API_KEY`, `BOAT_API_KEY`, `E2B_API_KEY` and `DAYTONA_API_KEY` exclusively in
+Keep `BOXD_API_KEY`, `BOAT_API_KEY`, `E2B_API_KEY`, `DAYTONA_API_KEY` and `PRIZED_API_KEY` exclusively in
 the private worker configuration. A configured key alone does not certify a managed
 base or a live agent. The current deployed lifecycle worker still selects Boxd;
 provider-neutral adapters and orchestration are being integrated separately.
