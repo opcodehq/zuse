@@ -40,6 +40,8 @@ pub(super) struct CloudConversation {
     execution: Option<Task<()>>,
     operation: Option<Task<()>>,
     sleep_command: Option<String>,
+    /// A message's files asked for a wake while a sleep was still running.
+    wake_after_sleep: bool,
     computer: computer::State,
     _subscriptions: Vec<Subscription>,
 }
@@ -132,6 +134,7 @@ impl CloudConversation {
                 ComposerEvent::CloudLaunchChanged => this.refresh_history(cx),
                 ComposerEvent::CloudForegroundAdmitted => this.foreground_admitted(cx),
                 ComposerEvent::CloudSleepRequested => this.sleep(cx),
+                ComposerEvent::CloudWakeRequested => this.wake_for_upload(cx),
                 ComposerEvent::Sent {
                     chat_id,
                     message_id,
@@ -197,6 +200,7 @@ impl CloudConversation {
             execution: None,
             operation: None,
             sleep_command: None,
+            wake_after_sleep: false,
             computer: computer::State::default(),
             _subscriptions: subscriptions,
         };
@@ -684,6 +688,19 @@ impl CloudConversation {
         }
         self.refresh_history(cx);
     }
+    /// Wake the computer so a message's files can go straight to it.
+    fn wake_for_upload(&mut self, cx: &mut Context<Self>) {
+        if self.ready(cx) {
+            return;
+        }
+        // A sleep in progress would drop the wake; start it once sleep ends.
+        if self.operation.is_some() {
+            self.wake_after_sleep = true;
+            return;
+        }
+        self.environment = None;
+        self.watch_environment(true, cx);
+    }
     fn watch_environment(&mut self, interactive: bool, cx: &mut Context<Self>) {
         if !self.authorized
             || interactive
@@ -787,6 +804,10 @@ impl CloudConversation {
                     Ok(value) => {
                         this.sleep_command = None;
                         this.apply_computer_metadata(&value["workspace"], cx);
+                        if std::mem::take(&mut this.wake_after_sleep) {
+                            this.environment = None;
+                            this.watch_environment(true, cx);
+                        }
                     }
                     Err(error) => {
                         this.error = Some(error.to_string());

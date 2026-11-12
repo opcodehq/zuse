@@ -5894,6 +5894,8 @@ pub enum ComposerEvent {
     /// Only a verified foreground Run receipt may reattach execution passively.
     CloudForegroundAdmitted,
     CloudSleepRequested,
+    /// A message with files needs its computer awake before they upload.
+    CloudWakeRequested,
     /// An accepted task selects the current native conversation surface.
     CloudAdmitted {
         workspace: serde_json::Value,

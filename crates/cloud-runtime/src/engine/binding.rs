@@ -114,7 +114,6 @@ impl EngineExecutor {
         if let SessionCommandPayload::Run { request, .. } = &mut resolved.payload {
             ensure!(
                 request.cwd == binding.cwd_relative
-                    && request.attachments.is_empty()
                     && request.resume.is_none()
                     && request.worktree.is_none()
                     && request.mcp.is_none(),
@@ -168,14 +167,35 @@ impl EngineExecutor {
                 )?;
             }
             self.conversation(&payload.session_id)?;
-            let mut paths = Vec::with_capacity(binding.attachments.len());
+            // Files uploaded straight to this computer for this message: each
+            // must be one of its own uploads. Together with files bound by the
+            // server they stay within the per-message limit.
             ensure!(
-                binding.attachments.len() <= zuse_protocol::cloud_assets::MAX_ASSETS
-                    && binding
-                        .attachments
-                        .iter()
-                        .try_fold(0usize, |sum, a| sum.checked_add(a.size_bytes))
-                        .is_some_and(|total| total <= zuse_protocol::cloud_assets::MAX_BYTES),
+                request.attachments.len() + binding.attachments.len()
+                    <= zuse_protocol::cloud_assets::MAX_ASSETS,
+                "cloud_command_assets_too_many"
+            );
+            let mut paths =
+                Vec::with_capacity(request.attachments.len() + binding.attachments.len());
+            if !request.attachments.is_empty() {
+                let uploads = std::fs::canonicalize(self.core.uploads.dir())
+                    .map_err(|_| anyhow::anyhow!("cloud_command_upload_missing"))?;
+                for path in &request.attachments {
+                    let file = std::fs::canonicalize(path)
+                        .map_err(|_| anyhow::anyhow!("cloud_command_upload_missing"))?;
+                    ensure!(
+                        file.starts_with(&uploads) && file.is_file(),
+                        "cloud_command_upload_outside_uploads"
+                    );
+                    paths.push(file.to_string_lossy().into_owned());
+                }
+            }
+            ensure!(
+                binding
+                    .attachments
+                    .iter()
+                    .try_fold(0usize, |sum, a| sum.checked_add(a.size_bytes))
+                    .is_some_and(|total| total <= zuse_protocol::cloud_assets::MAX_BYTES),
                 "cloud_command_assets_too_large"
             );
             for asset in &binding.attachments {

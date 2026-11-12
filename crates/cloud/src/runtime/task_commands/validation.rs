@@ -143,7 +143,7 @@ pub(super) fn request(request: &wire::Request) -> Result<(), ApiError> {
                     || request.resume.is_some()
                     || request.worktree.is_some()
                     || request.mcp.is_some()
-                    || !request.attachments.is_empty()
+                    || !computer_files(&request.attachments)
                 {
                     return Err(ApiError::bad_request("cloud_task_runtime_binding_required"));
                 }
@@ -162,4 +162,32 @@ pub(super) fn request(request: &wire::Request) -> Result<(), ApiError> {
         return Err(ApiError::bad_request("cloud_task_control_cannot_wake"));
     }
     Ok(())
+}
+
+/// Files a run carries are paths already uploaded to the computer (the
+/// server never sees their bytes); the computer checks they are its uploads.
+fn computer_files(paths: &[String]) -> bool {
+    paths.len() <= zuse_protocol::cloud_assets::MAX_ASSETS
+        && paths.iter().all(|path| {
+            path.starts_with('/')
+                && path.len() <= 1024
+                && !path.chars().any(char::is_control)
+                && !path.split('/').any(|part| part == "..")
+        })
+}
+
+#[cfg(test)]
+mod computer_file_tests {
+    #[test]
+    fn a_run_may_carry_computer_upload_paths_but_nothing_else() {
+        assert!(super::computer_files(&[]));
+        assert!(super::computer_files(&[
+            "/home/zuse/.zuse-data/uploads/a/shot.png".into()
+        ]));
+        assert!(!super::computer_files(&["relative.png".into()]));
+        assert!(!super::computer_files(&[
+            "/home/zuse/../../etc/passwd".into()
+        ]));
+        assert!(!super::computer_files(&vec!["/u/a".to_owned(); 9]));
+    }
 }
