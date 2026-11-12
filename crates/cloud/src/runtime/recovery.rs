@@ -11,6 +11,9 @@ mod retirement;
 #[cfg(test)]
 mod retirement_tests;
 mod stages;
+pub(in crate::runtime) use stages::{
+    EFFECT_MAX_SUBMISSIONS, EFFECT_SETTLE_MS, EFFECT_WAIT_LIMIT_MS,
+};
 #[cfg(test)]
 mod stages_tests;
 use zeroize::Zeroizing;
@@ -177,6 +180,16 @@ pub trait RecoveryProvider: Send + Sync {
         } else {
             OperationState::Pending
         })
+    }
+    /// Where the capture helper launched for `operation` stands on the guest.
+    /// Adapters without a guest status read report it running; the upload
+    /// time limit still bounds it.
+    async fn capture_status(
+        &self,
+        _id: &str,
+        _operation: &str,
+    ) -> Result<CaptureStatus, ProviderError> {
+        Ok(CaptureStatus::Running)
     }
     async fn retire_receipt(&self, id: &str) -> Result<ProviderOperation, ProviderError> {
         self.retire(id).await?;
@@ -491,15 +504,53 @@ fn hash_bytes(bytes: &[u8]) -> String {
 fn quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
+/// The capture helper's state on the guest, read from its status directory.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CaptureStatus {
+    /// Its process is alive.
+    Running,
+    /// It published the archive (`uploaded`).
+    Uploaded,
+    /// It gave up (`failed`).
+    Failed,
+    /// Not running and no result: not started yet, or ended without one.
+    Idle,
+}
+/// Reads the helper's status directory `$1` as the guest task user.
+const CAPTURE_STATUS_SCRIPT: &str = r#"d="$1"; if [ -f "$d/uploaded" ]; then echo uploaded; elif [ -f "$d/failed" ]; then echo failed; elif [ -f "$d/pid" ] && read p <"$d/pid" && kill -0 "$p" 2>/dev/null; then echo running; else echo idle; fi"#;
+pub(super) fn capture_status_command(run_as: &str, status_root: &str, operation: &str) -> String {
+    format!(
+        "{run_as} sh -c {} sh {}",
+        quote(CAPTURE_STATUS_SCRIPT),
+        quote(&format!("{status_root}/{operation}"))
+    )
+}
+pub(super) fn capture_status(
+    result: &crate::providers::ExecResult,
+) -> Result<CaptureStatus, ProviderError> {
+    if result.exit_code != 0 {
+        return Err(ProviderError::Unavailable);
+    }
+    match std::str::from_utf8(&result.stdout).map(str::trim) {
+        Ok("running") => Ok(CaptureStatus::Running),
+        Ok("uploaded") => Ok(CaptureStatus::Uploaded),
+        Ok("failed") => Ok(CaptureStatus::Failed),
+        Ok("idle") => Ok(CaptureStatus::Idle),
+        _ => Err(ProviderError::InvalidResponse),
+    }
+}
+/// Launches one capture attempt. A previous attempt's `failed` marker is
+/// cleared so the status read reflects this attempt only.
 pub(super) fn capture_command(plan: &CapturePlan) -> (String, String) {
     let staged = format!("/tmp/zuse-recovery-{}", plan.operation_id);
     let directory = format!("/var/lib/zuse/recovery/{}", plan.operation_id);
     let command = format!(
-        "set -eu\nsudo -n install -d -o zuse -g zuse -m 700 {}\nsudo -n install -o zuse -g zuse -m 600 {} {}/config.json\nsudo -n rm -- {}\nsudo -n -u zuse /usr/local/lib/zuse/launch-rust-recovery {}",
+        "set -eu\nsudo -n install -d -o zuse -g zuse -m 700 {}\nsudo -n install -o zuse -g zuse -m 600 {} {}/config.json\nsudo -n rm -- {}\nsudo -n rm -f -- {}/failed\nsudo -n -u zuse /usr/local/lib/zuse/launch-rust-recovery {}",
         quote(&directory),
         quote(&staged),
         quote(&directory),
         quote(&staged),
+        quote(&directory),
         quote(&plan.operation_id)
     );
     (staged, command)
@@ -542,6 +593,15 @@ impl RecoveryProvider for crate::providers::boxd::Boxd {
             return Err(ProviderError::Unavailable);
         }
         Ok(())
+    }
+    async fn capture_status(
+        &self,
+        id: &str,
+        operation: &str,
+    ) -> Result<CaptureStatus, ProviderError> {
+        let command =
+            capture_status_command("sudo -n -u zuse env", "/var/lib/zuse/recovery", operation);
+        capture_status(&self.exec(id, &command).await?)
     }
     async fn pause(&self, id: &str) -> Result<(), ProviderError> {
         self.hibernate(id).await

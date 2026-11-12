@@ -68,6 +68,13 @@ impl Layout {
             Self::Home => "/home/prized/.zuse/lib/zuse-launch",
         }
     }
+    /// Where the recovery launcher keeps each operation's status files.
+    pub(crate) fn recovery_status_root(self) -> &'static str {
+        match self {
+            Self::Root => "/var/lib/zuse/recovery",
+            Self::Home => "/home/prized/.zuse/recovery",
+        }
+    }
     /// Recovery launcher with the environment its layout needs.
     pub(crate) fn recovery_launcher(self) -> &'static str {
         match self {

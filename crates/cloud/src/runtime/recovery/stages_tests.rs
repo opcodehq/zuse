@@ -1,5 +1,8 @@
 //! Reconciling a capture wake whose submission never got an answer.
-use super::stages::{EFFECT_MAX_SUBMISSIONS, EFFECT_SETTLE_MS, EFFECT_WAIT_LIMIT_MS};
+use super::stages::{
+    CAPTURE_LIMIT_MS, CAPTURE_START_GRACE_MS, EFFECT_MAX_SUBMISSIONS, EFFECT_SETTLE_MS,
+    EFFECT_WAIT_LIMIT_MS,
+};
 use super::*;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use std::sync::Mutex;
@@ -13,6 +16,8 @@ struct Source {
     wakes: Mutex<Vec<bool>>,
     wake_calls: AtomicUsize,
     captures: AtomicUsize,
+    /// What the guest reports about a launched capture helper.
+    status: Mutex<CaptureStatus>,
 }
 impl Source {
     fn new(state: MachineState, wakes: Vec<bool>) -> Self {
@@ -21,6 +26,7 @@ impl Source {
             wakes: Mutex::new(wakes),
             wake_calls: AtomicUsize::new(0),
             captures: AtomicUsize::new(0),
+            status: Mutex::new(CaptureStatus::Running),
         }
     }
 }
@@ -54,6 +60,14 @@ impl RecoveryProvider for Source {
         assert_eq!(plan.source_machine_id, "machine-bob");
         self.captures.fetch_add(1, Ordering::SeqCst);
         Ok(())
+    }
+    async fn capture_status(
+        &self,
+        id: &str,
+        operation: &str,
+    ) -> Result<CaptureStatus, ProviderError> {
+        assert_eq!((id, operation), ("machine-bob", "archive-original"));
+        Ok(*self.status.lock().unwrap())
     }
     async fn stop_capture(&self, _: &str, _: &str) -> Result<(), ProviderError> {
         panic!("capture is not cancelled")
@@ -313,4 +327,193 @@ async fn a_wake_stuck_between_states_stops_with_attention_after_the_wait_limit()
         .unwrap();
     assert_eq!(state, "failed");
     f.finish().await;
+}
+
+/// The source woke for capture earlier in this operation.
+fn woken() -> Value {
+    json!({"state":"completed","receipt":{"resourceId":"machine-bob","operationId":null,"desired":"running"},"requestId":"capture-wake","submissions":1})
+}
+impl Fixture {
+    async fn capture(&self) -> Value {
+        sqlx::query_scalar("SELECT provider_effects->'capture' FROM zuse_rust_recovery_operations")
+            .fetch_one(&self.pool)
+            .await
+            .unwrap()
+    }
+    /// Pretend the capture helper was launched `ms` ago.
+    async fn launched_ago(&self, ms: i64) {
+        sqlx::query("UPDATE zuse_rust_recovery_operations SET provider_effects=jsonb_set(provider_effects,'{capture,launchedAtMs}',to_jsonb($1::bigint))").bind(clock_ms() - ms).execute(&self.pool).await.unwrap();
+    }
+    async fn job(&self) -> (String, Option<String>) {
+        sqlx::query_as("SELECT state,last_error_code FROM zuse_rust_jobs")
+            .fetch_one(&self.pool)
+            .await
+            .unwrap()
+    }
+    async fn status_code(&self) -> String {
+        sqlx::query_scalar(
+            "SELECT status_code FROM api_cloud_workspaces WHERE workspace_id='ws-bob'",
+        )
+        .fetch_one(&self.pool)
+        .await
+        .unwrap()
+    }
+    /// What Update computer Retry does to the recovery job.
+    async fn retry(&self) {
+        sqlx::query("UPDATE zuse_rust_jobs SET state='pending',attempts=0,last_error_code=NULL")
+            .execute(&self.pool)
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires explicit isolated localhost PostgreSQL"]
+async fn capture_is_launched_once_and_then_only_polled() {
+    let f = Fixture::start(woken()).await;
+    let source = Source::new(MachineState::Running, vec![]);
+    for _ in 0..5 {
+        f.pass(&source).await.unwrap();
+    }
+    assert_eq!(
+        source.captures.load(Ordering::SeqCst),
+        1,
+        "relaunching would touch the guest data directory under the capture"
+    );
+    let capture = f.capture().await;
+    assert_eq!(capture["state"], "launched");
+    assert_eq!(capture["attempt"], 1);
+    // A published archive keeps waiting for the manifest to advance the phase.
+    *source.status.lock().unwrap() = CaptureStatus::Uploaded;
+    f.pass(&source).await.unwrap();
+    // Not running and no result yet, inside the start grace: still waiting.
+    *source.status.lock().unwrap() = CaptureStatus::Idle;
+    f.pass(&source).await.unwrap();
+    assert_eq!(source.captures.load(Ordering::SeqCst), 1);
+    assert_eq!(f.job().await.0, "pending");
+    f.finish().await;
+}
+
+#[tokio::test]
+#[ignore = "requires explicit isolated localhost PostgreSQL"]
+async fn a_failed_capture_helper_needs_attention_and_retry_launches_a_fresh_attempt() {
+    let f = Fixture::start(woken()).await;
+    let source = Source::new(MachineState::Running, vec![]);
+    f.pass(&source).await.unwrap();
+    *source.status.lock().unwrap() = CaptureStatus::Failed;
+    assert_eq!(
+        f.pass(&source).await.unwrap_err().code,
+        "archive-capture-failed"
+    );
+    assert_eq!(
+        f.job().await,
+        ("failed".into(), Some("archive-capture-failed".into())),
+        "the job stops instead of polling a dead helper"
+    );
+    assert_eq!(f.status_code().await, "archive-capture-failed");
+    assert_eq!(f.capture().await["state"], "ended");
+    assert_eq!(source.captures.load(Ordering::SeqCst), 1);
+    f.retry().await;
+    *source.status.lock().unwrap() = CaptureStatus::Running;
+    f.pass(&source).await.unwrap();
+    assert_eq!(source.captures.load(Ordering::SeqCst), 2);
+    let capture = f.capture().await;
+    assert_eq!(capture["state"], "launched");
+    assert_eq!(capture["attempt"], 2);
+    f.finish().await;
+}
+
+#[tokio::test]
+#[ignore = "requires explicit isolated localhost PostgreSQL"]
+async fn a_helper_that_never_starts_or_never_finishes_is_bounded() {
+    let f = Fixture::start(woken()).await;
+    let source = Source::new(MachineState::Running, vec![]);
+    f.pass(&source).await.unwrap();
+    *source.status.lock().unwrap() = CaptureStatus::Idle;
+    f.launched_ago(CAPTURE_START_GRACE_MS + 1).await;
+    assert_eq!(
+        f.pass(&source).await.unwrap_err().code,
+        "archive-capture-failed"
+    );
+    f.retry().await;
+    *source.status.lock().unwrap() = CaptureStatus::Running;
+    f.pass(&source).await.unwrap();
+    assert_eq!(source.captures.load(Ordering::SeqCst), 2);
+    f.launched_ago(CAPTURE_LIMIT_MS + 1).await;
+    assert_eq!(
+        f.pass(&source).await.unwrap_err().code,
+        "archive-capture-timeout"
+    );
+    assert_eq!(
+        f.job().await,
+        ("failed".into(), Some("archive-capture-timeout".into()))
+    );
+    assert_eq!(f.status_code().await, "archive-capture-timeout");
+    assert_eq!(source.captures.load(Ordering::SeqCst), 2);
+    f.finish().await;
+}
+
+#[tokio::test]
+#[ignore = "requires explicit isolated localhost PostgreSQL"]
+async fn a_launch_renews_a_capability_that_would_expire_during_the_upload() {
+    let f = Fixture::start(woken()).await;
+    let soon = clock_ms() + 5 * 60_000;
+    sqlx::query("UPDATE zuse_rust_recovery_operations SET expires_at=$1")
+        .bind(soon)
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE api_cloud_workspaces SET request_config=jsonb_set(request_config,'{recoveryArchive,expiresAtMs}',to_jsonb($1::bigint))").bind(soon).execute(&f.pool).await.unwrap();
+    let source = Source::new(MachineState::Running, vec![]);
+    f.pass(&source).await.unwrap();
+    let expires: i64 = sqlx::query_scalar("SELECT expires_at FROM zuse_rust_recovery_operations")
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    assert!(expires >= clock_ms() + CAPTURE_LIMIT_MS);
+    assert_eq!(source.captures.load(Ordering::SeqCst), 1);
+    f.finish().await;
+}
+
+#[test]
+fn guest_capture_status_reads_the_helpers_status_directory() {
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().join("archive-original");
+    std::fs::create_dir(&directory).unwrap();
+    let read = || {
+        let command =
+            capture_status_command("env", root.path().to_str().unwrap(), "archive-original");
+        let output = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(&command)
+            .output()
+            .unwrap();
+        capture_status(&crate::providers::ExecResult {
+            stdout: output.stdout,
+            stderr: output.stderr,
+            exit_code: output.status.code().unwrap_or(-1),
+        })
+        .unwrap()
+    };
+    assert_eq!(read(), CaptureStatus::Idle);
+    std::fs::write(directory.join("pid"), "999999999\n").unwrap();
+    assert_eq!(
+        read(),
+        CaptureStatus::Idle,
+        "a stale pid is not a live helper"
+    );
+    std::fs::write(directory.join("pid"), format!("{}\n", std::process::id())).unwrap();
+    assert_eq!(read(), CaptureStatus::Running);
+    std::fs::write(directory.join("failed"), "archive-upload-failed\n").unwrap();
+    assert_eq!(read(), CaptureStatus::Failed);
+    std::fs::write(directory.join("uploaded"), "workspace_archive_uploaded\n").unwrap();
+    assert_eq!(read(), CaptureStatus::Uploaded);
+    assert!(
+        capture_status(&crate::providers::ExecResult {
+            stdout: b"running\n".to_vec(),
+            stderr: vec![],
+            exit_code: 1,
+        })
+        .is_err()
+    );
 }
