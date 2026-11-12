@@ -110,6 +110,7 @@ jobs:
       - run: python3 infra/cloud/tests/github-app-check.py
       - run: python3 infra/cloud/tests/launch-runtime.py
       - run: python3 infra/cloud/tests/runtime-supervisor.py
+      - run: python3 infra/cloud/tests/runtime-update.py
       - run: python3 infra/cloud/tests/runtime-repair.py
       - run: python3 infra/cloud/tests/runtime-recreation.py
       - run: python3 infra/cloud/tests/recovery-launcher.py

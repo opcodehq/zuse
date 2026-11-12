@@ -34,6 +34,8 @@ export async function verifyBundle(directory) {
     'launch-runtime.sh','launch-recovery.sh','managed-base-install.sh','runtime-supervisor.py','runtime-repair.py','runtime-recreation.py','prepare-plan.json']);
   if (manifest.managedBaseDerivationVersion===1) allowed.add('managed-base-derive.py');
   if (manifest.managedBaseFreshBootVersion===1) allowed.add('managed-base-fresh-boot.py');
+  if (manifest.managedBaseRuntimeUpdateVersion!==undefined&&(manifest.managedBaseRuntimeUpdateVersion!==1||manifest.managedBaseFreshBootVersion!==1))throw new Error('UnsupportedRuntimeUpdateVersion');
+  if (manifest.managedBaseRuntimeUpdateVersion===1) allowed.add('runtime-update.py');
   if(manifest.managedBaseFreshBootMode!==undefined&&(manifest.managedBaseFreshBootMode!=='post-hydration-first-start-v1'||manifest.managedBaseFreshBootVersion!==1))throw new Error('UnsupportedFreshBootMode');
   if (manifest.managedBaseFreshBootVersion!==undefined&&manifest.managedBaseFreshBootVersion!==1)throw new Error('UnsupportedFreshBootVersion');
   if (manifest.managedBaseDerivationVersion!==undefined&&manifest.managedBaseDerivationVersion!==1)throw new Error('UnsupportedDerivationVersion');

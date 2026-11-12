@@ -66,5 +66,11 @@ PATH line comes first, ahead of the early return for non-interactive shells.
   `/usr/bin/gh`, `/opt/zuse/bin/gh` and uid 10001. That means `R/bin/gh` runs
   the real `gh` directly, without brokered auth, and the image manifest has no
   `githubCli` entry.
+- **Runtime updates.** There is no root helper (`/usr/local/libexec/zuse/runtime-update.py`
+  is absent), so the runtime swaps `R/bin/zuse-cloud-runtime` itself by
+  `rename()` (the task user owns `R/bin`) and execs it in place. The
+  supervisor and `zuse-launch` always start `$ZUSE_RUNTIME_BINARY` by path, so
+  a later cold launch picks up the swapped file. No launch step checks the
+  runtime SHA on this layout.
 - **Agent warm-up.** The supervisor's `warm_agent` only looks under
   `/opt/zuse/harnesses`, so it does nothing on this layout.

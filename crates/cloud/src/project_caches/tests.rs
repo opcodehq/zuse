@@ -200,6 +200,7 @@ async fn preparation_is_project_scoped_reconciled_and_cache_hits_require_certifi
                     service_sha256: "c".repeat(64),
                     manifest_sha256: "d".repeat(64),
                     helper_sha256: "e".repeat(64),
+                    runtime_update_helper_sha256: None,
                 },
             ),
             source_bundle_sha256: "e".repeat(64),

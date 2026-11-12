@@ -147,6 +147,26 @@ class Tests(unittest.TestCase):
  def test_prepared_cache_payload_is_preserved(self):
   p=self.layout.at('/opt/zuse/project-caches/prepared/dependency');p.parent.mkdir(parents=True);p.write_text('exact-dependency')
   self.boot();self.assertEqual(p.read_text(),'exact-dependency')
+ def test_optional_runtime_update_helper_pin_is_verified_only_when_given(self):
+  body=b'synthetic pinned runtime update helper';p=self.layout.at(m.UPDATE_HELPER);p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(body);p.chmod(0o555)
+  request=copy.deepcopy(self.request);request['imagePins']['runtimeUpdateHelperSha256']='0'*64
+  with self.assertRaisesRegex(m.Rejected,'hash_mismatch'):self.boot(request)
+  p.unlink()
+  request['imagePins']['runtimeUpdateHelperSha256']=m.digest(body)
+  with self.assertRaises((m.Rejected,FileNotFoundError)):self.boot(request)
+  p.write_bytes(body);p.chmod(0o555)
+  self.assertEqual(self.boot(request)['imagePins'],request['imagePins'])
+  for extra in ('otherSha256',):
+   bad=copy.deepcopy(request);bad['imagePins'][extra]='a'*64
+   with self.assertRaisesRegex(m.Rejected,'pins_invalid'):self.boot(bad)
+ def test_swapped_runtime_is_accepted_when_its_sha_is_the_pin(self):
+  # An in-place update installs a new regular root-owned file by rename();
+  # the server then pins that computer's runtime release, not the base's.
+  runtime=self.layout.at('/usr/local/bin/zuse-cloud-runtime');swapped=runtime.with_name('.swap')
+  swapped.write_bytes(b'swapped signed runtime release');swapped.chmod(0o755);os.rename(swapped,runtime)
+  with self.assertRaisesRegex(m.Rejected,'hash_mismatch'):self.boot()
+  request=copy.deepcopy(self.request);request['imagePins']['runtimeSha256']=m.digest(b'swapped signed runtime release')
+  self.assertEqual(self.boot(request)['status'],'ready')
  def test_request_whitelist_rejects_task_resume_secrets_and_wrong_types(self):
   for mutation in [dict(purpose='retained'),dict(provider='other'),dict(generation=True),dict(generation=0),dict(bootToken='must-not-be-accepted'),dict(sourceMachineId='../other')]:
    with self.subTest(mutation=list(mutation)),self.assertRaises(m.Rejected):self.boot({**self.request,**mutation})

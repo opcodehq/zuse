@@ -15,6 +15,12 @@ pub struct ImagePins {
     /// SHA of the actual installed file, not normalized JSON from the registry.
     pub manifest_sha256: String,
     pub helper_sha256: String,
+    /// Root runtime swap helper (`runtime-update.py`). Absent on bases built
+    /// before in-place runtime updates; verified by fresh boot when present.
+    /// Never serialized when absent, so older bases' request digests and their
+    /// installed fresh-boot helpers (which accept exactly five pins) are unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_update_helper_sha256: Option<String>,
 }
 fn hash(v: &str) -> bool {
     v.len() == 64
@@ -32,6 +38,10 @@ impl ImagePins {
         ]
         .into_iter()
         .all(|s| hash(s))
+            && self
+                .runtime_update_helper_sha256
+                .as_deref()
+                .is_none_or(hash)
     }
 }
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -44,8 +54,22 @@ pub struct InitialRuntimeBootstrap {
     pub service_sha256: String,
     pub manifest_sha256: String,
     pub helper_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_update_helper_sha256: Option<String>,
+}
+/// The runtime this computer serves now, when it differs from its base's
+/// initial runtime: `request_config.runtimeRelease.sha256`, recorded by the
+/// server only after a signed, committed in-place update. `None` means the
+/// computer still runs the base runtime.
+pub fn computer_runtime_sha256(request_config: &Value) -> Option<&str> {
+    request_config
+        .get("runtimeRelease")
+        .and_then(|release| release.get("sha256"))
+        .and_then(Value::as_str)
+        .filter(|sha| hash(sha))
 }
 impl InitialRuntimeBootstrap {
+    /// The base's own pins: the image exactly as published.
     pub fn pins(&self) -> ImagePins {
         ImagePins {
             runtime_sha256: self.runtime_sha256.clone(),
@@ -53,7 +77,22 @@ impl InitialRuntimeBootstrap {
             service_sha256: self.service_sha256.clone(),
             manifest_sha256: self.manifest_sha256.clone(),
             helper_sha256: self.helper_sha256.clone(),
+            runtime_update_helper_sha256: self.runtime_update_helper_sha256.clone(),
         }
+    }
+    /// Pins for verifying one computer's disk. A fresh machine (allocation,
+    /// restore, cache preparation, publication) is the base image, so its
+    /// runtime is the base runtime. A retained disk keeps whatever runtime was
+    /// swapped in place, so retained resume expects the computer's runtime
+    /// release when one was committed. Every other pin stays the base's.
+    pub fn pins_for(&self, purpose: &Purpose, request_config: &Value) -> ImagePins {
+        let mut pins = self.pins();
+        if *purpose == Purpose::RetainedResume
+            && let Some(sha) = computer_runtime_sha256(request_config)
+        {
+            pins.runtime_sha256 = sha.to_owned();
+        }
+        pins
     }
     pub fn valid(&self, provider: ProviderId) -> bool {
         matches!(
@@ -63,6 +102,10 @@ impl InitialRuntimeBootstrap {
         ) && self.version == 1
             && self.pins().valid()
     }
+    /// Base registration only: the installed manifest is base sanitation
+    /// evidence, so it must name the base's INITIAL runtime. A computer that
+    /// later swapped its runtime is verified by [`Self::pins_for`] instead and
+    /// never re-runs this check.
     pub fn validate(
         &self,
         provider: ProviderId,
@@ -248,6 +291,7 @@ mod tests {
             service_sha256: "c".repeat(64),
             manifest_sha256: "d".repeat(64),
             helper_sha256: "e".repeat(64),
+            runtime_update_helper_sha256: None,
         }
     }
     fn request() -> Request {
@@ -262,6 +306,123 @@ mod tests {
             source_machine_id: "original-machine".into(),
             image_pins: spec().pins(),
         }
+    }
+    fn python_digest(request: &Request) -> String {
+        use std::io::Write;
+        let helper = include_str!("../../../../infra/cloud/managed-base-fresh-boot.py");
+        let code = format!(
+            "import json,sys\nn={{'__name__':'wire_validation'}}\nexec(compile({},'fresh-boot.py','exec'),n)\nv=n['validated'](json.load(sys.stdin))\nprint(n['digest'](n['canonical'](v)))",
+            serde_json::to_string(helper).unwrap()
+        );
+        let mut child = std::process::Command::new("/usr/bin/python3")
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .args(["-I", "-B", "-c", &code])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(&serde_json::to_vec(request).unwrap())
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success());
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    }
+    #[test]
+    fn runtime_update_helper_pin_is_optional_and_unchanged_when_absent() {
+        // Old bases: five pins on the wire, identical digest and serialization.
+        let old = request();
+        let wire = serde_json::to_value(&old).unwrap();
+        assert!(wire["imagePins"].get("runtimeUpdateHelperSha256").is_none());
+        assert_eq!(wire["imagePins"].as_object().unwrap().len(), 5);
+        let parsed: InitialRuntimeBootstrap =
+            serde_json::from_value(serde_json::to_value(spec()).unwrap()).unwrap();
+        assert!(parsed.runtime_update_helper_sha256.is_none());
+        // New bases: six pins, verified by the bundled fresh-boot helper.
+        let mut with_helper = spec();
+        with_helper.runtime_update_helper_sha256 = Some("f".repeat(64));
+        assert!(with_helper.valid(ProviderId::Boxd));
+        let mut request = request();
+        request.image_pins = with_helper.pins();
+        assert!(request.valid());
+        assert_eq!(
+            serde_json::to_value(&request).unwrap()["imagePins"]["runtimeUpdateHelperSha256"],
+            "f".repeat(64)
+        );
+        assert_eq!(python_digest(&request), request.digest().unwrap());
+        assert_ne!(request.digest().unwrap(), old.digest().unwrap());
+        with_helper.runtime_update_helper_sha256 = Some("not-a-hash".into());
+        assert!(!with_helper.valid(ProviderId::Boxd));
+        request.image_pins = with_helper.pins();
+        assert!(!request.valid());
+        assert!(request.command().is_err());
+    }
+    #[test]
+    fn retained_resume_expects_the_computers_runtime_release_and_fresh_boots_the_base() {
+        let base = spec();
+        let swapped = "9".repeat(64);
+        let config = json!({"runtimeRelease":{"sha256":swapped,"version":"2.0.0","previousSha256":"a".repeat(64),"appliedAt":1}});
+        let retained = base.pins_for(&Purpose::RetainedResume, &config);
+        assert_eq!(retained.runtime_sha256, swapped);
+        // Every other pin stays the base's.
+        assert!(
+            ImagePins {
+                runtime_sha256: base.runtime_sha256.clone(),
+                ..retained.clone()
+            } == base.pins()
+        );
+        // A fresh machine is the base image, whatever the computer ran before.
+        for purpose in [
+            Purpose::InitialAllocation,
+            Purpose::InitialRestore,
+            Purpose::CachePreparation,
+            Purpose::PublicationProof,
+        ] {
+            assert!(base.pins_for(&purpose, &config) == base.pins());
+        }
+        // No committed release, or a malformed one, keeps the base runtime.
+        for config in [
+            json!({}),
+            json!({"runtimeRelease":null}),
+            json!({"runtimeRelease":{"sha256":"ABC"}}),
+            json!({"runtimeRelease":{"sha256":"A".repeat(64)}}),
+            json!({"runtimeRelease":{"sha256":7}}),
+        ] {
+            assert!(base.pins_for(&Purpose::RetainedResume, &config) == base.pins());
+        }
+        let mut request = request();
+        request.provider = ProviderId::Boat;
+        request.purpose = Purpose::RetainedResume;
+        request.image_pins = retained;
+        assert!(request.valid());
+        assert_eq!(python_digest(&request), request.digest().unwrap());
+        // The installed manifest stays base evidence: registration still
+        // requires it to name the base's initial runtime, not the swapped one.
+        let manifest_runtime = base.runtime_sha256.clone();
+        assert_ne!(manifest_runtime, swapped);
+    }
+    #[test]
+    fn install_script_ships_the_contract_release_signing_key() {
+        let install = include_str!("../../../../infra/cloud/managed-base-install.sh");
+        let key = zuse_protocol::cloud_runtime_updates::RELEASE_SIGNING_PUBLIC_KEY;
+        assert!(install.contains(&format!(
+            "printf '%s\\n' '{key}' > /usr/local/share/zuse/.runtime-release-signing.pub.next"
+        )));
+        assert!(install.contains("PathExists=/home/zuse/.zuse-data/runtime-updates/request.json"));
+        assert!(install.contains(
+            "ExecStart=/usr/bin/python3 -I -B /usr/local/libexec/zuse/runtime-update.py run"
+        ));
+        assert!(install.contains(
+            "ExecStart=/usr/bin/python3 -I -B /usr/local/libexec/zuse/runtime-update.py recover"
+        ));
+        let helper = include_str!("../../../../infra/cloud/runtime-update.py");
+        assert!(helper.contains("/usr/local/share/zuse/runtime-release-signing.pub"));
+        assert!(helper.contains("DOMAIN = b'zuse-runtime-release-v1\\n'"));
     }
     #[test]
     fn boat_bootstrap_and_retained_resume_have_separate_explicit_authority() {
