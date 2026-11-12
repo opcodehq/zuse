@@ -11,6 +11,8 @@ mod retirement;
 #[cfg(test)]
 mod retirement_tests;
 mod stages;
+#[cfg(test)]
+mod stages_tests;
 use zeroize::Zeroizing;
 use zuse_cloud_runtime::recovery::{Binding, RustStorage};
 use zuse_protocol::cloud::{ArchiveManifest, ArchivePhase, RecoveryArchive};

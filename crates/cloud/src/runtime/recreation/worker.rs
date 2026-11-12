@@ -16,7 +16,7 @@ impl RuntimeControl {
         }
         Ok(!operations.is_empty())
     }
-    pub(super) async fn recreation_attention(
+    pub(in crate::runtime) async fn recreation_attention(
         &self,
         operation: &str,
         error: &str,
