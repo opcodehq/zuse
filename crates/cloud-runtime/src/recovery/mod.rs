@@ -403,12 +403,19 @@ impl Recovery {
         ensure!(bytes.len() <= 1024 * 1024, "recovery_manifest_too_large");
         let manifest: ArchiveManifest = serde_json::from_slice(&bytes)?;
         self.binding.check(&manifest)?;
+        // The downloaded archive is at most one full chunk per manifest entry.
+        files::ensure_space(
+            files::available(&self.layout.work)?,
+            (manifest.chunks.len() as u64).saturating_mul(CHUNK as u64),
+        )?;
         // Never substitute an earlier local verification for reading every remote chunk again.
         let downloaded = self
             .download(objects, &manifest, "remote-verification.tar.gz", false)
             .await?;
         let verify = self.layout.work.join("remote-verification");
-        files::extract(&downloaded, &verify)?;
+        // Every member is still validated; only what validation reads is
+        // written out (repositories can be most of a computer's disk).
+        files::extract_roots(&downloaded, &verify, Some(&files::VERIFIED_ROOTS))?;
         files::validate_stage(&verify, &self.binding)?;
         write(
             &self.layout.work.join("verified"),

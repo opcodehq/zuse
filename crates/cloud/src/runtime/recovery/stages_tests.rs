@@ -16,6 +16,7 @@ struct Source {
     wakes: Mutex<Vec<bool>>,
     wake_calls: AtomicUsize,
     captures: AtomicUsize,
+    pauses: AtomicUsize,
     /// What the guest reports about a launched capture helper.
     status: Mutex<CaptureStatus>,
 }
@@ -26,6 +27,7 @@ impl Source {
             wakes: Mutex::new(wakes),
             wake_calls: AtomicUsize::new(0),
             captures: AtomicUsize::new(0),
+            pauses: AtomicUsize::new(0),
             status: Mutex::new(CaptureStatus::Running),
         }
     }
@@ -72,8 +74,11 @@ impl RecoveryProvider for Source {
     async fn stop_capture(&self, _: &str, _: &str) -> Result<(), ProviderError> {
         panic!("capture is not cancelled")
     }
-    async fn pause(&self, _: &str) -> Result<(), ProviderError> {
-        panic!("upload does not pause")
+    async fn pause(&self, id: &str) -> Result<(), ProviderError> {
+        assert_eq!(id, "machine-bob");
+        self.pauses.fetch_add(1, Ordering::SeqCst);
+        *self.state.lock().unwrap() = MachineState::Paused;
+        Ok(())
     }
     async fn retire(&self, _: &str) -> Result<(), ProviderError> {
         panic!("upload does not retire")
@@ -516,4 +521,166 @@ fn guest_capture_status_reads_the_helpers_status_directory() {
         })
         .is_err()
     );
+}
+
+impl Fixture {
+    /// The capture uploaded and the operation is verifying.
+    async fn verifying(&self, effects: Value) {
+        let manifest = json!({"version":1,"operationId":"archive-original","workspaceId":"ws-bob","chatId":"chat-bob","sessionId":"session-bob","chunks":["a".repeat(64)],"archiveSha256":"b".repeat(64)});
+        sqlx::query("UPDATE zuse_rust_recovery_operations SET phase='verifying',helper_stopped=true,provider_effects=$1,manifest=$2")
+            .bind(effects)
+            .bind(&manifest)
+            .execute(&self.pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE api_cloud_workspaces SET request_config=jsonb_set(jsonb_set(request_config,'{recoveryArchive,phase}','\"verifying\"'),'{recoveryArchive,manifest}',$1) WHERE workspace_id='ws-bob'").bind(&manifest).execute(&self.pool).await.unwrap();
+    }
+    async fn claim(&self) -> jobs::Job {
+        sqlx::query("UPDATE zuse_rust_jobs SET due_at=0,lease_expires_at=0 WHERE state<>'failed'")
+            .execute(&self.pool)
+            .await
+            .unwrap();
+        jobs::claim(&self.pool, JOB_KIND, "workspace", clock_ms(), LEASE)
+            .await
+            .unwrap()
+            .expect("recovery job is claimable")
+    }
+    async fn verification(&self) -> Value {
+        sqlx::query_scalar(
+            "SELECT provider_effects->'verification' FROM zuse_rust_recovery_operations",
+        )
+        .fetch_one(&self.pool)
+        .await
+        .unwrap()
+    }
+}
+
+#[test]
+fn verification_failures_are_named_and_classified() {
+    let full = anyhow::Error::from(std::io::Error::from(std::io::ErrorKind::StorageFull));
+    assert_eq!(verification_reason(&full), "recovery_scratch_insufficient");
+    assert_eq!(
+        verification_reason(&anyhow::anyhow!("recovery_chunk_authentication_failed")),
+        "recovery_chunk_authentication_failed"
+    );
+    assert_eq!(
+        verification_reason(&anyhow::anyhow!("free text from /some/path")),
+        "unclassified"
+    );
+    assert_eq!(
+        classify_verification("recovery_scratch_insufficient"),
+        VerificationFailure::ScratchFull
+    );
+    assert_eq!(
+        classify_verification("archive_object_unavailable"),
+        VerificationFailure::Transient
+    );
+    assert_eq!(
+        classify_verification("recovery_archive_credentials_forbidden"),
+        VerificationFailure::Rejected
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires explicit isolated localhost PostgreSQL"]
+async fn verification_failures_are_bounded_and_surfaced_with_their_reason() {
+    for (reason, code) in [
+        (
+            "recovery_scratch_insufficient",
+            "archive-verification-scratch-full",
+        ),
+        (
+            "recovery_archive_checksum_mismatch",
+            "archive-verification-rejected",
+        ),
+    ] {
+        let f = Fixture::start(woken()).await;
+        f.verifying(json!({"wake":woken()})).await;
+        let job = f.claim().await;
+        assert_eq!(
+            f.control
+                .recovery_verification_failed(&job, reason)
+                .await
+                .unwrap()
+                .code,
+            code
+        );
+        assert_eq!(f.job().await, ("failed".into(), Some(code.into())));
+        assert_eq!(f.status_code().await, code);
+        assert_eq!(f.verification().await["lastReason"], reason);
+        f.finish().await;
+    }
+    // A transient failure is retried, then needs attention.
+    let f = Fixture::start(woken()).await;
+    f.verifying(json!({"wake":woken()})).await;
+    for attempt in 1..VERIFICATION_MAX_ATTEMPTS {
+        let job = f.claim().await;
+        assert_eq!(
+            f.control
+                .recovery_verification_failed(&job, "archive_object_unavailable")
+                .await
+                .unwrap()
+                .code,
+            "archive-verification-unavailable"
+        );
+        assert_eq!(f.verification().await["attempts"], attempt);
+        // The worker's own retry bookkeeping.
+        sqlx::query("UPDATE zuse_rust_jobs SET state='pending',lease_token=NULL")
+            .execute(&f.pool)
+            .await
+            .unwrap();
+    }
+    let job = f.claim().await;
+    assert_eq!(
+        f.control
+            .recovery_verification_failed(&job, "archive_object_unavailable")
+            .await
+            .unwrap()
+            .code,
+        "archive-verification-failed"
+    );
+    assert_eq!(f.job().await.0, "failed");
+    assert_eq!(
+        f.verification().await["attempts"],
+        0,
+        "Retry starts a fresh count"
+    );
+    f.finish().await;
+}
+
+#[tokio::test]
+#[ignore = "requires explicit isolated localhost PostgreSQL"]
+async fn a_source_woken_after_its_pause_completed_is_paused_again() {
+    let f = Fixture::start(woken()).await;
+    let paused = json!({"state":"completed","receipt":{"resourceId":"machine-bob","operationId":null,"desired":"sleeping"},"requestId":"first-pause","submissions":1});
+    f.verifying(json!({"wake":woken(),"pause":paused})).await;
+    let source = Source::new(MachineState::Running, vec![]);
+    let job = f.claim().await;
+    assert!(
+        !f.control
+            .recovery_prepare_verification(&source, &job)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        source.pauses.load(Ordering::SeqCst),
+        1,
+        "a spent pause must not leave the stage waiting forever"
+    );
+    let pause: Value =
+        sqlx::query_scalar("SELECT provider_effects->'pause' FROM zuse_rust_recovery_operations")
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
+    assert_ne!(pause["requestId"], "first-pause");
+    // Asleep again: verification may proceed once the new pause completes.
+    let job = f.claim().await;
+    assert!(
+        f.control
+            .recovery_prepare_verification(&source, &job)
+            .await
+            .unwrap()
+    );
+    assert_eq!(source.pauses.load(Ordering::SeqCst), 1);
+    f.finish().await;
 }

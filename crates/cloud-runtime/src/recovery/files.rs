@@ -375,9 +375,45 @@ pub(super) fn capture(layout: &Layout, path: &Path) -> Result<()> {
     File::open(&layout.work)?.sync_all()?;
     Ok(())
 }
+/// Headroom kept free on a scratch filesystem beyond what an operation needs.
+const SCRATCH_MARGIN: u64 = 64 * 1024 * 1024;
+/// Bytes available to this process on the filesystem holding `path`.
+pub(super) fn available(path: &Path) -> Result<u64> {
+    let path = std::ffi::CString::new(path.as_os_str().as_bytes())?;
+    // SAFETY: statvfs only writes the zeroed struct we pass it.
+    let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
+    ensure!(
+        unsafe { libc::statvfs(path.as_ptr(), &mut stat) } == 0,
+        "recovery_scratch_unavailable"
+    );
+    Ok((stat.f_bavail as u64).saturating_mul(stat.f_frsize as u64))
+}
+/// Refuse to start writing `needed` bytes that cannot fit: a full scratch
+/// disk is a capacity problem to report, not a corrupt archive.
+pub(super) fn ensure_space(available: u64, needed: u64) -> Result<()> {
+    ensure!(
+        available >= needed.saturating_add(SCRATCH_MARGIN),
+        "recovery_scratch_insufficient"
+    );
+    Ok(())
+}
 pub(super) fn extract(archive: &Path, stage: &Path) -> Result<()> {
+    extract_roots(archive, stage, None)
+}
+/// Validate every member of `archive`, then unpack only the roots in `only`
+/// (all of them when `None`). Verification needs only what it inspects.
+pub(super) fn extract_roots(archive: &Path, stage: &Path, only: Option<&[&str]>) -> Result<()> {
+    let unpacked = |path: &Path| {
+        only.is_none_or(|roots| {
+            path.components()
+                .next()
+                .and_then(|c| c.as_os_str().to_str())
+                .is_some_and(|root| roots.contains(&root))
+        })
+    };
     // Validate every logical member before any extraction; a symlink cannot be an extraction parent.
     let mut kinds = BTreeMap::new();
+    let mut needed = 0u64;
     let mut tar = Archive::new(GzDecoder::new(File::open(archive)?));
     for entry in tar.entries()? {
         let entry = entry?;
@@ -407,6 +443,9 @@ pub(super) fn extract(archive: &Path, stage: &Path) -> Result<()> {
                 .ok_or_else(|| anyhow::anyhow!("recovery_archive_link_invalid"))?;
             ensure!(link_inside(rel, &target), "recovery_archive_link_invalid");
         }
+        if unpacked(&path) {
+            needed = needed.saturating_add(entry.header().size()?);
+        }
         ensure!(
             kinds.insert(path, kind).is_none(),
             "recovery_archive_duplicate_path"
@@ -433,11 +472,16 @@ pub(super) fn extract(archive: &Path, stage: &Path) -> Result<()> {
         fs::remove_dir_all(stage)?;
     }
     private_directory(stage)?;
+    ensure_space(available(stage)?, needed)?;
     let mut tar = Archive::new(GzDecoder::new(File::open(archive)?));
     tar.set_preserve_permissions(false);
     tar.set_preserve_ownerships(false);
     for entry in tar.entries()? {
-        ensure!(entry?.unpack_in(stage)?, "recovery_archive_path_invalid");
+        let mut entry = entry?;
+        if !unpacked(&entry.path()?) {
+            continue;
+        }
+        ensure!(entry.unpack_in(stage)?, "recovery_archive_path_invalid");
     }
     sync_tree(stage)?;
     Ok(())
@@ -551,6 +595,8 @@ fn check_databases(path: &Path, skip: Option<&Path>) -> Result<()> {
     }
     Ok(())
 }
+/// The roots `validate_stage` reads.
+pub(super) const VERIFIED_ROOTS: [&str; 2] = ["data", "codex"];
 pub(super) fn validate_stage(stage: &Path, binding: &Binding) -> Result<()> {
     validate(&stage.join("data"), binding)?;
     let codex = stage.join("codex");

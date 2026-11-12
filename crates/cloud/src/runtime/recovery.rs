@@ -634,6 +634,55 @@ impl zuse_cloud_runtime::recovery::Objects for Reader {
         anyhow::bail!("archive_verifier_read_only")
     }
 }
+/// A short, log-safe reason for a failed verification: the verifier's own
+/// error code, or the I/O error kind (a full scratch disk is the common one).
+pub(super) fn verification_reason(error: &anyhow::Error) -> String {
+    for cause in error.chain() {
+        if let Some(io) = cause.downcast_ref::<std::io::Error>() {
+            return if io.kind() == std::io::ErrorKind::StorageFull {
+                "recovery_scratch_insufficient".into()
+            } else {
+                format!("io_{:?}", io.kind()).to_ascii_lowercase()
+            };
+        }
+    }
+    let message = error.to_string();
+    if !message.is_empty()
+        && message.len() <= 64
+        && message
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+    {
+        message
+    } else {
+        "unclassified".into()
+    }
+}
+/// How a failed verification is handled.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum VerificationFailure {
+    /// Not enough scratch space where verification runs: needs capacity.
+    ScratchFull,
+    /// Archive storage or this job's fence was briefly unavailable: retry.
+    Transient,
+    /// The archive itself does not verify; retrying cannot change that.
+    Rejected,
+}
+pub(super) fn classify_verification(reason: &str) -> VerificationFailure {
+    match reason {
+        "recovery_scratch_insufficient" | "recovery_scratch_unavailable" => {
+            VerificationFailure::ScratchFull
+        }
+        "archive_object_unavailable"
+        | "archive_verification_fenced"
+        | "verifier_panicked"
+        | "io_interrupted"
+        | "io_timedout" => VerificationFailure::Transient,
+        _ => VerificationFailure::Rejected,
+    }
+}
+/// Transient verification failures allowed before the operation asks for attention.
+pub(super) const VERIFICATION_MAX_ATTEMPTS: i64 = 3;
 pub(super) async fn active_job(
     tx: &mut Transaction<'_, Postgres>,
     job: &jobs::Job,
@@ -817,8 +866,21 @@ impl RuntimeControl {
                     })
                 });
                 tokio::pin!(task);
-                let verified = loop {
-                    tokio::select! {result=&mut task=>break result.map_err(|_|ApiError::unavailable("archive-verification-failed"))?.map_err(|_|ApiError::unavailable("archive-verification-failed"))?,_=tokio::time::sleep(Duration::from_secs(30))=>{if !jobs::extend(&self.pool,job,"workspace",clock_ms(),LEASE).await?{return Err(fenced())}}}
+                let outcome = loop {
+                    tokio::select! {result=&mut task=>break result,_=tokio::time::sleep(Duration::from_secs(30))=>{if !jobs::extend(&self.pool,job,"workspace",clock_ms(),LEASE).await?{return Err(fenced())}}}
+                };
+                let verified = match outcome {
+                    Ok(Ok(verified)) => verified,
+                    Ok(Err(error)) => {
+                        return Err(self
+                            .recovery_verification_failed(job, &verification_reason(&error))
+                            .await?);
+                    }
+                    Err(_) => {
+                        return Err(self
+                            .recovery_verification_failed(job, "verifier_panicked")
+                            .await?);
+                    }
                 };
                 let mut tx = self.pool.begin().await?;
                 let (row, generation, _) = locked_workspace(&mut tx, &job.resource_id).await?;
