@@ -1,0 +1,26 @@
+{
+	"private": true,
+	"type": "module",
+	"dependencies": {
+		"effect": "https://pkg.pr.new/Effect-TS/effect/effect@c7d1ffff31a3e2ae0b0b0796b742bddeb797269d",
+		"@modelcontextprotocol/sdk": "1.30.0",
+		"oauth4webapi": "3.8.8",
+		"@paralleldrive/cuid2": "3.3.0",
+		"@bufbuild/protobuf": "2.11.0",
+		"@cfworker/json-schema": "4.1.1",
+		"esbuild": "0.28.2",
+		"typescript": "5.9.3",
+		"@cloudflare/workers-types": "5.20260729.1",
+		"@types/node": "26.6.1",
+		"@effect/platform-browser": "https://pkg.pr.new/Effect-TS/effect/@effect/platform-browser@c7d1ffff31a3e2ae0b0b0796b742bddeb797269d",
+		"ipaddr.js": "2.2.0",
+		"yaml": "2.8.2",
+		"@effect/sql-pg": "https://pkg.pr.new/Effect-TS/effect/@effect/sql-pg@c7d1ffff31a3e2ae0b0b0796b742bddeb797269d",
+		"pg": "8.16.3",
+		"@types/pg": "8.15.6"
+	},
+	"patchedDependencies": {
+		"effect@https://pkg.pr.new/Effect-TS/effect/effect@c7d1ffff31a3e2ae0b0b0796b742bddeb797269d": "patches/effect@c7d1ffff.patch",
+		"@cfworker/json-schema@4.1.1": "patches/@cfworker%2Fjson-schema@4.1.1.patch"
+	}
+}

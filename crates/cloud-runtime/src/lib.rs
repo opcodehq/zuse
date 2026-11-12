@@ -59,4 +59,6 @@ pub mod github;
 #[cfg(target_os = "linux")]
 pub mod native_sockets;
 
+#[cfg(feature = "engine")]
+pub mod plugins;
 pub mod project_cache;

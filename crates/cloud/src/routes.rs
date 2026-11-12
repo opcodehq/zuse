@@ -40,7 +40,11 @@ pub struct AppState {
 }
 
 impl AppState {
-    async fn access(&self, headers: &HeaderMap, kind: AccessKind) -> Result<Access, ApiError> {
+    pub(crate) async fn access(
+        &self,
+        headers: &HeaderMap,
+        kind: AccessKind,
+    ) -> Result<Access, ApiError> {
         let access = self.setup_access(headers, kind).await?;
         // Native configured servers apply the same departure/enrollment gate to
         // fresh history and settings as to execution. Keep read-only bridge
@@ -194,6 +198,7 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
                 || state.store.image_writes_enabled()
                 || state.store.connections.is_some()
                 || state.store.computers.is_some()
+                || state.store.plugins.is_some()
             {
                 vec![Method::GET, Method::POST, Method::PUT, Method::DELETE]
             } else {
@@ -206,6 +211,9 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
             header::HeaderName::from_static("dpop"),
             header::HeaderName::from_static("x-zuse-workspace"),
             header::HeaderName::from_static("x-zuse-device-id"),
+            header::HeaderName::from_static("mcp-protocol-version"),
+            header::HeaderName::from_static("mcp-session-id"),
+            header::HeaderName::from_static("last-event-id"),
         ]);
     let mut app = Router::new()
         .route(
@@ -633,6 +641,8 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
                 post(runtime_ack).layer(DefaultBodyLimit::max(4096)),
             );
     }
+    // Plugin routes stay outside the account-event wake: tool calls are POSTs
+    // but change no account state other clients render.
     app.layer(middleware::from_fn(
         move |request: axum::extract::Request, next: middleware::Next| {
             let events = account_events.clone();
@@ -651,6 +661,7 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
             }
         },
     ))
+    .merge(crate::plugins::routes::router(origins.clone()))
     .layer(middleware::map_response(private_response))
     .layer(cors)
     .with_state(state)
@@ -935,7 +946,7 @@ async fn runtime_ack(
         .await?;
     Ok(Json(json!({"acknowledged":true})))
 }
-fn runtime_bearer(headers: &HeaderMap) -> Result<&str, ApiError> {
+pub(crate) fn runtime_bearer(headers: &HeaderMap) -> Result<&str, ApiError> {
     headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())

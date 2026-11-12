@@ -1675,3 +1675,27 @@ mod recreation_bootstrap_tests;
 
 #[cfg(test)]
 mod lock_tests;
+impl RuntimeControl {
+    /// Derive the plugin tenant only after verifying enrollment and runtime fencing.
+    pub(crate) async fn plugin_identity(
+        &self,
+        workspace: &str,
+        credential: &str,
+        at: i64,
+    ) -> Result<crate::plugins::PluginIdentity, ApiError> {
+        let mut tx = self.pool.begin().await?;
+        let (row, _, _) = locked_workspace(&mut tx, workspace).await?;
+        mailbox::runtime_auth(&row, credential, at)?;
+        let owner = required(&row, "account_id")?.to_owned();
+        let tenant = if owner.starts_with("organization:") {
+            owner.clone()
+        } else {
+            format!("personal:{owner}")
+        };
+        tx.commit().await?;
+        Ok(crate::plugins::PluginIdentity {
+            tenant,
+            subject: owner,
+        })
+    }
+}

@@ -36,9 +36,16 @@ impl PluginCredentials for Account {
     }
 }
 
+/// Runtime credentials are supplied by the enrolled guest, independently of WorkOS.
+#[async_trait]
+pub trait RuntimePlugins: Send + Sync {
+    async fn tools(&self, request: &PluginToolRequest) -> anyhow::Result<serde_json::Value>;
+}
+
 #[derive(Clone)]
 pub struct Plugins {
     account: Account,
+    runtime: Arc<std::sync::RwLock<Option<Arc<dyn RuntimePlugins>>>>,
     workspace: WorkspaceHost,
     bindings: Arc<Mutex<Connection>>,
     callback: Arc<tokio::sync::Mutex<Option<crate::plugin_callback::PluginCallback>>>,
@@ -57,6 +64,7 @@ impl Plugins {
         let db = open_bindings(root)?;
         Ok(Self {
             account,
+            runtime: Arc::new(std::sync::RwLock::new(None)),
             workspace,
             bindings: Arc::new(Mutex::new(db)),
             callback: Arc::new(tokio::sync::Mutex::new(None)),
@@ -134,6 +142,9 @@ impl Plugins {
             } => store.set_enabled(connection_id, *enabled).await?,
             _ => return Ok(None),
         }))
+    }
+    pub fn set_runtime(&self, runtime: Arc<dyn RuntimePlugins>) {
+        *self.runtime.write().unwrap_or_else(|e| e.into_inner()) = Some(runtime);
     }
     async fn client(&self, subject: &str) -> Result<PluginClient, PluginError> {
         let mut slot = self.client.lock().await;
@@ -278,6 +289,14 @@ impl Plugins {
         let permitted = chat.config.as_ref().is_some_and(|c| !c.plan);
         if request.invokes_external_tool() && !permitted {
             return Err(PluginError::PermissionRequired.into());
+        }
+        let runtime = self
+            .runtime
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        if let Some(runtime) = runtime {
+            return runtime.tools(request).await;
         }
         let cancel = self.account.session_cancellation();
         let credential = self.account.credential().await?;
@@ -454,6 +473,61 @@ impl PluginCredentials for BoundAccount {
 #[cfg(test)]
 mod tests {
     use super::*;
+    struct RuntimeFixture(std::sync::atomic::AtomicUsize);
+    #[async_trait]
+    impl RuntimePlugins for RuntimeFixture {
+        async fn tools(&self, _: &PluginToolRequest) -> anyhow::Result<serde_json::Value> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(serde_json::json!([]))
+        }
+    }
+    #[tokio::test]
+    async fn runtime_plugins_work_without_workos_and_preserve_session_permissions() {
+        let root = tempfile::tempdir().unwrap();
+        let core = crate::EngineCore::assemble_with_profile(
+            crate::EngineProfile::local(root.path()).unwrap(),
+            Arc::new(crate::HarnessRegistry::new()),
+            zuse_protocol::HarnessId::Mock,
+            None,
+        )
+        .unwrap();
+        assert!(matches!(
+            core.account.credential().await,
+            Err(AccountError::SignedOut)
+        ));
+        let mut config: zuse_protocol::ChatConfig = serde_json::from_value(
+            serde_json::json!({"harness":"mock","model":"fixture","sandbox":"read-only","plan":true}),
+        )
+        .unwrap();
+        core.workspace
+            .create_chat(
+                "runtime-chat",
+                None,
+                Some(&core.device_id),
+                Some(config.clone()),
+                Some(root.path().to_string_lossy().into_owned()),
+            )
+            .unwrap();
+        let runtime = Arc::new(RuntimeFixture(std::sync::atomic::AtomicUsize::new(0)));
+        core.plugins.set_runtime(runtime.clone());
+        core.plugins
+            .tools("runtime-chat", &PluginToolRequest::List)
+            .await
+            .unwrap();
+        let call = PluginToolRequest::Call {
+            address: "tools.fixture.user.c.echo".into(),
+            arguments: Default::default(),
+        };
+        assert!(core.plugins.tools("runtime-chat", &call).await.is_err());
+        assert_eq!(runtime.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+        config.plan = false;
+        core.workspace
+            .set_chat_config("runtime-chat", &config)
+            .unwrap();
+        core.plugins.tools("runtime-chat", &call).await.unwrap();
+        assert_eq!(runtime.0.load(std::sync::atomic::Ordering::SeqCst), 2);
+        core.shutdown().await;
+    }
     #[test]
     fn session_binding_survives_restart_and_rejects_another_account() {
         let dir = tempfile::tempdir().unwrap();

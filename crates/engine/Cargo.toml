@@ -6,7 +6,7 @@ license.workspace = true
 publish.workspace = true
 
 [features]
-test-support = []
+test-support = ["zuse-plugins/test-support"]
 
 [dependencies]
 zuse-simulator.workspace = true

@@ -104,6 +104,8 @@ enum Command {
     Gateway,
     /// Inspect existing schema/data counts without changing ownership or data.
     Inspect,
+    /// Apply the plugin metadata and pinned Executor SDK migrations explicitly.
+    PluginMigrate,
     /// Admit initial allocation for an already Rust-owned workspace and approved prepared image.
     Allocate {
         #[arg(long)]
@@ -533,6 +535,16 @@ async fn main() -> Result<()> {
                     tokio::select! {_=tokio::signal::ctrl_c()=>break,_=tokio::time::sleep(std::time::Duration::from_secs(1))=>{}}
                 }
             }
+        }
+        Command::PluginMigrate => {
+            let url = env::var("ZUSE_CLOUD_DATABASE_URL")
+                .context("ZUSE_CLOUD_DATABASE_URL is required")?;
+            let settings = zuse_cloud::plugins::PluginConfig::from_env()?
+                .context("Plugin encryption key and origins are required")?;
+            zuse_cloud::plugins::PluginControl::migrate_url(&url, &settings.key)
+                .await
+                .map_err(|e| anyhow::anyhow!("{}", e.code))?;
+            println!("Plugin and Executor schemas ready");
         }
         Command::Inspect => {
             let url = env::var("ZUSE_CLOUD_DATABASE_URL")
@@ -1245,6 +1257,22 @@ async fn main() -> Result<()> {
             store = store.with_account_events_from_env(runtime.as_ref()).await?;
             #[cfg(feature = "hosted-browser")]
             let hosted_browser = zuse_cloud::hosted_browser::from_env(&config)?;
+            if let Some(settings) = zuse_cloud::plugins::PluginConfig::from_env()? {
+                let plugins =
+                    zuse_cloud::plugins::PluginControl::connect(&config.database_url, settings)
+                        .await?;
+                let maintenance = plugins.clone();
+                tokio::spawn(async move {
+                    let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+                    loop {
+                        interval.tick().await;
+                        if let Err(error) = maintenance.sweep().await {
+                            tracing::warn!(code = error.code, "Plugin maintenance failed");
+                        }
+                    }
+                });
+                store = store.with_plugin_control(plugins);
+            }
             let state = AppState {
                 store,
                 identity,
