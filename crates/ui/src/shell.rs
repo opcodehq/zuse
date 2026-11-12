@@ -2733,6 +2733,7 @@ impl Shell {
                 }
                 ComposerEvent::ResumeCloud { .. }
                 | ComposerEvent::CloudSleepRequested
+                | ComposerEvent::CloudWakeRequested
                 | ComposerEvent::CloudForegroundAdmitted => {}
                 ComposerEvent::WorkspaceCommand(command) => {
                     this.pending_workspace_command = Some(*command);
