@@ -397,10 +397,136 @@ fn root_swap_restarts_once_the_helper_commits() {
     assert_eq!(next.as_deref(), Some(f.config.binary.as_path()));
     assert!(!stage::request_path(&f.config).exists());
     let pending = stage::read_pending(&f.config).unwrap();
+    let new = sha(b"new");
+    // Not attested until the new runtime proves healthy.
+    assert_eq!(swap::attestation_outcome(&f.config, &pending, &new), None);
     assert_eq!(
-        swap::attestation_outcome(&f.config, &pending, &sha(b"new")),
+        swap::cold_boot(&f.config, &new, Duration::ZERO).unwrap(),
+        None
+    );
+    let probation: swap::RootProbation = read_json(&swap::probation_path(&f.config)).unwrap();
+    assert_eq!(
+        (probation.sha256.as_str(), probation.update_id.as_str()),
+        (new.as_str(), "update-1")
+    );
+    assert_eq!(swap::attestation_outcome(&f.config, &pending, &new), None);
+
+    swap::commit_with(&f.config, &new).unwrap();
+    let healthy: swap::Healthy = read_json(&swap::healthy_path(&f.config)).unwrap();
+    assert_eq!(
+        (healthy.sha256.as_str(), healthy.update_id.as_str()),
+        (new.as_str(), "update-1")
+    );
+    assert!(!swap::probation_path(&f.config).exists());
+    assert_eq!(
+        swap::attestation_outcome(&f.config, &pending, &new),
         Some((Outcome::Committed, None))
     );
+    // Later starts of the healthy release stay out of probation.
+    swap::cold_boot(&f.config, &new, Duration::ZERO).unwrap();
+    assert!(!swap::probation_path(&f.config).exists());
+    assert!(!swap::rollback_path(&f.config).exists());
+}
+
+/// Root fixture whose helper already committed `new` for `update-1`.
+fn root_committed(new: &[u8]) -> Fixture {
+    let f = root();
+    let staged = stage_bytes(&f.config, "update-1", new);
+    swap::request_root(&f.config, &staged, &"c".repeat(64)).unwrap();
+    stage::remove_request(&f.config);
+    std::fs::write(
+        f.root.join("result.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "updateId": "update-1",
+            "outcome": "committed",
+            "sha256": sha(new),
+            "previousSha256": "c".repeat(64),
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    f
+}
+/// Plays the root helper's rollback mode: waits for `rollback.json`, checks
+/// it, removes it and writes `rolled-back`.
+fn rollback_helper(f: &Fixture) -> std::thread::JoinHandle<serde_json::Value> {
+    let request = swap::rollback_path(&f.config);
+    let result = f.root.join("result.json");
+    std::thread::spawn(move || {
+        for _ in 0..500 {
+            if let Some(value) = read_json::<serde_json::Value>(&request) {
+                std::fs::remove_file(&request).unwrap();
+                let body = serde_json::json!({
+                    "updateId": value["updateId"],
+                    "outcome": "rolled-back",
+                    "sha256": value["sha256"],
+                    "previousSha256": "c".repeat(64),
+                    "errorCode": ROLLED_BACK,
+                });
+                std::fs::write(&result, serde_json::to_vec(&body).unwrap()).unwrap();
+                return value;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        serde_json::Value::Null
+    })
+}
+
+#[test]
+fn root_second_start_in_probation_asks_the_helper_to_roll_back() {
+    let f = root_committed(b"new");
+    let new = sha(b"new");
+    assert_eq!(
+        swap::cold_boot(&f.config, &new, Duration::ZERO).unwrap(),
+        None
+    );
+    let helper = rollback_helper(&f);
+    let next = swap::cold_boot(&f.config, &new, Duration::from_secs(10)).unwrap();
+    let request = helper.join().unwrap();
+    assert_eq!(
+        request,
+        serde_json::json!({"updateId": "update-1", "sha256": new})
+    );
+    assert_eq!(next.as_deref(), Some(f.config.binary.as_path()));
+    assert!(!swap::probation_path(&f.config).exists());
+    assert!(!swap::healthy_path(&f.config).exists());
+    // The restored runtime attests the rollback so the server stops offering it.
+    let pending = stage::read_pending(&f.config).unwrap();
+    assert_eq!(
+        swap::attestation_outcome(&f.config, &pending, &"c".repeat(64)),
+        Some((Outcome::RolledBack, Some(ROLLED_BACK.into())))
+    );
+}
+
+#[test]
+fn root_failed_start_in_probation_restores_previous() {
+    let f = root_committed(b"new");
+    let new = sha(b"new");
+    swap::cold_boot(&f.config, &new, Duration::ZERO).unwrap();
+    let helper = rollback_helper(&f);
+    let next = swap::rollback_with(&f.config, &new).unwrap();
+    helper.join().unwrap();
+    assert_eq!(next.as_deref(), Some(f.config.binary.as_path()));
+}
+
+#[test]
+fn root_rollback_without_an_answer_is_withdrawn_at_cold_boot() {
+    let f = root_committed(b"new");
+    let new = sha(b"new");
+    swap::cold_boot(&f.config, &new, Duration::ZERO).unwrap();
+    let next = swap::cold_boot(&f.config, &new, Duration::from_millis(200)).unwrap();
+    assert_eq!(next, None);
+    assert!(!swap::rollback_path(&f.config).exists());
+    // A healthy marker for another release does not end this probation.
+    std::fs::write(
+        swap::healthy_path(&f.config),
+        serde_json::to_vec(&serde_json::json!({"sha256": new, "updateId": "other", "at": 1}))
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(swap::root_unproven(&f.config, &new).is_some());
+    // Another binary is not in this probation at all.
+    assert!(swap::root_unproven(&f.config, &"c".repeat(64)).is_none());
 }
 
 #[test]

@@ -71,6 +71,9 @@ PATH line comes first, ahead of the early return for non-interactive shells.
   `rename()` (the task user owns `R/bin`) and execs it in place. The
   supervisor and `zuse-launch` always start `$ZUSE_RUNTIME_BINARY` by path, so
   a later cold launch picks up the swapped file. No launch step checks the
-  runtime SHA on this layout.
+  runtime SHA on this layout. If the new runtime exits non-zero while
+  `R/runtime-update/journal.json` is still `swapped` or `probation`, the
+  supervisor restores `R/runtime-update/previous` itself, journals
+  `rolled-back` and relaunches the runtime once.
 - **Agent warm-up.** The supervisor's `warm_agent` only looks under
   `/opt/zuse/harnesses`, so it does nothing on this layout.

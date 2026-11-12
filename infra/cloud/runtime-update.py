@@ -20,7 +20,9 @@ the update is abandoned (`runtime_update_request_withdrawn`).
 
 If the new runtime fails its probation it writes
 ~/.zuse-data/runtime-updates/rollback.json {"updateId","sha256"}; the same path
-unit runs this helper, which restores /opt/zuse/runtime/previous.
+unit runs this helper, which restores /opt/zuse/runtime/previous. A new runtime
+that dies before it writes healthy.json gets the same request from the resident
+supervisor's watchdog (runtime-supervisor.py), which then relaunches it once.
 
 Every attempt ends with /var/lib/zuse/runtime-update/result.json (0644):
 {"updateId","outcome":"committed|rolled-back|failed","sha256","previousSha256","errorCode"}.

@@ -263,6 +263,9 @@ pub fn start_recovery(config: &Config, journal: &Path, own: &str) -> Result<Opti
     Ok(None)
 }
 pub fn commit_with(config: &Config, own: &str) -> Result<()> {
+    if let Layout::Root { .. } = &config.layout {
+        return root_commit(config, own);
+    }
     let Layout::Owned { journal } = &config.layout else {
         return Ok(());
     };
@@ -280,11 +283,23 @@ pub fn commit_probation(config: &Config) -> Result<()> {
     }
     Ok(())
 }
+/// Cheap (no hashing): an owned journal in probation, or a root probation marker.
 fn in_probation(config: &Config) -> bool {
-    matches!(&config.layout, Layout::Owned { journal }
-        if read_journal(journal).is_some_and(|j| j.phase == Phase::Probation))
+    match &config.layout {
+        Layout::Owned { journal } => {
+            read_journal(journal).is_some_and(|j| j.phase == Phase::Probation)
+        }
+        Layout::Root { .. } => probation_path(config).is_file(),
+        Layout::Unsupported => false,
+    }
 }
 pub fn rollback_with(config: &Config, own: &str) -> Result<Option<PathBuf>> {
+    if let Layout::Root { .. } = &config.layout {
+        let Some(committed) = root_unproven(config, own) else {
+            return Ok(None);
+        };
+        return root_rollback(config, &committed.update_id, own, ROOT_ROLLBACK_WAIT);
+    }
     let Layout::Owned { journal } = &config.layout else {
         return Ok(None);
     };
@@ -300,6 +315,142 @@ pub fn rollback_probation(config: &Config) -> Result<Option<PathBuf>> {
         return Ok(None);
     }
     rollback_with(config, &running_sha()?)
+}
+
+/// How long a failed start waits for the root helper to restore `previous`.
+pub const ROOT_ROLLBACK_WAIT: Duration = Duration::from_secs(60);
+
+/// `<data>/runtime-updates/healthy.json`: the release the root helper
+/// installed passed its startup checks. The supervisor's watchdog reads it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Healthy {
+    pub sha256: String,
+    pub update_id: String,
+    pub at: i64,
+}
+/// `<data>/runtime-updates/probation.json`: a root-installed release started
+/// once and has not passed its startup checks yet.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RootProbation {
+    pub sha256: String,
+    pub update_id: String,
+    pub started_at: i64,
+}
+/// `<data>/runtime-updates/rollback.json`, consumed by the root helper.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RollbackRequest {
+    pub update_id: String,
+    pub sha256: String,
+}
+pub fn healthy_path(config: &Config) -> PathBuf {
+    config.root().join("healthy.json")
+}
+pub fn probation_path(config: &Config) -> PathBuf {
+    config.root().join("probation.json")
+}
+pub fn rollback_path(config: &Config) -> PathBuf {
+    config.root().join("rollback.json")
+}
+fn root_healthy(config: &Config, update_id: &str, sha256: &str) -> bool {
+    read_json::<Healthy>(&healthy_path(config))
+        .is_some_and(|h| h.sha256 == sha256 && h.update_id == update_id)
+}
+/// The root helper committed `own` and it has not yet proved healthy.
+pub fn root_unproven(config: &Config, own: &str) -> Option<RootResult> {
+    let Layout::Root { result } = &config.layout else {
+        return None;
+    };
+    read_json::<RootResult>(result).filter(|r| {
+        r.outcome == Outcome::Committed
+            && r.sha256 == own
+            && !root_healthy(config, &r.update_id, own)
+    })
+}
+/// Cheap (no hashing): a committed root result that is not marked healthy.
+pub(crate) fn root_maybe_unproven(config: &Config) -> bool {
+    let Layout::Root { result } = &config.layout else {
+        return false;
+    };
+    read_json::<RootResult>(result).is_some_and(|r| {
+        r.outcome == Outcome::Committed && !root_healthy(config, &r.update_id, &r.sha256)
+    })
+}
+/// Root layout, process start: the first start of a committed release enters
+/// probation; a second start still in probation means it never became
+/// healthy, so ask the helper to roll back.
+pub fn root_start(config: &Config, own: &str, wait: Duration) -> Result<Option<PathBuf>> {
+    let Some(committed) = root_unproven(config, own) else {
+        return Ok(None);
+    };
+    let started_before = read_json::<RootProbation>(&probation_path(config))
+        .is_some_and(|p| p.sha256 == own && p.update_id == committed.update_id);
+    if started_before {
+        let restored = root_rollback(config, &committed.update_id, own, wait)?;
+        if restored.is_none() {
+            // Not restored in time: withdraw, keep serving, retry next start.
+            let _ = std::fs::remove_file(rollback_path(config));
+        }
+        return Ok(restored);
+    }
+    write_json(
+        &probation_path(config),
+        &RootProbation {
+            sha256: own.into(),
+            update_id: committed.update_id,
+            started_at: crate::now_ms(),
+        },
+    )?;
+    Ok(None)
+}
+/// The release in probation passed its startup checks.
+fn root_commit(config: &Config, own: &str) -> Result<()> {
+    if let Some(committed) = root_unproven(config, own) {
+        write_json(
+            &healthy_path(config),
+            &Healthy {
+                sha256: own.into(),
+                update_id: committed.update_id,
+                at: crate::now_ms(),
+            },
+        )?;
+    }
+    let _ = std::fs::remove_file(probation_path(config));
+    Ok(())
+}
+/// Ask the root helper to restore `previous` and wait (bounded) for its
+/// `rolled-back` result. Returns the binary to exec once restored.
+pub fn root_rollback(
+    config: &Config,
+    update_id: &str,
+    sha256: &str,
+    wait: Duration,
+) -> Result<Option<PathBuf>> {
+    let Layout::Root { result } = &config.layout else {
+        return Ok(None);
+    };
+    write_json(
+        &rollback_path(config),
+        &RollbackRequest {
+            update_id: update_id.into(),
+            sha256: sha256.into(),
+        },
+    )?;
+    tracing::warn!(update = %update_id, "runtime_update_rollback_requested");
+    let started = Instant::now();
+    loop {
+        match root_result(result, update_id).map(|r| r.outcome) {
+            Some(Outcome::RolledBack) => {
+                let _ = std::fs::remove_file(probation_path(config));
+                return Ok(Some(config.binary.clone()));
+            }
+            Some(Outcome::Failed) => return Ok(None),
+            _ if started.elapsed() >= wait => return Ok(None),
+            _ => std::thread::sleep(Duration::from_millis(100)),
+        }
+    }
 }
 
 /// Root layout: record the pending swap, then ask the helper.
@@ -385,15 +536,15 @@ pub fn attestation_outcome(
 ) -> Option<(Outcome, Option<String>)> {
     match decision(config, pending) {
         Decision::Installed if own == pending.sha256 => {
-            // Owned: only after this runtime passed its startup checks.
-            match &config.layout {
-                Layout::Owned { journal }
-                    if read_journal(journal).is_none_or(|j| j.phase != Phase::Committed) =>
-                {
-                    None
+            // Only after this runtime passed its startup checks.
+            let healthy = match &config.layout {
+                Layout::Owned { journal } => {
+                    read_journal(journal).is_some_and(|j| j.phase == Phase::Committed)
                 }
-                _ => Some((Outcome::Committed, None)),
-            }
+                Layout::Root { .. } => root_healthy(config, &pending.update_id, own),
+                Layout::Unsupported => true,
+            };
+            healthy.then_some((Outcome::Committed, None))
         }
         // Installed on disk, but this process is still the old image.
         Decision::Installed => None,
@@ -456,6 +607,11 @@ pub fn install(
 pub fn cold_boot(config: &Config, own: &str, wait: Duration) -> Result<Option<PathBuf>> {
     if let Layout::Owned { journal } = &config.layout {
         if let Some(binary) = start_recovery(config, journal, own)? {
+            return Ok(Some(binary));
+        }
+    }
+    if let Layout::Root { .. } = &config.layout {
+        if let Some(binary) = root_start(config, own, wait)? {
             return Ok(Some(binary));
         }
     }
