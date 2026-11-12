@@ -138,6 +138,7 @@ async fn preparation_holds_preserve_errors_retry_budget_and_fence_inflight_inspe
         ("existing", "replaced-lease"),
         ("existing", "delete"),
         ("existing", "generation"),
+        ("existing", "abandoned"),
     ] {
         let unique = uuid::Uuid::new_v4().simple().to_string();
         let schema = format!("preparation_{unique}");
@@ -217,6 +218,48 @@ async fn preparation_holds_preserve_errors_retry_budget_and_fence_inflight_inspe
         };
         if inject_at == "existing" {
             fixture.inject().await;
+        }
+        if fault == "abandoned" {
+            // Offline since a failed stage, unchanged past the bound: stop
+            // rechecking, keep the failure visible, never relaunch.
+            sqlx::query("UPDATE api_cloud_workspaces SET updated_at=$2 WHERE workspace_id=$1")
+                .bind(&workspace)
+                .bind(clock_ms() - ABANDON_AFTER_MS - 60_000)
+                .execute(&pool)
+                .await
+                .unwrap();
+            sqlx::query("UPDATE zuse_rust_jobs SET due_at=0 WHERE resource_id=$1")
+                .bind(&workspace)
+                .execute(&pool)
+                .await
+                .unwrap();
+            assert!(control.allocate_once(&fixture, clock_ms()).await.unwrap());
+            let state: (String, String, Option<String>) = sqlx::query_as("SELECT w.status_code,j.state,j.last_error_code FROM api_cloud_workspaces w JOIN zuse_rust_jobs j ON j.resource_id=w.workspace_id WHERE w.workspace_id=$1")
+                .bind(&workspace).fetch_one(&pool).await.unwrap();
+            assert_eq!(
+                state,
+                (
+                    "repository_preparation_failed".into(),
+                    "failed".into(),
+                    Some(ABANDONED.into())
+                )
+            );
+            assert!(
+                jobs::claim(&pool, JOB_KIND, "workspace", clock_ms(), 120_000)
+                    .await
+                    .unwrap()
+                    .is_none(),
+                "an abandoned hold is not claimed again"
+            );
+            assert_eq!(fixture.launches.load(Ordering::SeqCst), 0);
+            drop(control);
+            drop(fixture);
+            pool.close().await;
+            sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+                .execute(&admin)
+                .await
+                .unwrap();
+            continue;
         }
         if !fault.is_empty() {
             let job = jobs::claim(&pool, JOB_KIND, "workspace", clock_ms(), 120_000)

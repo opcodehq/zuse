@@ -8,6 +8,7 @@
 //! chunk opacity veil over the text runs (see [`super::veil`]) — opacity only,
 //! zero translate, applied after layout-relevant properties are fixed.
 
+use crate::tooltip::TooltipExt as _;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::ops::Range;
@@ -380,19 +381,7 @@ struct CodeBlockTooltip(SharedString);
 
 impl Render for CodeBlockTooltip {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = Theme::of(cx);
-        div()
-            .px(px(8.0))
-            .py(px(6.0))
-            .rounded(px(6.0))
-            .border_1()
-            .border_color(theme.border_strong)
-            .bg(theme.surface_raised)
-            .shadow_md()
-            .max_w(px(360.0))
-            .text_size(px(11.0))
-            .text_color(theme.text)
-            .child(self.0.clone())
+        crate::tooltip::chip(self.0.clone(), Theme::of(cx))
     }
 }
 
@@ -2235,7 +2224,9 @@ fn code_icon_action(
             cx.stop_propagation();
             handler(window, cx);
         })
-        .tooltip(move |_, cx| cx.new(move |_| CodeBlockTooltip(label.into())).into())
+        .anchored_tooltip(crate::tooltip::Placement::Below, move |_, cx| {
+            cx.new(move |_| CodeBlockTooltip(label.into())).into()
+        })
         .child(
             crate::icons::icon(icon_path)
                 .size(px(13.0))
@@ -2252,7 +2243,7 @@ fn code_notice(id: SharedString, message: SharedString, theme: &Theme) -> AnyEle
         .flex()
         .items_center()
         .justify_center()
-        .tooltip(move |_, cx| {
+        .anchored_tooltip(crate::tooltip::Placement::Below, move |_, cx| {
             let message = message.clone();
             cx.new(move |_| CodeBlockTooltip(message)).into()
         })
@@ -2297,7 +2288,9 @@ fn code_copy_button(
                 cx.stop_propagation();
                 handler(ix, code_text.clone(), window, cx);
             })
-            .tooltip(|_, cx| cx.new(|_| CodeBlockTooltip("Copy code".into())).into())
+            .anchored_tooltip(crate::tooltip::Placement::Below, |_, cx| {
+                cx.new(|_| CodeBlockTooltip("Copy code".into())).into()
+            })
             .child(
                 crate::icons::icon(if copied {
                     crate::icons::CHECK
@@ -2483,7 +2476,7 @@ fn render_code_block_source_with_actions(
                 cx.stop_propagation();
                 toggle(window, cx);
             })
-            .tooltip(move |_, cx| {
+            .anchored_tooltip(crate::tooltip::Placement::Below, move |_, cx| {
                 cx.new(move |_| {
                     CodeBlockTooltip(
                         if fit_content {

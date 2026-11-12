@@ -283,7 +283,7 @@ impl Shell {
                         cx.notify();
                     }),
                 )
-                .tooltip(crate::settings::widgets::text_tooltip("Section options"))
+                .tip("Section options")
                 .child(
                     icon(icons::MORE_HORIZONTAL)
                         .size(px(14.0))

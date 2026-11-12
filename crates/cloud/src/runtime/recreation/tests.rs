@@ -393,6 +393,7 @@ async fn computer_recreation_admission_and_verification_fault_matrix() {
     // now selects its pre-created full pause, preserving both operation IDs.
     let resume = zuse_protocol::cloud_lifecycle::RuntimeRequest::Resumed {
         operation_id: op["wake_operation_id"].as_str().unwrap().into(),
+        wake: None,
     };
     c.lifecycle_runtime("ws-alice", "fixture-alice-runtime", resume, now + 12000)
         .await
@@ -402,6 +403,7 @@ async fn computer_recreation_admission_and_verification_fault_matrix() {
         "fixture-alice-runtime",
         zuse_protocol::cloud_lifecycle::RuntimeRequest::Resumed {
             operation_id: op["wake_operation_id"].as_str().unwrap().into(),
+            wake: None,
         },
         now + 12001,
     )

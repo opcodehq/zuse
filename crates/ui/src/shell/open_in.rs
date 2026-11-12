@@ -631,10 +631,14 @@ impl Shell {
             .find(|t| t.id == "finder")
             .cloned();
         let primary_glyph = match (&primary, self.open_in.loading) {
-            (_, true) => {
-                loaders::mini_glyph_spinner("open-in-loading", 2.0, theme.glyph, cx.entity_id(), cx)
-                    .into_any_element()
-            }
+            (_, true) => loaders::mini_glyph_spinner(
+                "open-in-loading",
+                2.0,
+                theme.loader_glyph(),
+                cx.entity_id(),
+                cx,
+            )
+            .into_any_element(),
             (Some(primary), false) if local => Self::open_target_icon(primary, theme),
             _ => icon(icons::ARROW_UP_RIGHT)
                 .size(px(14.0))
@@ -683,7 +687,7 @@ impl Shell {
                     cx.notify();
                 }
             }))
-            .tooltip(crate::settings::widgets::text_tooltip("Open in…"))
+            .tip("Open in…")
             .child(
                 div()
                     .size(px(26.0))

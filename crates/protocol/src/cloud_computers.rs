@@ -9,15 +9,23 @@ pub enum ProviderId {
     Boxd,
     E2b,
     Daytona,
+    Prized,
 }
 impl ProviderId {
-    pub const ALL: [Self; 4] = [Self::Boat, Self::Boxd, Self::E2b, Self::Daytona];
+    pub const ALL: [Self; 5] = [
+        Self::Boat,
+        Self::Boxd,
+        Self::E2b,
+        Self::Daytona,
+        Self::Prized,
+    ];
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Boat => "boat",
             Self::Boxd => "boxd",
             Self::E2b => "e2b",
             Self::Daytona => "daytona",
+            Self::Prized => "prized",
         }
     }
 }

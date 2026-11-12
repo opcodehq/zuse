@@ -8,7 +8,7 @@ import socket
 import subprocess
 import time
 
-from cargo_dev import build_environment
+from cargo_dev import STAGING_IPC_PORT, build_environment, staging_environment, staging_profile
 from build_cache import prepare
 
 
@@ -44,16 +44,22 @@ def ui_only_input(path):
 def start_engine(binary, env, port):
     process = subprocess.Popen([binary, "headless"], cwd=ROOT, env=env, start_new_session=True)
     deadline = time.monotonic() + 30
-    while True:
-        if process.poll() is not None:
-            raise RuntimeError("Development engine exited before opening IPC")
-        try:
-            with socket.create_connection(("127.0.0.1", port), timeout=0.2):
-                return process
-        except OSError:
-            if time.monotonic() > deadline:
-                raise RuntimeError("Development engine did not open IPC within 30 seconds")
-            time.sleep(0.1)
+    try:
+        while True:
+            if process.poll() is not None:
+                raise RuntimeError("Development engine exited before opening IPC")
+            try:
+                with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+                    return process
+            except OSError:
+                if time.monotonic() > deadline:
+                    raise RuntimeError("Development engine did not open IPC within 30 seconds")
+                time.sleep(0.1)
+    except BaseException:
+        # Its own session ignores the terminal's Ctrl+C; an interrupted start
+        # (often mid-restart) must not leave it holding the IPC port.
+        stop(process)
+        raise
 
 
 def stop(process):
@@ -72,12 +78,24 @@ def interrupted(*_):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--data-dir", default=os.environ.get("ZUSE_DATA_DIR", str(ROOT / ".context/native-profile")))
-    parser.add_argument("--ipc-port", type=int, default=int(os.environ.get("ZUSE_IPC_PORT", "27664")))
+    parser.add_argument("--staging", action="store_true",
+                        help="use the staging cloud with one shared profile (~/.zuse-dev/staging)")
+    parser.add_argument("--data-dir")
+    parser.add_argument("--ipc-port", type=int)
     args = parser.parse_args()
+    if args.staging:
+        data_dir = args.data_dir or staging_profile()
+        args.ipc_port = args.ipc_port or STAGING_IPC_PORT
+    else:
+        data_dir = args.data_dir or os.environ.get("ZUSE_DATA_DIR", str(ROOT / ".context/native-profile"))
+        args.ipc_port = args.ipc_port or int(os.environ.get("ZUSE_IPC_PORT", "27664"))
     if not 0 < args.ipc_port < 65536:
         parser.error("--ipc-port must be between 1 and 65535")
-    env = dict(build_environment(), ZUSE_DATA_DIR=str(Path(args.data_dir).resolve()), ZUSE_IPC_PORT=str(args.ipc_port))
+    Path(data_dir).mkdir(parents=True, exist_ok=True)
+    env = dict(build_environment(), ZUSE_DATA_DIR=str(Path(data_dir).resolve()), ZUSE_IPC_PORT=str(args.ipc_port))
+    if args.staging:
+        env.update(staging_environment())
+        print(f"Staging profile: {env['ZUSE_DATA_DIR']} (IPC {args.ipc_port})", flush=True)
     # Use a separate local development profile unless the caller opts into sync.
     env.setdefault("ZUSE_WORKOS_CLIENT_ID", "")
     engine = ui = None
@@ -87,7 +105,12 @@ def main():
     try:
         # Never attach a development UI to an unrelated engine on the same port.
         with socket.socket() as probe:
-            probe.bind(("127.0.0.1", args.ipc_port))
+            try:
+                probe.bind(("127.0.0.1", args.ipc_port))
+            except OSError:
+                print(f"IPC port {args.ipc_port} is in use, usually by an engine left from an earlier run. "
+                      f"Stop it with: lsof -ti tcp:{args.ipc_port} | xargs kill", flush=True)
+                return 1
         seen = snapshot()
         target = prepare(env=env)
         if subprocess.call(build, cwd=ROOT, env=env):
