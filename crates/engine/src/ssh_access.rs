@@ -15,6 +15,8 @@ use std::sync::{Arc, LazyLock};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::sync::Mutex;
 
+/// The SSH server binary the computer image provides.
+const SSHD: &str = "/usr/sbin/sshd";
 /// Loopback port of the managed sshd.
 pub const PORT: u16 = 2222;
 /// Largest chunk one write or stream item carries.
@@ -142,12 +144,18 @@ pub async fn prepare(public_key: &str, workspace_root: Option<&Path>) -> Result<
     let config = dir.join("sshd_config");
     private_write(&config, &sshd_config(&dir, &user))?;
     if !listening().await {
+        // Some computer images (Daytona's container base today) ship without
+        // an SSH server. Say so instead of surfacing a sudo error.
+        ensure!(
+            Path::new(SSHD).exists(),
+            "SSH isn't available on this computer yet. Its image has no SSH server."
+        );
         if !Path::new("/etc/ssh/ssh_host_ed25519_key").exists() {
             sudo(&["ssh-keygen", "-A"]).await?;
         }
         sudo(&["mkdir", "-p", "/run/sshd"]).await?;
         let config = config.to_string_lossy().into_owned();
-        sudo(&["/usr/sbin/sshd", "-f", &config]).await?;
+        sudo(&[SSHD, "-f", &config]).await?;
         let started = tokio::time::Instant::now();
         while !listening().await {
             ensure!(

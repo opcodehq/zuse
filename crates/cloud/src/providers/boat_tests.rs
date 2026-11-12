@@ -155,27 +155,43 @@ async fn incomplete_reconciliation_listing_is_not_treated_as_absence() {
 }
 
 #[tokio::test]
-async fn boat_runtime_readiness_is_original_id_hydration_not_generic_running() {
+async fn boat_runtime_readiness_is_original_id_hydration_or_answering_runtime_not_generic_running()
+{
     let state = Arc::new(Mutex::new((
         StatusCode::OK,
         json!({"sandbox":{"id":"original","name":"original-name","state":"idle","hydrated":false}}),
     )));
     let calls = Arc::new(AtomicUsize::new(0));
+    let answers = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let handler_state = state.clone();
     let handler_calls = calls.clone();
-    let app = Router::new().route(
-        "/api/v1/sandboxes/original",
-        get(move |headers: HeaderMap| {
-            let state = handler_state.clone();
-            let calls = handler_calls.clone();
-            async move {
-                auth(&headers);
-                calls.fetch_add(1, Ordering::SeqCst);
-                let value = state.lock().unwrap().clone();
-                (value.0, Json(value.1))
-            }
-        }),
-    );
+    let handler_answers = answers.clone();
+    let app = Router::new()
+        .route(
+            "/api/v1/sandboxes/original",
+            get(move |headers: HeaderMap| {
+                let state = handler_state.clone();
+                let calls = handler_calls.clone();
+                async move {
+                    auth(&headers);
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    let value = state.lock().unwrap().clone();
+                    (value.0, Json(value.1))
+                }
+            }),
+        )
+        .route(
+            "/api/v1/sandboxes/original/commands",
+            post(move |headers: HeaderMap, Json(body): Json<Value>| {
+                let answers = handler_answers.clone();
+                async move {
+                    auth(&headers);
+                    assert_eq!(body["command"], super::boat::RUNTIME_ANSWERS);
+                    let code = if answers.load(Ordering::SeqCst) { 0 } else { 1 };
+                    Json(json!({"exitCode":code,"stdout":"","stderr":"","timedOut":false}))
+                }
+            }),
+        );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}/api/v1", listener.local_addr().unwrap());
     let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
@@ -188,7 +204,16 @@ async fn boat_runtime_readiness_is_original_id_hydration_not_generic_running() {
         super::MachineState::Running,
         "generic running remains usable for stop reconciliation"
     );
-    assert!(!provider.runtime_ready("original").await.unwrap());
+    assert!(
+        !provider.runtime_ready("original").await.unwrap(),
+        "not hydrated and the installed runtime does not answer yet"
+    );
+    answers.store(true, Ordering::SeqCst);
+    assert!(
+        provider.runtime_ready("original").await.unwrap(),
+        "a lazily restored disk that already runs the runtime is ready"
+    );
+    answers.store(false, Ordering::SeqCst);
     for (value, expected) in [
         (
             json!({"sandbox":{"id":"original","state":"idle","hydrated":true}}),
@@ -223,11 +248,11 @@ async fn boat_runtime_readiness_is_original_id_hydration_not_generic_running() {
         provider.runtime_ready("original").await,
         Err(ProviderError::NotFound)
     );
-    assert_eq!(calls.load(Ordering::SeqCst), 9);
+    assert_eq!(calls.load(Ordering::SeqCst), 10);
 }
 
 #[tokio::test]
-async fn boat_fresh_boot_requires_original_source_labels_name_and_same_id_hydration() {
+async fn boat_fresh_boot_requires_original_source_labels_name_and_same_id() {
     let original = json!({"id":"original-id","name":"original-name","state":"idle","hydrated":true,
         "labels":{"zuse-source-artifact":"original-base","zuse-allocation-name":"original-name"}});
     let state = Arc::new(Mutex::new(original.clone()));
@@ -256,10 +281,18 @@ async fn boat_fresh_boot_requires_original_source_labels_name_and_same_id_hydrat
         .verify_initial_source("original-id", "original-base", "original-name")
         .await
         .unwrap();
+    // Readiness (an answering runtime) is checked before this verification;
+    // a disk still hydrating is accepted, a malformed response is not.
+    let mut hydrating = original.clone();
+    hydrating["hydrated"] = json!(false);
+    *state.lock().unwrap() = hydrating;
+    provider
+        .verify_initial_source("original-id", "original-base", "original-name")
+        .await
+        .unwrap();
     for (path, value) in [
         ("id", json!("wrong-id")),
         ("name", json!("wrong-name")),
-        ("hydrated", json!(false)),
         ("hydrated", Value::Null),
         ("state", json!("archived")),
         (
@@ -282,7 +315,7 @@ async fn boat_fresh_boot_requires_original_source_labels_name_and_same_id_hydrat
 }
 
 #[tokio::test]
-async fn boat_runtime_adapter_uses_scoped_helper_for_fresh_and_owned_resume_only_after_hydration() {
+async fn boat_runtime_adapter_uses_scoped_helper_for_fresh_and_owned_resume_only_once_ready() {
     use crate::{
         managed_bases::bootstrap::{ImagePins, Purpose, Request},
         runtime::{
@@ -291,13 +324,16 @@ async fn boat_runtime_adapter_uses_scoped_helper_for_fresh_and_owned_resume_only
     };
     use base64::{Engine as _, engine::general_purpose::STANDARD};
     let hydrated = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let answers = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let commands = Arc::new(AtomicUsize::new(0));
     let hydration = hydrated.clone();
+    let answering = answers.clone();
     let count = commands.clone();
     let app=Router::new()
       .route("/api/v1/saved-snapshots/original-base",get(||async {Json(json!({"snapshot":{"name":"original-base","status":"ready"}}))}))
       .route("/api/v1/sandboxes/original-id",get(move||{let h=hydration.clone();async move{Json(json!({"sandbox":{"id":"original-id","name":"original-name","state":"idle","hydrated":h.load(Ordering::SeqCst),"labels":{"zuse-source-artifact":"original-base","zuse-allocation-name":"original-name"}}}))}}))
-      .route("/api/v1/sandboxes/original-id/commands",post(move|Json(v):Json<Value>|{let count=count.clone();async move {
+      .route("/api/v1/sandboxes/original-id/commands",post(move|Json(v):Json<Value>|{let count=count.clone();let answering=answering.clone();async move {
+        if v["command"]==super::boat::RUNTIME_ANSWERS {return Json(json!({"exitCode":if answering.load(Ordering::SeqCst){0}else{1},"stdout":"","stderr":"","timedOut":false}));}
         assert_eq!(v["timeoutSeconds"],60);let command=v["command"].as_str().unwrap();assert!(command.starts_with("sudo -n /usr/bin/python3 -I -B -c "));
         let body=command.rsplit('\'').nth(1).unwrap();let mut request:Value=serde_json::from_slice(&STANDARD.decode(body).unwrap()).unwrap();
         let typed:Request=serde_json::from_value(request.clone()).unwrap();assert!(typed.valid());assert_eq!(request["provider"],"boat");assert_eq!(request["sourceMachineId"],"original-id");
@@ -352,7 +388,14 @@ async fn boat_runtime_adapter_uses_scoped_helper_for_fresh_and_owned_resume_only
     assert_eq!(
         commands.load(Ordering::SeqCst),
         2,
-        "no helper effects before hydration"
+        "no helper effects before the restored disk runs the installed runtime"
+    );
+    answers.store(true, Ordering::SeqCst);
+    assert!(adapter.bootstrap_retained_runtime(&request).await.unwrap());
+    assert_eq!(
+        commands.load(Ordering::SeqCst),
+        3,
+        "a hydrating disk that runs the installed runtime may resume"
     );
 }
 
