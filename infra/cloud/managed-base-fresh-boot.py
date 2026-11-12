@@ -10,6 +10,11 @@ VERSION=1
 UNIT='zuse-runtime-supervisor.service'
 HELPER='/usr/local/lib/zuse/managed-base-fresh-boot.py'
 PIN_NAMES={'runtimeSha256','supervisorSha256','serviceSha256','manifestSha256','helperSha256'}
+# Optional sixth pin: absent on bases without the root runtime swap helper,
+# verified whenever present. runtimeSha256 may be the computer's own runtime
+# release (after an in-place update), not the base's initial runtime.
+OPTIONAL_PIN_NAMES={'runtimeUpdateHelperSha256'}
+UPDATE_HELPER='/usr/local/libexec/zuse/runtime-update.py'
 FIELDS={'version','provider','purpose','operationId','workspaceId','generation','storageIncarnationId','sourceMachineId','imagePins'}
 PURPOSES={'initial-allocation','initial-restore','publication-proof','cache-preparation'}
 SAFE=re.compile(r'[A-Za-z0-9_.:-]{1,180}\Z')
@@ -24,7 +29,7 @@ def validated(request):
  require(request['provider'] in ('boxd','boat') and (request['purpose'] in PURPOSES or request['provider']=='boat' and request['purpose']=='retained-resume'),'fresh_boot_scope_invalid')
  require(type(request['generation']) is int and 1<=request['generation']<2**63,'fresh_boot_generation_invalid')
  for key in ('operationId','workspaceId','storageIncarnationId','sourceMachineId'):require(isinstance(request[key],str) and SAFE.fullmatch(request[key]),'fresh_boot_binding_invalid')
- pins=request['imagePins'];require(isinstance(pins,dict) and set(pins)==PIN_NAMES and all(isinstance(v,str) and re.fullmatch('[a-f0-9]{64}',v) for v in pins.values()),'fresh_boot_pins_invalid')
+ pins=request['imagePins'];require(isinstance(pins,dict) and PIN_NAMES<=set(pins)<=PIN_NAMES|OPTIONAL_PIN_NAMES and all(isinstance(v,str) and re.fullmatch('[a-f0-9]{64}',v) for v in pins.values()),'fresh_boot_pins_invalid')
  return request
 class Layout:
  def __init__(self,root=Path('/'),owner=0,user=10001):self.root=Path(root);self.owner=owner;self.user=user
@@ -118,6 +123,7 @@ def verify_image(layout,request):
  supervisor=protected_bytes(layout.at('/usr/local/lib/zuse/runtime-supervisor.py'),p['supervisorSha256'],root,limit=131072)
  protected_bytes(layout.at('/etc/systemd/system/'+UNIT),p['serviceSha256'],root,limit=16384)
  protected_bytes(layout.at(HELPER),p['helperSha256'],root,limit=131072)
+ if 'runtimeUpdateHelperSha256' in p:protected_bytes(layout.at(UPDATE_HELPER),p['runtimeUpdateHelperSha256'],root,limit=131072)
  manifest=json.loads(protected_bytes(layout.at('/opt/zuse/preparation/status/manifest.json'),p['manifestSha256'],{layout.owner,layout.user}))
  require(manifest.get('managedBase') is True and manifest.get('credentialsRemoved') is True and manifest.get('repositories')==[] and manifest.get('rustRuntimeSupervisorVersion')==1,'fresh_boot_managed_manifest_invalid')
  (retained_identity(layout,request) if retained(request) else authority_free(layout));return supervisor

@@ -97,19 +97,28 @@ at an idle boundary.
   updated by `rename()` from a root-owned staged copy, so the existing
   `no_symlink`, `nlink==1`, owner and `samefile` checks still hold unchanged.
   The previous binary is kept in `/opt/zuse/runtime/previous`.
-- Download: the runtime (`zuse`) downloads into `~/.zuse-data/runtime-staging/`
-  in the background. It cannot install anything.
-- Install: a new pinned root helper, `runtime-update.py`, runs through the
-  existing loader by provider exec, the same way fresh boot does. It copies the
+- Download: the runtime (`zuse`) downloads, verifies and stages the release in
+  `~/.zuse-data/runtime-updates/staged/<sha256>/` (`zuse-cloud-runtime` +
+  `release.json`) in the background. It cannot install anything.
+- Install (as built): the runtime writes `~/.zuse-data/runtime-updates/request.json`
+  `{sha256, updateId, requestedAt}`. A root systemd path unit
+  (`zuse-runtime-update.path`) starts `zuse-runtime-update.service`, which runs
+  the pinned helper `/usr/local/libexec/zuse/runtime-update.py`. It copies the
   staged file into a root-only directory, fsyncs, then hashes and verifies **the
-  copy** (no TOCTOU on the task-writable file), decompresses, and runs
-  `runtime-capabilities` (`crates/cloud-runtime/src/capabilities.rs`
-  `probe_current`, 5 s cap). Only then does it rename. Its SHA becomes a sixth
-  `ImagePins` entry, so the helper itself needs a base change, but only once.
-- Journal: `/opt/zuse/runtime-update/journal.json`, phases
-  `staged → swapped → probation → committed`. If the supervisor or helper starts
-  and finds `swapped` or `probation` with no commit, it restores `previous` and
-  reports a rollback.
+  copy** (no TOCTOU on the task-writable file) and its Ed25519 signature
+  (`openssl pkeyutl`, key in `/usr/local/share/zuse/runtime-release-signing.pub`),
+  and runs `runtime-capabilities` as the task user (5 s cap). It re-reads
+  `request.json` right before the rename; a runtime that stopped waiting
+  deletes it, and the update is abandoned. It restarts nothing: `committed` in
+  `/var/lib/zuse/runtime-update/result.json` means "installed", and the
+  runtime then execs the installed path in place and owns probation. A runtime
+  that fails probation writes `rollback.json` and the helper restores
+  `previous`. Its SHA is the optional sixth `ImagePins` entry
+  `runtimeUpdateHelperSha256`.
+- Journal: `/var/lib/zuse/runtime-update/journal.json`, phases
+  `staged → swapped → committed` (or `failed` / `rolled-back`). At boot
+  `zuse-runtime-update-recover.service` restores `previous` from a journal left
+  in `staged` or `swapped` and reports a rollback.
 - The manifest is **not** rewritten, because it is base evidence pinned by
   `manifestSha256`. Launch verification changes from "installed runtime ==
   manifest `commandAdmission.runtimeSha256`" to "installed runtime == the

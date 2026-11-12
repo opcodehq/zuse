@@ -52,9 +52,13 @@ fresh)
   codex_ms=$(codex_start)
   mkdir -p "$STATE"
   echo retained > "$STATE/disk-marker" && sync
-  printf '{"runtimeSha256":"%s","runtimeVersion":"%s","claudeAnswers":%s,"codexInitializeMs":%s,"git":%s,"sudo":%s,"sshd":%s,"taskUser":%s,"cpus":%s}\n' \
+  # In-place runtime updates (root bases): helper, units and release key.
+  # Reported, not required: bases built before the helper stay certifiable.
+  runtime_update=$(ok test -f /usr/local/libexec/zuse/runtime-update.py -a -f /etc/systemd/system/zuse-runtime-update.path \
+    -a -f /etc/systemd/system/zuse-runtime-update.service -a -s /usr/local/share/zuse/runtime-release-signing.pub)
+  printf '{"runtimeSha256":"%s","runtimeVersion":"%s","claudeAnswers":%s,"codexInitializeMs":%s,"git":%s,"sudo":%s,"sshd":%s,"taskUser":%s,"cpus":%s,"runtimeUpdateInstalled":%s}\n' \
     "$runtime_sha" "$runtime_version" "$claude_ok" "$codex_ms" \
-    "$(ok git --version)" "$(ok as_task sudo -n true)" "$(ok test -x /usr/sbin/sshd)" "$(ok id zuse)" "$(nproc)"
+    "$(ok git --version)" "$(ok as_task sudo -n true)" "$(ok test -x /usr/sbin/sshd)" "$(ok id zuse)" "$(nproc)" "$runtime_update"
   ;;
 before)
   mkdir -p "$STATE"

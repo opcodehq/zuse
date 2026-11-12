@@ -362,6 +362,12 @@ async fn lifecycle(run: &mut Run<'_>, target: &Target, options: &Options, starte
     }
     run.trait_("sshAvailable", fresh["sshd"].clone());
     run.trait_("cpus", fresh["cpus"].clone());
+    // A trait, not a check: bases without the in-place runtime update helper
+    // remain certifiable (they use "Update computer" instead).
+    run.trait_(
+        "runtimeUpdateInstalled",
+        json!(fresh["runtimeUpdateInstalled"] == true),
+    );
 
     match run.script("before").await {
         Ok(value) if value["agentRunning"] == true => {

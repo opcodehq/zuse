@@ -20,7 +20,8 @@ elif [[ -e "$bundle_root/derivation.json" ]]; then
 fi
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq ca-certificates git gh openssh-client ripgrep python3 build-essential sudo util-linux zlib1g
+# openssl (>= 3.0) verifies Ed25519 runtime release signatures in runtime-update.py.
+apt-get install -y -qq ca-certificates git gh openssh-client ripgrep python3 build-essential sudo util-linux zlib1g openssl
 # SSH access starts its own loopback-only sshd on demand. Images without an SSH
 # server (Daytona's container base) get the binary, never a listening service,
 # and no shared host keys: each computer generates its own on first use.
@@ -138,6 +139,22 @@ for helper in runtime-repair.py runtime-recreation.py; do
 done
 install -m 555 "$bundle_root/runtime-supervisor.py" /usr/local/lib/zuse/.runtime-supervisor.next
 mv -T /usr/local/lib/zuse/.runtime-supervisor.next /usr/local/lib/zuse/runtime-supervisor.py
+# In-place runtime updates (internal-docs/cloud-runtime-updates.md). The root
+# helper is pinned as runtimeUpdateHelperSha256; the public key verifies signed
+# runtime releases and must equal RELEASE_SIGNING_PUBLIC_KEY in
+# crates/protocol/src/cloud_runtime_updates.rs.
+if [[ -e "$bundle_root/runtime-update.py" ]]; then
+  [[ -f "$bundle_root/runtime-update.py" && ! -L "$bundle_root/runtime-update.py" ]]
+  openssl version | grep -E '^OpenSSL [3-9]\.' >/dev/null || { printf '%s\n' runtime_update_openssl_required >&2; exit 1; }
+  install -d -o root -g root -m 755 /usr/local/libexec /usr/local/libexec/zuse
+  install -m 555 "$bundle_root/runtime-update.py" /usr/local/libexec/zuse/.runtime-update.next
+  mv -T /usr/local/libexec/zuse/.runtime-update.next /usr/local/libexec/zuse/runtime-update.py
+  install -d -o root -g root -m 755 /usr/local/share/zuse /opt/zuse/runtime /opt/zuse/runtime/releases /var/lib/zuse/runtime-update
+  install -d -o root -g root -m 700 /opt/zuse/runtime/.work
+  printf '%s\n' 'CTEMp+P0mILHcWFjITtV0yipAeHMNdlho7pxbsntKd8=' > /usr/local/share/zuse/.runtime-release-signing.pub.next
+  chmod 644 /usr/local/share/zuse/.runtime-release-signing.pub.next
+  mv -T /usr/local/share/zuse/.runtime-release-signing.pub.next /usr/local/share/zuse/runtime-release-signing.pub
+fi
 # New opt-in image policy is validated without changing ordinary boot behavior.
 # Factory preparation still proves an idle resident. The publisher atomically
 # stops it and disables ONLY the post-hydration image before snapshot capture.
@@ -210,7 +227,52 @@ TimeoutStopSec=10
 WantedBy=multi-user.target
 EOF
   chmod 644 /etc/systemd/system/zuse-runtime-supervisor.service
+  if [[ -f /usr/local/libexec/zuse/runtime-update.py ]]; then
+    # The task user writes request.json (install) or rollback.json (the new
+    # runtime failed probation); root swaps the runtime and restarts nothing.
+    # The helper trusts nothing it did not copy and verify itself.
+    cat > /etc/systemd/system/zuse-runtime-update.path <<'EOF'
+[Unit]
+Description=Zuse runtime update request
+[Path]
+PathExists=/home/zuse/.zuse-data/runtime-updates/request.json
+PathExists=/home/zuse/.zuse-data/runtime-updates/rollback.json
+Unit=zuse-runtime-update.service
+[Install]
+WantedBy=multi-user.target
+EOF
+    cat > /etc/systemd/system/zuse-runtime-update.service <<'EOF'
+[Unit]
+Description=Zuse runtime update (root swap helper)
+[Service]
+Type=oneshot
+User=root
+UMask=0022
+Environment=PATH=/usr/bin:/bin
+ExecStart=/usr/bin/python3 -I -B /usr/local/libexec/zuse/runtime-update.py run
+TimeoutStartSec=180
+EOF
+    cat > /etc/systemd/system/zuse-runtime-update-recover.service <<'EOF'
+[Unit]
+Description=Zuse runtime update boot recovery
+After=local-fs.target
+Before=zuse-runtime-supervisor.service zuse-runtime-update.path
+[Service]
+Type=oneshot
+User=root
+UMask=0022
+Environment=PATH=/usr/bin:/bin
+ExecStart=/usr/bin/python3 -I -B /usr/local/libexec/zuse/runtime-update.py recover
+[Install]
+WantedBy=multi-user.target
+EOF
+    chmod 644 /etc/systemd/system/zuse-runtime-update.path /etc/systemd/system/zuse-runtime-update.service /etc/systemd/system/zuse-runtime-update-recover.service
+  fi
   systemctl daemon-reload
+  if [[ -f /usr/local/libexec/zuse/runtime-update.py ]]; then
+    systemctl enable zuse-runtime-update-recover.service
+    systemctl enable --now zuse-runtime-update.path
+  fi
   systemctl enable --now zuse-runtime-supervisor.service
 fi
 supervisor_ready=false
