@@ -968,7 +968,7 @@ impl RuntimeControl {
         let head = request.session_head_version.unwrap_or(0);
         self.runtime_scope_access(id, credential, now).await?;
         let mut tx = self.pool.begin().await?;
-        let (row, _, _) = locked_workspace(&mut tx, id).await?;
+        let (row, generation, _) = locked_workspace(&mut tx, id).await?;
         if !enrollment_matches(&row)
             || blocked(&row)
             || row["desired_state"] != "ready"
@@ -1018,7 +1018,10 @@ impl RuntimeControl {
                 config["startupTimings"]["agentReadyAt"] = json!(now);
             }
             sqlx::query("UPDATE api_cloud_workspaces SET runtime_state='online',request_config=$2,revision=revision+1,updated_at=GREATEST(updated_at+1,$3) WHERE workspace_id=$1")
-                .bind(id).bind(config).bind(now).execute(&mut *tx).await?;
+                .bind(id).bind(&config).bind(now).execute(&mut *tx).await?;
+            proposed["runtime_state"] = json!("online");
+            proposed["request_config"] = config;
+            Self::reconcile_abandoned_allocation(&mut tx, &proposed, generation, now).await?;
             tx.commit().await?;
             self.notify_task_drain();
             return Ok(json!({"agentReady":true,"workspaceReady":false}));
@@ -1066,6 +1069,7 @@ impl RuntimeControl {
         .bind(id)
         .fetch_one(&mut *tx)
         .await?;
+        Self::reconcile_abandoned_allocation(&mut tx, &row, generation, now).await?;
         tx.commit().await?;
         Ok(crate::store::Workspace { row }.public())
     }
