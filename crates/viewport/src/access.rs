@@ -40,6 +40,7 @@ mod tests {
             // Selecting an existing chat still uses its own saved access.
             view.selected = Some(json!({"id":"existing","deviceId":"local","config":{"harness":"codex","sandbox":"auto"}}));
             view.workspace_synced = true;
+            view.model_confirmed = true;
             view.choose_access(SandboxLevel::WorkspaceWrite, cx);
             assert!(view.access_save.is_some());
             assert_eq!(view.preferences.default_permission_mode.sandbox(), SandboxLevel::WorkspaceWrite);

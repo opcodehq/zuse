@@ -68,6 +68,7 @@ mod previews;
 mod project_actions;
 pub mod project_archive;
 mod project_archive_host;
+mod project_setup;
 pub mod provider_accounts;
 pub mod provider_options;
 mod provider_settings;
@@ -85,6 +86,7 @@ mod settings_view;
 mod shell;
 pub mod sidebar_controls;
 mod sidebar_host;
+pub mod slack_settings;
 pub mod styling;
 mod terminals;
 mod thread_actions;
@@ -133,6 +135,8 @@ pub struct WorkspaceView {
     cloud: cloud::Cloud,
     cloud_models: cloud::models::State,
     repository_panel: Entity<cloud_repositories::RepositoryPanel>,
+    slack_panel: Entity<slack_settings::SlackPanel>,
+    slack_requests: HashMap<u64, u64>,
     repository_requests: HashMap<u64, u64>,
     billing: cloud_billing::Billing,
     cloud_settings_focus: [FocusHandle; 2],
@@ -177,6 +181,12 @@ pub struct WorkspaceView {
     tool_results: HashMap<String, tool_results::ToolResultView>,
     tool_result_requests: HashMap<u64, (String, usize)>,
     transcript_scroll: ScrollHandle,
+    /// Older host history just replaced the transcript: the scroll height
+    /// and offset before it, so the reader's place survives the insert.
+    history_growth: Option<(gpui::Pixels, gpui::Point<gpui::Pixels>)>,
+    /// First message an automatic earlier-history request was made from. A
+    /// page that adds nothing leaves it unchanged and falls back to a click.
+    history_auto_from: Option<String>,
     input_answers: HashMap<String, zuse_protocol::input_answers::InputAnswers>,
     input_pending: HashMap<u64, String>,
     input_submitted: std::collections::HashSet<String>,
@@ -235,6 +245,9 @@ pub struct WorkspaceView {
     paired: bool,
     account_remote: bool,
     pairing_origin: String,
+    pairing_app_origin: Option<String>,
+    pairing_self_signed: bool,
+    saved_computers: Value,
     pairings: Value,
     pairing_name: Entity<input::TextInput>,
     pairing_fragment: Option<String>,
@@ -285,6 +298,9 @@ pub struct WorkspaceView {
     spaces: Vec<zuse_protocol::Space>,
     project: Option<Value>,
     project_picker: bool,
+    project_error: Option<String>,
+    project_setup: project_setup::ProjectSetup,
+    software_renderer: bool,
     project_input: Entity<input::TextInput>,
     sidebar_controls: Entity<sidebar_controls::SidebarControls>,
     sidebar_control_requests: HashMap<u64, u64>,
@@ -431,6 +447,28 @@ impl WorkspaceView {
         .detach();
         let creation_source_picker = Self::new_creation_sources(cx);
         let import_picker = Self::new_import_menu(cx);
+        let slack_panel = cx.new(|cx| slack_settings::SlackPanel::new(window, cx));
+        cx.observe(&slack_panel, |_, _, cx| cx.notify()).detach();
+        cx.subscribe(
+            &slack_panel,
+            |this, _, event: &cloud_repositories::Request, _cx| match event {
+                cloud_repositories::Request::Call { id, method, params } => {
+                    let remote = this.call(method, params.clone());
+                    this.slack_requests.insert(remote, *id);
+                }
+                cloud_repositories::Request::Cancel { id } => {
+                    if let Some(remote) = this
+                        .slack_requests
+                        .iter()
+                        .find_map(|(r, l)| (*l == *id).then_some(*r))
+                    {
+                        this.slack_requests.remove(&remote);
+                        this.cancel(remote);
+                    }
+                }
+            },
+        )
+        .detach();
         let repository_panel = cx.new(|cx| cloud_repositories::RepositoryPanel::new(window, cx));
         cx.observe(&repository_panel, |_, _, cx| cx.notify())
             .detach();
@@ -474,7 +512,7 @@ impl WorkspaceView {
         cx.subscribe_in(
             &project_input,
             window,
-            |this, _, _: &input::Submitted, _, cx| this.add_project(cx),
+            |this, _, _: &input::Submitted, _, cx| this.submit_project_path(cx),
         )
         .detach();
         cx.subscribe_in(
@@ -628,6 +666,16 @@ impl WorkspaceView {
                 }
                 this.repository_panel
                     .update(cx, |panel, cx| panel.interrupted(cx));
+                for remote in this
+                    .slack_requests
+                    .drain()
+                    .map(|(id, _)| id)
+                    .collect::<Vec<_>>()
+                {
+                    this.pending.remove(&remote);
+                }
+                this.slack_panel
+                    .update(cx, |panel, cx| panel.interrupted(cx));
                 cx.notify();
             });
         });
@@ -681,6 +729,8 @@ impl WorkspaceView {
             cloud_archive: Default::default(),
             cloud: Default::default(),
             cloud_models: Default::default(),
+            slack_panel,
+            slack_requests: HashMap::new(),
             repository_panel,
             repository_requests: HashMap::new(),
             billing: Default::default(),
@@ -713,6 +763,8 @@ impl WorkspaceView {
             tool_results: HashMap::new(),
             tool_result_requests: HashMap::new(),
             transcript_scroll: ScrollHandle::new(),
+            history_growth: None,
+            history_auto_from: None,
             input_answers: HashMap::new(),
             input_pending: HashMap::new(),
             input_submitted: Default::default(),
@@ -773,6 +825,9 @@ impl WorkspaceView {
             managed_access: Default::default(),
             managed_name,
             pairing_origin: String::new(),
+            pairing_app_origin: None,
+            pairing_self_signed: false,
+            saved_computers: Value::Null,
             pairings: Value::Null,
             pairing_name,
             pairing_fragment: None,
@@ -822,6 +877,9 @@ impl WorkspaceView {
             spaces: vec![],
             project: None,
             project_picker: false,
+            project_error: None,
+            project_setup: project_setup::ProjectSetup::new(window, cx),
+            software_renderer: false,
             project_input,
             sidebar_controls,
             sidebar_control_requests: Default::default(),
@@ -1016,6 +1074,8 @@ impl WorkspaceView {
                     .as_str()
                     .map(|id| (id.to_owned(), value["orgId"].as_str().map(str::to_owned)));
                 self.repository_panel
+                    .update(cx, |panel, cx| panel.bind_owner(owner.clone(), cx));
+                self.slack_panel
                     .update(cx, |panel, cx| panel.bind_owner(owner, cx));
             }
         }
@@ -1035,6 +1095,24 @@ impl WorkspaceView {
                     .ok_or_else(|| "Repository response was interrupted.".into())
             };
             self.repository_panel
+                .update(cx, |panel, cx| panel.receive(local, result, cx));
+            return;
+        }
+        if let Some((remote, local)) = frame["id"]
+            .as_u64()
+            .and_then(|id| self.slack_requests.remove(&id).map(|local| (id, local)))
+        {
+            self.pending.remove(&remote);
+            let result = if let Some(error) = frame["err"].as_str() {
+                Err(error.to_owned())
+            } else {
+                frame
+                    .get("ok")
+                    .or_else(|| frame.get("item"))
+                    .cloned()
+                    .ok_or_else(|| "Slack response interrupted.".into())
+            };
+            self.slack_panel
                 .update(cx, |panel, cx| panel.receive(local, result, cx));
             return;
         }
@@ -1090,6 +1168,16 @@ impl WorkspaceView {
         }
         if let Some(paired) = frame["paired"].as_bool() {
             self.paired = paired;
+        }
+        if frame["softwareRenderer"] == true {
+            self.software_renderer = true;
+            cx.notify();
+            return;
+        }
+        if let Some(computers) = frame.get("savedComputers") {
+            self.saved_computers = computers.clone();
+            cx.notify();
+            return;
         }
         if frame.get("linkRoute").is_some() {
             self.link_route = frame["linkRoute"].clone();
@@ -1208,6 +1296,9 @@ impl WorkspaceView {
             }
             return;
         }
+        if self.receive_project_setup(id, &frame, cx) {
+            return;
+        }
         if self.receive_usage(id, &frame, cx) {
             return;
         }
@@ -1294,6 +1385,13 @@ impl WorkspaceView {
                     | methods::CLOUD_ACCOUNT_STATUS
             ) {
                 self.account_action_error = Some(error.into());
+            }
+            if method == methods::ADD_REPO {
+                if self.add_plain_project_folder(error, cx) {
+                    self.pending.remove(&id);
+                    return;
+                }
+                self.project_error = Some(error.into());
             }
             self.error = Some(error.into());
             if let Some(draft) = self.send_draft.remove(&id) {
@@ -1904,7 +2002,7 @@ impl WorkspaceView {
                 .focus_handle(cx)
                 .is_focused(window)
         {
-            self.add_project(cx);
+            self.submit_project_path(cx);
             return;
         }
         if self
@@ -2104,3 +2202,5 @@ pub fn initialize(cx: &mut App) {
         )
         .expect("bundled interface fonts");
 }
+
+pub mod zot_issues;

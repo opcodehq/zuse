@@ -614,6 +614,7 @@ impl Element for DockedComposer {
             if !state.frame.docked {
                 let hero_limit = ((self.viewport_height - height) * 0.5 - 8.0).max(0.0);
                 geometry.limit = geometry.limit.min(hero_limit);
+                geometry.height = geometry.height.min(hero_limit);
                 geometry.content_height =
                     geometry.content_height.min(hero_limit).max(geometry.height);
             }
@@ -701,6 +702,10 @@ impl IntoElement for DockedComposer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Inside the invisible interval: past the fade-out (progress 0.18) and the
+    /// geometry switch, before the fade-in begins (0.26).
+    const HIDDEN: f32 = 0.24 * panel_handoff::DURATION;
     use gpui::{Context, Render, canvas, div, prelude::*};
 
     fn attachment_layout(outer_width: f32) -> DockLayout {
@@ -737,7 +742,9 @@ mod tests {
             assert_eq!(compact, frame.amount);
             assert!(reflow.active());
 
-            now += std::time::Duration::from_millis(16);
+            // The route glide settles in ~240ms, so the first correction step has
+            // to be sub-frame for the painted height to stay within a few px.
+            now += std::time::Duration::from_millis(1);
             let (offset, _) = reflow.sample(target, frame, false, now);
             let painted = target.height(frame.amount) + offset;
             assert!((painted - source.height(frame.amount)).abs() < 5.0);
@@ -841,8 +848,10 @@ mod tests {
                     state.observe_column(docked, (0.0, target_pane), true, at);
                     assert_eq!(state.tick(docked, false, at).dissolve(), 1.0);
                 }
-                let at =
-                    now + std::time::Duration::from_secs_f32(0.321 * crate::motion::speed_scale());
+                let at = now
+                    + std::time::Duration::from_secs_f32(
+                        (panel_handoff::DURATION + 0.001) * crate::motion::speed_scale(),
+                    );
                 state.observe_column(docked, (0.0, target_pane), true, at);
                 assert_eq!(
                     state.tick(docked, false, at).dissolve(),
@@ -896,7 +905,7 @@ mod tests {
                 state.tick(docked, false, now);
                 assert_eq!(state.layout_width(target, false, now), source);
                 let hidden =
-                    now + std::time::Duration::from_secs_f32(0.075 * crate::motion::speed_scale());
+                    now + std::time::Duration::from_secs_f32(HIDDEN * crate::motion::speed_scale());
                 state.observe_column(docked, (0.0, target_pane), true, hidden);
                 state.tick(docked, false, hidden);
                 assert_eq!(state.opacity(), 0.0);
@@ -928,12 +937,13 @@ mod tests {
         state.position = Some((Glide::new(100.0), Glide::new(700.0)));
         state.observe_column(false, (0.0, 0.0), true, now);
         assert_eq!(state.tick(false, false, now).amount, 1.0);
-        let hidden = now + std::time::Duration::from_secs_f32(0.075 * crate::motion::speed_scale());
+        let hidden =
+            now + std::time::Duration::from_secs_f32(HIDDEN * crate::motion::speed_scale());
         state.observe_column(false, (0.0, 0.0), true, hidden);
         let frame = state.tick(false, false, hidden);
         assert_eq!(state.opacity(), 0.0);
         assert_eq!(frame.amount, 0.0);
-        for seconds in [0.321, 0.400, 0.500] {
+        for seconds in [panel_handoff::DURATION + 0.001, 0.400, 0.500] {
             let at =
                 now + std::time::Duration::from_secs_f32(seconds * crate::motion::speed_scale());
             state.observe_column(false, (0.0, 0.0), true, at);

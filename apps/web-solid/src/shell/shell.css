@@ -1,0 +1,46 @@
+/* The window frame: the sidebar on the window surface, the conversation and the workspace panel as inset cards.
+   Metrics from crates/viewport/src/workspace_style.rs (4px gutter, 8px radius) and crates/ui/src/shell.rs. */
+.app { display: flex; height: 100%; background: var(--shell); position: relative; --app-card-line: color-mix(in srgb, var(--hairline) 70%, transparent); }
+.app[data-resizing] { cursor: col-resize; user-select: none; }
+/* Columns clip rather than scroll, so focus or a scrolled-to element can never shift the content behind the mask. */
+.app-sidebar { flex-shrink: 0; height: 100%; display: flex; min-width: 0; position: relative; overflow: hidden; overflow: clip; }
+.app-sidebar-inner { flex-shrink: 0; height: 100%; display: flex; flex-direction: column; min-width: 0; position: relative; }
+.app-main { flex: 1; min-width: 0; display: flex; padding: var(--gutter); position: relative; }
+/* Both cards carry desktop's 5% hairline; the seams between them read as that line, not as extra rules. */
+.app-pane {
+  flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--bg);
+  border: 1px solid var(--app-card-line); border-radius: var(--radius); overflow: hidden; position: relative;
+}
+.app-right-slot { flex-shrink: 0; height: 100%; position: relative; overflow: hidden; overflow: clip; }
+.app-right {
+  display: flex; flex-direction: column; background: var(--bg);
+  border: 1px solid var(--app-card-line); border-radius: var(--radius); overflow: hidden;
+}
+.app-right-slot > .app-right { position: absolute; top: 0; right: 0; bottom: 0; }
+.app-chat { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.fatal { display: grid; place-content: center; gap: 12px; height: 100%; padding: 32px; text-align: center; color: var(--text-muted); }
+.fatal h1 { margin: 0; font-size: var(--text-lg); color: var(--text-strong); font-weight: 600; }
+
+/* Column seams: a 20px target centred on the gutter. At rest the cards' hairlines are the divider; hover fades in
+   a stronger centre line that melts toward both ends, held while dragging (desktop's resize_handle). */
+.app-seam { position: absolute; bottom: 0; width: 20px; z-index: 20; cursor: col-resize; outline: none; touch-action: none; }
+.app-seam::after {
+  content: ""; position: absolute; top: 0; bottom: 0; left: 50%; width: 1px; margin-left: -0.5px;
+  background: linear-gradient(to bottom, transparent, var(--border-strong) 50%, transparent);
+  opacity: 0; transition: opacity 150ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.app-seam:hover::after, .app-seam[data-active]::after, .app-seam:focus-visible::after { opacity: 1; }
+.app-seam:focus-visible::after { background: linear-gradient(to bottom, transparent, var(--accent) 50%, transparent); }
+[data-reduce-motion="on"] .app-seam::after { transition: none; }
+
+/* Narrow windows and phones: the sidebar is a drawer over the chat and the right panel fills the window. */
+.app-scrim { display: none; }
+@media (max-width: 800px) {
+  .app-scrim { display: block; position: fixed; inset: 0; z-index: 40; border: 0; padding: 0; background: var(--scrim); }
+  .app[data-narrow] .app-sidebar {
+    position: fixed; top: 0; bottom: 0; left: 0; z-index: 41; width: min(300px, 86vw);
+    background: var(--shell); box-shadow: 0 0 24px rgb(0 0 0 / 0.35); outline: none;
+  }
+  .app[data-narrow] .app-sidebar-inner { width: 100%; }
+  .app[data-narrow] .app-right { position: absolute; inset: var(--gutter); z-index: 10; }
+}

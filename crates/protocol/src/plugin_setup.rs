@@ -107,13 +107,19 @@ pub struct DetectedServer {
     pub env: BTreeMap<String, String>,
     #[serde(default)]
     pub url: Option<String>,
+    /// HTTP headers for URL servers. Values are credentials, like `env`.
+    #[serde(default)]
+    pub headers: BTreeMap<String, String>,
+    /// The configured transport (`stdio`, `http`, `sse`), when the app records one.
+    #[serde(default)]
+    pub transport: Option<String>,
 }
 
 impl DetectedServer {
-    /// One-line summary safe to show: the command or URL, never env values.
+    /// One-line summary safe to show: the command or URL, never env or header values.
     pub fn summary(&self) -> String {
         match (&self.url, &self.command) {
-            (Some(url), _) => url.clone(),
+            (Some(url), _) => display_url(url),
             (None, Some(command)) => std::iter::once(command.as_str())
                 .chain(self.args.iter().map(String::as_str))
                 .collect::<Vec<_>>()
@@ -129,10 +135,20 @@ impl DetectedServer {
         return_to: PluginReturnTo,
     ) -> Result<PluginRequest, &'static str> {
         if let Some(url) = &self.url {
+            if !self.hosted() {
+                return local_url_request(tenant, &self.name, url, self.headers.clone());
+            }
+            // The hosted form carries at most one credential header.
+            let (auth, header, secret) = match self.headers.iter().next() {
+                Some((header, value)) => (ServerAuth::Header, header.clone(), value.clone()),
+                None => (ServerAuth::Automatic, String::new(), String::new()),
+            };
             return ServerDraft {
                 name: self.name.clone(),
                 url: url.clone(),
-                ..Default::default()
+                auth,
+                header,
+                secret,
             }
             .request(tenant, return_to);
         }
@@ -144,7 +160,171 @@ impl DetectedServer {
         }
         .request(tenant)
     }
+    /// Public HTTPS servers go to the hosted service, so OAuth keeps working.
+    /// Anything only this computer can reach, legacy SSE, or several headers
+    /// runs as a local plugin instead.
+    pub fn hosted(&self) -> bool {
+        self.url.as_deref().is_some_and(public_https)
+            && self.headers.len() <= 1
+            && !self
+                .transport
+                .as_deref()
+                .is_some_and(|t| t.eq_ignore_ascii_case("sse"))
+    }
 }
+
+/// Whether `url` is HTTPS on a host the hosted service could reach.
+pub fn public_https(url: &str) -> bool {
+    let Ok(parsed) = url::Url::parse(url.trim()) else {
+        return false;
+    };
+    if parsed.scheme() != "https" {
+        return false;
+    }
+    match parsed.host() {
+        Some(url::Host::Domain(host)) => {
+            let host = host.trim_end_matches('.').to_ascii_lowercase();
+            host.contains('.')
+                && ![".localhost", ".local", ".internal", ".lan", ".home.arpa"]
+                    .iter()
+                    .any(|suffix| host.ends_with(suffix))
+        }
+        Some(url::Host::Ipv4(ip)) => public_ipv4(ip),
+        Some(url::Host::Ipv6(ip)) => match ip.to_ipv4_mapped() {
+            Some(ip) => public_ipv4(ip),
+            None => {
+                let first = ip.segments()[0];
+                !(ip.is_loopback()
+                    || ip.is_unspecified()
+                    || first & 0xfe00 == 0xfc00
+                    || first & 0xffc0 == 0xfe80)
+            }
+        },
+        None => false,
+    }
+}
+
+fn public_ipv4(ip: std::net::Ipv4Addr) -> bool {
+    let [a, b, ..] = ip.octets();
+    !(ip.is_loopback()
+        || ip.is_private()
+        || ip.is_link_local()
+        || ip.is_unspecified()
+        || ip.is_broadcast()
+        // Carrier-grade NAT, used by mesh VPNs.
+        || (a == 100 && (64..128).contains(&b)))
+}
+
+/// A URL safe to display: no credentials, query or fragment.
+pub fn display_url(url: &str) -> String {
+    let Ok(mut parsed) = url::Url::parse(url.trim()) else {
+        return String::new();
+    };
+    let _ = parsed.set_username("");
+    let _ = parsed.set_password(None);
+    parsed.set_query(None);
+    parsed.set_fragment(None);
+    parsed.to_string()
+}
+
+/// A local plugin that reaches an MCP server by URL with its headers.
+pub fn local_url_request(
+    tenant: &str,
+    name: &str,
+    url: &str,
+    headers: BTreeMap<String, String>,
+) -> Result<PluginRequest, &'static str> {
+    if !tenant.starts_with("personal:") {
+        return Err("Local servers can only be added to your personal workspace.");
+    }
+    let (name, url) = (name.trim(), url.trim());
+    validate_local_url(name, url, &headers)?;
+    Ok(PluginRequest::AddLocalServer {
+        tenant_id: tenant.into(),
+        request_id: uuid::Uuid::new_v4().to_string(),
+        name: name.into(),
+        command: String::new(),
+        args: vec![],
+        env: BTreeMap::new(),
+        url: Some(url.into()),
+        headers,
+    })
+}
+
+/// Set by the HTTP client itself, so a configured header can't override them.
+const RESERVED_HEADERS: &[&str] = &[
+    "accept",
+    "content-type",
+    "content-length",
+    "host",
+    "connection",
+    "transfer-encoding",
+    "mcp-session-id",
+    "mcp-protocol-version",
+    "last-event-id",
+];
+
+/// Shared by the import and by the engine before anything is connected or saved.
+pub fn validate_local_url(
+    name: &str,
+    url: &str,
+    headers: &BTreeMap<String, String>,
+) -> Result<(), &'static str> {
+    if name.trim().is_empty() || name.chars().count() > 60 || name.contains(['\0', '\n', '\r']) {
+        return Err(NAME_INVALID);
+    }
+    let parsed = url::Url::parse(url).map_err(|_| LOCAL_URL_INVALID)?;
+    if url.len() > 8192
+        || !matches!(parsed.scheme(), "http" | "https")
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err(LOCAL_URL_INVALID);
+    }
+    // Credentials only travel unencrypted to a server on this computer.
+    let loopback = match parsed.host() {
+        Some(url::Host::Domain(host)) => {
+            let host = host.trim_end_matches('.').to_ascii_lowercase();
+            host == "localhost" || host.ends_with(".localhost")
+        }
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        None => false,
+    };
+    if parsed.scheme() == "http" && !loopback && !headers.is_empty() {
+        return Err("Use HTTPS to send headers to a server on another computer.");
+    }
+    if headers.len() > 64
+        || headers
+            .iter()
+            .map(|(k, v)| k.len() + v.len())
+            .sum::<usize>()
+            > 64 * 1024
+    {
+        return Err("Headers exceed the request limit.");
+    }
+    for (header, value) in headers {
+        if header.is_empty()
+            || !header
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b))
+            || RESERVED_HEADERS
+                .iter()
+                .any(|r| header.eq_ignore_ascii_case(r))
+        {
+            return Err("Header names must be valid and not reserved by MCP.");
+        }
+        if value.bytes().any(|b| b.is_ascii_control() && b != b'\t') {
+            return Err("Header values can't contain line breaks or control characters.");
+        }
+    }
+    Ok(())
+}
+
+const LOCAL_URL_INVALID: &str =
+    "Enter an HTTP or HTTPS server URL without embedded credentials or a fragment.";
 
 /// The Local form starts from this editable stdio configuration.
 pub const LOCAL_CONFIG_TEMPLATE: &str = r#"{"command":"","args":[]}"#;
@@ -176,6 +356,8 @@ impl LocalServerDraft {
             command,
             args,
             env,
+            url: None,
+            headers: BTreeMap::new(),
         })
     }
 }
@@ -431,6 +613,147 @@ mod tests {
         }
         assert_eq!(
             local("", r#"{"command":"npx"}"#, "personal:user").err(),
+            Some(NAME_INVALID)
+        );
+    }
+    fn detected(url: &str) -> DetectedServer {
+        DetectedServer {
+            source: "Claude".into(),
+            name: "Tools".into(),
+            command: None,
+            args: vec![],
+            env: BTreeMap::new(),
+            url: Some(url.into()),
+            headers: BTreeMap::new(),
+            transport: None,
+        }
+    }
+    #[test]
+    fn public_https_servers_stay_hosted_and_everything_else_runs_locally() {
+        for url in [
+            "https://tools.example/mcp",
+            "https://8.8.8.8/mcp",
+            "https://[2001:db8::1]/mcp",
+            "https://tools.example.com./mcp",
+        ] {
+            assert!(detected(url).hosted(), "{url}");
+            let value = serde_json::to_value(
+                detected(url)
+                    .request("personal:me", PluginReturnTo::Web)
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(value["action"], "addServer", "{url}");
+        }
+        for url in [
+            "http://tools.example/mcp",
+            "http://localhost:3000/mcp",
+            "https://localhost/mcp",
+            "https://app.localhost/mcp",
+            "https://127.0.0.1:8443/mcp",
+            "https://[::1]/mcp",
+            "https://10.0.0.2/mcp",
+            "https://172.16.4.1/mcp",
+            "https://192.168.1.10/mcp",
+            "https://169.254.1.1/mcp",
+            "https://100.100.1.1/mcp",
+            "https://[fd00::1]/mcp",
+            "https://[fe80::1]/mcp",
+            "https://[::ffff:192.168.0.1]/mcp",
+            "https://printer.local/mcp",
+            "https://mcp-box/mcp",
+        ] {
+            assert!(!detected(url).hosted(), "{url}");
+            let request = detected(url)
+                .request("personal:me", PluginReturnTo::Web)
+                .unwrap();
+            let PluginRequest::AddLocalServer {
+                url: Some(saved),
+                command,
+                ..
+            } = request
+            else {
+                panic!("expected a local URL server for {url}");
+            };
+            assert_eq!(saved, url);
+            assert!(command.is_empty());
+            // Local servers stay personal.
+            assert!(
+                detected(url)
+                    .request("organization:team", PluginReturnTo::Web)
+                    .is_err()
+            );
+        }
+        let sse = DetectedServer {
+            transport: Some("sse".into()),
+            ..detected("https://tools.example/sse")
+        };
+        assert!(!sse.hosted());
+    }
+    #[test]
+    fn headers_pick_hosted_api_key_or_local_and_never_leak_into_summaries() {
+        let one = DetectedServer {
+            headers: BTreeMap::from([("X-Api-Key".into(), "secret-one".into())]),
+            ..detected("https://tools.example/mcp?token=secret-query")
+        };
+        assert!(one.hosted());
+        let value =
+            serde_json::to_value(one.request("personal:me", PluginReturnTo::Web).unwrap()).unwrap();
+        assert_eq!(value["apiKey"]["header"], "X-Api-Key");
+        assert_eq!(value["apiKey"]["value"], "secret-one");
+        assert_eq!(one.summary(), "https://tools.example/mcp");
+
+        let many = DetectedServer {
+            headers: BTreeMap::from([
+                ("Authorization".into(), "Bearer secret-two".into()),
+                ("X-Team".into(), "secret-three".into()),
+            ]),
+            ..detected("https://tools.example/mcp")
+        };
+        assert!(!many.hosted());
+        assert!(!many.summary().contains("secret"));
+        let value = serde_json::to_value(many.request("personal:me", PluginReturnTo::Web).unwrap())
+            .unwrap();
+        assert_eq!(value["action"], "addLocalServer");
+        assert_eq!(value["url"], "https://tools.example/mcp");
+        assert_eq!(value["headers"]["X-Team"], "secret-three");
+        // Older UIs deserialize detected servers without the new fields.
+        let old: DetectedServer = serde_json::from_value(
+            serde_json::json!({"source":"Codex","name":"x","url":"http://a"}),
+        )
+        .unwrap();
+        assert!(old.headers.is_empty() && old.transport.is_none());
+    }
+    #[test]
+    fn local_url_validation_rejects_bad_urls_and_headers_without_echoing_values() {
+        let ok = BTreeMap::from([("X-Key".to_owned(), "v".to_owned())]);
+        assert!(validate_local_url("Tools", "http://localhost:1/mcp", &ok).is_ok());
+        for url in [
+            "file:///etc/passwd",
+            "ws://localhost/mcp",
+            "http://user:secret@localhost/mcp",
+            "http://localhost/#secret",
+            "not a url",
+        ] {
+            let error = validate_local_url("Tools", url, &ok).err().unwrap();
+            assert!(!error.contains("secret"), "{url}");
+        }
+        for (header, value) in [
+            ("Bad Header", "secret-value"),
+            ("X-Key\r\nOther", "secret-value"),
+            ("X-Key", "secret-value\nother"),
+            ("Accept", "secret-value"),
+            ("mcp-session-id", "secret-value"),
+            ("", "secret-value"),
+        ] {
+            let headers = BTreeMap::from([(header.to_owned(), value.to_owned())]);
+            let error = validate_local_url("Tools", "http://localhost/mcp", &headers)
+                .err()
+                .unwrap();
+            assert!(!error.contains("secret-value"), "{header}");
+        }
+        assert_eq!(
+            validate_local_url("", "http://localhost/mcp", &ok).err(),
             Some(NAME_INVALID)
         );
     }

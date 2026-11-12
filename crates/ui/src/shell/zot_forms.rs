@@ -14,7 +14,7 @@ pub(super) enum Kind {
 }
 
 pub(super) struct Form {
-    id: String,
+    pub(super) id: String,
     zot: Option<Zot>,
     kind: Kind,
     inputs: Vec<Entity<ComposerInput>>,
@@ -66,7 +66,7 @@ fn fields(kind: &Kind, zot: Option<&Zot>) -> Vec<(&'static str, String, Lines)> 
                 Lines::Single,
             ),
             (
-                "What this Zot is responsible for",
+                "What this Zapper is responsible for",
                 zot.map(|z| z.config.purpose.clone()).unwrap_or_default(),
                 Lines::Prose,
             ),
@@ -305,7 +305,7 @@ impl Shell {
             })
     }
 
-    fn zot_thread_model(&self, zot: &Zot, cx: &App) -> ZotModel {
+    pub(super) fn zot_thread_model(&self, zot: &Zot, cx: &App) -> ZotModel {
         self.state
             .read(cx)
             .chats
@@ -347,7 +347,7 @@ impl Shell {
                 .cloned()
         });
         if form.zot.is_some() && latest.is_none() {
-            error(self, "This Zot no longer exists", cx);
+            error(self, "This Zapper no longer exists", cx);
             return;
         }
         let revision = latest.as_ref().map(|z| z.revision);
@@ -360,7 +360,7 @@ impl Shell {
             Kind::Config => {
                 let name = values[0].trim().to_owned();
                 if name.is_empty() {
-                    error(self, "Give this Zot a name", cx);
+                    error(self, "Give this Zapper a name", cx);
                     return;
                 }
                 let (home_device_id, repositories, worker_device_id) = (
@@ -456,12 +456,13 @@ impl Shell {
                     })
                     .or(form.repositories.first());
                 let Some(repository) = repository else {
-                    error(self, "Add a repository to this Zot first", cx);
+                    error(self, "Add a repository to this Zapper first", cx);
                     return;
                 };
                 let zot = latest.as_ref().or(form.zot.as_ref()).unwrap();
                 let base = values[1].trim();
                 ZotAction::Delegate {
+                    issue_id: None,
                     worker: ZotWorker {
                         chat_id: String::new(),
                         device_id: repository.device_id.clone(),
@@ -490,6 +491,7 @@ impl Shell {
         after: ZotAfter,
         cx: &mut Context<Self>,
     ) {
+        let from_issue_panel = std::mem::take(&mut self.zot_ui.issue_command);
         if self.zot_ui.pending {
             return;
         }
@@ -522,6 +524,7 @@ impl Shell {
         if let Some(previous) = &self.zot_ui.retry {
             let mut comparable = command.clone();
             comparable.command_id = previous.command_id.clone();
+            comparable.expected_revision = previous.expected_revision;
             if let ZotAction::Delegate { worker, .. } = &mut comparable.action {
                 worker.chat_id = format!("zot-worker-{}", previous.command_id);
             }
@@ -545,6 +548,11 @@ impl Shell {
                 match result {
                     Ok(value) => {
                         this.zot_ui.retry = None;
+                        if let Some(panel) =
+                            this.zot_ui.issues.as_ref().filter(|_| from_issue_panel)
+                        {
+                            panel.update(cx, |p, cx| p.committed(cx));
+                        }
                         this.zot_ui.loaded = None;
                         let coordinator = serde_json::from_value::<Option<Zot>>(value)
                             .ok()
@@ -553,6 +561,16 @@ impl Shell {
                         this.finish_zot_command(after, coordinator, cx);
                     }
                     Err(error) => {
+                        // The engine answered: nothing was written, so the
+                        // next attempt is a new command at the current revision.
+                        if !zuse_protocol::zots::command_outcome_unknown(&error.to_string()) {
+                            this.zot_ui.retry = None;
+                        }
+                        if let Some(panel) =
+                            this.zot_ui.issues.as_ref().filter(|_| from_issue_panel)
+                        {
+                            panel.update(cx, |p, cx| p.failed(error.to_string(), cx));
+                        }
                         this.show_notice(crate::toast::ToastKind::Error, error.to_string(), cx)
                     }
                 }
@@ -910,7 +928,7 @@ impl Shell {
                                 div()
                                     .text_size(crate::typography::ui_rems(11.5))
                                     .text_color(theme.text_faint)
-                                    .child("Threads this Zot starts can work in the ones you switch on."),
+                                    .child("Threads this Zapper starts can work in the ones you switch on."),
                             ),
                     )
                     .child(
@@ -998,13 +1016,17 @@ impl Shell {
         let header = div()
             .flex()
             .flex_col()
-            .child(widgets::page_header(&theme, "New Zot", None))
+            .child(widgets::page_header(&theme, "New Zapper", None))
             .child(widgets::page_subtitle(
                 &theme,
-                "A Zot is your captain: it runs work across your repositories, asks when it needs a decision and keeps its notes between conversations.",
+                "A Zapper is your captain: it runs work across your repositories, asks when it needs a decision and keeps its notes between conversations.",
             ));
         let fields = self.zot_form_fields(false, window, cx);
-        let submit = if saving { "Creating…" } else { "Create Zot" };
+        let submit = if saving {
+            "Creating…"
+        } else {
+            "Create Zapper"
+        };
         div()
             .id("zot-page")
             .debug_selector(|| "zot-page".into())
@@ -1263,7 +1285,7 @@ mod tests {
                 label
             })
             .collect();
-        assert_eq!(labels, ["Name", "What this Zot is responsible for"]);
+        assert_eq!(labels, ["Name", "What this Zapper is responsible for"]);
     }
 
     #[test]

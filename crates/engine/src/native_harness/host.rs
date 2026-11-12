@@ -398,7 +398,8 @@ pub(super) fn tools(
         .with_control_context(
             mcp.env.get("ZUSE_CONTROL_TOKEN").cloned(),
             mcp.env.contains_key("ZUSE_ZOT_ID"),
-        ),
+        )
+        .with_worker_context(mcp.env.contains_key("ZUSE_ZOT_WORKER_ID")),
     )))))
 }
 pub(super) fn callbacks(controls: &mut RunControls) -> Arc<Callbacks> {

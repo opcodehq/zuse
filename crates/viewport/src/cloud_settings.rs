@@ -66,7 +66,7 @@ pub fn tabs<T: 'static>(
                         0xa4a8a3
                     }))
                     .when(selected == tab, |view| {
-                        view.bg(palette::rgb(0x0b0c0b)).shadow_xs()
+                        view.bg(palette::rgb(0x151515)).shadow_xs()
                     })
                     .hover(|view| view.text_color(palette::rgb(0xe8e9e7)))
                     .focus_visible(|view| view.border_1().border_color(palette::rgb(0x89ca21)))

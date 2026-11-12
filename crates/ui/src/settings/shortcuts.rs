@@ -1370,6 +1370,10 @@ mod tests {
         cx.run_until_parked();
         cx.update(|window, cx| window.draw(cx).clear());
         assert!(cx.debug_bounds("composer-send-behavior-option-1").is_none());
+        // The conversation card has grown past the test window; bring the toggle
+        // into view before clicking it.
+        page.update(cx, |page, _| page.scroll.scroll.scroll_to_bottom());
+        cx.update(|window, cx| window.draw(cx).clear());
         let escape = cx.debug_bounds("escape-stops-active-agent-toggle").unwrap();
         cx.simulate_click(escape.center(), gpui::Modifiers::default());
         page.update(cx, |page, _| {

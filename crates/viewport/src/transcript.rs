@@ -119,6 +119,7 @@ impl WorkspaceView {
             generation: uuid::Uuid::new_v4(),
             ..Default::default()
         };
+        self.history_growth = None;
         self.context_confirmed = false;
     }
     pub(super) fn begin_transcript(&mut self, cx: &mut Context<Self>) {
@@ -130,6 +131,7 @@ impl WorkspaceView {
         });
         if scope != self.transcript_state.scope {
             self.transcript_state.scope = scope;
+            self.history_auto_from = None;
             self.transcript_state.rows = 32;
             self.transcript_state.bytes = 64 * 1024;
         }
@@ -270,6 +272,12 @@ impl WorkspaceView {
                 self.recover_transcript("The host omitted the initial history snapshot".into(), cx);
                 return;
             }
+            let growth = self.transcript_state.loading_earlier.then(|| {
+                (
+                    self.transcript_scroll.max_offset().y,
+                    self.transcript_scroll.offset(),
+                )
+            });
             let follow = !self.transcript_state.loading_earlier
                 && self.transcript_scroll.max_offset().y + self.transcript_scroll.offset().y
                     <= px(24.);
@@ -291,6 +299,9 @@ impl WorkspaceView {
             }
             self.transcript_state.notice = None;
             self.transcript_state.loading_earlier = false;
+            if growth.is_some() {
+                self.history_growth = growth;
+            }
             if reset || resumed || value.get("historyHasMore").is_some() {
                 self.transcript_state.has_more = value["historyHasMore"].as_bool().unwrap_or(false);
                 self.transcript_state.next_anchor =

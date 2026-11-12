@@ -92,6 +92,7 @@ mod tests {
             "setChatHost",
             "setChatArchived",
             "deleteChat",
+            "forceDeleteChat",
             "unknownFutureAction",
         ] {
             assert!(

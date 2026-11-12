@@ -71,7 +71,7 @@ fn write(path: &Path, rows: Vec<Value>) -> Vec<u8> {
 }
 fn registry(requests: Arc<Mutex<Vec<RunRequest>>>) -> Arc<HarnessRegistry> {
     let registry = Arc::new(HarnessRegistry::new());
-    for id in [HarnessId::ClaudeCode, HarnessId::Codex] {
+    for id in [HarnessId::ClaudeCode, HarnessId::Codex, HarnessId::Opencode] {
         registry.register(Arc::new(Recording {
             id,
             requests: requests.clone(),
@@ -88,6 +88,7 @@ async fn discovery_import_receipts_restart_and_continuation_preserve_provider_hi
     unsafe {
         std::env::set_var("CLAUDE_CONFIG_DIR", &claude);
         std::env::set_var("CODEX_HOME", &codex);
+        std::env::set_var("XDG_DATA_HOME", temp.path().join("data"));
     }
     let source = claude.join("projects/project/native-session.jsonl");
     let bytes = write(
@@ -112,6 +113,29 @@ async fn discovery_import_receipts_restart_and_continuation_preserve_provider_hi
         &codex.join("session_index.jsonl"),
         vec![json!({"id":"original-codex-thread","thread_name":"Archived provider conversation"})],
     );
+    let opencode_db = temp.path().join("data/opencode/opencode.db");
+    std::fs::create_dir_all(opencode_db.parent().unwrap()).unwrap();
+    let db = rusqlite::Connection::open(&opencode_db).unwrap();
+    db.execute_batch("PRAGMA journal_mode=WAL;
+        CREATE TABLE session_v2 (id text PRIMARY KEY, project_id text NOT NULL, parent_id text, slug text NOT NULL, directory text NOT NULL, title text, version text NOT NULL, time_created integer NOT NULL, time_updated integer NOT NULL);
+        CREATE TABLE session_message (id text PRIMARY KEY, session_id text NOT NULL, type text NOT NULL, seq integer NOT NULL, time_created integer NOT NULL, time_updated integer NOT NULL, data text NOT NULL);").unwrap();
+    db.execute("INSERT INTO session_v2 VALUES ('ses_original', 'p', NULL, 'slug', ?1, 'OpenCode conversation', '2.0.21', 1, 2)", [project.to_str().unwrap()]).unwrap();
+    for (seq, kind, data) in [
+        (1, "user", json!({"text":"Original OpenCode question"})),
+        (
+            2,
+            "assistant",
+            json!({"content":[{"type":"text","text":"Original OpenCode answer"}]}),
+        ),
+    ] {
+        db.execute(
+            "INSERT INTO session_message VALUES (?1, 'ses_original', ?2, ?3, ?3, ?3, ?4)",
+            rusqlite::params![format!("msg_{seq}"), kind, seq, data.to_string()],
+        )
+        .unwrap();
+    }
+    drop(db);
+    let opencode_bytes = std::fs::read(&opencode_db).unwrap();
     let requests = Arc::new(Mutex::new(vec![]));
     let profile = temp.path().join("profile");
     let core = EngineCore::assemble(
@@ -123,7 +147,7 @@ async fn discovery_import_receipts_restart_and_continuation_preserve_provider_hi
     .unwrap();
     let client = zuse_rpc::memory_client(core.rpc_service());
     let list: Vec<Row> = client.call_as(wire::LIST, json!({})).await.unwrap();
-    assert_eq!(list.len(), 2);
+    assert_eq!(list.len(), 3);
     assert!(list.iter().all(Row::importable));
     assert!(
         list.iter()
@@ -242,6 +266,42 @@ async fn discovery_import_receipts_restart_and_continuation_preserve_provider_hi
             .contains("Original Codex answer")
     );
     drop(codex_doc);
+    let opencode_row = list
+        .iter()
+        .find(|row| row.provider == HarnessId::Opencode)
+        .unwrap();
+    assert_eq!(opencode_row.title, "OpenCode conversation");
+    let opencode_import: Imported = client
+        .call_as(
+            wire::IMPORT,
+            json!({"id":opencode_row.id,"requestId":uuid::Uuid::new_v4().to_string()}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        opencode_import.chat.harness_session_id.as_deref(),
+        Some("ses_original")
+    );
+    let opencode_doc = core.doc_host.open_local(&opencode_import.chat.id).unwrap();
+    let opencode_history =
+        serde_json::to_string(&opencode_doc.doc().read_entries().unwrap()).unwrap();
+    for text in ["Original OpenCode question", "Original OpenCode answer"] {
+        assert!(opencode_history.contains(text), "Missing {text}");
+    }
+    drop(opencode_doc);
+    client.call("QueueCommand",json!({"chatId":opencode_import.chat.id,"command":{"kind":"run","messageId":"continued-opencode","request":{"prompt":"Continue","cwd":project,"harness":"opencode","sandbox":"workspace-write"}}})).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while requests.lock().unwrap().len() < 2 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        requests.lock().unwrap()[1].resume.as_deref(),
+        Some("ses_original")
+    );
+    assert_eq!(std::fs::read(&opencode_db).unwrap(), opencode_bytes);
     core.workspace.delete_chat(&first.chat.id).unwrap();
     assert!(client.call(wire::IMPORT, import).await.is_err());
     assert!(core.workspace.chat(&first.chat.id).unwrap().is_none());

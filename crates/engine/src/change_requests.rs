@@ -380,6 +380,7 @@ impl CheckoutChangeRequests {
                     error,
                     ChangeRequestError::Authentication
                         | ChangeRequestError::CliUnavailable
+                        | ChangeRequestError::CliOutdated
                         | ChangeRequestError::RateLimited
                 ) {
                     self.inner.timing.failure_max_backoff

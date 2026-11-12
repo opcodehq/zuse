@@ -254,28 +254,13 @@ impl WorkspaceView {
         }
     }
 
-    pub(super) fn open_project_setup(&mut self, cx: &mut Context<Self>) {
-        if self.cloud_controller {
-            self.project_picker = false;
-            self.settings = true;
-            let section = if self.cloud.account.is_some() {
-                crate::settings_view::Section::Cloud
-            } else {
-                crate::settings_view::Section::General
-            };
-            self.select_settings_section(section, cx);
-        } else {
-            self.project_picker = true;
-        }
-        cx.notify();
-    }
-
     pub(super) fn add_project(&mut self, cx: &mut Context<Self>) {
         if self.cloud_controller {
             self.open_project_setup(cx);
             return;
         }
         let path = self.project_input.read(cx).value(cx);
+        self.project_error = None;
         if !path.trim().is_empty() {
             self.call(methods::ADD_REPO, json!({"path":path.trim()}));
         }

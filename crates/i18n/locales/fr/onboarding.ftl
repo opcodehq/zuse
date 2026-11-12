@@ -142,3 +142,133 @@ onboarding-provider_requires_subscription_sentence = Nécessite un abonnement{ "
 onboarding-provider_sessions_will_fail_if_your_plan_doesn_apos_t_include_subscri_sentence = Les sessions échoueront si votre plan n’inclut pas{ " " }{ $plan }. Abonnez-vous (ou confirmez votre forfait existant) avant d'utiliser{ " " }{ $value }.
 
 onboarding-welcome_every_agent_one_workspace_sentence = Tous vos agents,<part0/>un seul espace de travail.
+
+# First-run onboarding
+onboarding-flow_step = Étape { $current } sur { $total }
+onboarding-flow_back = Retour
+onboarding-flow_skip = Passer
+onboarding-flow_skip_setup = Passer la configuration
+onboarding-flow_continue = Continuer
+onboarding-flow_language = Langue
+onboarding-flow_system_language = Langue du système
+onboarding-flow_welcome_title = Bienvenue dans Zuse
+onboarding-flow_welcome_back_title = Bon retour
+onboarding-flow_welcome_body = Exécutez des agents de code côte à côte sur cet ordinateur ou dans le cloud, avec toutes vos discussions au même endroit.
+onboarding-flow_welcome_back_body = Vos discussions de la version précédente de Zuse se trouvent sur cet ordinateur. La configuration les récupère en quelques étapes.
+onboarding-flow_welcome_point_agents = Fonctionne avec les agents que vous utilisez déjà
+onboarding-flow_welcome_point_parallel = Plusieurs discussions à la fois, chacune dans sa propre copie de travail
+onboarding-flow_welcome_point_phone = Suivez et approuvez les actions depuis votre téléphone
+onboarding-flow_get_started = Commencer
+onboarding-flow_agents_title = Vos agents
+onboarding-flow_agents_body = Zuse exécute les applications d'agent installées sur cet ordinateur. Désactivez celles dont vous ne voulez pas dans le sélecteur d'agent.
+onboarding-flow_agents_ready =
+    { $count ->
+        [one] 1 agent prêt
+       *[other] { $count } agents prêts
+    }
+onboarding-flow_agents_loading = Recherche d'agents…
+onboarding-flow_agents_none = Aucun agent trouvé pour l'instant
+onboarding-flow_agents_none_body = Installez une application d'agent, puis activez-la dans Paramètres → Fournisseurs. Vous pouvez continuer pour l'instant.
+onboarding-flow_agents_more =
+    { $count ->
+        [one] 1 autre agent peut être installé plus tard dans Paramètres → Fournisseurs.
+       *[other] { $count } autres agents peuvent être installés plus tard dans Paramètres → Fournisseurs.
+    }
+onboarding-flow_signin_title = Se connecter à Zuse
+onboarding-flow_signin_body = Un compte est facultatif. Avec un compte, la configuration peut récupérer vos outils.
+onboarding-flow_signin_point_mcp = Importez tous vos serveurs MCP d'un coup
+onboarding-flow_signin_point_cloud = Utilisez les mêmes plugins dans les espaces de travail cloud
+onboarding-flow_signin_point_phone = Consultez vos discussions et approuvez les actions depuis votre téléphone
+onboarding-flow_signin_action = Se connecter avec le navigateur
+onboarding-flow_signin_waiting = Terminez la connexion dans votre navigateur…
+onboarding-flow_signin_done = Vous êtes connecté
+onboarding-flow_signin_skip = Passer pour l'instant
+onboarding-flow_mcp_title = Importez vos serveurs MCP
+onboarding-flow_mcp_body = Ces serveurs sont déjà configurés dans les applications d'agent de cet ordinateur. Les agents disposent de ceux que vous choisissez dans chaque discussion.
+onboarding-flow_mcp_loading = Recherche de serveurs MCP…
+onboarding-flow_mcp_waiting = Préparation de vos plugins…
+onboarding-flow_mcp_none = Aucun serveur MCP trouvé
+onboarding-flow_mcp_none_body = Aucune application d'agent de cet ordinateur n'en a de configuré. Vous pourrez ajouter des serveurs plus tard dans Paramètres → Plugins.
+onboarding-flow_mcp_env =
+    { $count ->
+        [one] 1 variable d'environnement
+       *[other] { $count } variables d'environnement
+    }
+onboarding-flow_mcp_import =
+    { $count ->
+        [one] Importer 1 serveur
+       *[other] Importer { $count } serveurs
+    }
+onboarding-flow_mcp_adding = Ajout des serveurs…
+onboarding-flow_mcp_added =
+    { $count ->
+        [one] 1 serveur ajouté
+       *[other] { $count } serveurs ajoutés
+    }
+onboarding-flow_mcp_skipped =
+    { $count ->
+        [one] 1 serveur n'a pas pu être importé.
+       *[other] { $count } serveurs n'ont pas pu être importés.
+    }
+onboarding-flow_chats_title = Importez vos discussions
+onboarding-flow_chats_body = Reprenez là où vous vous étiez arrêté. Les discussions importées conservent leur historique et continuent avec le même agent.
+onboarding-flow_previous_title = Version précédente de Zuse
+onboarding-flow_previous_summary =
+    { $chats ->
+        [one] 1 discussion
+       *[other] { $chats } discussions
+    } · { $projects ->
+        [one] 1 projet
+       *[other] { $projects } projets
+    }
+onboarding-flow_previous_settings = Importer aussi les paramètres pris en charge
+onboarding-flow_chats_loading = Recherche de discussions récentes…
+onboarding-flow_chats_none = Aucune autre discussion trouvée sur cet ordinateur.
+onboarding-flow_chats_import =
+    { $count ->
+        [one] Importer 1 discussion
+       *[other] Importer { $count } discussions
+    }
+onboarding-flow_chats_importing = Importation de { $done } sur { $total }…
+onboarding-flow_chats_imported =
+    { $count ->
+        [one] 1 discussion importée
+       *[other] { $count } discussions importées
+    }
+onboarding-flow_chats_failed =
+    { $count ->
+        [one] 1 discussion n'a pas pu être importée.
+       *[other] { $count } discussions n'ont pas pu être importées.
+    }
+onboarding-flow_personal_title = Personnalisez Zuse
+onboarding-flow_personal_body = Vous pouvez modifier ces options à tout moment dans Paramètres.
+onboarding-flow_appearance = Apparence
+onboarding-flow_access = Les nouvelles discussions démarrent avec
+onboarding-flow_access_ask = Demander avant d'agir
+onboarding-flow_access_ask_body = Les agents demandent avant de modifier des fichiers ou d'exécuter des commandes.
+onboarding-flow_access_auto = Approuver pour moi
+onboarding-flow_access_auto_body = Un réviseur automatique approuve les actions courantes et vous demande pour le reste.
+onboarding-flow_access_full = Accès complet
+onboarding-flow_access_full_body = Les agents agissent sans demander. Idéal avec des arbres de travail ou un ordinateur cloud.
+onboarding-flow_launch_title = Tout est prêt
+onboarding-flow_launch_body = Ajoutez un projet pour donner aux agents un dossier où travailler, ou lancez une discussion tout de suite.
+onboarding-flow_launch_chats =
+    { $count ->
+        [one] 1 discussion prête à reprendre
+       *[other] { $count } discussions prêtes à reprendre
+    }
+onboarding-flow_launch_servers =
+    { $count ->
+        [one] 1 serveur MCP ajouté
+       *[other] { $count } serveurs MCP ajoutés
+    }
+onboarding-flow_launch_open = Ouvrir Zuse
+onboarding-flow_launch_project = Ajouter un projet
+onboarding-flow_launch_open_chats = Ouvrir les discussions importées
+onboarding-flow_source_importing = Importation…
+onboarding-flow_source_picked =
+    { $picked ->
+        [one] { $picked } discussion sur { $count }
+       *[other] { $picked } discussions sur { $count }
+    }
+onboarding-flow_chats_hint = Les applications basées sur ces agents enregistrent leurs discussions au même endroit : elles apparaissent aussi ici.

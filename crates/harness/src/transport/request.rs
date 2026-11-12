@@ -298,6 +298,9 @@ pub(super) fn body(input: &ModelInput, credential: &Credential) -> Result<Value,
             if let Some(reasoning) = &input.reasoning {
                 body["reasoning"] = json!({"effort":reasoning});
             }
+            if route.include_encrypted_reasoning && route.capabilities.reasoning {
+                body["reasoning"]["summary"] = json!("auto");
+            }
             if !route.subscription {
                 body["max_output_tokens"] = json!(route.max_output_tokens);
             }

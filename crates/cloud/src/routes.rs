@@ -393,6 +393,7 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
         .route("/v1/billing/entitlements", get(entitlements))
         .route("/v1/billing/portal", post(billing_portal))
         .route("/v1/billing/prepaid", get(prepaid_balance))
+        .route("/v1/billing/models/usage", get(hosted_model_usage))
         .route(
             "/v1/billing/prepaid/checkout",
             post(prepaid_checkout).layer(DefaultBodyLimit::max(4096)),
@@ -2181,7 +2182,7 @@ async fn billing_checkout(
     let access = state.access(&headers, AccessKind::Billing).await?;
     let Json(body) = body.map_err(|_| ApiError::bad_request("invalid_machine_offer"))?;
     Ok(Json(
-        json!({"checkoutUrl":state.store.billing_checkout(&access.owner_id,&body.offer_id,chrono::Utc::now().timestamp_millis()).await?}),
+        json!({"checkoutUrl":state.store.billing_checkout_with_key(&access.owner_id,&body.offer_id,chrono::Utc::now().timestamp_millis(),body.idempotency_key.as_deref()).await?}),
     ))
 }
 #[derive(Deserialize)]
@@ -2202,6 +2203,10 @@ async fn checkout_complete(
         )
         .await;
     let (title, detail) = match summary {
+        Some(summary) if summary.status=="active" => (
+            "Subscription active",
+            "Return to Zuse and refresh Cloud. Open the billing portal for your payment receipt and taxes.".into(),
+        ),
         Some(summary) if summary.status == "paid" => (
             "Payment confirmed",
             format!(
@@ -2230,6 +2235,28 @@ async fn prepaid_balance(
     let access = state.access(&headers, AccessKind::Billing).await?;
     Ok(Json(state.store.prepaid_balance(&access.owner_id).await?))
 }
+#[derive(Deserialize)]
+struct ModelUsageQuery {
+    cursor: Option<String>,
+    limit: Option<usize>,
+}
+async fn hosted_model_usage(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<ModelUsageQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let access = state.access(&headers, AccessKind::Billing).await?;
+    Ok(Json(
+        state
+            .store
+            .hosted_model_usage(
+                &access.owner_id,
+                query.cursor.as_deref(),
+                query.limit.unwrap_or(50),
+            )
+            .await?,
+    ))
+}
 async fn prepaid_checkout(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -2238,11 +2265,20 @@ async fn prepaid_checkout(
     let access = state.access(&headers, AccessKind::Billing).await?;
     let Json(body) = body.map_err(|_| ApiError::bad_request("invalid_prepaid_amount"))?;
     Ok(Json(
-        json!({"checkoutUrl":state.store.prepaid_checkout(&access.owner_id,body.amount_cents,chrono::Utc::now().timestamp_millis()).await?}),
+        json!({"checkoutUrl":state.store.prepaid_checkout_with_key(&access.owner_id,body.amount_cents,chrono::Utc::now().timestamp_millis(),body.idempotency_key.as_deref()).await?}),
     ))
 }
-async fn prepaid_complete() -> Response {
-    ([(header::CONTENT_TYPE,"text/html; charset=utf-8"),(header::CACHE_CONTROL,"no-store"),(header::CONTENT_SECURITY_POLICY,"default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'"),(header::REFERRER_POLICY,"no-referrer")],"<!doctype html><html lang=en><meta charset=utf-8><meta name=viewport content='width=device-width, initial-scale=1'><title>Zuse credits</title><body style='font-family:system-ui;max-width:480px;margin:80px auto;padding:24px'><h1>Thanks for your purchase</h1><p>Your balance will update once payment is confirmed. Return to Zuse and refresh Cloud to see your credits.</p><p>Credits apply automatically to future Zuse invoices, including subscriptions.</p></body></html>").into_response()
+#[derive(Deserialize)]
+struct PrepaidReturn {
+    funding: Option<String>,
+}
+async fn prepaid_complete(Query(query): Query<PrepaidReturn>) -> Response {
+    let funding = if query.funding.as_deref() == Some("shared-credits") {
+        "These credits fund cloud compute and models billed by Zuse from one balance. Your own agent subscriptions are billed separately."
+    } else {
+        "Credits apply automatically to future Zuse invoices, including subscriptions."
+    };
+    ([(header::CONTENT_TYPE,"text/html; charset=utf-8"),(header::CACHE_CONTROL,"no-store"),(header::CONTENT_SECURITY_POLICY,"default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'"),(header::REFERRER_POLICY,"no-referrer")],format!("<!doctype html><html lang=en><meta charset=utf-8><meta name=viewport content='width=device-width, initial-scale=1'><title>Zuse credits</title><body style='font-family:system-ui;max-width:480px;margin:80px auto;padding:24px'><h1>Thanks for your purchase</h1><p>Your balance will update once payment is confirmed. Return to Zuse and refresh Cloud to see your credits.</p><p>{funding}</p></body></html>")).into_response()
 }
 
 async fn project_list(

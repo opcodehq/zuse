@@ -103,6 +103,17 @@ impl Plugins {
             PluginRequest::AddLocalServer {
                 request_id,
                 name,
+                url: Some(url),
+                headers,
+                ..
+            } => {
+                store
+                    .add_url(request_id, name, url, headers.clone())
+                    .await?
+            }
+            PluginRequest::AddLocalServer {
+                request_id,
+                name,
                 command,
                 args,
                 env,

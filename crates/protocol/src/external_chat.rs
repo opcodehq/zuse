@@ -31,6 +31,7 @@ impl Row {
         let provider = match self.provider {
             HarnessId::ClaudeCode => "Claude Code",
             HarnessId::Codex => "Codex",
+            HarnessId::Opencode => "OpenCode",
             _ => "",
         };
         let fields: [&str; 5] = [

@@ -1,4 +1,4 @@
-//! The Summary tab: the title, branch/reviews/checks facts, then quiet
+//! The Summary tab: the title, branch/status/reviews/checks facts, then quiet
 //! sections for the description, checks, feedback and folded agent tools.
 use super::*;
 use crate::localization::message as tr;
@@ -6,7 +6,7 @@ use zuse_i18n::messages as msg;
 
 /// Width of the property rows' label column (icon and name).
 pub(super) const PROPERTY_LABEL: f32 = 112.0;
-const PROPERTY_HEIGHT: f32 = 28.0;
+const PROPERTY_HEIGHT: f32 = 30.0;
 /// A description this long starts clamped behind Show more.
 const DESCRIPTION_LONG_BYTES: usize = 360;
 const DESCRIPTION_LONG_LINES: usize = 8;
@@ -28,36 +28,61 @@ pub(super) struct HeaderFacts {
     pub changes: Option<(Option<usize>, u64, u64)>,
 }
 
-/// The pull request's lifecycle state as a small tinted pill.
-pub(super) fn state_pill(state: &str, draft: bool, theme: &Theme) -> AnyElement {
+/// How a merge from the header's menu goes through.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum MergeMenu {
+    Closed,
+    /// Merge right away, once GitHub's requirements are met.
+    Now,
+    /// Arm auto-merge for when checks pass.
+    WhenReady,
+    /// Ask GitHub to merge before checks pass.
+    Anyway,
+}
+
+/// The lifecycle state's glyph, tint and word.
+fn state_style(
+    state: &str,
+    draft: bool,
+    theme: &Theme,
+) -> (&'static str, gpui::Hsla, &'static str) {
     let state = if draft { "DRAFT" } else { state };
-    let (label, glyph, color) = match state.to_ascii_uppercase().as_str() {
-        "MERGED" => ("Merged", crate::icons::GIT_MERGE, theme.syntax.keyword),
-        "CLOSED" => ("Closed", crate::icons::PULL_REQUEST_CLOSED, theme.danger),
-        "DRAFT" => ("Draft", crate::icons::PULL_REQUEST_DRAFT, theme.text_muted),
-        _ => ("Open", crate::icons::PULL_REQUEST, theme.success),
-    };
+    match state.to_ascii_uppercase().as_str() {
+        "MERGED" => (crate::icons::GIT_MERGE, theme.syntax.keyword, "Merged"),
+        "CLOSED" => (crate::icons::PULL_REQUEST_CLOSED, theme.danger, "Closed"),
+        "DRAFT" => (crate::icons::PULL_REQUEST_DRAFT, theme.text_muted, "Draft"),
+        _ => (crate::icons::PULL_REQUEST, theme.success, "Open"),
+    }
+}
+
+/// The lifecycle state as a tinted glyph, beside the number in the toolbar.
+pub(super) fn state_mark(state: &str, draft: bool, theme: &Theme) -> AnyElement {
+    let (glyph, color, label) = state_style(state, draft, theme);
     div()
         .id("pr-state")
         .debug_selector(|| "pr-state".into())
         .flex_none()
-        .h(px(22.0))
-        .px(px(8.0))
-        .flex()
-        .items_center()
-        .gap(px(4.0))
-        .rounded_full()
-        .bg(color.opacity(0.14))
-        .text_size(crate::typography::text_xs())
-        .text_color(color)
+        .tooltip(widgets::text_tooltip(label))
         .child(
             crate::icons::icon(glyph)
-                .size(px(12.0))
+                .size(px(14.0))
                 .flex_none()
                 .text_color(color),
         )
-        .child(label)
         .into_any_element()
+}
+
+/// The page's headline, wrapping rather than truncating.
+fn page_title(title: String, theme: &Theme) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id("pr-detail-title")
+        .debug_selector(|| "pr-detail-title".into())
+        .min_w_0()
+        .text_size(crate::typography::text_xl())
+        .line_height(crate::typography::ui_rems(26.0))
+        .font_weight(gpui::FontWeight::MEDIUM)
+        .text_color(theme.text_strong)
+        .child(title)
 }
 
 /// Title, byline with the checkout command, refs with the change totals,
@@ -212,19 +237,7 @@ pub(super) fn detail_header(
         .min_w_0()
         .flex()
         .flex_col()
-        .child(
-            // `page_header` keeps one line; a PR title wraps instead.
-            div()
-                .id("pr-detail-title")
-                .debug_selector(|| "pr-detail-title".into())
-                .px(px(8.0))
-                .min_w_0()
-                .text_size(crate::typography::text_lg())
-                .line_height(crate::typography::ui_rems(22.0))
-                .font_weight(gpui::FontWeight::SEMIBOLD)
-                .text_color(theme.text_strong)
-                .child(title),
-        )
+        .child(page_title(title, theme).px(px(8.0)))
         .child(
             div()
                 .id("pr-detail-meta")
@@ -258,17 +271,6 @@ pub(crate) fn property_row(
     content: impl IntoElement,
     theme: &Theme,
 ) -> gpui::Stateful<gpui::Div> {
-    property_row_tinted(id, glyph, theme.text_muted, label, content, theme)
-}
-
-fn property_row_tinted(
-    id: &str,
-    glyph: &'static str,
-    tint: gpui::Hsla,
-    label: &str,
-    content: impl IntoElement,
-    theme: &Theme,
-) -> gpui::Stateful<gpui::Div> {
     let id = format!("pr-property-{id}");
     div()
         .id(SharedString::from(id.clone()))
@@ -291,7 +293,7 @@ fn property_row_tinted(
                     crate::icons::icon(glyph)
                         .size(px(14.0))
                         .flex_none()
-                        .text_color(tint),
+                        .text_color(theme.text_muted),
                 )
                 .child(div().min_w_0().truncate().child(label.to_owned())),
         )
@@ -309,11 +311,9 @@ fn property_row_tinted(
         )
 }
 
-/// Glyph, color, and the one-line phrase for the checks rollup.
-fn checks_summary(
-    detail: &ChangeRequestDetail,
-    theme: &Theme,
-) -> (&'static str, gpui::Hsla, String) {
+/// The checks rollup as one line: a terminal loader while anything runs,
+/// otherwise the settled mark, then the counts.
+fn checks_summary(detail: &ChangeRequestDetail, theme: &Theme) -> gpui::Div {
     let state = Facts::from_detail(detail).assess().ci.state;
     let statuses: Vec<String> = detail
         .status_check_rollup
@@ -349,15 +349,39 @@ fn checks_summary(
         if passed > 0 {
             parts.push(format!("{passed} passed"));
         }
-        parts.join(" · ")
+        parts.join(", ")
     };
-    let (glyph, color) = match state {
-        CiState::Failed => (crate::icons::CLOSE_CIRCLE, theme.danger),
-        CiState::Pending => (crate::icons::CLOCK_CIRCLE, theme.warning),
-        CiState::Passed => (crate::icons::CHECK_CIRCLE, theme.success),
-        _ => (crate::icons::INFO_CIRCLE, theme.text_muted),
+    let mark = if state == CiState::Pending {
+        crate::loaders::terminal_spinner("pr-checks-running", 14.0, theme.warning)
+    } else {
+        let (glyph, color) = match state {
+            CiState::Failed => (crate::icons::CLOSE_CIRCLE, theme.danger),
+            CiState::Passed => (crate::icons::CHECK, theme.success),
+            _ => (crate::icons::INFO_CIRCLE, theme.text_muted),
+        };
+        crate::icons::icon(glyph)
+            .size(px(14.0))
+            .flex_none()
+            .text_color(color)
+            .into_any_element()
     };
-    (glyph, color, text)
+    div()
+        .min_w_0()
+        .flex()
+        .items_center()
+        .gap(px(6.0))
+        .child(mark)
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .text_color(if state == CiState::Failed {
+                    theme.danger
+                } else {
+                    theme.text
+                })
+                .child(text),
+        )
 }
 
 /// The review decision in words and tone, if GitHub reported one.
@@ -372,7 +396,8 @@ fn review_decision(raw: &str, theme: &Theme) -> Option<(String, gpui::Hsla)> {
 }
 
 impl PullRequestDetailPage {
-    /// Merge, in the pane's header. Choosing a method is the confirmation.
+    /// Merge, in the pane's header. Choosing a method is the confirmation;
+    /// a blocked pull request can still arm auto-merge or try anyway.
     pub(super) fn merge_control(
         &self,
         detail: &ChangeRequestDetail,
@@ -384,18 +409,24 @@ impl PullRequestDetailPage {
             return None;
         }
         let busy = self.updating_pr;
+        let draft = detail.is_draft;
         let mergeable = can_merge(detail);
         let label = if busy {
             "Updating…"
-        } else if detail.is_draft {
+        } else if draft {
             "Ready for review"
         } else {
             "Merge"
         };
-        let enabled = !busy && (detail.is_draft || mergeable);
+        let solid = !busy && (draft || mergeable);
+        let tint = if solid {
+            theme.on_solid
+        } else {
+            theme.text_muted
+        };
         let button = widgets::action_button(
             theme,
-            if enabled {
+            if solid {
                 widgets::ActionTone::Solid
             } else {
                 widgets::ActionTone::Filled
@@ -405,7 +436,7 @@ impl PullRequestDetailPage {
         .debug_selector(|| "pr-primary-merge".into())
         .role(gpui::Role::Button)
         .aria_label(label)
-        .tab_index(if enabled { 0 } else { -1 })
+        .tab_index(if busy { -1 } else { 0 })
         .flex_none()
         .min_h(px(26.0))
         .px(px(10.0))
@@ -413,60 +444,172 @@ impl PullRequestDetailPage {
         .child(
             crate::icons::icon(crate::icons::GIT_MERGE)
                 .size(px(13.0))
-                .text_color(if enabled {
-                    theme.on_solid
-                } else {
-                    theme.text_muted
-                }),
+                .text_color(tint),
         )
         .child(label)
-        .when(!enabled, |el| el.opacity(0.6).cursor_default())
-        .when(enabled, |el| {
+        .when(!draft && !busy, |el| {
+            el.child(
+                crate::icons::icon(crate::icons::ALT_ARROW_DOWN)
+                    .size(px(11.0))
+                    .text_color(tint),
+            )
+        })
+        .when(busy, |el| el.opacity(0.6).cursor_default())
+        .when(!busy, |el| {
             el.on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(|page, _, _, cx| {
                     if page.detail.as_ref().is_some_and(|d| d.is_draft) {
                         page.update_pr(Update::MarkReady, cx);
                     } else {
-                        page.merge_options = !page.merge_options;
+                        page.more_open = false;
+                        page.merge_menu = if page.merge_menu == MergeMenu::Closed {
+                            MergeMenu::Now
+                        } else {
+                            MergeMenu::Closed
+                        };
                         cx.notify();
                     }
                 }))
-        })
-        .when(!enabled && !busy, |el| {
-            el.tooltip(widgets::text_tooltip(merge_blocker(detail)))
         });
-        let methods = (self.merge_options && mergeable && !busy).then(|| {
+        let open = self.merge_menu != MergeMenu::Closed && !busy && !draft;
+        let menu = open.then(|| {
+            let assessment = Facts::from_detail(detail).assess();
+            let can_defer = can_defer_merge(detail);
+            let mode = if can_defer {
+                self.merge_menu
+            } else {
+                MergeMenu::Now
+            };
+            let live = mergeable || mode != MergeMenu::Now;
+            let waiting = !mergeable
+                && mode == MergeMenu::Now
+                && assessment.ci.state == CiState::Pending
+                && assessment.blockers.is_empty();
+            let heading = (!mergeable).then(|| match mode {
+                MergeMenu::WhenReady => "Merge when checks pass",
+                MergeMenu::Anyway => "Merge before checks pass",
+                _ => merge_blocker(detail),
+            });
+            let methods: Vec<AnyElement> = [
+                ("pr-merge-squash", "Squash and merge", Method::Squash),
+                ("pr-merge-commit", "Create a merge commit", Method::Merge),
+                ("pr-merge-rebase", "Rebase and merge", Method::Rebase),
+            ]
+            .into_iter()
+            .map(|(id, label, method)| {
+                if !live {
+                    return div()
+                        .id(id)
+                        .debug_selector(move || id.to_owned())
+                        .role(gpui::Role::MenuItem)
+                        .px(px(8.0))
+                        .py(px(6.0))
+                        .text_color(theme.text_faint)
+                        .child(label)
+                        .into_any_element();
+                }
+                crate::popover::menu_row(theme, false, label)
+                    .id(id)
+                    .debug_selector(move || id.to_owned())
+                    .role(gpui::Role::MenuItem)
+                    .child(label)
+                    .on_click(cx.listener(move |page, _, _, cx| {
+                        let update = if mode == MergeMenu::WhenReady {
+                            Update::EnableAutoMerge { method }
+                        } else {
+                            Update::Merge { method }
+                        };
+                        page.update_pr(update, cx)
+                    }))
+                    .into_any_element()
+            })
+            .collect();
+            let mut footer: Vec<AnyElement> = Vec::new();
+            if detail.auto_merge_request.is_some() {
+                footer.push(
+                    crate::popover::menu_row(theme, false, "pr-merge-auto-off")
+                        .id("pr-merge-auto-off")
+                        .debug_selector(|| "pr-merge-auto-off".into())
+                        .role(gpui::Role::MenuItem)
+                        .child("Turn off auto-merge")
+                        .on_click(cx.listener(|page, _, _, cx| {
+                            page.update_pr(Update::DisableAutoMerge, cx)
+                        }))
+                        .into_any_element(),
+                );
+            }
+            if can_defer {
+                let rows = [
+                    detail.auto_merge_request.is_none().then_some((
+                        "pr-merge-auto",
+                        "Enable auto-merge",
+                        MergeMenu::WhenReady,
+                    )),
+                    Some(("pr-merge-force", "Force merge", MergeMenu::Anyway)),
+                ];
+                for (id, label, target) in rows.into_iter().flatten() {
+                    footer.push(
+                        crate::popover::menu_row(theme, mode == target, label)
+                            .id(id)
+                            .debug_selector(move || id.to_owned())
+                            .role(gpui::Role::MenuItem)
+                            .aria_expanded(mode == target)
+                            .justify_between()
+                            .child(label)
+                            .child(
+                                crate::icons::icon(crate::icons::ALT_ARROW_RIGHT)
+                                    .size(px(11.0))
+                                    .flex_none()
+                                    .text_color(theme.text_muted),
+                            )
+                            .on_click(cx.listener(move |page, _, _, cx| {
+                                page.merge_menu = if page.merge_menu == target {
+                                    MergeMenu::Now
+                                } else {
+                                    target
+                                };
+                                cx.notify();
+                            }))
+                            .into_any_element(),
+                    );
+                }
+            }
             gpui::deferred(
                 crate::popover::popover_card(theme)
                     .id("pr-merge-methods")
+                    .debug_selector(|| "pr-merge-methods".into())
                     .absolute()
                     .top_full()
                     .right_0()
                     .mt(px(4.0))
-                    .w(px(192.0))
+                    .w(px(224.0))
                     .occlude()
                     .on_mouse_down_out(cx.listener(|page, _, _, cx| {
-                        page.merge_options = false;
+                        page.merge_menu = MergeMenu::Closed;
                         cx.notify();
                     }))
-                    .children(
-                        [
-                            ("pr-merge-squash", "Squash and merge", Method::Squash),
-                            ("pr-merge-commit", "Create a merge commit", Method::Merge),
-                            ("pr-merge-rebase", "Rebase and merge", Method::Rebase),
-                        ]
-                        .into_iter()
-                        .map(|(id, label, method)| {
-                            crate::popover::menu_row(theme, false, label)
-                                .id(id)
-                                .debug_selector(move || id.to_owned())
-                                .role(gpui::Role::MenuItem)
-                                .child(label)
-                                .on_click(cx.listener(move |page, _, _, cx| {
-                                    page.update_pr(Update::Merge { method }, cx)
-                                }))
-                        }),
-                    ),
+                    .children(heading.map(|heading| {
+                        div()
+                            .px(px(8.0))
+                            .py(px(4.0))
+                            .flex()
+                            .items_center()
+                            .gap(px(6.0))
+                            .text_size(crate::typography::text_xs())
+                            .text_color(theme.text_muted)
+                            .when(waiting, |el| {
+                                el.child(crate::loaders::terminal_spinner(
+                                    "pr-merge-waiting",
+                                    12.0,
+                                    theme.warning,
+                                ))
+                            })
+                            .child(heading)
+                    }))
+                    .children(methods)
+                    .when(!footer.is_empty(), |el| {
+                        el.child(crate::popover::menu_separator()).children(footer)
+                    }),
             )
         });
         Some(
@@ -474,12 +617,16 @@ impl PullRequestDetailPage {
                 .relative()
                 .flex_none()
                 .child(button)
-                .children(methods)
+                .children(menu)
                 .into_any_element(),
         )
     }
 
-    fn update_pr(&mut self, update: zuse_protocol::ChangeRequestUpdate, cx: &mut Context<Self>) {
+    pub(super) fn update_pr(
+        &mut self,
+        update: zuse_protocol::ChangeRequestUpdate,
+        cx: &mut Context<Self>,
+    ) {
         if self.updating_pr {
             return;
         }
@@ -491,12 +638,18 @@ impl PullRequestDetailPage {
         if let Some(target) = &self.target {
             params["targetDeviceId"] = target.clone().into();
         }
-        self.merge_options = false;
+        self.merge_menu = MergeMenu::Closed;
+        self.more_open = false;
         self.update_notice = None;
         self.task = None;
         self.loading = false;
         self.error = None;
-        let method = if matches!(update, zuse_protocol::ChangeRequestUpdate::Merge { .. }) {
+        // Both land on whatever the head becomes, so pin the one on screen.
+        let method = if matches!(
+            update,
+            zuse_protocol::ChangeRequestUpdate::Merge { .. }
+                | zuse_protocol::ChangeRequestUpdate::EnableAutoMerge { .. }
+        ) {
             methods::UPDATE_CHANGE_REQUEST_AT_HEAD
         } else {
             methods::UPDATE_CHANGE_REQUEST
@@ -535,12 +688,10 @@ impl PullRequestDetailPage {
         cx.notify();
     }
 
-    /// The header's facts for loaded details.
-    pub(super) fn header_facts(&self, detail: &ChangeRequestDetail) -> HeaderFacts {
-        // The board knows when the pull request last changed; a chat-opened
-        // one falls back to its newest activity.
-        let age = self
-            .preview
+    /// The board knows when the pull request last changed; a chat-opened
+    /// one falls back to its newest activity.
+    fn age(&self, detail: &ChangeRequestDetail) -> Option<String> {
+        self.preview
             .as_ref()
             .filter(|preview| preview.url == self.url)
             .map(|preview| {
@@ -562,11 +713,15 @@ impl PullRequestDetailPage {
                     .filter(|time| !time.is_empty())
                     .max()
                     .map(|time| format!("active {}", activity_time(time)))
-            });
+            })
+    }
+
+    /// The header's facts for loaded details.
+    pub(super) fn header_facts(&self, detail: &ChangeRequestDetail) -> HeaderFacts {
         HeaderFacts {
             title: detail.title.clone(),
             author: detail.author.login.clone(),
-            age,
+            age: self.age(detail),
             checkout: Some((
                 format!("gh pr checkout {}", detail.number),
                 handoff::checkout_command(detail, &self.url),
@@ -577,7 +732,7 @@ impl PullRequestDetailPage {
         }
     }
 
-    /// The title, the branch/reviews/checks facts, then quiet sections for
+    /// The title, the branch/status/reviews/checks facts, then quiet sections for
     /// the description, checks, feedback and agent tools.
     pub(super) fn summary_body(
         &self,
@@ -593,18 +748,8 @@ impl PullRequestDetailPage {
             .px(px(8.0))
             .flex()
             .flex_col()
-            .gap(px(6.0))
-            .child(
-                div()
-                    .id("pr-detail-title")
-                    .debug_selector(|| "pr-detail-title".into())
-                    .min_w_0()
-                    .text_size(crate::typography::text_lg())
-                    .line_height(crate::typography::ui_rems(22.0))
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .text_color(theme.text_strong)
-                    .child(detail.title.clone()),
-            )
+            .gap(px(8.0))
+            .child(page_title(detail.title.clone(), theme))
             .child(
                 div()
                     .id("pr-detail-meta")
@@ -627,19 +772,10 @@ impl PullRequestDetailPage {
                             detail.author.login.clone()
                         },
                     ))
-                    .child(div().flex_none().text_color(theme.text_faint).child("·"))
-                    .child(
-                        div()
-                            .id("pr-header-changes")
-                            .debug_selector(|| "pr-header-changes".into())
-                            .flex_none()
-                            .child(super::code::counts(
-                                detail.additions,
-                                detail.deletions,
-                                12.0,
-                                theme,
-                            )),
-                    ),
+                    .when_some(self.age(detail), |el, age| {
+                        el.child(div().flex_none().text_color(theme.text_faint).child("·"))
+                            .child(div().flex_none().text_color(theme.text_muted).child(age))
+                    }),
             );
 
         let copied = handoff::checkout_command(detail, &self.url);
@@ -655,8 +791,6 @@ impl PullRequestDetailPage {
             .items_center()
             .gap(px(6.0))
             .cursor_pointer()
-            .font_family(theme.font_mono.clone())
-            .text_size(crate::typography::text_xs())
             .tooltip(widgets::text_tooltip(format!("Copy {shown}")))
             .child(
                 div()
@@ -669,7 +803,7 @@ impl PullRequestDetailPage {
             .child(
                 div()
                     .flex_none()
-                    .text_color(theme.text_muted)
+                    .text_color(theme.text)
                     .child(detail.base_ref_name.clone()),
             )
             .on_click(move |_, _, cx| {
@@ -727,7 +861,52 @@ impl PullRequestDetailPage {
             )
             .on_click(cx.listener(|page, _, _, cx| page.select_tab(Tab::Activity, cx)));
 
-        let (glyph, color, phrase) = checks_summary(detail, theme);
+        let branch = div()
+            .min_w_0()
+            .flex()
+            .items_center()
+            .gap(px(8.0))
+            .child(branch)
+            .child(
+                div()
+                    .id("pr-header-changes")
+                    .debug_selector(|| "pr-header-changes".into())
+                    .flex_none()
+                    .child(super::code::counts(
+                        detail.additions,
+                        detail.deletions,
+                        12.0,
+                        theme,
+                    )),
+            );
+
+        let (state_glyph, state_color, state_label) =
+            state_style(&detail.state, detail.is_draft, theme);
+        let auto_merging =
+            detail.state.eq_ignore_ascii_case("open") && detail.auto_merge_request.is_some();
+        let status = div()
+            .min_w_0()
+            .flex()
+            .items_center()
+            .gap(px(6.0))
+            .child(
+                crate::icons::icon(state_glyph)
+                    .size(px(14.0))
+                    .flex_none()
+                    .text_color(state_color),
+            )
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(theme.text)
+                    .child(if auto_merging {
+                        format!("{state_label}, auto-merge on")
+                    } else {
+                        state_label.to_owned()
+                    }),
+            );
+
         let properties = div()
             .id("pr-properties")
             .debug_selector(|| "pr-properties".into())
@@ -743,18 +922,24 @@ impl PullRequestDetailPage {
                 theme,
             ))
             .child(property_row(
+                "status",
+                crate::icons::PULL_REQUEST,
+                "Status",
+                status,
+                theme,
+            ))
+            .child(property_row(
                 "reviews",
                 crate::icons::EYE,
                 "Reviews",
                 reviews_value,
                 theme,
             ))
-            .child(property_row_tinted(
+            .child(property_row(
                 "checks",
-                glyph,
-                color,
+                crate::icons::CHECK_CIRCLE,
                 "Checks",
-                div().min_w_0().truncate().text_color(color).child(phrase),
+                checks_summary(detail, theme),
                 theme,
             ));
 
@@ -799,6 +984,7 @@ impl PullRequestDetailPage {
                                     &self.url,
                                     theme,
                                     window,
+                                    self.diagrams.clone(),
                                     cx.weak_entity(),
                                 ))
                             },
@@ -925,7 +1111,7 @@ impl PullRequestDetailPage {
                 div()
                     .flex()
                     .flex_col()
-                    .child(section_divider(theme))
+                    .child(section_gap())
                     .child(
                         div()
                             .flex()
@@ -1004,14 +1190,14 @@ impl PullRequestDetailPage {
             .flex_col()
             .child(header)
             .child(properties)
-            .child(section_divider(theme))
+            .child(section_gap())
             .child(description_toggle)
             .children(description)
-            .child(section_divider(theme))
+            .child(section_gap())
             .child(checks_toggle)
             .children(checks_list)
             .children(feedback_section)
-            .child(section_divider(theme))
+            .child(section_gap())
             .child(agent_toggle)
             .children(agent)
     }
@@ -1034,7 +1220,7 @@ impl PullRequestDetailPage {
             &status
         });
         let (glyph, color, label_color) = match tone {
-            StatusTone::Positive => (crate::icons::CHECK_CIRCLE, theme.success, theme.text_muted),
+            StatusTone::Positive => (crate::icons::CHECK, theme.success, theme.text_muted),
             StatusTone::Warning => (glyph, theme.warning, theme.text_muted),
             StatusTone::Negative => (crate::icons::CLOSE_CIRCLE, theme.danger, theme.danger),
             StatusTone::Neutral | StatusTone::Merged => (
@@ -1060,18 +1246,21 @@ impl PullRequestDetailPage {
         div()
             .id(SharedString::from(format!("pr-check-{index}")))
             .debug_selector(move || format!("pr-check-{index}"))
-            .min_h(px(28.0))
+            .min_h(px(30.0))
             .px(px(8.0))
             .rounded(px(6.0))
             .flex()
             .items_center()
             .gap(px(8.0))
-            .child(
+            .child(if tone == StatusTone::Warning {
+                crate::loaders::terminal_spinner(format!("pr-check-running-{index}"), 14.0, color)
+            } else {
                 crate::icons::icon(glyph)
-                    .size(px(15.0))
+                    .size(px(14.0))
                     .flex_none()
-                    .text_color(color),
-            )
+                    .text_color(color)
+                    .into_any_element()
+            })
             .child(
                 div()
                     .id(SharedString::from(format!("pr-check-name-{index}")))
@@ -1088,6 +1277,22 @@ impl PullRequestDetailPage {
                     .text_size(crate::typography::text_xs())
                     .text_color(label_color)
                     .child(label),
+            )
+            // Always reserved, so the status column stays aligned.
+            .child(
+                div()
+                    .size(px(14.0))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .when(!link.is_empty(), |el| {
+                        el.child(
+                            crate::icons::icon(crate::icons::ARROW_UP_RIGHT)
+                                .size(px(13.0))
+                                .text_color(theme.text_muted),
+                        )
+                    }),
             )
             .when(!link.is_empty(), |el| {
                 el.cursor_pointer()
@@ -1204,8 +1409,8 @@ fn check_rank(status: &str) -> u8 {
     }
 }
 
-fn section_divider(theme: &Theme) -> gpui::Div {
-    div().my(px(10.0)).h(px(1.0)).flex_none().bg(theme.border)
+fn section_gap() -> gpui::Div {
+    div().h(px(16.0)).flex_none()
 }
 
 /// A quiet section heading that folds what follows it.
@@ -1229,16 +1434,11 @@ fn section_toggle(
         .items_center()
         .gap(px(6.0))
         .text_size(crate::typography::text_sm())
-        .font_weight(gpui::FontWeight::MEDIUM)
-        .text_color(theme.text)
+        .text_color(theme.text_muted)
         .cursor_pointer()
+        .hover(|style| style.text_color(theme.text))
         .child(label)
-        .children(count.map(|count| {
-            div()
-                .font_weight(gpui::FontWeight::NORMAL)
-                .text_color(theme.text_muted)
-                .child(count.to_string())
-        }))
+        .children(count.map(|count| div().child(count.to_string())))
         .child(
             crate::icons::icon(if collapsed {
                 crate::icons::ALT_ARROW_RIGHT
@@ -1264,13 +1464,23 @@ pub(super) fn can_merge(detail: &ChangeRequestDetail) -> bool {
         )
 }
 
-/// Why Merge is unavailable, for its tooltip.
+/// Auto-merge and Force merge need a head to pin and a tree GitHub could
+/// merge; conflicts can't be waited out or forced through.
+fn can_defer_merge(detail: &ChangeRequestDetail) -> bool {
+    !can_merge(detail)
+        && detail.state.eq_ignore_ascii_case("open")
+        && !detail.is_draft
+        && detail.mergeable != "CONFLICTING"
+        && zuse_protocol::change_request_assessment::valid_head_oid(&detail.head_ref_oid)
+}
+
+/// Why Merge can't go straight through, for the top of its menu.
 fn merge_blocker(detail: &ChangeRequestDetail) -> &'static str {
     let assessment = Facts::from_detail(detail).assess();
     if let Some(blocker) = assessment.blockers.first() {
         blocker.label()
     } else if assessment.ci.state == CiState::Pending {
-        "Checks running"
+        "Waiting on checks"
     } else {
         "Merge status unknown"
     }
@@ -1284,7 +1494,13 @@ fn review_snippet(body: &str) -> String {
                 .trim_start_matches(['#', '>', '*', '-', '_', ' '])
                 .trim_end_matches(['*', '_', ' '])
         })
-        .find(|line| !line.is_empty() && !line.starts_with('<') && !line.starts_with('!'))
+        .find(|line| {
+            !line.is_empty()
+                && !line.starts_with('<')
+                && !line.starts_with('!')
+                // GitHub's `> [!WARNING]` alert marker.
+                && !line.starts_with("[!")
+        })
         .unwrap_or_default()
         .to_owned()
 }
@@ -1303,6 +1519,47 @@ mod tests {
         );
         assert_eq!(review_snippet("![badge](x)\n> Looks good"), "Looks good");
         assert_eq!(review_snippet("  \n"), "");
+        assert_eq!(
+            review_snippet("> [!WARNING]\n> Rate limit exceeded"),
+            "Rate limit exceeded"
+        );
+    }
+
+    #[test]
+    fn deferred_merges_need_a_pinned_head_and_no_conflicts() {
+        let pending = ChangeRequestDetail {
+            state: "OPEN".into(),
+            mergeable: "MERGEABLE".into(),
+            head_ref_oid: "a".repeat(40),
+            status_check_rollup: vec![zuse_protocol::ChangeRequestCheck {
+                name: "engine".into(),
+                status: "IN_PROGRESS".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert!(!can_merge(&pending));
+        assert!(can_defer_merge(&pending));
+        for blocked in [
+            ChangeRequestDetail {
+                mergeable: "CONFLICTING".into(),
+                ..pending.clone()
+            },
+            ChangeRequestDetail {
+                head_ref_oid: String::new(),
+                ..pending.clone()
+            },
+            ChangeRequestDetail {
+                is_draft: true,
+                ..pending.clone()
+            },
+            ChangeRequestDetail {
+                state: "MERGED".into(),
+                ..pending.clone()
+            },
+        ] {
+            assert!(!can_defer_merge(&blocked));
+        }
     }
 
     #[gpui::test]

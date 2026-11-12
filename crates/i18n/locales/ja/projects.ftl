@@ -705,9 +705,9 @@ projects-new_chat_without_project = プロジェクトなしで新しいチャ�
 
 projects-no_project = プロジェクトなし
 
-projects-masters_create_master = 新しい Zot
+projects-masters_create_master = 新しい Zapper
 
-projects-masters_master_name = Zot 名
+projects-masters_master_name = Zapper 名
 
 projects-masters_this_environment = この環境
 
@@ -731,9 +731,9 @@ projects-masters_run_action = 操作を実行
 
 projects-masters_decline = 拒否
 
-projects-masters_master_generated_screen = Zot が生成した画面
+projects-masters_master_generated_screen = Zapper が生成した画面
 
-projects-masters_masters = Zots
+projects-masters_masters = Zappers
 
 projects-masters_one_conversation_to_coordinate_your_work = 1 つの会話で作業を調整。
 
@@ -751,7 +751,7 @@ projects-masters_slaves = Slaves
 
 projects-masters_fresh_chat = 新しいチャット
 
-projects-masters_ask_the_master_to_start_work_it_will_decide_which_tasks_need_separate_agents = Zot に作業を依頼してください。個別のエージェントが必要なタスクを判断します。
+projects-masters_ask_the_master_to_start_work_it_will_decide_which_tasks_need_separate_agents = Zapper に作業を依頼してください。個別のエージェントが必要なタスクを判断します。
 
 projects-masters_open_chat = チャットを開く
 
@@ -769,7 +769,7 @@ projects-masters_working = 作業中
 
 projects-masters_needs_attention = 要確認
 
-projects-masters_loading = Zot を読み込み中…
+projects-masters_loading = Zapper を読み込み中…
 
 projects-masters_offline = オフライン
 
@@ -819,7 +819,7 @@ projects-masters_add_work_model = モデルを追加
 
 projects-masters_auto_follow_ups = 自動フォローアップ
 
-projects-masters_auto_follow_ups_help = Zot があなたに確認する前に、自分から Slave にメッセージを送れる回数です。
+projects-masters_auto_follow_ups_help = Zapper があなたに確認する前に、自分から Slave にメッセージを送れる回数です。
 
 projects-masters_limits = 上限
 
@@ -845,7 +845,7 @@ projects-masters_add_repository = リポジトリを追加
 
 projects-masters_color = 色
 
-projects-masters_create_failed = Zot を作成できませんでした
+projects-masters_create_failed = Zapper を作成できませんでした
 
 projects-masters_details = 詳細
 
@@ -855,7 +855,7 @@ projects-masters_hide_details = 詳細を隠す
 
 projects-masters_mascot = マスコット
 
-projects-masters_needs_setup = この Zot を開始するには、詳細で設定を保存してください。
+projects-masters_needs_setup = この Zapper を開始するには、詳細で設定を保存してください。
 
 projects-masters_remove_repository = { $name }{ " " }を削除
 
@@ -959,15 +959,15 @@ projects-masters_color_blue = ブルー
 
 projects-masters_color_pink = ピンク
 
-projects-masters_no_signed_in_agent = Zot を作成する前にエージェントにサインインしてください。
+projects-masters_no_signed_in_agent = Zapper を作成する前にエージェントにサインインしてください。
 
 projects-masters_skills_failed = スキルを読み込めませんでした。
 
-projects-masters_home_only_note = このプレビューでは、Slaves はこの Zot と同じコンピューターで動作します。
+projects-masters_home_only_note = このプレビューでは、Slaves はこの Zapper と同じコンピューターで動作します。
 
-projects-masters_guide_open = Zot ガイド
+projects-masters_guide_open = Zapper ガイド
 
-projects-masters_guide_how = Zots の仕組み
+projects-masters_guide_how = Zappers の仕組み
 
 projects-masters_guide_step_count = { $current }{ " " }/{ " " }{ $total }
 
@@ -985,17 +985,17 @@ projects-masters_guide_done = 完了
 
 projects-masters_guide_target_hidden = この項目は現在表示されていません。開いているページを閉じるか、詳細を表示してください。
 
-projects-masters_guide_welcome_title = Zot について
+projects-masters_guide_welcome_title = Zapper について
 
-projects-masters_guide_welcome_body = Zot は 1 つの依頼を連携した作業に変えます。計画を立て、Slaves と呼ばれる別々のチャットに作業を任せ、進み具合を確認します。
+projects-masters_guide_welcome_body = Zapper は 1 つの依頼を連携した作業に変えます。計画を立て、Slaves と呼ばれる別々のチャットに作業を任せ、進み具合を確認します。
 
-projects-masters_guide_welcome_preview = プレビュー: Zot とその Slaves は Zot を作成したコンピューターで動作します。起動したまま接続しておいてください。
+projects-masters_guide_welcome_preview = プレビュー: Zapper とその Slaves は Zapper を作成したコンピューターで動作します。起動したまま接続しておいてください。
 
 projects-masters_guide_repositories_title = リポジトリを選ぶ
 
-projects-masters_guide_repositories_summary = Zot が作業できる場所を決めます。
+projects-masters_guide_repositories_summary = Zapper が作業できる場所を決めます。
 
-projects-masters_guide_repositories_body = Zot はここで追加したリポジトリでのみ作業します。追加しても、既存のチャットには何も送信されません。
+projects-masters_guide_repositories_body = Zapper はここで追加したリポジトリでのみ作業します。追加しても、既存のチャットには何も送信されません。
 
 projects-masters_guide_repositories_empty = まだない場合は、まず Zuse でリポジトリを開いてから、ここで追加してください。
 
@@ -1005,9 +1005,9 @@ projects-masters_guide_brief_title = 依頼内容を書く
 
 projects-masters_guide_brief_summary = 目指す結果を書きます。
 
-projects-masters_guide_brief_body = 完了の状態を書いてください。結果、範囲、制約があれば、Zot がそこから計画して作業を割り当てます。
+projects-masters_guide_brief_body = 完了の状態を書いてください。結果、範囲、制約があれば、Zapper がそこから計画して作業を割り当てます。
 
-projects-masters_guide_brief_model = モデル選択で Zot が計画に使うモデルを設定できます。常に守らせたい指示は環境設定にあります。
+projects-masters_guide_brief_model = モデル選択で Zapper が計画に使うモデルを設定できます。常に守らせたい指示は環境設定にあります。
 
 projects-masters_guide_brief_example = 例を試す
 
@@ -1041,9 +1041,9 @@ projects-masters_guide_continuity_body = 会話が長くなったら、ここで
 
 projects-masters_guide_continuity_memory = このガイドはいつでもこのメニューから再表示できます。
 
-projects-masters_paused_notice = 一時停止中です。Zot は返信できますが、再開するまで Slaves の開始やメッセージ送信は行いません。
+projects-masters_paused_notice = 一時停止中です。Zapper は返信できますが、再開するまで Slaves の開始やメッセージ送信は行いません。
 
-projects-masters_stopped_notice = 停止中です。Zot は返信できますが、再開するまで Slaves の開始やメッセージ送信は行いません。
+projects-masters_stopped_notice = 停止中です。Zapper は返信できますが、再開するまで Slaves の開始やメッセージ送信は行いません。
 
 # Complete plural message. $count is numeric; remaining variables retain their source names.
 projects-pr_pane_added_file_to_the_composer-plural =

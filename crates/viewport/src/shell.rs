@@ -5,8 +5,8 @@ use crate::{assets::icon, composer_style as composer};
 use zuse_i18n::messages as msg;
 use zuse_markdown::{Block, InlineRun, parse_full};
 
-pub(super) const BG: u32 = 0x0b0c0b;
-pub(super) const SURFACE: u32 = 0x0e0f0e;
+pub(super) const BG: u32 = 0x151515;
+pub(super) const SURFACE: u32 = 0x1e1e1e;
 pub(super) const RAISED: u32 = 0x191c1a;
 pub(super) const BORDER: u32 = 0x1f211f;
 pub(super) const TEXT: u32 = 0xe8e9e7;
@@ -608,12 +608,96 @@ impl WorkspaceView {
             .into_any_element()
     }
 
+    /// Earlier history above the first message, from the host or a cloud
+    /// snapshot: `Some(loading)` while there is more to fetch.
+    fn history_paging(&self) -> Option<bool> {
+        if self.transcript_state.has_more {
+            Some(self.transcript_state.loading_earlier)
+        } else {
+            self.cloud.older_before.map(|_| self.cloud.older_loading)
+        }
+    }
+
+    pub(super) fn load_older_history(&mut self, cx: &mut Context<Self>) {
+        if self.transcript_state.has_more {
+            self.load_earlier_messages(cx);
+        } else if self.cloud.older_before.is_some() && !self.cloud.older_loading {
+            self.cloud.older_loading = true;
+            let _ = self
+                .requests
+                .unbounded_send(json!({"ui":"cloudHistoryOlder"}));
+            cx.notify();
+        }
+    }
+
+    fn auto_load_older_history(&mut self, cx: &mut Context<Self>) {
+        let first = self.messages.first().map(|entry| entry.id.clone());
+        if self.history_paging() != Some(false)
+            || first.is_none()
+            || first == self.history_auto_from
+        {
+            return;
+        }
+        self.history_auto_from = first;
+        self.load_older_history(cx);
+    }
+
+    /// The strip above the first message while older history exists. Drawn
+    /// within a screen of the top, it fetches the next page by itself; a
+    /// click is needed only when the previous page added nothing.
+    fn history_loader(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let loading = self.history_paging()?;
+        let stalled =
+            self.messages.first().map(|entry| &entry.id) == self.history_auto_from.as_ref();
+        let strip = row()
+            .id("load-earlier-messages")
+            .relative()
+            .w_full()
+            .h(px(36.))
+            .justify_center()
+            .gap_2()
+            .text_size(px(12.))
+            .text_color(rgb(FAINT));
+        if loading || !stalled {
+            let scroll = self.transcript_scroll.clone();
+            let view = cx.entity().downgrade();
+            let near_top = gpui::canvas(
+                move |bounds, _, cx| {
+                    if bounds.bottom() > scroll.bounds().top() - px(320.) {
+                        cx.defer(move |cx| {
+                            let _ = view.update(cx, |this, cx| this.auto_load_older_history(cx));
+                        });
+                    }
+                },
+                |_, _, _, _| (),
+            )
+            .absolute()
+            .size_0();
+            return Some(
+                strip
+                    .child(crate::acp_catalog::spinner("history-loader-spinner", 12.))
+                    .child(tr(cx, msg::chat::cloud_history_loading))
+                    .child(near_top)
+                    .into_any_element(),
+            );
+        }
+        Some(
+            strip
+                .cursor_pointer()
+                .hover(|style| style.text_color(rgb(TEXT)))
+                .child(tr(cx, msg::chat::cloud_history_load_earlier))
+                .on_click(cx.listener(|this, _, _, cx| this.load_older_history(cx)))
+                .into_any_element(),
+        )
+    }
+
     pub(super) fn transcript(&self, cx: &mut Context<Self>) -> AnyElement {
         let archived = self
             .selected
             .as_ref()
             .is_some_and(|chat| chat["archived"] == true);
         if !self.messages.is_empty()
+            && self.history_growth.is_none()
             && self.transcript_scroll.max_offset().y + self.transcript_scroll.offset().y <= px(24.)
         {
             self.transcript_scroll.scroll_to_bottom();
@@ -628,14 +712,29 @@ impl WorkspaceView {
             .pt_6()
             .pb_8()
             .gap_8()
-            .when(self.cloud.older_before.is_some(), |view| view.child(control("cloud-load-older",if self.cloud.older_loading { "Loading earlier messages…" } else { "Load earlier messages" })
-                .self_center().on_click(cx.listener(|this,_,_,cx| {
-                    if !this.cloud.older_loading {
-                        this.cloud.older_loading=true;
-                        let _=this.requests.unbounded_send(json!({"ui":"cloudHistoryOlder"}));
-                        cx.notify();
-                    }
-                }))))
+            .children(self.history_loader(cx))
+            .children(self.history_growth.map(|(height, offset)| {
+                // Older host history landed above the reader: once it is laid
+                // out, hold the same distance from the bottom, as cloud pages do.
+                let scroll = self.transcript_scroll.clone();
+                let view = cx.entity().downgrade();
+                gpui::canvas(
+                    move |_, window, _| {
+                        window.on_next_frame(move |_, cx| {
+                            let _ = view.update(cx, |this, cx| {
+                                if this.history_growth.take().is_some() {
+                                    let grown = scroll.max_offset().y - height;
+                                    scroll.set_offset(gpui::point(offset.x, offset.y - grown));
+                                    cx.notify();
+                                }
+                            });
+                        });
+                    },
+                    |_, _, _, _| (),
+                )
+                .absolute()
+                .size_0()
+            }))
             .when(self.messages.is_empty() && archived, |d| {
                 d.child(column().flex_1().justify_center().items_center().gap_3()
                     .child(icon("archive-minimalistic").size(px(24.)).text_color(rgb(MUTED)))
@@ -649,13 +748,10 @@ impl WorkspaceView {
                         .text_color(rgb(MUTED)).text_size(px(12.))
                         .on_click(cx.listener(|this, _, _, cx| { this.project = None; this.set_creation_destination(false, cx); cx.notify(); })))))
             })
-            .when(self.transcript_state.has_more, |view| view.child(
-                row().w_full().justify_center().child(control("load-earlier-messages", if self.transcript_state.loading_earlier { tr(cx, msg::chat::cloud_history_loading) } else { tr(cx, msg::chat::cloud_history_load_earlier) })
-                    .on_click(cx.listener(|this, _, _, cx| this.load_earlier_messages(cx))))
-            ))
             .children(self.messages.iter().enumerate().map(|(i, entry)| {
                 let message = serde_json::to_value(entry).unwrap_or(Value::Null);
                 let user = message["role"] == "user";
+                let source=entry.parts.iter().find_map(|part|match part {zuse_model::MessagePart::MessageSource {source,..}=>Some(source),_=>None});
                 column()
                     .id(SharedString::from(format!("message-{}",entry.id)))
                     .group("message")
@@ -677,14 +773,20 @@ impl WorkspaceView {
                                 let kind = part["kind"].as_str().unwrap_or_default();
                                 match kind {
                                     "text" => {
-                                        let text = part["text"].as_str().unwrap_or_default();
+                                        let text = if user {source.map(|s|s.text()).unwrap_or_else(||part["text"].as_str().unwrap_or_default())}else{part["text"].as_str().unwrap_or_default()};
                                         Some(if user {
-                                            let parsed = zuse_protocol::message_attachments::parse(text);
-                                            column().items_end().gap_3()
+                                            let attribution = zuse_protocol::presentation::zot_message::parse_display(text).or_else(|| source.map(|s| (s.sender(), text)));
+                                            let parsed = zuse_protocol::message_attachments::parse(attribution.as_ref().map(|(_,body)|*body).unwrap_or(text));
+                                            if let Some((sender, body)) = attribution.as_ref().filter(|(s,_)|s.activity) {
+                                                crate::zot_issues::activity_notice(sender, body, entry.created_at).into_any_element()
+                                            } else { column().when(attribution.is_none(),|d|d.items_end()).gap_3()
+
                                                 .when(!parsed.text.is_empty(), |d|d.child(
-                                                    div().max_w(relative(0.85)).px_4().py_3().rounded_xl()
-                                                        .bg(rgb(0x1d1d1d)).text_size(px(14.)).line_height(px(21.))
-                                                        .child(parsed.text)))
+                                                    div().max_w(relative(if attribution.is_some(){1.0}else{0.85})).px_4().py_3().rounded_xl()
+                                                        .bg(rgb(0x1d1d1d)).text_size(px(if attribution.is_some(){13.}else{14.})).line_height(px(20.))
+                                                        .when_some(attribution.as_ref(),|d,(sender,_)|d.child(crate::zot_issues::sender_header(sender,entry.created_at)))
+                                                        .child(parsed.text.clone())))
+                                                .when(attribution.is_some(),|d|d.child(crate::zot_issues::sender_footer(parsed.text.clone(),entry.created_at)))
                                                 .children(parsed.attachments.iter().map(|attachment| {
                                                     if zuse_protocol::attachment_mentions::is_image_path(&attachment.path) {
                                                         self.image_preview(&attachment.path,&attachment.name,384.,cx)
@@ -694,7 +796,7 @@ impl WorkspaceView {
                                                             .child(label(attachment.name.clone())).into_any_element()
                                                     }
                                                 }))
-                                                .into_any_element()
+                                                .into_any_element() }
                                         } else {
                                             column()
                                                 .text_size(px(14.))
@@ -758,75 +860,6 @@ impl WorkspaceView {
                             .on_click({let text=entry.parts.iter().filter_map(|p|serde_json::to_value(p).ok()).filter_map(|p|p["text"].as_str().map(str::to_owned)).collect::<Vec<_>>().join("\n");move|_,_,cx|cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))})
                     ))
             }))
-            .into_any_element()
-    }
-
-    pub(super) fn project_picker_view(&self, cx: &mut Context<Self>) -> AnyElement {
-        column()
-            .p_6()
-            .gap_4()
-            .flex_1()
-            .child(
-                row()
-                    .child(
-                        div()
-                            .text_size(px(20.))
-                            .child(tr(cx, msg::native::open_a_project)),
-                    )
-                    .child(div().flex_1())
-                    .child(
-                        icon_button("close-project-picker", "close", "Close project picker")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.project_picker = false;
-                                cx.notify();
-                            })),
-                    ),
-            )
-            .child(label(tr(
-                cx,
-                msg::native::choose_a_known_repository_or_enter_a_path_on_the_engine_host,
-            )))
-            .children(self.known_projects().iter().enumerate().map(|(i, p)| {
-                let project = p.clone();
-                column()
-                    .id(("project", i))
-                    .cursor_pointer()
-                    .rounded_lg()
-                    .border_1()
-                    .border_color(rgb(BORDER))
-                    .p_3()
-                    .gap_1()
-                    .hover(|s| s.bg(rgb(RAISED)))
-                    .child(
-                        row()
-                            .gap_2()
-                            .child(icon("folder"))
-                            .child(label(p["name"].as_str().unwrap_or("Project").to_owned())),
-                    )
-                    .child(label(p["path"].as_str().unwrap_or_default().to_owned()))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if !this.new_chat(cx) {
-                            return;
-                        }
-                        this.project = Some(project.clone());
-                        this.project_picker = false;
-                        cx.notify();
-                    }))
-            }))
-            .child(
-                div()
-                    .mt_3()
-                    .p_2()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(rgb(BORDER))
-                    .child(self.project_input.clone()),
-            )
-            .child(
-                control("add-project", tr(cx, msg::native::open_folder))
-                    .bg(rgb(RAISED))
-                    .on_click(cx.listener(|this, _, _, cx| this.add_project(cx))),
-            )
             .into_any_element()
     }
 
@@ -1271,7 +1304,7 @@ impl Render for WorkspaceView {
 
         let panel_width = if self.selected_zot().is_some() && !self.settings && !self.project_picker
         {
-            320.
+            crate::zots::ZOT_PANEL_WIDTH
         } else if !self.right_open || self.settings || self.project_picker {
             0.
         } else if self.right_tab == "browser" {
@@ -1528,7 +1561,7 @@ impl Render for WorkspaceView {
             )
             .when(
                 self.selected_zot().is_some() && !self.settings && !self.project_picker,
-                |d| d.child(self.zot_panel(cx)),
+                |d| d.child(self.zot_panel(window, cx)),
             )
             .when(self.preview_open.is_some() && !self.settings, |d| {
                 d.child(self.preview_overlay(window, cx))

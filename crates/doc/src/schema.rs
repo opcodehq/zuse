@@ -39,6 +39,8 @@ pub use zuse_model::schema::{MessageRole, SessionMessageEntry};
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct DocPartJson {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source: Option<zuse_protocol::slack::MessageSource>,
     id: String,
     kind: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -112,6 +114,12 @@ struct DocPartJson {
 /// App parts → doc part json (mirror of `toDocParts`).
 fn to_doc_part(part: &MessagePart) -> Result<DocPartJson, DocError> {
     Ok(match part {
+        MessagePart::MessageSource { id, source } => DocPartJson {
+            id: id.clone(),
+            kind: "messageSource".into(),
+            source: Some(source.clone()),
+            ..Default::default()
+        },
         MessagePart::AgentContext {
             id,
             agent,
@@ -236,6 +244,13 @@ fn to_doc_part(part: &MessagePart) -> Result<DocPartJson, DocError> {
 /// Doc part json → app part (mirror of `fromDocParts`; malformed degrades to empty text).
 fn from_doc_part(p: DocPartJson) -> MessagePart {
     match p.kind.as_str() {
+        "messageSource" => match p.source {
+            Some(source) => MessagePart::MessageSource { id: p.id, source },
+            None => MessagePart::Text {
+                id: p.id,
+                text: String::new(),
+            },
+        },
         "agentContext" => match p.agent {
             Some(agent) => MessagePart::AgentContext {
                 id: p.id,
@@ -434,6 +449,56 @@ impl SessionDoc {
             Some(loro::ValueOrContainer::Value(LoroValue::String(s))) => Some(s.to_string()),
             _ => None,
         }
+    }
+
+    pub fn slack_turn_results(
+        &self,
+    ) -> std::collections::BTreeMap<String, zuse_protocol::slack::TurnResult> {
+        let values = self
+            .doc
+            .get_map("slackTurnResults")
+            .get_deep_value()
+            .to_json_value();
+        values
+            .as_object()
+            .into_iter()
+            .flat_map(|values| values.iter())
+            .filter_map(|(id, value)| {
+                serde_json::from_value(value.clone())
+                    .ok()
+                    .map(|result| (id.clone(), result))
+            })
+            .collect()
+    }
+
+    /// Runtime-owned, bounded Slack completion receipts. The first terminal
+    /// result wins, including when a parked harness emits another Done later.
+    pub fn record_slack_turn_result(
+        &self,
+        message: &str,
+        result: &zuse_protocol::slack::TurnResult,
+    ) -> Result<(), DocError> {
+        let map = self.doc.get_map("slackTurnResults");
+        if map.get(message).is_some() {
+            return Ok(());
+        }
+        map.insert(
+            message,
+            loro_value_from_json(&serde_json::to_value(result)?),
+        )?;
+        let values = map.get_deep_value().to_json_value();
+        if let Some(values) = values.as_object() {
+            let mut oldest = values
+                .iter()
+                .map(|(id, v)| (id, v["completedAt"].as_i64().unwrap_or(0)))
+                .collect::<Vec<_>>();
+            oldest.sort_by_key(|(_, at)| *at);
+            for (id, _) in oldest.iter().take(oldest.len().saturating_sub(128)) {
+                map.delete(id)?;
+            }
+        }
+        self.doc.commit();
+        Ok(())
     }
 
     /// Insert a complete message entry (user/system messages, command-side inserts).
@@ -976,6 +1041,12 @@ fn push_part(parts: &LoroList, part: &MessagePart) -> Result<(), DocError> {
         if let Some(value) = value {
             map.insert(key, value.as_str())?;
         }
+    }
+    if let Some(source) = &doc_part.source {
+        map.insert(
+            "source",
+            loro_value_from_json(&serde_json::to_value(source)?),
+        )?;
     }
     if let Some(agent) = &doc_part.agent {
         map.insert("agent", loro_value_from_json(&serde_json::to_value(agent)?))?;
@@ -2566,5 +2637,84 @@ mod context_usage_tests {
         assert_eq!(rebuilt.context_usage(), host.context_usage());
         rebuilt.clear_context_usage().unwrap();
         assert_eq!(rebuilt.context_usage(), None);
+    }
+}
+
+#[cfg(test)]
+mod slack_tests {
+    use super::*;
+    #[test]
+    fn slack_source_roundtrips_without_replacing_the_provider_prompt() {
+        let doc = SessionDoc::init("slack-chat").unwrap();
+        let source = zuse_protocol::slack::MessageSource::Slack {
+            text: "Fix the test".into(),
+            author: Some("Ada Lovelace".into()),
+            channel: Some("engineering".into()),
+        };
+        let entry = SessionMessageEntry {
+            id: "slack-message".into(),
+            role: MessageRole::User,
+            parts: vec![
+                MessagePart::Text {
+                    id: "text".into(),
+                    text: "Full agent prompt with thread context".into(),
+                },
+                MessagePart::MessageSource {
+                    id: "source".into(),
+                    source,
+                },
+            ],
+            created_at: 1,
+            device_id: "runtime".into(),
+            status: Some(MessageStatus::Complete),
+            continuation_of: None,
+            duration_ms: None,
+        };
+        doc.push_message(&entry).unwrap();
+        assert_eq!(doc.read_entries().unwrap(), vec![entry.clone()]);
+        doc.record_slack_turn_result(
+            "slack-message",
+            &zuse_protocol::slack::TurnResult {
+                completed_at: 1,
+                text: "Fixed".into(),
+                status: zuse_protocol::DoneStatus::Completed,
+            },
+        )
+        .unwrap();
+        let rebuilt = crate::rebuild_thin_doc(&doc).unwrap();
+        assert_eq!(rebuilt.doc.read_entries().unwrap(), vec![entry]);
+        assert_eq!(rebuilt.doc.slack_turn_results(), doc.slack_turn_results());
+    }
+    #[test]
+    fn slack_completion_receipts_are_bounded_and_first_terminal_result_wins() {
+        let doc = SessionDoc::init("slack-chat").unwrap();
+        for index in 0..130 {
+            doc.record_slack_turn_result(
+                &format!("message-{index}"),
+                &zuse_protocol::slack::TurnResult {
+                    completed_at: index,
+                    text: format!("result-{index}"),
+                    status: zuse_protocol::DoneStatus::Completed,
+                },
+            )
+            .unwrap();
+        }
+        doc.record_slack_turn_result(
+            "message-129",
+            &zuse_protocol::slack::TurnResult {
+                completed_at: 200,
+                text: "late parked teardown".into(),
+                status: zuse_protocol::DoneStatus::Interrupted,
+            },
+        )
+        .unwrap();
+        let results = doc
+            .doc()
+            .get_map("slackTurnResults")
+            .get_deep_value()
+            .to_json_value();
+        assert_eq!(results.as_object().unwrap().len(), 128);
+        assert_eq!(results["message-129"]["text"], "result-129");
+        assert!(results["message-0"].is_null());
     }
 }

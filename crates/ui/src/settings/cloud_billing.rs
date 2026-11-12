@@ -101,6 +101,8 @@ pub struct CloudBillingPage {
     view: CloudView,
     usage_pages: usize,
     repository_panel: Entity<zuse_viewport::cloud_repositories::RepositoryPanel>,
+    slack_panel: Entity<zuse_viewport::slack_settings::SlackPanel>,
+    slack_tasks: std::collections::HashMap<u64, Task<()>>,
     repository_tasks: std::collections::HashMap<u64, Task<()>>,
     state: Entity<AppState>,
     owner: Option<Owner>,
@@ -126,6 +128,8 @@ pub struct CloudBillingPage {
     history_open: bool,
     workspace_task: Option<Task<()>>,
     cap_request: Option<(i64, String)>,
+    credit_request: Option<(i64, String)>,
+    checkout_request: Option<String>,
 }
 impl EventEmitter<Navigate> for CloudBillingPage {}
 impl CloudBillingPage {
@@ -145,6 +149,44 @@ impl CloudBillingPage {
     }
     pub fn new(state: Entity<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         zuse_viewport::input::bind_keys(cx);
+        let slack_panel = cx.new(|cx| zuse_viewport::slack_settings::SlackPanel::new(window, cx));
+        cx.observe(&slack_panel, |_, _, cx| cx.notify()).detach();
+        cx.subscribe(
+            &slack_panel,
+            |this, panel, event: &zuse_viewport::cloud_repositories::Request, cx| match event {
+                zuse_viewport::cloud_repositories::Request::Cancel { id } => {
+                    this.slack_tasks.remove(id);
+                }
+                zuse_viewport::cloud_repositories::Request::Call { id, method, params } => {
+                    let Some(engine) = this.state.read(cx).engine().map(|e| e.controller()) else {
+                        panel.update(cx, |p, cx| {
+                            p.receive(*id, Err("Account connection unavailable.".into()), cx)
+                        });
+                        return;
+                    };
+                    let id = *id;
+                    let method = *method;
+                    let params = params.clone();
+                    let panel = panel.clone();
+                    let job = gpui_tokio::Tokio::spawn(cx, async move {
+                        engine
+                            .client()
+                            .call_scoped(method, params)
+                            .await
+                            .map_err(|e| e.to_string())
+                    });
+                    let task = cx.spawn(async move |this, cx| {
+                        let result = job.await.unwrap_or_else(|e| Err(e.to_string()));
+                        let _ = this.update(cx, |this, cx| {
+                            this.slack_tasks.remove(&id);
+                            panel.update(cx, |p, cx| p.receive(id, result, cx));
+                        });
+                    });
+                    this.slack_tasks.insert(id, task);
+                }
+            },
+        )
+        .detach();
         let repository_panel =
             cx.new(|cx| zuse_viewport::cloud_repositories::RepositoryPanel::new(window, cx));
         cx.observe(&repository_panel, |_, _, cx| cx.notify())
@@ -211,6 +253,8 @@ impl CloudBillingPage {
         Self {
             view: CloudView::Overview,
             usage_pages: 0,
+            slack_panel,
+            slack_tasks: Default::default(),
             repository_panel,
             repository_tasks: Default::default(),
             state,
@@ -237,6 +281,8 @@ impl CloudBillingPage {
             history_open: false,
             workspace_task: None,
             cap_request: None,
+            credit_request: None,
+            checkout_request: None,
         }
     }
     fn sign_in(&mut self, cx: &mut Context<Self>) {
@@ -494,6 +540,15 @@ impl CloudBillingPage {
             return;
         };
         self.error = None;
+        let checkout_key = if subscribed {
+            None
+        } else {
+            Some(
+                self.checkout_request
+                    .get_or_insert_with(|| uuid::Uuid::new_v4().to_string())
+                    .clone(),
+            )
+        };
         let expected = owner.clone();
         let job = gpui_tokio::Tokio::spawn(cx, async move {
             engine
@@ -509,7 +564,7 @@ impl CloudBillingPage {
                         if subscribed {
                             json!({})
                         } else {
-                            json!({"offerId":"cloud-workspace-standard-v1"})
+                            json!({"offerId":"cloud-workspace-standard-v1","idempotencyKey":checkout_key})
                         },
                     ),
                 )
@@ -532,6 +587,9 @@ impl CloudBillingPage {
                         .as_str()
                         .filter(|url| url.starts_with("https://"))
                         {
+                            if !subscribed {
+                                this.checkout_request = None;
+                            }
                             cx.open_url(url);
                         } else {
                             this.error = Some(
@@ -561,6 +619,10 @@ impl CloudBillingPage {
             return;
         };
         let amount = self.credit_amount;
+        if buy && self.credit_request.as_ref().is_none_or(|r| r.0 != amount) {
+            self.credit_request = Some((amount, uuid::Uuid::new_v4().to_string()));
+        }
+        let credit_key = self.credit_request.as_ref().map(|r| r.1.clone());
         self.credit_error = None;
         let expected = owner.clone();
         let job = gpui_tokio::Tokio::spawn(cx, async move {
@@ -575,7 +637,7 @@ impl CloudBillingPage {
                     request_params(
                         &expected,
                         if buy {
-                            json!({"amountCents":amount})
+                            json!({"amountCents":amount,"idempotencyKey":credit_key})
                         } else {
                             json!({})
                         },
@@ -597,6 +659,7 @@ impl CloudBillingPage {
                                 .as_str()
                                 .filter(|s| s.starts_with("https://"))
                             {
+                                this.credit_request = None;
                                 cx.open_url(url);
                             } else {
                                 this.credit_error = Some(
@@ -725,12 +788,16 @@ impl Render for CloudBillingPage {
             self.error = None;
             self.notice = None;
             self.cap_request = None;
+            self.credit_request = None;
+            self.checkout_request = None;
             self.cap.update(cx, |i, cx| i.set_value("".into(), cx));
         }
         if !self.loaded {
             self.load(false, cx);
         }
         self.repository_panel
+            .update(cx, |panel, cx| panel.bind_owner(self.owner.clone(), cx));
+        self.slack_panel
             .update(cx, |panel, cx| panel.bind_owner(self.owner.clone(), cx));
         let theme = Theme::of(cx).for_settings_surface();
         zuse_viewport::palette::set_light(theme.appearance.is_light());
@@ -854,7 +921,13 @@ impl Render for CloudBillingPage {
             _ => {
                 self.repository_panel
                     .update(cx, |panel, cx| panel.set_usage(false, None, cx));
-                div().child(self.repository_panel.clone())
+                div()
+                    .child(self.repository_panel.clone())
+                    // Slack connections start cloud tasks, so they sit with the
+                    // computer overview.
+                    .when(self.view == CloudView::Overview, |d| {
+                        d.child(div().mt(px(24.)).child(self.slack_panel.clone()))
+                    })
             }
         };
         body = body.child(content.mt(px(if self.view == CloudView::Compute {

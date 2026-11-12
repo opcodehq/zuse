@@ -6716,6 +6716,8 @@ pub struct Composer {
     dictation_activation: Option<Subscription>,
     dictation_blur: Option<Subscription>,
     dictation_focus: FocusHandle,
+    /// The game above the card while an agent works.
+    runner: Entity<crate::arcade::Runner>,
     /// The last live frame of the voice pill, kept so it can settle away
     /// after the transcript lands instead of vanishing.
     voice_last: Option<VoiceFrame>,
@@ -7153,6 +7155,11 @@ impl Composer {
             input
         });
         let pickers = cx.new(|cx| Pickers::new(state.clone(), cx));
+        let runner = {
+            let owner = cx.weak_entity();
+            let input_focus = input.read(cx).focus_handle.clone();
+            cx.new(|cx| crate::arcade::Runner::new(owner, input_focus, cx))
+        };
         let account_usage = cx.new(|cx| crate::account_usage::AccountUsage::new(state.clone(), cx));
         // The footer toolbar (checkout kind + ref picker) is rendered INLINE
         // by the composer from picker state — a pickers-side notify (refs
@@ -7392,6 +7399,7 @@ impl Composer {
             dictation_activation: None,
             dictation_blur: None,
             dictation_focus: cx.focus_handle(),
+            runner,
             dictation_ready: Default::default(),
             dictation_ready_task: None,
             dictation_button_focus: cx.focus_handle(),
@@ -8042,6 +8050,39 @@ impl Composer {
             cx.notify();
         });
         self.focus_pending = true;
+        cx.notify();
+    }
+
+    /// Browser notes are staged without stealing focus from the page editor.
+    pub(crate) fn stage_browser_annotation(
+        &mut self,
+        key: String,
+        context: crate::context_items::ContextItem,
+        cx: &mut Context<Self>,
+    ) {
+        self.state.update(cx, |state, cx| {
+            state.add_context_item(&key, context);
+            cx.notify();
+        });
+        cx.notify();
+    }
+
+    pub(crate) fn remove_browser_annotation(
+        &mut self,
+        key: String,
+        id: &str,
+        cx: &mut Context<Self>,
+    ) {
+        self.state.update(cx, |state, cx| {
+            if state
+                .context_items(&key)
+                .iter()
+                .any(|item| item.id == id && item.browser_annotation.is_some())
+            {
+                state.remove_context_item(&key, id);
+                cx.notify();
+            }
+        });
         cx.notify();
     }
 
@@ -13123,6 +13164,10 @@ impl Render for Composer {
             self.reset_slash(None, cx);
         }
         let mode = self.button_mode(cx);
+        let agent_working = mode == SendButtonMode::Stop;
+        let runner_mounted = self
+            .runner
+            .update(cx, |runner, cx| runner.mounted(agent_working, window, cx));
         // Shape the current draft before sizing the pill. Waiting for the child
         // layout leaves the parent using the previous edit's height.
         self.input.update(cx, |input, cx| {
@@ -13297,8 +13342,9 @@ impl Render for Composer {
         } else {
             composer_total_height(content_height)
         };
-        let target_height = base_height + appshot_strip_height(appshot_count);
-        dock_layout.extra_height = appshot_strip_height(appshot_count);
+        let extra_height = appshot_strip_height(appshot_count);
+        let target_height = base_height + extra_height;
+        dock_layout.extra_height = extra_height;
         let dock_owns_layout = self.dock_frame.is_some_and(|frame| frame.active)
             || dock_height_changed
             || self.dock_reflow.active();
@@ -13611,12 +13657,10 @@ impl Render for Composer {
                 )
             });
         let beneath_voice = 1.0 - voice_t.clamp(0.0, 1.0);
-        // The model selector sits between the microphone and Send. While
-        // dictating it fades and folds to zero width, so the microphone
-        // slides in beside Send and the track takes the row.
+        // While dictating, the context and model controls fold away so the
+        // voice track expands toward the microphone beside Send.
         let model_picker = model_picker
             .opacity(beneath_voice)
-            .ml(px(ACTION_PRIMARY_GAP * beneath_voice))
             .when(voice_t > 0.0, |el| {
                 el.max_w(px(surface_width * 0.45 * beneath_voice))
                     .overflow_hidden()
@@ -13722,7 +13766,7 @@ impl Render for Composer {
             .child(stash_count.to_string());
         // Editor on top (`px-4 pb-1 pt-4`); the toolbar row (2px top + 32px
         // controls + 8px bottom) is ABSOLUTE at the pill's stationary bottom,
-        // `[+][access][plugins] … [mic][model][send]`. The editor viewport
+        // `[+][access][plugins] … [usage][model][mic][send]`. The editor viewport
         // follows the animated height so it cannot paint over the controls;
         // its width stays fixed (no tween rewraps).
         let body = pill
@@ -13780,18 +13824,26 @@ impl Render for Composer {
                             .items_center()
                             .pl(px(ACTION_PRIMARY_GAP))
                             .when(stash_count > 0, |el| el.child(stash.mr(px(8.))))
-                            .children(microphone)
-                            .child(model_picker),
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .opacity(beneath_voice)
+                                    .when(voice_t > 0.0, |el| {
+                                        el.max_w(px(36.0 * beneath_voice)).overflow_hidden()
+                                    })
+                                    .child(self.account_usage.clone()),
+                            )
+                            .child(model_picker)
+                            .children(microphone.map(|mic| {
+                                div().flex_none().ml(px(ACTION_PRIMARY_GAP)).child(mic)
+                            })),
                     )
-                    // `[model][usage ring][send]`: the ring renders nothing
-                    // until the harness reports context or plan usage.
                     .child(
                         div()
                             .flex_none()
                             .flex()
                             .items_center()
                             .pl(px(ACTION_PRIMARY_GAP))
-                            .child(self.account_usage.clone())
                             .child(send_button),
                     ),
             )
@@ -13841,19 +13893,16 @@ impl Render for Composer {
             .children(self.render_emoji_popup(&theme, cx))
             .children(self.render_composer_list(&theme, cx))
             .children(self.render_flash(&theme, cx))
-            // While the agent works, a pixel bug walks the card's top edge
-            // eating a row of pellets.
-            .when(mode == SendButtonMode::Stop, |el| {
+            // While the agent works, a little runner plays itself in the
+            // reserved status strip until the user clicks to take over.
+            .when(runner_mounted, |el| {
                 el.child(
                     div()
                         .absolute()
-                        .top(px(-crate::arcade::PELLET_TRAIL_HEIGHT - 4.0))
+                        .top(px(-crate::arcade::RUNNER_HEIGHT - 1.0))
                         .left(px(surface_radius))
                         .right(px(surface_radius))
-                        .child(crate::arcade::pellet_trail(
-                            format!("composer-trail-{}", cx.entity_id()),
-                            theme.text_muted,
-                        )),
+                        .child(crate::arcade::runner_strip(&self.runner)),
                 )
             })
             .children(self.render_worktree_progress(&theme, cx));
@@ -14125,7 +14174,7 @@ mod tests {
                         assert!((f32::from(origin.y - surface.top()) - (1.0 + TEXT_TOP_PAD)).abs() <= 1.0,
                             "editor jumped: docked={docked}, amount={amount}, origin={origin:?}, surface={surface:?}");
                         let model = composer.model_bounds.get().unwrap();
-                        let expected_right = surface.right() - px(1.0 + ACTION_INSET + 28.0 + ACTION_PRIMARY_GAP);
+                        let expected_right = surface.right() - px(1.0 + ACTION_INSET + 56.0 + 2.0 * ACTION_PRIMARY_GAP);
                         assert!((f32::from(model.right() - expected_right)).abs() <= 1.0,
                             "model must stay right aligned: compact_picker={compact_picker}, docked={docked}, amount={amount}, actual={model:?}, expected={expected_right:?}");
                         // Only the empty editor floor changes between routes;
@@ -14328,7 +14377,7 @@ mod tests {
                     let surface = composer.surface_bounds.get().unwrap();
                     let model = composer.model_bounds.get().unwrap();
                     let right =
-                        surface.right() - px(1.0 + ACTION_INSET + 28.0 + ACTION_PRIMARY_GAP);
+                        surface.right() - px(1.0 + ACTION_INSET + 56.0 + 2.0 * ACTION_PRIMARY_GAP);
                     assert!(
                         (f32::from(model.right() - right)).abs() <= 1.0,
                         "controls must remain on the right at {width}px"
@@ -15061,7 +15110,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn composer_picker_escape_restores_focus_but_click_away_does_not(
+    fn composer_picker_dismissal_returns_focus_when_nothing_else_takes_it(
         cx: &mut gpui::TestAppContext,
     ) {
         let (_dir, handle) = composer_focus_window(cx);
@@ -15099,7 +15148,9 @@ mod tests {
             }
             cx.update_window(handle.into(), |_, window, cx| {
                 window.draw(cx).clear();
-                assert_eq!(input.read(cx).focus_handle.is_focused(window), escape);
+                // Dismissing the menu hands focus back to the composer whether by
+                // Escape or by clicking empty space: nothing else claimed it.
+                assert!(input.read(cx).focus_handle.is_focused(window));
             })
             .unwrap();
         }
@@ -18605,13 +18656,15 @@ mod tests {
     fn new_thread_route_changes_use_the_coordinated_timeline() {
         let m = FlipMorph::new_thread_transition(124.0, 0.0);
         assert_eq!(m.spec, motion::NEW_THREAD_TRANSITION);
+        let end = motion::NEW_THREAD_TRANSITION.duration_ms as f32;
+        let mid = end * 0.6;
         assert_eq!(m.height(49.0, 0.0), 124.0);
-        assert!(m.height(49.0, 250.0) < 124.0);
-        assert!(m.height(49.0, 250.0) > 49.0);
-        assert_eq!(m.height(49.0, 420.0), 49.0);
+        assert!(m.height(49.0, mid) < 124.0);
+        assert!(m.height(49.0, mid) > 49.0);
+        assert_eq!(m.height(49.0, end), 49.0);
         let reverse = FlipMorph::new_thread_transition(49.0, 0.0);
         assert_eq!(reverse.height(124.0, 0.0), 49.0);
-        assert_eq!(reverse.height(124.0, 420.0), 124.0);
+        assert_eq!(reverse.height(124.0, end), 124.0);
     }
 
     #[test]

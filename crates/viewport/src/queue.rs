@@ -322,7 +322,7 @@ mod tests {
             view.model_host.target=Some("host".into());view.model_host.confirmed=true;
             view.model_host.rows=vec![json!({"id":"claude-code","installed":true,"supportsSteering":true,"steeringMode":"step-boundary"})];
             view.sessions=vec![json!({"chatId":"chat","status":"working"})];
-            view.queue=vec![json!({"id":"older","text":"first"}),json!({"id":"newest","text":"second"})];
+            view.queue=vec![json!({"id":"older","text":"first","revision":1}),json!({"id":"newest","text":"second","revision":2})];
             window.focus(&view.input.read(cx).focus_handle(cx),cx);
         }).unwrap();
         Fixture {
@@ -376,7 +376,7 @@ mod tests {
             );
             assert_eq!(
                 writes[0]["params"],
-                json!({"chatId":"chat","targetDeviceId":"host","id":"newest"})
+                json!({"chatId":"chat","targetDeviceId":"host","id":"newest","revision":2})
             );
         }
     }
@@ -451,7 +451,7 @@ mod tests {
         assert_eq!(writes.len(), 1);
         assert_eq!(
             writes[0]["params"],
-            json!({"chatId":"chat","targetDeviceId":"host","id":"older","toIndex":2})
+            json!({"chatId":"chat","targetDeviceId":"host","id":"older","revision":1,"toIndex":2})
         );
     }
     #[gpui::test]

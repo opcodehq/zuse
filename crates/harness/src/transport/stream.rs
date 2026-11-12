@@ -61,6 +61,7 @@ impl Sse {
 pub(super) struct Assembly {
     pub text: String,
     reasoning: String,
+    thinking_bytes: usize,
     items: BTreeMap<usize, Value>,
     pub usage: Value,
     pub done: bool,
@@ -98,6 +99,20 @@ impl Assembly {
                 self.usage[k] = v.clone();
             }
         }
+    }
+    fn emit_thinking(&mut self, input: &ModelInput, text: &str) -> Result<(), Error> {
+        let mut end = text
+            .len()
+            .min(FRAME_LIMIT.saturating_sub(self.thinking_bytes));
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        let text = &text[..end];
+        self.thinking_bytes += end;
+        if !text.is_empty() {
+            (input.thinking)(text.to_owned());
+        }
+        Ok(())
     }
     pub fn event(
         &mut self,
@@ -165,6 +180,14 @@ impl Assembly {
                         .as_str()
                         .ok_or_else(|| failed("invalid_stream_delta"))?,
                 )?,
+                "response.reasoning_summary_text.delta" | "response.reasoning_text.delta" => {
+                    self.emit_thinking(
+                        input,
+                        event["delta"]
+                            .as_str()
+                            .ok_or_else(|| failed("invalid_stream_delta"))?,
+                    )?;
+                }
                 "response.output_item.done" => {
                     let index = event["output_index"]
                         .as_u64()
@@ -222,6 +245,11 @@ impl Assembly {
                     if let Some(text) = event["content_block"]["text"].as_str() {
                         self.emit(input, text)?;
                     }
+                    if event["content_block"]["type"] == "thinking"
+                        && let Some(text) = event["content_block"]["thinking"].as_str()
+                    {
+                        self.emit_thinking(input, text)?;
+                    }
                 }
                 "content_block_delta" => {
                     let index = event["index"]
@@ -266,6 +294,9 @@ impl Assembly {
                     if field != "zuseArguments" || !value.is_empty() {
                         append(block, field, value, "content_block_too_large")?;
                     }
+                    if field == "thinking" {
+                        self.emit_thinking(input, value)?;
+                    }
                 }
                 "message_delta" => {
                     self.merge_usage(&event["usage"]);
@@ -291,10 +322,12 @@ impl Assembly {
                     for candidate in candidates {
                         if let Some(parts) = candidate["content"]["parts"].as_array() {
                             for part in parts {
-                                if let Some(text) =
-                                    part["text"].as_str().filter(|_| part["thought"] != true)
-                                {
-                                    self.emit(input, text)?;
+                                if let Some(text) = part["text"].as_str() {
+                                    if part["thought"] == true {
+                                        self.emit_thinking(input, text)?;
+                                    } else {
+                                        self.emit(input, text)?;
+                                    }
                                 }
                                 if self.items.len() >= 256 {
                                     return Err(failed("too_many_output_items"));
@@ -327,6 +360,7 @@ impl Assembly {
                                 return Err(failed("reasoning_too_large"));
                             }
                             self.reasoning.push_str(reasoning);
+                            self.emit_thinking(input, reasoning)?;
                         }
                         if let Some(calls) = delta["tool_calls"].as_array() {
                             for call in calls {

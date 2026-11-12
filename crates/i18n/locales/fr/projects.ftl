@@ -717,9 +717,9 @@ projects-new_chat_without_project = Nouvelle discussion sans projet
 
 projects-no_project = Aucun projet
 
-projects-masters_create_master = Nouveau Zot
+projects-masters_create_master = Nouveau Zapper
 
-projects-masters_master_name = Nom du Zot
+projects-masters_master_name = Nom du Zapper
 
 projects-masters_this_environment = Cet environnement
 
@@ -743,9 +743,9 @@ projects-masters_run_action = Exécuter
 
 projects-masters_decline = Refuser
 
-projects-masters_master_generated_screen = Écran généré par le Zot
+projects-masters_master_generated_screen = Écran généré par le Zapper
 
-projects-masters_masters = Zots
+projects-masters_masters = Zappers
 
 projects-masters_one_conversation_to_coordinate_your_work = Une conversation pour coordonner votre travail.
 
@@ -763,7 +763,7 @@ projects-masters_slaves = Slaves
 
 projects-masters_fresh_chat = Nouvelle conversation
 
-projects-masters_ask_the_master_to_start_work_it_will_decide_which_tasks_need_separate_agents = Demandez au Zot de commencer. Il décidera quelles tâches confier à des agents distincts.
+projects-masters_ask_the_master_to_start_work_it_will_decide_which_tasks_need_separate_agents = Demandez au Zapper de commencer. Il décidera quelles tâches confier à des agents distincts.
 
 projects-masters_open_chat = Ouvrir la conversation
 
@@ -781,7 +781,7 @@ projects-masters_working = En cours
 
 projects-masters_needs_attention = À vérifier
 
-projects-masters_loading = Chargement du Zot…
+projects-masters_loading = Chargement du Zapper…
 
 projects-masters_offline = Hors ligne
 
@@ -831,7 +831,7 @@ projects-masters_add_work_model = Ajouter un modèle
 
 projects-masters_auto_follow_ups = Relances automatiques
 
-projects-masters_auto_follow_ups_help = Nombre de fois où le Zot peut relancer un slave de lui-même avant de vous demander.
+projects-masters_auto_follow_ups_help = Nombre de fois où le Zapper peut relancer un slave de lui-même avant de vous demander.
 
 projects-masters_limits = Limites
 
@@ -857,7 +857,7 @@ projects-masters_add_repository = Ajouter un dépôt
 
 projects-masters_color = Couleur
 
-projects-masters_create_failed = Impossible de créer un Zot
+projects-masters_create_failed = Impossible de créer un Zapper
 
 projects-masters_details = Détails
 
@@ -867,7 +867,7 @@ projects-masters_hide_details = Masquer les détails
 
 projects-masters_mascot = Mascotte
 
-projects-masters_needs_setup = Enregistrez ses réglages dans Détails pour démarrer ce Zot.
+projects-masters_needs_setup = Enregistrez ses réglages dans Détails pour démarrer ce Zapper.
 
 projects-masters_remove_repository = Retirer{ " " }{ $name }
 
@@ -971,15 +971,15 @@ projects-masters_color_blue = Bleu
 
 projects-masters_color_pink = Rose
 
-projects-masters_no_signed_in_agent = Connectez-vous à un agent avant de créer un Zot.
+projects-masters_no_signed_in_agent = Connectez-vous à un agent avant de créer un Zapper.
 
 projects-masters_skills_failed = Impossible de charger les compétences.
 
-projects-masters_home_only_note = Dans cette Preview, les slaves s’exécutent sur le même ordinateur que ce Zot.
+projects-masters_home_only_note = Dans cette Preview, les slaves s’exécutent sur le même ordinateur que ce Zapper.
 
-projects-masters_guide_open = Guide des Zots
+projects-masters_guide_open = Guide des Zappers
 
-projects-masters_guide_how = Fonctionnement des Zots
+projects-masters_guide_how = Fonctionnement des Zappers
 
 projects-masters_guide_step_count = { $current }{ " " }sur{ " " }{ $total }
 
@@ -997,17 +997,17 @@ projects-masters_guide_done = Terminé
 
 projects-masters_guide_target_hidden = Cet élément n’est pas visible pour le moment. Fermez la page ouverte ou affichez les détails pour le trouver.
 
-projects-masters_guide_welcome_title = Découvrez votre Zot
+projects-masters_guide_welcome_title = Découvrez votre Zapper
 
-projects-masters_guide_welcome_body = Un Zot transforme une consigne en travail coordonné. Il planifie, confie des tâches à des conversations distinctes appelées slaves, et assure le suivi.
+projects-masters_guide_welcome_body = Un Zapper transforme une consigne en travail coordonné. Il planifie, confie des tâches à des conversations distinctes appelées slaves, et assure le suivi.
 
-projects-masters_guide_welcome_preview = Preview : votre Zot et ses slaves s’exécutent sur l’ordinateur où il a été créé. Gardez-le allumé et connecté.
+projects-masters_guide_welcome_preview = Preview : votre Zapper et ses slaves s’exécutent sur l’ordinateur où il a été créé. Gardez-le allumé et connecté.
 
 projects-masters_guide_repositories_title = Choisissez ses dépôts
 
-projects-masters_guide_repositories_summary = Choisissez où votre Zot peut travailler.
+projects-masters_guide_repositories_summary = Choisissez où votre Zapper peut travailler.
 
-projects-masters_guide_repositories_body = Votre Zot travaille uniquement dans les dépôts ajoutés ici. Ajouter un dépôt n’envoie rien à ses conversations existantes.
+projects-masters_guide_repositories_body = Votre Zapper travaille uniquement dans les dépôts ajoutés ici. Ajouter un dépôt n’envoie rien à ses conversations existantes.
 
 projects-masters_guide_repositories_empty = Aucun dépôt ? Ouvrez d’abord un dépôt dans Zuse, puis ajoutez-le ici.
 
@@ -1017,9 +1017,9 @@ projects-masters_guide_brief_title = Rédigez une consigne
 
 projects-masters_guide_brief_summary = Décrivez le résultat attendu.
 
-projects-masters_guide_brief_body = Dites à quoi ressemble le travail terminé : le résultat, le périmètre et les contraintes. Votre Zot planifie et délègue à partir de là.
+projects-masters_guide_brief_body = Dites à quoi ressemble le travail terminé : le résultat, le périmètre et les contraintes. Votre Zapper planifie et délègue à partir de là.
 
-projects-masters_guide_brief_model = Le sélecteur de modèle définit le modèle avec lequel votre Zot planifie. Les instructions permanentes se trouvent dans Préférences.
+projects-masters_guide_brief_model = Le sélecteur de modèle définit le modèle avec lequel votre Zapper planifie. Les instructions permanentes se trouvent dans Préférences.
 
 projects-masters_guide_brief_example = Essayer un exemple
 
@@ -1053,9 +1053,9 @@ projects-masters_guide_continuity_body = Quand une conversation devient longue, 
 
 projects-masters_guide_continuity_memory = Rouvrez ce guide depuis ce menu à tout moment.
 
-projects-masters_paused_notice = En pause. Votre Zot peut répondre, mais ne lancera ni ne contactera de slaves tant que vous n’aurez pas repris.
+projects-masters_paused_notice = En pause. Votre Zapper peut répondre, mais ne lancera ni ne contactera de slaves tant que vous n’aurez pas repris.
 
-projects-masters_stopped_notice = Arrêté. Votre Zot peut répondre, mais ne lancera ni ne contactera de slaves tant que vous n’aurez pas repris.
+projects-masters_stopped_notice = Arrêté. Votre Zapper peut répondre, mais ne lancera ni ne contactera de slaves tant que vous n’aurez pas repris.
 
 # Complete plural message. $count is numeric; remaining variables retain their source names.
 projects-pr_pane_added_file_to_the_composer-plural =

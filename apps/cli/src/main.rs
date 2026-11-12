@@ -6,6 +6,8 @@ use zuse_i18n::{LanguagePreference, Localizer, messages::cli as m};
 use zuse_protocol::HarnessId;
 use zuse_serve::{BrowserServer, TlsConfig};
 
+mod remote;
+
 #[derive(Parser)]
 #[command(
     name = "zuse-server",
@@ -19,12 +21,12 @@ struct Args {
     #[arg(long, default_value = "127.0.0.1:27656")]
     listen: SocketAddr,
     /// Loopback RPC endpoint used by agent tools; 0 chooses an available port.
-    #[arg(long, default_value_t = 27654)]
+    #[arg(long, global = true, default_value_t = 27654)]
     ipc_port: u16,
     #[arg(long, env = "ZUSE_DATA_DIR")]
     data_dir: Option<PathBuf>,
-    #[arg(long, default_value = "dist/web")]
-    assets: PathBuf,
+    #[arg(long)]
+    assets: Option<PathBuf>,
     #[arg(long, env = "ZUSE_BROWSER_TOKEN", hide_env_values = true)]
     token: Option<String>,
     #[arg(long, env = "ZUSE_PUBLIC_ORIGIN")]
@@ -51,12 +53,38 @@ struct Args {
     /// Also publish --lan over Tailscale HTTPS, reachable from browsers.
     #[arg(long, requires = "lan")]
     tailscale_serve: bool,
+    /// Sign in and link this computer when the server starts.
+    #[arg(long)]
+    account: bool,
 }
 
 #[derive(Subcommand)]
 enum Command {
     /// Serve agent tools over stdio, forwarding to the local engine.
     Mcp,
+    /// Create a private link for another device.
+    Pair {
+        /// Name shown in Connected devices.
+        #[arg(long)]
+        label: Option<String>,
+        /// Show the QR code for the Zuse app instead of a browser.
+        #[arg(long)]
+        app: bool,
+    },
+    /// Sign in to your Zuse account.
+    Login,
+    /// Sign out of your Zuse account.
+    Logout,
+    /// Make this computer available through your Zuse account.
+    Link {
+        /// Computer name shown in your account.
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Stop making this computer available through your account.
+    Unlink,
+    /// Show account and network status.
+    Status,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -125,17 +153,35 @@ fn localized_command(l10n: &Localizer) -> clap::Command {
         ("tls_key", m::tls_key(l10n)),
         ("relay_origin", m::relay_origin(l10n)),
         ("relay_host_token_file", m::relay_host_token_file(l10n)),
+        ("account", m::account(l10n)),
     ] {
         command = command.mut_arg(id, |arg| arg.help(help));
     }
-    command = command.mut_subcommand("mcp", |subcommand| {
-        subcommand
-            .about(m::mcp(l10n))
-            .help_template(template)
-            .disable_help_flag(true)
-            .arg(help)
-    });
+    for (name, about) in [
+        ("mcp", m::mcp(l10n)),
+        ("pair", m::pair(l10n)),
+        ("login", m::login(l10n)),
+        ("logout", m::logout(l10n)),
+        ("link", m::link(l10n)),
+        ("unlink", m::unlink(l10n)),
+        ("status", m::status(l10n)),
+    ] {
+        command = command.mut_subcommand(name, |subcommand| {
+            subcommand
+                .about(about)
+                .help_template(template.clone())
+                .disable_help_flag(true)
+                .arg(help.clone())
+        });
+    }
     command
+        .mut_subcommand("pair", |pair| {
+            pair.mut_arg("label", |arg| arg.help(m::pair_label(l10n)))
+                .mut_arg("app", |arg| arg.help(m::pair_app(l10n)))
+        })
+        .mut_subcommand("link", |link| {
+            link.mut_arg("name", |arg| arg.help(m::link_name(l10n)))
+        })
 }
 
 fn parse_arguments(arguments: Vec<std::ffi::OsString>, l10n: &Localizer) -> Args {
@@ -181,10 +227,14 @@ async fn run() -> anyhow::Result<()> {
         std::env::var("ZUSE_LANGUAGE").ok(),
         &zuse_i18n::system_languages(),
     );
-    let args = parse_arguments(arguments, &l10n);
-    if matches!(args.command, Some(Command::Mcp)) {
-        zuse_mcp::run(zuse_mcp::McpConfig::from_env()).await?;
-        return Ok(());
+    let mut args = parse_arguments(arguments, &l10n);
+    match args.command.take() {
+        Some(Command::Mcp) => {
+            zuse_mcp::run(zuse_mcp::McpConfig::from_env()).await?;
+            return Ok(());
+        }
+        Some(command) => return remote::run(command, args.ipc_port, &l10n).await,
+        None => {}
     }
     let relay = match (&args.relay_origin, &args.relay_host_token_file) {
         (Some(origin), Some(path)) => {
@@ -221,6 +271,13 @@ async fn run() -> anyhow::Result<()> {
         Some(token) => token,
         None => BrowserServer::load_or_create_token(&data_dir)?,
     };
+    let assets = args
+        .assets
+        .or_else(zuse_engine::browser_access::discover_assets)
+        .unwrap_or_else(|| {
+            eprintln!("{}", m::assets_missing(&l10n));
+            PathBuf::from("dist/web")
+        });
 
     let config = EngineConfig {
         data_dir: data_dir.clone(),
@@ -266,6 +323,7 @@ async fn run() -> anyhow::Result<()> {
         ipc,
         runtime.core().rpc_service(),
     ));
+    let public_origin = args.public_origin.is_some();
     let origin = args.public_origin.unwrap_or_else(|| {
         format!(
             "{}://{address}",
@@ -278,14 +336,13 @@ async fn run() -> anyhow::Result<()> {
         .control()
         .register_external(address, origin.clone(), tls.is_none())
         .await;
-    // Isolating controls must not enter copyable terminal access links.
     println!(
         "{}",
-        m::listening(&l10n, ipc_port.to_string()).replace(['\u{2068}', '\u{2069}'], "")
+        remote::plain(m::listening(&l10n, ipc_port.to_string()))
     );
     println!(
         "{}",
-        m::open(&l10n, format!("{origin}/#token={token}")).replace(['\u{2068}', '\u{2069}'], "")
+        remote::plain(m::open(&l10n, format!("{origin}/#token={token}")))
     );
     if args.lan {
         match runtime
@@ -313,6 +370,7 @@ async fn run() -> anyhow::Result<()> {
             }
         }
     }
+    let relayed = relay.is_some();
     if let Some((origin, host_token_file)) = relay {
         // Explicit command-line configuration replaces saved startup settings.
         runtime.core().relay_access.control().stop().await;
@@ -334,10 +392,34 @@ async fn run() -> anyhow::Result<()> {
             return Err(error);
         }
     }
+    let managed = runtime.core().managed_host.control().status();
+    let reachable =
+        args.lan || relayed || public_origin || (managed.enabled && managed.account_matches);
+    // Linking needs the listener below to be serving, so this cannot run first.
+    let remote_setup = (reachable || args.account).then(|| {
+        let client = zuse_rpc::memory_client(runtime.core().rpc_service());
+        let l10n = Localizer::new(l10n.locale());
+        let account = args.account;
+        tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+            if account
+                && let Err(error) = async {
+                    remote::sign_in(&client, &l10n).await?;
+                    remote::link(&client, None, &l10n).await
+                }
+                .await
+            {
+                eprintln!("{error}");
+            }
+            if let Err(error) = remote::invite(&client, None, false, &l10n).await {
+                eprintln!("{error}");
+            }
+        }))
+    });
     let result = match tls {
-        Some(tls) => browser.serve_tls(listener, args.assets, tls).await,
-        None => browser.serve(listener, args.assets).await,
+        Some(tls) => browser.serve_tls(listener, assets, tls).await,
+        None => browser.serve(listener, assets).await,
     };
+    drop(remote_setup);
     shutdown.cancel();
     ipc_task.abort();
     runtime.shutdown().await;
@@ -413,5 +495,29 @@ mod localization_tests {
             .unwrap_err();
         assert_eq!(error.exit_code(), 0);
         assert!(error.to_string().contains(&m::mcp(&localizer)));
+    }
+    #[test]
+    fn remote_commands_are_localized_and_reach_the_chosen_engine() {
+        for locale in Locale::ALL {
+            let localizer = Localizer::new(locale);
+            let error = localized_command(&localizer)
+                .try_get_matches_from(["zuse-server", "pair", "--help"])
+                .unwrap_err();
+            assert_eq!(error.exit_code(), 0);
+            assert!(error.to_string().contains(&m::pair(&localizer)));
+            assert!(error.to_string().contains(&m::pair_label(&localizer)));
+        }
+        let matches = localized_command(&Localizer::new(Locale::En))
+            .try_get_matches_from(["zuse-server", "pair", "--ipc-port", "4000", "--app"])
+            .unwrap();
+        let args = Args::from_arg_matches(&matches).unwrap();
+        assert_eq!(args.ipc_port, 4000);
+        assert!(matches!(
+            args.command,
+            Some(Command::Pair {
+                label: None,
+                app: true
+            })
+        ));
     }
 }

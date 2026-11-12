@@ -13,6 +13,42 @@ pub struct CloudTarget {
     pub workspace: String,
     pub initial_session: String,
 }
+impl CloudTarget {
+    /// Cloud deletion belongs to the account control plane, never guest Mutate.
+    pub(crate) async fn delete_session(
+        &self,
+        chat_id: &str,
+        command_id: &str,
+    ) -> Result<Value, RpcError> {
+        if chat_id != self.initial_session {
+            return Err(RpcError::Failed(
+                "Delete this cloud task from its Computer menu.".into(),
+            ));
+        }
+        let value = self
+            .controller
+            .client()
+            .call_scoped(
+                methods::CLOUD_DELETE,
+                json!({
+                    "workspaceId": self.workspace,
+                    "expectedAccountId": self.subject,
+                    "expectedOrganizationId": self.organization,
+                    "commandId": command_id,
+                }),
+            )
+            .await?;
+        if value["accountId"] != self.subject
+            || value["organizationId"].as_str() != self.organization.as_deref()
+            || value["workspace"]["workspaceId"] != self.workspace
+        {
+            return Err(RpcError::Failed(
+                "Cloud deletion could not be verified. Refresh to check its state.".into(),
+            ));
+        }
+        Ok(value)
+    }
+}
 struct Source {
     target: CloudTarget,
     closed: CancellationToken,
@@ -96,6 +132,9 @@ impl super::remote_connection::Source for Source {
     }
     fn initial_chat(&self) -> Option<String> {
         Some(self.target.initial_session.clone())
+    }
+    fn cloud_target(&self) -> Option<CloudTarget> {
+        Some(self.target.clone())
     }
     async fn connect(self: Arc<Self>) -> Result<(zuse_rpc::reconnect::Channel, String), RpcError> {
         let mut status = self.status.clone();

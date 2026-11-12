@@ -55,6 +55,7 @@ mod creation_sources;
 mod desktop_import;
 mod dictation;
 mod external_chats;
+mod force_delete;
 mod git_workspace;
 mod list_watch;
 mod simulators;
@@ -720,6 +721,9 @@ enum MutateParams {
     /// Tombstone: removes the chats-map row; the session doc remains.
     #[serde(rename_all = "camelCase")]
     DeleteChat { chat_id: String },
+    /// Remove an exclusive managed checkout without creating an archive.
+    #[serde(rename_all = "camelCase")]
+    ForceDeleteChat { chat_id: String },
     #[serde(rename_all = "camelCase")]
     RenameDevice { device_id: String, name: String },
     /// Synced seen marker (LWW + monotonic guard): clears the "completed"
@@ -1336,7 +1340,11 @@ impl EngineRpc {
             });
             return Ok(RpcReply::Stream(stream.boxed()));
         }
-        let deadline = if method == methods::MUTATE && params["op"] == "setChatArchived" {
+        let deadline = if method == methods::MUTATE
+            && matches!(
+                params["op"].as_str(),
+                Some("setChatArchived" | "forceDeleteChat")
+            ) {
             std::time::Duration::from_secs(10 * 60)
         } else {
             forward_deadline(method)
@@ -1500,9 +1508,11 @@ impl EngineRpc {
                     .map_err(failed)
                     .map(drop)
             }
-            MutateParams::SetChatArchived { .. } => Err(RpcError::Failed(
-                "Archive changes must use the host lifecycle handler.".into(),
-            )),
+            MutateParams::SetChatArchived { .. } | MutateParams::ForceDeleteChat { .. } => {
+                Err(RpcError::Failed(
+                    "Archive and force-delete changes must use the host lifecycle handler.".into(),
+                ))
+            }
             MutateParams::ChangeSidebarPin { change } => {
                 self.workspace.change_sidebar_pin(&change).map_err(failed)
             }
@@ -1609,6 +1619,7 @@ fn should_invalidate_link(error: &RpcError) -> bool {
 fn change_request_rpc_error(error: ChangeRequestError) -> RpcError {
     let code = match error {
         ChangeRequestError::CliUnavailable => capability_errors::PULL_REQUESTS_CLI_UNAVAILABLE,
+        ChangeRequestError::CliOutdated => capability_errors::PULL_REQUESTS_CLI_OUTDATED,
         ChangeRequestError::Authentication => capability_errors::PULL_REQUESTS_AUTHENTICATION,
         ChangeRequestError::RateLimited => capability_errors::PULL_REQUESTS_RATE_LIMITED,
         ChangeRequestError::Timeout => capability_errors::PULL_REQUESTS_TIMEOUT,
@@ -1764,8 +1775,10 @@ const LOGIN_TUNNEL_TTL: Duration = Duration::from_secs(15 * 60);
 fn forwardable_request(method: &str, params: &serde_json::Value) -> bool {
     forwardable(method)
         || (method == methods::MUTATE
-            && (params["op"] == "setChatArchived"
-                || (params["op"] == "setChatConfig" && params.get("expectedConfig").is_some())))
+            && (matches!(
+                params["op"].as_str(),
+                Some("setChatArchived" | "forceDeleteChat")
+            ) || (params["op"] == "setChatConfig" && params.get("expectedConfig").is_some())))
 }
 
 fn forwardable(method: &str) -> bool {
@@ -1779,6 +1792,7 @@ fn forwardable(method: &str) -> bool {
             | zuse_protocol::control::WATCH_ZOTS
             | zuse_protocol::control::ZOT_FILES
             | zuse_protocol::control::ZOT_EVENTS
+            | zuse_protocol::control::ZOT_ISSUE
             | zuse_protocol::control::ACK_ZOT_EVENTS
     ) {
         return true;
@@ -2678,9 +2692,25 @@ impl EngineRpc {
                         }
                         (origin, _) => origin,
                     };
-                    RpcReply::value(
-                        &serde_json::json!({"peer":peer,"fragment":fragment,"origin":origin}),
-                    )
+                    // Plain LAN routes suit paired apps. A browser needs HTTPS.
+                    let (browser_origin, browser_self_signed) = match (&origin, &self.direct_access)
+                    {
+                        (Some(origin), _) if origin.starts_with("https:") => {
+                            (Some(origin.clone()), false)
+                        }
+                        (_, Some(direct)) => match direct.browser_origin().await {
+                            Some((origin, self_signed)) => (Some(origin), self_signed),
+                            None => (None, false),
+                        },
+                        _ => (None, false),
+                    };
+                    RpcReply::value(&serde_json::json!({
+                        "peer":peer,
+                        "fragment":fragment,
+                        "origin":origin,
+                        "browserOrigin":browser_origin,
+                        "browserSelfSigned":browser_self_signed,
+                    }))
                 }
                 _ => {
                     #[derive(Deserialize)]
@@ -2699,7 +2729,11 @@ impl EngineRpc {
 
         let mut params = params;
         if method == methods::GET_CHAT_ARCHIVE_STATUS
-            || (method == methods::MUTATE && params["op"] == "setChatArchived")
+            || (method == methods::MUTATE
+                && matches!(
+                    params["op"].as_str(),
+                    Some("setChatArchived" | "forceDeleteChat")
+                ))
         {
             if let Some(id) = params["chatId"].as_str() {
                 if let Some(chat) = self.workspace.chat(id).map_err(failed)? {
@@ -2708,7 +2742,7 @@ impl EngineRpc {
                         .is_some_and(|target| target != chat.device_id)
                     {
                         return Err(RpcError::Failed(
-                            "This thread moved to another computer. Refresh before archiving it."
+                            "This thread moved to another computer. Refresh before changing it."
                                 .into(),
                         ));
                     }
@@ -2742,43 +2776,70 @@ impl EngineRpc {
                 if !self.sessions.turn_in_flight(&chat) {
                     return Err(denied());
                 }
-                let zot = zots
+                let coordinator = zots
                     .coordinator(&chat)
-                    .map_err(|e| RpcError::Failed(e.to_string()))?
-                    .ok_or_else(denied)?;
-                let args = operation_params.clone();
-                if operation != zuse_protocol::control::API_INFO
-                    && args.get("zotId").and_then(|v| v.as_str()) != Some(zot.id.as_str())
-                {
-                    return Err(denied());
-                }
-                if operation == zuse_protocol::control::ZOT_COMMAND {
-                    let mut command: zuse_protocol::zots::ZotCommand = parse_params(args)?;
-                    if matches!(
-                        command.action,
-                        zuse_protocol::zots::ZotAction::Create { .. }
-                            | zuse_protocol::zots::ZotAction::Configure { .. }
-                            | zuse_protocol::zots::ZotAction::Delete
-                            | zuse_protocol::zots::ZotAction::SetStatus { .. }
-                            | zuse_protocol::zots::ZotAction::AdoptWorker { .. }
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                if let Some(zot) = coordinator {
+                    let args = operation_params.clone();
+                    if operation != zuse_protocol::control::API_INFO
+                        && args.get("zotId").and_then(|v| v.as_str()) != Some(zot.id.as_str())
+                    {
+                        return Err(denied());
+                    }
+                    if operation == zuse_protocol::control::ZOT_COMMAND {
+                        let mut command: zuse_protocol::zots::ZotCommand = parse_params(args)?;
+                        if matches!(
+                            command.action,
+                            zuse_protocol::zots::ZotAction::Create { .. }
+                                | zuse_protocol::zots::ZotAction::Configure { .. }
+                                | zuse_protocol::zots::ZotAction::Delete
+                                | zuse_protocol::zots::ZotAction::SetStatus { .. }
+                                | zuse_protocol::zots::ZotAction::AdoptWorker { .. }
+                        ) {
+                            return Err(denied());
+                        }
+                        if let zuse_protocol::zots::ZotAction::MessageWorker { automatic, .. } =
+                            &mut command.action
+                        {
+                            *automatic = true;
+                        }
+                        operation_params = serde_json::to_value(command)
+                            .map_err(|e| RpcError::BadParams(e.to_string()))?;
+                        operation_params["_zotActor"] = serde_json::json!(zot.coordinator_chat_id);
+                    } else if !matches!(
+                        operation,
+                        zuse_protocol::control::API_INFO
+                            | zuse_protocol::control::ZOT_FILES
+                            | zuse_protocol::control::ZOT_EVENTS
+                            | zuse_protocol::control::ZOT_ISSUE
+                            | zuse_protocol::control::ACK_ZOT_EVENTS
                     ) {
                         return Err(denied());
                     }
-                    if let zuse_protocol::zots::ZotAction::MessageWorker { automatic, .. } =
-                        &mut command.action
+                } else {
+                    let (zot, home) = zots
+                        .worker_home(&chat)
+                        .map_err(|e| RpcError::Failed(e.to_string()))?
+                        .ok_or_else(denied)?;
+                    if operation != zuse_protocol::control::ZOT_COMMAND {
+                        return Err(denied());
+                    }
+                    let command: zuse_protocol::zots::ZotCommand =
+                        parse_params(operation_params.clone())?;
+                    if command.zot_id != zot
+                        || !matches!(
+                            command.action,
+                            zuse_protocol::zots::ZotAction::CommentIssue { .. }
+                                | zuse_protocol::zots::ZotAction::LinkIssuePullRequest { .. }
+                        )
                     {
-                        *automatic = true;
+                        return Err(denied());
                     }
                     operation_params = serde_json::to_value(command)
                         .map_err(|e| RpcError::BadParams(e.to_string()))?;
-                } else if !matches!(
-                    operation,
-                    zuse_protocol::control::API_INFO
-                        | zuse_protocol::control::ZOT_FILES
-                        | zuse_protocol::control::ZOT_EVENTS
-                        | zuse_protocol::control::ACK_ZOT_EVENTS
-                ) {
-                    return Err(denied());
+                    operation_params["targetDeviceId"] = serde_json::json!(home);
+                    operation_params["_zotWorkerChatId"] = serde_json::json!(chat);
+                    operation_params["_zotActor"] = serde_json::json!(chat);
                 }
             }
             if !zuse_protocol::control::METHODS.contains(&operation) {
@@ -3049,6 +3110,7 @@ impl EngineRpc {
             zuse_protocol::control::ZOT_COMMAND => self.zot_command(params).await,
             zuse_protocol::control::ZOT_FILES
             | zuse_protocol::control::ZOT_EVENTS
+            | zuse_protocol::control::ZOT_ISSUE
             | zuse_protocol::control::ACK_ZOT_EVENTS => {
                 let zots = self
                     .zots
@@ -3073,6 +3135,19 @@ impl EngineRpc {
                     ),
                     zuse_protocol::control::ZOT_EVENTS => {
                         RpcReply::value(&zots.events(id).map_err(failure)?)
+                    }
+                    zuse_protocol::control::ZOT_ISSUE => {
+                        let issue = params
+                            .get("issueId")
+                            .and_then(|v| v.as_str())
+                            .ok_or_else(|| RpcError::BadParams("issueId is required".into()))?;
+                        let zot = zots.get(id).map_err(failure)?;
+                        RpcReply::value(
+                            zot.issues
+                                .iter()
+                                .find(|i| i.id == issue)
+                                .ok_or_else(|| RpcError::Failed("issue not found".into()))?,
+                        )
                     }
                     _ => {
                         let ids: Vec<String> = serde_json::from_value(
@@ -4496,6 +4571,10 @@ impl EngineRpc {
                 if let MutateParams::SetChatArchived { chat_id, archived } = &p {
                     let outcome = self.archive_chat(chat_id, *archived).await?;
                     return RpcReply::value(&serde_json::json!({"ok":true,"archive":outcome}));
+                }
+                if let MutateParams::ForceDeleteChat { chat_id } = &p {
+                    self.force_delete_chat(chat_id).await?;
+                    return RpcReply::value(&serde_json::json!({"ok":true}));
                 }
                 let sidebar_pins = matches!(&p, MutateParams::ChangeSidebarPin { .. });
                 self.mutate(p)?;
@@ -6878,6 +6957,10 @@ mod tests {
             (
                 ChangeRequestError::CliUnavailable,
                 capability_errors::PULL_REQUESTS_CLI_UNAVAILABLE,
+            ),
+            (
+                ChangeRequestError::CliOutdated,
+                capability_errors::PULL_REQUESTS_CLI_OUTDATED,
             ),
             (
                 ChangeRequestError::Authentication,

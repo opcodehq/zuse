@@ -2088,6 +2088,8 @@ struct SubagentTab {
     _fetch: Option<Task<()>>,
     /// Spawn chips INSIDE the subagent transcript open their own tabs.
     _events: Subscription,
+    /// A workflow agent's conversation follows its run's progress.
+    _feed: Option<Subscription>,
 }
 
 /// Sidebar render identity lets transcript/caret frames reuse its GPUI scene.
@@ -2156,6 +2158,9 @@ pub struct Shell {
     cloud_conversation_events: Option<Subscription>,
     cloud_tabs: cloud_tabs::CloudTabs,
     desktop_import: Entity<crate::desktop_import::Onboarding>,
+    onboarding: Entity<crate::onboarding::Wizard>,
+    /// A chat onboarding asked to open before its row synced in.
+    pending_open_chat: Option<String>,
     sidebar_pane: Entity<SidebarPane>,
     sidebar_controls: Entity<zuse_viewport::sidebar_controls::SidebarControls>,
     workspace_sidebar_focus: FocusHandle,
@@ -2329,6 +2334,8 @@ pub struct Shell {
     chat_rename: Option<ChatRename>,
     /// Chat id awaiting delete confirmation.
     delete_confirm: Option<String>,
+    deleting_chat: bool,
+    cloud_delete_commands: std::collections::HashMap<String, String>,
     /// Global confirmation/error dialog for the Changes-pane trash action. The
     /// RPC task is retained separately so rerenders do not cancel it.
     discard_working_tree: Option<DiscardWorkingTreeFlow>,
@@ -2623,6 +2630,28 @@ impl Shell {
         )
         .detach();
 
+        let onboarding =
+            cx.new(|cx| crate::onboarding::Wizard::new(state.clone(), desktop_import.clone(), cx));
+        cx.subscribe(
+            &onboarding,
+            |this: &mut Self, _, event: &crate::onboarding::Finished, cx| {
+                if let Some(id) = &event.open_chat {
+                    this.pending_open_chat = Some(id.clone());
+                    this.open_pending_chat(cx);
+                } else if event.add_project {
+                    this.open_add_space(cx);
+                }
+                this.pull_settings(cx);
+                let pickers = this.composer.read(cx).pickers().clone();
+                pickers.update(cx, |pickers, cx| {
+                    pickers.reload_defaults();
+                    cx.notify();
+                });
+                cx.notify();
+            },
+        )
+        .detach();
+
         let observation = cx.observe(&state, |this: &mut Shell, state, cx| {
             this.on_state_changed(&state, cx);
             cx.notify();
@@ -2839,6 +2868,8 @@ impl Shell {
             cloud_conversation_events: None,
             cloud_tabs: Default::default(),
             desktop_import,
+            onboarding,
+            pending_open_chat: None,
             zot_ui: zots::ZotUi::default(),
             sidebar_pane,
             sidebar_controls,
@@ -2953,6 +2984,8 @@ impl Shell {
             chat_copy_left: false,
             chat_rename: None,
             delete_confirm: None,
+            deleting_chat: false,
+            cloud_delete_commands: std::collections::HashMap::new(),
             discard_working_tree: None,
             discard_working_tree_task: None,
             space_menu: popover::Popup::default(),
@@ -3226,8 +3259,32 @@ impl Shell {
 
     // ---- splash ----
 
+    /// Open the chat onboarding asked for once the chat watch delivers it.
+    fn open_pending_chat(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.pending_open_chat.clone() else {
+            return;
+        };
+        let Some(chat) = self
+            .state
+            .read(cx)
+            .chats
+            .iter()
+            .find(|chat| chat.id == id)
+            .cloned()
+        else {
+            return;
+        };
+        self.pending_open_chat = None;
+        self.state.update(cx, |state, cx| {
+            state.select_space(chat.space_id.clone(), cx);
+            state.select_chat(Some(chat.id), cx);
+        });
+        self.set_route(Route::Chat, cx);
+    }
+
     fn on_state_changed(&mut self, state: &Entity<AppState>, cx: &mut Context<Self>) {
         self.refresh_pr_watches(cx);
+        self.open_pending_chat(cx);
         // Voice is an orchestrator over every thread: navigation keeps it,
         // only losing the engine that hosts it ends the session.
         if self.voice.read(cx).chat_id.is_some()
@@ -4462,6 +4519,32 @@ impl Shell {
                         this.add_browser_surface(url.clone(), window, cx);
                     }
                 }
+                crate::browser::BrowserEvent::ElementSelected(details) => {
+                    if this.panel_key(cx) == owner
+                        && this.resolved_right_active(cx) == RightSurface::Browser(id)
+                    {
+                        let composer = this.composer.clone();
+                        let details = details.clone();
+                        let draft_key = composer.read(cx).current_key.clone();
+                        cx.defer(move |cx| {
+                            composer.update(cx, |composer, cx| {
+                                composer.stage_browser_annotation(draft_key, details, cx);
+                            })
+                        });
+                    }
+                }
+                crate::browser::BrowserEvent::AnnotationRemoved(id) => {
+                    if this.panel_key(cx) == owner {
+                        let composer = this.composer.clone();
+                        let draft_key = composer.read(cx).current_key.clone();
+                        let id = id.clone();
+                        cx.defer(move |cx| {
+                            composer.update(cx, |composer, cx| {
+                                composer.remove_browser_annotation(draft_key, &id, cx)
+                            })
+                        });
+                    }
+                }
                 crate::browser::BrowserEvent::Close => {
                     this.close_right_surface(RightSurface::Browser(id), window, cx)
                 }
@@ -4848,6 +4931,19 @@ impl Shell {
                     cx,
                 );
             }
+            TranscriptEvent::OpenWorkflowAgent {
+                row_id,
+                agent_index,
+                title,
+            } => {
+                self.add_workflow_agent_surface(
+                    transcript,
+                    row_id.clone(),
+                    *agent_index,
+                    title.clone(),
+                    cx,
+                );
+            }
             // A reply's Fork menu: a new tab in this thread, or a new thread.
             TranscriptEvent::ForkChat { chat_id, target } => {
                 let source = self
@@ -4869,6 +4965,91 @@ impl Shell {
                 });
             }
         }
+    }
+
+    /// A workflow board's agent row: open that agent as a subagent tab. A
+    /// workflow agent has no doc of its own, so its conversation (what it was
+    /// asked, what it returned) is built from the run's progress and kept in
+    /// step with it; the tab then reads exactly like any other transcript.
+    fn add_workflow_agent_surface(
+        &mut self,
+        transcript: Entity<Transcript>,
+        row_id: SharedString,
+        index: u32,
+        title: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.set_surfaces_open(true, cx);
+        let doc_id = format!("workflow-agent:{row_id}:{index}");
+        if let Some((&id, _)) = self
+            .subagent_tabs
+            .iter()
+            .find(|(_, tab)| tab.doc_id == doc_id)
+        {
+            self.set_right_active(RightSurface::Subagent(id), cx);
+            return;
+        }
+        let Some(snapshot) = transcript.read(cx).workflow_agent(&row_id, index) else {
+            return;
+        };
+        let device = self
+            .state
+            .read(cx)
+            .local_device_id
+            .clone()
+            .unwrap_or_default();
+        let entries = crate::workflow_board::agent_entries(&snapshot, &device);
+        let live = matches!(
+            snapshot.agent.status,
+            crate::workflow_board::AgentStatus::Working
+                | crate::workflow_board::AgentStatus::Queued
+        );
+        self.state.update(cx, |state, cx| {
+            state.set_subagent_snapshot(doc_id.clone(), entries.clone());
+            cx.notify();
+        });
+        let last = std::cell::RefCell::new(entries);
+        let state = self.state.clone();
+        let feed_doc = doc_id.clone();
+        let feed = cx.observe(&transcript, move |_, source, cx| {
+            let Some(snapshot) = source.read(cx).workflow_agent(&row_id, index) else {
+                return;
+            };
+            let entries = crate::workflow_board::agent_entries(&snapshot, &device);
+            if *last.borrow() == entries {
+                return;
+            }
+            last.replace(entries.clone());
+            state.update(cx, |state, cx| {
+                state.set_subagent_snapshot(feed_doc.clone(), entries);
+                cx.notify();
+            });
+        });
+        self.subagent_seq += 1;
+        let id = self.subagent_seq;
+        let view = cx.new(|cx| Transcript::for_doc(self.state.clone(), doc_id.clone(), live, cx));
+        let links = Self::session_links(Some(self.active_chat.clone()), cx);
+        view.update(cx, |view, _| view.set_workspace_link_handler(links));
+        let events = cx.subscribe(&view, Self::on_transcript_event);
+        self.subagent_tabs.insert(
+            id,
+            SubagentTab {
+                doc_id,
+                // Workflows are a Claude Code feature.
+                harness: Some(zuse_protocol::HarnessId::ClaudeCode),
+                title: title.into(),
+                transcript: view,
+                _fetch: None,
+                _events: events,
+                _feed: Some(feed),
+            },
+        );
+        let key = self.panel_key(cx);
+        self.right_tabs
+            .entry(key)
+            .or_default()
+            .push(RightSurface::Subagent(id));
+        self.set_right_active(RightSurface::Subagent(id), cx);
     }
 
     /// A spawn chip's "Open subagent": focus the existing tab for that doc,
@@ -4944,6 +5125,7 @@ impl Shell {
                 transcript,
                 _fetch: fetch,
                 _events: events,
+                _feed: None,
             },
         );
         let key = self.panel_key(cx);
@@ -5620,6 +5802,13 @@ impl Shell {
     }
 
     /// Close the session-row context menu through the exit animation.
+    /// Whether the open chat menu belongs to `chat_id`'s row (not a tab).
+    pub(super) fn chat_menu_targets(&self, chat_id: &str) -> bool {
+        self.chat_menu
+            .get()
+            .is_some_and(|menu| menu.tab.is_none() && menu.chat_id == chat_id)
+    }
+
     fn close_chat_menu(&mut self, cx: &mut Context<Self>) {
         self.chat_copy_intent.reset();
         if self.chat_menu.begin_close() {
@@ -5639,6 +5828,32 @@ impl Shell {
         let message = message.into();
         self.sidebar_notice = Some(message.clone());
         crate::toast::show(cx, kind, message);
+    }
+
+    fn show_archive_error(&mut self, chat_id: String, message: String, cx: &mut Context<Self>) {
+        self.sidebar_notice = Some(message.clone().into());
+        let shell = cx.weak_entity();
+        crate::toast::error_with_action(
+            cx,
+            message,
+            chat_id.clone(),
+            "Force delete…",
+            move |_, cx| {
+                let _ = shell.update(cx, |this, cx| {
+                    if !this.deleting_chat
+                        && this
+                            .state
+                            .read(cx)
+                            .chats
+                            .iter()
+                            .any(|chat| chat.id == chat_id)
+                    {
+                        this.delete_confirm = Some(chat_id.clone());
+                        cx.notify();
+                    }
+                });
+            },
+        );
     }
 
     fn set_chat_copy_open(&mut self, open: bool, cx: &mut Context<Self>) {
@@ -6968,7 +7183,11 @@ impl Shell {
                             if !shell.state.read(cx).engine().is_some_and(|current| current.same_connection(&engine)) {
                                 return;
                             }
-                            shell.show_notice(crate::toast::ToastKind::Error, format!("{error}"), cx);
+                            if archived {
+                                shell.show_archive_error(chat_id.clone(), format!("{error}"), cx);
+                            } else {
+                                shell.show_notice(crate::toast::ToastKind::Error, format!("{error}"), cx);
+                            }
                             cx.notify();
                         });
                     }
@@ -7055,7 +7274,86 @@ impl Shell {
     }
 
     fn delete_chat(&mut self, chat_id: String, cx: &mut Context<Self>) {
-        self.delete_confirm = None;
+        if self.deleting_chat {
+            return;
+        }
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            self.show_notice(crate::toast::ToastKind::Error, "Engine not connected", cx);
+            cx.notify();
+            return;
+        };
+        // Take a Zapper thread off its Zapper first, so the Zapper stops
+        // counting it and sending it work.
+        if let Some(zot) = self.zot_of_thread(&chat_id, cx) {
+            self.send_zot_command(
+                zot.id.clone(),
+                Some(zot.revision),
+                zuse_protocol::zots::ZotAction::ReleaseWorker {
+                    chat_id: chat_id.clone(),
+                },
+                zot_forms::ZotAfter::Stay,
+                cx,
+            );
+        }
+        let owner = self
+            .state
+            .read(cx)
+            .chats
+            .iter()
+            .find(|chat| chat.id == chat_id)
+            .map(|chat| chat.device_id.clone());
+        let cloud_request = engine.cloud_target().map(|target| {
+            let command_id = self
+                .cloud_delete_commands
+                .entry(chat_id.clone())
+                .or_insert_with(|| uuid::Uuid::new_v4().to_string())
+                .clone();
+            (target, command_id)
+        });
+        self.deleting_chat = true;
+        cx.spawn(async move |this, cx| {
+            let result = if let Some((target, command_id)) = cloud_request {
+                target.delete_session(&chat_id, &command_id).await
+            } else {
+                engine
+                    .client()
+                    .call(
+                        methods::MUTATE,
+                        serde_json::json!({
+                            "op": "forceDeleteChat", "chatId": chat_id, "targetDeviceId": owner,
+                        }),
+                    )
+                    .await
+            };
+            let _ = this.update(cx, |this, cx| {
+                this.deleting_chat = false;
+                if !this
+                    .state
+                    .read(cx)
+                    .engine()
+                    .is_some_and(|current| current.same_connection(&engine))
+                {
+                    cx.notify();
+                    return;
+                }
+                match result {
+                    Ok(_) => this.finish_delete_chat(chat_id, cx),
+                    Err(error) => {
+                        this.show_notice(crate::toast::ToastKind::Error, format!("{error}"), cx)
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn finish_delete_chat(&mut self, chat_id: String, cx: &mut Context<Self>) {
+        self.cloud_delete_commands.remove(&chat_id);
+        if self.delete_confirm.as_deref() == Some(chat_id.as_str()) {
+            self.delete_confirm = None;
+        }
         if let Some(tabs) = self.right_tabs.get(&chat_id) {
             for surface in tabs {
                 if let RightSurface::Browser(id) = surface {
@@ -7079,10 +7377,6 @@ impl Shell {
         }
         self.composer
             .update(cx, |composer, cx| composer.purge_chat(&chat_id, cx));
-        self.mutate(
-            serde_json::json!({ "op": "deleteChat", "chatId": chat_id }),
-            cx,
-        );
         cx.notify();
     }
 
@@ -9025,7 +9319,7 @@ impl Shell {
         let working = status == zuse_protocol::ChatIndicator::Working && !queued && !undelivered;
         let compact_status = sidebar.then(|| {
             let glyph = if working {
-                loaders::dither_ring(format!("{row_id}-working"), 13.0, theme.text_muted)
+                loaders::terminal_spinner(format!("{row_id}-working"), 13.0, theme.text_muted)
                     .into_any_element()
             } else if status == zuse_protocol::ChatIndicator::Completed && !queued && !undelivered {
                 icon(icons::CHECK)
@@ -9126,8 +9420,12 @@ impl Shell {
                             .text_color(status_color)
                             .into_any_element()
                     } else if working {
-                        loaders::dither_ring(format!("{row_id}-working"), 13.0, theme.text_muted)
-                            .into_any_element()
+                        loaders::terminal_spinner(
+                            format!("{row_id}-working"),
+                            13.0,
+                            theme.text_muted,
+                        )
+                        .into_any_element()
                     } else {
                         attention_mark(13.0)
                     };
@@ -9246,6 +9544,9 @@ impl Shell {
         // below its near-opaque selected fill, and blending toward it visibly
         // dimmed the active row under the pointer (user report).
         let hover_bg = if selected { selected_wash } else { hover };
+        // The row a context menu was opened on stays lit while the menu is
+        // up; the pointer leaving it for the menu must not drop the wash.
+        let menu_target = !preview && self.chat_menu_targets(&id);
         // Brightness is the read state: titles rest gray and an unseen finish
         // stands out in full white, with no status mark beside it.
         let finished_unseen =
@@ -9278,8 +9579,16 @@ impl Shell {
             .px(px(Theme::SPACE_SM))
             .when(sidebar, |el| el.justify_center())
             .when(!sidebar, |el| el.py(px(6.0)))
-            .text_color(motion::hover_blend(&fade_key, rest_text, theme.text_strong))
-            .bg(motion::hover_blend(&fade_key, rest_bg, hover_bg))
+            .text_color(if menu_target {
+                theme.text_strong
+            } else {
+                motion::hover_blend(&fade_key, rest_text, theme.text_strong)
+            })
+            .bg(if menu_target {
+                hover_bg
+            } else {
+                motion::hover_blend(&fade_key, rest_bg, hover_bg)
+            })
             // No selection ring (user request) — the wash alone marks the
             // active row.
             // Row hover drives BOTH the wash blend and the corner's
@@ -9606,7 +9915,7 @@ impl Shell {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .child(loaders::dither_ring(
+                            .child(loaders::terminal_spinner(
                                 format!("{row_id}-working"),
                                 10.0,
                                 theme.text_muted,
@@ -11975,8 +12284,11 @@ impl Shell {
         // Modals and context menus sit above the rest of the shell. Preserve
         // their existing behavior: only surfaces that already have a Cancel
         // path close here; the others remain explicit blockers.
+        if self.delete_confirm.take().is_some() {
+            cx.notify();
+            return true;
+        }
         if self.sync_flow.has_visible_overlay()
-            || self.delete_confirm.is_some()
             || self.delete_space_confirm.is_some()
             || self.chat_menu.get().is_some()
             || self.space_menu.get().is_some()
@@ -11986,6 +12298,9 @@ impl Shell {
         }
         if self.zot_ui.dialog.take().is_some() {
             cx.notify();
+            return true;
+        }
+        if self.dismiss_zot_overlay(cx) {
             return true;
         }
         if self.harness_update_expanded {
@@ -12223,6 +12538,7 @@ impl Shell {
         overlays.push(self.desktop_import.clone().into_any_element());
         overlays.extend(self.render_shortcuts_panel(viewport, cx));
         overlays.extend(self.render_zot_dialog(viewport, window, cx));
+        overlays.extend(self.render_zot_overlays(viewport, cx));
 
         if let Some(menu_state) = self.chat_menu.get().cloned() {
             let chat_id = menu_state.chat_id;
@@ -12236,6 +12552,9 @@ impl Shell {
                     .iter()
                     .any(|chat| chat.id == chat_id && chat.parent_chat_id.is_some());
             let is_pinned = self.active_sidebar_pins(cx).contains(&chat_id);
+            // A Zapper thread lives under its Zapper, so it has no pin, and
+            // archiving goes through the Zapper so it stops sending work.
+            let thread_zot = self.zot_of_thread(&chat_id, cx);
             let rename_id = chat_id.clone();
             let pin_id = chat_id.clone();
             let archive_id = chat_id.clone();
@@ -12281,9 +12600,16 @@ impl Shell {
                     let archive =
                         popover::menu_row(&theme, false, format!("chat-menu-archive-{chat_id}"))
                             .id("chat-menu-archive")
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.archive_chat(archive_id.clone(), cx)
-                            }))
+                            .on_click({
+                                let thread_zot = thread_zot.clone();
+                                cx.listener(move |this, _, _, cx| match &thread_zot {
+                                    Some(zot) => {
+                                        this.close_chat_menu(cx);
+                                        this.archive_zot_thread(zot, archive_id.clone(), cx);
+                                    }
+                                    None => this.archive_chat(archive_id.clone(), cx),
+                                })
+                            })
                             .child(
                                 icon(icons::ARCHIVE_MINIMALISTIC)
                                     .size(px(16.0))
@@ -12291,8 +12617,12 @@ impl Shell {
                             )
                             .child(SharedString::from("Archive"));
                     let copy = self.render_chat_copy_trigger(&chat_id, copy_open, &theme, cx);
-                    menu.child(self.chat_menu_hover_row(CHAT_MENU_ROW_PIN, pin, cx))
-                        .child(self.chat_menu_hover_row(CHAT_MENU_ROW_ARCHIVE, archive, cx))
+                    let menu = if thread_zot.is_some() {
+                        menu
+                    } else {
+                        menu.child(self.chat_menu_hover_row(CHAT_MENU_ROW_PIN, pin, cx))
+                    };
+                    menu.child(self.chat_menu_hover_row(CHAT_MENU_ROW_ARCHIVE, archive, cx))
                         .child(self.chat_menu_hover_row(CHAT_MENU_ROW_COPY, copy, cx))
                 };
                 let delete =
@@ -12309,7 +12639,7 @@ impl Shell {
                                 .size(px(16.0))
                                 .text_color(theme.danger),
                         )
-                        .child(SharedString::from("Delete…"));
+                        .child(SharedString::from("Force delete…"));
                 menu.child(popover::menu_separator())
                     .child(self.chat_menu_hover_row(CHAT_MENU_ROW_DELETE, delete, cx))
             };
@@ -12383,14 +12713,29 @@ impl Shell {
                     .and_then(|c| c.title.clone())
                     .unwrap_or_else(|| "New session".into()),
             );
+            let cloud = self
+                .state
+                .read(cx)
+                .engine()
+                .is_some_and(|engine| engine.cloud_target().is_some());
             let card = popover::dialog_card(&theme)
-                .child(popover::dialog_title(&theme, "Delete session?"))
-                .child(div().mt(px(6.0)).child(popover::dialog_body(
-                    &theme,
-                    format!("\u{201C}{title}\u{201D} will be permanently deleted. This can\u{2019}t be undone."),
-                )))
+                .w(px(440.))
+                .overflow_hidden()
+                .child(
+                    div().flex().flex_col().gap(px(10.))
+                        .child(popover::dialog_title(&theme, "Force delete session?"))
+                        .child(popover::dialog_body(&theme,
+                            format!("“{title}” and its conversations and agents will be permanently deleted.")))
+                        .child(popover::dialog_body(&theme,
+                            if cloud {
+                                "Its cloud computer, disk, stored history and recovery data will be permanently deleted."
+                            } else {
+                                "Its private worktree and unsaved files will also be removed. Shared worktrees and your main project folder are kept."
+                            })),
+                )
                 .child(
                     popover::dialog_footer(&theme)
+                        .child(div().flex_1().text_size(px(11.)).text_color(theme.text_muted).child("This can’t be undone."))
                         .child(
                             popover::btn_ghost(&theme, &tr(cx, msg::common::cancel), "delete-chat-cancel")
                                 .id("delete-chat-cancel")
@@ -12400,8 +12745,12 @@ impl Shell {
                                 })),
                         )
                         .child(
-                            popover::btn_danger(&theme, "Delete")
+                            popover::btn_danger(
+                                &theme,
+                                if self.deleting_chat { "Deleting…" } else { "Force delete" },
+                            )
                                 .id("delete-chat-confirm")
+                                .opacity(if self.deleting_chat { 0.5 } else { 1. })
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.delete_chat(chat_id.clone(), cx)
                                 })),
@@ -15903,6 +16252,13 @@ impl Render for Shell {
             }
             SplashPhase::Gone => root,
         };
+        // Onboarding fills the window below the caption controls and drag strip.
+        let onboarding = self.onboarding.read(cx).visible();
+        let root = if onboarding {
+            root.child(self.onboarding.clone())
+        } else {
+            root
+        };
 
         // Caption controls are shell-level chrome, not Ready-page content:
         // keep them above the splash and every auth/org/error gate as well as
@@ -15911,7 +16267,7 @@ impl Render for Shell {
         // the native `Drag` control area, on Linux the explicit
         // `start_window_move` strip (the control-area hit-test is inert
         // there); macOS drags gate windows natively.
-        let root = if (!restart_required && matches!(gate, GatePhase::Ready))
+        let root = if (!restart_required && matches!(gate, GatePhase::Ready) && !onboarding)
             || cfg!(target_os = "macos")
         {
             root
@@ -16100,8 +16456,9 @@ mod tests {
 
     #[test]
     fn sidebar_drag_stays_exact_in_range_and_reduced_motion_never_nudges() {
-        let middle = sidebar_drag_sample(312.0, None, false);
-        assert_eq!(middle.width, 312.0);
+        let inside = (SIDEBAR_MIN + SIDEBAR_MAX) / 2.0;
+        let middle = sidebar_drag_sample(inside, None, false);
+        assert_eq!(middle.width, inside);
         assert_eq!(middle.edge, None);
         assert!(!middle.starts_bounce);
 
@@ -18747,8 +19104,8 @@ mod exit_regressions {
                     // below the titlebar band.
                     let title = cx.debug_bounds("pr-toolbar-title").unwrap();
                     assert!(title.top() >= px(Theme::TITLEBAR_HEIGHT));
-                    let external = cx.debug_bounds("pr-external").unwrap();
-                    assert!(external.right() <= px(width));
+                    let more = cx.debug_bounds("pr-more").unwrap();
+                    assert!(more.right() <= px(width));
                 }
             }
         }
@@ -20105,6 +20462,19 @@ impl Shell {
 
     pub fn fixture_focus_mounted(&self, window: &Window, cx: &App) -> bool {
         self.shortcut_focus.contains_focused(window, cx)
+    }
+    pub fn fixture_browser_annotation_comments(&self, cx: &App) -> Vec<String> {
+        let composer = self.composer.read(cx);
+        self.state
+            .read(cx)
+            .context_items(&composer.current_key)
+            .iter()
+            .filter_map(|item| {
+                item.browser_annotation
+                    .as_ref()
+                    .map(|annotation| annotation.comment.clone())
+            })
+            .collect()
     }
     pub fn fixture_active_browser(
         &self,

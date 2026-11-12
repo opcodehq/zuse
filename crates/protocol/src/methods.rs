@@ -102,7 +102,7 @@ pub const WATCH_SESSIONS: &str = "WatchSessions";
 pub const WATCH_SPACES: &str = "WatchSpaces";
 /// Entity mutations against the workspace doc (feature-inventory §2 DataRpc).
 /// Params are tagged `{op: createChat|createSpace|renameSpace|deleteSpace|
-/// renameChat|setChatArchived|deleteChat|renameDevice|markChatSeen, …}`.
+/// renameChat|setChatArchived|deleteChat|forceDeleteChat|renameDevice|markChatSeen, …}`.
 pub const MUTATE: &str = "Mutate";
 /// This engine's identity → `{deviceId}` (IPC-only; never relay-forwarded —
 /// the answer is about whichever engine you are directly connected to).
@@ -342,6 +342,7 @@ pub fn retryable_read(method: &str, params: &serde_json::Value) -> bool {
         | CLOUD_ACCOUNT_STATUS
         | CLOUD_CONTEXT
         | CLOUD_EVENTS
+        | SLACK_CONNECTIONS
         | CLOUD_PROJECTS
         | CLOUD_GITHUB
         | CLOUD_CAPABILITIES
@@ -560,3 +561,9 @@ pub const CLOUD_TASK_COMMAND: &str = "CloudTaskCommand";
 
 /// Scoped API-owned workspace asset transfer; does not acquire execution.
 pub const CLOUD_TASK_ASSET: &str = "CloudTaskAsset";
+
+pub const SLACK_CONNECTIONS: &str = "SlackConnections";
+pub const SLACK_CONNECT: &str = "SlackConnect";
+pub const SLACK_DISCONNECT: &str = "SlackDisconnect";
+/// Accept or decline a Slack sign-in that is waiting for confirmation in Zuse.
+pub const SLACK_CONFIRM: &str = "SlackConfirm";

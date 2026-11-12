@@ -157,6 +157,7 @@ impl Shell {
             || self.sync_flow.has_visible_overlay()
             || self.delete_confirm.is_some()
             || self.zot_ui.dialog.is_some()
+            || self.zot_overlay_open()
             || self.delete_space_confirm.is_some()
             || self.chat_rename.is_some()
             || self.rename_space_dialog.is_some()
@@ -1264,7 +1265,10 @@ impl Shell {
         // right pane's toggle anchors the far edge.
         // A Zot's coordinator has no repository, branch or environment to show.
         let zot_coordinator = self.state.read(cx).selected_chat_is_zot_coordinator();
-        let session_info_toggle = (!takeover && !on_canvas && !zot_coordinator).then(|| {
+        // Neither does a Zot thread that hasn't created its worktree yet.
+        let no_checkout =
+            zot_coordinator || self.state.read(cx).selected_chat_awaits_zot_worktree();
+        let session_info_toggle = (!takeover && !on_canvas && !no_checkout).then(|| {
             let open = self.session_info_visible();
             header_icon_button(
                 "toggle-session-info",
@@ -1283,14 +1287,14 @@ impl Shell {
             )
             .when(open, |button| button.bg(theme.text.opacity(0.10)))
         });
-        let open_in = if !takeover && !on_canvas && !zot_coordinator {
+        let open_in = if !takeover && !on_canvas && !no_checkout {
             self.render_open_in(&theme, cx)
         } else {
             None
         };
         let terminal_toggle =
-            (!takeover && !on_canvas && !zot_coordinator && self.cloud_conversation.is_none())
-                .then(|| {
+            (!takeover && !on_canvas && !no_checkout && self.cloud_conversation.is_none()).then(
+                || {
                     let open = self.terminal_open(cx);
                     header_icon_button(
                         "toggle-bottom-terminal",
@@ -1304,7 +1308,8 @@ impl Shell {
                     .aria_selected(open)
                     .flex_none()
                     .when(open, |button| button.bg(theme.text.opacity(0.10)))
-                });
+                },
+            );
         // The left cluster: owner avatar, branch and copy (reference top bar).
         let identity = if !takeover && !on_canvas && zot_coordinator {
             // With no branch to show, the conversation tabs take this row.

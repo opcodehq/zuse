@@ -474,7 +474,113 @@ impl PullRequestDetailPage {
             .into_any_element()
     }
 
+    /// Start a paint pass over the page's Mermaid fences, sized to its column.
+    pub(super) fn begin_diagram_frame(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let released = {
+            let mut diagrams = self.diagrams.borrow_mut();
+            let mut released = diagrams.begin_frame(crate::theme::style_generation());
+            let column = self
+                .page_width
+                .unwrap_or(DETAIL_COLUMN_MAX)
+                .min(DETAIL_COLUMN_MAX);
+            released.extend(diagrams.set_view((column.max(1.0), 480.0), window.scale_factor()));
+            released
+        };
+        if !released.is_empty() {
+            crate::image_media::release_media(released, cx);
+        }
+    }
+
+    /// Draw requested diagrams one at a time off the UI thread. Pull request
+    /// text is written by anyone, so the renderer's complexity limits apply.
+    pub(super) fn ensure_diagram_worker(&mut self, cx: &mut Context<Self>) {
+        if self.diagram_worker.is_some() || !self.diagrams.borrow_mut().take_new_requests() {
+            return;
+        }
+        self.diagram_worker = Some(cx.spawn(async move |this, cx| {
+            loop {
+                let job = this.update(cx, |this, cx| {
+                    let job = this.diagrams.borrow_mut().next_job();
+                    if job.is_none() {
+                        this.diagram_worker = None;
+                    }
+                    job.map(|code| {
+                        (
+                            code,
+                            crate::markdown::mermaid::Palette::from_theme(Theme::of(cx)),
+                            crate::theme::style_generation(),
+                        )
+                    })
+                });
+                let Ok(Some((code, palette, style))) = job else {
+                    return;
+                };
+                let source = code.clone();
+                let result = cx
+                    .background_executor()
+                    .spawn(async move {
+                        let svg = crate::markdown::mermaid::render(&source, &palette)?;
+                        crate::image_media::decode_image("image/svg+xml", svg.into_bytes())
+                    })
+                    .await;
+                let finished = this.update(cx, |this, cx| {
+                    let finished = this.diagrams.borrow_mut().finish(code, style, result);
+                    if let Some((_, released)) = finished {
+                        crate::image_media::release_media(released, cx);
+                        cx.notify();
+                    }
+                });
+                if finished.is_err() {
+                    return;
+                }
+            }
+        }));
+    }
+
+    pub(super) fn open_diagram(
+        &mut self,
+        source: crate::image_media::MediaImage,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.close_diagram_zoom(cx);
+        let viewport = window.viewport_size();
+        let available = crate::markdown::mermaid_cache::MAX_RETAINED_BYTES
+            .saturating_sub(self.diagrams.borrow().retained_bytes());
+        let enlarged = source.enlarged(
+            (
+                f32::from(viewport.width) * 0.9,
+                f32::from(viewport.height) * 0.85,
+            ),
+            window.scale_factor(),
+            available,
+            None,
+        );
+        self.image_previous_focus = window.focused(cx);
+        self.image_preview = Some(
+            crate::attachments::PreviewImage::new("Mermaid diagram", enlarged.image)
+                .with_plate(crate::markdown::mermaid::Palette::plate(Theme::of(cx))),
+        );
+        self.diagram_zoom = Some(source);
+        window.focus(&self.image_focus, cx);
+        cx.notify();
+    }
+
+    /// Release a diagram lightbox's dedicated raster; the page's own preview
+    /// stays with the diagram cache.
+    pub(super) fn close_diagram_zoom(&mut self, cx: &mut gpui::App) {
+        let Some(source) = self.diagram_zoom.take() else {
+            return;
+        };
+        if let Some(preview) = self.image_preview.take()
+            && !Arc::ptr_eq(&preview.image, &source.image)
+        {
+            cx.defer(move |cx| gpui::ImageSource::Image(preview.image).evict(None, cx));
+        }
+    }
+
     pub(super) fn close_image(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_diagram_zoom(cx);
         self.image_task = None;
         self.image_preview = None;
         self.image_failed = None;

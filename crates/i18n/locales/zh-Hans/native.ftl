@@ -1155,7 +1155,7 @@ native-no_matching_threads = 没有匹配的线程
 native-try_title_project_branch = 尝试搜索标题、项目或分支
 
 # Context: new-chat landing screen and local account status.
-native-composer_placeholder = 请求修改通过 @ 提及的文件，或运行斜杠命令…
+native-composer_placeholder = 做任何事…
 
 # Context: new-chat landing screen and local account status.
 native-agent_default = 智能体默认值

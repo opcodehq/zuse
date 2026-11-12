@@ -1,5 +1,33 @@
 use serde_json::{Value, json};
 use zuse_harness::{Call, Compaction, Message, Role, ToolOutput, prompt::*};
+
+#[test]
+fn model_context_defaults_do_not_compact_at_32k() {
+    for (model, window) in [
+        ("local/codex/gpt-6-astra", 272_000),
+        ("local/codex/gpt-6.1-sol", 500_000),
+        ("chatgpt/gpt-6.1-terra", 500_000),
+        ("local/claude/claude-opus-5-5", 1_000_000),
+        ("local/claude/claude-sonnet-4-6", 1_000_000),
+        ("local/claude/claude-haiku-4-5", 200_000),
+        ("local/claude/claude-opus-4-5", 200_000),
+    ] {
+        let options = zuse_harness::Options::new(model);
+        assert_eq!(options.window_tokens, window, "{model}");
+        let budget = limits(
+            options.window_tokens,
+            options.compact_tokens,
+            options.effective_window_percent,
+        );
+        assert!(budget.compact_at > 32_000, "{model}");
+    }
+    assert_eq!(limits(0, None, 95.).window, 32_000);
+    assert_eq!(
+        zuse_harness::Options::new("api/custom/small-model").window_tokens,
+        32_000
+    );
+}
+
 fn legacy_estimate(messages: &[Message]) -> u64 {
     messages
         .iter()

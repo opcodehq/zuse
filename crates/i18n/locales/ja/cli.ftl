@@ -57,3 +57,63 @@ cli-missing_home = HOME または --data-dir が必要です
 cli-listening = エージェントツールの待ち受け先: 127.0.0.1:{ $port }
 
 cli-open = 開く { $url }
+
+cli-account = サーバーの起動時にサインインしてこのコンピューターをリンクする
+
+cli-pair = 別のデバイス用のプライベートリンクを作成する
+
+cli-pair_label = 接続済みデバイスに表示する名前
+
+cli-pair_app = ブラウザーではなく Zuse アプリ用の QR コードを表示する
+
+cli-login = Zuse アカウントにサインインする
+
+cli-logout = Zuse アカウントからサインアウトする
+
+cli-link = Zuse アカウント経由でこのコンピューターを利用できるようにする
+
+cli-link_name = アカウントに表示するコンピューター名
+
+cli-unlink = アカウント経由でのこのコンピューターの提供を停止する
+
+cli-status = アカウントとネットワークの状態を表示する
+
+cli-server_unavailable = エージェントポート { $port } で Zuse サーバーが実行されていません。先に zuse-server を起動するか、--ipc-port を指定してください。
+
+cli-default_device = 新しいデバイス
+
+cli-browser_link = ブラウザー: { $url }
+
+cli-app_link = Zuse アプリ: { $url }
+
+cli-certificate_warning = 初回はブラウザーがこのコンピューターのプライベート証明書について警告します。信頼できるネットワークでのみ続行してください。
+
+cli-link_warning = このリンクを持つ人は誰でもこのコンピューターを使用できます。未使用のリンクは 10 分で期限切れになります。
+
+cli-local_only = このリンクはこのコンピューターでのみ機能します。他のデバイスを接続するには --lan または --account を指定して zuse-server を起動してください。
+
+cli-sign_in_prompt = { $url } を開いてコード { $code } を確認してください
+
+cli-signed_in = { $email } としてサインインしました
+
+cli-signed_out = サインアウトしました
+
+cli-sign_in_failed = サインインが完了しませんでした
+
+cli-linked = アカウント経由で { $name } として { $url } で利用できます
+
+cli-unlinked = このコンピューターはアカウント経由で利用できなくなりました
+
+cli-status_signed_in = アカウント: { $email }
+
+cli-status_signed_out = アカウント: サインインしていません
+
+cli-status_linked = コンピューター: { $name } ({ $url })
+
+cli-status_unlinked = コンピューター: アカウントにリンクされていません
+
+cli-status_no_routes = ネットワーク: このコンピューターのみ
+
+cli-assets_missing = ブラウザー用ファイルが見つかりません。--assets を指定するか ZUSE_WEB_ASSETS を設定するまで、ブラウザーではこのサーバーを開けません。
+
+cli-invitation_failed = 接続リンクを作成できませんでした

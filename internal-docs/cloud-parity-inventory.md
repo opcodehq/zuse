@@ -52,7 +52,8 @@ Source: [architecture](https://github.com/swarajbachu/zuse/blob/2016cf4f0cc240e6
 - [ ] Persistent machines: offers/create/checkout, status/cancel/recover/destroy, SSH keys/modes, private network and runtime updates/resources.
 - [ ] Organizations: scope switch, independent configuration/billing, members/roles/invites, sharing policy and defaults.
 - [ ] Cloud device selector: optional computer command access, independent enrollment/disable/revoke, approvals, disconnected status and explicit target binding.
-- [ ] API keys and automation: create/list/revoke, public workspace/message/attachment API, result polling and signed webhooks; Slack connection/alerts.
+- [ ] API keys and automation: create/list/revoke, public workspace/message/attachment API, result polling and signed webhooks.
+- [x] Rust Slack source implementation: signed mentions/DMs, durable idempotent runs, correlated threaded results, sender/channel chat attribution and shared settings/workspace connection picker. See `slack-app.md` for fixture evidence, rollout prerequisites and deferred Slack features. Live installation/provider execution and alerts remain unverified.
 
 UI entrypoints: `apps/renderer/src/components/{chat-composer,top-bar,cloud-workspace-info,cloud-connection-notice,cloud-device-selector,cloud-chat-sharing-dialog}.tsx`.
 Settings: `components/settings/{cloud-workspace-pool,cloud-hosting-settings,cloud-image-build-history,cloud-snapshot-settings,cloud-machines-pane,cloud-device-access-card}.tsx`.

@@ -141,3 +141,8 @@ pr-checks	CheckmarkCircle02Icon
 pr-conflicts	GitMergeConflictIcon
 pr-add-to-chat	CommentAdd01Icon
 pr-github	GithubIcon
+browser-select	CursorRectangleSelection01Icon
+browser-code	CodeIcon
+browser-cookie	CookieIcon
+browser-brush	CleanIcon
+browser-camera	Camera01Icon

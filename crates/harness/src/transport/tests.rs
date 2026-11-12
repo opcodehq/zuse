@@ -37,6 +37,7 @@ fn input() -> ModelInput {
         retry_index: 0,
         cancel: CancellationToken::new(),
         text: Arc::new(|_| {}),
+        thinking: Arc::new(|_| {}),
         budget: Arc::new(Budget),
         report: Arc::new(|_| {}),
     }
@@ -231,6 +232,87 @@ async fn encoded_fixture(
     )
 }
 #[tokio::test]
+async fn visible_thinking_streams_separately_from_answer_text() {
+    for (protocol, events) in [
+        (
+            Protocol::Responses,
+            vec![
+                json!({"type":"response.reasoning_summary_text.delta","delta":"visible thought"}),
+                json!({"type":"response.output_text.delta","delta":"answer"}),
+                json!({"type":"response.completed","response":{"status":"completed"}}),
+            ],
+        ),
+        (
+            Protocol::Messages,
+            vec![
+                json!({"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"visible "}}),
+                json!({"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"thought"}}),
+                json!({"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"private signature"}}),
+                json!({"type":"content_block_start","index":1,"content_block":{"type":"text","text":"answer"}}),
+                json!({"type":"message_delta","delta":{"stop_reason":"end_turn"}}),
+                json!({"type":"message_stop"}),
+            ],
+        ),
+    ] {
+        let (mut credential, body) = fixture(protocol, events, false).await;
+        credential.route.include_encrypted_reasoning = protocol == Protocol::Responses;
+        let mut request = input();
+        request.reasoning = Some("medium".into());
+        let thoughts = Arc::new(std::sync::Mutex::new(String::new()));
+        let captured = thoughts.clone();
+        request.thinking = Arc::new(move |text| captured.lock().unwrap().push_str(&text));
+        let output = NativeTransport::new()
+            .unwrap()
+            .request(request, credential)
+            .await
+            .unwrap();
+        assert_eq!(*thoughts.lock().unwrap(), "visible thought", "{protocol:?}");
+        assert_eq!(output.text, "answer");
+        let body = body.await.unwrap();
+        if protocol == Protocol::Responses {
+            assert_eq!(body["reasoning"]["summary"], "auto");
+        }
+    }
+}
+
+#[test]
+fn thinking_display_limit_does_not_fail_the_model_request() {
+    let mut request = input();
+    let bytes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let captured = bytes.clone();
+    request.thinking = Arc::new(move |text| {
+        captured.fetch_add(text.len(), std::sync::atomic::Ordering::Relaxed);
+    });
+    let mut assembly = stream::Assembly::new(std::time::Instant::now());
+    for text in [
+        "a".repeat(stream::FRAME_LIMIT - 1),
+        "é".into(),
+        "z".into(),
+        "ignored".into(),
+    ] {
+        assembly
+            .event(
+                &request,
+                Protocol::Responses,
+                json!({"type":"response.reasoning_summary_text.delta","delta":text}),
+            )
+            .unwrap();
+    }
+    assert_eq!(
+        bytes.load(std::sync::atomic::Ordering::Relaxed),
+        stream::FRAME_LIMIT
+    );
+    assembly
+        .event(
+            &request,
+            Protocol::Responses,
+            json!({"type":"response.output_text.delta","delta":"answer"}),
+        )
+        .unwrap();
+    assert_eq!(assembly.text, "answer");
+}
+
+#[tokio::test]
 async fn responses_streams_text_tools_usage_and_preserves_same_account_reasoning() {
     let events = vec![
         json!({"type":"response.output_text.delta","delta":"héllo"}),
@@ -253,6 +335,7 @@ async fn responses_streams_text_tools_usage_and_preserves_same_account_reasoning
     let body = body.await.unwrap();
     assert_eq!(body["store"], false);
     assert_eq!(body["stream"], true);
+    assert!(body["reasoning"]["summary"].is_null());
     let key = body["prompt_cache_key"].clone();
     Arc::make_mut(&mut request.messages).extend(output.messages);
     let c = Credential {

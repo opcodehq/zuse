@@ -31,12 +31,14 @@ pub struct Options {
 }
 impl Options {
     pub fn new(model: impl Into<String>) -> Self {
+        let model = model.into();
+        let window_tokens = prompt::default_window(&model);
         Self {
-            model: model.into(),
+            model,
             reasoning: None,
             max_requests: 200,
             subagents: true,
-            window_tokens: 32000,
+            window_tokens,
             compact_tokens: None,
             effective_window_percent: 95.,
             automatic_notifications: true,
@@ -879,6 +881,9 @@ impl Engine {
             let item_id = id();
             let host = self.0.host.clone();
             let completed_item = item_id.clone();
+            let thinking_item = item_id.clone();
+            let thinking_host = host.clone();
+            let thinking_agent = agent_id.to_owned();
             let agent = agent_id.to_owned();
             let response = self
                 .request(
@@ -890,6 +895,13 @@ impl Engine {
                         host.notify(Event::Text {
                             agent_id: agent.clone(),
                             item_id: item_id.clone(),
+                            text,
+                        })
+                    }),
+                    Arc::new(move |text| {
+                        thinking_host.notify(Event::Thinking {
+                            agent_id: thinking_agent.clone(),
+                            item_id: thinking_item.clone(),
                             text,
                         })
                     }),
@@ -1011,6 +1023,7 @@ impl Engine {
         tools: Arc<Tools>,
         cancel: &CancellationToken,
         text: Arc<dyn Fn(String) + Send + Sync>,
+        thinking: Arc<dyn Fn(String) + Send + Sync>,
     ) -> Result<ModelOutput, Error> {
         let root_id = self.0.state.lock().await.root_id.clone();
         let options = self.options();
@@ -1033,6 +1046,7 @@ impl Engine {
             tools,
             cancel: cancel.clone(),
             text,
+            thinking,
             budget: Arc::new(self.clone()),
             report: Arc::new(move |mut attempt| {
                 let (tools, count) = lock(&stage_tools)
@@ -1454,7 +1468,7 @@ impl Engine {
                     (budget / (attempt + 1)).max(64),
                     if attempt > 0 { "The previous summary was too large; make this substantially shorter." } else { "" },
                 )).into());
-                let result = self.request(agent_id, messages, Arc::new(Tools::new()), cancel, Arc::new(|_| {})).await?;
+                let result = self.request(agent_id, messages, Arc::new(Tools::new()), cancel, Arc::new(|_| {}), Arc::new(|_| {})).await?;
                 self.0.host.notify(Event::Usage { agent_id: agent_id.into(), usage: result.usage });
                 if !result.calls.is_empty() || result.text.trim().is_empty() {
                     continue;

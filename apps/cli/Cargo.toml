@@ -15,15 +15,19 @@ tokio-util = { workspace = true, features = ["rt"] }
 zuse-engine.workspace = true
 zuse-serve.workspace = true
 zuse-protocol.workspace = true
+zuse-remote.workspace = true
 zuse-rpc.workspace = true
 zuse-mcp.workspace = true
+serde_json.workspace = true
+gethostname.workspace = true
+qrcode = { version = "0.14", default-features = false }
 tokio.workspace = true
 clap = { workspace = true, features = ["env"] }
 anyhow.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
-serde_json.workspace = true
+async-trait.workspace = true
 tempfile.workspace = true
 rcgen = "0.14"
 reqwest.workspace = true

@@ -208,7 +208,10 @@ mod tests {
                 assert!(view.cloud.read_forwards.is_empty());
                 assert_eq!(view.cloud.child.as_ref().unwrap().entity_id(), child_id);
                 assert_eq!(view.cloud.status["state"], "reconnecting");
-                assert_ne!(child.read(cx).cloud.guest_status["state"], "ready");
+                assert_eq!(
+                    child.read(cx).cloud.guest_status["connectionState"],
+                    "reconnecting"
+                );
                 view.receive_connection(&json!({"connection":"connected","epoch":2}), cx);
                 assert!(
                     !view.connected,

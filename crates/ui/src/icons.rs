@@ -211,6 +211,7 @@ icon_assets![
     (ACTION_DEBUG, "action-debug"),
     (STAR, "star"),
     (STAR_BOLD, "star-bold"),
+    (MODEL_FAVORITE_FILLED, "model-favorite-filled"),
     (ZUSE_LOGO, "zuse-logo"),
     (CLAUDE_MARK, "claude-mark"),
     (OPENAI_MARK, "openai-mark"),
@@ -236,6 +237,13 @@ icon_assets![
     // A skill chip's stacked-block mark.
     (SKILL, "skill"),
 ];
+
+pub const BROWSER_SELECT: &str = "icons/browser-select.svg";
+pub const BROWSER_CODE: &str = "icons/browser-code.svg";
+pub const BROWSER_LINK: &str = "icons/link.svg";
+pub const BROWSER_COOKIE: &str = "icons/browser-cookie.svg";
+pub const BROWSER_BRUSH: &str = "icons/browser-brush.svg";
+pub const BROWSER_CAMERA: &str = "icons/browser-camera.svg";
 
 pub const SETTINGS_GENERAL: &str = "icons/settings-general.svg";
 pub const SETTINGS_PROVIDERS: &str = "icons/settings-providers.svg";

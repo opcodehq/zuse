@@ -212,3 +212,209 @@ async fn failed_verification_saves_nothing_and_malformed_files_fail_closed() {
     assert!(add(&local, root.path(), "request-3").await.is_err());
     assert_eq!(starts(&marker), 0);
 }
+
+/// A minimal streamable HTTP MCP server: JSON responses, one request per
+/// connection, and every request's headers recorded for assertions.
+async fn http_fixture() -> (String, Arc<StdMutex<Vec<String>>>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!(
+        "http://{}/mcp?team=query-secret",
+        listener.local_addr().unwrap()
+    );
+    let seen = Arc::new(StdMutex::new(Vec::new()));
+    let log = seen.clone();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                return;
+            };
+            let log = log.clone();
+            tokio::spawn(async move {
+                let mut data = Vec::new();
+                let mut buffer = [0u8; 4096];
+                let end = loop {
+                    let Ok(n) = socket.read(&mut buffer).await else {
+                        return;
+                    };
+                    if n == 0 {
+                        return;
+                    }
+                    data.extend_from_slice(&buffer[..n]);
+                    if let Some(at) = data.windows(4).position(|w| w == b"\r\n\r\n") {
+                        break at + 4;
+                    }
+                };
+                let head = String::from_utf8_lossy(&data[..end]).to_lowercase();
+                let length = head
+                    .lines()
+                    .find_map(|l| l.strip_prefix("content-length:"))
+                    .and_then(|v| v.trim().parse::<usize>().ok())
+                    .unwrap_or(0);
+                while data.len() < end + length {
+                    let Ok(n) = socket.read(&mut buffer).await else {
+                        return;
+                    };
+                    if n == 0 {
+                        return;
+                    }
+                    data.extend_from_slice(&buffer[..n]);
+                }
+                log.lock().unwrap().push(head.clone());
+                let reply = |status: &str, body: String| {
+                    format!(
+                        "HTTP/1.1 {status}\r\ncontent-type: application/json\r\nmcp-session-id: fixture-session\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                };
+                let response = if !head.contains("x-fixture-key: fixture-header-secret") {
+                    reply("401 Unauthorized", String::new())
+                } else if head.starts_with("get ") {
+                    reply("405 Method Not Allowed", String::new())
+                } else if head.starts_with("delete ") {
+                    reply("200 OK", String::new())
+                } else {
+                    let p: Value = serde_json::from_slice(&data[end..end + length]).unwrap();
+                    match p.get("id") {
+                        None => reply("202 Accepted", String::new()),
+                        Some(id) => {
+                            let result = match p["method"].as_str() {
+                                Some("initialize") => {
+                                    json!({"protocolVersion":p["params"]["protocolVersion"],"capabilities":{"tools":{}},"serverInfo":{"name":"http-fixture","version":"1"}})
+                                }
+                                Some("tools/list") => {
+                                    json!({"tools":[{"name":"echo","description":"Echo a message","inputSchema":{"type":"object"}}]})
+                                }
+                                Some("tools/call") => {
+                                    json!({"content":[{"type":"text","text":p["params"]["arguments"]["message"]}],"isError":false})
+                                }
+                                _ => json!({}),
+                            };
+                            reply(
+                                "200 OK",
+                                json!({"jsonrpc":"2.0","id":id,"result":result}).to_string(),
+                            )
+                        }
+                    }
+                };
+                let _ = socket.write_all(response.as_bytes()).await;
+                let _ = socket.shutdown().await;
+            });
+        }
+    });
+    (url, seen)
+}
+
+#[tokio::test]
+async fn url_servers_connect_with_their_headers_and_never_show_them() {
+    let root = tempfile::tempdir().unwrap();
+    let (url, seen) = http_fixture().await;
+    let local = store(root.path());
+    let headers: BTreeMap<String, String> = [
+        (
+            "X-Fixture-Key".to_owned(),
+            "fixture-header-secret".to_owned(),
+        ),
+        (
+            "Authorization".to_owned(),
+            "Bearer fixture-bearer".to_owned(),
+        ),
+    ]
+    .into();
+    // Wrong credentials fail verification and save nothing.
+    assert!(
+        local
+            .add_url(
+                "request-0",
+                "Dev",
+                &url,
+                [("X-Fixture-Key".to_owned(), "wrong".to_owned())].into()
+            )
+            .await
+            .is_err()
+    );
+    assert!(!local.path.exists());
+    let PluginResponse::Attempt { id, state, .. } = local
+        .add_url("request-1", " Dev ", &url, headers)
+        .await
+        .unwrap()
+    else {
+        panic!("expected a connected attempt");
+    };
+    assert_eq!(state, "connected");
+    let (catalog, connections) = local.snapshot().await.unwrap();
+    let shown = format!("http://{}/mcp", url.split('/').nth(2).unwrap());
+    assert_eq!(catalog[0].command.as_deref(), Some(shown.as_str()));
+    let wire = serde_json::to_string(&(catalog, connections)).unwrap();
+    assert!(
+        !wire.contains("secret") && !wire.contains("fixture-bearer"),
+        "{wire}"
+    );
+
+    let found = local
+        .tools(&PluginToolRequest::Search {
+            query: "echo".into(),
+        })
+        .await
+        .unwrap();
+    let address = found[0]["address"].as_str().unwrap().to_owned();
+    let mut arguments = Map::new();
+    arguments.insert("message".into(), json!("hello"));
+    let called = local
+        .tools(&PluginToolRequest::Call { address, arguments })
+        .await
+        .unwrap();
+    assert_eq!(called["content"][0]["text"], "hello");
+    {
+        let seen = seen.lock().unwrap();
+        // Every configured header rides on each request, with the session echoed.
+        assert!(
+            seen.iter()
+                .any(|h| h.contains("authorization: bearer fixture-bearer"))
+        );
+        assert!(
+            seen.iter()
+                .any(|h| h.contains("mcp-session-id: fixture-session"))
+        );
+    }
+    // Saved privately and reloaded by a fresh store for the same account.
+    drop(local);
+    let local = store(root.path());
+    assert_eq!(local.snapshot().await.unwrap().0.len(), 1);
+    local.remove(&id).await.unwrap();
+}
+
+#[tokio::test]
+async fn saved_rows_stay_compatible_and_mixed_rows_fail_closed() {
+    let root = tempfile::tempdir().unwrap();
+    let local = store(root.path());
+    std::fs::create_dir_all(&local.dir).unwrap();
+    // Files written before URL servers existed still load unchanged.
+    let old = json!({"servers":[{"id":"local-old","requestId":"r","name":"Old","command":"python3","args":["-V"],"env":{"K":"v"},"enabled":true,"createdAt":1}]});
+    std::fs::write(&local.path, old.to_string()).unwrap();
+    let (catalog, _) = local.snapshot().await.unwrap();
+    assert_eq!(catalog[0].command.as_deref(), Some("python3 -V"));
+    // Stdio rows serialize exactly as before, so older builds keep reading them.
+    local.set_enabled("local-old", false).await.unwrap();
+    let saved: Value = serde_json::from_slice(&std::fs::read(&local.path).unwrap()).unwrap();
+    let row = saved["servers"][0].as_object().unwrap();
+    assert!(!row.contains_key("url") && !row.contains_key("headers"));
+
+    let url = json!({"servers":[{"id":"local-url","requestId":"r","name":"Dev","command":"","args":[],"env":{},"url":"http://localhost:9/mcp?k=secret","headers":{"X-Key":"header-secret"},"enabled":false,"createdAt":1}]});
+    std::fs::write(&local.path, url.to_string()).unwrap();
+    let (catalog, _) = local.snapshot().await.unwrap();
+    assert_eq!(
+        catalog[0].command.as_deref(),
+        Some("http://localhost:9/mcp")
+    );
+    assert!(!serde_json::to_string(&catalog).unwrap().contains("secret"));
+
+    for row in [
+        json!({"id":"local-x","requestId":"r","name":"Dev","command":"python3","args":[],"env":{},"url":"http://localhost:9/mcp","enabled":false,"createdAt":1}),
+        json!({"id":"local-x","requestId":"r","name":"Dev","command":"python3","args":[],"env":{},"headers":{"X-Key":"v"},"enabled":false,"createdAt":1}),
+        json!({"id":"local-x","requestId":"r","name":"Dev","command":"","args":[],"env":{},"url":"file:///etc/passwd","enabled":false,"createdAt":1}),
+    ] {
+        std::fs::write(&local.path, json!({"servers":[row]}).to_string()).unwrap();
+        assert!(local.snapshot().await.is_err(), "{row}");
+    }
+}

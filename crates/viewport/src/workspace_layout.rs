@@ -1,7 +1,7 @@
 //! Sidebar sizing and layout events for the browser host.
 use super::*;
 use crate::localization::message as tr;
-use crate::shell::{BORDER, column};
+use crate::shell::{BORDER, column, row};
 use crate::workspace_style as layout;
 use zuse_i18n::messages as msg;
 
@@ -26,6 +26,31 @@ impl WorkspaceView {
             .when(!self.sidebar_open, |view| view.pl(px(layout::GUTTER)))
             .child(
                 layout::surface()
+                    .when(self.software_renderer, |view| {
+                        view.child(
+                            row()
+                                .id("software-renderer-notice")
+                                .role(Role::Status)
+                                .px_3()
+                                .py_2()
+                                .gap_2()
+                                .bg(rgb(0x303030))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .text_size(px(12.))
+                                        .child("This browser is drawing Zuse on the CPU, so it may feel slow. Turn on hardware acceleration and WebGPU, or use a browser that can reach your graphics card."),
+                                )
+                                .child(
+                                    crate::shell::icon_button("dismiss-software-renderer", "close", "Dismiss")
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.software_renderer = false;
+                                            cx.notify();
+                                        })),
+                                ),
+                        )
+                    })
                     .when(
                         chrome
                             && !self.plugins_browse

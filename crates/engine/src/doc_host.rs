@@ -5146,6 +5146,18 @@ impl DocHost {
         chat_id: &str,
         entry: SessionCommandEntry,
     ) -> Result<(), EngineError> {
+        self.admit_mailbox_command_with_source(chat_id, entry, None)
+            .await
+    }
+
+    /// Attribution enters with the authenticated, encrypted mailbox payload and
+    /// is persisted together with its command before the queue can dispatch.
+    pub async fn admit_mailbox_command_with_source(
+        &self,
+        chat_id: &str,
+        entry: SessionCommandEntry,
+        source: Option<&zuse_protocol::slack::MessageSource>,
+    ) -> Result<(), EngineError> {
         if !self.is_host(chat_id) || !entry.issued_by.starts_with("cloud-mailbox:hmac-sha256:") {
             return Err(EngineError::Other(
                 "mailbox_command_identity_rejected".into(),
@@ -5156,7 +5168,7 @@ impl DocHost {
             .ok_or_else(|| EngineError::Other("executor unavailable".into()))?;
         let execution = sessions.execution_admission().enter()?;
         execution
-            .scope(self.admit_mailbox_admitted(chat_id, entry, sessions))
+            .scope(self.admit_mailbox_admitted(chat_id, entry, source, sessions))
             .await
     }
 
@@ -5164,6 +5176,7 @@ impl DocHost {
         &self,
         chat_id: &str,
         entry: SessionCommandEntry,
+        source: Option<&zuse_protocol::slack::MessageSource>,
         sessions: SessionsEngine,
     ) -> Result<(), EngineError> {
         let handle = self.open_local(chat_id)?;
@@ -5212,6 +5225,41 @@ impl DocHost {
                 handle: handle.clone(),
                 id: entry.id.clone(),
             };
+            if let (
+                Some(source),
+                SessionCommandPayload::Run {
+                    request,
+                    message_id,
+                },
+            ) = (source, &entry.payload)
+            {
+                if !handle
+                    .doc
+                    .read_entries()?
+                    .iter()
+                    .any(|m| m.id == *message_id)
+                {
+                    handle.doc.push_message(&SessionMessageEntry {
+                        id: message_id.clone(),
+                        role: MessageRole::User,
+                        parts: vec![
+                            MessagePart::Text {
+                                id: "t0".into(),
+                                text: request.prompt.clone(),
+                            },
+                            MessagePart::MessageSource {
+                                id: "source".into(),
+                                source: source.clone(),
+                            },
+                        ],
+                        created_at: entry.issued_at,
+                        device_id: handle.device_id.clone(),
+                        status: Some(MessageStatus::Complete),
+                        continuation_of: None,
+                        duration_ms: None,
+                    })?;
+                }
+            }
             handle.doc.queue_command(&entry)?;
             if let Err(error) = self.persist_fork(&handle) {
                 let _ = handle.doc.set_command_status(

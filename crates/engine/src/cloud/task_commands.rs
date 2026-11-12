@@ -591,6 +591,7 @@ pub(super) fn registered_head(
     let chat: zuse_protocol::Chat = serde_json::from_value(value)?;
     let rows = Vec::new();
     Ok(zuse_model::cloud::Head {
+        slack_results: Default::default(),
         schema_version: 1,
         payload_format: "zuse-cloud-admission-v1".into(),
         workspace_id: workspace.workspace_id.clone(),
@@ -661,6 +662,7 @@ pub(super) fn admission_head(
         duration_ms: None,
     }];
     Ok(zuse_model::cloud::Head {
+        slack_results: Default::default(),
         schema_version: 1,
         payload_format: "zuse-cloud-admission-v1".into(),
         workspace_id: workspace.workspace_id.clone(),
