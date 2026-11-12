@@ -30,7 +30,9 @@ VERSION=1
 LIMIT=65536
 SAFE=re.compile(r'[A-Za-z0-9_.:-]{1,160}\Z')
 INHERIT=('PATH','HOME','USER','LOGNAME','LANG','LC_ALL','SHELL','TMPDIR',
-         'ZUSE_HARNESS_ROOT','ZUSE_HARNESS_CHANNEL','ZUSE_RUNTIME_BINARY')
+         'ZUSE_HARNESS_ROOT','ZUSE_HARNESS_CHANNEL','ZUSE_RUNTIME_BINARY',
+         # Home-directory layouts (no root, e.g. Prized) relocate these tools.
+         'ZUSE_HARNESS_RELEASE_TOOL','ZUSE_RUNTIME_SUPERVISOR')
 FIELDS={'version','action','operationId','workspaceId','generation','storageIncarnationId','apiUrl','bootTokenFile','retained'}
 
 class Rejected(Exception):pass

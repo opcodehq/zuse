@@ -44,7 +44,7 @@ harness_args=()
 if [[ -n "${ZUSE_HARNESS_ROOT:-}" ]]; then
   runtime_version="$("$binary" --version)"
   runtime_version="${runtime_version##* }"
-  harness_args=(python3 /usr/local/lib/zuse/harness-release.py --root "$ZUSE_HARNESS_ROOT" exec
+  harness_args=(python3 "${ZUSE_HARNESS_RELEASE_TOOL:-/usr/local/lib/zuse/harness-release.py}" --root "$ZUSE_HARNESS_ROOT" exec
     --channel "${ZUSE_HARNESS_CHANNEL:-stable}"
     --runtime-version "$runtime_version" --pin "$ZUSE_USER_DATA/cloud-harness-release.json" --)
 fi

@@ -20,8 +20,7 @@ use std::time::{Duration, Instant};
 use zuse_protocol::cloud_computers::ProviderId;
 
 const CHECKS: &str = include_str!("certification/checks.sh");
-const SCRIPT: &str = "/tmp/zuse-certification.sh";
-const RUNTIME: &str = "/usr/local/bin/zuse-cloud-runtime --version";
+use crate::runtime::machine_layout::Layout;
 /// The lifetime production requests on create and resume.
 const LIFETIME_SECONDS: u32 = 86400;
 
@@ -141,6 +140,7 @@ impl Report {
 
 struct Run<'a> {
     provider: &'a dyn Provider,
+    layout: Layout,
     machine: String,
     checks: Vec<Check>,
     traits: serde_json::Map<String, Value>,
@@ -173,15 +173,33 @@ impl Run<'_> {
         }
         Err(last)
     }
+    fn runtime(&self) -> String {
+        format!("{} --version", self.layout.runtime_binary())
+    }
     /// Upload the checks (a cold restore may have dropped /tmp) and run a mode.
     async fn script(&self, mode: &str) -> Result<Value, String> {
+        let script = match self.layout {
+            Layout::Root => "/tmp/zuse-certification.sh",
+            // Prized accepts uploads only under its user's home.
+            Layout::Home => "/home/prized/.zuse/boot/zuse-certification.sh",
+        };
+        let harnesses = match self.layout {
+            Layout::Root => "/opt/zuse/harnesses/releases",
+            Layout::Home => "/home/prized/.zuse/harnesses/releases",
+        };
         self.provider
-            .upload(&self.machine, SCRIPT, CHECKS.as_bytes())
+            .upload(&self.machine, script, CHECKS.as_bytes())
             .await
             .map_err(|e| format!("upload {e:?}"))?;
         let result = self
             .provider
-            .execute(&self.machine, &format!("bash {SCRIPT} {mode}"))
+            .execute(
+                &self.machine,
+                &format!(
+                    "ZUSE_RUNTIME_BINARY={} ZUSE_HARNESS_RELEASES={harnesses} bash {script} {mode}",
+                    self.layout.runtime_binary()
+                ),
+            )
             .await
             .map_err(|e| format!("execute {e:?}"))?;
         let stdout = String::from_utf8_lossy(&result.stdout);
@@ -274,6 +292,7 @@ pub async fn certify(provider: &dyn Provider, target: &Target, options: &Options
     };
     let mut run = Run {
         provider,
+        layout: Layout::for_provider(target.provider),
         machine: machine.id.clone(),
         checks,
         traits: serde_json::Map::new(),
@@ -302,7 +321,7 @@ pub async fn certify(provider: &dyn Provider, target: &Target, options: &Options
 }
 
 async fn lifecycle(run: &mut Run<'_>, target: &Target, options: &Options, started: Instant) {
-    match run.until_ok(RUNTIME, options.runtime_wait).await {
+    match run.until_ok(&run.runtime(), options.runtime_wait).await {
         Ok(_) => {
             let ms = started.elapsed().as_millis() as u64;
             run.check("runtimeAnswers", true, json!({"msFromCreate":ms}));
@@ -334,13 +353,12 @@ async fn lifecycle(run: &mut Run<'_>, target: &Target, options: &Options, starte
         json!({"initializeMs":codex_ms}),
     );
     run.trait_("codexColdStartMs", json!(codex_ms));
-    for (name, key) in [
-        ("taskUserExists", "taskUser"),
-        ("gitAvailable", "git"),
-        ("sudoWithoutPassword", "sudo"),
-    ] {
-        let passed = fresh[key] == true;
-        run.check(name, passed, json!({}));
+    run.check("gitAvailable", fresh["git"] == true, json!({}));
+    // Root bases run the agent as the zuse task user via sudo; a home base
+    // (Prized) runs everything as its only user.
+    if run.layout == Layout::Root {
+        run.check("taskUserExists", fresh["taskUser"] == true, json!({}));
+        run.check("sudoWithoutPassword", fresh["sudo"] == true, json!({}));
     }
     run.trait_("sshAvailable", fresh["sshd"].clone());
     run.trait_("cpus", fresh["cpus"].clone());
@@ -386,7 +404,7 @@ async fn lifecycle(run: &mut Run<'_>, target: &Target, options: &Options, starte
         return;
     }
     run.check("resumeSettles", true, json!({}));
-    match run.until_ok(RUNTIME, options.runtime_wait).await {
+    match run.until_ok(&run.runtime(), options.runtime_wait).await {
         Ok(_) => {
             let ms = resumed.elapsed().as_millis() as u64;
             run.check(
