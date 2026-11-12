@@ -46,6 +46,14 @@ pub struct Directive {
     pub storage_incarnation_id: String,
     pub source_machine_id: String,
 }
+/// Whether the runtime process survived sleep. A computer whose provider does
+/// not keep memory (Daytona, Boat after ten minutes) restarts from disk: same
+/// storage and conversations, but terminals and background processes restart.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Wake {
+    #[serde(rename = "fromMemory")]
+    pub from_memory: bool,
+}
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum RuntimeRequest {
@@ -61,6 +69,9 @@ pub enum RuntimeRequest {
     Resumed {
         #[serde(rename = "operationId")]
         operation_id: String,
+        /// How the computer woke. Absent from older guests.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        wake: Option<Wake>,
     },
     RecoveryRequired {
         #[serde(rename = "operationId")]

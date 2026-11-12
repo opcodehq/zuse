@@ -590,7 +590,7 @@ impl RuntimeControl {
                 sqlx::query("UPDATE api_cloud_workspaces SET request_config=jsonb_set(request_config,'{rustMemoryParked}',$2),runtime_state='offline',status_code='runtime-memory-parked' WHERE workspace_id=$1")
                     .bind(id).bind(marker).execute(&mut *tx).await?;
             }
-            RuntimeRequest::Resumed { operation_id } => {
+            RuntimeRequest::Resumed { operation_id, wake } => {
                 if operation_id != d.operation_id
                     || d.action != Action::Resume
                     || !matches!(d.phase.as_str(), "waking" | "launching" | "ready")
@@ -601,8 +601,10 @@ impl RuntimeControl {
                 // This authenticated Ready receipt is stronger than a worker
                 // observing it two seconds later. Complete ONLY its matching
                 // durable job atomically, fencing any late worker delivery.
-                sqlx::query("WITH operation AS (UPDATE zuse_rust_lifecycle_operations SET phase='ready',updated_at=GREATEST(updated_at,$3),provider_effects=jsonb_set(provider_effects,'{timings}',jsonb_build_object('ready',$3::bigint)||COALESCE(provider_effects->'timings','{}'::jsonb)) WHERE operation_id=$2 AND workspace_id=$1 AND generation=$4 AND source_machine_id=$5 AND storage_incarnation_id=$6 RETURNING operation_id), workspace AS (UPDATE api_cloud_workspaces SET state='ready',runtime_state='online',status_code='ready',request_config=jsonb_set(request_config-'rustMemoryParked','{rustLifecycleOperation}',$7),next_action_at=$8,revision=revision+1,updated_at=GREATEST(updated_at+1,$3) WHERE workspace_id=$1 AND EXISTS(SELECT 1 FROM operation) RETURNING workspace_id) UPDATE zuse_rust_jobs SET state='completed',lease_token=NULL,lease_expires_at=NULL,last_error_code=NULL,updated_at=GREATEST(updated_at,$3) WHERE resource_id=$1 AND resource_generation=$4 AND kind=$9 AND payload->>'operationId'=$2 AND state IN ('pending','running') AND EXISTS(SELECT 1 FROM workspace)")
-                    .bind(id).bind(&d.operation_id).bind(now).bind(d.generation).bind(&d.source_machine_id).bind(&d.storage_incarnation_id).bind(json!({"id":d.operation_id,"action":d.action,"phase":"ready"})).bind(now+self.idle_ms).bind(JOB_KIND).execute(&mut *tx).await?;
+                // Record how the computer woke so the app can say whether it
+                // kept memory; wake time runs from the resume operation's start.
+                sqlx::query("WITH operation AS (UPDATE zuse_rust_lifecycle_operations SET phase='ready',updated_at=GREATEST(updated_at,$3),provider_effects=jsonb_set(provider_effects,'{timings}',jsonb_build_object('ready',$3::bigint)||COALESCE(provider_effects->'timings','{}'::jsonb)) WHERE operation_id=$2 AND workspace_id=$1 AND generation=$4 AND source_machine_id=$5 AND storage_incarnation_id=$6 RETURNING operation_id,created_at), workspace AS (UPDATE api_cloud_workspaces SET state='ready',runtime_state='online',status_code='ready',request_config=jsonb_set(jsonb_set(request_config-'rustMemoryParked','{rustLifecycleOperation}',$7),'{rustLastWake}',CASE WHEN request_config#>>'{rustLifecycleOperation,id}'=$2 AND request_config#>>'{rustLifecycleOperation,phase}'='ready' AND request_config ? 'rustLastWake' THEN request_config->'rustLastWake' ELSE jsonb_build_object('fromMemory',$10::jsonb,'at',$3::bigint,'ms',GREATEST(0,$3::bigint-(SELECT created_at FROM operation))) END),next_action_at=$8,revision=revision+1,updated_at=GREATEST(updated_at+1,$3) WHERE workspace_id=$1 AND EXISTS(SELECT 1 FROM operation) RETURNING workspace_id) UPDATE zuse_rust_jobs SET state='completed',lease_token=NULL,lease_expires_at=NULL,last_error_code=NULL,updated_at=GREATEST(updated_at,$3) WHERE resource_id=$1 AND resource_generation=$4 AND kind=$9 AND payload->>'operationId'=$2 AND state IN ('pending','running') AND EXISTS(SELECT 1 FROM workspace)")
+                    .bind(id).bind(&d.operation_id).bind(now).bind(d.generation).bind(&d.source_machine_id).bind(&d.storage_incarnation_id).bind(json!({"id":d.operation_id,"action":d.action,"phase":"ready"})).bind(now+self.idle_ms).bind(JOB_KIND).bind(json!(wake.map(|w| w.from_memory))).execute(&mut *tx).await?;
             }
         }
         if acknowledged && !completed_on_ack {
