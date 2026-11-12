@@ -14,3 +14,6 @@ pulldown-cmark.workspace = true
 url = "2.5"
 ts-rs = { version = "11", features = ["serde-json-impl"] }
 schemars = "1"
+
+[dev-dependencies]
+base64 = "0.22"

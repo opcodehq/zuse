@@ -115,7 +115,7 @@ fn task_rejection(code: &str) -> Option<&'static str> {
             "The computer couldn't accept this message, so it didn't run. Send it again."
         }
         zuse_protocol::cloud_task_commands::RUNTIME_OUTDATED => {
-            "This computer runs an older version that can't receive files or change access per message. Send without files, or recreate the computer to update it."
+            "This computer is on an older version that can't take files or a different access mode yet. Send without them for now; it will update itself soon."
         }
         _ => return None,
     })
@@ -1840,7 +1840,10 @@ mod beta_tests {
         let message =
             super::task_rejection(zuse_protocol::cloud_task_commands::RUNTIME_OUTDATED).unwrap();
         assert!(message.contains("older version"));
-        assert!(message.contains("recreate the computer"));
+        assert!(
+            !message.contains("recreate"),
+            "recreation keeps the same runtime"
+        );
         let rpc = TaskRejection(message).rpc();
         assert!(matches!(
             rpc,

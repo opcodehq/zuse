@@ -91,6 +91,8 @@ pub mod cloud_auth;
 
 pub mod cloud_lifecycle;
 
+pub mod cloud_runtime_updates;
+
 pub mod cloud_projects;
 
 pub mod cloud_assets;
