@@ -367,6 +367,11 @@ async fn session_send_round_trips_through_the_chat_room() {
                 snap.pending.is_empty()
                     && snap.entry(&message_id).is_some_and(|e| e.echo.is_none())
                     && snap.entry("reply-1").is_some()
+            });
+            // The composer publishes separately and can trail the transcript.
+            wait_for("composer settled", Duration::from_secs(10), || {
+                let composer = session.composer();
+                composer.send_state.is_none() && composer.live.indicator == ChatIndicator::Idle
             })
         }
     })
