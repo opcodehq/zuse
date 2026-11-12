@@ -132,6 +132,7 @@ impl CloudConversation {
                 ComposerEvent::CloudLaunchChanged => this.refresh_history(cx),
                 ComposerEvent::CloudForegroundAdmitted => this.foreground_admitted(cx),
                 ComposerEvent::CloudSleepRequested => this.sleep(cx),
+                ComposerEvent::CloudWakeRequested => this.wake_for_upload(cx),
                 ComposerEvent::Sent {
                     chat_id,
                     message_id,
@@ -661,6 +662,14 @@ impl CloudConversation {
             self.watch_environment(false, cx);
         }
         self.refresh_history(cx);
+    }
+    /// Wake the computer so a message's files can go straight to it.
+    fn wake_for_upload(&mut self, cx: &mut Context<Self>) {
+        if self.ready(cx) {
+            return;
+        }
+        self.environment = None;
+        self.watch_environment(true, cx);
     }
     fn watch_environment(&mut self, interactive: bool, cx: &mut Context<Self>) {
         if !self.authorized

@@ -459,6 +459,11 @@ pub(super) async fn maybe_forward(
 ) -> Result<Option<zuse_rpc::RpcReply>, zuse_rpc::RpcError> {
     use futures::StreamExt;
     use zuse_rpc::{RpcError, RpcReply};
+    // Files for a run go straight to the awake computer; the server never
+    // stores them. Only queued-message edits still stage on the server.
+    if matches!(name, methods::UPLOAD_CHUNK | methods::UPLOAD_COMMIT) && p["computer"] == true {
+        return Ok(None);
+    }
     let supported = is_command_method(name)
         || matches!(
             name,

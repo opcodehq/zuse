@@ -302,7 +302,37 @@ impl Composer {
         self.cloud.task = Some(cx.spawn(async move |this, cx| {
             let field=if request["action"]["type"]=="queue" {"input"} else {""};
             let assets=if field=="input" {&request["action"]["input"]["attachments"]} else {&request["action"]["attachments"]};
-            if !staged.is_empty() && assets.as_array().map_or(true,|assets|assets.len()!=staged.len()) {
+            let direct=&request["action"]["payload"]["request"]["attachments"];
+            if !staged.is_empty() && field.is_empty() && direct.as_array().map_or(true,|paths|paths.len()!=staged.len()) {
+                // A run's files go straight to its computer, never to server
+                // storage: wake it, wait for its connection, then upload.
+                let _=this.update(cx,|_,cx|cx.emit(ComposerEvent::CloudWakeRequested));
+                let started=std::time::Instant::now();
+                let engine=loop {
+                    let ready=this.read_with(cx,|this,cx|{
+                        let state=this.state.read(cx);
+                        (state.connection==crate::state::ConnectionStatus::Ready).then(||state.engine().cloned()).flatten()
+                    });
+                    match ready {
+                        Ok(Some(engine))=>break engine,
+                        Ok(None)=>{}
+                        Err(_)=>return,
+                    }
+                    if started.elapsed()>std::time::Duration::from_secs(180) {
+                        let _=this.update(cx,|this,cx|{this.return_native_send(cx);this.cloud_failure("The computer didn't start in time to receive the files. Send again to retry.".into(),cx)});
+                        return;
+                    }
+                    cx.background_executor().timer(std::time::Duration::from_millis(250)).await;
+                };
+                let executor=cx.background_executor().clone();
+                let uploads=futures::future::try_join_all(staged.iter().map(|attachment|attachments::upload_attachment(&engine,&executor,Some(attachments::COMPUTER),&attachment.id,attachment,None))).await;
+                let paths=match uploads {
+                    Ok(paths)=>paths,
+                    Err(error)=>{let _=this.update(cx,|this,cx|{this.return_native_send(cx);this.cloud_failure(format!("The files couldn't reach the computer: {error}"),cx)});return;}
+                };
+                request["action"]["payload"]["request"]["attachments"]=json!(paths);
+                let _=this.update(cx,|this,_|this.cloud.pending_native=Some(request.clone()));
+            } else if !staged.is_empty() && assets.as_array().map_or(true,|assets|assets.len()!=staged.len()) {
                 // All files upload at once; their order is kept.
                 let uploads=futures::future::try_join_all(staged.iter().map(|attachment|upload_native_asset(&target,attachment))).await;
                 let assets=match uploads {
