@@ -34,7 +34,7 @@ class NativeFlowTests {
     fun backFromComputersReturnsToSettings() {
         compose.onNodeWithContentDescription("Settings").performClick()
         compose.onNodeWithText("Computers").performClick()
-        compose.onNodeWithText("Pair a computer").assertExists()
+        compose.onNodeWithText("Add manually").assertExists()
         check(
             androidx.test.platform.app.InstrumentationRegistry.getInstrumentation()
                 .uiAutomation
@@ -45,7 +45,7 @@ class NativeFlowTests {
         compose.waitUntil(5000) {
             compose.onAllNodesWithText("Zuse Cloud").fetchSemanticsNodes().isNotEmpty()
         }
-        compose.onNodeWithText("Pair a computer").assertDoesNotExist()
+        compose.onNodeWithText("Add manually").assertDoesNotExist()
         compose.onNodeWithText("Zuse Cloud").assertExists()
     }
 
@@ -421,6 +421,143 @@ class NativeFlowTests {
                         .fetchSemanticsNodes()
                         .isNotEmpty()
             }
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun newChatSendsTheFirstMessageWithDefaultsAndARejectionIsNotUncertain() {
+        val server = MockWebServer()
+        val mutations = LinkedBlockingQueue<JsonElement>()
+        val commands = LinkedBlockingQueue<JsonElement>()
+        val isolated = LinkedBlockingQueue<String>()
+        val chats = java.util.concurrent.atomic.AtomicReference(emptyList<JsonElement>())
+        val rejectNext = java.util.concurrent.atomic.AtomicBoolean(true)
+        server.enqueue(
+            MockResponse()
+                .withWebSocketUpgrade(
+                    object : WebSocketListener() {
+                        override fun onMessage(socket: WebSocket, text: String) {
+                            val frame = WireJson.parseToJsonElement(text)
+                            val id = frame.field("id")
+                            val method = frame.text("method") ?: return
+                            val params = frame.field("params")
+                            fun reply(result: JsonElement) =
+                                socket.send(
+                                    obj(
+                                            "id" to id,
+                                            (if (method.startsWith("Watch")) "item" else "ok") to
+                                                result,
+                                        )
+                                        .toString()
+                                )
+                            fun reject(message: String) =
+                                socket.send(obj("id" to id, "err" to message.json()).toString())
+                            when (method) {
+                                "EngineInfo" -> reply(obj("deviceId" to "host".json()))
+                                "WatchSpaces",
+                                "WatchSessions" -> reply(JsonArray(emptyList()))
+                                "WatchChats" -> reply(JsonArray(chats.get()))
+                                "ListHarnesses" ->
+                                    reply(
+                                        JsonArray(
+                                            listOf(
+                                                obj(
+                                                    "id" to "claude".json(),
+                                                    "installed" to true.json(),
+                                                    "enabled" to true.json(),
+                                                )
+                                            )
+                                        )
+                                    )
+                                "ListModels" ->
+                                    reply(
+                                        JsonArray(
+                                            listOf(
+                                                obj(
+                                                    "id" to "test-model".json(),
+                                                    "label" to "Test model".json(),
+                                                )
+                                            )
+                                        )
+                                    )
+                                "CreateWorktree",
+                                "ResolveCreationSource" -> {
+                                    isolated.add(method)
+                                    reject("No project to check out")
+                                }
+                                "Mutate" -> {
+                                    mutations.add(params)
+                                    if (rejectNext.getAndSet(false)) reject("Rejected by host")
+                                    else {
+                                        chats.set(
+                                            listOf(
+                                                obj(
+                                                    "id" to params.field("chatId"),
+                                                    "title" to "New chat".json(),
+                                                    "cwd" to "/home/fixture".json(),
+                                                    "config" to params.field("config"),
+                                                )
+                                            )
+                                        )
+                                        reply(obj("ok" to true.json()))
+                                    }
+                                }
+                                "WatchDocMessages" -> reply(obj("reset" to JsonArray(emptyList())))
+                                "QueueCommand" -> {
+                                    commands.add(params)
+                                    reply(obj("commandId" to "accepted".json()))
+                                }
+                                else -> reject("Unexpected method $method")
+                            }
+                        }
+                    }
+                )
+        )
+        server.start()
+        try {
+            val address = server.url("/api/rpc").toString().replace("http://", "ws://")
+            launch("zuse://fixture?address=${Uri.encode(address)}")
+            compose.waitUntil(30_000) {
+                compose.onAllNodesWithText("New chat").fetchSemanticsNodes().isNotEmpty()
+            }
+            compose.onNodeWithText("New chat").performClick()
+            compose.waitUntil(15_000) {
+                compose.onAllNodesWithText(ChatList.NO_PROJECT).fetchSemanticsNodes().isNotEmpty()
+            }
+            // Without a project there is no mode to pick: the chat works locally.
+            compose.onNodeWithText("Mode").assertDoesNotExist()
+            compose
+                .onNodeWithContentDescription("New chat message")
+                .performTextInput("Hello new chat")
+            compose.onNodeWithContentDescription("Send message").performClick()
+            compose.waitUntil(15_000) {
+                compose.onAllNodesWithText("Rejected by host").fetchSemanticsNodes().isNotEmpty()
+            }
+            compose.onNodeWithText("uncertain", substring = true).assertDoesNotExist()
+            val rejected = mutations.poll(5, TimeUnit.SECONDS)!!
+            // A rejected request is not uncertain: sending again simply works.
+            compose.onNodeWithContentDescription("Send message").performClick()
+            val created = mutations.poll(15, TimeUnit.SECONDS)
+            assertNotNull(created)
+            assertEquals("createChat", created!!.text("op"))
+            assertEquals(JsonNull, created.field("spaceId"))
+            assertEquals(JsonNull, created.field("cwd"))
+            assertNotEquals(rejected.text("chatId"), created.text("chatId"))
+            val command = commands.poll(15, TimeUnit.SECONDS)
+            assertNotNull(command)
+            assertEquals(created.text("chatId"), command!!.text("chatId"))
+            assertEquals("Hello new chat", command.field("command").field("request").text("prompt"))
+            assertTrue(isolated.isEmpty())
+            compose.waitUntil(15_000) {
+                compose
+                    .onAllNodesWithContentDescription("New chat message")
+                    .fetchSemanticsNodes()
+                    .isEmpty()
+            }
+            compose.onNodeWithText("Rejected by host").assertDoesNotExist()
+            compose.onNodeWithContentDescription("Ask Zuse").assertExists()
         } finally {
             server.shutdown()
         }

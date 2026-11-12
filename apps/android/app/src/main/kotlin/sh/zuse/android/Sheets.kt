@@ -99,9 +99,10 @@ fun SettingsSheet(
     openUri: (Uri) -> Unit,
     onCloud: () -> Unit,
     onClose: () -> Unit,
+    initialPage: String = "home",
 ) {
     var page by rememberSaveable {
-        mutableStateOf(if (workspace.pairingLink != null) "pair" else "home")
+        mutableStateOf(if (workspace.pairingLink != null) "pair" else initialPage)
     }
     LaunchedEffect(page, workspace.connected) {
         if (page == "archives" && workspace.canManageChats) workspace.loadArchivedChats()
@@ -138,9 +139,10 @@ fun SettingsSheet(
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         containerColor = MaterialTheme.colorScheme.surface,
         dragHandle = { SheetHandle() },
-        properties = ModalBottomSheetProperties(shouldDismissOnBackPress = page == "home"),
+        properties =
+            ModalBottomSheetProperties(shouldDismissOnBackPress = page == "home" || page == initialPage),
     ) {
-        androidx.activity.compose.BackHandler(page != "home") {
+        androidx.activity.compose.BackHandler(page != "home" && page != initialPage) {
             page = if (page in listOf("pair", "manual")) "computers" else "home"
         }
         Column(
@@ -603,240 +605,6 @@ private fun SettingsRow(
 private fun SelectionContainerText(text: String) {
     androidx.compose.foundation.text.selection.SelectionContainer {
         Text(text, style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace)
-    }
-}
-
-@Composable
-fun NewChatSheet(
-    workspace: WorkspaceViewModel,
-    onClose: () -> Unit,
-    onCreated: () -> Unit,
-    onCloud: () -> Unit = {},
-) {
-    var prompt by rememberSaveable { mutableStateOf("") }
-    var model by remember { mutableStateOf<ModelChoice?>(null) }
-    var branch by remember { mutableStateOf<Branch?>(null) }
-    var mode by rememberSaveable { mutableStateOf("New worktree") }
-    var menu by remember { mutableStateOf<String?>(null) }
-    var modelMenu by remember { mutableStateOf(false) }
-    val computer =
-        when (val source = workspace.source) {
-            is Source.Device -> source.device.label
-            is Source.Computer -> source.device.label ?: "Computer"
-            is Source.Cloud -> "Zuse Cloud"
-            null ->
-                if (BuildConfig.DEBUG && workspace.selectedSession?.id == "preview-session")
-                    "Demo computer"
-                else "Choose computer"
-        }
-    LaunchedEffect(workspace.selectedProject?.id) {
-        workspace.loadBranches()
-        branch = null
-    }
-    LaunchedEffect(workspace.models.toList()) {
-        if (model !in workspace.models) model = workspace.models.firstOrNull()
-    }
-    ModalBottomSheet(
-        onDismissRequest = onClose,
-        sheetMaxWidth = 620.dp,
-        dragHandle = { SheetHandle() },
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-        containerColor = MaterialTheme.colorScheme.surface,
-    ) {
-        Column(Modifier.fillMaxHeight(.88f).fillMaxWidth()) {
-            PaneHeader(
-                "New chat",
-                actions = { SmallIcon(Icons.Outlined.Close, "Close new chat", onClose) },
-            )
-            Column(Modifier.padding(horizontal = 16.dp)) {
-                workspace.error?.let {
-                    Text(
-                        it,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
-                Box {
-                    NewChatSelector(Icons.Outlined.Computer, "Where", computer) {
-                        menu = "computer"
-                    }
-                    DropdownMenu(menu == "computer", { menu = null }) {
-                        workspace.devices.forEach { device ->
-                            DropdownMenuItem(
-                                text = { Text(device.label) },
-                                onClick = {
-                                    menu = null
-                                    workspace.connect(Source.Device(device))
-                                },
-                            )
-                        }
-                        workspace.computers.forEach { device ->
-                            DropdownMenuItem(
-                                text = { Text(device.label ?: "Computer") },
-                                onClick = {
-                                    menu = null
-                                    workspace.connect(Source.Computer(device))
-                                },
-                            )
-                        }
-                        DropdownMenuItem(
-                            text = { Text("Zuse Cloud") },
-                            onClick = {
-                                menu = null
-                                onCloud()
-                            },
-                        )
-                    }
-                }
-                Box {
-                    NewChatSelector(
-                        Icons.Outlined.FolderOpen,
-                        "Project",
-                        workspace.selectedProject?.name ?: "Choose project",
-                    ) {
-                        menu = "project"
-                    }
-                    DropdownMenu(menu == "project", { menu = null }) {
-                        workspace.projects.forEach { project ->
-                            DropdownMenuItem(
-                                text = { Text(project.name) },
-                                onClick = {
-                                    menu = null
-                                    workspace.selectProject(project)
-                                },
-                            )
-                        }
-                    }
-                }
-                Box {
-                    NewChatSelector(Icons.Outlined.AccountTree, "Mode", mode) {
-                        if (!workspace.busy) menu = "mode"
-                    }
-                    DropdownMenu(menu == "mode", { menu = null }) {
-                        listOf("Work locally", "New worktree", "Existing branch").forEach { value ->
-                            DropdownMenuItem(
-                                text = { Text(value) },
-                                onClick = {
-                                    menu = null
-                                    mode = value
-                                    branch = null
-                                },
-                            )
-                        }
-                    }
-                }
-                if (mode == "Existing branch")
-                    Box {
-                        NewChatSelector(
-                            Icons.Outlined.CallSplit,
-                            "Branch",
-                            branch?.name
-                                ?: workspace.branches.firstOrNull { it.current }?.name
-                                ?: "Current branch",
-                        ) {
-                            menu = "branch"
-                        }
-                        DropdownMenu(menu == "branch", { menu = null }) {
-                            workspace.branches.forEach { item ->
-                                DropdownMenuItem(
-                                    text = { Text(item.name) },
-                                    onClick = {
-                                        branch = item
-                                        menu = null
-                                    },
-                                )
-                            }
-                        }
-                    }
-                Text(
-                    if (mode == "New worktree")
-                        "Keep this chat’s changes separate in a fresh worktree."
-                    else "Use the project’s working directory on $computer.",
-                    Modifier.padding(start = 34.dp, top = 2.dp),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Spacer(Modifier.weight(1f))
-            Box(Modifier.fillMaxWidth().imePadding().padding(12.dp)) {
-                ComposerFrame(
-                    prompt,
-                    { prompt = it },
-                    expanded = true,
-                    enabled = !workspace.busy,
-                    inputDescription = "New chat message",
-                    leadingAction = {
-                        Text(
-                            if (workspace.busy) "Creating…" else "",
-                            Modifier.padding(start = 12.dp),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    },
-                    trailingAction = {
-                        ModelTrigger(model?.name.orEmpty(), !workspace.busy) { modelMenu = true }
-                        ComposerSend(
-                            model != null && workspace.connected && !workspace.busy,
-                            label = if (prompt.isBlank()) "Create chat" else "Create and send",
-                        ) {
-                            model?.let {
-                                workspace.createChat(
-                                    it,
-                                    if (mode == "Existing branch") branch else null,
-                                    mode == "New worktree",
-                                    prompt,
-                                    onCreated,
-                                )
-                            }
-                        }
-                    },
-                )
-            }
-        }
-    }
-    if (modelMenu)
-        ModelPickerSheet(workspace.models, model, { modelMenu = false }) {
-            model = it
-            modelMenu = false
-        }
-}
-
-@Composable
-private fun NewChatSelector(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    label: String,
-    value: String,
-    onClick: () -> Unit,
-) {
-    Row(
-        Modifier.fillMaxWidth()
-            .height(44.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        Icon(icon, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(
-            label,
-            Modifier.width(66.dp),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Text(
-            value,
-            Modifier.weight(1f),
-            style = MaterialTheme.typography.bodyMedium,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        Icon(
-            Icons.Outlined.UnfoldMore,
-            null,
-            Modifier.size(14.dp),
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
     }
 }
 

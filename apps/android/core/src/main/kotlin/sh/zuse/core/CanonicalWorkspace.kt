@@ -18,7 +18,7 @@ class CanonicalWorkspace(private val rpc: RpcClient) {
                 requireNotNull(space.text("id")),
                 space.text("name") ?: path.trimEnd('/').substringAfterLast('/').ifEmpty { path },
             )
-        } + Project(PROJECTLESS, "Chats without a project")
+        } + Project(PROJECTLESS, ChatList.NO_PROJECT)
 
     suspend fun sessions(projectId: String): List<Session> =
         snapshot("WatchChats")
@@ -36,6 +36,29 @@ class CanonicalWorkspace(private val rpc: RpcClient) {
 
     suspend fun session(id: String): Session =
         session(snapshot("WatchChats").first { it.text("id") == id })
+
+    /** Whether a chat with this id exists on the host, archived or not. */
+    suspend fun exists(id: String): Boolean = snapshot("WatchChats").any { it.text("id") == id }
+
+    /** Live run status per chat id; hosts without the runtime stream report none. */
+    suspend fun runtimeStatuses(nowMillis: Long = System.currentTimeMillis()): Map<String, String> {
+        val rows =
+            try {
+                withTimeout(5_000) { rpc.stream("WatchSessions").first().jsonArray.toList() }
+            } catch (_: kotlinx.coroutines.TimeoutCancellationException) {
+                emptyList()
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                emptyList()
+            }
+        return rows
+            .mapNotNull { row ->
+                val id = row.text("chatId") ?: return@mapNotNull null
+                CanonicalRuntime.status(row, id, nowMillis)?.let { id to it }
+            }
+            .toMap()
+    }
 
     suspend fun archivedSessions(): List<Session> =
         snapshot("WatchChats")
@@ -69,6 +92,9 @@ class CanonicalWorkspace(private val rpc: RpcClient) {
             chat.text("title") ?: "New chat",
             config.text("harness") ?: "",
             config.text("model") ?: "",
+            preview = chat.text("lastMessagePreview")?.takeIf { it.isNotBlank() },
+            activityAt = chat.text("lastMessageAt") ?: chat.text("createdAt"),
+            branch = chat.text("branch")?.takeIf { it.isNotBlank() },
         )
     }
 
@@ -315,10 +341,13 @@ class CanonicalWorkspace(private val rpc: RpcClient) {
                 (item.text.ifBlank { "Please review the attached files." } +
                     "\n\nAttached images (local files — open them to view):\n" +
                     paths.joinToString("\n") { "- $it" })
-        val chat = snapshot("WatchChats").first { it.text("id") == item.sessionId }
+        // Checks before QueueCommand fail as IllegalArgumentException: the message was never sent.
+        val chat =
+            requireNotNull(snapshot("WatchChats").firstOrNull { it.text("id") == item.sessionId }) {
+                "This chat is no longer on the host."
+            }
         val config = chat.field("config")
-        val harness =
-            config.text("harness") ?: throw ClientException("Choose an agent for this chat.")
+        val harness = requireNotNull(config.text("harness")) { "Choose an agent for this chat." }
         val request =
             obj(
                 "prompt" to prompt.json(),
@@ -328,10 +357,9 @@ class CanonicalWorkspace(private val rpc: RpcClient) {
                 "reasoning" to config.field("reasoning"),
                 "modelOptions" to (config.field("modelOptions") as? JsonObject ?: obj()),
                 "cwd" to
-                    (chat.text("cwd")
-                            ?: throw ClientException(
-                                "The host has not resolved this chat's folder."
-                            ))
+                    requireNotNull(chat.text("cwd")) {
+                            "The host has not resolved this chat's folder."
+                        }
                         .json(),
                 "sandbox" to (config.text("sandbox") ?: "workspace-write").json(),
                 "autoApprove" to false.json(),

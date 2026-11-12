@@ -362,3 +362,228 @@ async fn preparation_holds_preserve_errors_retry_budget_and_fence_inflight_inspe
     }
     admin.close().await;
 }
+
+/// The allocation, its job and the workspace status, as one comparable value.
+async fn allocation_snapshot(pool: &PgPool, workspace: &str) -> Value {
+    sqlx::query_scalar("SELECT jsonb_build_object('phase',a.phase,'sealed',a.sealed_boot_token IS NOT NULL,'allocationUpdatedAt',a.updated_at,'job',j.state,'error',j.last_error_code,'jobUpdatedAt',j.updated_at,'marker',w.request_config->'rustPreparationHoldAbandoned') FROM zuse_rust_allocations a JOIN zuse_rust_jobs j ON j.resource_id=a.workspace_id JOIN api_cloud_workspaces w ON w.workspace_id=a.workspace_id WHERE a.workspace_id=$1")
+        .bind(workspace).fetch_one(pool).await.unwrap()
+}
+
+#[tokio::test]
+#[ignore = "requires explicit isolated localhost PostgreSQL"]
+async fn late_ready_receipt_completes_only_an_abandoned_hold() {
+    let url = std::env::var("ZUSE_CLOUD_TEST_DATABASE_URL").expect("isolated database required");
+    assert!(matches!(
+        reqwest::Url::parse(&url).unwrap().host_str(),
+        Some("127.0.0.1" | "localhost" | "::1")
+    ));
+    let admin = PgPool::connect(&url).await.unwrap();
+    for fault in [
+        "",
+        "other-failure",
+        "running-job",
+        "generation",
+        "machine",
+        "incarnation",
+        "operation",
+        "delete",
+        "no-marker",
+    ] {
+        let unique = uuid::Uuid::new_v4().simple().to_string();
+        let schema = format!("late_ready_{unique}");
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        let scope = schema.clone();
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(4)
+            .after_connect(move |c, _| {
+                let scope = scope.clone();
+                Box::pin(async move {
+                    sqlx::query(&format!("SET search_path={scope}"))
+                        .execute(c)
+                        .await?;
+                    Ok(())
+                })
+            })
+            .connect(&url)
+            .await
+            .unwrap();
+        for sql in [
+            include_str!("../../../../tests/fixtures/legacy-catalog.sql"),
+            jobs::MIGRATION,
+            MIGRATION,
+        ] {
+            sqlx::raw_sql(sql).execute(&pool).await.unwrap();
+        }
+        let workspace = format!("ws-{unique}");
+        let now = clock_ms();
+        sqlx::query("UPDATE api_cloud_workspaces SET workspace_id=$1,provider_sandbox_id=NULL,state='queued',runtime_state='offline',request_config='{}' WHERE workspace_id='ws-bob'")
+            .bind(&workspace).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO zuse_rust_control_owners VALUES('workspace',$1,'rust',1,$2)")
+            .bind(&workspace)
+            .bind(now)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO api_cloud_workspace_launch_intents VALUES($1,'user-bob','chat','session','turn','command','test-ciphertext',$2,$3)")
+            .bind(&workspace).bind(now+86_400_000).bind(now).execute(&pool).await.unwrap();
+        let signing = ed25519_dalek::SigningKey::from_bytes(&[77; 32]);
+        let jwk = json!({"kty":"OKP","crv":"Ed25519","d":URL_SAFE_NO_PAD.encode([77;32]),"x":URL_SAFE_NO_PAD.encode(signing.verifying_key().as_bytes())});
+        let control = RuntimeControl::from_pool(
+            pool.clone(),
+            MasterKey::parse(&URL_SAFE_NO_PAD.encode([78; 32])).unwrap(),
+            TicketSigner::from_jwk(&jwk.to_string(), "https://api.example.test").unwrap(),
+        );
+        let operation = control
+            .queue_allocation(&workspace, "managed-artifact", now)
+            .await
+            .unwrap();
+        let disk: String = sqlx::query_scalar("UPDATE zuse_rust_allocations SET phase='launching',machine_id='original' WHERE operation_id=$1 RETURNING storage_incarnation_id")
+            .bind(&operation).fetch_one(&pool).await.unwrap();
+        sqlx::query(
+            "UPDATE api_cloud_workspaces SET provider_sandbox_id='original' WHERE workspace_id=$1",
+        )
+        .bind(&workspace)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let fixture = Preparing {
+            pool: pool.clone(),
+            workspace: workspace.clone(),
+            config: enrolled(&workspace, &operation, &disk, "failed"),
+            inject_at: "existing",
+            inspections: AtomicUsize::new(0),
+            readiness: AtomicUsize::new(0),
+            launches: AtomicUsize::new(0),
+        };
+        fixture.inject().await;
+        // The guest went offline after its stage failed and stayed away.
+        sqlx::query("UPDATE api_cloud_workspaces SET updated_at=$2 WHERE workspace_id=$1")
+            .bind(&workspace)
+            .bind(clock_ms() - ABANDON_AFTER_MS - 60_000)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE zuse_rust_jobs SET due_at=0 WHERE resource_id=$1")
+            .bind(&workspace)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(control.allocate_once(&fixture, clock_ms()).await.unwrap());
+        let abandoned = allocation_snapshot(&pool, &workspace).await;
+        assert_eq!(
+            (&abandoned["phase"], &abandoned["sealed"], &abandoned["job"]),
+            (&json!("launching"), &json!(true), &json!("failed"))
+        );
+        assert_eq!(abandoned["error"], ABANDONED);
+        assert_eq!(abandoned["marker"], json!(operation));
+
+        // It comes back: renews its credential and reports ready.
+        let credential = "late-runtime-credential";
+        sqlx::query("UPDATE api_cloud_workspaces SET runtime_credential_hash=$2,request_config=request_config||$3 WHERE workspace_id=$1")
+            .bind(&workspace).bind(hash(credential))
+            .bind(json!({"runtimeCredentialExpiresAtMs":clock_ms()+3_600_000}))
+            .execute(&pool).await.unwrap();
+        let statement = match fault {
+            "" | "running-job" => None,
+            "other-failure" => Some(
+                "UPDATE zuse_rust_jobs SET last_error_code='cloud_allocation_boot_expired' WHERE resource_id=$1",
+            ),
+            "generation" => Some(
+                "UPDATE zuse_rust_control_owners SET generation=generation+1 WHERE resource_id=$1",
+            ),
+            "machine" => Some(
+                "UPDATE zuse_rust_allocations SET machine_id='replacement' WHERE workspace_id=$1",
+            ),
+            "incarnation" => Some(
+                "UPDATE zuse_rust_allocations SET storage_incarnation_id='other' WHERE workspace_id=$1",
+            ),
+            "operation" => Some(
+                "UPDATE api_cloud_workspaces SET request_config=jsonb_set(request_config,'{rustAllocationOperationId}','\"newer\"') WHERE workspace_id=$1",
+            ),
+            "delete" => Some(
+                "UPDATE api_cloud_workspaces SET desired_state='deleted' WHERE workspace_id=$1",
+            ),
+            // E.g. abandoned before the marker existed: left for the user.
+            "no-marker" => Some(
+                "UPDATE api_cloud_workspaces SET request_config=request_config-'rustPreparationHoldAbandoned' WHERE workspace_id=$1",
+            ),
+            _ => unreachable!(),
+        };
+        if let Some(statement) = statement {
+            sqlx::query(statement)
+                .bind(&workspace)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        if fault == "running-job" {
+            // A live job owns the allocation; the receipt never steals it.
+            sqlx::query("UPDATE zuse_rust_jobs SET state='running',lease_token='live-lease',lease_expires_at=$2 WHERE resource_id=$1")
+                .bind(&workspace).bind(clock_ms() + 120_000).execute(&pool).await.unwrap();
+        }
+        let before = allocation_snapshot(&pool, &workspace).await;
+        let ready = || zuse_protocol::cloud::CloudRuntimeReady {
+            phase: "agent-started".into(),
+            launch_command_id: Some("command".into()),
+            session_head_version: Some(0),
+        };
+        let receipt = control
+            .ready_launch(&workspace, credential, ready(), clock_ms())
+            .await;
+        if matches!(fault, "delete" | "generation") {
+            // Deletion and a new ownership generation reject the receipt itself.
+            assert!(receipt.is_err(), "{fault}");
+        } else {
+            assert_eq!(receipt.unwrap()["state"], "ready", "{fault}");
+        }
+        let after = allocation_snapshot(&pool, &workspace).await;
+        if !fault.is_empty() {
+            assert_eq!(
+                before, after,
+                "{fault}: only an abandoned hold is reconciled"
+            );
+        } else {
+            assert_eq!(
+                (
+                    &after["phase"],
+                    &after["sealed"],
+                    &after["job"],
+                    &after["error"],
+                    &after["marker"]
+                ),
+                (
+                    &json!("ready"),
+                    &json!(false),
+                    &json!("completed"),
+                    &Value::Null,
+                    &Value::Null
+                )
+            );
+            // A repeated receipt (no intent left, same command) changes nothing.
+            control
+                .ready_launch(&workspace, credential, ready(), clock_ms())
+                .await
+                .unwrap();
+            assert_eq!(after, allocation_snapshot(&pool, &workspace).await);
+            assert!(
+                jobs::claim(&pool, JOB_KIND, "workspace", clock_ms(), 120_000)
+                    .await
+                    .unwrap()
+                    .is_none(),
+                "the completed job is never claimed again"
+            );
+        }
+        assert_eq!(fixture.launches.load(Ordering::SeqCst), 0);
+        drop(control);
+        drop(fixture);
+        pool.close().await;
+        sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+    }
+    admin.close().await;
+}

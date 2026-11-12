@@ -819,7 +819,7 @@ impl RuntimeControl {
     ) -> Result<(Value, String), ApiError> {
         use zuse_protocol::cloud::CloudStoragePhase;
         if request.capabilities.as_ref().is_some_and(|caps| {
-            caps.len() > 10
+            caps.len() > 12
                 || caps.iter().any(|cap| {
                     !matches!(
                         cap.as_str(),
@@ -832,6 +832,8 @@ impl RuntimeControl {
                             | "rust-organization-execution-v1"
                             | "rust-computer-recreation-v1"
                             | zuse_protocol::cloud_task_commands::CAPABILITY
+                            | zuse_protocol::cloud_task_commands::DIRECT_UPLOADS_CAPABILITY
+                            | zuse_protocol::cloud_task_commands::MESSAGE_ACCESS_MODE_CAPABILITY
                             | zuse_cloud_runtime::project_cache::CAPABILITY
                     )
                 })
@@ -968,7 +970,7 @@ impl RuntimeControl {
         let head = request.session_head_version.unwrap_or(0);
         self.runtime_scope_access(id, credential, now).await?;
         let mut tx = self.pool.begin().await?;
-        let (row, _, _) = locked_workspace(&mut tx, id).await?;
+        let (row, generation, _) = locked_workspace(&mut tx, id).await?;
         if !enrollment_matches(&row)
             || blocked(&row)
             || row["desired_state"] != "ready"
@@ -1018,7 +1020,10 @@ impl RuntimeControl {
                 config["startupTimings"]["agentReadyAt"] = json!(now);
             }
             sqlx::query("UPDATE api_cloud_workspaces SET runtime_state='online',request_config=$2,revision=revision+1,updated_at=GREATEST(updated_at+1,$3) WHERE workspace_id=$1")
-                .bind(id).bind(config).bind(now).execute(&mut *tx).await?;
+                .bind(id).bind(&config).bind(now).execute(&mut *tx).await?;
+            proposed["runtime_state"] = json!("online");
+            proposed["request_config"] = config;
+            Self::reconcile_abandoned_allocation(&mut tx, &proposed, generation, now).await?;
             tx.commit().await?;
             self.notify_task_drain();
             return Ok(json!({"agentReady":true,"workspaceReady":false}));
@@ -1066,6 +1071,7 @@ impl RuntimeControl {
         .bind(id)
         .fetch_one(&mut *tx)
         .await?;
+        Self::reconcile_abandoned_allocation(&mut tx, &row, generation, now).await?;
         tx.commit().await?;
         Ok(crate::store::Workspace { row }.public())
     }
@@ -1628,6 +1634,19 @@ fn native_commands_supported(row: &Value) -> bool {
                         .iter()
                         .any(|cap| cap == zuse_protocol::cloud_task_commands::CAPABILITY))
         })
+}
+/// Whether the guest runtime on this computer advertised `capability` at its
+/// last bootstrap. A sleeping computer is judged by
+/// that last bootstrap: its image, and so its runtime, only changes when the
+/// computer is recreated. A computer that never stored any capabilities is
+/// treated as an old runtime, since a guest that predates a capability never
+/// advertised it either.
+pub(crate) fn runtime_capable(row: &Value, capability: &str) -> bool {
+    // Only the bootstrap receipt: it is replaced on every bootstrap, while a
+    // storage enrollment can outlive a replaced guest.
+    row["request_config"]["runtimeBootstrapReceipt"]["capabilities"]
+        .as_array()
+        .is_some_and(|caps| caps.iter().any(|cap| cap == capability))
 }
 fn native_commands_accepted(row: &Value) -> bool {
     native_commands_supported(row)

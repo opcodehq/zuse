@@ -8,6 +8,15 @@ use serde::{Deserialize, Serialize};
 pub const VERSION: u32 = 2;
 pub const CAPABILITY: &str = "rust-task-command-admission-v2";
 pub const MODE: &str = "server-admitted-v2";
+/// The computer accepts a run whose files were uploaded straight to it and
+/// are referenced as paths in the run's attachments.
+pub const DIRECT_UPLOADS_CAPABILITY: &str = "rust-direct-uploads-v1";
+/// The computer accepts a run whose access mode differs from the one its task
+/// policy was bound with (each message may choose its own access mode).
+pub const MESSAGE_ACCESS_MODE_CAPABILITY: &str = "rust-message-access-mode-v1";
+/// The computer's guest runtime predates something this message needs; only
+/// recreating the computer (onto a current image) updates it.
+pub const RUNTIME_OUTDATED: &str = "cloud_computer_runtime_outdated";
 pub const MAX_TEXT_BYTES: usize = 128 * 1024;
 pub const MAX_QUEUE_ROWS: i64 = 128;
 pub const EDIT_LEASE_MS: i64 = 30_000;
@@ -49,6 +58,11 @@ pub struct Input {
     pub text: String,
     #[serde(default)]
     pub attachments: Vec<Asset>,
+    /// Files already uploaded straight to the computer: their absolute paths
+    /// there. The server never sees their bytes; the computer checks each is
+    /// one of its own uploads when the queued message runs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub computer_files: Vec<String>,
     /// References remain task-relative until the enrolled guest resolves them.
     #[serde(default)]
     pub file_refs: Vec<String>,

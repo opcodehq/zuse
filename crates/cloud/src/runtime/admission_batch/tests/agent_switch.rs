@@ -132,6 +132,7 @@ async fn queued_selection(
         text: "Inspect the exact queued config".into(),
         run_selection: selection,
         attachments: vec![],
+        computer_files: vec![],
         file_refs: vec![],
         skill_refs: vec![],
         annotations: vec![],
