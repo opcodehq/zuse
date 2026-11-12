@@ -1,6 +1,7 @@
 //! Shared inline review cards for diffs and Markdown file previews.
 use crate::changes::ACCENT_BAR_WIDTH;
 use crate::localization::message as tr;
+use crate::tooltip::TooltipExt as _;
 use crate::{
     comments::{self, ReviewComment},
     composer::ComposerInput,
@@ -123,7 +124,7 @@ pub(crate) fn render_comment_card<T: 'static>(
                                 .opacity(0.0)
                                 .group_hover(group, |s| s.opacity(1.0))
                                 .on_click(cx.listener(move |this, _, _, cx| remove(this, &id, cx)))
-                                .tooltip(crate::settings::widgets::text_tooltip("Remove comment"))
+                                .tip("Remove comment")
                                 .child(
                                     crate::icons::icon(crate::icons::CLOSE_CIRCLE)
                                         .size(px(12.0))
@@ -173,7 +174,7 @@ pub(crate) fn render_comment_edit<T: 'static>(
             cx.stop_propagation();
             edit(this, &id, window, cx);
         }))
-        .tooltip(crate::settings::widgets::text_tooltip("Edit comment"))
+        .tip("Edit comment")
         .child(
             crate::icons::icon(crate::icons::PEN)
                 .size(px(12.0))

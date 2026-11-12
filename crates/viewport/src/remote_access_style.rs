@@ -1,5 +1,6 @@
 //! Compact remote access cards and focused connection dialogs shared by both hosts.
 use crate::localization::message as tr;
+use crate::tooltip::TooltipExt as _;
 use crate::{
     assets::icon,
     palette::rgb,
@@ -59,31 +60,12 @@ pub fn frame(
                             .rounded(px(6.))
                             .text_color(rgb(MUTED).opacity(0.6))
                             .hover(|v| v.bg(s::frame_bg()).text_color(rgb(MUTED)))
-                            .tooltip(move |_, cx| cx.new(|_| Help(help.clone())).into())
+                            .tip(help.clone())
                             .child(icon("info-circle").size(px(14.))),
                     ),
             )
             .children(action),
     )
-}
-
-struct Help(SharedString);
-impl Render for Help {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .max_w(px(256.))
-            .px(px(12.))
-            .py(px(8.))
-            .rounded(px(6.))
-            .border_1()
-            .border_color(s::card_border())
-            .bg(s::card_bg())
-            .text_color(rgb(TEXT))
-            .text_size(px(12.))
-            .line_height(px(16.))
-            .shadow_sm()
-            .child(self.0.clone())
-    }
 }
 
 pub fn method_row(

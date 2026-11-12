@@ -26,6 +26,7 @@
 //! streaming has advanced beyond the last measured frame.
 
 use crate::localization::message as tr;
+use crate::tooltip::TooltipExt as _;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ops::Range;
@@ -4554,10 +4555,10 @@ impl Transcript {
             .text_color(theme.text_faint);
         if self.history_loading || auto {
             return strip
-                .child(crate::loaders::dither_ring(
+                .child(crate::loaders::retro_loader(
                     "history-loader-ring",
                     12.0,
-                    theme.text_faint,
+                    theme.loader_glyph(),
                 ))
                 .child(tr(cx, msg::chat::cloud_history_loading))
                 .into_any_element();
@@ -6681,7 +6682,7 @@ impl Transcript {
                 None => crate::loaders::mini_glyph_spinner(
                     format!("chip-sending-{row_id}-{ix}"),
                     2.0,
-                    theme.glyph,
+                    theme.loader_glyph(),
                     cx.entity_id(),
                     cx,
                 )
@@ -7111,7 +7112,7 @@ impl Transcript {
                         cx.stop_propagation();
                         this.dispatch_fork_menu(index, cx)
                     }))
-                    .tooltip(crate::settings::widgets::text_tooltip(tooltip))
+                    .tip(tooltip)
                     .tooltip_show_delay(std::time::Duration::from_millis(500))
                     .child(
                         crate::icons::icon(crate::icons::FORK)
@@ -7961,7 +7962,7 @@ impl Transcript {
                     .max_w_full()
                     .min_w_0()
                     .flex()
-                    .tooltip(crate::settings::widgets::text_tooltip(path.clone()))
+                    .tip(path.clone())
                     .child(user_file_pill(
                         SharedString::from(format!("{row_id}#mention-pill{fix}")),
                         name,
@@ -8159,7 +8160,7 @@ impl Transcript {
             let mut chip =
                 crate::badges::pill(SharedString::from(format!("{row_id}#att{aix}")), &theme)
                     .pl(px(6.0))
-                    .tooltip(crate::settings::widgets::text_tooltip(att.name.clone()));
+                    .tip(att.name.clone());
             let thumb: AnyElement = match state {
                 AttachmentSnapshot::Loaded(image) => {
                     let preview = crate::attachments::PreviewImage::new(
@@ -8445,10 +8446,10 @@ impl Transcript {
             .gap(px(Theme::SPACE_SM))
             .pt(px(Theme::SPACE_LG))
             .text_size(crate::typography::text_xs())
-            .child(crate::loaders::dither_ring(
+            .child(crate::loaders::retro_loader(
                 format!("working-mark-{}", cx.entity_id()),
                 14.0,
-                theme.text_muted,
+                theme.loader_glyph(),
             ))
             .child(
                 div()
@@ -8883,7 +8884,7 @@ impl Transcript {
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.copy_message(entry_id.clone(), text.clone(), cx)
                         }))
-                        .tooltip(crate::settings::widgets::text_tooltip("Copy message"))
+                        .tip("Copy message")
                         .child(
                             crate::icons::icon(if copied_message {
                                 crate::icons::CHECK
@@ -8929,9 +8930,7 @@ impl Transcript {
                             cx.stop_propagation();
                             this.toggle_fork_menu(entry_id.clone(), chat_id.clone(), window, cx);
                         }))
-                        .when(!fork_menu_here, |button| {
-                            button.tooltip(crate::settings::widgets::text_tooltip("Fork chat"))
-                        })
+                        .when(!fork_menu_here, |button| button.tip("Fork chat"))
                         .child(
                             crate::icons::icon(crate::icons::FORK)
                                 .size(px(14.0))
@@ -10310,9 +10309,7 @@ impl gpui::Element for ChipOverlays {
                             )
                         )
                     })
-                    .when(link, |target| {
-                        target.tooltip(crate::settings::widgets::text_tooltip(path.to_string()))
-                    })
+                    .when(link, |target| target.tip(path.to_string()))
                     .on_click(move |event, window, cx| {
                         // A drag that selects text across the chip is not a click.
                         if event.click_count() == 1

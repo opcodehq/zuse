@@ -797,6 +797,11 @@ impl TerminalColors {
 }
 
 impl Theme {
+    /// The golden three-tone palette of the retro pixel loader that marks
+    /// work in progress (actions, working chats), whatever the accent.
+    pub fn loader_glyph(&self) -> GlyphPalette {
+        AccentColor::Amber.tokens(self.appearance).glyph
+    }
     // ---- numbers drive layout (px) ----
     /// Frost translucency over the blurred window background (macOS vibrancy
     /// or Windows Acrylic). Linux stays opaque because compositor blur is not
@@ -1730,6 +1735,7 @@ impl Theme {
             .with_code_font_size(crate::typography::code_font_size(cx))
             .with_terminal_font_size(crate::typography::terminal_font_size(cx));
         sync_gpui_base_scrollbar(&next, cx);
+        crate::tooltip::install(cx);
         cx.set_global(next);
         // An accent-only swap leaves CURRENT_APPEARANCE unchanged, but cached
         // resolved colors still need to be discarded for the next frame.
@@ -1805,6 +1811,7 @@ impl Theme {
         });
         set_current_appearance(appearance);
         sync_gpui_base_scrollbar(&next, cx);
+        crate::tooltip::install(cx);
         cx.set_global(next);
         if changed || force_generation {
             bump_style_generation();

@@ -169,6 +169,16 @@ pub trait Provider: Send + Sync {
     -> Result<OperationState, ProviderError>;
     async fn execute(&self, id: &str, command: &str) -> Result<ExecResult, ProviderError>;
     async fn upload(&self, id: &str, path: &str, contents: &[u8]) -> Result<(), ProviderError>;
+    /// Push back a provider-side running limit for a computer that is still in
+    /// use. Providers whose limit already outlasts any run keep this no-op.
+    async fn keep_running(&self, _id: &str) -> Result<(), ProviderError> {
+        Ok(())
+    }
+    /// Whether [`Self::keep_running`] does anything, so the worker only visits
+    /// computers whose provider can end them mid-task.
+    fn has_running_limit(&self) -> bool {
+        false
+    }
 }
 
 pub(super) fn observed(receipt: &ProviderOperation, machine: Option<&Machine>) -> OperationState {

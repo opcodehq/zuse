@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# Ensures Zuse's resident runtime supervisor is serving on a Prized computer.
+# A forked computer inherits the parent's live supervisor; after a cold boot
+# (no memory kept) nothing is running, so this starts one, detached.
+set -euo pipefail
+umask 077
+R=/home/prized/.zuse
+export ZUSE_USER_DATA=/home/prized/.zuse-data
+export ZUSE_CLOUD_WORKSPACE_ROOT=/home/prized/workspace
+export ZUSE_WORKSPACE_RUNTIME_STATUS_DIR="$R/status"
+export ZUSE_RUNTIME_BINARY="$R/bin/zuse-cloud-runtime"
+export ZUSE_RUNTIME_SUPERVISOR="$R/lib/runtime-supervisor.py"
+export ZUSE_HARNESS_ROOT="$R/harnesses"
+export ZUSE_HARNESS_CHANNEL=staging
+export ZUSE_HARNESS_RELEASE_TOOL="$R/lib/harness-release.py"
+export ZUSE_RECOVERY_STATUS_ROOT="$R/recovery"
+socket="$ZUSE_USER_DATA/.runtime-supervision/control.sock"
+
+serving() {
+  # The ping client waits up to 3 s for a missing socket; skip it when absent.
+  [[ -S "$socket" ]] && python3 "$ZUSE_RUNTIME_SUPERVISOR" --data-dir "$ZUSE_USER_DATA" ping >/dev/null 2>&1
+}
+
+serving && exit 0
+mkdir -p -m 700 "$ZUSE_USER_DATA" "$ZUSE_WORKSPACE_RUNTIME_STATUS_DIR" "$ZUSE_RECOVERY_STATUS_ROOT"
+mkdir -p "$ZUSE_CLOUD_WORKSPACE_ROOT"
+# One starter at a time; the supervisor's own lock also refuses a second resident.
+exec 8>"$ZUSE_WORKSPACE_RUNTIME_STATUS_DIR/.supervise.lock"
+flock -w 10 8
+serving && exit 0
+cd /
+nohup setsid python3 "$ZUSE_RUNTIME_SUPERVISOR" --data-dir "$ZUSE_USER_DATA" \
+  --workspace-root "$ZUSE_CLOUD_WORKSPACE_ROOT" --status-dir "$ZUSE_WORKSPACE_RUNTIME_STATUS_DIR" \
+  --launcher "$R/lib/launch-rust-runtime" --binary "$ZUSE_RUNTIME_BINARY" \
+  --recovery-root "$ZUSE_RECOVERY_STATUS_ROOT" --recovery-launcher "$R/lib/launch-rust-recovery" \
+  serve >>"$ZUSE_WORKSPACE_RUNTIME_STATUS_DIR/supervisor.log" 2>&1 </dev/null 8>&- &
+deadline=$((SECONDS + 5))
+until [[ -S "$socket" ]]; do
+  (( SECONDS < deadline )) || break
+  sleep 0.05
+done
+serving || { printf '%s\n' runtime_supervisor_not_ready >&2; exit 1; }

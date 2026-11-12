@@ -1,8 +1,11 @@
-//! Host-owned CI watches. Repair permission is separate from observation.
+//! Host-owned pull request watches. Follow-up permission is separate from
+//! observation: a watch reads CI, review feedback and mergeability, and only an
+//! enabled auto-fix sends the conversation back to address them.
 use crate::change_request_assessment::CiState;
 use serde::{Deserialize, Serialize};
 
-pub const MAX_REPAIR_ATTEMPTS: usize = 3;
+/// Automatic follow-ups a watch may send before a person restarts the budget.
+pub const MAX_REPAIR_ATTEMPTS: usize = 5;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -39,6 +42,10 @@ pub struct PrWatchStatus {
     pub error: Option<String>,
     pub repairing: bool,
     pub can_auto_fix: bool,
+    /// What the latest automatic follow-up addressed, e.g. "failing CI and 2
+    /// review comments". Absent from older engines and before the first one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_follow_up: Option<String>,
 }
 
 /// Initial snapshots seed silently; later failures are consumed regardless of
@@ -94,6 +101,7 @@ mod tests {
             error: None,
             repairing: false,
             can_auto_fix: true,
+            last_follow_up: None,
         }
     }
     #[test]

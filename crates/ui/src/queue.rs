@@ -8,6 +8,7 @@
 //! Editing moves the message into the composer while its leased row reserves
 //! its position.
 
+use crate::tooltip::TooltipExt as _;
 use gpui::{
     AnyElement, Context, InteractiveElement as _, IntoElement, ParentElement as _, Render,
     SharedString, StatefulInteractiveElement as _, Styled, Window, div, prelude::*, px,
@@ -65,18 +66,7 @@ struct QueueActionTooltip {
 
 impl Render for QueueActionTooltip {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = Theme::of(cx);
-        let card = div()
-            .px(px(8.0))
-            .py(px(5.0))
-            .rounded(px(6.0))
-            .border_1()
-            .border_color(theme.border)
-            .bg(crate::popover::surface_bg(theme))
-            .text_size(px(10.5))
-            .text_color(theme.text_muted)
-            .child(self.label.clone());
-        crate::frost::frosted(6.0, crate::frost::MENU_BLUR, card)
+        crate::tooltip::chip(self.label.clone(), Theme::of(cx))
     }
 }
 
@@ -702,7 +692,7 @@ impl Composer {
                             .text_size(px(11.0))
                             .text_color(theme.text_muted)
                             .aria_label(format!("{hidden}; edit message to view all"))
-                            .tooltip(move |_, cx| {
+                            .anchored_tooltip(crate::tooltip::Placement::Below, move |_, cx| {
                                 cx.new(|_| QueueActionTooltip {
                                     label: hidden.clone(),
                                 })
@@ -971,7 +961,7 @@ impl Composer {
             .border_color(crate::theme::hairline(0.1))
             .bg(crate::theme::ink(0.035))
             .overflow_hidden()
-            .tooltip({
+            .anchored_tooltip(crate::tooltip::Placement::Below, {
                 let label = label.clone();
                 move |_, cx| {
                     cx.new(|_| QueueActionTooltip {
@@ -1092,7 +1082,7 @@ impl Composer {
             .when(!enabled, |el| {
                 el.cursor(gpui::CursorStyle::Arrow).opacity(0.45)
             })
-            .tooltip(move |_, cx| {
+            .anchored_tooltip(crate::tooltip::Placement::Below, move |_, cx| {
                 cx.new(|_| QueueActionTooltip {
                     label: label.into(),
                 })
@@ -1152,7 +1142,7 @@ impl Composer {
                     })
             })
             .when(!enabled, |el| el.opacity(0.45))
-            .tooltip(move |_, cx| {
+            .anchored_tooltip(crate::tooltip::Placement::Below, move |_, cx| {
                 cx.new(|_| QueueActionTooltip {
                     label: tooltip.into(),
                 })

@@ -547,6 +547,10 @@ impl Composer {
     pub(super) fn cached_cloud(&self) -> bool {
         self.cloud.cached.is_some()
     }
+    /// Bound to a cloud task, which sends with its own saved settings.
+    pub(super) fn native_cloud_task(&self) -> bool {
+        self.cloud.native.is_some()
+    }
     pub(crate) fn set_cached_cloud(&mut self, paused: bool, cx: &mut Context<Self>) {
         if self.cloud.cached != Some(paused) {
             self.cloud.cached = Some(paused);
@@ -1385,6 +1389,89 @@ mod cached_tests {
             assert!(!echoed(cx));
             assert_eq!(c.input.read(cx).text(), "Look at this");
             assert!(c.cloud.pending_native.is_some(), "Retry keeps the same identity");
+        });
+        drop(receive);
+    }
+    #[gpui::test]
+    fn a_sleeping_cloud_task_can_send_before_its_engine_configuration_loads(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _entered = runtime.enter();
+        let (send, receive) = tokio::sync::mpsc::channel(1);
+        let (_replies, replies) = tokio::sync::mpsc::channel(1);
+        let controller =
+            crate::state::EngineHandle::from_test_client(zuse_rpc::RpcClient::new(send, replies));
+        let state = cx.new(|_| {
+            let mut state = crate::state::AppState::new();
+            state.apply_cloud_account(json!({"user":{"id":"owner"},"orgId":null}));
+            // The cloud chat is selected, but its configuration lives on the
+            // sleeping computer's engine and has not been confirmed.
+            state.selected_chat = Some("session".into());
+            state
+        });
+        let composer = cx.new(|cx| Composer::new(state.clone(), cx));
+        composer.update(cx, |c, cx| {
+            assert!(c.state.read(cx).configuration_blocked());
+            let target = crate::state::CloudTarget {
+                controller,
+                subject: "owner".into(),
+                organization: None,
+                workspace: "task".into(),
+                initial_session: "session".into(),
+            };
+            c.set_cloud_task(
+                target,
+                json!({"agent":"codex","model":"gpt-6.1-sol","runtimeMode":"full-access"}),
+                cx,
+            );
+            c.set_cloud_task_sleeping(true);
+            assert!(
+                !c.send_blocked(cx),
+                "the task's own saved settings are enough; Send wakes the computer"
+            );
+            assert!(c.send_cloud_task("Wake up and continue".into(), false, cx));
+            let request = c.cloud.pending_native.as_ref().expect("command built");
+            assert_eq!(
+                request["action"]["payload"]["request"]["prompt"],
+                "Wake up and continue"
+            );
+            assert_eq!(request["wake"], "explicit-resume");
+            c.cloud.task = None;
+        });
+        drop(receive);
+    }
+    #[gpui::test]
+    fn a_cloud_task_opened_without_saved_settings_waits_for_them_before_send(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _entered = runtime.enter();
+        let (send, receive) = tokio::sync::mpsc::channel(1);
+        let (_replies, replies) = tokio::sync::mpsc::channel(1);
+        let controller =
+            crate::state::EngineHandle::from_test_client(zuse_rpc::RpcClient::new(send, replies));
+        let state = cx.new(|_| {
+            let mut state = crate::state::AppState::new();
+            state.apply_cloud_account(json!({"user":{"id":"owner"},"orgId":null}));
+            state.selected_chat = Some("session".into());
+            state
+        });
+        let composer = cx.new(|cx| Composer::new(state.clone(), cx));
+        composer.update(cx, |c, cx| {
+            let target = crate::state::CloudTarget {
+                controller,
+                subject: "owner".into(),
+                organization: None,
+                workspace: "task".into(),
+                initial_session: "session".into(),
+            };
+            // A sidebar row carries no agent or model.
+            c.set_cloud_task(target, json!({"workspaceId":"task"}), cx);
+            assert!(
+                c.send_blocked(cx),
+                "Send waits for the task's saved choices instead of failing"
+            );
         });
         drop(receive);
     }

@@ -222,7 +222,7 @@ impl Transcript {
                 .rounded(px(8.0))
                 .role(gpui::Role::Button)
                 .aria_label(label.clone())
-                .tooltip(crate::settings::widgets::text_tooltip(label))
+                .tip(label)
                 .when(enabled, |el| {
                     el.cursor_pointer()
                         .hover(|style| style.bg(theme.element_hover))
