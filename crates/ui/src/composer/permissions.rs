@@ -96,10 +96,21 @@ impl Composer {
         level: SandboxLevel,
         cx: &mut Context<Self>,
     ) -> bool {
-        self.native_cloud_task()
-            && self
-                .pickers
-                .update(cx, |pickers, cx| pickers.set_cloud_task_sandbox(level, cx))
+        if !self.native_cloud_task() {
+            return false;
+        }
+        // An unconfirmed message keeps its exact request (and access mode) for
+        // a safe retry; changing access now would not apply to it.
+        if self.cloud_send_unconfirmed() {
+            self.failure = Some(
+                "Your last message is still being confirmed with its original access mode. Change access after it's sent."
+                    .into(),
+            );
+            cx.notify();
+            return true;
+        }
+        self.pickers
+            .update(cx, |pickers, cx| pickers.set_cloud_task_sandbox(level, cx))
     }
     /// Save the new-chat default immediately and refresh permission controls.
     fn remember_permission(&self, level: SandboxLevel, cx: &mut Context<Self>) {

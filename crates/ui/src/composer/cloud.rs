@@ -399,6 +399,10 @@ impl Composer {
     pub(super) fn native_cloud_task(&self) -> bool {
         self.cloud.native.is_some()
     }
+    /// A cloud message whose delivery isn't confirmed keeps its request.
+    pub(super) fn cloud_send_unconfirmed(&self) -> bool {
+        self.cloud.pending_native.is_some()
+    }
     pub(crate) fn set_cached_cloud(&mut self, paused: bool, cx: &mut Context<Self>) {
         if self.cloud.cached != Some(paused) {
             self.cloud.cached = Some(paused);
@@ -1219,6 +1223,12 @@ mod cached_tests {
                 SandboxLevel::DangerFullAccess
             );
             assert!(c.send_cloud_task("Go ahead".into(), false, cx));
+            // While that message is unconfirmed, access stays as it was sent.
+            assert!(c.set_cloud_task_permission(SandboxLevel::WorkspaceWrite, cx));
+            assert_eq!(
+                c.pickers.read(cx).cloud_task_choice().unwrap().sandbox,
+                SandboxLevel::DangerFullAccess
+            );
             let request = &c.cloud.pending_native.as_ref().unwrap()["action"]["payload"]["request"];
             assert_eq!(request["sandbox"], json!(SandboxLevel::DangerFullAccess));
             assert_eq!(request["autoApprove"], true);
