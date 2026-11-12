@@ -44,6 +44,11 @@ pub struct Input {
     pub text: String,
     #[serde(default)]
     pub attachments: Vec<Asset>,
+    /// Files already uploaded straight to the computer: their absolute paths
+    /// there. The server never sees their bytes; the computer checks each is
+    /// one of its own uploads when the queued message runs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub computer_files: Vec<String>,
     /// References remain task-relative until the enrolled guest resolves them.
     #[serde(default)]
     pub file_refs: Vec<String>,
