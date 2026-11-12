@@ -83,6 +83,36 @@ fn task_rejection(code: &str) -> Option<&'static str> {
             "Too many attachments are still uploading. Wait for them to finish, then send again."
         }
         "invalid_launch_asset" => "This attachment couldn't be uploaded. Try attaching it again.",
+        // The computer refused a delivered message before running it.
+        "cloud_command_upload_missing" | "cloud_command_upload_outside_uploads" => {
+            "An attached file wasn't on the computer, so this message didn't run. Attach it again and send."
+        }
+        "cloud_command_assets_too_many" => {
+            "Too many attachments for one message, so it didn't run. Remove some and send again."
+        }
+        "cloud_command_assets_too_large" => {
+            "These attachments are too large together, so this message didn't run. Remove some and send again."
+        }
+        "cloud_command_agent_changed"
+        | "cloud_command_model_changed"
+        | "cloud_command_agent_not_installed"
+        | "cloud_command_agent_catalog_invalid" => {
+            "This computer can't run that agent or model, so this message didn't run. Pick another and send again."
+        }
+        "cloud_command_permission_policy_changed" | "cloud_command_permission_policy_missing" => {
+            "This access mode can't be used for this task, so this message didn't run. Pick another access mode and send again."
+        }
+        "cloud_command_policy_or_runtime_fenced"
+        | "cloud_command_checkout_fenced"
+        | "cloud_command_admission_update_required"
+        | "cloud_command_thread_missing"
+        | "cloud_canonical_command_binding_required"
+        | "cloud_conversation_scope_rejected"
+        | "cloud_interrupt_target_invalid"
+        | "cloud_control_runtime_binding_invalid"
+        | "command-admission-rejected" => {
+            "The computer couldn't accept this message, so it didn't run. Send it again."
+        }
         zuse_protocol::cloud_task_commands::RUNTIME_OUTDATED => {
             "This computer runs an older version that can't receive files or change access per message. Send without files, or recreate the computer to update it."
         }

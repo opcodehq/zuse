@@ -35,7 +35,7 @@ pub(super) fn command(
             Some("starting" | "running" | "waiting-input" | "outcome-unknown")
         )
     };
-    let row = rows
+    let Some(row) = rows
         .iter()
         .filter(eligible)
         .filter(active)
@@ -50,7 +50,10 @@ pub(super) fn command(
                     )
                 })
                 .max_by_key(|row| row["createdAt"].as_i64().unwrap_or_default())
-        })?;
+        })
+    else {
+        return refused(rows);
+    };
     let (label, busy) = match row["executionState"].as_str()? {
         "starting" => ("Starting agent turn…", true),
         "running" => ("Agent working…", true),
@@ -62,6 +65,23 @@ pub(super) fn command(
         label: label.into(),
         next: None,
         busy,
+    })
+}
+/// The newest message failed for a known reason before it ran (the computer
+/// refused it): say why until another message is sent.
+fn refused(rows: &[Value]) -> Option<Activity> {
+    let newest = rows
+        .iter()
+        .filter(|row| row["messageId"].as_str().is_some_and(|id| !id.is_empty()))
+        .max_by_key(|row| row["createdAt"].as_i64().unwrap_or_default())?;
+    if newest["executionState"] != "failed" {
+        return None;
+    }
+    let label = zuse_engine::cloud::task_commands::refusal_message(newest["errorCode"].as_str()?)?;
+    Some(Activity {
+        label: label.into(),
+        next: None,
+        busy: false,
     })
 }
 /// The launch prompt, until the transcript holds a user message of its own.
@@ -182,6 +202,29 @@ mod tests {
             )
             .unwrap()
             .busy
+        );
+    }
+    #[test]
+    fn a_refused_newest_message_says_why_until_another_is_sent() {
+        let refused = json!({"executionState":"failed","errorCode":"cloud_command_upload_outside_uploads","messageId":"refused","text":"see file","createdAt":2});
+        let shown = command(&json!([refused])).unwrap();
+        assert!(shown.label.contains("Attach it again"));
+        assert!(!shown.busy);
+        // A failure with no known refusal reason (a turn that ran and failed)
+        // is not described as a refusal.
+        assert!(
+            command(&json!([{"executionState":"failed","errorCode":"agent_turn_failed","messageId":"m","text":"t"}]))
+                .is_none()
+        );
+        // A later message replaces the explanation, whether waiting or done.
+        let later =
+            json!({"executionState":"completed","messageId":"later","text":"again","createdAt":3});
+        assert!(command(&json!([refused, later])).is_none());
+        let waiting =
+            json!({"executionState":"queued","messageId":"later","text":"again","createdAt":3});
+        assert_eq!(
+            command(&json!([refused, waiting])).unwrap().label,
+            "Waiting for agent…"
         );
     }
 }

@@ -41,6 +41,12 @@ impl Manager {
     }
 }
 
+/// What a message that failed for a known refusal reason (its execution's
+/// `errorCode`) means for the user. `None` for failures with no such reason.
+pub fn refusal_message(code: &str) -> Option<&'static str> {
+    super::task_rejection(code)
+}
+
 pub const ASSET_PREFIX: &str = "cloud-asset://";
 pub fn asset_ref(asset: &Asset) -> Result<String> {
     let encoded = URL_SAFE_NO_PAD.encode(serde_json::to_vec(asset)?);

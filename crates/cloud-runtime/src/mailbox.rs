@@ -90,6 +90,27 @@ impl MessageSend {
         None
     }
 }
+/// A delivered command refused before anything on this computer changed: no
+/// engine queue entry, progress row, conversation or settings write, or
+/// imported file. Only this error becomes a definitive `Rejected`
+/// acknowledgment carrying its code; every other admission failure stays
+/// `OutcomeUnknown`, because the command might have started.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AdmissionRejected(pub &'static str);
+impl std::fmt::Display for AdmissionRejected {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0)
+    }
+}
+impl std::error::Error for AdmissionRejected {}
+/// Refuse a command definitively. Call only before any side effect.
+pub fn reject(code: &'static str) -> anyhow::Error {
+    AdmissionRejected(code).into()
+}
+/// `ensure!` for checks that run before any side effect.
+pub fn require(ok: bool, code: &'static str) -> Result<()> {
+    if ok { Ok(()) } else { Err(reject(code)) }
+}
 enum DecodedCommand {
     Message(Box<MessageSend>),
     Session(Box<CloudSessionCommand>),
@@ -434,10 +455,15 @@ impl Mailbox {
                         ack.result_iv = Some(iv);
                         ack.result_ciphertext = Some(ciphertext);
                     }
-                    Err(_) => {
-                        ack.state = AcknowledgmentState::OutcomeUnknown;
-                        ack.category = Some("runtime-admission-not-proven".into());
-                    }
+                    Err(error) => match error.downcast_ref::<AdmissionRejected>() {
+                        // Refused before any side effect: nothing ran, so the
+                        // server may fail the command and admit the next one.
+                        Some(AdmissionRejected(code)) => ack.category = Some((*code).into()),
+                        None => {
+                            ack.state = AcknowledgmentState::OutcomeUnknown;
+                            ack.category = Some("runtime-admission-not-proven".into());
+                        }
+                    },
                 }
             }
             Err(category) => ack.category = Some(category.into()),
@@ -967,3 +993,6 @@ mod cold_recovery_tests;
 
 #[cfg(test)]
 mod control_tests;
+
+#[cfg(test)]
+mod rejection_tests;

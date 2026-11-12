@@ -1,5 +1,6 @@
 //! Resolve the selected managed harness from authenticated server policy.
-use anyhow::{Result, ensure};
+use crate::mailbox::{reject, require};
+use anyhow::Result;
 use zuse_protocol::{HarnessId, RunRequest, cloud::CloudRuntimeBootstrap};
 
 fn agent_key(harness: HarnessId) -> Option<&'static str> {
@@ -20,46 +21,45 @@ pub(super) fn resolve(
         Some("claude" | "claude-code") => HarnessId::ClaudeCode,
         Some("codex") => HarnessId::Codex,
         Some("grok") => HarnessId::Grok,
-        _ => anyhow::bail!("cloud_command_agent_changed"),
+        _ => return Err(reject("cloud_command_agent_changed")),
     };
     let selected = request
         .harness
-        .ok_or_else(|| anyhow::anyhow!("cloud_command_agent_changed"))?;
-    let selected_key =
-        agent_key(selected).ok_or_else(|| anyhow::anyhow!("cloud_command_agent_changed"))?;
+        .ok_or_else(|| reject("cloud_command_agent_changed"))?;
+    let selected_key = agent_key(selected).ok_or_else(|| reject("cloud_command_agent_changed"))?;
     if let Some(value) = boot.extra.get("managedAgentCatalogs") {
         let catalogs: std::collections::BTreeMap<
             String,
             zuse_protocol::cloud_catalog::CloudAgentModels,
         > = serde_json::from_value(value.clone())
-            .map_err(|_| anyhow::anyhow!("cloud_command_agent_catalog_invalid"))?;
-        ensure!(
+            .map_err(|_| reject("cloud_command_agent_catalog_invalid"))?;
+        require(
             catalogs.contains_key(agent_key(initial).unwrap()),
-            "cloud_command_agent_catalog_invalid"
-        );
+            "cloud_command_agent_catalog_invalid",
+        )?;
         for (key, catalog) in &catalogs {
-            ensure!(
+            require(
                 agent_key(catalog.id) == Some(key.as_str())
                     && !catalog.models.is_empty()
                     && catalog.resolve_model(&catalog.default_model).is_some(),
-                "cloud_command_agent_catalog_invalid"
-            );
+                "cloud_command_agent_catalog_invalid",
+            )?;
         }
         let catalog = catalogs
             .get(selected_key)
-            .ok_or_else(|| anyhow::anyhow!("cloud_command_agent_changed"))?;
-        ensure!(
-            request.model.as_deref().is_some_and(
-                |model| !model.trim().is_empty() && catalog.resolve_model(model).is_some()
-            ),
-            "cloud_command_model_changed"
-        );
+            .ok_or_else(|| reject("cloud_command_agent_changed"))?;
+        require(
+            request.model.as_deref().is_some_and(|model| {
+                !model.trim().is_empty() && catalog.resolve_model(model).is_some()
+            }),
+            "cloud_command_model_changed",
+        )?;
     } else {
         // A legacy guest/task with no sealed catalogue remains single-agent.
-        ensure!(selected == initial, "cloud_command_agent_changed");
+        require(selected == initial, "cloud_command_agent_changed")?;
     }
     // Resolve/check only the requested installed harness, never other credentials.
-    ensure!(installed(selected), "cloud_command_agent_not_installed");
+    require(installed(selected), "cloud_command_agent_not_installed")?;
     Ok(selected)
 }
 
@@ -200,5 +200,39 @@ mod tests {
             .is_err()
         );
         assert_eq!(*seen.borrow(), vec![HarnessId::Grok]);
+    }
+    #[test]
+    fn agent_refusals_are_definitive_because_they_only_read_policy() {
+        use crate::mailbox::AdmissionRejected;
+        let code = |result: Result<HarnessId>| {
+            result
+                .unwrap_err()
+                .downcast_ref::<AdmissionRejected>()
+                .map(|r| r.0)
+        };
+        assert_eq!(
+            code(resolve(
+                &boot(),
+                &request(HarnessId::Grok, "grok-model"),
+                |_| false
+            )),
+            Some("cloud_command_agent_not_installed")
+        );
+        assert_eq!(
+            code(resolve(
+                &boot(),
+                &request(HarnessId::Codex, "unknown-model"),
+                |_| true
+            )),
+            Some("cloud_command_model_changed")
+        );
+        assert_eq!(
+            code(resolve(
+                &boot(),
+                &request(HarnessId::Mock, "codex-model"),
+                |_| true
+            )),
+            Some("cloud_command_agent_changed")
+        );
     }
 }

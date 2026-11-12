@@ -41,7 +41,16 @@ impl RuntimeControl {
         use zuse_protocol::cloud_commands::AcknowledgmentState;
         let (state, code) = match ack.state {
             AcknowledgmentState::Applied => return Ok(()), // admission is not completion
-            AcknowledgmentState::Rejected => ("failed", "command-admission-rejected"),
+            // The guest refused before anything ran: a definitive failure
+            // that keeps its reason and never holds the conversation for
+            // review. A reason that is not a short code stays generic.
+            AcknowledgmentState::Rejected => (
+                "failed",
+                ack.category
+                    .as_deref()
+                    .filter(|code| rejection_code(code))
+                    .unwrap_or("command-admission-rejected"),
+            ),
             AcknowledgmentState::Expired => ("cancelled", "command-expired"),
             AcknowledgmentState::OutcomeUnknown => ("outcome-unknown", "delivery-outcome-unknown"),
         };
@@ -88,6 +97,14 @@ impl RuntimeControl {
         }
         Ok(())
     }
+}
+
+/// A guest refusal reason the app may see: a short code, never free text.
+fn rejection_code(code: &str) -> bool {
+    (1..=128).contains(&code.len())
+        && code
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
 }
 
 #[cfg(test)]
