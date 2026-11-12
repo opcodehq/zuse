@@ -195,6 +195,15 @@ impl ManagedBaseCandidate {
         tx.commit().await?;
         Ok(())
     }
+    fn recreation_base(&self) -> RecreationBase<'_> {
+        RecreationBase {
+            provider: self.provider,
+            architecture: &self.architecture,
+            capabilities: &self.capabilities,
+            manifest: &self.manifest,
+            harnesses: &self.harnesses,
+        }
+    }
     pub(crate) fn settings(&self, pin: &StagingBasePin) -> Value {
         let mut settings = manifest_settings(
             self.provider,
@@ -376,6 +385,53 @@ impl StagingBasePin {
             return Err(invalid());
         }
         Ok(candidate)
+    }
+    /// This pin's candidate as the base a recreation lands on.
+    pub(crate) async fn recreation_target(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        now: i64,
+    ) -> Result<RecreationTarget, ApiError> {
+        let candidate = self.load(tx, now, true).await?;
+        Ok(RecreationTarget {
+            release_id: candidate.release_id.clone(),
+            artifact_id: candidate.artifact_id.clone(),
+            settings: candidate.settings(self),
+        })
+    }
+    /// "Update computer" for a computer on `source` (this pin or one of its
+    /// retained bindings): this pin's candidate, when it is a different,
+    /// newer candidate that can restore the computer's capture. `None` keeps
+    /// the computer on its own candidate.
+    pub(crate) async fn newer_recreation_target(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        source: &Self,
+        needs: &RecreationNeeds<'_>,
+        now: i64,
+    ) -> Result<Option<RecreationTarget>, ApiError> {
+        if source.candidate_sha256 == self.candidate_sha256
+            || source.provider != self.provider
+            || source.release_id == self.release_id
+        {
+            return Ok(None);
+        }
+        let current = source.load(tx, now, true).await?;
+        let target = self.load(tx, now, true).await?;
+        // Strictly newer registration: never a silent downgrade.
+        let newer: Option<bool> = sqlx::query_scalar("SELECT (b.created_at,b.release_id)>(c.created_at,c.release_id) FROM cloud_managed_bases b JOIN cloud_managed_bases c ON c.provider=b.provider AND c.release_id=$3 WHERE b.provider=$1 AND b.release_id=$2")
+            .bind(self.provider.as_str()).bind(&self.release_id).bind(&source.release_id)
+            .fetch_optional(&mut **tx).await?.flatten();
+        if newer != Some(true)
+            || !recreation_compatible(current.recreation_base(), target.recreation_base(), needs)
+        {
+            return Ok(None);
+        }
+        Ok(Some(RecreationTarget {
+            release_id: target.release_id.clone(),
+            artifact_id: target.artifact_id.clone(),
+            settings: target.settings(self),
+        }))
     }
     fn row_binding(&self, row: &Value) -> Result<(), ApiError> {
         let config = &row["request_config"];

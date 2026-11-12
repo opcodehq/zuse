@@ -105,10 +105,13 @@ impl RuntimeControl {
                     .ok_or_else(|| {
                         ApiError::forbidden("staging_managed_base_candidate_not_selected")
                     })?;
-                if row["request_config"]["managedCandidateSha256"] != pin.candidate_sha256
-                    || row["request_config"]["managedCandidateArtifactId"] != pin.artifact_id
-                    || pin.release_id != release
-                {
+                // The current pin or its retained binding for this computer;
+                // the same exact candidate the resume admission above checked.
+                let pin = pin.pin_for_row(row).map_err(|error| match error.code {
+                    "staging_managed_base_candidate_fenced" => fenced(),
+                    _ => error,
+                })?;
+                if pin.release_id != release {
                     return Err(fenced());
                 }
                 pin.load(tx, now, true).await?.artifact_id
