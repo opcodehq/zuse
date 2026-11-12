@@ -275,7 +275,7 @@ impl RuntimeControl {
                     .queued_run_tx(tx, workspace, session, message, &input)
                     .await?;
                 let result = if let wire::Action::SteerNow { based_on, .. } = &request.action {
-                    if !input.attachments.is_empty() {
+                    if !input.attachments.is_empty() || !input.computer_files.is_empty() {
                         return Err(error("cloud_task_steer_attachments_unsupported"));
                     }
                     let current:Option<String>=sqlx::query_scalar("SELECT e.turn_id FROM zuse_rust_task_command_execution e JOIN zuse_rust_mailbox_commands c USING(workspace_id,command_id) WHERE e.workspace_id=$1 AND e.session_id=$2 AND (c.lane=$3 OR (c.lane='task-control:'||e.session_id AND c.envelope->>'kind'='zuse.session.steer' AND e.message_id IS NOT NULL AND e.state IN ('starting','running','waiting-input','outcome-unknown'))) AND e.state IN ('running','waiting-input') AND e.turn_id IS NOT NULL ORDER BY c.workspace_sequence LIMIT 1").bind(id).bind(session).bind(format!("task-execution:{session}")).fetch_optional(&mut **tx).await?;

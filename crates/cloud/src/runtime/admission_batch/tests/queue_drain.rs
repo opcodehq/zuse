@@ -17,6 +17,7 @@ pub(super) async fn exercise(
         run_selection: None,
         text: text.into(),
         attachments: vec![],
+        computer_files: vec![],
         file_refs: vec!["src/lib.rs".into()],
         skill_refs: vec!["skills/test.md".into()],
         annotations: vec!["Reviewed user context".into()],

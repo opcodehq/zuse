@@ -75,7 +75,9 @@ impl RuntimeControl {
         if prompt.len() > wire::MAX_TEXT_BYTES {
             return Err(error("cloud_task_input_too_large"));
         }
-        serde_json::from_value(json!({"kind":"run","messageId":message,"request":{"prompt":prompt,"harness":config["harness"],"model":config["model"],"reasoning":config["reasoning"],"modelOptions":config.get("modelOptions").cloned().unwrap_or(json!({})),"cwd":".","sandbox":sandbox,"autoApprove":auto,"resume":null,"worktree":null,"mcp":null,"attachments":[]}})).map_err(|_|error("cloud_task_session_config_invalid"))
+        // Files uploaded straight to the computer run as their paths there;
+        // the computer checks each is one of its own uploads.
+        serde_json::from_value(json!({"kind":"run","messageId":message,"request":{"prompt":prompt,"harness":config["harness"],"model":config["model"],"reasoning":config["reasoning"],"modelOptions":config.get("modelOptions").cloned().unwrap_or(json!({})),"cwd":".","sandbox":sandbox,"autoApprove":auto,"resume":null,"worktree":null,"mcp":null,"attachments":input.computer_files}})).map_err(|_|error("cloud_task_session_config_invalid"))
     }
     pub(super) fn open_queue_input(
         &self,

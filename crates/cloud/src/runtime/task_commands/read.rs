@@ -62,7 +62,7 @@ impl RuntimeControl {
                 .map_err(|_| ApiError::unavailable("cloud_task_queue_unavailable"))?;
             let input: wire::Input = serde_json::from_slice(&text)
                 .map_err(|_| ApiError::unavailable("cloud_task_queue_unavailable"))?;
-            queue.push(json!({"id":key,"messageId":row["message_id"],"revision":row["revision"],"position":row["position"],"input":input,"text":input.text,"attachments":input.attachments,"fileRefs":input.file_refs,"skillRefs":input.skill_refs,"annotations":input.annotations,"asGoal":input.as_goal,"holdForTurnEnd":row["hold_for_turn_end"],"createdAt":row["created_at"],"editing":if row["edit_lease_hash"].is_string(){json!({"actorId":row["edit_actor_id"],"expiresAt":row["edit_expires_at"],"reviewRequired":true})}else{Value::Null}}));
+            queue.push(json!({"id":key,"messageId":row["message_id"],"revision":row["revision"],"position":row["position"],"input":input,"text":input.text,"attachments":input.attachments,"computerFiles":input.computer_files,"fileRefs":input.file_refs,"skillRefs":input.skill_refs,"annotations":input.annotations,"asGoal":input.as_goal,"holdForTurnEnd":row["hold_for_turn_end"],"createdAt":row["created_at"],"editing":if row["edit_lease_hash"].is_string(){json!({"actorId":row["edit_actor_id"],"expiresAt":row["edit_expires_at"],"reviewRequired":true})}else{Value::Null}}));
         }
         let queue_error:Option<String>=sqlx::query_scalar("SELECT last_error FROM zuse_rust_task_command_drains WHERE workspace_id=$1 AND session_id=$2").bind(id).bind(session).fetch_optional(&mut *tx).await?.flatten();
         tx.commit().await?;
