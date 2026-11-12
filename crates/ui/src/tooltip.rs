@@ -33,7 +33,7 @@ pub fn chip(text: impl Into<SharedString>, theme: &Theme) -> AnyElement {
     frost(
         surface(theme)
             .max_w(px(MAX_WIDTH))
-            .font_weight(gpui::FontWeight::MEDIUM)
+            .font_weight(gpui::FontWeight::NORMAL)
             .child(text.into()),
     )
 }
