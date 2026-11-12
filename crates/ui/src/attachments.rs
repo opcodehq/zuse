@@ -445,9 +445,17 @@ pub fn stage_png_bytes(name: String, bytes: Vec<u8>) -> StagedAttachment {
 // Upload (state.ts uploadAttachment) + read-back (state.ts readAttachmentImage)
 // ---------------------------------------------------------------------------
 
+/// Target for [`upload_attachment`] that sends a cloud chat's files to its
+/// awake computer instead of server storage.
+pub const COMPUTER: &str = "cloud-computer";
+
 fn with_target(mut params: serde_json::Value, target_device_id: Option<&str>) -> serde_json::Value {
     if let (Some(target), Some(map)) = (target_device_id, params.as_object_mut()) {
-        map.insert("targetDeviceId".into(), target.into());
+        if target == COMPUTER {
+            map.insert("computer".into(), true.into());
+        } else {
+            map.insert("targetDeviceId".into(), target.into());
+        }
     }
     params
 }
@@ -1266,6 +1274,15 @@ pub(crate) fn lightbox_with_size(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn computer_uploads_are_marked_for_the_computer_not_a_device() {
+        let params = super::with_target(serde_json::json!({"uploadId":"u"}), Some(super::COMPUTER));
+        assert_eq!(params["computer"], true);
+        assert!(params.get("targetDeviceId").is_none());
+        let device = super::with_target(serde_json::json!({}), Some("device-1"));
+        assert_eq!(device["targetDeviceId"], "device-1");
+    }
     use super::*;
 
     #[test]

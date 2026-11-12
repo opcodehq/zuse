@@ -268,10 +268,17 @@ impl Composer {
         let message = message.to_owned();
         self.state
             .update(cx, |state, _| state.remove_echo(&session, &message));
-        if let Some(text) = self.cloud.pending_native_text.clone()
-            && self.input.read(cx).text().is_empty()
-        {
-            self.input.update(cx, |input, cx| input.set_text(text, cx));
+        if let Some(text) = self.cloud.pending_native_text.clone() {
+            if self.input.read(cx).text().is_empty() {
+                self.input.update(cx, |input, cx| input.set_text(text, cx));
+            } else {
+                // A newer draft is in the box: keep it, let it be sent, and
+                // keep the unsent message's text visible instead of retrying it.
+                self.cloud.pending_native = None;
+                self.cloud.pending_native_text = None;
+                self.failure_key = None;
+                self.failure = Some(format!("This message wasn't sent: “{text}”").into());
+            }
         }
         let restored = self.cloud.native_staged.clone();
         let files = self
@@ -312,7 +319,41 @@ impl Composer {
         self.cloud.task = Some(cx.spawn(async move |this, cx| {
             let field=if request["action"]["type"]=="queue" {"input"} else {""};
             let assets=if field=="input" {&request["action"]["input"]["attachments"]} else {&request["action"]["attachments"]};
-            if !staged.is_empty() && assets.as_array().map_or(true,|assets|assets.len()!=staged.len()) {
+            let direct=&request["action"]["payload"]["request"]["attachments"];
+            if !staged.is_empty() && field.is_empty() && direct.as_array().map_or(true,|paths|paths.len()!=staged.len()) {
+                // A run's files go straight to its computer, never to server
+                // storage: wake it, wait for its connection, then upload.
+                let _=this.update(cx,|_,cx|cx.emit(ComposerEvent::CloudWakeRequested));
+                let started=std::time::Instant::now();
+                let engine=loop {
+                    let ready=this.read_with(cx,|this,cx|{
+                        let state=this.state.read(cx);
+                        (state.connection==crate::state::ConnectionStatus::Ready).then(||state.engine().cloned()).flatten()
+                    });
+                    match ready {
+                        Ok(Some(engine))=>break engine,
+                        Ok(None)=>{}
+                        Err(_)=>return,
+                    }
+                    if started.elapsed()>std::time::Duration::from_secs(180) {
+                        let _=this.update(cx,|this,cx|{this.return_native_send(cx);this.cloud_failure("The computer didn't start in time to receive the files. Send again to retry.".into(),cx)});
+                        return;
+                    }
+                    cx.background_executor().timer(std::time::Duration::from_millis(250)).await;
+                };
+                let executor=cx.background_executor().clone();
+                // Two files at a time: each upload holds its whole encoded file.
+                use futures::{StreamExt as _, TryStreamExt as _};
+                let uploads=futures::stream::iter(staged.iter()).map(|attachment|attachments::upload_attachment(&engine,&executor,Some(attachments::COMPUTER),&attachment.id,attachment,None)).buffered(2).try_collect::<Vec<_>>().await;
+                let paths=match uploads {
+                    Ok(paths)=>paths,
+                    Err(error)=>{let _=this.update(cx,|this,cx|{this.return_native_send(cx);this.cloud_failure(format!("The files couldn't reach the computer: {error}"),cx)});return;}
+                };
+                request["action"]["payload"]["request"]["attachments"]=json!(paths);
+                let _=this.update(cx,|this,_|this.cloud.pending_native=Some(request.clone()));
+            } else if !staged.is_empty() && field=="input" && assets.as_array().map_or(true,|assets|assets.len()!=staged.len()) {
+                // Only queued messages still stage files on the server; a run's
+                // files (including a retry's) never take this path.
                 // All files upload at once; their order is kept.
                 let uploads=futures::future::try_join_all(staged.iter().map(|attachment|upload_native_asset(&target,attachment))).await;
                 let assets=match uploads {
@@ -1404,6 +1445,89 @@ mod cached_tests {
             assert_eq!(request["sandbox"], json!(SandboxLevel::DangerFullAccess));
             assert_eq!(request["autoApprove"], true);
             c.cloud.task = None;
+        });
+        drop(receive);
+    }
+    #[gpui::test]
+    fn a_sleeping_cloud_task_can_send_before_its_engine_configuration_loads(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _entered = runtime.enter();
+        let (send, receive) = tokio::sync::mpsc::channel(1);
+        let (_replies, replies) = tokio::sync::mpsc::channel(1);
+        let controller =
+            crate::state::EngineHandle::from_test_client(zuse_rpc::RpcClient::new(send, replies));
+        let state = cx.new(|_| {
+            let mut state = crate::state::AppState::new();
+            state.apply_cloud_account(json!({"user":{"id":"owner"},"orgId":null}));
+            // The cloud chat is selected, but its configuration lives on the
+            // sleeping computer's engine and has not been confirmed.
+            state.selected_chat = Some("session".into());
+            state
+        });
+        let composer = cx.new(|cx| Composer::new(state.clone(), cx));
+        composer.update(cx, |c, cx| {
+            assert!(c.state.read(cx).configuration_blocked());
+            let target = crate::state::CloudTarget {
+                controller,
+                subject: "owner".into(),
+                organization: None,
+                workspace: "task".into(),
+                initial_session: "session".into(),
+            };
+            c.set_cloud_task(
+                target,
+                json!({"agent":"codex","model":"gpt-6.1-sol","runtimeMode":"full-access"}),
+                cx,
+            );
+            c.set_cloud_task_sleeping(true);
+            assert!(
+                !c.send_blocked(cx),
+                "the task's own saved settings are enough; Send wakes the computer"
+            );
+            assert!(c.send_cloud_task("Wake up and continue".into(), false, cx));
+            let request = c.cloud.pending_native.as_ref().expect("command built");
+            assert_eq!(
+                request["action"]["payload"]["request"]["prompt"],
+                "Wake up and continue"
+            );
+            assert_eq!(request["wake"], "explicit-resume");
+            c.cloud.task = None;
+        });
+        drop(receive);
+    }
+    #[gpui::test]
+    fn a_cloud_task_opened_without_saved_settings_waits_for_them_before_send(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _entered = runtime.enter();
+        let (send, receive) = tokio::sync::mpsc::channel(1);
+        let (_replies, replies) = tokio::sync::mpsc::channel(1);
+        let controller =
+            crate::state::EngineHandle::from_test_client(zuse_rpc::RpcClient::new(send, replies));
+        let state = cx.new(|_| {
+            let mut state = crate::state::AppState::new();
+            state.apply_cloud_account(json!({"user":{"id":"owner"},"orgId":null}));
+            state.selected_chat = Some("session".into());
+            state
+        });
+        let composer = cx.new(|cx| Composer::new(state.clone(), cx));
+        composer.update(cx, |c, cx| {
+            let target = crate::state::CloudTarget {
+                controller,
+                subject: "owner".into(),
+                organization: None,
+                workspace: "task".into(),
+                initial_session: "session".into(),
+            };
+            // A sidebar row carries no agent or model.
+            c.set_cloud_task(target, json!({"workspaceId":"task"}), cx);
+            assert!(
+                c.send_blocked(cx),
+                "Send waits for the task's saved choices instead of failing"
+            );
         });
         drop(receive);
     }
