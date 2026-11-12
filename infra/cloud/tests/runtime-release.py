@@ -22,6 +22,7 @@ release = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(release)
 
 FAKE_RUNTIME = """#!/bin/sh
+if [ "$1" = bootstrap-capabilities ]; then printf '["rust-rpc-v1","rust-runtime-update-v1"]\\n'; exit 0; fi
 [ "$1" = runtime-capabilities ] || exit 2
 sha=SHA_EXPR
 printf '{"version":1,"runtimeSha256":"%s","commandAdmissionVersion":2,"runtimeRpcProtocol":"zuse-rpc-v1","storageFormat":"zuse-rust-engine-v1","sessionCommandVersion":1,"executionProgressVersion":1,"managedAgentVersion":1}\\n' "$sha"
@@ -150,6 +151,7 @@ class RuntimeReleaseTest(unittest.TestCase):
         self.assertEqual(manifest["artifactKey"], f"runtime/x86_64/{digest}.zst")
         self.assertEqual(manifest["compressedSizeBytes"], (out / f"{digest}.zst").stat().st_size)
         self.assertEqual(manifest["capabilities"]["runtimeSha256"], digest)
+        self.assertEqual(manifest["bootstrapCapabilities"], ["rust-rpc-v1", "rust-runtime-update-v1"])
         self.assertEqual(release.decompressed_sha256(out / f"{digest}.zst"), digest)
 
     def test_build_rejects_a_receipt_for_another_binary_or_format(self):
@@ -161,6 +163,14 @@ class RuntimeReleaseTest(unittest.TestCase):
         result = self.run_tool("build-artifact", "--binary", binary, "--version", "0.26.0", "--arch", "x86_64",
                                "--storage-format", "zuse-rust-engine-v2", "--out", self.directory / "y", okay=False)
         self.assertIn("storage format", result.stderr)
+
+    def test_build_refuses_a_runtime_without_bootstrap_capabilities(self):
+        binary = Path(self.fake_runtime("old"))
+        binary.write_text("\n".join(line for line in binary.read_text().splitlines()
+                                    if "bootstrap-capabilities" not in line) + "\n")
+        result = self.run_tool("build-artifact", "--binary", binary, "--version", "0.26.0", "--arch", "x86_64",
+                               "--out", self.directory / "old", okay=False)
+        self.assertIn("predates in-place updates", result.stderr)
 
     def test_sign_verify_round_trip_and_tamper_detection(self):
         key, public = self.key()
