@@ -260,11 +260,6 @@ async fn queued_selection(
     for (suffix, mut choice, expected) in [
         ("model", selected.clone(), "cloud_task_model_not_installed"),
         (
-            "sandbox",
-            selected.clone(),
-            "cloud_task_permission_policy_changed",
-        ),
-        (
             "revoked",
             selected.clone(),
             "cloud_agent_connection_revoked",
@@ -272,9 +267,6 @@ async fn queued_selection(
     ] {
         if suffix == "model" {
             choice.model = "not-installed".into();
-        }
-        if suffix == "sandbox" {
-            choice.sandbox = zuse_protocol::SandboxLevel::DangerFullAccess;
         }
         let q = format!("denied-{suffix}");
         control
