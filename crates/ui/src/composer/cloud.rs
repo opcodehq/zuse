@@ -268,10 +268,17 @@ impl Composer {
         let message = message.to_owned();
         self.state
             .update(cx, |state, _| state.remove_echo(&session, &message));
-        if let Some(text) = self.cloud.pending_native_text.clone()
-            && self.input.read(cx).text().is_empty()
-        {
-            self.input.update(cx, |input, cx| input.set_text(text, cx));
+        if let Some(text) = self.cloud.pending_native_text.clone() {
+            if self.input.read(cx).text().is_empty() {
+                self.input.update(cx, |input, cx| input.set_text(text, cx));
+            } else {
+                // A newer draft is in the box: keep it, let it be sent, and
+                // keep the unsent message's text visible instead of retrying it.
+                self.cloud.pending_native = None;
+                self.cloud.pending_native_text = None;
+                self.failure_key = None;
+                self.failure = Some(format!("This message wasn't sent: “{text}”").into());
+            }
         }
         let restored = self.cloud.native_staged.clone();
         let files = self
@@ -335,14 +342,18 @@ impl Composer {
                     cx.background_executor().timer(std::time::Duration::from_millis(250)).await;
                 };
                 let executor=cx.background_executor().clone();
-                let uploads=futures::future::try_join_all(staged.iter().map(|attachment|attachments::upload_attachment(&engine,&executor,Some(attachments::COMPUTER),&attachment.id,attachment,None))).await;
+                // Two files at a time: each upload holds its whole encoded file.
+                use futures::{StreamExt as _, TryStreamExt as _};
+                let uploads=futures::stream::iter(staged.iter()).map(|attachment|attachments::upload_attachment(&engine,&executor,Some(attachments::COMPUTER),&attachment.id,attachment,None)).buffered(2).try_collect::<Vec<_>>().await;
                 let paths=match uploads {
                     Ok(paths)=>paths,
                     Err(error)=>{let _=this.update(cx,|this,cx|{this.return_native_send(cx);this.cloud_failure(format!("The files couldn't reach the computer: {error}"),cx)});return;}
                 };
                 request["action"]["payload"]["request"]["attachments"]=json!(paths);
                 let _=this.update(cx,|this,_|this.cloud.pending_native=Some(request.clone()));
-            } else if !staged.is_empty() && assets.as_array().map_or(true,|assets|assets.len()!=staged.len()) {
+            } else if !staged.is_empty() && field=="input" && assets.as_array().map_or(true,|assets|assets.len()!=staged.len()) {
+                // Only queued messages still stage files on the server; a run's
+                // files (including a retry's) never take this path.
                 // All files upload at once; their order is kept.
                 let uploads=futures::future::try_join_all(staged.iter().map(|attachment|upload_native_asset(&target,attachment))).await;
                 let assets=match uploads {

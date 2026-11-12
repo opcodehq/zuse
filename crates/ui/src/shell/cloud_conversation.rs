@@ -40,6 +40,8 @@ pub(super) struct CloudConversation {
     execution: Option<Task<()>>,
     operation: Option<Task<()>>,
     sleep_command: Option<String>,
+    /// A message's files asked for a wake while a sleep was still running.
+    wake_after_sleep: bool,
     computer: computer::State,
     _subscriptions: Vec<Subscription>,
 }
@@ -198,6 +200,7 @@ impl CloudConversation {
             execution: None,
             operation: None,
             sleep_command: None,
+            wake_after_sleep: false,
             computer: computer::State::default(),
             _subscriptions: subscriptions,
         };
@@ -668,6 +671,11 @@ impl CloudConversation {
         if self.ready(cx) {
             return;
         }
+        // A sleep in progress would drop the wake; start it once sleep ends.
+        if self.operation.is_some() {
+            self.wake_after_sleep = true;
+            return;
+        }
         self.environment = None;
         self.watch_environment(true, cx);
     }
@@ -774,6 +782,10 @@ impl CloudConversation {
                     Ok(value) => {
                         this.sleep_command = None;
                         this.apply_computer_metadata(&value["workspace"], cx);
+                        if std::mem::take(&mut this.wake_after_sleep) {
+                            this.environment = None;
+                            this.watch_environment(true, cx);
+                        }
                     }
                     Err(error) => {
                         this.error = Some(error.to_string());
