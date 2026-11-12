@@ -13010,8 +13010,12 @@ impl Shell {
                 self.viewport_height - Theme::TITLEBAR_HEIGHT - 160.0,
                 cx,
             );
-            return div()
-                .relative()
+            // Dropped files and dragged workspace paths attach to the cloud
+            // chat's own composer, like any conversation.
+            let composer = conversation.read(cx).composer.clone();
+            return self
+                .chat_dropzone("chat-dropzone", composer, cx)
+                .debug_selector(|| "chat-dropzone".into())
                 .flex_1()
                 .min_w_0()
                 .h_full()

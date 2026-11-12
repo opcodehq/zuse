@@ -2313,6 +2313,102 @@ mod tests {
             assert_eq!(shell.composer.read(cx).input.read(cx).text(), "");
         });
     }
+    #[gpui::test]
+    fn files_dropped_on_a_cloud_chat_attach_to_its_displayed_composer(cx: &mut TestAppContext) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _entered = runtime.enter();
+        let directory = tempfile::tempdir().unwrap();
+        cx.update(|cx| {
+            initialize(cx);
+            gpui_tokio::init_from_handle(cx, runtime.handle().clone());
+            settings::init(UiSettings::default(), directory.path(), cx);
+            crate::history::init(
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                cx,
+            );
+        });
+        let controller = crate::state::EngineHandle::from_test_client(zuse_rpc::memory_client(
+            std::sync::Arc::new(PendingController),
+        ));
+        let (host, cx) = cx.add_window_view(|_, cx| {
+            let shell = cx.new(|cx| {
+                let state = cx.new(|_| {
+                    let mut state = AppState::new();
+                    account(&mut state);
+                    state
+                });
+                let mut shell = Shell::new(state, boot(directory.path()), cx);
+                shell.open_cloud_conversation(
+                    CloudTarget {
+                        controller,
+                        subject: "owner".into(),
+                        organization: None,
+                        workspace: "task".into(),
+                        initial_session: "session".into(),
+                    },
+                    json!({"workspaceId":"task","initialSessionId":"session"}),
+                    json!({"firstMessage":"Accepted task","agent":"codex","model":"fixture"}),
+                    cx,
+                );
+                shell
+                    .cloud_conversation
+                    .as_ref()
+                    .unwrap()
+                    .update(cx, |conversation, _| conversation.authorized = true);
+                shell
+            });
+            ConversationHost {
+                shell,
+                _directory: directory,
+            }
+        });
+        let shell = host.read_with(cx, |host, _| host.shell.clone());
+        cx.update(|window, cx| window.draw(cx).clear());
+        let files = tempfile::tempdir().unwrap();
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::RgbImage::new(1, 1)
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        std::fs::write(files.path().join("shot.png"), png.into_inner()).unwrap();
+        let to = cx.debug_bounds("chat-dropzone").unwrap().center();
+        let paths = gpui::ExternalPaths(vec![files.path().join("shot.png")].into());
+        cx.simulate_event(gpui::FileDropEvent::Entered {
+            position: to,
+            paths,
+        });
+        cx.update(|window, cx| window.draw(cx).clear());
+        cx.simulate_event(gpui::FileDropEvent::Pending { position: to });
+        cx.update(|window, cx| window.draw(cx).clear());
+        cx.simulate_event(gpui::FileDropEvent::Submit { position: to });
+        cx.run_until_parked();
+        shell.read_with(cx, |shell, cx| {
+            let names = |composer: &Entity<Composer>| {
+                composer
+                    .read(cx)
+                    .staged()
+                    .iter()
+                    .map(|file| file.name.clone())
+                    .collect::<Vec<_>>()
+            };
+            let shown = names(&shell.conversation_composer(cx));
+            assert_eq!(
+                shown.len(),
+                1,
+                "the drop lands in the composer the cloud chat shows"
+            );
+            assert!(shown[0].ends_with(".png"), "{shown:?}");
+            assert!(
+                names(&shell.composer).is_empty(),
+                "not the hidden local composer"
+            );
+        });
+    }
     struct ProvisionalHistoryController {
         fresh_failure: Option<&'static str>,
         events: std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<Value>>>,
