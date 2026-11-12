@@ -124,7 +124,7 @@ impl PrWatchControl {
                 })
             })
             .unwrap_or_else(|| tr(cx, msg::native::pr_watch_auto_fix_help).to_string());
-        div()
+        crate::pull_request_card::retro_chip(&theme, cx)
             .id("composer-pr-auto-fix")
             .debug_selector(|| "composer-pr-auto-fix".into())
             .role(gpui::Role::Switch)
@@ -135,47 +135,31 @@ impl PrWatchControl {
             })
             .aria_label(tr(cx, msg::native::pr_watch_auto_fix))
             .tab_index(if ready { 0 } else { -1 })
-            .flex_none()
-            .h(px(24.0))
-            .px(px(8.0))
-            .flex()
-            .items_center()
-            .gap(px(5.0))
-            .rounded_full()
-            .border_1()
-            .border_color(if fixing {
-                gold.opacity(0.45)
-            } else {
-                theme.border
-            })
-            .bg(if fixing {
-                gold.opacity(0.10)
-            } else {
-                theme.surface_card
-            })
-            .text_size(px(12.0))
-            .text_color(if fixing { gold } else { theme.text_muted })
+            .text_color(if fixing { theme.text } else { theme.text_muted })
             .when(!ready, |el| el.opacity(0.5))
             .tooltip(crate::settings::widgets::text_tooltip(SharedString::from(
                 tooltip,
             )))
+            // The light: the golden pixel chase while fixing, a lit golden
+            // pixel when on, an unlit one when off.
             .child(if repairing {
                 crate::loaders::retro_loader(
                     format!("pr-auto-fix-working-{}", cx.entity_id()),
-                    13.0,
+                    12.0,
                     theme.loader_glyph(),
                 )
             } else {
-                crate::icons::icon(crate::icons::PR_REPAIR)
-                    .size(px(13.0))
-                    .flex_none()
-                    .text_color(if fixing { gold } else { theme.text_muted })
-                    .into_any_element()
+                crate::pull_request_card::pixel_light(if fixing {
+                    gold
+                } else {
+                    theme.text_muted.opacity(0.35)
+                })
+                .into_any_element()
             })
             .child(label)
             .when(ready, |el| {
                 el.cursor_pointer()
-                    .hover(|style| style.bg(theme.element_hover))
+                    .hover(|style| style.bg(theme.element_active))
                     .on_click(cx.listener(move |control, _, _, cx| {
                         cx.stop_propagation();
                         control.set(!fixing, !fixing, exhausted && !fixing, cx);

@@ -1941,6 +1941,27 @@ impl gpui::Render for PullRequestCard {
 // The composer's chips
 // ---------------------------------------------------------------------------
 
+/// A flat, square-cornered monospace badge for the retro composer row: a
+/// faint fill, no outline.
+pub(crate) fn retro_chip(theme: &Theme, cx: &App) -> gpui::Div {
+    div()
+        .flex_none()
+        .h(px(22.0))
+        .px(px(8.0))
+        .flex()
+        .items_center()
+        .gap(px(6.0))
+        .rounded(px(3.0))
+        .bg(theme.element_hover)
+        .font_family(crate::typography::code_effective_family_name(cx))
+        .text_size(px(11.5))
+}
+
+/// A square status light, one "pixel" of the retro palette.
+pub(crate) fn pixel_light(color: gpui::Hsla) -> gpui::Div {
+    div().flex_none().size(px(6.0)).bg(color)
+}
+
 /// The selected chat's open pull request above the composer: its chip on
 /// the left ("#128 · 3 conflicts" opens the PR) and `auto_fix`, the PR's
 /// auto-fix button, on the right. `None` when the chat has no PR.
@@ -1972,26 +1993,15 @@ pub fn composer_chips(
     let url = summary.url.clone();
     let device = (state.local_device_id.as_deref() != Some(chat.device_id.as_str()))
         .then(|| chat.device_id.clone());
-    let chip = div()
+    let chip = retro_chip(theme, cx)
         .id("composer-pr-chip")
         .debug_selector(|| "composer-pr-chip".to_owned())
-        .flex_none()
-        .h(px(24.0))
-        .px(px(9.0))
-        .flex()
-        .items_center()
-        .gap(px(6.0))
-        .rounded_full()
-        .border_1()
-        .border_color(theme.border)
-        .bg(theme.surface_card)
-        .text_size(px(12.0))
         .cursor_pointer()
-        .hover(|style| style.bg(theme.element_hover))
+        .hover(|style| style.bg(theme.element_active))
         .on_click(move |_, window, cx| {
             crate::pull_request_detail::open_on_device(&url, device.clone(), window, cx)
         })
-        .child(div().size(px(6.0)).rounded_full().bg(tone))
+        .child(pixel_light(tone))
         .child(
             div()
                 .text_color(theme.text)
