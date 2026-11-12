@@ -1,6 +1,7 @@
 //! A computer whose guest runtime predates direct uploads or per-message
-//! access is refused those messages at admission, before anything reaches its
-//! mailbox; plain messages keep working on it.
+//! access, and cannot update in place, is refused those messages at
+//! admission, before anything reaches its mailbox; plain messages keep
+//! working on it.
 use super::*;
 use zuse_protocol::{cloud_task_commands as w, session_commands::SessionCommandPayload};
 
@@ -44,7 +45,7 @@ pub(super) async fn exercise(
         .await;
 }
 
-async fn computer(
+pub(super) async fn computer(
     control: &std::sync::Arc<RuntimeControl>,
     pool: &PgPool,
     access: &crate::access::Access,
@@ -83,7 +84,7 @@ async fn computer(
         .unwrap();
 }
 
-fn run(id: &str, cid: &str, files: &[&str], full_access: bool) -> w::Request {
+pub(super) fn run(id: &str, cid: &str, files: &[&str], full_access: bool) -> w::Request {
     let mid = format!("{cid}-message");
     let (sandbox, auto) = if full_access {
         ("danger-full-access", true)
@@ -104,7 +105,7 @@ fn run(id: &str, cid: &str, files: &[&str], full_access: bool) -> w::Request {
     }
 }
 
-async fn enqueued(pool: &PgPool, id: &str) -> i64 {
+pub(super) async fn enqueued(pool: &PgPool, id: &str) -> i64 {
     sqlx::query_scalar("SELECT count(*) FROM zuse_rust_mailbox_commands WHERE workspace_id=$1")
         .bind(id)
         .fetch_one(pool)
@@ -112,7 +113,7 @@ async fn enqueued(pool: &PgPool, id: &str) -> i64 {
         .unwrap()
 }
 
-async fn admitted(pool: &PgPool, id: &str, cid: &str) -> bool {
+pub(super) async fn admitted(pool: &PgPool, id: &str, cid: &str) -> bool {
     sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM zuse_rust_task_command_actions WHERE workspace_id=$1 AND command_id=$2)")
         .bind(id)
         .bind(cid)
@@ -138,7 +139,12 @@ async fn old_computer_refuses_files_and_access_changes(
             .task_command_submit(id, access, run(id, &cid, &files, full_access), now)
             .await
             .unwrap_err();
-        assert_eq!(refused.code, w::RUNTIME_OUTDATED, "{cid}");
+        // Without in-place update support the app offers "Update computer".
+        assert_eq!(
+            refused.code,
+            zuse_protocol::cloud_runtime_updates::RUNTIME_UPDATE_UNAVAILABLE,
+            "{cid}"
+        );
         assert_eq!(refused.status, axum::http::StatusCode::CONFLICT, "{cid}");
         assert!(!admitted(pool, id, &cid).await, "{cid} left no admission");
         assert_eq!(

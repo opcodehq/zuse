@@ -400,11 +400,14 @@ impl RuntimeControl {
         if let SessionCommandPayload::Run { request, .. } = payload {
             // An older guest runtime fails on a run carrying computer file
             // paths, leaving the command's outcome unknown and the chat
-            // locked; refuse it here, before anything is enqueued.
+            // locked; refuse it here, before anything is enqueued, and
+            // update the runtime in place when a release can.
             if !request.attachments.is_empty()
                 && !crate::runtime::runtime_capable(row, wire::DIRECT_UPLOADS_CAPABILITY)
             {
-                return Err(error(wire::RUNTIME_OUTDATED));
+                return Err(self
+                    .demand_runtime_update(tx, row, wire::DIRECT_UPLOADS_CAPABILITY, now)
+                    .await);
             }
             let harness = request
                 .harness
@@ -452,7 +455,9 @@ impl RuntimeControl {
                 // An unchanged mode is admitted as before, so plain messages
                 // keep working on computers that predate per-message access.
                 if !crate::runtime::runtime_capable(row, wire::MESSAGE_ACCESS_MODE_CAPABILITY) {
-                    return Err(error(wire::RUNTIME_OUTDATED));
+                    return Err(self
+                        .demand_runtime_update(tx, row, wire::MESSAGE_ACCESS_MODE_CAPABILITY, now)
+                        .await);
                 }
                 self.set_task_runtime_mode_tx(tx, row, &policy, revision, mode, now)
                     .await?;

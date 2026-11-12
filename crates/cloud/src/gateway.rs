@@ -134,6 +134,31 @@ impl LeaseControl for RuntimeControl {
 }
 
 impl Hub {
+    /// Ask the runtime attached to this process's room for `workspace` to
+    /// poll for an update now. Best effort: false when no runtime is attached
+    /// here (it may be on another gateway process, or asleep); it then learns
+    /// the urgency on its next poll. Callers must only nudge computers whose
+    /// stored capabilities include the update capability: older runtimes treat
+    /// an unknown control type as an error and reconnect.
+    pub fn nudge_runtime_update(&self, workspace: &str) -> bool {
+        let entry = lock(&self.rooms).get(workspace).cloned();
+        let Some(room) =
+            entry.and_then(|entry| entry.try_lock().ok().and_then(|slot| slot.upgrade()))
+        else {
+            return false;
+        };
+        let state = lock(&room.state);
+        if state.closed {
+            return false;
+        }
+        match state.runtime.as_ref().and_then(|id| state.peers.get(id)) {
+            Some(runtime) => room.control(
+                runtime,
+                json!({"type": zuse_protocol::cloud_runtime_updates::POLL_NOW_METHOD}),
+            ),
+            None => false,
+        }
+    }
     pub fn permit(&self) -> Result<OwnedSemaphorePermit, ApiError> {
         self.sockets
             .clone()

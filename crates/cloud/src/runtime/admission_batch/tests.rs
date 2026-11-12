@@ -61,6 +61,7 @@ async fn v2_initial_write_is_atomic_under_the_actual_restricted_role() {
         include_str!("../../../migrations/0023_managed_base_admission_lock.sql"),
         include_str!("../../../migrations/0025_admission_read_batch.sql"),
         include_str!("../../../migrations/0026_task_command_admission.sql"),
+        include_str!("../../../migrations/0034_runtime_releases.sql"),
     ] {
         sqlx::raw_sql(migration).execute(&pool).await.unwrap();
     }
@@ -332,6 +333,39 @@ async fn v2_initial_write_is_atomic_under_the_actual_restricted_role() {
         now,
     )
     .await;
+    let updating = std::sync::Arc::new(
+        RuntimeControl::from_pool(
+            application.clone(),
+            crate::crypto::MasterKey::parse(
+                &base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([48u8; 32]),
+            )
+            .unwrap(),
+            crate::tickets::TicketSigner::from_jwk(&jwk.to_string(), "https://api.example.test")
+                .unwrap(),
+        )
+        .with_runtime_releases(super::super::runtime_updates::RuntimeReleaseConfig {
+            channel: crate::runtime_releases::Channel::Stable,
+            links: Some(std::sync::Arc::new(
+                crate::objects::ArtifactLinks::new(
+                    "https://account.r2.example.test/",
+                    "zuse-runtime",
+                    "access",
+                    "fixture-secret",
+                )
+                .unwrap(),
+            )),
+        }),
+    );
+    runtime_updates::exercise(
+        &updating,
+        &pool,
+        &application,
+        &access,
+        &master,
+        |id| plan(id, false),
+        now,
+    )
+    .await;
     // A partially installed optional schema must fail before acknowledging
     // any new queue/control mutation, even when all table grants are present.
     sqlx::query("ALTER TABLE zuse_rust_task_command_execution RENAME COLUMN priority TO incomplete_priority").execute(&pool).await.unwrap();
@@ -386,3 +420,5 @@ mod interrupts;
 mod agent_switch;
 
 mod runtime_outdated;
+
+mod runtime_updates;
