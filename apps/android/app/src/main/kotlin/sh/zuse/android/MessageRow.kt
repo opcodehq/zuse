@@ -241,10 +241,10 @@ fun MessageRow(
         } else if (user) {
             BoxWithConstraints(Modifier.fillMaxWidth()) {
                 Surface(
-                    shape = RoundedCornerShape(16.dp),
-                    color = brandFill,
-                    contentColor = androidx.compose.ui.graphics.Color.White,
-                    modifier = Modifier.align(Alignment.TopEnd).widthIn(max = maxWidth * .88f),
+                    shape = RoundedCornerShape(16.dp, 4.dp, 16.dp, 16.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    contentColor = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.align(Alignment.TopEnd).widthIn(max = maxWidth * .85f),
                 ) {
                     SelectionContainer {
                         Text(

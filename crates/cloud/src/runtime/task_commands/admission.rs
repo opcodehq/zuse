@@ -398,6 +398,14 @@ impl RuntimeControl {
         let (policy, revision) = self.task_policy_tx(tx, row).await?;
         let run = matches!(payload, SessionCommandPayload::Run { .. });
         if let SessionCommandPayload::Run { request, .. } = payload {
+            // An older guest runtime fails on a run carrying computer file
+            // paths, leaving the command's outcome unknown and the chat
+            // locked; refuse it here, before anything is enqueued.
+            if !request.attachments.is_empty()
+                && !crate::runtime::runtime_capable(row, wire::DIRECT_UPLOADS_CAPABILITY)
+            {
+                return Err(error(wire::RUNTIME_OUTDATED));
+            }
             let harness = request
                 .harness
                 .as_ref()
@@ -441,6 +449,11 @@ impl RuntimeControl {
                 // becomes the task's policy from this message on.
                 let mode = requested_runtime_mode(request.sandbox, request.auto_approve)
                     .ok_or_else(|| error("cloud_task_permission_policy_invalid"))?;
+                // An unchanged mode is admitted as before, so plain messages
+                // keep working on computers that predate per-message access.
+                if !crate::runtime::runtime_capable(row, wire::MESSAGE_ACCESS_MODE_CAPABILITY) {
+                    return Err(error(wire::RUNTIME_OUTDATED));
+                }
                 self.set_task_runtime_mode_tx(tx, row, &policy, revision, mode, now)
                     .await?;
             }

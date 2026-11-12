@@ -18,7 +18,9 @@ pub(super) fn relative(value: &str) -> bool {
 }
 pub(super) fn input(input: &wire::Input) -> Result<(), ApiError> {
     if input.text.len() > wire::MAX_TEXT_BYTES
-        || input.attachments.len() > zuse_protocol::cloud_assets::MAX_ASSETS
+        || input.attachments.len() + input.computer_files.len()
+            > zuse_protocol::cloud_assets::MAX_ASSETS
+        || !computer_files(&input.computer_files)
         || input.file_refs.len() > 64
         || input.skill_refs.len() > 64
         || input.annotations.len() > 64
@@ -30,6 +32,7 @@ pub(super) fn input(input: &wire::Input) -> Result<(), ApiError> {
         || input.annotations.iter().any(|v| v.len() > 16384)
         || (input.text.trim().is_empty()
             && input.attachments.is_empty()
+            && input.computer_files.is_empty()
             && input.file_refs.is_empty()
             && input.skill_refs.is_empty())
     {
@@ -164,8 +167,9 @@ pub(super) fn request(request: &wire::Request) -> Result<(), ApiError> {
     Ok(())
 }
 
-/// Files a run carries are paths already uploaded to the computer (the
-/// server never sees their bytes); the computer checks they are its uploads.
+/// Files a run or queued message carries are paths already uploaded to the
+/// computer (the server never sees their bytes); the computer checks they are
+/// its uploads.
 fn computer_files(paths: &[String]) -> bool {
     paths.len() <= zuse_protocol::cloud_assets::MAX_ASSETS
         && paths.iter().all(|path| {
@@ -189,5 +193,48 @@ mod computer_file_tests {
             "/home/zuse/../../etc/passwd".into()
         ]));
         assert!(!super::computer_files(&vec!["/u/a".to_owned(); 9]));
+    }
+
+    fn queued(attachments: usize, computer_files: Vec<String>) -> super::wire::Input {
+        let asset = zuse_protocol::cloud_assets::Asset {
+            asset_id: "asset-1".into(),
+            mime_type: "image/png".into(),
+            original_name: "shot.png".into(),
+            size_bytes: 3,
+            sha256: "hash".into(),
+        };
+        super::wire::Input {
+            run_selection: None,
+            text: String::new(),
+            attachments: vec![asset; attachments],
+            computer_files,
+            file_refs: vec![],
+            skill_refs: vec![],
+            annotations: vec![],
+            as_goal: false,
+        }
+    }
+
+    #[test]
+    fn a_queued_message_may_carry_only_files_already_on_the_computer() {
+        let path = "/home/zuse/.zuse-data/uploads/a/shot.png".to_owned();
+        // Files alone are a message, like a run with only files.
+        assert!(super::input(&queued(0, vec![path.clone()])).is_ok());
+        assert!(super::input(&queued(0, vec!["shot.png".into()])).is_err());
+        assert!(super::input(&queued(0, vec!["/a/../../etc/passwd".into()])).is_err());
+        // Computer files and server-bound files share the per-message limit.
+        assert!(super::input(&queued(4, vec![path.clone(); 4])).is_ok());
+        assert!(super::input(&queued(4, vec![path; 5])).is_err());
+    }
+
+    #[test]
+    fn computer_files_stay_out_of_queued_input_that_has_none() {
+        let encoded = serde_json::to_value(queued(0, vec![])).unwrap();
+        assert!(encoded.get("computerFiles").is_none());
+        let decoded: super::wire::Input = serde_json::from_value(
+            serde_json::json!({"text":"later","computerFiles":["/u/a.png"]}),
+        )
+        .unwrap();
+        assert_eq!(decoded.computer_files, vec!["/u/a.png".to_owned()]);
     }
 }

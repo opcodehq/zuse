@@ -187,7 +187,11 @@ impl Composer {
             );
             self.cloud.pending_native_text = Some(text.clone());
             self.cloud.native_staged = self.staged().to_vec();
-            if !queue {
+            if queue {
+                // A queued message leaves the draft at once; its row appears
+                // in the queue once saved, and a failure returns it.
+                self.clear_sent_draft(cx);
+            } else {
                 self.show_native_send(&task.target.initial_session.clone(), &message, &text, cx);
             }
         } else if let Some(request) = self.cloud.pending_native.clone()
@@ -200,6 +204,14 @@ impl Composer {
             // Retry: the same message identity rejoins the conversation now.
             let session = task.target.initial_session.clone();
             self.show_native_send(&session, message, &text, cx);
+        } else if self
+            .cloud
+            .pending_native
+            .as_ref()
+            .is_some_and(|request| request["action"]["type"] == "queue")
+        {
+            // Retry of a queued message: it leaves the draft again.
+            self.clear_sent_draft(cx);
         }
         self.dispatch_cloud_task(cx);
         true
@@ -240,6 +252,10 @@ impl Composer {
             );
             cx.notify();
         });
+        self.clear_sent_draft(cx);
+    }
+    /// The sent text and files leave the draft; delivery continues behind it.
+    fn clear_sent_draft(&mut self, cx: &mut Context<Self>) {
         self.input.update(cx, |input, cx| input.set_text("", cx));
         if let Some(files) = self.attachments.get_mut(&self.current_key) {
             let sent = &self.cloud.native_staged;
@@ -248,9 +264,10 @@ impl Composer {
         self.sync_attachment_chips(cx);
         cx.notify();
     }
-    /// Undo [`Self::show_native_send`] after a failed send: the message leaves
-    /// the conversation and its text and files return to an empty draft, so
-    /// Retry re-sends the same message identity.
+    /// Undo [`Self::show_native_send`] (or a queued message leaving the
+    /// draft) after a failed send: the message leaves the conversation and its
+    /// text and files return to an empty draft, so Retry re-sends the same
+    /// message identity.
     fn return_native_send(&mut self, cx: &mut Context<Self>) {
         let Some(request) = self.cloud.pending_native.clone() else {
             return;
@@ -261,13 +278,15 @@ impl Composer {
         ) else {
             return;
         };
-        if request["action"]["type"] != "submit" {
+        let kind = request["action"]["type"].as_str();
+        if kind == Some("submit") {
+            let session = task.target.initial_session.clone();
+            let message = message.to_owned();
+            self.state
+                .update(cx, |state, _| state.remove_echo(&session, &message));
+        } else if kind != Some("queue") {
             return;
         }
-        let session = task.target.initial_session.clone();
-        let message = message.to_owned();
-        self.state
-            .update(cx, |state, _| state.remove_echo(&session, &message));
         if let Some(text) = self.cloud.pending_native_text.clone() {
             if self.input.read(cx).text().is_empty() {
                 self.input.update(cx, |input, cx| input.set_text(text, cx));
@@ -317,12 +336,10 @@ impl Composer {
         let staged = self.cloud.native_staged.clone();
         self.failure = None;
         self.cloud.task = Some(cx.spawn(async move |this, cx| {
-            let field=if request["action"]["type"]=="queue" {"input"} else {""};
-            let assets=if field=="input" {&request["action"]["input"]["attachments"]} else {&request["action"]["attachments"]};
-            let direct=&request["action"]["payload"]["request"]["attachments"];
-            if !staged.is_empty() && field.is_empty() && direct.as_array().map_or(true,|paths|paths.len()!=staged.len()) {
-                // A run's files go straight to its computer, never to server
-                // storage: wake it, wait for its connection, then upload.
+            if !staged.is_empty() && !computer_files_delivered(&request, staged.len()) {
+                // A message's files go straight to its computer, never to server
+                // storage, whether it runs now or waits in the queue: wake it,
+                // wait for its connection, then upload.
                 let _=this.update(cx,|_,cx|cx.emit(ComposerEvent::CloudWakeRequested));
                 let started=std::time::Instant::now();
                 let engine=loop {
@@ -349,19 +366,8 @@ impl Composer {
                     Ok(paths)=>paths,
                     Err(error)=>{let _=this.update(cx,|this,cx|{this.return_native_send(cx);this.cloud_failure(format!("The files couldn't reach the computer: {error}"),cx)});return;}
                 };
-                request["action"]["payload"]["request"]["attachments"]=json!(paths);
-                let _=this.update(cx,|this,_|this.cloud.pending_native=Some(request.clone()));
-            } else if !staged.is_empty() && field=="input" && assets.as_array().map_or(true,|assets|assets.len()!=staged.len()) {
-                // Only queued messages still stage files on the server; a run's
-                // files (including a retry's) never take this path.
-                // All files upload at once; their order is kept.
-                let uploads=futures::future::try_join_all(staged.iter().map(|attachment|upload_native_asset(&target,attachment))).await;
-                let assets=match uploads {
-                    Ok(assets)=>assets,
-                    Err(error)=>{let _=this.update(cx,|this,cx|{this.return_native_send(cx);this.cloud_failure(error,cx)});return;}
-                };
-                if field=="input" {request["action"]["input"]["attachments"]=json!(assets);} else {request["action"]["attachments"]=json!(assets);}
-                // Retain the exact asset receipts and command before dispatch.
+                set_computer_files(&mut request, paths);
+                // Retain the uploaded paths so a retry doesn't upload again.
                 let _=this.update(cx,|this,_|this.cloud.pending_native=Some(request.clone()));
             }
             let result = target.controller.client().call_scoped(methods::CLOUD_TASK_COMMAND,
@@ -381,8 +387,7 @@ impl Composer {
                         if let Some(files)=this.attachments.get_mut(&this.current_key){files.retain(|file|!sent.iter().any(|sent|sent.id==file.id));}
                         this.sync_attachment_chips(cx);
                         if let Some(text)=this.cloud.pending_native_text.take() {
-                            // A sent message already cleared its draft; anything there now is newer.
-                            if request["action"]["type"]!="submit" && this.input.read(cx).text()==text {this.input.update(cx, |input,cx| input.set_text("",cx));}
+                            // A sent or queued message already cleared its draft; anything there now is newer.
                             if request["action"]["type"]=="submit" {
                                 if let Some(message)=request["action"]["messageId"].as_str() {
                                     let message=message.to_owned();let session=target.initial_session.clone();
@@ -1145,54 +1150,23 @@ impl Composer {
     }
 }
 
-async fn upload_native_asset(
-    target: &crate::state::CloudTarget,
-    attachment: &StagedAttachment,
-) -> Result<Value, String> {
-    use base64::Engine as _;
-    use sha2::Digest as _;
-    if attachment.bytes().is_empty()
-        || attachment.bytes().len() > zuse_protocol::cloud_assets::MAX_BYTES
-    {
-        return Err("Cloud attachments must be non-empty and at most 20 MB.".into());
+/// Whether a message's files already reached its computer: a run carries
+/// their paths in its request, a queued message in its input.
+fn computer_files_delivered(request: &Value, files: usize) -> bool {
+    let paths = if request["action"]["type"] == "queue" {
+        &request["action"]["input"]["computerFiles"]
+    } else {
+        &request["action"]["payload"]["request"]["attachments"]
+    };
+    paths.as_array().is_some_and(|paths| paths.len() == files)
+}
+/// Record where a message's files landed on its computer.
+fn set_computer_files(request: &mut Value, paths: Vec<String>) {
+    if request["action"]["type"] == "queue" {
+        request["action"]["input"]["computerFiles"] = json!(paths);
+    } else {
+        request["action"]["payload"]["request"]["attachments"] = json!(paths);
     }
-    // Chunks carry their sequence, so they upload side by side; a screenshot
-    // sent one chunk at a time took 15 s.
-    use futures::{StreamExt as _, TryStreamExt as _};
-    futures::stream::iter(
-        attachment
-            .bytes()
-            .chunks(zuse_protocol::cloud_assets::CHUNK_BYTES)
-            .enumerate(),
-    )
-    .map(|(seq, bytes)| async move {
-        target.controller.client().call_scoped(methods::CLOUD_TASK_ASSET,json!({
-            "workspaceId":target.workspace,"expectedAccountId":target.subject,"expectedOrganizationId":target.organization,
-            "method":methods::UPLOAD_CHUNK,"params":{"uploadId":attachment.id,"seq":seq,"data":base64::engine::general_purpose::STANDARD.encode(bytes)}
-        })).await.map_err(|error|error.to_string())
-    })
-    .buffer_unordered(4)
-    .try_collect::<Vec<_>>()
-    .await?;
-    let value=target.controller.client().call_scoped(methods::CLOUD_TASK_ASSET,json!({
-        "workspaceId":target.workspace,"expectedAccountId":target.subject,"expectedOrganizationId":target.organization,
-        "method":methods::UPLOAD_COMMIT,"params":{"uploadId":attachment.id,"fileName":attachment.name}
-    })).await.map_err(|error|error.to_string())?;
-    if value["accountId"] != target.subject
-        || value["organizationId"].as_str() != target.organization.as_deref()
-    {
-        return Err("Cloud attachment access changed.".into());
-    }
-    let asset = &value["data"]["asset"];
-    let hash = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .encode(sha2::Sha256::digest(attachment.bytes()));
-    if asset["sizeBytes"].as_u64() != Some(attachment.bytes().len() as u64)
-        || asset["sha256"] != hash
-        || asset["originalName"] != attachment.name
-    {
-        return Err("The cloud attachment receipt did not match its file.".into());
-    }
-    Ok(asset.clone())
 }
 
 #[cfg(test)]
@@ -1337,9 +1311,8 @@ mod cached_tests {
                 c.input.update(cx,|input,cx|input.set_text("Keep this queued draft",cx));
                 c.attachments.insert(c.current_key.clone(),vec![StagedAttachment::from_file("notes.txt",b"retained bytes".to_vec())]);
                 assert!(c.send_cloud_task("Keep this queued draft".into(),true,cx));
-                assert_eq!(c.input.read(cx).text(),"Keep this queued draft");assert_eq!(c.staged().len(),1);
-                if version==0 {assert!(c.cloud.pending_native.is_none());assert!(c.failure.as_deref().unwrap().contains("draft is preserved"));}
-                else {let request=c.cloud.pending_native.as_ref().unwrap();assert_eq!(request["action"]["input"]["runSelection"],json!({"harness":"grok","model":"selected-grok","reasoning":"high","modelOptions":{"speed":"fast"},"sandbox":"workspace-write"}));assert_eq!(request["action"]["input"]["text"],"Keep this queued draft");assert_eq!(c.cloud.native_staged.len(),1);c.cloud.task=None;}
+                if version==0 {assert_eq!(c.input.read(cx).text(),"Keep this queued draft");assert_eq!(c.staged().len(),1);assert!(c.cloud.pending_native.is_none());assert!(c.failure.as_deref().unwrap().contains("draft is preserved"));}
+                else {assert_eq!(c.input.read(cx).text(),"","a queued message leaves the draft at once");assert!(c.staged().is_empty());let request=c.cloud.pending_native.as_ref().unwrap();assert_eq!(request["action"]["input"]["runSelection"],json!({"harness":"grok","model":"selected-grok","reasoning":"high","modelOptions":{"speed":"fast"},"sandbox":"workspace-write"}));assert_eq!(request["action"]["input"]["text"],"Keep this queued draft");assert_eq!(c.cloud.native_staged.len(),1);c.cloud.task=None;}
             });
             drop(receive);
         }
@@ -1715,5 +1688,111 @@ mod cached_tests {
             &*actions.borrow(),
             &[("Continue the retained conversation".to_owned(), true)]
         );
+    }
+
+    #[test]
+    fn a_messages_computer_files_go_in_its_run_or_its_queued_input() {
+        let mut run = json!({"action":{"type":"submit","payload":{"request":{"attachments":[]}}}});
+        assert!(!computer_files_delivered(&run, 1));
+        set_computer_files(&mut run, vec!["/u/a.png".into()]);
+        assert_eq!(
+            run["action"]["payload"]["request"]["attachments"],
+            json!(["/u/a.png"])
+        );
+        assert!(computer_files_delivered(&run, 1));
+        let mut queued = json!({"action":{"type":"queue","input":{"text":"later"}}});
+        assert!(!computer_files_delivered(&queued, 1));
+        set_computer_files(&mut queued, vec!["/u/a.png".into(), "/u/b.txt".into()]);
+        assert_eq!(
+            queued["action"]["input"]["computerFiles"],
+            json!(["/u/a.png", "/u/b.txt"])
+        );
+        assert!(queued["action"]["input"].get("attachments").is_none());
+        assert!(computer_files_delivered(&queued, 2));
+    }
+    #[gpui::test]
+    fn a_queued_message_with_files_wakes_the_computer_instead_of_uploading_to_the_server(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _entered = runtime.enter();
+        let (send, mut receive) = tokio::sync::mpsc::channel(8);
+        let (_replies, replies) = tokio::sync::mpsc::channel(1);
+        let controller =
+            crate::state::EngineHandle::from_test_client(zuse_rpc::RpcClient::new(send, replies));
+        let state = cx.new(|_| {
+            let mut state = crate::state::AppState::new();
+            state.apply_cloud_account(json!({"user":{"id":"owner"},"orgId":null}));
+            state.selected_chat = Some("session".into());
+            state
+        });
+        let composer = cx.new(|cx| Composer::new(state, cx));
+        let wakes = std::rc::Rc::new(std::cell::Cell::new(0));
+        let woke = wakes.clone();
+        let _subscription = cx.update(|cx| {
+            cx.subscribe(&composer, move |_, event, _| {
+                if matches!(event, ComposerEvent::CloudWakeRequested) {
+                    woke.set(woke.get() + 1);
+                }
+            })
+        });
+        composer.update(cx, |c, cx| {
+            let target = crate::state::CloudTarget {
+                controller,
+                subject: "owner".into(),
+                organization: None,
+                workspace: "task".into(),
+                initial_session: "session".into(),
+            };
+            c.set_cloud_task(
+                target,
+                json!({"agent":"codex","model":"gpt-6.1-sol","sandbox":"workspace-write",
+                    "queueRunSelectionVersion":zuse_protocol::cloud_task_commands::QUEUE_RUN_SELECTION_VERSION}),
+                cx,
+            );
+            c.set_cloud_task_sleeping(true);
+            c.input
+                .update(cx, |input, cx| input.set_text("Use this after the turn", cx));
+            c.attachments.insert(
+                c.current_key.clone(),
+                vec![StagedAttachment::from_file("shot.png", b"png bytes".to_vec())],
+            );
+            assert!(c.send_cloud_task("Use this after the turn".into(), true, cx));
+            assert_eq!(c.input.read(cx).text(), "", "the draft clears at once");
+            assert!(c.staged().is_empty());
+            let request = c.cloud.pending_native.as_ref().unwrap();
+            assert_eq!(request["action"]["type"], "queue");
+            assert_eq!(request["wake"], "preserve-sleep");
+        });
+        // The send asks for the computer and waits for its connection.
+        cx.run_until_parked();
+        assert_eq!(wakes.get(), 1);
+        assert!(
+            receive.try_recv().is_err(),
+            "nothing goes to server asset storage while the computer wakes"
+        );
+        composer.update(cx, |c, cx| {
+            let request = c.cloud.pending_native.as_ref().unwrap();
+            assert!(request["action"]["input"].get("attachments").is_none());
+            assert!(request["action"]["input"].get("computerFiles").is_none());
+            // The computer never connects: the message and its file return.
+            c.cloud.task = None;
+            c.return_native_send(cx);
+            assert_eq!(c.input.read(cx).text(), "Use this after the turn");
+            assert_eq!(c.staged().len(), 1);
+            assert!(
+                c.cloud.pending_native.is_some(),
+                "Retry keeps the same identity"
+            );
+            // Retry leaves the draft again and keeps the same queued message.
+            let queue_id = c.cloud.pending_native.as_ref().unwrap()["action"]["queueId"].clone();
+            assert!(c.send_cloud_task("Use this after the turn".into(), true, cx));
+            assert_eq!(c.input.read(cx).text(), "");
+            assert_eq!(
+                c.cloud.pending_native.as_ref().unwrap()["action"]["queueId"],
+                queue_id
+            );
+            c.cloud.task = None;
+        });
     }
 }
