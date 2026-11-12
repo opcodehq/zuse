@@ -190,6 +190,16 @@ impl Composer {
             if !queue {
                 self.show_native_send(&task.target.initial_session.clone(), &message, &text, cx);
             }
+        } else if let Some(request) = self.cloud.pending_native.clone()
+            && request["action"]["type"] == "submit"
+            && let (Some(message), Some(text)) = (
+                request["action"]["messageId"].as_str(),
+                self.cloud.pending_native_text.clone(),
+            )
+        {
+            // Retry: the same message identity rejoins the conversation now.
+            let session = task.target.initial_session.clone();
+            self.show_native_send(&session, message, &text, cx);
         }
         self.dispatch_cloud_task(cx);
         true
@@ -330,7 +340,8 @@ impl Composer {
                         if let Some(files)=this.attachments.get_mut(&this.current_key){files.retain(|file|!sent.iter().any(|sent|sent.id==file.id));}
                         this.sync_attachment_chips(cx);
                         if let Some(text)=this.cloud.pending_native_text.take() {
-                            if this.input.read(cx).text()==text {this.input.update(cx, |input,cx| input.set_text("",cx));}
+                            // A sent message already cleared its draft; anything there now is newer.
+                            if request["action"]["type"]!="submit" && this.input.read(cx).text()==text {this.input.update(cx, |input,cx| input.set_text("",cx));}
                             if request["action"]["type"]=="submit" {
                                 if let Some(message)=request["action"]["messageId"].as_str() {
                                     let message=message.to_owned();let session=target.initial_session.clone();
@@ -352,6 +363,17 @@ impl Composer {
                     Ok(_) => {
                         this.return_native_send(cx);
                         this.failure = Some("Message admission was not verified. Retry the original message to check its saved identity.".into());
+                    }
+                    Err(zuse_rpc::RpcError::Capability(code)) if code.starts_with(zuse_protocol::cloud_task_commands::TASK_REJECTED_PREFIX) => {
+                        // Refused outright (model, access, attachment): nothing was
+                        // admitted, so the next Send builds a new message with the
+                        // corrected choices instead of retrying this one.
+                        this.return_native_send(cx);
+                        this.cloud.pending_native = None;
+                        this.cloud.pending_native_text = None;
+                        this.cloud.native_staged.clear();
+                        let message = code.trim_start_matches(zuse_protocol::cloud_task_commands::TASK_REJECTED_PREFIX).to_owned();
+                        this.failure = Some(format!("Couldn't send: {message}").into());
                     }
                     Err(error) => {
                         this.return_native_send(cx);

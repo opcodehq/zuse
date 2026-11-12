@@ -650,25 +650,45 @@ impl RuntimeControl {
     ) -> Result<(), ApiError> {
         let result = self.lifecycle_step(provider, job, now).await;
         if let Err(error) = &result {
-            // A computer its provider no longer has will not come back; after
-            // a few confirmations stop retrying, so the user sees why instead
-            // of an endless "Starting computer".
-            if error.code == MACHINE_MISSING && job.attempts >= MISSING_CONFIRMATIONS {
+            // A computer its provider no longer has will not come back. Count
+            // consecutive "missing" answers (claims and other outcomes don't
+            // count) and stop after a few, leaving the workspace settled so
+            // the user can recreate it instead of watching "Starting computer".
+            let missing = if error.code == MACHINE_MISSING {
+                sqlx::query_scalar::<_, i32>("UPDATE zuse_rust_jobs SET payload=jsonb_set(payload,'{missingObservations}',to_jsonb(COALESCE((payload->>'missingObservations')::int,0)+1)) WHERE job_id=$1 AND lease_token=$2 AND state='running' RETURNING (payload->>'missingObservations')::int")
+                    .bind(&job.id).bind(&job.lease_token).fetch_optional(&self.pool).await?.unwrap_or(0)
+            } else {
+                self.clear_missing_observations(job).await?;
+                0
+            };
+            if missing >= MISSING_CONFIRMATIONS {
                 sqlx::query("UPDATE zuse_rust_jobs SET state='failed',last_error_code=$3,lease_token=NULL,lease_expires_at=NULL,updated_at=$4 WHERE job_id=$1 AND lease_token=$2 AND state='running'")
                     .bind(&job.id).bind(&job.lease_token).bind(error.code).bind(clock_ms()).execute(&self.pool).await?;
-                tracing::warn!(workspace = %job.resource_id, attempts = job.attempts,
+                sqlx::query("UPDATE api_cloud_workspaces SET state='paused',desired_state='paused',runtime_state='offline',status_code=$3,request_config=jsonb_set(request_config,'{rustLifecycleOperation,phase}','\"paused\"'),revision=revision+1,updated_at=GREATEST(updated_at+1,$4) WHERE workspace_id=$1 AND request_config->'rustLifecycleOperation'->>'id'=$2 AND desired_state<>'deleted' AND state NOT IN ('deleting','deleted')")
+                    .bind(&job.resource_id).bind(job.payload["operationId"].as_str()).bind(error.code).bind(clock_ms()).execute(&self.pool).await?;
+                tracing::warn!(workspace = %job.resource_id, missing,
                     "Retained computer missing at its provider; lifecycle stopped");
-            } else {
-                jobs::retry(&self.pool, &job, clock_ms(), error.code).await?;
+                return result;
             }
+            jobs::retry(&self.pool, &job, clock_ms(), error.code).await?;
             sqlx::query("UPDATE api_cloud_workspaces w SET status_code=$3,revision=revision+1,updated_at=GREATEST(updated_at+1,(extract(epoch from clock_timestamp())*1000)::bigint) WHERE workspace_id=$1 AND request_config->'rustLifecycleOperation'->>'id'=$2 AND desired_state<>'deleted' AND state NOT IN ('deleting','deleted') AND request_config->'rustLifecycleOperation'->>'phase' NOT IN ('paused','ready') AND request_config->'rustMemoryTransportRecovery'->>'operationId' IS DISTINCT FROM $2 AND EXISTS(SELECT 1 FROM zuse_rust_control_owners o WHERE o.resource_kind='workspace' AND o.resource_id=w.workspace_id AND o.backend='rust' AND o.generation=$4)").bind(&job.resource_id).bind(job.payload["operationId"].as_str()).bind(error.code).bind(job.generation).execute(&self.pool).await?;
+        } else if job.payload.get("missingObservations").is_some() {
+            self.clear_missing_observations(job).await?;
         }
         result
+    }
+    /// Only consecutive "missing" answers count toward giving up.
+    async fn clear_missing_observations(&self, job: &jobs::Job) -> Result<(), ApiError> {
+        sqlx::query("UPDATE zuse_rust_jobs SET payload=payload-'missingObservations' WHERE job_id=$1 AND payload ? 'missingObservations'")
+            .bind(&job.id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 }
 /// The provider no longer has the retained computer (in any cluster).
 pub(crate) const MACHINE_MISSING: &str = "cloud_retained_machine_missing";
-/// Consecutive "missing" observations (about 7 s of backoff) before giving up.
+/// Consecutive "missing" observations before giving up.
 const MISSING_CONFIRMATIONS: i32 = 3;
 
 pub(super) async fn require_resume_capacity(
