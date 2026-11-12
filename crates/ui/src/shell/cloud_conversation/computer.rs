@@ -283,6 +283,10 @@ pub(super) fn issue(row: &Value) -> Option<(&'static str, &'static str)> {
 }
 fn issue_code(code: &str) -> Option<(&'static str, &'static str)> {
     match code {
+        "cloud_retained_machine_missing" => Some((
+            "This computer no longer exists",
+            "Its provider no longer has this computer, so it can't wake. Recreate it from this menu, or start a new chat. This conversation is saved.",
+        )),
         "repository_preparation_failed"
         | "github_repository_access_denied"
         | "github_reconnect_required" => Some((

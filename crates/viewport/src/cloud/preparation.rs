@@ -329,6 +329,12 @@ pub(crate) fn issue(code: &str) -> Option<Issue> {
             "Review the failed command and its output, then correct the environment recipe or timeout before retrying preparation.",
             Recovery::Environment,
         ),
+        "cloud_retained_machine_missing" => (
+            "Computer starting",
+            "This computer no longer exists",
+            "Its provider no longer has this computer, so it can't wake. Recreate it from the computer menu, or start a new chat. This conversation is saved.",
+            Recovery::Operator,
+        ),
         "staging_candidate_computer_limit" => (
             "Computer starting",
             "Staging computer limit reached",
@@ -589,6 +595,10 @@ mod tests {
             assert_eq!(failure.recovery.label(), None);
         }
         assert!(issue("allocating").is_none());
+        assert!(
+            issue("cloud_retained_machine_missing").is_some(),
+            "a computer its provider no longer has says so instead of starting forever"
+        );
         assert!(
             issue("cloud_allocation_unavailable").is_none(),
             "transport failure is not classified as missing configuration"

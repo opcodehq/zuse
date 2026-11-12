@@ -11,6 +11,11 @@ pub const MODE: &str = "server-admitted-v2";
 pub const MAX_TEXT_BYTES: usize = 128 * 1024;
 pub const MAX_QUEUE_ROWS: i64 = 128;
 pub const EDIT_LEASE_MS: i64 = 30_000;
+/// Prefix of a capability error that means the server definitively refused a
+/// command (bad model, access mode, attachment …). The rest is the message
+/// to show; the client may build a fresh command instead of retrying it.
+pub const TASK_REJECTED_PREFIX: &str = "cloud_task_rejected:";
+
 /// No implicit resume occurs merely because work was persisted.
 #[derive(Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
