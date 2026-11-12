@@ -20,6 +20,11 @@
 //! - `<data>/runtime-updates/pending.json`: the swap this runtime asked for
 //! - `<data>/runtime-updates/state.json`: attested and rejected update ids
 //! - root result (read only): `/var/lib/zuse/runtime-update/result.json`
+//! - root probation: `<data>/runtime-updates/probation.json` (first start of a
+//!   committed release), `healthy.json` `{"sha256","updateId","at"}` once it
+//!   passes its startup checks, and `rollback.json` `{"updateId","sha256"}`
+//!   asking the root helper to restore `previous`. The resident supervisor
+//!   also writes `rollback.json` when the new runtime dies before `healthy.json`.
 //! - owned binary journal: `<binary>/../../runtime-update/journal.json` and
 //!   `previous` (on Prized `~/.zuse/runtime-update/`).
 use anyhow::{Result, ensure};
@@ -242,7 +247,8 @@ pub fn cold_boot(data: &Path) -> Option<PathBuf> {
     let _ = DATA.set(data.into());
     let config = Config::detect(data).ok()?;
     let journal = matches!(&config.layout, Layout::Owned { journal }
-        if journal.join("journal.json").is_file());
+        if journal.join("journal.json").is_file())
+        || swap::root_maybe_unproven(&config);
     // Hash this binary only when there is something to decide.
     if !journal && stage::latest(&config).is_none() {
         return None;
