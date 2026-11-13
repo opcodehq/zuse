@@ -107,11 +107,79 @@ It uses the same **environment secrets** as the runtime release workflow
 environments; no new secret is needed. Bundles live under `runtime/harness/`
 in the same bucket, so the server's existing presigned-link settings cover them.
 
+## Register (manual)
+
+Registration needs the operator database role, so CI does not do it. Download
+`bundle.json` from the workflow run, then:
+
+```sh
+ZUSE_CLOUD_RELEASE_DATABASE_URL=… zuse-cloud-api register-harness-bundle --bundle bundle.json --state staging
+```
+
+The server verifies the signature against the release key before it reads
+the database URL, and again before it stores the bundle. A registered bundle
+is immutable apart from its state; registering the same file again only moves
+its state. Schema: `crates/cloud/migrations/0036_harness_bundles.sql`
+(`zuse_rust_harness_bundles`; application roles can only read it).
+
+## Promote
+
+```text
+candidate ─▶ staging ─▶ canary ─▶ stable ─▶ retired
+```
+
+```sh
+zuse-cloud-api set-harness-bundle-state --sha256 <sha256> --state canary
+zuse-cloud-api set-harness-bundle-state --sha256 <sha256> --state stable
+```
+
+| Deployment | `ZUSE_CLOUD_HARNESS_CHANNEL` | Offered states |
+|---|---|---|
+| staging | `staging` | staging, canary, stable |
+| production | `stable` (default) | stable; plus canary for accounts in `ZUSE_CLOUD_HARNESS_CANARY_ACCOUNTS` (comma separated) |
+
+Before `stable`, run the checks the harness release process already requires
+on the **same bundle** (protocol fixtures, streaming, tools, Stop, resume,
+selected-account identity, credential renewal, old conversation continuation)
+on staging and the canary accounts. A failing candidate leaves stable
+unchanged.
+
+For each agent the server offers the newest bundle in the computer's channel
+that (1) matches its architecture, (2) uses an adapter contract the runtime
+speaks, (3) reads the session-state format the computer's current CLI wrote,
+(4) has not failed twice on that computer, and (5) is newer than what it runs
+(by version, then registration time; a CLI that came with the image never
+yields to a bundle of the same version). Computers report their current CLI
+on every poll and attest each adoption, so `zuse_rust_harness_bindings`
+shows what every computer runs; `zuse_rust_harness_updates` holds the last
+offer and its outcome.
+
+## Roll back
+
+Never delete objects. Retire the bad bundle:
+
+```sh
+zuse-cloud-api set-harness-bundle-state --sha256 <bad> --state retired
+```
+
+Computers running a retired bundle are offered the newest good bundle in
+their channel, even an older one, as long as it can continue their session
+state; they move at their next safe boundary like any other update. If no
+compatible bundle exists, they stay on the retired one (a retired bundle is
+never offered to anyone else). Rolling back does not reverse a session-state
+change: a bundle that writes a new format must first ship as one that can read
+it, and the previous bundle must list the new format in `readsStateFormats`
+before it can be a rollback target.
+
 ## Test
 
 ```sh
 python3 infra/cloud/tests/harness-bundle.py
 cargo test --locked -p zuse-protocol cloud_harness_updates
+cargo test --locked -p zuse-cloud --lib harness
+# Registry, offers, attestation, channels and rollback under the restricted role:
+ZUSE_CLOUD_TEST_DATABASE_URL=postgresql://… cargo test --locked -p zuse-cloud --lib \
+  v2_initial_write_is_atomic_under_the_actual_restricted_role -- --ignored
 ```
 
 The Python tests use throwaway keys, fake CLIs, a fake upstream and a local

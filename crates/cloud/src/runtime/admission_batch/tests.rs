@@ -62,6 +62,7 @@ async fn v2_initial_write_is_atomic_under_the_actual_restricted_role() {
         include_str!("../../../migrations/0025_admission_read_batch.sql"),
         include_str!("../../../migrations/0026_task_command_admission.sql"),
         include_str!("../../../migrations/0034_runtime_releases.sql"),
+        include_str!("../../../migrations/0036_harness_bundles.sql"),
     ] {
         sqlx::raw_sql(migration).execute(&pool).await.unwrap();
     }
@@ -366,6 +367,51 @@ async fn v2_initial_write_is_atomic_under_the_actual_restricted_role() {
         now,
     )
     .await;
+    let harness_control = |canary: Option<&str>| {
+        std::sync::Arc::new(
+            RuntimeControl::from_pool(
+                application.clone(),
+                crate::crypto::MasterKey::parse(
+                    &base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([48u8; 32]),
+                )
+                .unwrap(),
+                crate::tickets::TicketSigner::from_jwk(
+                    &jwk.to_string(),
+                    "https://api.example.test",
+                )
+                .unwrap(),
+            )
+            .with_runtime_releases(super::super::runtime_updates::RuntimeReleaseConfig {
+                channel: crate::runtime_releases::Channel::Stable,
+                links: Some(std::sync::Arc::new(
+                    crate::objects::ArtifactLinks::new(
+                        "https://account.r2.example.test/",
+                        "zuse-runtime",
+                        "access",
+                        "fixture-secret",
+                    )
+                    .unwrap(),
+                )),
+            })
+            .with_harness_bundles(super::super::harness_updates::HarnessBundleConfig {
+                channel: crate::harness_bundles::Channel {
+                    staging: false,
+                    canary_accounts: canary.into_iter().map(str::to_owned).collect(),
+                },
+            }),
+        )
+    };
+    harness_updates::exercise(
+        &harness_control(None),
+        &harness_control(Some(access.owner_id.as_str())),
+        &pool,
+        &application,
+        &access,
+        &master,
+        |id| plan(id, false),
+        now,
+    )
+    .await;
     runtime_wait_queue::exercise(
         &updating,
         &pool,
@@ -432,5 +478,6 @@ mod agent_switch;
 mod runtime_outdated;
 
 mod asset_release;
+mod harness_updates;
 mod runtime_updates;
 mod runtime_wait_queue;

@@ -100,6 +100,24 @@ enum Command {
         #[arg(long, value_parser = ["candidate", "staging", "stable", "retired"])]
         state: String,
     },
+    /// Register a signed agent CLI harness bundle using an operator database
+    /// role. The signature is checked against the release key before anything
+    /// is written.
+    RegisterHarnessBundle {
+        #[arg(long)]
+        bundle: std::path::PathBuf,
+        /// Channel state to register (or move) the bundle into.
+        #[arg(long, default_value = "candidate", value_parser = ["candidate", "staging", "canary", "stable", "retired"])]
+        state: String,
+    },
+    /// Move a registered harness bundle to another channel state. Retiring
+    /// the bundle computers run rolls them back to the newest good bundle.
+    SetHarnessBundleState {
+        #[arg(long)]
+        sha256: String,
+        #[arg(long, value_parser = ["candidate", "staging", "canary", "stable", "retired"])]
+        state: String,
+    },
     /// Stage an uncertified artifact for one explicitly pinned staging owner.
     StageManagedBaseCandidate {
         #[arg(long)]
@@ -497,6 +515,43 @@ async fn main() -> Result<()> {
                 .await
                 .map_err(|e| anyhow::anyhow!("{}", e.code))?;
             println!("Runtime release {sha256} is now {}", state.as_str());
+        }
+        Command::RegisterHarnessBundle { bundle, state } => {
+            let bytes = std::fs::read(bundle).context("Harness bundle file unavailable")?;
+            anyhow::ensure!(bytes.len() <= 256 * 1024, "Harness bundle file too large");
+            let bundle: zuse_cloud::harness_bundles::BundleFile = serde_json::from_slice(&bytes)
+                .map_err(|_| anyhow::anyhow!("Invalid harness bundle file"))?;
+            let state = zuse_cloud::harness_bundles::BundleState::parse(&state)
+                .context("Invalid harness bundle state")?;
+            let key = zuse_cloud::runtime_releases::contract_verifying_key();
+            // Verify before reading any database credential.
+            bundle
+                .verify(&key)
+                .map_err(|e| anyhow::anyhow!("{}", e.code))?;
+            let url = env::var("ZUSE_CLOUD_RELEASE_DATABASE_URL")
+                .context("Registration requires explicit ZUSE_CLOUD_RELEASE_DATABASE_URL with operator permissions")?;
+            bundle
+                .register_url(&url, &key, state, now_ms())
+                .await
+                .map_err(|e| anyhow::anyhow!("{}", e.code))?;
+            println!(
+                "Harness bundle registered: {} {} {} {} ({})",
+                bundle.bundle.agent,
+                bundle.bundle.architecture,
+                bundle.bundle.version,
+                bundle.bundle.sha256,
+                state.as_str()
+            );
+        }
+        Command::SetHarnessBundleState { sha256, state } => {
+            let state = zuse_cloud::harness_bundles::BundleState::parse(&state)
+                .context("Invalid harness bundle state")?;
+            let url = env::var("ZUSE_CLOUD_RELEASE_DATABASE_URL")
+                .context("Changing a bundle requires explicit ZUSE_CLOUD_RELEASE_DATABASE_URL with operator permissions")?;
+            zuse_cloud::harness_bundles::set_state_url(&url, &sha256, state, now_ms())
+                .await
+                .map_err(|e| anyhow::anyhow!("{}", e.code))?;
+            println!("Harness bundle {sha256} is now {}", state.as_str());
         }
         Command::StageManagedBaseCandidate {
             candidate,
