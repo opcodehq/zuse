@@ -8,6 +8,8 @@
 //!                                                 rolled-back/failed: count a failure
 //! admission: message needs a missing capability ─▶ urgency now + RUNTIME_UPDATING,
 //!                                                 or RUNTIME_UPDATE_UNAVAILABLE
+//!            (client sent queueWhileWaiting)    ─▶ queued with that code instead;
+//!                                                 a commit drains the queue at once
 //! app ────── GET  …/runtime-update ─────────────▶ UpdateStatus
 //! ```
 //! The registry is operator-written (`crate::runtime_releases`); this module
@@ -350,6 +352,8 @@ impl RuntimeControl {
                     .bind(now)
                     .execute(&mut *tx)
                     .await?;
+                // Messages queued while it updated go out now.
+                Self::resume_waiting_queues_tx(&mut tx, &row, now).await?;
             }
             outcome @ (wire::Outcome::RolledBack | wire::Outcome::Failed) => {
                 let (state, default_code) = match outcome {
@@ -387,6 +391,9 @@ impl RuntimeControl {
             }
         }
         tx.commit().await?;
+        if attestation.outcome == wire::Outcome::Committed {
+            self.notify_task_drain();
+        }
         Ok(json!({"recorded": true}))
     }
 

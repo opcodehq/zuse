@@ -2,8 +2,17 @@ use super::*;
 use zuse_cloud_runtime::mailbox::CommandKey;
 use zuse_protocol::{
     cloud_commands::{CloudSessionCommand, CommandEnvelope},
+    cloud_runtime_updates as updates,
     session_commands::SessionCommandPayload,
 };
+/// How a client's message is admitted.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Submit {
+    /// The client shows server-queued messages: a run that has to wait for
+    /// its computer (runtime update, Update computer) is queued, not refused.
+    /// See [`updates::QUEUE_WHILE_WAITING`].
+    pub queue_while_waiting: bool,
+}
 impl RuntimeControl {
     pub(super) async fn initialize_task_command_policy_tx(
         &self,
@@ -120,6 +129,17 @@ impl RuntimeControl {
         request: wire::Request,
         now: i64,
     ) -> Result<Value, ApiError> {
+        self.task_command_submit_with(id, access, request, Submit::default(), now)
+            .await
+    }
+    pub async fn task_command_submit_with(
+        &self,
+        id: &str,
+        access: &Access,
+        request: wire::Request,
+        options: Submit,
+        now: i64,
+    ) -> Result<Value, ApiError> {
         if !self.task_command_delivery_available().await? {
             return Err(ApiError::unavailable("cloud_task_command_schema_not_ready"));
         }
@@ -138,7 +158,7 @@ impl RuntimeControl {
         let authorized = fresh.as_ref().map_or(access, |(access, _)| access);
         self.authorize_task_command_row(&row, authorized, true)?;
         let result = self
-            .task_command_submit_tx(&mut tx, &row, authorized, &request, now)
+            .task_command_submit_tx(&mut tx, &row, authorized, &request, options, now)
             .await?;
         tx.commit().await?;
         self.notify_task_drain();
@@ -177,6 +197,7 @@ impl RuntimeControl {
         row: &Value,
         access: &Access,
         request: &wire::Request,
+        options: Submit,
         now: i64,
     ) -> Result<Value, ApiError> {
         validation::request(request)?;
@@ -228,13 +249,24 @@ impl RuntimeControl {
                 .await?;
             return Ok(acceptance);
         }
-        if super::super::recreation::leases_blocked(row) {
-            return Err(error("computer_recreation_in_progress"));
+        // A run that only has to wait for its computer is queued instead of
+        // refused when the client shows server-queued messages.
+        let waiting_run = options.queue_while_waiting
+            && matches!(
+                &request.action,
+                wire::Action::Submit {
+                    payload: SessionCommandPayload::Run { .. },
+                    ..
+                }
+            );
+        let recreating = super::super::recreation::leases_blocked(row);
+        if recreating && !waiting_run {
+            return Err(error(updates::RECREATING));
         }
-        if super::super::lifecycle::valid_memory_recovery(row) {
+        if !recreating && super::super::lifecycle::valid_memory_recovery(row) {
             return Err(error("codex_memory_transport_recovery_required"));
         }
-        if super::super::repair::leases_blocked(row) {
+        if !recreating && super::super::repair::leases_blocked(row) {
             return Err(error("runtime_repair_attention_required"));
         }
         // Every referenced asset is committed under this exact owner/workspace;
@@ -250,13 +282,55 @@ impl RuntimeControl {
             }
             _ => {}
         }
-        let mut acceptance = if let Some(value) = self
+        let mut acceptance = if recreating {
+            self.queue_waiting_run_tx(tx, row, access, request, updates::RECREATING, now)
+                .await?
+        } else if let Some(value) = self
             .task_queue_action_tx(tx, row, access, request, now)
             .await?
         {
             value
         } else {
             match &request.action {
+                wire::Action::Submit {
+                    message_id,
+                    payload,
+                    attachments,
+                    based_on,
+                } if waiting_run => {
+                    // A savepoint, so a refusal for the computer's runtime
+                    // leaves nothing behind but the queued message.
+                    let mut attempt = sqlx::Acquire::begin(&mut **tx).await?;
+                    match self
+                        .task_seal_submit_tx(
+                            &mut attempt,
+                            row,
+                            access,
+                            &request.command_id,
+                            &request.session_id,
+                            message_id,
+                            payload,
+                            attachments,
+                            based_on.clone(),
+                            now,
+                        )
+                        .await
+                    {
+                        Ok(value) => {
+                            attempt.commit().await?;
+                            value
+                        }
+                        Err(refused)
+                            if refused.code == updates::RUNTIME_UPDATING
+                                || refused.code == updates::RUNTIME_UPDATE_UNAVAILABLE =>
+                        {
+                            attempt.rollback().await?;
+                            self.queue_waiting_run_tx(tx, row, access, request, refused.code, now)
+                                .await?
+                        }
+                        Err(refused) => return Err(refused),
+                    }
+                }
                 wire::Action::Submit {
                     message_id,
                     payload,
@@ -292,7 +366,8 @@ impl RuntimeControl {
         // Explicit wake is handled only after message admission, in this same
         // transaction. Until its lifecycle integration is available it fails
         // closed and rolls back, never quietly waking or dropping the message.
-        if request.wake == wire::WakePolicy::ExplicitResume {
+        // A recreation brings the computer back up itself.
+        if request.wake == wire::WakePolicy::ExplicitResume && !recreating {
             acceptance["wake"] = self
                 .task_command_wake_tx(tx, row, &request.command_id, now)
                 .await?;
@@ -301,8 +376,77 @@ impl RuntimeControl {
         acceptance["durablyAdmitted"] = json!(true);
         self.enqueue_task_drain_tx(tx, row, &request.session_id, now)
             .await?;
+        if let Some(reason) = acceptance["waitingFor"].as_str() {
+            // Every device sees why it waits before the first drain attempt.
+            sqlx::query("UPDATE zuse_rust_task_command_drains SET last_error=$3 WHERE workspace_id=$1 AND session_id=$2")
+                .bind(id).bind(&request.session_id).bind(reason).execute(&mut **tx).await?;
+        }
         self.save_task_action_tx(tx, id, access, request, &digest, &acceptance, now)
             .await?;
+        Ok(acceptance)
+    }
+    /// Save a run that has to wait for its computer as a queued message with
+    /// the same text, files and agent settings. Its files stay where they
+    /// are (on the computer, or held in object storage until it is sent);
+    /// the drain sends it once the computer can take it.
+    async fn queue_waiting_run_tx(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        row: &Value,
+        access: &Access,
+        request: &wire::Request,
+        reason: &'static str,
+        now: i64,
+    ) -> Result<Value, ApiError> {
+        let wire::Action::Submit {
+            message_id,
+            payload: SessionCommandPayload::Run { request: run, .. },
+            attachments,
+            ..
+        } = &request.action
+        else {
+            return Err(error(reason));
+        };
+        let input = wire::Input {
+            run_selection: Some(wire::RunSelection {
+                harness: run
+                    .harness
+                    .ok_or_else(|| error("cloud_task_agent_required"))?,
+                model: run
+                    .model
+                    .clone()
+                    .ok_or_else(|| error("cloud_task_model_required"))?,
+                reasoning: run.reasoning,
+                model_options: run.model_options.clone(),
+                sandbox: run.sandbox,
+            }),
+            text: run.prompt.clone(),
+            attachments: attachments.clone(),
+            computer_files: run.attachments.clone(),
+            file_refs: vec![],
+            skill_refs: vec![],
+            annotations: vec![],
+            as_goal: false,
+        };
+        validation::input(&input)?;
+        let queued = wire::Request {
+            command_id: request.command_id.clone(),
+            session_id: request.session_id.clone(),
+            // The queue id is the message id, so the sent message's bubble
+            // becomes its queued row.
+            action: wire::Action::Queue {
+                queue_id: message_id.clone(),
+                message_id: message_id.clone(),
+                input,
+                hold_for_turn_end: true,
+            },
+            wake: request.wake,
+        };
+        let mut acceptance = self
+            .task_queue_action_tx(tx, row, access, &queued, now)
+            .await?
+            .ok_or_else(|| error(reason))?;
+        acceptance["waitingFor"] = json!(reason);
         Ok(acceptance)
     }
     async fn save_task_action_tx(
@@ -398,17 +542,6 @@ impl RuntimeControl {
         let (policy, revision) = self.task_policy_tx(tx, row).await?;
         let run = matches!(payload, SessionCommandPayload::Run { .. });
         if let SessionCommandPayload::Run { request, .. } = payload {
-            // An older guest runtime fails on a run carrying computer file
-            // paths, leaving the command's outcome unknown and the chat
-            // locked; refuse it here, before anything is enqueued, and
-            // update the runtime in place when a release can.
-            if !request.attachments.is_empty()
-                && !crate::runtime::runtime_capable(row, wire::DIRECT_UPLOADS_CAPABILITY)
-            {
-                return Err(self
-                    .demand_runtime_update(tx, row, wire::DIRECT_UPLOADS_CAPABILITY, now)
-                    .await);
-            }
             let harness = request
                 .harness
                 .as_ref()
@@ -437,6 +570,19 @@ impl RuntimeControl {
                 }) {
                     return Err(error("cloud_task_model_option_invalid"));
                 }
+            }
+            // An older guest runtime fails on a run carrying computer file
+            // paths, leaving the command's outcome unknown and the chat
+            // locked; refuse it here, before anything is enqueued, and
+            // update the runtime in place when a release can. Checked after
+            // the model, so a message that can never run is refused outright
+            // rather than left waiting for an update.
+            if !request.attachments.is_empty()
+                && !crate::runtime::runtime_capable(row, wire::DIRECT_UPLOADS_CAPABILITY)
+            {
+                return Err(self
+                    .demand_runtime_update(tx, row, wire::DIRECT_UPLOADS_CAPABILITY, now)
+                    .await);
             }
             let (sandbox, auto) = match policy.runtime_mode {
                 zuse_protocol::cloud::CloudRuntimeMode::FullAccess => {

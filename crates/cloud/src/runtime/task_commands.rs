@@ -5,6 +5,7 @@ use crate::access::Access;
 use sqlx::Row;
 use zuse_protocol::cloud_task_commands as wire;
 mod admission;
+pub use admission::Submit;
 mod agents;
 pub(super) mod dispatch;
 mod drain;

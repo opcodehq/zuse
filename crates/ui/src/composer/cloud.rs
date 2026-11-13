@@ -6,6 +6,7 @@ use zuse_i18n::messages as msg;
 mod reupload;
 mod runtime_update;
 mod unknown;
+mod waiting;
 mod wake;
 #[derive(Default)]
 pub(super) struct Launch {
@@ -395,15 +396,21 @@ impl Composer {
                 // Retain the uploaded paths so a retry doesn't upload again.
                 let _=this.update(cx,|this,_|this.cloud.pending_native=Some(request.clone()));
             }
+            // A message that has to wait for its computer (runtime update,
+            // Update computer) is queued on the server, not refused.
             let result = target.controller.client().call_scoped(methods::CLOUD_TASK_COMMAND,
                 json!({"workspaceId":target.workspace,"expectedAccountId":target.subject,
-                    "expectedOrganizationId":target.organization,"request":request})).await;
+                    "expectedOrganizationId":target.organization,"request":request,
+                    (zuse_protocol::cloud_runtime_updates::QUEUE_WHILE_WAITING):true})).await;
             let _ = this.update(cx, |this, cx| {
                 this.cloud.task = None;
                 match result {
                     Ok(value) if value["accountId"]==target.subject && value["organizationId"].as_str()==target.organization.as_deref()
                         && value["data"]["commandId"]==request["commandId"] && value["data"]["durablyAdmitted"]==true => {
-                        let foreground=request["action"]["type"]=="submit" && request["action"]["payload"]["kind"]=="run";
+                        // Saved in the server's queue until its computer can
+                        // take it; the queue shows it from here on.
+                        let waiting=value["data"]["waitingFor"].is_string();
+                        let foreground=!waiting && request["action"]["type"]=="submit" && request["action"]["payload"]["kind"]=="run";
                         if foreground {
                             this.cloud.admitted_native=Some(json!({"commandId":request["commandId"],"messageId":request["action"]["messageId"]}));
                             this.remember_cloud_run(&request);
@@ -415,6 +422,13 @@ impl Composer {
                         // Its files stay here until the computer takes it, in
                         // case they go missing there first.
                         let text=this.cloud.pending_native_text.clone();
+                        if waiting {
+                            // Its files go to server storage until it is sent:
+                            // the computer may be replaced meanwhile.
+                            this.keep_waiting_files_on_server(&request, &value["data"], sent.clone(), cx);
+                            // Its bubble stays until its queued row replaces it.
+                            this.cloud.pending_native_text = None;
+                        }
                         this.keep_cloud_files(&request,text,sent);
                         if let Some(text)=this.cloud.pending_native_text.take() {
                             // A sent or queued message already cleared its draft; anything there now is newer.

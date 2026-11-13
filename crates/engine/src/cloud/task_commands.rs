@@ -103,6 +103,20 @@ fn revision(p: &Value) -> Result<i64> {
         anyhow::anyhow!("The queue changed. Refresh its current revision before changing it.")
     })
 }
+/// The admission query a `CloudTaskCommand` carries: a caller that shows
+/// server-queued messages asks for a run that has to wait for its computer to
+/// be queued instead of refused ([`QUEUE_WHILE_WAITING`]). Servers without it
+/// ignore the flag and refuse as before.
+///
+/// [`QUEUE_WHILE_WAITING`]: zuse_protocol::cloud_runtime_updates::QUEUE_WHILE_WAITING
+pub(super) fn submit_query(params: &Value) -> Vec<(String, String)> {
+    use zuse_protocol::cloud_runtime_updates::QUEUE_WHILE_WAITING;
+    if params[QUEUE_WHILE_WAITING] == true {
+        vec![(QUEUE_WHILE_WAITING.into(), "true".into())]
+    } else {
+        Vec::new()
+    }
+}
 pub fn is_command_method(name: &str) -> bool {
     matches!(
         name,
@@ -629,12 +643,13 @@ pub(super) async fn maybe_forward(
         let selected_queue = match &request.action {wire::Action::Queue{input,..}|wire::Action::Edit{input,..}=>input.run_selection.is_some(),_=>false};
         ensure!(!selected_queue || queue_selection_version==wire::QUEUE_RUN_SELECTION_VERSION,"This server cannot save the selected agent with queued messages yet. Your draft is preserved; wait for the current turn to finish, then Send.");
         scoped(&auth,&account,organization.as_deref())?;
-        let result=api.request_scoped(&token,&["v1","cloud","workspaces",&workspace,"task-commands"],Some(serde_json::to_value(&request)?),organization.as_deref(),&[]).await;
+        let query=if name==methods::CLOUD_TASK_COMMAND {submit_query(&p)} else {Vec::new()};
+        let result=api.request_scoped(&token,&["v1","cloud","workspaces",&workspace,"task-commands"],Some(serde_json::to_value(&request)?),organization.as_deref(),&query).await;
         // The exact typed body/ID is retained by this owned operation. A lost HTTP
         // response never becomes a different command or an opaque guest RPC.
         let result=match result {Ok(value)=>value,Err(original) if original.downcast_ref::<super::TaskRejection>().is_some()||original.downcast_ref::<super::unknown_outcome::UnknownOutcome>().is_some()=>return Err(original),Err(original)=>{
             scoped(&auth,&account,organization.as_deref())?;
-            match api.request_scoped(&token,&["v1","cloud","workspaces",&workspace,"task-commands"],Some(serde_json::to_value(&request)?),organization.as_deref(),&[]).await{
+            match api.request_scoped(&token,&["v1","cloud","workspaces",&workspace,"task-commands"],Some(serde_json::to_value(&request)?),organization.as_deref(),&query).await{
                 Ok(value)=>value,Err(_)=>return Err(original),
             }
         }};

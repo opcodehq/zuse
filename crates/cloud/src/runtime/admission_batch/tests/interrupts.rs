@@ -265,6 +265,7 @@ pub(super) async fn exercise<F: Fn(&str) -> Value>(
             &row,
             &access(),
             &stop(id, "stop-holds-lock", None),
+            Default::default(),
             now,
         )
         .await

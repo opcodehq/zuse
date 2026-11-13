@@ -6,14 +6,14 @@ use super::runtime_outdated::{admitted, computer, enqueued, run};
 use super::*;
 use zuse_protocol::{cloud_runtime_updates as u, cloud_task_commands as w};
 
-const FILE: &str = "/home/zuse/.zuse-data/uploads/a/shot.png";
-const CREDENTIAL: &str = "workspace_runtime_fixture_credential";
+pub(super) const FILE: &str = "/home/zuse/.zuse-data/uploads/a/shot.png";
+pub(super) const CREDENTIAL: &str = "workspace_runtime_fixture_credential";
 
-fn sha(c: char) -> String {
+pub(super) fn sha(c: char) -> String {
     c.to_string().repeat(64)
 }
 
-async fn register(
+pub(super) async fn register(
     owner: &PgPool,
     key: &ed25519_dalek::SigningKey,
     sha: &str,
@@ -34,7 +34,7 @@ async fn register(
 }
 
 /// Give the computer a live runtime credential and a pinned runtime.
-async fn attach_runtime(owner: &PgPool, id: &str, runtime: &str, now: i64) {
+pub(super) async fn attach_runtime(owner: &PgPool, id: &str, runtime: &str, now: i64) {
     let hash: String = Sha256::digest(CREDENTIAL.as_bytes())
         .iter()
         .map(|b| format!("{b:02x}"))
@@ -67,7 +67,7 @@ async fn status(control: &RuntimeControl, pool: &PgPool, id: &str) -> u::UpdateS
     control.runtime_update_status(&row).await.unwrap()
 }
 
-fn attestation(
+pub(super) fn attestation(
     outcome: u::Outcome,
     update_id: Option<String>,
     serving: &str,
