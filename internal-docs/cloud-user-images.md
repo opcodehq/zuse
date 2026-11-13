@@ -90,3 +90,61 @@ capability and receive nothing new.
 3. Selection: admission and allocation pick the user image with base fallback.
 4. Retire the old account-image builder; status UI shows build progress,
    last good image and errors.
+
+## Implementation (2026-11-13)
+
+Code: `crates/cloud/src/project_caches/user_images/`, guest helper
+`infra/cloud/user-image-guest.py`, migration `0037_user_images.sql`, after `0036_harness_bundles.sql` (replaces
+the unused `cloud_machine_images` placeholder from 0031).
+
+- **Image input** is the setup script and its time limit only
+  (`image_digest`). Instructions, skills and dotfiles are delivered per chat;
+  editing them never rebuilds.
+- **Build phases** (one durable row per build, provider IO outside SQL
+  locks, effects recorded before each call, lost replies reconciled by the
+  build-unique names `ui-b-…`, `ui-v-…`, `ui-s-…`): `allocate` (builder from
+  the newest verified base that has fresh-boot pins; pins re-hashed) →
+  `setup` (script uploaded to `/opt/zuse/user-image`, run once as `zuse` via
+  `sudo -u zuse` under `timeout`, detached with `systemd-run`; status polled)
+  → `sanitize` (kill leftover `zuse` processes, require the runtime unit was
+  never started and `~/.zuse-data` is empty, remove credentials, shell
+  history, npm logs, `/tmp`, token lines in `.npmrc`, the build journal,
+  empty task directories, re-verify pins) → `capture` → `retire-builder` →
+  `verify` (verifier from the snapshot: read-only cleanliness check, then the
+  same fresh boot a task computer gets, with the base's pins) →
+  `retire-verifier` → `publish` (under the managed-base admission lock; a
+  retired base never gains an image). Any failure → `cleanup` (deletes
+  builder, verifier and unpublished snapshot) → `failed` with an error code
+  and a redacted 4 KiB log tail. A ready image is never replaced by a failure.
+- **The resident supervisor never runs on the builder**, so a user image is
+  captured in the same stopped state as its base and needs no new guest
+  runtime command.
+- **Selection**: admission uses the newest ready image whose base is still
+  verified (an image on an older base serves while its rebuild runs, if that
+  base offers the chat); otherwise the managed base. Restores (unarchive and
+  "Update computer") use the newest ready image on the computer's release.
+  The computer records `request_config.rustMachineImage`.
+- **Triggers**: recipe save (15 s debounce, newest recipe replaces a waiting
+  build, one build in flight per account), "Rebuild now"
+  (`POST /v1/cloud/machine/rebuild`), an hourly staleness pass over accounts
+  active in the last 14 days (rebuilds when the ready image's script digest
+  or base release differs from the current ones; identical inputs never
+  rebuild), and rebuild on next use for inactive accounts. Failed builds are
+  retried by later passes with exponential backoff (1 h, 2 h, …), at most 3
+  times for the same script and base; a script edit or "Rebuild now" resets.
+- **Retirement**: a ready image retires (provider snapshot deleted) once a
+  newer ready image on a verified base exists, its base is no longer
+  verified, or the script was removed, and no non-deleted computer
+  (archived included) references it.
+- **Providers**: Boxd only. Other providers start from the managed base.
+- **Fresh boots never wait for an image.** With no ready image, the computer
+  boots the managed base without the setup script's tools. Running the setup
+  script on that computer as a fallback is a follow-up.
+
+Operations: the worker builds wherever it has `BOXD_API_KEY`
+(`ZUSE_CLOUD_USER_IMAGES=0` turns builds off). Each build briefly holds two
+VMs and one snapshot; each account keeps one or two ready snapshots plus any
+still referenced by computers. Builds require billing capacity like a
+computer. Not yet exercised against a live Boxd base: the detached setup run
+(`systemd-run` availability, upload ownership), memory-snapshot capture of a
+builder whose resident never started, and the verifier's fresh boot.

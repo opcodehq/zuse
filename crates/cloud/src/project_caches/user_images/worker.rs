@@ -21,6 +21,7 @@ const OVERHEAD_MS: i64 = 20 * 60 * 1000;
 
 pub struct UserImageControl {
     pool: PgPool,
+    last_schedule: std::sync::atomic::AtomicI64,
     ready: OnceLock<bool>,
     backends: OnceLock<BTreeMap<ProviderId, Arc<dyn UserImageBackend>>>,
 }
@@ -103,6 +104,7 @@ impl UserImageControl {
     pub fn from_pool(pool: PgPool) -> Self {
         Self {
             pool,
+            last_schedule: std::sync::atomic::AtomicI64::new(0),
             ready: OnceLock::new(),
             backends: OnceLock::new(),
         }
@@ -144,10 +146,27 @@ impl UserImageControl {
         if !self.available().await? || !self.configured() {
             return Ok(false);
         }
-        if self.step_one(now).await? {
+        if self.step_one(now).await? || self.start_one(now).await? || self.retire_one(now).await? {
             return Ok(true);
         }
-        self.start_one(now).await
+        use std::sync::atomic::Ordering;
+        let last = self.last_schedule.load(Ordering::Acquire);
+        if now - last < super::schedule::SCHEDULE_INTERVAL_MS
+            || self
+                .last_schedule
+                .compare_exchange(last, now, Ordering::AcqRel, Ordering::Acquire)
+                .is_err()
+        {
+            return Ok(false);
+        }
+        self.schedule_one(now).await
+    }
+    pub(crate) fn mark_scheduled(&self, now: i64) {
+        self.last_schedule
+            .fetch_max(now, std::sync::atomic::Ordering::AcqRel);
+    }
+    pub(crate) fn pool(&self) -> &PgPool {
+        &self.pool
     }
 
     async fn defer(

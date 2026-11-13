@@ -300,6 +300,7 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
                 .put(save_machine)
                 .layer(DefaultBodyLimit::max(1536 * 1024)),
         )
+        .route("/v1/cloud/machine/rebuild", post(rebuild_machine))
         .route(
             "/v1/cloud/projects/{id}/environment",
             get(project_environment)
@@ -1213,6 +1214,18 @@ async fn save_machine(
         state
             .store
             .save_machine_scoped(&access, request, chrono::Utc::now().timestamp_millis())
+            .await?,
+    ))
+}
+async fn rebuild_machine(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<zuse_protocol::cloud_computers::MachineVersion>, ApiError> {
+    let access = state.access(&headers, AccessKind::Administration).await?;
+    Ok(Json(
+        state
+            .store
+            .rebuild_machine_scoped(&access, chrono::Utc::now().timestamp_millis())
             .await?,
     ))
 }

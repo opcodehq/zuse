@@ -283,6 +283,7 @@ pub fn handles(method: &str) -> bool {
             | zuse_protocol::methods::CLOUD_PROJECT_ENVIRONMENT_SAVE
             | zuse_protocol::methods::CLOUD_MACHINE
             | zuse_protocol::methods::CLOUD_MACHINE_SAVE
+            | zuse_protocol::methods::CLOUD_MACHINE_REBUILD
             | zuse_protocol::methods::CLOUD_PROJECT_SECRETS
             | zuse_protocol::methods::CLOUD_PROJECT_SECRET_SAVE
             | zuse_protocol::methods::CLOUD_PROJECT_SECRET_REVOKE
@@ -1109,6 +1110,7 @@ impl CloudApi {
             | zuse_protocol::methods::CLOUD_PROJECT_ENVIRONMENT_SAVE
             | zuse_protocol::methods::CLOUD_MACHINE
             | zuse_protocol::methods::CLOUD_MACHINE_SAVE
+            | zuse_protocol::methods::CLOUD_MACHINE_REBUILD
             | zuse_protocol::methods::CLOUD_PROJECT_SECRETS
             | zuse_protocol::methods::CLOUD_PROJECT_SECRET_SAVE
             | zuse_protocol::methods::CLOUD_PROJECT_SECRET_REVOKE => {
@@ -1258,6 +1260,17 @@ impl CloudApi {
                             } else {
                                 reqwest::Method::GET
                             },
+                        )
+                        .await?
+                    }
+                    zuse_protocol::methods::CLOUD_MACHINE_REBUILD => {
+                        self.request_scoped_verb(
+                            &token,
+                            &["v1", "cloud", "machine", "rebuild"],
+                            Some(serde_json::json!({})),
+                            org.as_deref(),
+                            &[],
+                            reqwest::Method::POST,
                         )
                         .await?
                     }

@@ -16,6 +16,8 @@ use sha2::{Digest, Sha256};
 use zuse_protocol::cloud_computers::{MachineRecipe, ProviderId};
 
 pub mod boxd;
+pub mod schedule;
+
 pub mod selection;
 pub mod worker;
 
@@ -354,6 +356,8 @@ fn redact_line(line: &str) -> String {
         .join(" ")
 }
 
+#[cfg(test)]
+mod schedule_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
