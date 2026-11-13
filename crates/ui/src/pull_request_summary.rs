@@ -19,6 +19,7 @@ pub(super) struct HeaderFacts {
     pub title: String,
     pub title_reserve: f32,
     pub author: String,
+    pub author_avatar_url: Option<String>,
     /// Already phrased, e.g. "updated 3 days ago".
     pub age: Option<String>,
     /// (shown, copied): the short command and the one that names the repo.
@@ -103,6 +104,7 @@ pub(super) fn detail_header(
         title,
         title_reserve,
         author,
+        author_avatar_url,
         age,
         checkout,
         refs,
@@ -134,8 +136,9 @@ pub(super) fn detail_header(
                 .flex()
                 .items_center()
                 .gap(px(6.0))
-                .child(super::super::pull_request_media::avatar(
+                .child(super::super::pull_request_media::avatar_with_url(
                     &author,
+                    author_avatar_url.as_deref(),
                     "pr-author".into(),
                     18.0,
                     theme,
@@ -752,6 +755,7 @@ impl PullRequestDetailPage {
             title: detail.title.clone(),
             title_reserve: self.title_reserve(&detail.state, detail.is_draft),
             author: detail.author.login.clone(),
+            author_avatar_url: detail.author.avatar_url.clone(),
             age: self.age(detail),
             checkout: Some((
                 format!("gh pr checkout {}", detail.number),
@@ -794,8 +798,9 @@ impl PullRequestDetailPage {
                     .items_center()
                     .gap(px(6.0))
                     .text_size(crate::typography::text_sm())
-                    .child(super::super::pull_request_media::avatar(
+                    .child(super::super::pull_request_media::avatar_with_url(
                         &detail.author.login,
+                        detail.author.avatar_url.as_deref(),
                         "pr-author".into(),
                         18.0,
                         theme,
@@ -880,8 +885,13 @@ impl PullRequestDetailPage {
                     .id(SharedString::from(format!("pr-reviewer-{index}")))
                     .flex_none()
                     .tip(login.to_string())
-                    .child(super::super::pull_request_media::avatar(
+                    .child(super::super::pull_request_media::avatar_with_url(
                         login,
+                        detail
+                            .reviews
+                            .iter()
+                            .find(|review| review.author.login == *login)
+                            .and_then(|review| review.author.avatar_url.as_deref()),
                         format!("pr-reviewer-avatar-{index}").into(),
                         18.0,
                         theme,
@@ -1387,8 +1397,9 @@ impl PullRequestDetailPage {
                     .items_center()
                     .gap(px(8.0))
                     .text_size(crate::typography::text_sm())
-                    .child(super::super::pull_request_media::avatar(
+                    .child(super::super::pull_request_media::avatar_with_url(
                         &comment.author.login,
+                        comment.author.avatar_url.as_deref(),
                         format!("pr-review-avatar-{index}").into(),
                         18.0,
                         theme,

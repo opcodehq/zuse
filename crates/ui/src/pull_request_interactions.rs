@@ -666,6 +666,7 @@ mod tests {
                     body: params["body"].as_str().unwrap().into(),
                     author: zuse_protocol::ChangeRequestActor {
                         login: "writer".into(),
+                        ..Default::default()
                     },
                     ..Default::default()
                 })
@@ -752,6 +753,7 @@ mod tests {
             page.detail = Some(ChangeRequestDetail {
                 author: zuse_protocol::ChangeRequestActor {
                     login: "octocat".into(),
+                    ..Default::default()
                 },
                 ..Default::default()
             });

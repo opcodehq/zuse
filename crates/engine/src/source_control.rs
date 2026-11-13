@@ -41,9 +41,9 @@ const GITHUB_REPOSITORY_QUERY: &str = "query($owner: String!, $name: String!) { 
 const GITHUB_OUTPUT_LIMIT: usize = 1024 * 1024;
 const GITHUB_RESULT_LIMIT: &str = "20";
 const GITHUB_JSON_FIELDS: &str = "number,title,url,state,baseRefName,headRefName,updatedAt,isCrossRepository,headRepositoryOwner,isDraft,reviewDecision";
-const GITHUB_SEARCH_QUERY: &str = "query($search: String!, $owner: String!, $name: String!, $after: String) { repository(owner: $owner, name: $name) { nameWithOwner } search(query: $search, type: ISSUE, first: 50, after: $after) { issueCount pageInfo { hasNextPage endCursor } nodes { ... on PullRequest { author { login } headRefOid viewerDidAuthor viewerLatestReviewRequest { id } reviewRequests(first: 100) { nodes { id } pageInfo { hasNextPage } } statusCheckRollup { commit { oid } state contexts { totalCount checkRunCountsByState { state count } statusContextCountsByState { state count } } } number title url state isDraft mergeable reviewDecision createdAt updatedAt additions deletions repository { nameWithOwner } } } } }";
+const GITHUB_SEARCH_QUERY: &str = "query($search: String!, $owner: String!, $name: String!, $after: String) { repository(owner: $owner, name: $name) { nameWithOwner } search(query: $search, type: ISSUE, first: 50, after: $after) { issueCount pageInfo { hasNextPage endCursor } nodes { ... on PullRequest { author { login avatarUrl(size: 64) } headRefOid viewerDidAuthor viewerLatestReviewRequest { id } reviewRequests(first: 100) { nodes { id } pageInfo { hasNextPage } } statusCheckRollup { commit { oid } state contexts { totalCount checkRunCountsByState { state count } statusContextCountsByState { state count } } } number title url state isDraft mergeable reviewDecision createdAt updatedAt additions deletions repository { nameWithOwner } } } } }";
 
-const GITHUB_PR_METADATA_QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) { viewer { login } repository(owner: $owner, name: $name) { pullRequest(number: $number) { headRefOid baseRefOid commits(first: 100) { nodes { commit { oid additions deletions } } } viewerDidAuthor viewerLatestReviewRequest { id } reviewRequests(first: 100) { nodes { id } pageInfo { hasNextPage } } statusCheckRollup { commit { oid } state contexts(first: 100) { nodes { ... on CheckRun { name status conclusion detailsUrl databaseId startedAt completedAt } ... on StatusContext { context state targetUrl } } totalCount checkRunCountsByState { state count } statusContextCountsByState { state count } } } } } }";
+const GITHUB_PR_METADATA_QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) { viewer { login } repository(owner: $owner, name: $name) { pullRequest(number: $number) { author { login avatarUrl(size: 64) } comments(first: 100) { nodes { author { login avatarUrl(size: 64) } } } reviews(first: 100) { nodes { author { login avatarUrl(size: 64) } } } headRefOid baseRefOid commits(first: 100) { nodes { commit { oid additions deletions } } } viewerDidAuthor viewerLatestReviewRequest { id } reviewRequests(first: 100) { nodes { id } pageInfo { hasNextPage } } statusCheckRollup { commit { oid } state contexts(first: 100) { nodes { ... on CheckRun { name status conclusion detailsUrl databaseId startedAt completedAt } ... on StatusContext { context state targetUrl } } totalCount checkRunCountsByState { state count } statusContextCountsByState { state count } } } } } }";
 
 fn remove_nulls(value: &mut serde_json::Value) {
     match value {
@@ -885,6 +885,7 @@ impl GitHubCli {
                 .into(),
             author: zuse_protocol::ChangeRequestActor {
                 login: value["user"]["login"].as_str().unwrap_or_default().into(),
+                avatar_url: value["user"]["avatar_url"].as_str().map(str::to_owned),
             },
             created_at: value["created_at"].as_str().unwrap_or_default().into(),
             ..Default::default()
@@ -999,6 +1000,20 @@ impl GitHubCli {
                 // Who "you" are, so every comment of yours reads as yours,
                 // reviews included, before you've commented here.
                 detail.viewer_login = metadata.viewer_login.clone();
+                let avatars = metadata.avatars();
+                for actor in std::iter::once(&mut detail.author)
+                    .chain(
+                        detail
+                            .comments
+                            .iter_mut()
+                            .map(|comment| &mut comment.author),
+                    )
+                    .chain(detail.reviews.iter_mut().map(|review| &mut review.author))
+                {
+                    if let Some(url) = avatars.get(&actor.login) {
+                        actor.avatar_url = Some(url.clone());
+                    }
+                }
                 let checks = metadata.checks();
                 let base = metadata.base_ref_oid.clone();
                 if metadata.head_ref_oid.as_deref() == Some(detail.head_ref_oid.as_str()) {
@@ -1971,6 +1986,12 @@ struct GhSearchPullRequest {
 #[serde(rename_all = "camelCase")]
 struct GhPrMetadata {
     #[serde(default)]
+    author: Option<zuse_protocol::ChangeRequestActor>,
+    #[serde(default)]
+    comments: Option<serde_json::Value>,
+    #[serde(default)]
+    reviews: Option<serde_json::Value>,
+    #[serde(default)]
     commits: Option<serde_json::Value>,
     #[serde(default)]
     head_ref_oid: Option<String>,
@@ -1994,6 +2015,26 @@ struct GhPrMetadata {
 }
 
 impl GhPrMetadata {
+    fn avatars(&self) -> std::collections::HashMap<String, String> {
+        let mut avatars = std::collections::HashMap::new();
+        if let Some(actor) = &self.author
+            && let Some(url) = &actor.avatar_url
+        {
+            avatars.insert(actor.login.clone(), url.clone());
+        }
+        for connection in [&self.comments, &self.reviews].into_iter().flatten() {
+            if let Some(nodes) = connection["nodes"].as_array() {
+                for actor in nodes.iter().map(|node| &node["author"]) {
+                    if let (Some(login), Some(url)) =
+                        (actor["login"].as_str(), actor["avatarUrl"].as_str())
+                    {
+                        avatars.insert(login.to_owned(), url.to_owned());
+                    }
+                }
+            }
+        }
+        avatars
+    }
     fn checks(&self) -> Option<Vec<zuse_protocol::ChangeRequestCheck>> {
         match self.status_check_rollup.as_ref()? {
             None => Some(Vec::new()),
@@ -2627,6 +2668,25 @@ mod tests {
     use std::sync::Mutex;
 
     use super::*;
+
+    #[test]
+    fn metadata_collects_author_and_bot_avatar_urls() {
+        let metadata: GhPrMetadata = serde_json::from_value(serde_json::json!({
+            "author": {"login": "alice", "avatarUrl": "https://avatars.githubusercontent.com/u/1"},
+            "comments": {"nodes": [{"author": {"login": "app/example", "avatarUrl": "https://avatars.githubusercontent.com/in/2"}}, {"author": null}]},
+            "reviews": {"nodes": [{"author": {"login": "review[bot]", "avatarUrl": "https://avatars.githubusercontent.com/in/3"}}]}
+        })).unwrap();
+        let avatars = metadata.avatars();
+        assert_eq!(
+            avatars.get("app/example").map(String::as_str),
+            Some("https://avatars.githubusercontent.com/in/2")
+        );
+        assert_eq!(
+            avatars.get("review[bot]").map(String::as_str),
+            Some("https://avatars.githubusercontent.com/in/3")
+        );
+        assert_eq!(avatars.len(), 3);
+    }
 
     #[derive(Default)]
     struct FakeProcessRunner {

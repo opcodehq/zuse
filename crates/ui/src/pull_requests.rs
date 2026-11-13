@@ -3189,8 +3189,9 @@ fn render_pr_meta(item: &ChangeRequestListItem, tight: bool, theme: &Theme) -> A
                 .gap(px(6.0))
                 .max_w(px(160.0))
                 .min_w_0()
-                .child(super::pull_request_media::avatar(
+                .child(super::pull_request_media::avatar_with_url(
                     &item.author.login,
+                    item.author.avatar_url.as_deref(),
                     format!("pr-list-author-{}", pull_request_key(item)).into(),
                     16.0,
                     theme,

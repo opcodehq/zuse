@@ -609,9 +609,17 @@ pub(super) fn render_description(
     output.into_any_element()
 }
 
-/// GitHub redirects this public profile image endpoint to its avatar CDN.
-/// Stable sizing lets repeated authors share GPUI's image cache.
 pub(super) fn avatar(login: &str, id: SharedString, size: f32, theme: &Theme) -> AnyElement {
+    avatar_with_url(login, None, id, size, theme)
+}
+
+pub(super) fn avatar_with_url(
+    login: &str,
+    avatar_url: Option<&str>,
+    id: SharedString,
+    size: f32,
+    theme: &Theme,
+) -> AnyElement {
     let initial = login
         .chars()
         .next()
@@ -631,26 +639,8 @@ pub(super) fn avatar(login: &str, id: SharedString, size: f32, theme: &Theme) ->
             .child(initial.clone())
             .into_any_element()
     };
-    if login.is_empty() {
+    let Some(url) = avatar_url.and_then(trusted_avatar_url) else {
         return fallback();
-    }
-    let mut url = url::Url::parse("https://github.com/").unwrap();
-    url.path_segments_mut()
-        .unwrap()
-        .push(&format!("{login}.png"));
-    let attempt = avatar_attempt(login);
-    // GPUI caches a failed load for the session, so a retry asks for a
-    // fresh source rather than the failed one.
-    url.set_query(Some(&if attempt == 0 {
-        "size=64".to_owned()
-    } else {
-        format!("size=64&retry={attempt}")
-    }));
-    let failed_login = login.to_owned();
-    let failure = fallback.clone();
-    let on_failure = move || {
-        avatar_failed(&failed_login, attempt);
-        failure()
     };
     div()
         .id(id.clone())
@@ -664,59 +654,53 @@ pub(super) fn avatar(login: &str, id: SharedString, size: f32, theme: &Theme) ->
                 .size(px(size))
                 .rounded_full()
                 .object_fit(gpui::ObjectFit::Cover)
-                .with_loading(fallback)
-                .with_fallback(on_failure),
+                .with_loading(fallback.clone())
+                .with_fallback(fallback),
         )
         .into_any_element()
 }
 
-/// Retries after a failed avatar load, each later than the last, so one
-/// network blip at launch doesn't leave initials up for the whole session.
-const AVATAR_RETRY_DELAYS: [std::time::Duration; 3] = [
-    std::time::Duration::from_secs(2),
-    std::time::Duration::from_secs(15),
-    std::time::Duration::from_secs(120),
-];
-
-fn avatar_failures()
--> &'static std::sync::Mutex<std::collections::HashMap<String, (usize, std::time::Instant)>> {
-    static FAILURES: std::sync::OnceLock<
-        std::sync::Mutex<std::collections::HashMap<String, (usize, std::time::Instant)>>,
-    > = std::sync::OnceLock::new();
-    FAILURES.get_or_init(Default::default)
-}
-
-/// The attempt to render now: the last failed one until its retry delay
-/// passes, then the next.
-fn avatar_attempt(login: &str) -> usize {
-    let mut failures = avatar_failures().lock().unwrap();
-    let Some((attempt, at)) = failures.get_mut(login) else {
-        return 0;
-    };
-    match AVATAR_RETRY_DELAYS.get(*attempt) {
-        Some(delay) if at.elapsed() >= *delay => {
-            *attempt += 1;
-            *at = std::time::Instant::now();
-            *attempt
-        }
-        _ => *attempt,
+fn trusted_avatar_url(value: &str) -> Option<String> {
+    let url = url::Url::parse(value).ok()?;
+    let host = url.host_str()?;
+    if url.scheme() != "https"
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.port().is_some()
+        || !(host == "avatars.githubusercontent.com"
+            || matches!(
+                host,
+                "avatars0.githubusercontent.com"
+                    | "avatars1.githubusercontent.com"
+                    | "avatars2.githubusercontent.com"
+                    | "avatars3.githubusercontent.com"
+            ))
+    {
+        return None;
     }
-}
-
-/// Records the first failure; a retry's own timestamp was set when
-/// [`avatar_attempt`] started it.
-fn avatar_failed(login: &str, attempt: usize) {
-    avatar_failures()
-        .lock()
-        .unwrap()
-        .entry(login.to_owned())
-        .or_insert((attempt, std::time::Instant::now()));
+    Some(url.into())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::pull_request_test_support as fixture;
+
+    #[test]
+    fn avatar_urls_only_allow_github_avatar_hosts() {
+        assert!(trusted_avatar_url("https://avatars.githubusercontent.com/u/123?v=4").is_some());
+        assert!(trusted_avatar_url("https://avatars1.githubusercontent.com/in/123").is_some());
+        for url in [
+            "https://github.com/app%2Fvorflux.png",
+            "https://avatars.githubusercontent.com.evil.test/u/1",
+            "http://avatars.githubusercontent.com/u/1",
+            "https://user@avatars.githubusercontent.com/u/1",
+            "https://avatars.githubusercontent.com:444/u/1",
+            "not a url",
+        ] {
+            assert!(trusted_avatar_url(url).is_none(), "{url}");
+        }
+    }
 
     #[test]
     fn mixed_image_tables_keep_cells_and_link_destinations() {

@@ -2306,6 +2306,7 @@ pub(crate) fn fixture_seed_cache(cache: &Rc<RefCell<PullRequestCache>>) -> Strin
     let url = "https://github.com/opcodehq/fieldnotes/pull/2942".to_owned();
     let actor = |login: &str| ChangeRequestActor {
         login: login.into(),
+        ..Default::default()
     };
     let file = |path: &str, header: &str, body: &str| {
         format!("diff --git a/{path} b/{path}\n{header}--- a/{path}\n+++ b/{path}\n{body}")
@@ -3056,8 +3057,9 @@ impl Render for PullRequestDetailPage {
                                                 .flex()
                                                 .items_center()
                                                 .gap(px(8.0))
-                                                .child(super::pull_request_media::avatar(
+                                                .child(super::pull_request_media::avatar_with_url(
                                                     &comment.author.login,
+                                                    comment.author.avatar_url.as_deref(),
                                                     format!("pr-actor-{index}").into(),
                                                     20.0,
                                                     &theme,
@@ -3171,6 +3173,7 @@ impl Render for PullRequestDetailPage {
                                     preview.is_draft,
                                 ),
                                 author: preview.author.login.clone(),
+                                author_avatar_url: preview.author.avatar_url.clone(),
                                 age: Some(format!(
                                     "updated {}",
                                     crate::pull_requests::relative_time(
@@ -4730,7 +4733,7 @@ mod tests {
                     });
                     page.detail.as_mut().unwrap().comments.push(zuse_protocol::ChangeRequestComment {
                         viewer_did_author: true, body: "My comment".into(),
-                        author: zuse_protocol::ChangeRequestActor { login: "viewer".into() }, ..Default::default()
+                        author: zuse_protocol::ChangeRequestActor { login: "viewer".into(), ..Default::default() }, ..Default::default()
                     });
                     page.activity_bodies = vec![
                         super::super::pull_request_media::parse_description("My comment"),

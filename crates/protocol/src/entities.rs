@@ -1292,6 +1292,7 @@ pub struct ChangeRequestHeadRepository {
 #[serde(default, rename_all = "camelCase")]
 pub struct ChangeRequestActor {
     pub login: String,
+    pub avatar_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -1725,6 +1726,20 @@ pub struct ChatConnectivity {
 mod tests {
     use super::*;
     use chrono::TimeZone;
+
+    #[test]
+    fn change_request_actor_accepts_old_and_new_payloads() {
+        let old: ChangeRequestActor = serde_json::from_str(r#"{"login":"app/example"}"#).unwrap();
+        assert_eq!(old.avatar_url, None);
+        let new: ChangeRequestActor = serde_json::from_str(
+            r#"{"login":"example[bot]","avatarUrl":"https://avatars.githubusercontent.com/in/1"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            new.avatar_url.as_deref(),
+            Some("https://avatars.githubusercontent.com/in/1")
+        );
+    }
 
     #[test]
     fn outside_workspace_reads_round_trip_without_breaking_older_reasons() {
