@@ -25,7 +25,7 @@ typedef struct {
     gboolean visible, dirty;
     gchar *error;
     guint width, height;
-    double scale;
+    double scale, zoom;
     WebKitOptionMenu *options;
     gchar *context_link;
 } Page;
@@ -339,6 +339,7 @@ static Page *new_page(guint id) {
     p->width = 800;
     p->height = 600;
     p->scale = 1;
+    p->zoom = 1;
     p->visible = TRUE;
     p->window = gtk_offscreen_window_new();
     p->web = WEBKIT_WEB_VIEW(webkit_web_view_new_with_context(context));
@@ -721,11 +722,15 @@ static void command(JsonObject *o) {
         guint w = CLAMP(number(o, "width"), 1, MAX_DIMENSION),
               h = CLAMP(number(o, "height"), 1, MAX_DIMENSION);
         double scale = CLAMP(number(o, "scale"), 0.5, 4);
-        if (w != p->width || h != p->height || scale != p->scale) {
+        double zoom = json_object_has_member(o, "zoom") ? CLAMP(number(o, "zoom"), 0.25, 3) : 1;
+        if (w != p->width || h != p->height || scale != p->scale || zoom != p->zoom) {
             p->width = w;
             p->height = h;
             p->scale = scale;
-            webkit_web_view_set_zoom_level(p->web, scale);
+            p->zoom = zoom;
+            // Frames are device pixels, so the GPUI scale maps CSS pixels to
+            // them; the user's page zoom multiplies on top.
+            webkit_web_view_set_zoom_level(p->web, scale * zoom);
             gtk_window_set_default_size(GTK_WINDOW(p->window), w, h);
             gtk_widget_set_size_request(GTK_WIDGET(p->web), w, h);
             gtk_widget_queue_resize(p->window);
@@ -846,6 +851,10 @@ int main(int argc, char **argv) {
         g_printerr("Could not connect WebKitGTK to the display.\n");
         return 1;
     }
+    // GDK_DPI_SCALE does not override Xft.dpi/XSETTINGS. WebKit would scale
+    // pages by DPI/96 on top of the GPUI scale it already receives, so a 2x
+    // X11 desktop rendered every page at 200%. Pin GTK to the 96 DPI baseline.
+    g_object_set(gtk_settings_get_default(), "gtk-xft-dpi", 96 * 1024, NULL);
     pages = g_hash_table_new_full(g_direct_hash, g_direct_equal, NULL, free_page);
     input = g_byte_array_new();
     if (!configure_storage(argc, argv))
