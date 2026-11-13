@@ -7243,9 +7243,14 @@ impl Composer {
             this.on_input_edited(cx);
             cx.notify();
         });
-        cx.subscribe(&pickers, |_: &mut Self, _, _: &crate::pickers::EditLoadout, cx| {
-            cx.emit(ComposerEvent::WorkspaceCommand(WorkspaceCommand::ModelSettings));
-        })
+        cx.subscribe(
+            &pickers,
+            |_: &mut Self, _, _: &crate::pickers::EditLoadout, cx| {
+                cx.emit(ComposerEvent::WorkspaceCommand(
+                    WorkspaceCommand::ModelSettings,
+                ));
+            },
+        )
         .detach();
         let picker_focus = cx.subscribe(
             &pickers,
