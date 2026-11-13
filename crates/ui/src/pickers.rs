@@ -6533,12 +6533,11 @@ impl Render for Pickers {
             });
         // The pill names the effort too ("Sonnet 4.6 High"); the loadout
         // card it opens changes it.
-        let effort_suffix: Option<SharedString> = (!self.is_settings_model()
-            && self.title.is_none()
-            && !chip_label_loading)
-            .then(|| self.compact_effort(cx))
-            .flatten()
-            .and_then(|effort| effort.labels.get(effort.selected).cloned());
+        let effort_suffix: Option<SharedString> =
+            (!self.is_settings_model() && self.title.is_none() && !chip_label_loading)
+                .then(|| self.compact_effort(cx))
+                .flatten()
+                .and_then(|effort| effort.labels.get(effort.selected).cloned());
         let chip_width = self.model_chip_width(
             window,
             &model_label,
@@ -6637,7 +6636,11 @@ impl Render for Pickers {
                     .and_then(|e| e.labels.get(e.selected))
                     .cloned()
                     .unwrap_or_else(|| "Options".into());
-                let label: SharedString = if extra_options { "Options".into() } else { label };
+                let label: SharedString = if extra_options {
+                    "Options".into()
+                } else {
+                    label
+                };
                 let mut button = div()
                     .id("reasoning-trigger")
                     .relative()
@@ -9777,9 +9780,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn loadout_entries_switch_model_effort_and_options_in_one_pick(
-        cx: &mut gpui::TestAppContext,
-    ) {
+    fn loadout_entries_switch_model_effort_and_options_in_one_pick(cx: &mut gpui::TestAppContext) {
         let dir = tempfile::tempdir().unwrap();
         cx.update(|cx| {
             cx.set_global(Theme::dark());
