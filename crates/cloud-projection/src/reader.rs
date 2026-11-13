@@ -80,6 +80,11 @@ impl Reader {
     pub fn clear_native_cache(root: &std::path::Path) -> Result<()> {
         crate::cache::PageCache::purge_root(root)
     }
+    /// Forget one workspace's cached history, keeping every other chat.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn forget_native_workspace(root: &std::path::Path, workspace: &str) -> Result<()> {
+        crate::cache::PageCache::forget_workspace(root, workspace)
+    }
     #[cfg(not(target_arch = "wasm32"))]
     pub fn cached_head(&self, token: &str, workspace: &str, session: &str) -> Result<Option<Head>> {
         self.cache
@@ -202,11 +207,13 @@ impl Reader {
             response.url() == &requested,
             "cloud_projection_redirect_rejected"
         );
+        // A 401 is an expired bearer the next refresh replaces; it says
+        // nothing about access. A 403 withdraws this workspace only.
         #[cfg(not(target_arch = "wasm32"))]
-        if matches!(response.status().as_u16(), 401 | 403) {
-            if let Some(cache) = &self.cache {
-                let _ = cache.purge();
-            }
+        if response.status().as_u16() == 403
+            && let Some(cache) = &self.cache
+        {
+            let _ = crate::cache::PageCache::forget_workspace(cache.root(), workspace);
         }
         ensure!(
             response.status().is_success(),
@@ -586,7 +593,10 @@ mod cache_tests {
             .unwrap()
             .map(|row| row.unwrap())
             .collect();
-        assert_eq!(columns, ["namespace", "identity", "ciphertext", "digest"]);
+        assert_eq!(
+            columns,
+            ["namespace", "identity", "ciphertext", "digest", "workspace"]
+        );
         db.execute("UPDATE encrypted_pages SET ciphertext='damaged'", [])
             .unwrap();
         assert!(
@@ -700,6 +710,71 @@ mod cache_tests {
                 .get::<_, i64>(0))
                 .unwrap()
                 <= 256
+        );
+    }
+
+    /// What a restarted app sees: a new cache instance with no in-memory
+    /// leases still opens the last saved head. Forgetting one workspace (it
+    /// was deleted, or access to it was withdrawn) leaves every other chat.
+    #[test]
+    fn saved_heads_paint_after_restart_and_forgetting_one_workspace_keeps_the_rest() {
+        let (head, checkpoint, _) = fixtures();
+        let root = tempfile::tempdir().unwrap();
+        let reader = Reader::new("https://staging.example")
+            .unwrap()
+            .with_page_cache(root.path(), "account-a")
+            .unwrap();
+        let origin = reader.origin.as_str();
+        let encoded = B64.encode([42; 32]);
+        let key = TranscriptKey::parse(&encoded).unwrap();
+        let projection = json!({"workspaceId":"workspace","sessionId":"session","cursor":head.cursor,"beforeSequence":null,"ciphertext":checkpoint["checkpoint"]["ciphertext"],"transcriptKey":encoded});
+        reader.cache_projection("token-a", &projection).unwrap();
+        let mut other = head.clone();
+        other.workspace_id = "other".into();
+        let sealed = key
+            .seal("other", "session", &other.cursor, None, &other)
+            .unwrap();
+        let projection = json!({"workspaceId":"other","sessionId":"session","cursor":other.cursor,"beforeSequence":null,"ciphertext":sealed.ciphertext,"transcriptKey":encoded});
+        reader.cache_projection("token-a", &projection).unwrap();
+
+        let restarted =
+            crate::cache::PageCache::open(root.path(), origin, None, "account-a").unwrap();
+        let painted = restarted
+            .provisional_head("workspace", Some("session"))
+            .unwrap()
+            .expect("a restarted app paints the saved head");
+        assert_eq!(painted.chat.title.as_deref(), Some("Private history"));
+        let stranger =
+            crate::cache::PageCache::open(root.path(), origin, None, "account-b").unwrap();
+        assert!(
+            stranger
+                .provisional_head("workspace", Some("session"))
+                .unwrap()
+                .is_none(),
+            "another account never sees this account's history"
+        );
+
+        Reader::forget_native_workspace(root.path(), "workspace").unwrap();
+        let restarted =
+            crate::cache::PageCache::open(root.path(), origin, None, "account-a").unwrap();
+        assert!(
+            restarted
+                .provisional_head("workspace", Some("session"))
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            restarted
+                .provisional_head("other", Some("session"))
+                .unwrap()
+                .is_some(),
+            "forgetting one workspace keeps the others"
+        );
+        assert!(
+            reader
+                .cached_head("token-a", "workspace", "session")
+                .unwrap()
+                .is_none()
         );
     }
 

@@ -167,7 +167,7 @@ async fn run(
             Ok(()) => failures = 0,
             Err(Failure::Reset) => {
                 cursor = None;
-                purge_cache(&api).await;
+                apply_cache_effect(&api, CacheEffect::Catalog).await;
                 publish(
                     &feed,
                     &scope,
@@ -177,7 +177,7 @@ async fn run(
             }
             Err(Failure::Denied) => {
                 cursor = None;
-                purge_cache(&api).await;
+                apply_cache_effect(&api, CacheEffect::ClearAll).await;
                 publish(
                     &feed,
                     &scope,
@@ -219,7 +219,23 @@ async fn connect(
     feed: &std::sync::Weak<Feed>,
     cancel: &CancellationToken,
 ) -> std::result::Result<(), Failure> {
-    let token = zeroize::Zeroizing::new(auth.access_token().await.map_err(|_| Failure::Denied)?);
+    // Only a signed-out session is a denial. A refresh that could not reach
+    // the network (offline, just woke from sleep) retries without touching
+    // anything saved.
+    let token = zeroize::Zeroizing::new(auth.access_token().await.map_err(|error| {
+        let signed_out = matches!(
+            error.downcast_ref::<crate::account::AccountError>(),
+            Some(crate::account::AccountError::SignedOut | crate::account::AccountError::Changed)
+        ) || matches!(
+            error.downcast_ref::<zuse_rpc::TokenError>(),
+            Some(zuse_rpc::TokenError::SignedOut)
+        );
+        if signed_out {
+            Failure::Denied
+        } else {
+            Failure::Transient
+        }
+    })?);
     if !scope.matches(auth) {
         return Err(Failure::Denied);
     }
@@ -252,7 +268,9 @@ async fn connect(
     let grant: Value = serde_json::from_slice(&body).map_err(|_| Failure::Transient)?;
     match status {
         409 => return Err(Failure::Reset),
-        401 | 403 => return Err(Failure::Denied),
+        // An expired bearer; the next attempt presents a refreshed one.
+        401 => return Err(Failure::Transient),
+        403 => return Err(Failure::Denied),
         404 => return Err(Failure::Disabled),
         503 if grant["error"] == "account_events_disabled" => return Err(Failure::Disabled),
         200 => {}
@@ -327,13 +345,7 @@ async fn connect(
                         if value["type"] == "ready" {
                             value["type"] = json!("connected");
                         }
-                        if value["cacheRevoked"] == true
-                            || value["revokedWorkspaceIds"]
-                                .as_array()
-                                .is_some_and(|ids| !ids.is_empty())
-                        {
-                            purge_cache(&api).await;
-                        }
+                        apply_cache_effect(api, frame_cache_effect(&value)).await;
                         publish(feed, scope, value);
                         tokio::time::timeout(
                             Duration::from_secs(10),
@@ -349,11 +361,18 @@ async fn connect(
                     Some("error") => {
                         let revoked = value["cacheRevoked"] == true;
                         let expired = value["status"] == 401;
-                        if revoked {
-                            purge_cache(&api).await;
+                        let effect = frame_cache_effect(&value);
+                        apply_cache_effect(api, effect).await;
+                        if expired {
+                            // The socket's bearer outlived its lifetime. That
+                            // is not a loss of access: reconnect with a
+                            // refreshed token, and don't tell views (or open
+                            // computer streams) that access changed.
+                            publish(feed, scope, json!({"type":"reconnecting"}));
+                            return Err(Failure::Transient);
                         }
                         publish(feed, scope, value);
-                        return Err(if revoked && !expired {
+                        return Err(if revoked {
                             Failure::Denied
                         } else {
                             Failure::Transient
@@ -427,17 +446,97 @@ fn validate(frame: &Value) -> Result<()> {
     Ok(())
 }
 
-async fn purge_cache(api: &CloudApi) {
-    if api.hosted {
+/// What a feed frame or failure means for saved chat history on disk. Saved
+/// history only ever paints provisionally: every open still makes a fresh,
+/// authorized read, and that read forgets a workspace it is denied (403) or
+/// finds deleted (404). So only a confirmed account-wide denial wipes it all.
+#[derive(Debug, PartialEq, Eq)]
+enum CacheEffect {
+    Keep,
+    /// Missed invalidations (cursor expired, server reset): drop the saved
+    /// sidebar catalog, which the next list read rebuilds; keep history.
+    Catalog,
+    /// These workspaces were withdrawn; keep every other chat.
+    Forget(Vec<String>),
+    /// Access to the account's cloud was denied (403, or signed out).
+    ClearAll,
+}
+fn frame_cache_effect(frame: &Value) -> CacheEffect {
+    if frame["type"] == "error" {
+        // 401 = the socket's bearer expired. Refresh fixes it; nothing was lost.
+        return if frame["cacheRevoked"] == true && frame["status"] != 401 {
+            CacheEffect::ClearAll
+        } else {
+            CacheEffect::Keep
+        };
+    }
+    let revoked: Vec<String> = frame["revokedWorkspaceIds"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|id| id.as_str().map(str::to_owned))
+        .collect();
+    if !revoked.is_empty() {
+        return CacheEffect::Forget(revoked);
+    }
+    if frame["cacheRevoked"] == true {
+        return CacheEffect::Catalog;
+    }
+    CacheEffect::Keep
+}
+async fn apply_cache_effect(api: &CloudApi, effect: CacheEffect) {
+    if api.hosted || effect == CacheEffect::Keep {
         return;
     }
     #[cfg(not(target_arch = "wasm32"))]
-    let _ = tokio::task::spawn_blocking(super::clear_native_history_cache).await;
+    let _ = tokio::task::spawn_blocking(move || match effect {
+        CacheEffect::Keep => {}
+        CacheEffect::Catalog => super::sidebar_cache::clear_all(),
+        CacheEffect::Forget(ids) => {
+            super::sidebar_cache::clear_all();
+            for id in ids {
+                super::forget_native_workspace_history(&id);
+            }
+        }
+        CacheEffect::ClearAll => {
+            let _ = super::clear_native_history_cache();
+        }
+    })
+    .await;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// The server re-verifies the socket's bearer every few seconds, so each
+    /// access-token expiry ends the socket with a 401 `cacheRevoked` error.
+    /// That used to wipe every saved chat, leaving nothing to paint after a
+    /// restart. Only a real denial clears everything.
+    #[test]
+    fn an_expired_socket_bearer_keeps_saved_history_and_only_denial_clears_it() {
+        let expired =
+            json!({"type":"error","code":"invalid_workos_token","status":401,"cacheRevoked":true});
+        assert_eq!(frame_cache_effect(&expired), CacheEffect::Keep);
+        let denied = json!({"type":"error","code":"workspace_access_denied","status":403,"cacheRevoked":true});
+        assert_eq!(frame_cache_effect(&denied), CacheEffect::ClearAll);
+        let resync = json!({"type":"error","code":"account_event_scope_resync_required","status":409,"cacheRevoked":true});
+        assert_eq!(frame_cache_effect(&resync), CacheEffect::ClearAll);
+        let unavailable = json!({"type":"error","code":"x","status":503,"cacheRevoked":false});
+        assert_eq!(frame_cache_effect(&unavailable), CacheEffect::Keep);
+        let revoked = json!({"type":"events","events":[],"revokedWorkspaceIds":["gone"]});
+        assert_eq!(
+            frame_cache_effect(&revoked),
+            CacheEffect::Forget(vec!["gone".into()])
+        );
+        let reset = json!({"type":"reset","cacheRevoked":true});
+        assert_eq!(frame_cache_effect(&reset), CacheEffect::Catalog);
+        let events = json!({"type":"events","events":[{"kind":"workspace","resourceId":"w"}],"revokedWorkspaceIds":[]});
+        assert_eq!(frame_cache_effect(&events), CacheEffect::Keep);
+        assert_eq!(
+            frame_cache_effect(&json!({"type":"connected","revalidate":true})),
+            CacheEffect::Keep
+        );
+    }
     #[test]
     fn account_invalidations_are_bounded_and_never_accept_command_frames() {
         let frame = json!({"type":"events","events":[{"kind":"workspace","resourceId":"w"}],"revokedWorkspaceIds":[]});
