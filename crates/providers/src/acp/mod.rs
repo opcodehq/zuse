@@ -1264,6 +1264,7 @@ pub struct AcpHarness {
     credentials: Option<std::sync::Arc<dyn crate::credentials::CredentialResolver>>,
     custom: Option<zuse_protocol::custom_acp::CustomAcpAgent>,
     executable: Option<PathBuf>,
+    executable_source: Option<crate::executable::ExecutableSource>,
     /// Override of the agent's on-disk sessions root (grok's
     /// `~/.grok/sessions`), where subagent transcripts are tailed from.
     sessions_root: Option<PathBuf>,
@@ -1293,6 +1294,7 @@ impl AcpHarness {
             credentials: None,
             custom: None,
             executable: None,
+            executable_source: None,
             sessions_root: None,
             interrupt_grace: Duration::from_secs(2),
             kill_grace: Duration::from_secs(3),
@@ -1563,6 +1565,23 @@ impl AcpHarness {
         self
     }
 
+    /// Bind each new agent process to the path `source` returns at spawn
+    /// (managed installs).
+    pub fn with_executable_source(mut self, source: crate::executable::ExecutableSource) -> Self {
+        self.executable_source = Some(source);
+        self
+    }
+
+    /// The fixed binary, else the managed source's current answer.
+    fn explicit_executable(&self) -> Option<PathBuf> {
+        self.executable.clone().or_else(|| {
+            self.executable_source
+                .as_ref()
+                .and_then(|source| source())
+                .filter(|p| p.is_file())
+        })
+    }
+
     /// Test seam: tail subagent transcripts from this sessions root instead
     /// of the agent's real one (`~/.grok/sessions`).
     #[doc(hidden)]
@@ -1640,8 +1659,8 @@ impl AcpHarness {
             ));
         }
         let spec_args: Vec<String> = self.spec.args.iter().map(|a| a.to_string()).collect();
-        if let Some(p) = &self.executable {
-            return crate::executable::validate_native_override(p)
+        if let Some(p) = self.explicit_executable() {
+            return crate::executable::validate_native_override(&p)
                 .map(|program| Launch::Program(program, spec_args));
         }
         if let Some(p) = std::env::var_os(self.spec.env_override)
@@ -2317,8 +2336,8 @@ impl Harness for AcpHarness {
         // Overrides go through the same validation as `resolve_launch`, so an
         // override that points at nothing reports not-installed instead of an
         // agent that shows up in the composer and then fails to launch.
-        if let Some(p) = &self.executable {
-            return crate::executable::validate_native_override(p).is_ok();
+        if let Some(p) = self.explicit_executable() {
+            return crate::executable::validate_native_override(&p).is_ok();
         }
         if let Some(p) = std::env::var_os(self.spec.env_override)
             && !p.is_empty()
@@ -2348,8 +2367,8 @@ impl Harness for AcpHarness {
         }
         // Version checks and updates target the agent CLI when its transport differs.
         if self.spec.executable == self.spec.cli_executable {
-            if let Some(path) = &self.executable {
-                return Some(path.clone());
+            if let Some(path) = self.explicit_executable() {
+                return Some(path);
             }
             if let Some(path) = std::env::var_os(self.spec.env_override).filter(|p| !p.is_empty()) {
                 return Some(PathBuf::from(path));

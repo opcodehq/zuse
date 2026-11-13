@@ -461,7 +461,71 @@ impl MachineRecipe {
         if total > 1024 * 1024 {
             return Err("machine_recipe_too_large");
         }
+        if let Some(delivery) = self.delivery(0) {
+            let size = serde_json::to_vec(&delivery)
+                .map_err(|_| "invalid_machine_recipe")?
+                .len();
+            if size > MACHINE_DELIVERY_LIMIT {
+                return Err("machine_recipe_too_large");
+            }
+        }
         Ok(())
+    }
+}
+
+/// A runtime that advertises this applies [`MachineDelivery`] at start. The
+/// server only sends `machineDelivery` in the bootstrap to runtimes that
+/// advertise it; older runtimes neither receive nor need it.
+pub const MACHINE_DELIVERY_CAPABILITY: &str = "rust-machine-delivery-v1";
+/// Serialized bound for the delivered part of a recipe. The bootstrap that
+/// carries it is persisted by the runtime alongside its identity, so it must
+/// stay well below that store's limit even with worst-case JSON escaping.
+pub const MACHINE_DELIVERY_LIMIT: usize = 768 * 1024;
+
+/// The part of a machine recipe applied to every task computer at start,
+/// without an image: user-level instructions, skills and home files. The
+/// setup script is not here; it only runs when the image is built.
+///
+/// Unknown fields are ignored so a newer server can extend it.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MachineDelivery {
+    pub revision: i64,
+    #[serde(default)]
+    pub instructions: String,
+    #[serde(default)]
+    pub skills: Vec<MachineSkill>,
+    #[serde(default)]
+    pub files: Vec<MachineFile>,
+}
+
+impl MachineDelivery {
+    /// The same checks the recipe got when it was saved; the runtime repeats
+    /// them so it never writes a path the server would have refused.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        MachineRecipe {
+            instructions: self.instructions.clone(),
+            skills: self.skills.clone(),
+            files: self.files.clone(),
+            ..Default::default()
+        }
+        .validate()
+    }
+}
+
+impl MachineRecipe {
+    /// What a task computer receives at start, or `None` when the recipe
+    /// has nothing to apply without an image.
+    pub fn delivery(&self, revision: i64) -> Option<MachineDelivery> {
+        if self.instructions.trim().is_empty() && self.skills.is_empty() && self.files.is_empty() {
+            return None;
+        }
+        Some(MachineDelivery {
+            revision,
+            instructions: self.instructions.clone(),
+            skills: self.skills.clone(),
+            files: self.files.clone(),
+        })
     }
 }
 
@@ -640,5 +704,66 @@ mod machine_recipe_tests {
         }];
         assert_eq!(recipe.validate(), Err("invalid_machine_skill"));
         assert!(MachineRecipe::default().is_empty());
+    }
+
+    #[test]
+    fn delivery_carries_instructions_skills_and_files_but_never_the_setup_script() {
+        let recipe = MachineRecipe {
+            setup_script: "sudo apt-get install -y ffmpeg".into(),
+            ..Default::default()
+        };
+        assert_eq!(recipe.delivery(3), None, "a setup script needs an image");
+        let recipe = MachineRecipe {
+            instructions: "Keep commits small.".into(),
+            skills: vec![MachineSkill {
+                name: "release-notes".into(),
+                content: "# Release notes".into(),
+            }],
+            files: vec![MachineFile {
+                path: ".gitconfig".into(),
+                content: "[user]\n".into(),
+            }],
+            ..recipe
+        };
+        let delivery = recipe.delivery(3).unwrap();
+        assert_eq!(delivery.revision, 3);
+        assert_eq!(delivery.validate(), Ok(()));
+        let wire = serde_json::to_value(&delivery).unwrap();
+        assert!(wire.get("setupScript").is_none());
+        // A newer server may add fields; this runtime still reads the rest.
+        let mut newer = wire.clone();
+        newer["futureField"] = serde_json::json!(true);
+        assert_eq!(
+            serde_json::from_value::<MachineDelivery>(newer).unwrap(),
+            delivery
+        );
+    }
+
+    #[test]
+    fn delivery_size_is_bounded_even_when_escaping_expands_it() {
+        // 16 skills of 60 KiB each pass the per-entry and total content limits,
+        // but control characters escape to six bytes each on the wire.
+        let recipe = MachineRecipe {
+            skills: (0..16)
+                .map(|i| MachineSkill {
+                    name: format!("skill-{i}"),
+                    content: "\u{1}".repeat(60 * 1024),
+                })
+                .collect(),
+            ..Default::default()
+        };
+        assert_eq!(recipe.validate(), Err("machine_recipe_too_large"));
+        assert_eq!(
+            recipe.delivery(1).unwrap().validate(),
+            Err("machine_recipe_too_large")
+        );
+        let mut delivery = recipe.delivery(1).unwrap();
+        delivery.skills.truncate(1);
+        assert_eq!(delivery.validate(), Ok(()));
+        delivery.files = vec![MachineFile {
+            path: ".ssh/config".into(),
+            content: String::new(),
+        }];
+        assert_eq!(delivery.validate(), Err("invalid_machine_file"));
     }
 }
