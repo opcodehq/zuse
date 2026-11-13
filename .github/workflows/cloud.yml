@@ -120,6 +120,7 @@ jobs:
       - run: python3 infra/cloud/tests/managed-base-release.py
       - run: python3 infra/cloud/tests/fetch-harness-candidates.py
       - run: python3 infra/cloud/tests/authority-launcher.py
+      - run: python3 -W error::ResourceWarning infra/cloud/tests/user-image-guest.py
       - run: node --test infra/cloud/tests/build-managed-base.mjs infra/cloud/tests/probe-boxd-supervisor.mjs infra/cloud/tests/probe-boat-supervisor.mjs
       - name: Verify standalone database bootstrap and restricted roles
         run: |
