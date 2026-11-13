@@ -319,7 +319,8 @@ impl RepositoryPanel {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::saved_notice;
+    use zuse_protocol::cloud_computers::MachineRecipe;
 
     #[test]
     fn saved_notice_says_what_applies_now_and_what_waits_for_the_image() {

@@ -765,14 +765,15 @@ impl RuntimeControl {
             }
             // The account's latest machine instructions, skills and files,
             // read at each enrollment so a new chat gets the newest version.
-            if receipt.capabilities.as_ref().is_some_and(|caps| {
+            let delivers_machine = receipt.capabilities.as_ref().is_some_and(|caps| {
                 caps.iter()
                     .any(|c| c == zuse_protocol::cloud_computers::MACHINE_DELIVERY_CAPABILITY)
-            }) {
-                if let Some(delivery) = crate::computers::machine::delivery(&mut tx, owner).await? {
-                    response["machineDelivery"] = serde_json::to_value(delivery)
-                        .map_err(|_| ApiError::unavailable("machine_record_invalid"))?;
-                }
+            });
+            if delivers_machine
+                && let Some(delivery) = crate::computers::machine::delivery(&mut tx, owner).await?
+            {
+                response["machineDelivery"] = serde_json::to_value(delivery)
+                    .map_err(|_| ApiError::unavailable("machine_record_invalid"))?;
             }
             let storage: zuse_protocol::cloud::CloudRuntimeStorage =
                 serde_json::from_value(config["rustRuntimeStorage"].clone())
