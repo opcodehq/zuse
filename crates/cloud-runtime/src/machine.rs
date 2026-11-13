@@ -136,6 +136,10 @@ pub fn apply(data: &Path, layout: &Layout, delivery: Option<&MachineDelivery>) -
         Err(error) => return Err(error.into()),
     };
     let targets = delivery.map(|d| layout.targets(d)).unwrap_or_default();
+    if targets.is_empty() && previous.written.is_empty() && !receipt_path.exists() {
+        // Nothing delivered now or before: leave the data directory as is.
+        return Ok(Applied::default());
+    }
     let mut applied = Applied::default();
     let mut written = BTreeMap::new();
 
@@ -426,6 +430,13 @@ mod tests {
             read(layout.home.join(".gitconfig")),
             "[user]\n\tname = Edited\n"
         );
+    }
+
+    #[test]
+    fn no_recipe_leaves_the_data_directory_untouched() {
+        let (_root, data, layout) = fixture();
+        assert_eq!(apply(&data, &layout, None).unwrap(), Applied::default());
+        assert_eq!(std::fs::read_dir(&data).unwrap().count(), 0);
     }
 
     #[test]

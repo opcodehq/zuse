@@ -452,10 +452,6 @@ async fn run() -> Result<()> {
             .ok_or_else(|| anyhow::anyhow!("workspace_root_required"))?,
     )?;
     ensure!(checkout.is_dir(), "workspace_checkout_missing");
-    // Before any agent can start: the account's instructions, skills and home
-    // files. Fixed for this enrollment; a newer recipe arrives with the next
-    // computer's bootstrap. Never fatal: the task runs without them.
-    apply_machine_delivery(&directory, &checkout, &bootstrap);
     let profile = EngineProfile::synced(
         &directory,
         &bootstrap.workspace_id,
@@ -475,6 +471,12 @@ async fn run() -> Result<()> {
         &binding.incarnation,
         &enrollment,
     )?;
+    // Before any agent can start: the account's instructions, skills and home
+    // files. Fixed for this enrollment; a newer recipe arrives with the next
+    // computer's bootstrap. Never fatal: the task runs without them. Only
+    // after storage is prepared: a first start refuses unrecognized files in
+    // the data directory, and this leaves a receipt there.
+    apply_machine_delivery(&directory, &checkout, &bootstrap);
     let command_key = {
         let key = identity.open_transcript_key(&bootstrap.sealed_transcript_key)?;
         zuse_cloud_runtime::mailbox::CommandKey::parse(&key)?
