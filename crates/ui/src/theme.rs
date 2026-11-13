@@ -1982,17 +1982,16 @@ fn band_for(appearance: Appearance) -> Hsla {
     }
 }
 
-/// Selected background for workspace tabs and sidebar rows. Dark uses the
-/// reference charcoal; light keeps a subtle black wash. Selection *inside
-/// floating cards* uses [`card_selected_bg`].
+/// Selected-state glass treatment (tabs, session rows, space rows): a
+/// translucent wash that lets the vibrancy show through. Dark uses the 11%
+/// [`wash`]; light uses a 4% black wash to stay subtle over bright surfaces.
+/// Selection *inside floating cards* is different — see [`card_selected_bg`].
 pub fn glass_selected_bg() -> Hsla {
-    match current_appearance() {
-        Appearance::Dark => gpui::rgb(0x353535).into(),
-        Appearance::Light => selected_wash(),
-    }
+    selected_wash()
 }
 
-/// The selected wash for rows and chips inside floating cards.
+/// The translucent selected wash used by workspace rows and chips inside
+/// floating cards.
 fn selected_wash() -> Hsla {
     match current_appearance() {
         Appearance::Dark => wash(0.11),
@@ -2001,7 +2000,7 @@ fn selected_wash() -> Hsla {
 }
 
 /// The user message bubble's plate: the same translucent wash family as
-/// [`selected_wash`], one step softer — at the selection weight the
+/// [`glass_selected_bg`], one step softer — at the selection weight the
 /// bubble read too strong for settled content (user report), and an opaque
 /// plate before that read as a solid slab over glass.
 pub fn user_bubble_bg() -> Hsla {
@@ -3154,11 +3153,10 @@ mod tests {
     }
 
     #[test]
-    fn workspace_selection_uses_reference_charcoal_in_dark_mode() {
+    fn workspace_selection_uses_translucent_wash() {
         let _guard = lock_appearance();
         set_current_appearance(Appearance::Dark);
-        let expected: Hsla = gpui::rgb(0x353535).into();
-        assert_eq!(glass_selected_bg(), expected);
+        assert_eq!(glass_selected_bg(), wash(0.11));
 
         set_current_appearance(Appearance::Light);
         let light = glass_selected_bg();

@@ -9526,7 +9526,7 @@ impl Shell {
         };
         let mut corner = Some(corner);
         let hover = theme.glass_hover();
-        let selected_bg = crate::theme::glass_selected_bg();
+        let selected_wash = crate::theme::glass_selected_bg();
         // Metadata reads in the subtle text role, as do read titles;
         // titles turn strong once selected or unread.
         let subline = theme.text_muted;
@@ -9540,11 +9540,11 @@ impl Shell {
         // the wash and the title brighten ride the same 150ms blend.
         let fade_key = format!("{row_id}-hover");
         let rest_bg = if selected {
-            selected_bg
+            selected_wash
         } else {
             crate::theme::wash(0.0)
         };
-        let hover_bg = if selected { selected_bg } else { hover };
+        let hover_bg = if selected { selected_wash } else { hover };
         // The row a context menu was opened on stays lit while the menu is
         // up; the pointer leaving it for the menu must not drop the wash.
         let menu_target = !preview && self.chat_menu_targets(&id);
@@ -9590,7 +9590,7 @@ impl Shell {
             } else {
                 motion::hover_blend(&fade_key, rest_bg, hover_bg)
             })
-            // No selection ring (user request) — the fill alone marks the
+            // No selection ring (user request) — the wash alone marks the
             // active row.
             // Row hover drives BOTH the wash blend and the corner's
             // status→Archive swap (one listener — gpui allows a single
