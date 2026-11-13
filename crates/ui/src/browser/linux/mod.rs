@@ -368,7 +368,7 @@ pub struct NativePage {
     pub bounds: Bounds<Pixels>,
     pub scale: f32,
     dark: std::cell::Cell<Option<bool>>,
-    geometry: Option<(u32, u32, u32)>,
+    geometry: Option<(u32, u32, u32, u32)>,
     presentation: Presentation,
     pub image: Option<Arc<RenderImage>>,
     pub image_scale: f32,
@@ -488,7 +488,9 @@ impl NativePage {
             }
         }
     }
-    pub fn sync(&mut self, bounds: Bounds<Pixels>, scale: f32) {
+    /// `zoom` is the user's page magnification (1.0 = 100%), applied on top
+    /// of the display scale.
+    pub fn sync(&mut self, bounds: Bounds<Pixels>, scale: f32, zoom: f32) {
         self.bounds = bounds;
         self.scale = scale;
         let geometry = (
@@ -499,10 +501,12 @@ impl NativePage {
                 .round()
                 .clamp(1., 8192.) as u32,
             scale.to_bits(),
+            zoom.to_bits(),
         );
         if self.geometry != Some(geometry) {
             self.command(
-                json!({"cmd":"resize","width":geometry.0,"height":geometry.1,"scale":scale}),
+                json!({"cmd":"resize","width":geometry.0,"height":geometry.1,
+                "scale":scale,"zoom":zoom}),
             );
             self.geometry = Some(geometry);
         }
@@ -728,6 +732,16 @@ impl super::BrowserSurface {
     }
     pub fn fixture_linux_evaluation(&self) -> Option<Value> {
         self.native.as_ref().unwrap().evaluation()
+    }
+    pub fn fixture_toolbar_menu(&mut self, open: bool, cx: &mut gpui::Context<Self>) {
+        if open {
+            self.open_toolbar_menu(cx);
+        } else {
+            self.close_toolbar_menu(cx);
+        }
+    }
+    pub fn fixture_set_zoom(&mut self, percent: u16, cx: &mut gpui::Context<Self>) {
+        self.set_zoom(percent, cx);
     }
 }
 

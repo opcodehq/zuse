@@ -71,6 +71,34 @@ pub const TERMINAL_DEFAULT_HEIGHT: f32 = 280.0;
 pub const SAVE_DEBOUNCE_MS: u64 = 400;
 
 pub const FILES_AUTOSAVE_DELAY_DEFAULT_MS: u64 = 900;
+/// Page magnifications offered for built-in browser tabs, in percent.
+pub const BROWSER_ZOOM_LEVELS: [u16; 15] = [
+    25, 33, 50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200, 250, 300,
+];
+pub const BROWSER_ZOOM_DEFAULT: u16 = 100;
+
+/// Snap a stored or hand-edited zoom to the nearest offered level.
+pub fn browser_zoom_level(percent: u16) -> u16 {
+    BROWSER_ZOOM_LEVELS
+        .into_iter()
+        .min_by_key(|level| level.abs_diff(percent))
+        .unwrap_or(BROWSER_ZOOM_DEFAULT)
+}
+
+/// The next offered zoom level above (`step > 0`) or below the given one.
+pub fn browser_zoom_step(percent: u16, step: i8) -> u16 {
+    let current = browser_zoom_level(percent);
+    let index = BROWSER_ZOOM_LEVELS
+        .iter()
+        .position(|level| *level == current)
+        .unwrap_or(0);
+    let next = if step > 0 {
+        (index + 1).min(BROWSER_ZOOM_LEVELS.len() - 1)
+    } else {
+        index.saturating_sub(1)
+    };
+    BROWSER_ZOOM_LEVELS[next]
+}
 pub const FILES_AUTOSAVE_DELAY_MIN_MS: u64 = 100;
 pub const FILES_AUTOSAVE_DELAY_MAX_MS: u64 = 10_000;
 
@@ -989,6 +1017,8 @@ pub struct UiSettings {
     pub appearance: crate::appearance::AppearanceMode,
     /// Browser page color scheme; System follows the Zuse interface.
     pub browser_appearance: crate::appearance::AppearanceMode,
+    /// Page magnification for built-in browser tabs, in percent.
+    pub browser_zoom: u16,
     /// Optional columns shown in every Git History pane.
     pub git_history_columns: GitHistoryColumns,
     /// User-adjusted widths for the resizable Git History columns.
@@ -1144,6 +1174,7 @@ impl Default for UiSettings {
             appshot_destination: crate::appshots::AppshotDestination::Automatic,
             appearance: crate::appearance::AppearanceMode::default(),
             browser_appearance: crate::appearance::AppearanceMode::default(),
+            browser_zoom: BROWSER_ZOOM_DEFAULT,
             git_history_columns: GitHistoryColumns::default(),
             git_history_column_widths: GitHistoryColumnWidths::default(),
             git_history_column_order: GitHistoryColumnOrder::default(),
@@ -2044,6 +2075,7 @@ impl UiSettings {
             settings_section,
             appearance,
             browser_appearance,
+            browser_zoom,
             git_history_columns,
             git_history_column_widths,
             git_history_column_order,
@@ -2136,6 +2168,7 @@ impl UiSettings {
         self.git_history_column_widths = self.git_history_column_widths.clamped();
         self.git_history_column_order = self.git_history_column_order.normalized();
         self.ui_font_size = self.ui_font_size.normalized();
+        self.browser_zoom = browser_zoom_level(self.browser_zoom);
         if let Some(background) = self.new_thread_composer_background.as_mut() {
             background.adjustment = background.adjustment.normalized();
         }
@@ -3130,6 +3163,7 @@ mod tests {
             },
             appearance: crate::appearance::AppearanceMode::Light,
             browser_appearance: crate::appearance::AppearanceMode::Dark,
+            browser_zoom: 150,
             git_history_columns: GitHistoryColumns {
                 author: false,
                 date: true,
@@ -3349,6 +3383,7 @@ mod tests {
             loaded.browser_appearance,
             crate::appearance::AppearanceMode::System
         );
+        assert_eq!(loaded.browser_zoom, BROWSER_ZOOM_DEFAULT);
         assert_eq!(loaded.accent, zuse_theme::AccentSelection::ThemeDefault);
         assert_eq!(loaded.surface, zuse_theme::SurfacePreference::ThemeDefault);
         assert_eq!(loaded.sidebar_width, 300.0);
@@ -3464,6 +3499,17 @@ mod tests {
             loaded.ui_font_size,
             crate::typography::UiFontSize::default()
         );
+    }
+
+    #[test]
+    fn browser_zoom_snaps_and_steps_through_offered_levels() {
+        assert_eq!(browser_zoom_level(0), 25);
+        assert_eq!(browser_zoom_level(104), 100);
+        assert_eq!(browser_zoom_level(1000), 300);
+        assert_eq!(browser_zoom_step(100, 1), 110);
+        assert_eq!(browser_zoom_step(100, -1), 90);
+        assert_eq!(browser_zoom_step(300, 1), 300);
+        assert_eq!(browser_zoom_step(25, -1), 25);
     }
 
     #[test]

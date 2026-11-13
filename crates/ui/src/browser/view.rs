@@ -1068,6 +1068,67 @@ impl Render for BrowserSurface {
                 .when(!has_page, |el| el.opacity(0.4).cursor_default()),
             );
             let menu = menu.child(copy);
+            #[cfg(target_os = "linux")]
+            let menu = {
+                let zoom = crate::settings::current(cx).browser_zoom;
+                let levels = crate::settings::BROWSER_ZOOM_LEVELS;
+                let stepper = |id: &'static str, glyph: &'static str, label: &'static str, enabled: bool| {
+                    div()
+                        .id(id)
+                        .debug_selector(move || id.into())
+                        .size(px(22.0))
+                        .rounded(px(6.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_size(px(14.0))
+                        .text_color(theme.text_muted)
+                        .role(gpui::Role::Button)
+                        .aria_label(label)
+                        .child(glyph)
+                        .when(enabled, |el| {
+                            el.cursor_pointer().hover(|el| el.bg(crate::theme::wash(0.1)))
+                        })
+                        .when(!enabled, |el| el.opacity(0.35).cursor_default())
+                };
+                menu.child(
+                    browser_menu_row(&theme, "browser-zoom", icons::MAGNIFER, "Zoom")
+                        .cursor_default()
+                        .child(div().flex_1())
+                        .child(
+                            stepper("browser-zoom-out", "−", "Zoom out", zoom > levels[0])
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    cx.stop_propagation();
+                                    this.step_zoom(-1, cx);
+                                })),
+                        )
+                        .child(
+                            div()
+                                .id("browser-zoom-reset")
+                                .debug_selector(|| "browser-zoom-reset".into())
+                                .w(px(40.0))
+                                .flex()
+                                .justify_center()
+                                .role(gpui::Role::Button)
+                                .aria_label("Reset zoom to 100%")
+                                .when(zoom != crate::settings::BROWSER_ZOOM_DEFAULT, |el| {
+                                    el.cursor_pointer().hover(|el| el.text_color(theme.text_strong))
+                                })
+                                .child(format!("{zoom}%"))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    cx.stop_propagation();
+                                    this.set_zoom(crate::settings::BROWSER_ZOOM_DEFAULT, cx);
+                                })),
+                        )
+                        .child(
+                            stepper("browser-zoom-in", "+", "Zoom in", zoom < levels[levels.len() - 1])
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    cx.stop_propagation();
+                                    this.step_zoom(1, cx);
+                                })),
+                        ),
+                )
+            };
             #[cfg(any(target_os = "macos", target_os = "linux", windows))]
             let menu = {
                 use crate::appearance::AppearanceMode;
@@ -1384,6 +1445,20 @@ impl Render for BrowserSurface {
             .on_action(cx.listener(|_, _: &super::CloseTab, _, cx| cx.emit(BrowserEvent::Close)))
             .on_action(cx.listener(|this, _: &super::Back, _, _| this.history(false)))
             .on_action(cx.listener(|this, _: &super::Forward, _, _| this.history(true)))
+            .when(cfg!(target_os = "linux"), |el| {
+                el.on_action(cx.listener(|_this, _: &super::ZoomIn, _, _cx| {
+                    #[cfg(target_os = "linux")]
+                    _this.step_zoom(1, _cx);
+                }))
+                .on_action(cx.listener(|_this, _: &super::ZoomOut, _, _cx| {
+                    #[cfg(target_os = "linux")]
+                    _this.step_zoom(-1, _cx);
+                }))
+                .on_action(cx.listener(|_this, _: &super::ZoomReset, _, _cx| {
+                    #[cfg(target_os = "linux")]
+                    _this.set_zoom(crate::settings::BROWSER_ZOOM_DEFAULT, _cx);
+                }))
+            })
             // Mouse side buttons drive the shell's route history everywhere
             // else; over the browser they are inert.
             .on_mouse_down(MouseButton::Navigate(gpui::NavigationDirection::Back), |_, _, cx| cx.stop_propagation())
@@ -1457,6 +1532,7 @@ impl BrowserSurface {
                 let image = native.image.clone();
                 let image_scale = native.image_scale;
                 let dark = page_dark(theme, cx);
+                let zoom = f32::from(crate::settings::current(cx).browser_zoom) / 100.;
                 let entity = cx.entity().downgrade();
                 body.child(gpui::canvas(|_,_,_| (), move |bounds,_,window,cx| {
                     let scale = window.scale_factor();
@@ -1465,7 +1541,7 @@ impl BrowserSurface {
                         window.handle_input(&focus,gpui::ElementInputHandler::new(bounds,view),cx);
                     }
                     let _ = entity.update(cx, |this,_| {
-                        if let Some(native)=&mut this.native { native.sync(bounds,scale); native.set_appearance(dark); }
+                        if let Some(native)=&mut this.native { native.sync(bounds,scale,zoom); native.set_appearance(dark); }
                     });
                     let capture=entity.clone();
                     window.on_mouse_event(move |event: &gpui::MouseMoveEvent,phase,_,cx| {

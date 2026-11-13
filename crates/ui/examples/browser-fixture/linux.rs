@@ -139,6 +139,57 @@ fn click(
         cx,
     )
 }
+/// Default page zoom must match the display scale exactly (no extra Xft DPI
+/// scaling), and the menu's zoom setting must resize page CSS pixels.
+async fn zoom(
+    window: WindowHandle<shell::Shell>,
+    page: &Entity<BrowserSurface>,
+    output: &std::path::Path,
+    cx: &mut AsyncApp,
+) -> anyhow::Result<()> {
+    let scale = AnyWindowHandle::from(window).update(cx, |_, w, _| w.scale_factor())? as f64;
+    let width = f32::from(
+        page.read_with(cx, |b, _| b.fixture_linux_bounds())
+            .size
+            .width,
+    ) as f64;
+    let metrics = "[innerWidth, devicePixelRatio]";
+    let at = |value: &serde_json::Value, i: usize| value[i].as_f64().unwrap_or(0.);
+    let base = eval(page, metrics, cx).await?;
+    anyhow::ensure!(
+        (at(&base, 0) - width).abs() <= 1. && (at(&base, 1) - scale).abs() < 0.01,
+        "default page zoom is not 100%: {base} for a {width}pt pane at {scale}x"
+    );
+    page.update(cx, |b, cx| b.fixture_toolbar_menu(true, cx));
+    pause(cx, 400).await;
+    capture_frame(window, output, "linux-zoom-100-dark", cx).await?;
+    page.update(cx, |b, cx| b.fixture_set_zoom(150, cx));
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        pause(cx, 100).await;
+        let zoomed = eval(page, metrics, cx).await?;
+        if (at(&zoomed, 1) - scale * 1.5).abs() < 0.01 {
+            anyhow::ensure!(
+                (at(&zoomed, 0) - width / 1.5).abs() <= 1.,
+                "150% zoom did not shrink the CSS viewport: {zoomed}"
+            );
+            break;
+        }
+        anyhow::ensure!(
+            std::time::Instant::now() < deadline,
+            "150% zoom was not applied: {zoomed}"
+        );
+    }
+    pause(cx, 200).await;
+    capture_frame(window, output, "linux-zoom-150-dark", cx).await?;
+    page.update(cx, |b, cx| {
+        b.fixture_set_zoom(zuse_ui::settings::BROWSER_ZOOM_DEFAULT, cx);
+        b.fixture_toolbar_menu(false, cx);
+    });
+    pause(cx, 400).await;
+    Ok(())
+}
+
 pub async fn exercise(
     window: WindowHandle<shell::Shell>,
     page: Entity<BrowserSurface>,
@@ -189,6 +240,7 @@ pub async fn exercise(
         }
     });
     pause(cx, 400).await;
+    zoom(window, &page, output, cx).await?;
     let bounds = page.read_with(cx, |b, _| b.fixture_linux_bounds());
     let input=eval(&page,"(()=>{let r=document.getElementById('browser-input').getBoundingClientRect();return [r.x+20,r.y+15]})()",cx).await?;
     click(
