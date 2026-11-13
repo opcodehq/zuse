@@ -4873,8 +4873,12 @@ impl EngineRpc {
                 if p.refresh {
                     self.github.invalidate_watches();
                 }
-                let value = if method == methods::GET_CHANGE_REQUEST_DIFF && p.commit_oid.is_some() {
-                    self.github.commit_diff_request(&p.url, p.commit_oid.as_deref().unwrap(), p.refresh).await.map_err(change_request_rpc_error)?
+                let value = if method == methods::GET_CHANGE_REQUEST_DIFF && p.commit_oid.is_some()
+                {
+                    self.github
+                        .commit_diff_request(&p.url, p.commit_oid.as_deref().unwrap(), p.refresh)
+                        .await
+                        .map_err(change_request_rpc_error)?
                 } else if p.summary && method == methods::GET_CHANGE_REQUEST {
                     self.github
                         .summary_request(&p.url, p.refresh)
