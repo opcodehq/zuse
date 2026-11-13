@@ -124,6 +124,25 @@ impl RuntimeControl {
             let snapshot:Option<String>=sqlx::query_scalar("SELECT b.snapshot_id FROM api_cloud_project_builds b WHERE b.account_id=$1 AND (b.project_id=$2 OR b.settings->'rustRuntimeRepositoryLayouts' ? $2) AND b.provider=$3 AND b.state='ready' AND b.settings->>'runtimeRpcProtocol'='zuse-rpc-v1' AND b.settings->>'rustRuntimeStorageFormat'='zuse-rust-engine-v1' AND NOT EXISTS(SELECT 1 FROM api_cloud_snapshots s WHERE (s.provider=b.provider OR (b.provider='boxd' AND s.provider='box')) AND s.snapshot_id=b.snapshot_id AND s.state IN ('deleting','deleted')) ORDER BY b.updated_at DESC LIMIT 1 FOR SHARE").bind(required(row,"account_id")?).bind(required(row,"project_id")?).bind(required(row,"provider")?).fetch_optional(&mut **tx).await?;
             snapshot.ok_or_else(|| ApiError::conflict("cloud_restore_image_required"))?
         };
+        // Same release, but the account's user image on it when one is ready:
+        // unarchive and "Update computer" keep the setup script's tools.
+        let user_image = match row["managed_release_id"].as_str() {
+            Some(release) if row["request_config"]["managedCandidateSha256"].is_null() => {
+                crate::project_caches::user_images::selection::for_restore_tx(
+                    tx,
+                    required(row, "account_id")?,
+                    required(row, "provider")?,
+                    release,
+                )
+                .await?
+                .filter(|hit| hit.base_artifact_id == snapshot)
+            }
+            _ => None,
+        };
+        let snapshot = user_image
+            .as_ref()
+            .map(|hit| hit.artifact_id.clone())
+            .unwrap_or(snapshot);
         let previous = row["request_config"]["runtimeGeneration"]
             .as_i64()
             .ok_or_else(fenced)?;
@@ -172,6 +191,13 @@ impl RuntimeControl {
             config.as_object_mut().ok_or_else(fenced)?.remove(key);
         }
         super::runtime_updates::fresh_machine(&mut config);
+        config
+            .as_object_mut()
+            .ok_or_else(fenced)?
+            .remove("rustMachineImage");
+        if let Some(hit) = &user_image {
+            config["rustMachineImage"] = hit.config();
+        }
         config["runtimeGeneration"] = json!(generation);
         config["gatewayEpoch"] = json!(epoch);
         config["recoveryArchive"] = serde_json::to_value(a).map_err(|_| failed())?;

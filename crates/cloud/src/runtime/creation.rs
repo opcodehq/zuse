@@ -457,6 +457,40 @@ impl RuntimeControl {
             }
             None => return Err(ApiError::conflict("cloud_project_not_ready")),
         };
+        // The account's user image (built from its setup script) replaces the
+        // managed base snapshot when one is ready on a still-verified base.
+        let (build, user_image) = if self.authority.is_some()
+            && candidate_pin.is_none()
+            && build["settings"]["managedReleaseId"].is_string()
+            && build["settings"]["managedCandidateSha256"].is_null()
+            && self.user_image_control.available().await?
+        {
+            let size = body.size_id.as_deref().unwrap_or("default");
+            let organization = owner.starts_with("organization:");
+            match crate::project_caches::user_images::selection::for_new_computer_tx(
+                &mut tx,
+                owner,
+                &body.provider_id,
+                &build,
+                |base| {
+                    crate::managed_bases::source_from_locked_records(
+                        std::slice::from_ref(base),
+                        &body.provider_id,
+                        &body.agent,
+                        &body.model,
+                        size,
+                        organization,
+                    )
+                },
+            )
+            .await?
+            {
+                Some((build, hit)) => (build, Some(hit)),
+                None => (build, None),
+            }
+        } else {
+            (build, None)
+        };
         let managed = build["settings"]["managedReleaseId"].is_string();
         let server_admitted = body.initial_message_delivery.as_deref()
             == Some(zuse_protocol::cloud_task_commands::MODE);
@@ -698,9 +732,12 @@ impl RuntimeControl {
         } else {
             None
         };
+        // A project cache is built from the managed base and wins over it.
+        let user_image = user_image.filter(|_| project_cache.is_none());
         let selected_snapshot = project_cache
             .as_ref()
             .map(|hit| hit.artifact_id.as_str())
+            .or(user_image.as_ref().map(|hit| hit.artifact_id.as_str()))
             .unwrap_or(snapshot);
         let staging: bool = if facts.is_some() {
             true
@@ -916,6 +953,9 @@ impl RuntimeControl {
                 config["providerArtifactBinding"] = json!(binding);
             }
         }
+        if let Some(hit) = &user_image {
+            config["rustMachineImage"] = hit.config();
+        }
         if let Some(connection) = &body.agent_connection_id {
             if !brokered {
                 return Err(ApiError::conflict("runtime_provider_auth_adapter_required"));
@@ -1062,7 +1102,7 @@ impl RuntimeControl {
         self.save_task_admission_tx(&mut tx, owner, &id, &session, &admission, now)
             .await?;
         sqlx::query("INSERT INTO zuse_rust_control_owners(resource_kind,resource_id,backend,generation,updated_at) VALUES('workspace',$1,'rust',1,$2)").bind(&id).bind(now).execute(&mut *tx).await?;
-        self.queue_allocation_tx(&mut tx, &id, snapshot, now)
+        self.queue_allocation_tx(&mut tx, &id, selected_snapshot, now)
             .await?;
         let row: Value = sqlx::query_scalar(
             "SELECT to_jsonb(w) FROM api_cloud_workspaces w WHERE workspace_id=$1",

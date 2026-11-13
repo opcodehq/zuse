@@ -108,7 +108,60 @@ async fn deferred_repository_checks_admit_locally_and_still_fence_git_credential
     admission_case(false, true).await;
 }
 
+#[tokio::test]
+#[ignore = "requires explicit isolated localhost PostgreSQL"]
+async fn ready_user_image_replaces_the_base_snapshot_with_base_fallback() {
+    admission_case_with(false, false, true).await;
+}
+
 async fn admission_case(expanded_capacity_only: bool, defer_repository: bool) {
+    admission_case_with(expanded_capacity_only, defer_repository, false).await;
+}
+
+/// A ready user image on `release`, as the builder publishes it.
+async fn ready_user_image(
+    pool: &PgPool,
+    release: &ManagedBaseRelease,
+    artifact: &str,
+    built: i64,
+) -> String {
+    use crate::project_caches::user_images::*;
+    let recipe = zuse_protocol::cloud_computers::MachineRecipe {
+        setup_script: "npm i -g pnpm".into(),
+        ..Default::default()
+    };
+    let id = format!("uimg_{}", uuid::Uuid::new_v4().simple());
+    let bootstrap = release.initial_runtime_bootstrap.clone().unwrap();
+    let plan = BuildPlan {
+        version: 1,
+        image_id: id.clone(),
+        identity: UserImageIdentity {
+            version: 1,
+            owner_id: "user-test".into(),
+            provider: ProviderId::Boxd,
+            architecture: release.architecture.clone(),
+            base_release_id: release.release_id.clone(),
+            base_artifact_id: release.artifact_id.clone(),
+            base_artifact_version: "1".into(),
+            base_runtime_sha256: bootstrap.runtime_sha256.clone(),
+            recipe_digest: image_digest(&recipe).unwrap(),
+        },
+        setup_script: recipe.setup_script.clone(),
+        setup_timeout_seconds: recipe.setup_timeout_seconds,
+        initial_runtime_bootstrap: bootstrap,
+    };
+    sqlx::query("INSERT INTO cloud_machine_images(image_id,owner_id,provider,reason,state,phase,recipe_revision,recipe_digest,architecture,base_release_id,base_artifact_id,base_artifact_version,base_runtime_sha256,identity_key,plan,artifact_id,artifact_version,next_attempt_at,started_at,built_at,created_at,updated_at) VALUES($1,'user-test','boxd','recipe','ready','complete',1,$2,$3,$4,$5,'1',$6,$7,$8,$9,'1',0,$10,$10,$10,$10)")
+        .bind(&id).bind(&plan.identity.recipe_digest).bind(&plan.identity.architecture).bind(&plan.identity.base_release_id)
+        .bind(&plan.identity.base_artifact_id).bind(&plan.identity.base_runtime_sha256).bind(plan.identity.key().unwrap())
+        .bind(json!(plan)).bind(artifact).bind(built).execute(pool).await.unwrap();
+    id
+}
+
+async fn admission_case_with(
+    expanded_capacity_only: bool,
+    defer_repository: bool,
+    user_image: bool,
+) {
     let url = std::env::var("ZUSE_CLOUD_TEST_DATABASE_URL").expect("isolated PostgreSQL required");
     let parsed = reqwest::Url::parse(&url).unwrap();
     assert!(matches!(
@@ -165,6 +218,12 @@ async fn admission_case(expanded_capacity_only: bool, defer_repository: bool) {
         include_str!("../../migrations/0020_staging_managed_base_candidates.sql"),
         include_str!("../../migrations/0023_managed_base_admission_lock.sql"),
         include_str!("../../migrations/0025_admission_read_batch.sql"),
+        include_str!("../../migrations/0031_machine_images.sql"),
+        if user_image {
+            crate::project_caches::user_images::MIGRATION
+        } else {
+            "SELECT 1"
+        },
     ] {
         sqlx::raw_sql(migration).execute(&pool).await.unwrap();
     }
@@ -257,6 +316,19 @@ async fn admission_case(expanded_capacity_only: bool, defer_repository: bool) {
     );
     let mut r = release();
     r.manifest.rust_github_credentials_version = Some(1);
+    if user_image {
+        r.initial_runtime_bootstrap =
+            Some(crate::managed_bases::bootstrap::InitialRuntimeBootstrap {
+                version: 1,
+                mode: "stopped-memory-snapshot-v1".into(),
+                runtime_sha256: "a".repeat(64),
+                supervisor_sha256: "b".repeat(64),
+                service_sha256: "c".repeat(64),
+                manifest_sha256: "d".repeat(64),
+                helper_sha256: "e".repeat(64),
+                runtime_update_helper_sha256: None,
+            });
+    }
     r.register(&pool, now).await.unwrap();
     r.register(&pool, now + 1).await.unwrap();
     let mut held = application.begin().await.unwrap();
@@ -313,6 +385,28 @@ async fn admission_case(expanded_capacity_only: bool, defer_repository: bool) {
         "managed_base_release_immutable"
     );
     let before_reads = github.reads.load(std::sync::atomic::Ordering::SeqCst);
+    let image = if user_image {
+        // A recipe without a setup script never uses an image, even a ready one.
+        sqlx::query("INSERT INTO cloud_machine_versions(owner_id,revision,actor_id,recipe,digest,created_at) VALUES('user-test',1,'user-test','{\"instructions\":\"x\"}',$1,$2)").bind("f".repeat(64)).bind(now).execute(&pool).await.unwrap();
+        let id = ready_user_image(&pool, &r, "user-image-snapshot", now).await;
+        let mut tx = application.begin().await.unwrap();
+        assert!(
+            crate::project_caches::user_images::selection::for_restore_tx(
+                &mut tx,
+                "user-test",
+                "boxd",
+                &r.release_id
+            )
+            .await
+            .unwrap()
+            .is_none()
+        );
+        tx.rollback().await.unwrap();
+        sqlx::query("INSERT INTO cloud_machine_versions(owner_id,revision,actor_id,recipe,digest,created_at) VALUES('user-test',2,'user-test','{\"setupScript\":\"npm i -g pnpm\"}',$1,$2)").bind("f".repeat(64)).bind(now).execute(&pool).await.unwrap();
+        Some(id)
+    } else {
+        None
+    };
     let (left, right) = tokio::join!(
         control.create_workspace(&access, copy(&body), now),
         control.create_workspace(&access, copy(&body), now)
@@ -386,6 +480,106 @@ async fn admission_case(expanded_capacity_only: bool, defer_repository: bool) {
     assert_eq!(row["request_config"]["repositoryCache"], "none");
     let counts:(i64,i64,i64) = sqlx::query_as("SELECT (SELECT count(*) FROM api_cloud_project_builds),(SELECT count(*) FROM api_cloud_snapshots),(SELECT count(*) FROM zuse_rust_allocations)").fetch_one(&pool).await.unwrap();
     assert_eq!(counts, (0, 0, 1));
+    if let Some(image) = image {
+        let snapshot: String = sqlx::query_scalar(
+            "SELECT snapshot_id FROM zuse_rust_allocations WHERE workspace_id=$1",
+        )
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(snapshot, "user-image-snapshot");
+        assert_eq!(row["request_config"]["rustMachineImage"]["imageId"], image);
+        // Launch verification is unchanged: the base's own pins.
+        assert_eq!(
+            row["request_config"]["initialRuntimeBootstrap"],
+            json!(r.initial_runtime_bootstrap)
+        );
+        let mut tx = application.begin().await.unwrap();
+        let restore = crate::project_caches::user_images::selection::for_restore_tx(
+            &mut tx,
+            "user-test",
+            "boxd",
+            &r.release_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(restore.image_id, image);
+        tx.rollback().await.unwrap();
+        // A newer base is registered: the image on the older, still verified
+        // base keeps serving until its rebuild verifies.
+        let mut newer = r.clone();
+        newer.release_id = "managed-fixture-v2".into();
+        newer.manifest.build_id = newer.release_id.clone();
+        newer.artifact_id = "platform-snapshot-v2".into();
+        newer.register(&pool, now + 10).await.unwrap();
+        let next = |key: &str, branch: &str| {
+            let mut next = copy(&body);
+            next.idempotency_key = key.into();
+            next.branch = Some(branch.into());
+            next
+        };
+        let (second, _) = control
+            .create_workspace(&access, next("task-key-2", "task/two"), now + 20)
+            .await
+            .unwrap();
+        let second: Value = sqlx::query_scalar(
+            "SELECT to_jsonb(w) FROM api_cloud_workspaces w WHERE workspace_id=$1",
+        )
+        .bind(second["workspace"]["workspaceId"].as_str())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(second["managed_release_id"], r.release_id);
+        assert_eq!(
+            second["request_config"]["rustMachineImage"]["imageId"],
+            image
+        );
+        // Its base retired: new computers fall back to the newest base.
+        sqlx::query("UPDATE cloud_managed_bases SET state='retired' WHERE release_id=$1")
+            .bind(&r.release_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let (third, _) = control
+            .create_workspace(&access, next("task-key-3", "task/three"), now + 30)
+            .await
+            .unwrap();
+        let third: Value = sqlx::query_scalar(
+            "SELECT to_jsonb(w) FROM api_cloud_workspaces w WHERE workspace_id=$1",
+        )
+        .bind(third["workspace"]["workspaceId"].as_str())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(third["managed_release_id"], "managed-fixture-v2");
+        assert!(third["request_config"]["rustMachineImage"].is_null());
+        let snapshot: String = sqlx::query_scalar(
+            "SELECT snapshot_id FROM zuse_rust_allocations WHERE workspace_id=$1",
+        )
+        .bind(third["workspace_id"].as_str())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(snapshot, "platform-snapshot-v2");
+        application.close().await;
+        pool.close().await;
+        sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query("DROP OWNED BY zuse_cloud_staging")
+            .execute(&admin)
+            .await
+            .unwrap();
+        sqlx::query("DROP ROLE zuse_cloud_staging")
+            .execute(&admin)
+            .await
+            .unwrap();
+        return;
+    }
+
     if defer_repository {
         assert_eq!(
             github.reads.load(std::sync::atomic::Ordering::SeqCst),

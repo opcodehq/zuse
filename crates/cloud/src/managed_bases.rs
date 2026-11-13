@@ -4,6 +4,7 @@ pub mod bootstrap;
 use crate::error::ApiError;
 pub(crate) use admission_validation::source_from_locked_records;
 mod admission_lock;
+pub(crate) use admission_lock::record as locked_base_record;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sqlx::{PgPool, Postgres, Transaction};
