@@ -242,8 +242,7 @@ impl ComposerDefaults {
     /// Add an entry to the loadout's end. Returns false when it is already
     /// there or the loadout is full.
     pub fn add_to_loadout(&mut self, entry: LoadoutEntry) -> bool {
-        if self.loadout.len() >= LOADOUT_LIMIT || self.loadout.iter().any(|e| e.same_run(&entry))
-        {
+        if self.loadout.len() >= LOADOUT_LIMIT || self.loadout.iter().any(|e| e.same_run(&entry)) {
             return false;
         }
         self.loadout.push(entry);

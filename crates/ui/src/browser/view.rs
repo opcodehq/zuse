@@ -1072,25 +1072,27 @@ impl Render for BrowserSurface {
             let menu = {
                 let zoom = crate::settings::current(cx).browser_zoom;
                 let levels = crate::settings::BROWSER_ZOOM_LEVELS;
-                let stepper = |id: &'static str, glyph: &'static str, label: &'static str, enabled: bool| {
-                    div()
-                        .id(id)
-                        .debug_selector(move || id.into())
-                        .size(px(22.0))
-                        .rounded(px(6.0))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .text_size(px(14.0))
-                        .text_color(theme.text_muted)
-                        .role(gpui::Role::Button)
-                        .aria_label(label)
-                        .child(glyph)
-                        .when(enabled, |el| {
-                            el.cursor_pointer().hover(|el| el.bg(crate::theme::wash(0.1)))
-                        })
-                        .when(!enabled, |el| el.opacity(0.35).cursor_default())
-                };
+                let stepper =
+                    |id: &'static str, glyph: &'static str, label: &'static str, enabled: bool| {
+                        div()
+                            .id(id)
+                            .debug_selector(move || id.into())
+                            .size(px(22.0))
+                            .rounded(px(6.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .text_size(px(14.0))
+                            .text_color(theme.text_muted)
+                            .role(gpui::Role::Button)
+                            .aria_label(label)
+                            .child(glyph)
+                            .when(enabled, |el| {
+                                el.cursor_pointer()
+                                    .hover(|el| el.bg(crate::theme::wash(0.1)))
+                            })
+                            .when(!enabled, |el| el.opacity(0.35).cursor_default())
+                    };
                 menu.child(
                     browser_menu_row(&theme, "browser-zoom", icons::MAGNIFER, "Zoom")
                         .cursor_default()
@@ -1112,7 +1114,8 @@ impl Render for BrowserSurface {
                                 .role(gpui::Role::Button)
                                 .aria_label("Reset zoom to 100%")
                                 .when(zoom != crate::settings::BROWSER_ZOOM_DEFAULT, |el| {
-                                    el.cursor_pointer().hover(|el| el.text_color(theme.text_strong))
+                                    el.cursor_pointer()
+                                        .hover(|el| el.text_color(theme.text_strong))
                                 })
                                 .child(format!("{zoom}%"))
                                 .on_click(cx.listener(|this, _, _, cx| {
@@ -1121,11 +1124,16 @@ impl Render for BrowserSurface {
                                 })),
                         )
                         .child(
-                            stepper("browser-zoom-in", "+", "Zoom in", zoom < levels[levels.len() - 1])
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    cx.stop_propagation();
-                                    this.step_zoom(1, cx);
-                                })),
+                            stepper(
+                                "browser-zoom-in",
+                                "+",
+                                "Zoom in",
+                                zoom < levels[levels.len() - 1],
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.step_zoom(1, cx);
+                            })),
                         ),
                 )
             };
