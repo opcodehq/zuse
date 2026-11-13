@@ -61,6 +61,27 @@ falls back to the base. User images reuse it as a repository-less cache kind.
 The older repository-baking account image (`crates/cloud/src/images.rs`, its
 worker and routes) cannot satisfy fresh-boot pins and is retired.
 
+## Per-chat delivery (no image)
+
+Instructions, skills and home files do not wait for an image. A runtime that
+advertises `rust-machine-delivery-v1` receives the account's latest recipe
+version as `machineDelivery` in its bootstrap (the setup script is not
+included) and writes it before any agent starts
+(`crates/cloud-runtime/src/machine.rs`):
+
+| Recipe part | Written to |
+|---|---|
+| Instructions | `$CLAUDE_CONFIG_DIR/CLAUDE.md` (default `~/.claude/CLAUDE.md`), `$CODEX_HOME/AGENTS.md` (default `~/.codex/AGENTS.md`) |
+| Skill `name` | `~/.claude/skills/<name>/SKILL.md`, `~/.agents/skills/<name>/SKILL.md` |
+| File `path` | `~/<path>` (credential and runtime paths refused) |
+
+Files are written atomically, owner-only, never through a link and never
+inside the checkout, so the repository's own `AGENTS.md` stays authoritative
+for the repository. The version is fixed per enrollment: a save reaches the
+next chat; a running computer picks it up at its next enrollment (a new
+runtime generation), not mid-session. Older runtimes don't advertise the
+capability and receive nothing new.
+
 ## Delivery phases
 
 1. Recipe: protocol type, migration, save/read API, Settings card.

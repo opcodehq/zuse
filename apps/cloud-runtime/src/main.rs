@@ -223,6 +223,31 @@ fn bootstrap_capabilities_json() -> Result<String> {
         &zuse_cloud_runtime::identity::bootstrap_capabilities(),
     )?)
 }
+/// Write the account's machine instructions, skills and home files for the
+/// agents. Failures are logged by code only (never content) and the task
+/// continues without them.
+fn apply_machine_delivery(
+    directory: &std::path::Path,
+    checkout: &std::path::Path,
+    bootstrap: &zuse_protocol::cloud::CloudRuntimeBootstrap,
+) {
+    use zuse_cloud_runtime::machine;
+    let Some(layout) = machine::Layout::from_env(checkout) else {
+        tracing::warn!("Machine delivery skipped: no home directory");
+        return;
+    };
+    let result = machine::from_bootstrap(&bootstrap.extra)
+        .and_then(|delivery| machine::apply(directory, &layout, delivery.as_ref()));
+    match result {
+        Ok(applied) => tracing::info!(
+            written = applied.written.len(),
+            removed = applied.removed.len(),
+            skipped = applied.skipped.len(),
+            "Machine delivery applied"
+        ),
+        Err(error) => tracing::warn!(error = %error, "Machine delivery failed"),
+    }
+}
 async fn run() -> Result<()> {
     let secret_filter = Arc::new(zuse_providers::credentials::redaction::Secrets::default());
     tracing_subscriber::fmt()
@@ -427,6 +452,10 @@ async fn run() -> Result<()> {
             .ok_or_else(|| anyhow::anyhow!("workspace_root_required"))?,
     )?;
     ensure!(checkout.is_dir(), "workspace_checkout_missing");
+    // Before any agent can start: the account's instructions, skills and home
+    // files. Fixed for this enrollment; a newer recipe arrives with the next
+    // computer's bootstrap. Never fatal: the task runs without them.
+    apply_machine_delivery(&directory, &checkout, &bootstrap);
     let profile = EngineProfile::synced(
         &directory,
         &bootstrap.workspace_id,

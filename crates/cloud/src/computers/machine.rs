@@ -8,6 +8,42 @@ fn digest(recipe: &MachineRecipe) -> Result<String, ApiError> {
     Ok(format!("{:x}", Sha256::digest(bytes)))
 }
 
+/// The latest recipe's instructions, skills and files for a task computer's
+/// bootstrap, or `None` when there is nothing to apply. Reads in the caller's
+/// transaction and never fails it: a missing table (an API ahead of its
+/// migration) or an unreadable record just means no delivery.
+pub(crate) async fn delivery(
+    connection: &mut sqlx::PgConnection,
+    owner: &str,
+) -> Result<Option<MachineDelivery>, ApiError> {
+    let ready: bool =
+        sqlx::query_scalar("SELECT to_regclass('cloud_machine_versions') IS NOT NULL")
+            .fetch_one(&mut *connection)
+            .await?;
+    if !ready {
+        return Ok(None);
+    }
+    let row: Option<(i64, Value)> = sqlx::query_as(
+        "SELECT revision,recipe FROM cloud_machine_versions WHERE owner_id=$1 ORDER BY revision DESC LIMIT 1",
+    )
+    .bind(owner)
+    .fetch_optional(&mut *connection)
+    .await?;
+    let Some((revision, recipe)) = row else {
+        return Ok(None);
+    };
+    let Ok(recipe) = serde_json::from_value::<MachineRecipe>(recipe) else {
+        tracing::warn!(revision, "Machine recipe unreadable; nothing delivered");
+        return Ok(None);
+    };
+    let delivery = recipe.delivery(revision);
+    if let Some(Err(code)) = delivery.as_ref().map(MachineDelivery::validate) {
+        tracing::warn!(revision, code, "Machine recipe not deliverable");
+        return Ok(None);
+    }
+    Ok(delivery)
+}
+
 impl ComputerControl {
     pub async fn save_machine_scoped(
         &self,
