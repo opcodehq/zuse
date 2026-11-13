@@ -1,13 +1,14 @@
-//! The conversation's top bar identity: the repository owner's avatar, the
-//! checkout's branch with its changed-file count, the branch menu, and a
-//! copy-branch button. The conversation tabs sit on their own row below.
+//! Conversation tabs and checkout controls.
 use super::*;
 use crate::localization::message as tr;
 use zuse_i18n::messages as msg;
 
+#[cfg(test)]
+#[path = "top_bar_tests.rs"]
+mod tests;
+
 /// The conversation tab row under the top bar.
 pub(super) const CONVERSATION_TAB_ROW_HEIGHT: f32 = 36.0;
-
 /// The branch menu's state: the checkout's local branches, fetched when the
 /// menu opens, and a switch in flight.
 #[derive(Default)]
@@ -15,6 +16,7 @@ pub(super) struct BranchMenu {
     pub(super) menu: popover::Popup<()>,
     pub(super) branches: Vec<String>,
     loaded_for: Option<String>,
+    current_branch: Option<String>,
     loading: bool,
     error: Option<SharedString>,
     switching: Option<String>,
@@ -30,12 +32,60 @@ struct BranchTarget {
     dirty: u32,
 }
 
+fn format_branch_error(branch: &str, error: &str) -> String {
+    if error.contains("already used by worktree") || error.contains("already checked out at") {
+        let path = error.rsplit('\'').nth(1).unwrap_or("");
+        let location = if path.is_empty() {
+            String::new()
+        } else {
+            format!("\n{path}")
+        };
+        format!(
+            "Branch already in use\n“{branch}” is checked out in another worktree.{location}\nSwitch that worktree to another branch first."
+        )
+    } else if error.contains("local changes") || error.contains("would be overwritten") {
+        format!(
+            "Uncommitted changes\nCommit or stash your changes before switching branches.\n{error}"
+        )
+    } else {
+        format!("Couldn’t switch branch\n{error}")
+    }
+}
+
+pub(super) struct ComposerBranch {
+    shell: gpui::WeakEntity<Shell>,
+    _observation: Subscription,
+}
+
+impl ComposerBranch {
+    pub(super) fn new(shell: Entity<Shell>, cx: &mut Context<Self>) -> Self {
+        Self {
+            shell: shell.downgrade(),
+            _observation: cx.observe(&shell, |_, _, cx| cx.notify()),
+        }
+    }
+}
+
+impl Render for ComposerBranch {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.shell
+            .update(cx, |shell, cx| {
+                let theme = Theme::of(cx).clone();
+                shell
+                    .render_top_bar_branch(&theme, cx)
+                    .unwrap_or_else(|| Empty.into_any_element())
+            })
+            .unwrap_or_else(|_| Empty.into_any_element())
+    }
+}
+
 impl Shell {
     fn branch_target(&self, cx: &App) -> Option<BranchTarget> {
         let conversation = self.conversation_state(cx);
         let state = conversation.read(cx);
         let chat = state.selected_chat_row()?;
-        let branch = crate::change_requests::conversation_branch(chat, &state.spaces)?.to_owned();
+        let mut branch =
+            crate::change_requests::conversation_branch(chat, &state.spaces)?.to_owned();
         let repo_path = chat
             .source_context
             .as_ref()
@@ -44,6 +94,14 @@ impl Shell {
         let target_device = (self.cloud_conversation.is_none()
             && state.local_device_id.as_deref() != Some(chat.device_id.as_str()))
         .then(|| chat.device_id.clone());
+        if let Some(path) = &repo_path {
+            let key = format!("{}:{path}", target_device.as_deref().unwrap_or("local"));
+            if self.branch_menu.loaded_for.as_deref() == Some(key.as_str()) {
+                if let Some(current) = &self.branch_menu.current_branch {
+                    branch = current.clone();
+                }
+            }
+        }
         Some(BranchTarget {
             chat_id: chat.id.clone(),
             branch,
@@ -53,11 +111,12 @@ impl Shell {
         })
     }
 
-    /// Whether the conversation tab row shows: on a selected conversation.
+    /// Keep a separate tab row only when the expanded pane occupies the titlebar.
     pub(super) fn conversation_tab_row_visible(&self, cx: &App) -> bool {
         matches!(self.route, Route::Chat)
             && self.has_conversation(cx)
             && !self.state.read(cx).selected_chat_is_zot_coordinator()
+            && self.titlebar_trailing_layout(false, cx).takeover
     }
 
     /// The conversation tabs on their own row below the top bar: main-area
@@ -78,7 +137,11 @@ impl Shell {
             .left_0()
             .right_0()
             .h(px(CONVERSATION_TAB_ROW_HEIGHT))
-            .px(px(Theme::SPACE_SM))
+            .pl(px((self.overview_content_left(cx)
+                - self.sidebar_now()
+                - self.workspace_gutter())
+            .max(Theme::SPACE_SM)))
+            .pr(px(Theme::SPACE_SM))
             .flex()
             .items_center()
             .text_size(crate::typography::text_xs())
@@ -91,9 +154,7 @@ impl Shell {
             .into_any_element()
     }
 
-    /// The top bar's left cluster: owner avatar, branch (with "· N" changed
-    /// files and the menu caret) and the copy-branch button. `None` without
-    /// a branch to show.
+    /// The checkout pill and its branch menu, absent without a checkout.
     pub(super) fn render_top_bar_branch(
         &mut self,
         theme: &Theme,
@@ -115,20 +176,6 @@ impl Shell {
                     .into_any_element(),
             );
         };
-        let space = {
-            let conversation = self.conversation_state(cx);
-            let state = conversation.read(cx);
-            state
-                .selected_chat_row()
-                .and_then(|chat| state.space_for_chat(chat))
-                .cloned()
-        };
-        let avatar = div()
-            .size(px(14.0))
-            .flex_none()
-            .rounded(px(3.0))
-            .overflow_hidden()
-            .child(self.project_artwork(space.as_ref(), false, cx));
         let open = self.branch_menu.menu.get().is_some();
         let label: SharedString = target.branch.clone().into();
         let fade = "top-bar-branch";
@@ -140,18 +187,18 @@ impl Shell {
             .aria_expanded(open)
             .h(px(24.0))
             .min_w_0()
+            .flex_1()
             .flex()
             .items_center()
-            .gap(px(4.0))
-            .px(px(4.0))
-            .rounded(px(4.0))
+            .gap(px(6.0))
+            .px(px(9.0))
+            .rounded_full()
+            .border_1()
+            .border_color(theme.border)
             .cursor_pointer()
             .text_color(if open { theme.text } else { theme.text_muted })
-            .bg(if open {
-                crate::theme::wash(0.06)
-            } else {
-                motion::hover_blend(fade, crate::theme::wash(0.0), crate::theme::wash(0.06))
-            })
+            .bg(theme.surface_card.opacity(1.0))
+            .hover(|style| style.bg(theme.element_hover))
             .on_hover(motion::hover_listener(fade))
             .occlude()
             .on_mouse_down(
@@ -171,7 +218,19 @@ impl Shell {
             }))
             .tip(label.clone())
             .tooltip_show_delay(Duration::from_millis(350))
-            .child(div().min_w_0().max_w(px(144.0)).truncate().child(label))
+            .child(
+                icon(icons::GIT_BRANCH)
+                    .size(px(13.0))
+                    .text_color(theme.text_muted),
+            )
+            .child(
+                div()
+                    .min_w_0()
+                    .flex_1()
+                    .max_w(px(180.0))
+                    .truncate()
+                    .child(label),
+            )
             .when(target.dirty > 0, |d| {
                 d.child(
                     div()
@@ -189,20 +248,13 @@ impl Shell {
         if open {
             let closing = self.branch_menu.menu.closing_since();
             let menu = self.render_branch_menu(&target, theme, cx);
-            trigger = trigger.relative().child(popover::anchored_menu_below(
-                "top-bar-branch-menu",
-                menu,
-                closing,
-            ));
+            let popup = if self.cloud_conversation.is_some() {
+                popover::anchored_menu_below("top-bar-branch-menu", menu, closing)
+            } else {
+                popover::anchored_menu_above_end("top-bar-branch-menu", menu, closing)
+            };
+            trigger = trigger.relative().child(popup);
         }
-        let copy_branch = target.branch.clone();
-        let copy = header_icon_button(
-            "top-bar-copy-branch",
-            icons::COPY,
-            "Copy branch name",
-            theme,
-            cx.listener(move |this, _, _, cx| this.copy_branch_name(copy_branch.clone(), cx)),
-        );
         Some(
             div()
                 .id("top-bar-identity")
@@ -210,13 +262,12 @@ impl Shell {
                 .role(gpui::Role::Navigation)
                 .aria_label(tr(cx, msg::projects::pr_pane_branch))
                 .min_w_0()
+                .w_full()
                 .flex()
                 .items_center()
                 .gap(px(4.0))
-                .text_size(crate::typography::text_xs())
-                .child(avatar)
+                .text_size(px(12.0))
                 .child(trigger)
-                .child(copy)
                 .into_any_element(),
         )
     }
@@ -259,6 +310,7 @@ impl Shell {
         );
         if self.branch_menu.loaded_for.as_deref() != Some(key.as_str()) {
             self.branch_menu.branches.clear();
+            self.branch_menu.current_branch = None;
         }
         self.branch_menu.loaded_for = Some(key.clone());
         self.branch_menu.loading = true;
@@ -269,15 +321,25 @@ impl Shell {
             params.insert("targetDeviceId".into(), device.into());
         }
         self.branch_menu.task = Some(cx.spawn(async move |this, cx| {
+            let refs_params = serde_json::Value::Object(params.clone());
             let result = engine
                 .client()
                 .call(methods::LIST_BRANCHES, serde_json::Value::Object(params))
                 .await;
+            let refs = engine.client().call(methods::LIST_REFS, refs_params).await;
             let _ = this.update(cx, |this, cx| {
                 if this.branch_menu.loaded_for.as_deref() != Some(key.as_str()) {
                     return;
                 }
                 this.branch_menu.loading = false;
+                if let Ok(value) = refs {
+                    if let Ok(refs) = serde_json::from_value::<Vec<zuse_protocol::RepoRef>>(value) {
+                        this.branch_menu.current_branch = refs
+                            .into_iter()
+                            .find(|item| item.current)
+                            .map(|item| item.name);
+                    }
+                }
                 match result {
                     Ok(value) => {
                         this.branch_menu.branches =
@@ -310,23 +372,42 @@ impl Shell {
             return;
         };
         let mut params = serde_json::Map::new();
+        let key = format!(
+            "{}:{repo_path}",
+            target.target_device.as_deref().unwrap_or("local")
+        );
         params.insert("repoPath".into(), repo_path.into());
         params.insert("refName".into(), branch.clone().into());
         if let Some(device) = target.target_device {
             params.insert("targetDeviceId".into(), device.into());
         }
         self.branch_menu.error = None;
-        self.branch_menu.switching = Some(branch);
+        self.branch_menu.switching = Some(branch.clone());
         self.branch_menu.task = Some(cx.spawn(async move |this, cx| {
             let result = engine
                 .client()
                 .call(methods::SWITCH_REF, serde_json::Value::Object(params))
                 .await;
             let _ = this.update(cx, |this, cx| {
+                if this.branch_menu.loaded_for.as_deref() != Some(key.as_str()) {
+                    return;
+                }
                 this.branch_menu.switching = None;
                 match result {
-                    Ok(_) => this.close_branch_menu(cx),
-                    Err(error) => this.branch_menu.error = Some(error.to_string().into()),
+                    Ok(value) => {
+                        this.branch_menu.current_branch = Some(
+                            value
+                                .get("branch")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or(&branch)
+                                .to_owned(),
+                        );
+                        this.close_branch_menu(cx)
+                    }
+                    Err(error) => {
+                        this.branch_menu.error =
+                            Some(format_branch_error(&branch, &error.to_string()).into())
+                    }
                 }
                 cx.notify();
             });
@@ -364,13 +445,15 @@ impl Shell {
                 let fade = format!("branch-menu-row-{name}");
                 let pick = name.clone();
                 let busy = switching.as_deref() == Some(name.as_str());
-                popover::menu_row(&theme, false, fade.clone())
+                popover::menu_row(&theme, is_current, fade.clone())
                     .id(SharedString::from(fade))
                     .role(gpui::Role::MenuItem)
                     .aria_label(SharedString::from(name.clone()))
                     .aria_selected(is_current)
                     .gap(px(8.0))
-                    .text_size(crate::typography::text_xs())
+                    .h(px(28.0))
+                    .py(px(3.0))
+                    .text_size(px(12.0))
                     .child(
                         icon(icons::CHECK)
                             .size(px(14.0))
@@ -395,8 +478,18 @@ impl Shell {
             .collect::<Vec<_>>();
         let empty = rows.is_empty();
         let copy_branch = current.clone();
+        let longest = self
+            .branch_menu
+            .branches
+            .iter()
+            .map(|name| name.chars().count())
+            .chain(std::iter::once(current.chars().count()))
+            .max()
+            .unwrap_or(0);
+        let width = (longest as f32 * 6.0 + 48.0).clamp(224.0, 288.0);
         popover::popover_card(&theme)
-            .w(px(288.0))
+            .w(px(width))
+            .bg(theme.surface_card.opacity(1.0))
             .on_mouse_down_out(cx.listener(|this, _, _, cx| this.close_branch_menu(cx)))
             .flex()
             .flex_col()
@@ -408,9 +501,15 @@ impl Shell {
                     .pl(px(8.0))
                     .py(px(2.0))
                     .child(
+                        icon(icons::GIT_BRANCH)
+                            .size(px(14.0))
+                            .text_color(theme.text_muted),
+                    )
+                    .child(
                         div()
                             .flex_1()
                             .min_w_0()
+                            .truncate()
                             .text_size(crate::typography::text_xs())
                             .text_color(theme.text)
                             .child(current.clone()),
@@ -427,13 +526,27 @@ impl Shell {
             )
             .child(popover::menu_separator())
             .when_some(self.branch_menu.error.clone(), |card, error| {
+                let (title, detail) = error
+                    .split_once('\n')
+                    .map(|(title, detail)| (title.to_owned(), detail.to_owned()))
+                    .unwrap_or_else(|| ("Couldn’t load branches".into(), error.to_string()));
                 card.child(
                     div()
                         .px(px(8.0))
-                        .py(px(6.0))
+                        .py(px(8.0))
+                        .rounded(px(6.0))
+                        .bg(theme.danger.opacity(0.08))
+                        .flex()
+                        .flex_col()
+                        .gap(px(4.0))
                         .text_size(crate::typography::text_xs())
-                        .text_color(theme.danger)
-                        .child(error),
+                        .child(
+                            div()
+                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .text_color(theme.danger)
+                                .child(title),
+                        )
+                        .child(div().text_color(theme.text).child(detail)),
                 )
             })
             .child(section_label("Local branches"))
@@ -468,7 +581,7 @@ impl Shell {
                         .text_size(crate::typography::text_xs())
                         .text_color(theme.text_muted)
                         .child(format!(
-                            "{} uncommitted {}. Git refuses a switch that would overwrite them.",
+                            "{} uncommitted {}",
                             target.dirty,
                             if target.dirty == 1 {
                                 "change"

@@ -1983,20 +1983,15 @@ fn band_for(appearance: Appearance) -> Hsla {
 }
 
 /// Selected-state glass treatment (tabs, session rows, space rows): a
-/// TRANSLUCENT wash the vibrancy reads through — heavier flat washes blocked
-/// the glass (user request). Dark: the 11% [`wash`]. Light: a 4% black wash,
-/// the design system's `bg-selected` — 11% black read too dark over the
-/// bright frost (user report; light also previously ran a near-opaque white
-/// chip, rejected the same way). Same fill as [`Theme::glass_hover`] — the ring in
-/// [`glass_selected_shadows`] is what distinguishes selection. Selection
-/// *inside floating cards* is different — see [`card_selected_bg`].
+/// translucent wash that lets the vibrancy show through. Dark uses the 11%
+/// [`wash`]; light uses a 4% black wash to stay subtle over bright surfaces.
+/// Selection *inside floating cards* is different — see [`card_selected_bg`].
 pub fn glass_selected_bg() -> Hsla {
     selected_wash()
 }
 
-/// The context-free twin of [`Theme::bg_selected`]: the dark 11% soft-white
-/// wash, and on light a 4% black wash that lands on the design system's
-/// `bg-selected` (#F5F5F5) over a white plane.
+/// The translucent selected wash used by workspace rows and chips inside
+/// floating cards.
 fn selected_wash() -> Hsla {
     match current_appearance() {
         Appearance::Dark => wash(0.11),
@@ -2041,8 +2036,8 @@ pub fn card_selected_bg() -> Hsla {
 /// exactly where the chip meets the frost, gpui's small-radius blur reads
 /// coarse on a bright field, and the tab strip is a scroll container that
 /// clips its children vertically — any shadow escaping the chip gets cut off
-/// mid-fade. The near-opaque fill plus the ring carry selection, exactly as
-/// dark's wash plus ring does; the two appearances share one recipe now.
+/// mid-fade. The selection fill plus ring carry selection without a drop-shadow
+/// seat.
 pub fn glass_selected_shadows() -> Vec<gpui::BoxShadow> {
     card_selected_shadows()
 }
@@ -2050,11 +2045,8 @@ pub fn glass_selected_shadows() -> Vec<gpui::BoxShadow> {
 /// Selection outline for rows and chips INSIDE a floating card (menu rows,
 /// the picker rail, segmented chips): the inset ring alone, in both
 /// appearances. Card rows fill with a translucent wash
-/// ([`card_selected_bg`]), and a drop shadow — a filled rect painted BEHIND
-/// the element — shows straight through a translucent fill as a grey plate
-/// (the same lesson [`glass_selected_shadows`] records for dark glass). The
-/// card already carries the elevation shadow; selection inside it only needs
-/// the edge.
+/// ([`card_selected_bg`]); the card already carries the elevation shadow, so
+/// selection inside it only needs the edge.
 pub fn card_selected_shadows() -> Vec<gpui::BoxShadow> {
     let color = match current_appearance() {
         Appearance::Dark => hairline(0.09),
@@ -3157,6 +3149,19 @@ mod tests {
                 ring.color.a
             );
         }
+        set_current_appearance(Appearance::Dark);
+    }
+
+    #[test]
+    fn workspace_selection_uses_translucent_wash() {
+        let _guard = lock_appearance();
+        set_current_appearance(Appearance::Dark);
+        assert_eq!(glass_selected_bg(), wash(0.11));
+
+        set_current_appearance(Appearance::Light);
+        let light = glass_selected_bg();
+        assert_eq!(light.l, 0.0);
+        assert_eq!(light.a, 0.04);
         set_current_appearance(Appearance::Dark);
     }
 

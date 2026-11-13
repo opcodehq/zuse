@@ -114,6 +114,26 @@ pub(crate) fn tab(
     })
 }
 
+pub(crate) fn workspace_tab(
+    id: impl Into<gpui::ElementId>,
+    selected: bool,
+    theme: &Theme,
+) -> gpui::Stateful<Div> {
+    let hover = theme.glass_hover();
+    let hover_text = theme.text;
+    div()
+        .id(id)
+        .rounded(px(7.0))
+        .bg(if selected {
+            crate::theme::glass_selected_bg()
+        } else {
+            hover.opacity(0.0)
+        })
+        .when(!selected, |tab| {
+            tab.hover(move |style| style.bg(hover).text_color(hover_text))
+        })
+}
+
 /// Fixed pane tab width. Drag reordering (drop-index quantisation and slide
 /// offsets) assumes uniform chips.
 pub(crate) const TAB_CHIP_WIDTH: f32 = 112.0;
@@ -131,6 +151,7 @@ pub(crate) struct TabChip {
     pub close_id: &'static str,
     pub ix: usize,
     pub active: bool,
+    pub workspace_style: bool,
     pub title: gpui::SharedString,
     /// Shows the unsaved dot in the close slot while the tab is not hovered.
     pub dirty: bool,
@@ -153,20 +174,34 @@ pub(crate) fn tab_chip(
         close_id,
         ix,
         active,
+        workspace_style,
         title,
         dirty,
         leading,
     } = chip;
     let group: gpui::SharedString = format!("{id}-{ix}").into();
     let selector = group.clone();
-    tab((id, ix), active, theme)
+    let frame = if workspace_style {
+        workspace_tab((id, ix), active, theme)
+            .aria_selected(active)
+            .tab_index(0)
+            .text_color(if active {
+                theme.text_strong
+            } else {
+                theme.text_muted
+            })
+            .focus_visible(|style| style.border_2().border_color(theme.accent))
+    } else {
+        tab((id, ix), active, theme)
+    };
+    frame
         .debug_selector(move || selector.to_string())
         .group(group.clone())
         .h(px(TAB_CHIP_HEIGHT))
         .w(px(TAB_CHIP_WIDTH))
         .flex_none()
         .px(px(6.0))
-        .rounded(px(4.0))
+        .rounded(px(if workspace_style { 7.0 } else { 4.0 }))
         .flex()
         .flex_row()
         .items_center()

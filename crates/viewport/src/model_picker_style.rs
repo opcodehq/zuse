@@ -32,7 +32,7 @@ pub fn section(label: impl Into<SharedString>) -> Div {
 
 pub fn provider_heading(
     name: impl Into<SharedString>,
-    glyph: Svg,
+    glyph: impl IntoElement,
     count: usize,
     current: bool,
 ) -> Div {
@@ -52,7 +52,7 @@ pub fn provider_heading(
                 .pb(px(4.))
                 .text_size(px(13.))
                 .line_height(px(17.))
-                .child(glyph.size(px(14.)).flex_none())
+                .child(div().size(px(14.)).flex_none().child(glyph))
                 .child(
                     div()
                         .min_w_0()
@@ -97,7 +97,7 @@ pub fn provider_tab(
     label: impl Into<SharedString>,
     active: bool,
     live: bool,
-    glyph: Option<Svg>,
+    glyph: Option<AnyElement>,
 ) -> Stateful<Div> {
     let label = label.into();
     let has_glyph = glyph.is_some();
@@ -126,7 +126,9 @@ pub fn provider_tab(
                     .text_color(palette::rgb(TEXT))
             })
         })
-        .when_some(glyph, |v, glyph| v.child(glyph.size(px(16.)).flex_none()))
+        .when_some(glyph, |v, glyph| {
+            v.child(div().size(px(16.)).flex_none().child(glyph))
+        })
         .when(!has_glyph, |v| {
             v.child(
                 div()
@@ -223,7 +225,7 @@ pub fn model_row(
     id: impl Into<ElementId>,
     title: impl Into<SharedString>,
     provider: Option<SharedString>,
-    glyph: Svg,
+    glyph: impl IntoElement,
     is_selected: bool,
     active: bool,
     shortcut: Option<usize>,
@@ -260,7 +262,7 @@ pub fn model_row(
                 s::frame_bg().opacity(0.6)
             })
         })
-        .child(glyph.size(px(16.)).flex_none())
+        .child(div().size(px(16.)).flex_none().child(glyph))
         .child(
             div()
                 .flex_1()

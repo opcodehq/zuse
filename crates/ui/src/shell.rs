@@ -1245,8 +1245,6 @@ pub(crate) fn sidebar_faded_label(
     .fade_right(true)
     .fade_label_overflow(&overflow)
 }
-/// Square action beside the account trigger in the sidebar footer.
-const SIDEBAR_FOOTER_ACTION_SIZE: f32 = SIDEBAR_FOOTER_BUTTON_SIZE;
 /// Breathing room between the account trigger and its adjacent action.
 const SIDEBAR_FOOTER_ACTION_GAP: f32 = 4.0;
 
@@ -2402,6 +2400,7 @@ pub struct Shell {
     /// `{device,harness,latest}` discoveries already delivered as a desktop
     /// banner during this viewport lifetime.
     harness_update_seen: std::collections::HashSet<String>,
+    harness_update_dismissed: std::collections::HashSet<String>,
     /// Short debounce that aggregates providers finishing the same check at
     /// slightly different times into one banner.
     harness_update_banner_task: Option<Task<()>>,
@@ -2654,6 +2653,11 @@ impl Shell {
         let transcript = cx.new(|cx| Transcript::new(state.clone(), cx));
         transcript.update(cx, |transcript, _| transcript.retain_for_route_exit());
         let composer = cx.new(|cx| Composer::new(state.clone(), cx));
+        let shell = cx.entity();
+        let branch_controls = cx.new(|cx| top_bar::ComposerBranch::new(shell, cx));
+        composer.update(cx, |composer, _| {
+            composer.checkout_controls = Some(branch_controls.into());
+        });
         let voice = cx.new(|_| crate::voice::VoiceController::default());
         let voice_stage_orb = cx.new(|_| {
             crate::orb::Orb::new()
@@ -3021,6 +3025,7 @@ impl Shell {
             connectivity_notifications: Default::default(),
             attention_sound_gate: Default::default(),
             harness_update_seen: std::collections::HashSet::new(),
+            harness_update_dismissed: std::collections::HashSet::new(),
             harness_update_banner_task: None,
             harness_update_devices: Default::default(),
             pr_watch_devices: Default::default(),
@@ -4635,6 +4640,8 @@ impl Shell {
             move |this: &mut Self, source, event, window, cx| {
                 if matches!(event, FilesEvent::OpenFile(_) | FilesEvent::RevealFile(_))
                     && !this.accepts_file_navigation(&event_panel_key, &source, cx)
+                    && !(this.active_main_file(cx) == Some(id)
+                        && source.read(cx).is_current_target(cx))
                 {
                     return;
                 }
@@ -5447,7 +5454,7 @@ impl Shell {
         dirty.sort_by_key(|(key, _)| (key != &current, key.clone()));
         if let Some((key, RightSurface::File(id))) = dirty.into_iter().next() {
             // Its tab stands in for the conversation of the chat it belongs to.
-            self.select_main_file_tab(&key, id);
+            self.select_main_file_tab(&key, id, cx);
             self.apply_nav(NavEntry::Chat(key), cx);
         }
     }
@@ -8195,10 +8202,12 @@ impl Shell {
     /// the pull request pane's tabs.
     fn render_title_bar(&mut self, cx: &mut Context<Self>) -> AnyElement {
         // The Plugins page has no tabs: a bare strip that still drags.
-        if matches!(
-            self.route,
-            Route::Plugins | Route::Archives | Route::Usage | Route::Zot
-        ) {
+        if matches!(self.route, Route::Plugins) {
+            return self
+                .titlebar_drag_region("plugins-titlebar", div().size_full(), cx)
+                .into_any_element();
+        }
+        if matches!(self.route, Route::Archives | Route::Usage | Route::Zot) {
             return self
                 .titlebar_drag_region("plugins-titlebar", div().size_full(), cx)
                 .into_any_element();
@@ -8261,6 +8270,32 @@ impl Shell {
             })
     }
 
+    fn render_titlebar_navigation(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .debug_selector(|| "titlebar-navigation".into())
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(px(TITLEBAR_CONTROL_GAP))
+            .child(nav_history_button(
+                "nav-back",
+                icons::ARROW_LEFT,
+                "Back",
+                self.nav.can_back(),
+                theme,
+                cx.listener(|this, _, _, cx| this.navigate_back(cx)),
+            ))
+            .child(nav_history_button(
+                "nav-forward",
+                icons::ARROW_RIGHT,
+                "Forward",
+                self.nav.can_forward(),
+                theme,
+                cx.listener(|this, _, _, cx| this.navigate_forward(cx)),
+            ))
+            .into_any_element()
+    }
+
     /// The ONE top-left window-control cluster (sidebar toggle + back/forward —
     /// zuse window-controls.tsx): rendered once, in a paint-only overlay layer
     /// pinned at the window's top-left, ABOVE the sidebar and headers. The
@@ -8271,8 +8306,6 @@ impl Shell {
     /// through to the titlebar drag strips below.
     fn render_titlebar_cluster(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::of(cx).clone();
-        let can_back = self.nav.can_back();
-        let can_forward = self.nav.can_forward();
         // The titlebar is the single owner of the new-session action in both
         // sidebar states. Hide it on the new-session canvas: opening another
         // blank canvas from an already blank canvas has no effect and used to
@@ -8361,30 +8394,11 @@ impl Shell {
                 &theme,
                 cx.listener(|this, _, _, cx| this.toggle_sidebar(cx)),
             ))
-            .child(
+            .child({
                 div()
                     .ml(px(TITLEBAR_GROUP_GAP))
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap(px(TITLEBAR_CONTROL_GAP))
-                    .child(nav_history_button(
-                        "nav-back",
-                        icons::ARROW_LEFT,
-                        "Back",
-                        can_back,
-                        &theme,
-                        cx.listener(|this, _, _, cx| this.navigate_back(cx)),
-                    ))
-                    .child(nav_history_button(
-                        "nav-forward",
-                        icons::ARROW_RIGHT,
-                        "Forward",
-                        can_forward,
-                        &theme,
-                        cx.listener(|this, _, _, cx| this.navigate_forward(cx)),
-                    )),
-            )
+                    .child(self.render_titlebar_navigation(&theme, cx))
+            })
             .children(show_plus.then(|| {
                 div()
                     .flex_none()
@@ -9530,10 +9544,6 @@ impl Shell {
         } else {
             crate::theme::wash(0.0)
         };
-        // A selected row must NOT drift toward the hover wash: in dark the two
-        // fills are identical so the blend is a no-op, but light's hover sits
-        // below its near-opaque selected fill, and blending toward it visibly
-        // dimmed the active row under the pointer (user report).
         let hover_bg = if selected { selected_wash } else { hover };
         // The row a context menu was opened on stays lit while the menu is
         // up; the pointer leaving it for the menu must not drop the wash.
@@ -9926,11 +9936,11 @@ impl Shell {
                                     .flex()
                                     .items_center()
                                     .justify_center()
-                                    .child(
-                                        icon(path)
-                                            .size(px(14.0))
-                                            .text_color(tint.unwrap_or(subline).opacity(0.8)),
-                                    )
+                                    .child(icons::brand_icon(
+                                        path,
+                                        14.0,
+                                        tint.unwrap_or(subline).opacity(0.8),
+                                    ))
                                     .into_any_element()
                             })
                     })
@@ -9946,12 +9956,8 @@ impl Shell {
                     format!("chat-title-{content_id}").into(),
                     true,
                     div()
-                        .text_size(if two_line {
-                            crate::typography::text_sm()
-                        } else {
-                            crate::typography::text_xs()
-                        })
-                        .line_height(px(17.0))
+                        .text_size(crate::typography::text_sm())
+                        .line_height(crate::typography::ui_rems(18.0))
                         .when(unread, |el| {
                             el.font_weight(gpui::FontWeight::MEDIUM)
                                 .text_color(theme.text_strong)
@@ -10075,18 +10081,15 @@ impl Shell {
                         .when_some(
                             harness.map(crate::pickers::harness_brand_icon),
                             |el, (path, tint)| {
-                                el.child(
-                                    icon(path)
-                                        .size(px(SIDEBAR_ACTIVE_HARNESS_ICON_SIZE))
-                                        .flex_none()
-                                        .text_color(
-                                            tint.unwrap_or(subline).opacity(if archived_muted {
-                                                0.4
-                                            } else {
-                                                0.8
-                                            }),
-                                        ),
-                                )
+                                el.child(icons::brand_icon(
+                                    path,
+                                    SIDEBAR_ACTIVE_HARNESS_ICON_SIZE,
+                                    tint.unwrap_or(subline).opacity(if archived_muted {
+                                        0.4
+                                    } else {
+                                        0.8
+                                    }),
+                                ))
                             },
                         )
                         .children(project_icon)
@@ -10879,9 +10882,7 @@ impl Shell {
 
     /// Compact New chat, New project and Plugins actions.
     fn render_sidebar_nav(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
-        // Organization switching requires capabilities from the General account.
-        // The legacy device sync menu stays on the PR route; workspace routes
-        // expose those controls in Remote access.
+        // Workspace routes expose account controls in Remote access.
         let workspace =
             (self.workspace_gutter() == 0.).then(|| self.render_workspace_switcher(theme, cx));
         let new_chat_hint: SharedString =
@@ -10895,17 +10896,17 @@ impl Shell {
                 .debug_selector(move || id.into())
                 .role(gpui::Role::Button)
                 .tab_index(0)
-                .min_h(px(24.0))
+                .min_h(px(28.0))
                 .py(px(2.0))
-                .line_height(px(16.0))
+                .line_height(crate::typography::ui_rems(18.0))
                 .px(px(Theme::SPACE_SM))
                 .flex()
                 .flex_row()
                 .items_center()
-                .gap(px(6.0))
+                .gap(px(8.0))
                 .rounded(px(SIDEBAR_ROW_RADIUS))
                 .cursor_pointer()
-                .text_size(crate::typography::text_xs())
+                .text_size(crate::typography::text_sm())
                 .bg(if active {
                     crate::theme::glass_selected_bg()
                 } else {
@@ -10975,18 +10976,16 @@ impl Shell {
                 .aria_label(tr(cx, msg::projects::projects_sidebar_new_project))
                 .on_click(cx.listener(|this, _, _, cx| this.open_add_space(cx))),
             )
-            .when(self.state.read(cx).cloud_user_id().is_some(), |view| {
-                view.child(
-                    row(
-                        "sidebar-plugins-row",
-                        icons::DITHER_PLUG,
-                        "Plugins",
-                        plugins_open,
-                    )
-                    .aria_label(tr(cx, msg::plugins::plugins_back))
-                    .on_click(cx.listener(|this, _, _, cx| this.open_plugins_page(cx))),
+            .child(
+                row(
+                    "sidebar-plugins-row",
+                    icons::DITHER_PLUG,
+                    "Plugins",
+                    plugins_open,
                 )
-            })
+                .aria_label(tr(cx, msg::plugins::plugins_back))
+                .on_click(cx.listener(|this, _, _, cx| this.open_plugins_page(cx))),
+            )
             // Pull requests span every chat, so the entry lives with the
             // other global destinations rather than in a chat's top bar.
             .child(
@@ -11555,53 +11554,6 @@ impl Shell {
                     .min_w_0()
                     .child(self.render_sidebar_footer(theme, cx)),
             )
-            .into_any_element()
-    }
-
-    fn render_pull_requests_button(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
-        div()
-            .id("open-pull-requests")
-            .role(gpui::Role::Button)
-            .aria_label(tr(cx, msg::native::pull_requests))
-            .tab_index(0)
-            .debug_selector(|| "open-pull-requests".into())
-            .focus_visible(|style| style.border_2().border_color(theme.accent))
-            .size(px(SIDEBAR_FOOTER_ACTION_SIZE))
-            .flex_none()
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded(px(8.0))
-            .text_color(if matches!(self.route, Route::PullRequests) {
-                theme.text
-            } else {
-                theme.text_muted
-            })
-            .bg(if matches!(self.route, Route::PullRequests) {
-                theme.glass_hover()
-            } else {
-                motion::hover_blend(
-                    "open-pull-requests",
-                    theme.glass_hover().opacity(0.0),
-                    theme.glass_hover(),
-                )
-            })
-            .on_hover(motion::hover_listener("open-pull-requests"))
-            .cursor_pointer()
-            .on_click(cx.listener(|this, _, _, cx| {
-                // Leaving Settings through its own footer is a plain route
-                // change; nothing there should grab focus on the way out.
-                this.settings_focus_pending = false;
-                this.open_pull_requests(cx);
-            }))
-            .tip("Pull requests")
-            .child(icon(icons::PULL_REQUEST).size(px(15.0)).text_color(
-                if matches!(self.route, Route::PullRequests) {
-                    theme.text
-                } else {
-                    motion::hover_blend("open-pull-requests", theme.text_muted, theme.text)
-                },
-            ))
             .into_any_element()
     }
 
@@ -13344,30 +13296,6 @@ impl Shell {
                 .into_any_element()
         };
 
-        // Share the dock's choreography: release the bottom chip early on
-        // departure, reveal it with the Home selectors on return. Absolute
-        // mounting keeps it out of composer measurements and centering.
-        let chip_opacity = if has_selection {
-            1.0 - crate::composer_dock::stage(dock_frame.dissolve(), 0.0, 0.22)
-        } else {
-            dock_frame.selectors()
-        } * self.composer_dock.borrow().opacity();
-        if has_selection {
-            self.set_harness_updates_expanded(false, cx);
-        }
-        let harness_update_card =
-            if !cloud_starting && chip_opacity > 0.001 && (!has_selection || dock_frame.active) {
-                self.render_harness_update_card(window, main_content_width, cx)
-            } else {
-                None
-            };
-        // The notice rides above the composer's context tray (last frame's
-        // measured card top), never under the card where it used to peek out.
-        let composer_top = self.composer.read(cx).surface_bounds().get();
-        let harness_update_bottom = composer_top.map_or(24.0, |bounds| {
-            let lift = crate::composer::NEW_THREAD_SELECTOR_ROW_HEIGHT + 10.0;
-            (self.viewport_height - f32::from(bounds.top()) + lift).max(24.0)
-        }) - 8.0 * (1.0 - chip_opacity);
         let status = self.render_status_strip(composer_width, cx);
         let session_card = self.render_session_info(
             session_reveal,
@@ -13444,36 +13372,6 @@ impl Shell {
                 },
             )
             .children(session_card)
-            .when_some(harness_update_card, |column, chip| {
-                // Home notices stay anchored to the window bottom, behind the
-                // dock. Clip paint and hitboxes at the same measured terminal
-                // edge as the transcript, including during open/close motion;
-                // draw order alone would show them through the terminal glass.
-                column.child(
-                    div()
-                        .absolute()
-                        .inset_0()
-                        .child(crate::terminal::dock::above_terminal(
-                            div().size_full().overflow_hidden().child(
-                                div().relative().w_full().h(px(self.viewport_height)).child(
-                                    div()
-                                        .absolute()
-                                        .left_0()
-                                        .right_0()
-                                        .bottom(px(harness_update_bottom))
-                                        .opacity(chip_opacity)
-                                        .flex()
-                                        .justify_center()
-                                        .child(chip)
-                                        .when(has_selection, |el| {
-                                            el.child(div().absolute().inset_0().occlude())
-                                        }),
-                                ),
-                            ),
-                            terminal_geometry.clone(),
-                        )),
-                )
-            })
             // The glass chrome stack, floating over the transcript's bottom:
             // reserved status strip (h-6, the WorkingIndicator — the composer
             // below never shifts), composer, terminal dock. A paint-time
@@ -14331,10 +14229,11 @@ impl Shell {
                 .when(!is_active, |icon| icon.opacity(0.78))
                 .into_any_element()
             } else if let Some((icon_path, Some(brand_color))) = harness_icon {
-                icon(icon_path)
-                    .size(px(12.0))
-                    .text_color(brand_color.opacity(if is_active { 1.0 } else { 0.7 }))
-                    .into_any_element()
+                icons::brand_icon(
+                    icon_path,
+                    12.0,
+                    brand_color.opacity(if is_active { 1.0 } else { 0.7 }),
+                )
             } else {
                 let icon_path = harness_icon.map_or(icon_path, |(path, _)| path);
                 crate::surface_chrome::tab_chip_icon(icon_path, is_active, &theme)
@@ -14345,6 +14244,7 @@ impl Shell {
                     close_id: "right-surface-close",
                     ix,
                     active: is_active,
+                    workspace_style: true,
                     title,
                     dirty,
                     leading,
@@ -15215,6 +15115,14 @@ fn header_icon_button_with(
     label: &'static str,
     on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
 ) -> gpui::Stateful<gpui::Div> {
+    header_icon_button_base(id, glyph, on_click).tip(label)
+}
+
+fn header_icon_button_base(
+    id: &'static str,
+    glyph: impl IntoElement,
+    on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
+) -> gpui::Stateful<gpui::Div> {
     let fade_key = format!("header-icon-{id}");
     // Reference top bar: `size-6 rounded-sm` with 14px glyphs.
     div()
@@ -15243,7 +15151,6 @@ fn header_icon_button_with(
             cx.stop_propagation();
             on_click(event, window, cx)
         })
-        .tip(label)
         .child(glyph)
 }
 
@@ -16188,8 +16095,21 @@ impl Render for Shell {
                         },
                     )
                     .child(self.workspace_sidebar_header(cx))
-                    .child(self.workspace_native_actions(cx))
                     .children(overlays);
+                let update_card = self.render_harness_update_card(
+                    window,
+                    f32::from(window.viewport_size().width),
+                    cx,
+                );
+                let root = root.when_some(update_card, |view, card| {
+                    view.child(
+                        div()
+                            .absolute()
+                            .top(px(Theme::TITLEBAR_HEIGHT + 12.0))
+                            .right(px(16.0))
+                            .child(card),
+                    )
+                });
                 root.when(self.workspace_gutter() == 0., |view| {
                     view.child(sidebar_tone)
                 })
@@ -18698,6 +18618,46 @@ mod exit_regressions {
             );
         });
         cx.run_until_parked();
+    }
+
+    #[gpui::test]
+    fn new_thread_canvas_has_no_overview_tab_strip(cx: &mut TestAppContext) {
+        let (shell, cx, _dir) = pull_request_shell(cx);
+        cx.simulate_resize(gpui::size(px(1400.0), px(800.0)));
+        shell.update(cx, |shell, cx| {
+            shell.reduced_motion = true;
+            shell.open_pull_requests(cx);
+            shell.open_new_session(None, cx);
+        });
+        cx.update(|window, cx| window.draw(cx).clear());
+        assert!(shell.read_with(cx, |shell, cx| !shell.has_conversation(cx)));
+        assert!(cx.debug_bounds("overview-threads").is_none());
+        assert!(cx.debug_bounds("overview-pull-requests").is_none());
+        assert!(cx.debug_bounds("overview-add").is_none());
+    }
+
+    #[gpui::test]
+    fn pull_requests_share_workspace_sidebar_and_place_navigation_before_toggle(
+        cx: &mut TestAppContext,
+    ) {
+        let (shell, cx, _dir) = pull_request_shell(cx);
+        shell.update(cx, |shell, cx| {
+            shell.reduced_motion = true;
+            shell.open_pull_requests(cx);
+        });
+        cx.update(|window, cx| window.draw(cx).clear());
+        assert!(cx.debug_bounds("workspace-app-logo").is_some());
+        assert!(shell.read_with(cx, |shell, _| shell.workspace_gutter() > 0.));
+        assert!(cx.debug_bounds("overview-pull-requests").is_none());
+        let navigation = cx.debug_bounds("titlebar-navigation").unwrap();
+        let toggle = cx.debug_bounds("workspace-hide-sidebar").unwrap();
+        assert!(navigation.right() <= toggle.left());
+
+        cx.simulate_click(toggle.center(), gpui::Modifiers::default());
+        cx.update(|window, cx| window.draw(cx).clear());
+        let navigation = cx.debug_bounds("titlebar-navigation").unwrap();
+        let toggle = cx.debug_bounds("toggle-sidebar").unwrap();
+        assert!(toggle.right() <= navigation.left());
     }
 
     #[gpui::test]

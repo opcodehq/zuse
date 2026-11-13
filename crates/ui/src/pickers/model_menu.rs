@@ -5,14 +5,7 @@ use zuse_viewport::model_picker_style as ui;
 
 fn picker_brand(harness: HarnessId, fallback: gpui::Hsla) -> (&'static str, gpui::Hsla) {
     let (path, tint) = harness_brand_icon(harness);
-    let color = tint.or_else(|| match harness {
-        HarnessId::Gemini => Some(gpui::rgb(0x4285f4).into()),
-        HarnessId::Kiro => Some(gpui::rgb(0x9b6df3).into()),
-        HarnessId::Zuse => Some(gpui::rgb(0x89ca21).into()),
-        HarnessId::CustomAcp(id) if id.as_str() == "acp-gemini" => Some(gpui::rgb(0x4285f4).into()),
-        _ => None,
-    });
-    (path, color.unwrap_or(fallback))
+    (path, tint.unwrap_or(fallback))
 }
 
 #[derive(Clone)]
@@ -274,7 +267,7 @@ impl Pickers {
                 let (path, tint) = picker_brand(*provider, Theme::of(cx).text);
                 ui::provider_heading(
                     name.clone(),
-                    crate::icons::icon(path).text_color(tint),
+                    crate::icons::brand_icon(path, 14., tint),
                     *count,
                     *current,
                 )
@@ -316,7 +309,7 @@ impl Pickers {
                             ("model-row", index),
                             row.model.label.clone(),
                             provider.then(|| row.harness_name.clone()),
-                            crate::icons::icon(path).text_color(tint),
+                            crate::icons::brand_icon(path, 16., tint),
                             selected,
                             self.compact_keyboard && self.active == index,
                             (index < 9).then_some(index + 1),
@@ -412,7 +405,11 @@ impl Pickers {
                     "Favorite models",
                     self.model_rail == ModelRail::Favorites,
                     false,
-                    Some(crate::icons::icon(crate::icons::STAR).text_color(theme.text_muted)),
+                    Some(crate::icons::brand_icon(
+                        crate::icons::STAR,
+                        16.,
+                        theme.text_muted,
+                    )),
                 )
                 .on_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
                     if matches!(e.keystroke.key.as_str(), "enter" | "space") {
@@ -431,7 +428,7 @@ impl Pickers {
                     format!("{} models", p.name),
                     self.model_rail != ModelRail::Favorites && self.model_scope == Some(provider),
                     false,
-                    Some(crate::icons::icon(path).text_color(tint)),
+                    Some(crate::icons::brand_icon(path, 16., tint)),
                 )
                 .on_key_down(cx.listener(move |this, e: &KeyDownEvent, _, cx| {
                     if matches!(e.keystroke.key.as_str(), "enter" | "space") {

@@ -1187,7 +1187,7 @@ mod tests {
 
     #[cfg(any(target_os = "macos", target_os = "linux", windows))]
     #[gpui::test]
-    fn browser_annotations_collect_multiple_notes_and_ignore_stale_completions(
+    fn browser_annotations_finish_each_note_and_ignore_stale_completions(
         cx: &mut gpui::TestAppContext,
     ) {
         cx.update(|cx| {
@@ -1221,36 +1221,39 @@ mod tests {
             let details = |comment: &str| Some(serde_json::json!({"comment":comment,"elements":[{"tag":"button","selector":"button#save","text":"Save"}]}).to_string());
             browser.element_selected(page.clone(), 6, Ok(details("Stale note")), cx);
             assert!(browser.selecting_element);
+            let pending = serde_json::json!({"comment":"Pending note", "keep_open":true,"elements":[{"tag":"button","selector":"button#save","text":"Save"}]}).to_string();
+            browser.element_selected(page.clone(), 7, Ok(Some(pending)), cx);
+            assert!(browser.selecting_element);
             browser.element_selected(page.clone(), 7, Ok(details("First note")), cx);
-            assert!(browser.selecting_element);
-            browser.element_selected(page.clone(), 7, Ok(details("Second note")), cx);
-            assert!(browser.selecting_element);
-            browser.element_selected(page.clone(), 7, Ok(None), cx);
             assert!(!browser.selecting_element);
             browser.element_selected(page.clone(), 7, Ok(details("Too late")), cx);
             browser.selecting_element = true;
+            browser.element_selected(page.clone(), 8, Ok(details("Second note")), cx);
+            assert!(!browser.selecting_element);
+            browser.selecting_element = true;
             browser.set_presentation(Presentation::Hidden, cx);
             assert!(!browser.selecting_element);
-            assert_eq!(browser.selection_generation, 8);
+            assert_eq!(browser.selection_generation, 10);
             // Both malformed payloads and native errors must close the session
             // and fence completions that arrive after the overlay is removed.
             browser.selecting_element = true;
-            browser.element_selected(page.clone(), 8, Ok(Some("invalid JSON".into())), cx);
+            browser.element_selected(page.clone(), 10, Ok(Some("invalid JSON".into())), cx);
             assert!(!browser.selecting_element);
-            assert_eq!(browser.selection_generation, 9);
+            assert_eq!(browser.selection_generation, 11);
             browser.selecting_element = true;
-            browser.element_selected(page.clone(), 8, Ok(details("After parse error")), cx);
+            browser.element_selected(page.clone(), 10, Ok(details("After parse error")), cx);
             assert!(browser.selecting_element);
-            browser.element_selected(page.clone(), 9, Err("Fixture native error".into()), cx);
+            browser.element_selected(page.clone(), 11, Err("Fixture native error".into()), cx);
             assert!(!browser.selecting_element);
-            assert_eq!(browser.selection_generation, 10);
-            browser.element_selected(page, 9, Ok(details("After native error")), cx);
+            assert_eq!(browser.selection_generation, 12);
+            browser.element_selected(page, 11, Ok(details("After native error")), cx);
         }).unwrap();
         cx.run_until_parked();
         let notes = captured.borrow();
-        assert_eq!(notes.len(), 2);
-        assert!(notes[0].body.contains("First note"));
-        assert!(notes[1].body.contains("Second note"));
+        assert_eq!(notes.len(), 3);
+        assert!(notes[0].body.contains("Pending note"));
+        assert!(notes[1].body.contains("First note"));
+        assert!(notes[2].body.contains("Second note"));
     }
 
     #[cfg(any(target_os = "macos", target_os = "linux", windows))]
@@ -1451,20 +1454,27 @@ impl BrowserSurface {
                 }
                 match crate::context_items::BrowserAnnotation::from_selection(&page, &details) {
                     Ok(annotation) => {
+                        let keep_open = serde_json::from_str::<serde_json::Value>(&details)
+                            .ok()
+                            .and_then(|value| value["keep_open"].as_bool())
+                            .unwrap_or(false);
+                        #[cfg(any(target_os = "macos", windows))]
+                        if let Some(native) = &self.native {
+                            native.focus_chrome();
+                        }
                         cx.emit(BrowserEvent::ElementSelected(
                             crate::context_items::ContextItem::from_browser_annotation(annotation),
                         ));
-                        // One native completion per note; keep the picker active for
-                        // the next note without moving focus to the composer.
-                        if let Some(native) = &self.native {
-                            native.select_element(
-                                page,
-                                generation,
-                                annotation_script(
-                                    crate::theme::Theme::of(cx),
-                                    self.selection_generation,
-                                ),
-                            );
+                        if keep_open {
+                            if let Some(native) = &self.native {
+                                native.select_element(
+                                    page,
+                                    generation,
+                                    annotation_script(crate::theme::Theme::of(cx), generation),
+                                );
+                            }
+                        } else {
+                            self.cancel_selection();
                         }
                     }
                     Err(error) => {

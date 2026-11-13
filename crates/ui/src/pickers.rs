@@ -3777,11 +3777,11 @@ impl Pickers {
             .when_some(
                 (!icon_loading).then_some(chip_icon).flatten(),
                 |el, (path, tint)| {
-                    el.child(
-                        crate::icons::icon(path)
-                            .size(px(if model { 12.0 } else { 16.0 }))
-                            .text_color(tint.unwrap_or(theme.text_muted)),
-                    )
+                    el.child(crate::icons::brand_icon(
+                        path,
+                        if model { 12.0 } else { 16.0 },
+                        tint.unwrap_or(theme.text_muted),
+                    ))
                 },
             )
             .when(label_loading, |el| {
@@ -3992,6 +3992,7 @@ impl Pickers {
                 closing,
             ))
             .children(self.render_creation_workspace(cx))
+            .children(self.render_new_thread_git_selectors(cx))
             .children(self.render_import_chat(cx))
             .into_any_element()
     }
@@ -4367,49 +4368,50 @@ impl Pickers {
             let is_viewed = !all_view && effective == Some(harness);
             let live = descriptor.installed && descriptor.enabled != Some(false);
             let (icon_path, tint) = harness_brand_icon(harness);
-            tabs =
-                tabs.child(
-                    div()
-                        .id(("harness-tab", ix))
-                        .relative()
-                        .w(px(32.0))
-                        .h(px(32.0))
-                        .flex_none()
-                        .rounded(px(MODEL_ROW_RADIUS))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .cursor_pointer()
-                        .when(is_viewed, |el| model_selected(el, &theme))
-                        .when(!is_viewed, |el| {
-                            el.hover(|s| s.bg(theme.muted_fill().opacity(0.6)))
-                        })
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.setting_menu = None;
-                            this.model_rail = ModelRail::Harness;
-                            this.pick_harness(harness, cx);
-                            cx.notify();
-                        }))
-                        .child(crate::icons::icon(icon_path).size(px(14.0)).text_color(
-                            tint.unwrap_or(if is_viewed {
-                                theme.text
-                            } else {
-                                theme.text_muted
-                            }),
-                        ))
-                        // Live: the provider's CLI is installed and enabled.
-                        .when(live, |el| {
-                            el.child(
-                                div()
-                                    .absolute()
-                                    .right(px(4.0))
-                                    .bottom(px(4.0))
-                                    .size(px(6.0))
-                                    .rounded_full()
-                                    .bg(theme.accent),
-                            )
+            tabs = tabs.child(
+                div()
+                    .id(("harness-tab", ix))
+                    .relative()
+                    .w(px(32.0))
+                    .h(px(32.0))
+                    .flex_none()
+                    .rounded(px(MODEL_ROW_RADIUS))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .when(is_viewed, |el| model_selected(el, &theme))
+                    .when(!is_viewed, |el| {
+                        el.hover(|s| s.bg(theme.muted_fill().opacity(0.6)))
+                    })
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.setting_menu = None;
+                        this.model_rail = ModelRail::Harness;
+                        this.pick_harness(harness, cx);
+                        cx.notify();
+                    }))
+                    .child(crate::icons::brand_icon(
+                        icon_path,
+                        14.0,
+                        tint.unwrap_or(if is_viewed {
+                            theme.text
+                        } else {
+                            theme.text_muted
                         }),
-                );
+                    ))
+                    // Live: the provider's CLI is installed and enabled.
+                    .when(live, |el| {
+                        el.child(
+                            div()
+                                .absolute()
+                                .right(px(4.0))
+                                .bottom(px(4.0))
+                                .size(px(6.0))
+                                .rounded_full()
+                                .bg(theme.accent),
+                        )
+                    }),
+            );
         }
 
         // ── search row: icon + borderless input over a full-bleed hairline.
@@ -4729,12 +4731,11 @@ impl Pickers {
                         .flex_row()
                         .items_center()
                         .gap(px(6.0))
-                        .child(
-                            crate::icons::icon(icon_path)
-                                .size(px(11.0))
-                                .flex_none()
-                                .text_color(tint.unwrap_or(theme.text_muted)),
-                        )
+                        .child(crate::icons::brand_icon(
+                            icon_path,
+                            11.0,
+                            tint.unwrap_or(theme.text_muted),
+                        ))
                         .child(
                             div()
                                 .flex_none()
@@ -6079,18 +6080,18 @@ pub(crate) fn harness_display_name(harness: HarnessId) -> &'static str {
 
 pub(crate) fn harness_brand_icon(harness: HarnessId) -> (&'static str, Option<gpui::Hsla>) {
     match harness {
-        HarnessId::Zuse => (crate::icons::ZUSE_LOGO, None),
-        HarnessId::Gemini => (crate::icons::GEMINI_MARK, None),
-        HarnessId::Kiro => (crate::icons::KIRO_MARK, None),
+        HarnessId::Zuse => (crate::icons::ZUSE_LOGO, Some(gpui::rgb(0x89ca21).into())),
+        HarnessId::Gemini => (crate::icons::GEMINI_MARK, Some(gpui::rgb(0x4285f4).into())),
+        HarnessId::Kiro => (crate::icons::KIRO_MARK, Some(gpui::rgb(0x9b6df3).into())),
         HarnessId::CustomAcp(id) if id.as_str() == "acp-gemini" => {
-            (crate::icons::GEMINI_MARK, None)
+            (crate::icons::GEMINI_MARK, Some(gpui::rgb(0x4285f4).into()))
         }
         HarnessId::CustomAcp(_) => (crate::icons::TERMINAL, None),
         HarnessId::ClaudeCode | HarnessId::Mock => (
             crate::icons::CLAUDE_MARK,
             Some(crate::icons::claude_brand()),
         ),
-        HarnessId::Codex => (crate::icons::CODEX_MARK, None),
+        HarnessId::Codex => (crate::icons::CODEX_MARK, Some(gpui::rgb(0x8b5cf6).into())),
         HarnessId::Cursor => (crate::icons::CURSOR_MARK, None),
         // Cognition's mark (the Devin product icon), monochrome.
         HarnessId::Devin => (crate::icons::DEVIN_MARK, None),

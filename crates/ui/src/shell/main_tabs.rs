@@ -1,4 +1,4 @@
-//! Review, commit-diff and file tabs in the main area. They lead the
+//! Review, commit-diff and file tabs in the main area. They follow the
 //! conversation tabs in the titlebar strip; while one is active it stands in
 //! for the conversation, and closing it returns to the chat. The right pane
 //! keeps the file tree, browser, terminal and history.
@@ -12,7 +12,7 @@ pub(super) enum MainTab {
     File(u64),
 }
 
-/// One chat panel's main-area tabs.
+/// One thread's main-area tabs.
 #[derive(Debug, Default)]
 pub(super) struct MainTabs {
     /// Strip order.
@@ -36,6 +36,19 @@ pub(super) struct MainTabRow {
 }
 
 impl Shell {
+    fn main_tabs_key_for(&self, chat_id: &str, cx: &App) -> String {
+        self.state
+            .read(cx)
+            .chats
+            .iter()
+            .find(|chat| chat.id == chat_id)
+            .map(|chat| chat.thread_id().to_owned())
+            .unwrap_or_else(|| chat_id.to_owned())
+    }
+
+    fn main_tabs_key(&self, cx: &App) -> String {
+        self.main_tabs_key_for(&self.panel_key(cx), cx)
+    }
     fn main_tab_live(&self, tab: MainTab) -> bool {
         match tab {
             MainTab::Diff(id) => self.diffs.contains_key(&id),
@@ -49,7 +62,7 @@ impl Shell {
             return None;
         }
         self.main_tabs
-            .get(&self.panel_key(cx))?
+            .get(&self.main_tabs_key(cx))?
             .active
             .filter(|tab| self.main_tab_live(*tab))
     }
@@ -70,12 +83,12 @@ impl Shell {
         }
     }
 
-    /// The open chat's main-area tabs in strip order.
+    /// The open thread's main-area tabs in strip order.
     pub(super) fn main_tab_rows(&self, cx: &App) -> Vec<MainTabRow> {
         if self.active_chat.is_empty() {
             return Vec::new();
         }
-        let Some(tabs) = self.main_tabs.get(&self.panel_key(cx)) else {
+        let Some(tabs) = self.main_tabs.get(&self.main_tabs_key(cx)) else {
             return Vec::new();
         };
         tabs.tabs
@@ -119,8 +132,8 @@ impl Shell {
         if self.active_chat.is_empty() {
             return;
         }
-        let key = self.panel_key(cx);
-        self.collapse_surfaces_if_empty(&key, cx);
+        let key = self.main_tabs_key(cx);
+        self.collapse_surfaces_if_empty(&self.panel_key(cx), cx);
         if let Some(id) = self
             .main_tabs
             .get(&key)
@@ -157,7 +170,7 @@ impl Shell {
     ) -> u64 {
         let id = self.subscribe_diff(changes.clone(), window, cx);
         self.suspend_main_file_images(cx);
-        let tabs = self.main_tabs.entry(self.panel_key(cx)).or_default();
+        let tabs = self.main_tabs.entry(self.main_tabs_key(cx)).or_default();
         tabs.tabs.push(MainTab::Diff(id));
         tabs.active = Some(MainTab::Diff(id));
         changes.update(cx, |changes, cx| {
@@ -170,7 +183,8 @@ impl Shell {
     /// Add a file editor's tab to `panel_key`'s strip (after its other tabs)
     /// and show it.
     pub(super) fn push_main_file_tab(&mut self, panel_key: &str, id: u64, cx: &mut Context<Self>) {
-        let tabs = self.main_tabs.entry(panel_key.to_owned()).or_default();
+        let key = self.main_tabs_key_for(panel_key, cx);
+        let tabs = self.main_tabs.entry(key).or_default();
         if !tabs.tabs.contains(&MainTab::File(id)) {
             tabs.tabs.push(MainTab::File(id));
         }
@@ -179,8 +193,9 @@ impl Shell {
 
     /// Show `id`'s file tab in `panel_key`'s strip without navigating there
     /// (an unsaved editor surfacing for a quit prompt).
-    pub(super) fn select_main_file_tab(&mut self, panel_key: &str, id: u64) {
-        if let Some(tabs) = self.main_tabs.get_mut(panel_key)
+    pub(super) fn select_main_file_tab(&mut self, panel_key: &str, id: u64, cx: &App) {
+        let key = self.main_tabs_key_for(panel_key, cx);
+        if let Some(tabs) = self.main_tabs.get_mut(&key)
             && tabs.tabs.contains(&MainTab::File(id))
         {
             tabs.active = Some(MainTab::File(id));
@@ -200,13 +215,16 @@ impl Shell {
     pub(super) fn activate_main_tab(&mut self, tab: Option<MainTab>, cx: &mut Context<Self>) {
         let current = self
             .main_tabs
-            .get(&self.panel_key(cx))
+            .get(&self.main_tabs_key(cx))
             .and_then(|tabs| tabs.active);
         if current == tab {
             return;
         }
         self.suspend_main_file_images(cx);
-        self.main_tabs.entry(self.panel_key(cx)).or_default().active = tab;
+        self.main_tabs
+            .entry(self.main_tabs_key(cx))
+            .or_default()
+            .active = tab;
         match tab {
             Some(MainTab::Diff(id)) => {
                 if let Some(changes) = self.diffs.get(&id).cloned() {
@@ -248,14 +266,15 @@ impl Shell {
     /// Close a main-area tab. Closing the one on screen returns to the chat.
     /// A file with unsaved edits asks first (its tab stays until it may close).
     pub(super) fn close_main_tab(&mut self, tab: MainTab, cx: &mut Context<Self>) {
-        let key = self.panel_key(cx);
+        let panel_key = self.panel_key(cx);
+        let key = self.main_tabs_key(cx);
         if let MainTab::File(id) = tab {
             let Some(file) = self.file_surfaces.get(&id).cloned() else {
                 return;
             };
             match file.update(cx, |file, cx| file.prepare_close(cx)) {
                 FilesCloseDisposition::Allow => {
-                    self.complete_file_close(RightSurface::File(id), &key, cx)
+                    self.complete_file_close(RightSurface::File(id), &panel_key, cx)
                 }
                 FilesCloseDisposition::Pending | FilesCloseDisposition::Blocked => {
                     self.pending_file_closes.insert(RightSurface::File(id));
@@ -289,7 +308,7 @@ impl Shell {
     /// Drop a closed file editor from every strip; one on screen hands the
     /// main area back to the conversation.
     pub(super) fn forget_main_file_tab(&mut self, id: u64, cx: &mut Context<Self>) {
-        let current = self.panel_key(cx);
+        let current = self.main_tabs_key(cx);
         let mut refocus = false;
         for (key, tabs) in self.main_tabs.iter_mut() {
             tabs.tabs.retain(|tab| *tab != MainTab::File(id));

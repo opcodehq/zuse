@@ -794,11 +794,11 @@ impl HarnessesPage {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .child(
-                        crate::icons::icon(icon_path)
-                            .size(px(26.))
-                            .text_color(tint.unwrap_or(theme.text)),
-                    ),
+                    .child(crate::icons::brand_icon(
+                        icon_path,
+                        26.,
+                        tint.unwrap_or(theme.text),
+                    )),
             )
             .child(
                 div()

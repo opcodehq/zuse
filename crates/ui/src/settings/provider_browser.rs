@@ -640,11 +640,11 @@ impl HarnessesPage {
                     .items_center()
                     .justify_center()
                     .when(!enabled, |el| el.opacity(0.55))
-                    .child(
-                        crate::icons::icon(icon_path)
-                            .size(px(16.))
-                            .text_color(tint.unwrap_or(theme.text_muted)),
-                    ),
+                    .child(crate::icons::brand_icon(
+                        icon_path,
+                        16.,
+                        tint.unwrap_or(theme.text_muted),
+                    )),
             )
             .child(
                 div()
@@ -744,11 +744,11 @@ impl HarnessesPage {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .child(
-                        crate::icons::icon(icon_path)
-                            .size(px(24.))
-                            .text_color(tint.unwrap_or(theme.text)),
-                    ),
+                    .child(crate::icons::brand_icon(
+                        icon_path,
+                        24.,
+                        tint.unwrap_or(theme.text),
+                    )),
             )
             .child(
                 div()

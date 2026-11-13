@@ -5,6 +5,14 @@ use zuse_i18n::messages as msg;
 
 const RIGHT_PANE_HEADER_CONTROLS_MIN_WIDTH: f32 = 8.0 + 4.0 + 4.0 + 28.0;
 
+pub(super) fn active_tab_text_color(theme: &Theme) -> gpui::Hsla {
+    crate::theme::mix(theme.text, theme.text_muted, 0.3)
+}
+
+fn conversation_tab_title(title: Option<&str>) -> &str {
+    title.unwrap_or("New chat")
+}
+
 /// The chat one step from `selected` in the sidebar `order`, wrapping at both
 /// ends. Pure.
 ///
@@ -87,7 +95,7 @@ struct PanelTitlebarWidths {
 pub(super) struct TitlebarTrailing {
     fit: HorizontalPanelFit,
     right_pane_visible: bool,
-    takeover: bool,
+    pub(super) takeover: bool,
     row_left: f32,
     row_gap: f32,
     right_pad: f32,
@@ -117,6 +125,12 @@ fn panel_titlebar_widths(
 }
 
 impl Shell {
+    pub(super) fn overview_content_left(&self, cx: &App) -> f32 {
+        (self.sidebar_now() + Theme::SPACE_LG).max(
+            self.title_bar_content_start()
+                + TITLEBAR_ACTION_SLOT_WIDTH * self.titlebar_plus_alpha(cx),
+        )
+    }
     /// The same binding navigates the focused pane. Keep the persisted action
     /// IDs so existing user keymaps and the native browser bridge still work.
     pub(super) fn cycle_navigation(
@@ -259,6 +273,17 @@ impl Shell {
 
     /// Open a session from the sidebar: select it, the main area follows.
     pub(crate) fn open_chat(&mut self, chat_id: String, cx: &mut Context<Self>) {
+        let same_thread = {
+            let state = self.state.read(cx);
+            let target = state.chats.iter().find(|chat| chat.id == chat_id);
+            let selected = state.selected_chat_row();
+            target
+                .zip(selected)
+                .is_some_and(|(target, selected)| target.thread_id() == selected.thread_id())
+        };
+        if same_thread {
+            self.activate_main_tab(None, cx);
+        }
         self.cloud_conversation = None;
         self.cloud_conversation_events = None;
         self.command_palette = None;
@@ -416,8 +441,10 @@ impl Shell {
         // Same glide as the old strip: content starts at the inset card's
         // left edge while the sidebar is open, and slides toward the control
         // cluster as it collapses.
-        let content_left =
-            (sidebar_now + Theme::SPACE_LG).max(self.title_bar_content_start() + plus_inset);
+        let content_left = (sidebar_now + Theme::SPACE_SM).max(
+            self.title_bar_content_start()
+                + TITLEBAR_ACTION_SLOT_WIDTH * self.titlebar_plus_alpha(cx),
+        );
 
         // Trailing titlebar section. With the changes pane open this is the
         // PANE'S HEADER — a strip exactly as wide as the pane carrying its
@@ -510,26 +537,47 @@ impl Shell {
         };
         let root = selected.thread_id().to_owned();
         let device = selected.device_id.clone();
+        let origin = selected.id.clone();
         self.thread_conversation_creating = true;
         cx.spawn(async move |this, cx| {
             let result = engine.client().call_as::<zuse_protocol::Chat>(methods::CREATE_THREAD_SESSION,
                 serde_json::json!({"chatId": uuid::Uuid::new_v4().to_string(), "threadId": root, "targetDeviceId": device})).await;
             let _ = this.update(cx, |this, cx| {
                 this.thread_conversation_creating = false;
-                match result {
-                    Ok(chat) => {
-                        let id = chat.id.clone();
-                        this.state.update(cx, |state, _| {
-                            if !state.chats.iter().any(|row| row.id == id) { state.chats.push(chat); }
-                        });
-                        this.open_chat(id, cx);
-                    }
-                    Err(error) => this.composer.update(cx, |composer, cx| composer.show_error(error.to_string(), cx)),
-                }
+                this.finish_thread_conversation(&origin, result.map_err(|error| error.to_string()), cx);
                 cx.notify();
             });
         }).detach();
         cx.notify();
+    }
+
+    pub(super) fn finish_thread_conversation(
+        &mut self,
+        origin: &str,
+        result: Result<zuse_protocol::Chat, String>,
+        cx: &mut Context<Self>,
+    ) {
+        let still_selected = matches!(self.route, Route::Chat)
+            && self.cloud_conversation.is_none()
+            && self.state.read(cx).selected_chat.as_deref() == Some(origin);
+        match result {
+            Ok(chat) => {
+                let id = chat.id.clone();
+                self.state.update(cx, |state, cx| {
+                    if !state.chats.iter().any(|row| row.id == id) {
+                        state.chats.push(chat);
+                        cx.notify();
+                    }
+                });
+                if still_selected {
+                    self.open_chat(id, cx);
+                }
+            }
+            Err(error) if still_selected => self
+                .composer
+                .update(cx, |composer, cx| composer.show_error(error, cx)),
+            Err(error) => crate::toast::error(cx, error),
+        }
     }
 
     /// The selected thread's conversations as `(thread id, open tabs, closed)`.
@@ -662,30 +710,24 @@ impl Shell {
                 .into_any_element()
         };
         let tab_chip = |id: SharedString, title: SharedString, active: bool| {
-            div()
-                .id(id)
+            crate::surface_chrome::workspace_tab(id, active, &theme)
                 .role(gpui::Role::Tab)
                 .aria_label(title)
                 .aria_selected(active)
                 .cursor_pointer()
                 .flex_none()
                 .w(px(160.))
-                .h(px(24.))
-                .px(px(8.))
+                .h(px(28.))
+                .px(px(9.))
                 .flex()
                 .items_center()
                 .gap(px(6.))
-                .rounded(px(7.))
-                .text_size(crate::typography::text_xs())
+                .text_size(crate::typography::text_md())
                 .when(active, |d| {
-                    d.bg(theme.accent_fill())
-                        .text_color(theme.text_strong)
+                    d.text_color(active_tab_text_color(&theme))
                         .font_weight(gpui::FontWeight::MEDIUM)
                 })
-                .when(!active, |d| {
-                    d.text_color(theme.text_muted)
-                        .hover(|d| d.bg(theme.muted_fill().opacity(0.6)).text_color(theme.text))
-                })
+                .when(!active, |d| d.text_color(theme.text_muted))
         };
         // The × every closable tab shares: shown on the active tab, revealed
         // on hover for the rest.
@@ -819,13 +861,9 @@ impl Shell {
             .collect::<Vec<_>>();
         let conversation_chips = rows
             .into_iter()
-            .enumerate()
-            .map(|(index, chat)| {
+            .map(|chat| {
                 let active = chat.id == selected_id && main_tab.is_none();
-                let title = chat
-                    .title
-                    .clone()
-                    .unwrap_or_else(|| format!("Chat {}", index + 1));
+                let title = conversation_tab_title(chat.title.as_deref()).to_owned();
                 let brand = chat
                     .config
                     .as_ref()
@@ -844,11 +882,9 @@ impl Shell {
                         tab_spinner(&id, cx)
                     } else {
                         match brand {
-                            Some((path, tint)) => icon(path)
-                                .size(px(14.))
-                                .flex_none()
-                                .text_color(tint.unwrap_or(theme.text_muted))
-                                .into_any_element(),
+                            Some((path, tint)) => {
+                                icons::brand_icon(path, 14., tint.unwrap_or(theme.text_muted))
+                            }
                             None => icon(icons::CHAT_ROUND_LINE)
                                 .size(px(14.))
                                 .flex_none()
@@ -914,10 +950,11 @@ impl Shell {
                 .child(if working.contains(&id) {
                     tab_spinner(&id, cx)
                 } else {
-                    icon(brand.map_or(icons::CHAT_ROUND_LINE, |(path, _)| path))
-                        .size(px(14.))
-                        .text_color(brand.and_then(|(_, tint)| tint).unwrap_or(theme.text_muted))
-                        .into_any_element()
+                    icons::brand_icon(
+                        brand.map_or(icons::CHAT_ROUND_LINE, |(path, _)| path),
+                        14.,
+                        brand.and_then(|(_, tint)| tint).unwrap_or(theme.text_muted),
+                    )
                 })
                 .child(match rename {
                     Some(input) => div().w(px(120.)).child(input).into_any_element(),
@@ -1022,20 +1059,23 @@ impl Shell {
                     .min_w_0()
                     .overflow_x_scroll()
                     .gap(px(4.))
-                    .children(main_chips)
                     .children(conversation_chips)
-                    .children(side_chips),
+                    .children(side_chips)
+                    .when(!archived, |d| {
+                        d.child(
+                            strip_button(
+                                "add-thread-conversation",
+                                icons::PLUS,
+                                "New chat in this thread",
+                            )
+                            .debug_selector(|| "add-thread-conversation".to_string())
+                            .on_click(
+                                cx.listener(|this, _, _, cx| this.add_thread_conversation(cx)),
+                            ),
+                        )
+                    })
+                    .children(main_chips),
             )
-            .when(!archived, |d| {
-                d.child(
-                    strip_button(
-                        "add-thread-conversation",
-                        icons::PLUS,
-                        "New chat in this thread",
-                    )
-                    .on_click(cx.listener(|this, _, _, cx| this.add_thread_conversation(cx))),
-                )
-            })
             .child(div().flex_1())
             .child(history)
             .into_any_element()
@@ -1068,12 +1108,11 @@ impl Shell {
                 .id(SharedString::from(fade))
                 .role(gpui::Role::MenuItem)
                 .aria_label(title.clone())
-                .child(
-                    icon(brand.map_or(icons::CHAT_ROUND_LINE, |(path, _)| path))
-                        .size(px(14.))
-                        .flex_none()
-                        .text_color(brand.and_then(|(_, tint)| tint).unwrap_or(theme.text_muted)),
-                )
+                .child(icons::brand_icon(
+                    brand.map_or(icons::CHAT_ROUND_LINE, |(path, _)| path),
+                    14.,
+                    brand.and_then(|(_, tint)| tint).unwrap_or(theme.text_muted),
+                ))
                 .child(div().flex_1().min_w_0().truncate().child(title))
                 .child(
                     div()
@@ -1310,20 +1349,25 @@ impl Shell {
                     .when(open, |button| button.bg(theme.text.opacity(0.10)))
                 },
             );
-        // The left cluster: owner avatar, branch and copy (reference top bar).
-        let identity = if !takeover && !on_canvas && zot_coordinator {
-            // With no branch to show, the conversation tabs take this row.
-            Some(
-                div()
-                    .pt(px(10.))
-                    .child(self.render_thread_conversations(cx))
-                    .into_any_element(),
-            )
-        } else if !takeover && !on_canvas {
-            self.render_top_bar_branch(&theme, cx)
-        } else {
-            None
-        };
+        let identity = (!takeover).then(|| {
+            div()
+                .debug_selector(|| "titlebar-conversation-tabs".into())
+                .min_w_0()
+                .flex()
+                .items_center()
+                .gap(px(8.0))
+                .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
+                .when(!on_canvas && self.cloud_conversation.is_none(), |row| {
+                    row.child(self.render_thread_conversations(cx))
+                })
+                .when(self.cloud_conversation.is_some() && !on_canvas, |row| {
+                    row.children(self.render_cloud_tabs(cx))
+                })
+                .when(self.cloud_conversation.is_some() && !on_canvas, |row| {
+                    row.children(self.render_top_bar_branch(&theme, cx))
+                })
+                .into_any_element()
+        });
         let cloud_info = if !takeover && !on_canvas {
             self.render_cloud_info(&theme, cx)
         } else {
@@ -1340,8 +1384,7 @@ impl Shell {
             // In panel takeover the header strip spans the whole band — the
             // identity would sit UNDER it (both flex_none, the row overflows
             // and paint order stacks them), so it hides for the duration.
-            // The conversation tabs live on their own row below this bar
-            // (`render_conversation_tab_row`).
+            // Expanded pane takeover keeps conversation tabs on a separate row.
             .when(!takeover, |el| {
                 el.child(
                     div()
@@ -1380,6 +1423,13 @@ impl Shell {
 #[cfg(test)]
 mod panel_titlebar_tests {
     use super::*;
+
+    #[test]
+    fn conversation_title_defaults_without_overwriting_named_chats() {
+        assert_eq!(conversation_tab_title(None), "New chat");
+        assert_eq!(conversation_tab_title(Some("My chat")), "My chat");
+        assert_eq!(conversation_tab_title(Some("Chat 2")), "Chat 2");
+    }
 
     #[test]
     fn tabs_align_with_the_panel_for_each_caption_layout_and_files_width() {
