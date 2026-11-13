@@ -214,10 +214,15 @@ impl Harnesses {
             // Already installed (for example the previous bundle): reuse it.
             let _ = std::fs::remove_dir_all(tree);
         } else {
-            seal(tree)?;
             super::private_directory(&self.config.bundles())?;
             remove_tree(&target);
+            // Seal after the move: moving a directory to another parent
+            // rewrites its `..` entry, which needs write permission on it.
             std::fs::rename(tree, &target).map_err(|_| anyhow!(INSTALL_FAILED))?;
+            if let Err(error) = seal(&target) {
+                remove_tree(&target);
+                return Err(error);
+            }
             write_json(&self.config.bundles().join(format!("{sha}.json")), &file)?;
         }
         let agent = file.bundle.agent.clone();
