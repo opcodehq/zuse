@@ -132,6 +132,7 @@ pub async fn run(
                     .await?
                     {
                         RuntimeUpdates::woke(runtime_updates);
+                        zuse_cloud_runtime::harness_updates::note_wake();
                         continue;
                     }
                     return Ok(());
@@ -304,6 +305,36 @@ impl RuntimeUpdates {
             Ok(false)
         }
     }
+}
+
+/// Start the harness bundle poller. Bundles download in the background and
+/// are adopted only when no turn runs and every command is acknowledged.
+#[cfg(unix)]
+pub fn harness_updates(
+    harnesses: &Arc<zuse_cloud_runtime::harness_updates::Harnesses>,
+    core: &Arc<EngineCore>,
+    database: &Path,
+    authority: &Authority,
+    boot: &watch::Receiver<CloudRuntimeBootstrap>,
+    cancel: &CancellationToken,
+) -> Option<AbortOnDropHandle<()>> {
+    let updater = match zuse_cloud_runtime::harness_updates::Updater::new(harnesses.clone()) {
+        Ok(updater) => updater,
+        Err(error) => {
+            tracing::warn!(%error, "harness_update_poller_unavailable");
+            return None;
+        }
+    };
+    let activity: Arc<dyn zuse_cloud_runtime::updates::Activity> = Arc::new(EngineActivity {
+        core: core.clone(),
+        database: database.into(),
+    });
+    Some(AbortOnDropHandle::new(tokio::spawn(updater.run(
+        authority.clone(),
+        boot.clone(),
+        activity,
+        cancel.child_token(),
+    ))))
 }
 
 /// Swap gate backed by the engine's run statuses and the durable mailbox.
