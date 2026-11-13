@@ -15,6 +15,8 @@ pub fn now_ms() -> i64 {
 }
 
 #[cfg(unix)]
+pub mod harness_updates;
+#[cfg(unix)]
 pub mod parking;
 pub mod supervisor;
 #[cfg(unix)]

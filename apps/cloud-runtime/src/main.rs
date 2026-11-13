@@ -504,8 +504,20 @@ async fn run() -> Result<()> {
                 "claude"
             }
         });
+    // Agent CLIs installed from harness bundles, adopted independently of
+    // the image. Opening adopts anything staged: no harness process exists yet.
+    #[cfg(unix)]
+    let harnesses = (!args.test_harness)
+        .then(|| open_harnesses(&directory, &bootstrap, selected_agent))
+        .flatten();
+    #[cfg(unix)]
+    let selected_executable = harnesses
+        .as_ref()
+        .and_then(|h| h.executable(provider_id(selected_agent)));
+    #[cfg(not(unix))]
+    let selected_executable = None;
     if !args.test_harness {
-        agent_warmup::spawn(selected_agent, &directory);
+        agent_warmup::spawn(selected_agent, &directory, selected_executable);
     }
     let default_harness = if args.test_harness {
         HarnessId::Mock
@@ -1138,17 +1150,25 @@ async fn run() -> Result<()> {
             continue;
         }
 
+        #[cfg(unix)]
+        let source = harness_source(harnesses.as_ref(), provider.id());
+        #[cfg(not(unix))]
+        let source: Option<zuse_providers::ExecutableSource> = None;
         match provider {
-            zuse_protocol::cloud_auth::CloudAuthProvider::Claude => registry.register(Arc::new(
-                zuse_providers::ClaudeHarness::new().with_credentials(
+            zuse_protocol::cloud_auth::CloudAuthProvider::Claude => registry.register(Arc::new({
+                let harness = zuse_providers::ClaudeHarness::new().with_credentials(
                     zuse_cloud_runtime::workload_secrets::Credentials::wrap(
                         broker,
                         workload.clone(),
                     ),
-                ),
-            )),
-            zuse_protocol::cloud_auth::CloudAuthProvider::Codex => registry.register(Arc::new(
-                zuse_providers::CodexHarness::new()
+                );
+                match source {
+                    Some(source) => harness.with_executable_source(source),
+                    None => harness,
+                }
+            })),
+            zuse_protocol::cloud_auth::CloudAuthProvider::Codex => registry.register(Arc::new({
+                let harness = zuse_providers::CodexHarness::new()
                     .with_managed_startup()
                     .with_managed_memory_sessions(
                         (bootstrap.extra.get("internalCodexMemoryTransportReset")
@@ -1164,8 +1184,12 @@ async fn run() -> Result<()> {
                             broker,
                             workload.clone(),
                         ),
-                    ),
-            )),
+                    );
+                match source {
+                    Some(source) => harness.with_executable_source(source),
+                    None => harness,
+                }
+            })),
             #[cfg(unix)]
             zuse_protocol::cloud_auth::CloudAuthProvider::Grok => {
                 let helper = std::env::var_os("ZUSE_GROK_AUTH_HELPER")
@@ -1177,14 +1201,16 @@ async fn run() -> Result<()> {
                     helper,
                     directory.join("grok-managed"),
                 );
-                registry.register(Arc::new(
-                    zuse_providers::AcpHarness::grok()
-                        .with_sessions_root(sessions)
-                        .with_credentials(zuse_cloud_runtime::workload_secrets::Credentials::wrap(
-                            credentials,
-                            workload.clone(),
-                        )),
-                ));
+                let harness = zuse_providers::AcpHarness::grok()
+                    .with_sessions_root(sessions)
+                    .with_credentials(zuse_cloud_runtime::workload_secrets::Credentials::wrap(
+                        credentials,
+                        workload.clone(),
+                    ));
+                registry.register(Arc::new(match source {
+                    Some(source) => harness.with_executable_source(source),
+                    None => harness,
+                }));
             }
             _ => anyhow::bail!("runtime_agent_unsupported"),
         }
@@ -1297,6 +1323,17 @@ async fn run() -> Result<()> {
         // probation is now healthy and keeps the new binary.
         #[cfg(unix)]
         zuse_cloud_runtime::updates::startup_healthy();
+        #[cfg(unix)]
+        let _harness_updates = harnesses.as_ref().and_then(|harnesses| {
+            active::harness_updates(
+                harnesses,
+                &core,
+                storage.database_path(),
+                &authority,
+                &updates,
+                &cancel,
+            )
+        });
         let runtime_updates = active::RuntimeUpdates::start(
             &directory,
             &core,
@@ -1561,4 +1598,57 @@ async fn adopt(
             .await?;
     }
     Ok(())
+}
+
+/// The cloud auth provider id of a launch agent name.
+fn provider_id(agent: &str) -> &str {
+    if agent == "claude-code" {
+        "claude"
+    } else {
+        agent
+    }
+}
+
+/// Open the harness bundle store for the agents this runtime registers: the
+/// managed catalogs when present, else the selected agent.
+#[cfg(unix)]
+fn open_harnesses(
+    directory: &std::path::Path,
+    bootstrap: &zuse_protocol::cloud::CloudRuntimeBootstrap,
+    selected: &str,
+) -> Option<Arc<zuse_cloud_runtime::harness_updates::Harnesses>> {
+    let catalogs: Vec<String> = bootstrap
+        .extra
+        .get("managedAgentCatalogs")
+        .and_then(serde_json::Value::as_object)
+        .map(|m| m.keys().cloned().collect())
+        .unwrap_or_default();
+    let selected = provider_id(selected);
+    let agents: Vec<&str> = zuse_protocol::cloud_harness_updates::AGENTS
+        .into_iter()
+        .filter(|a| {
+            if catalogs.is_empty() {
+                *a == selected
+            } else {
+                catalogs.iter().any(|c| c == a)
+            }
+        })
+        .collect();
+    match zuse_cloud_runtime::harness_updates::Config::detect(directory, &agents) {
+        Ok(config) => Some(zuse_cloud_runtime::harness_updates::Harnesses::open(config)),
+        Err(error) => {
+            tracing::warn!(%error, "harness_updates_unavailable");
+            None
+        }
+    }
+}
+
+/// Each new process of `agent` starts from the bundle adopted at that moment.
+#[cfg(unix)]
+fn harness_source(
+    harnesses: Option<&Arc<zuse_cloud_runtime::harness_updates::Harnesses>>,
+    agent: &'static str,
+) -> Option<zuse_providers::ExecutableSource> {
+    let harnesses = harnesses?.clone();
+    Some(Arc::new(move || harnesses.executable(agent)))
 }

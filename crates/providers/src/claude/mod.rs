@@ -187,6 +187,7 @@ fn same_connection(live: &RunRequest, next: &RunRequest) -> bool {
 /// it at a fake CLI with [`ClaudeHarness::with_executable`].
 pub struct ClaudeHarness {
     executable: Option<PathBuf>,
+    executable_source: Option<crate::executable::ExecutableSource>,
     credentials: Option<std::sync::Arc<dyn crate::credentials::CredentialResolver>>,
     /// Grace between the interrupt control request and SIGTERM.
     interrupt_grace: Duration,
@@ -201,6 +202,7 @@ impl Default for ClaudeHarness {
     fn default() -> Self {
         Self {
             executable: None,
+            executable_source: None,
             credentials: None,
             interrupt_grace: Duration::from_secs(2),
             kill_grace: Duration::from_secs(3),
@@ -236,9 +238,24 @@ impl ClaudeHarness {
         self
     }
 
+    /// Bind each new CLI process to the path `source` returns at spawn
+    /// (managed installs). Such installs never update themselves.
+    pub fn with_executable_source(mut self, source: crate::executable::ExecutableSource) -> Self {
+        self.executable_source = Some(source);
+        self
+    }
+
     fn resolve_executable(&self) -> Result<PathBuf, HarnessError> {
         if let Some(p) = &self.executable {
             return crate::executable::validate_native_override(p);
+        }
+        if let Some(p) = self
+            .executable_source
+            .as_ref()
+            .and_then(|source| source())
+            .filter(|p| p.is_file())
+        {
+            return crate::executable::validate_native_override(&p);
         }
         if let Some(p) = std::env::var_os("CLAUDE_CODE_EXECUTABLE")
             && !p.is_empty()
@@ -311,6 +328,11 @@ impl ClaudeHarness {
     fn build_command(&self, exe: &PathBuf, request: &RunRequest) -> Command {
         let mut cmd = Command::new(exe);
         crate::compose_child_path(&mut cmd, exe);
+        if self.executable_source.is_some() {
+            // The release pipeline owns a managed install's version.
+            cmd.env("DISABLE_AUTOUPDATER", "1")
+                .env("DISABLE_UPDATES", "1");
+        }
         cmd.args(Self::launch_args(request));
         if let Some(resume) = &request.resume {
             cmd.arg(format!("--resume={resume}"));

@@ -46,6 +46,12 @@ fn home_or_current_dir_with(
 /// `.cmd`/`.bat` shims npm installs on Windows (the process module launches
 /// those through `cmd.exe` with per-argument escaping). The path must exist,
 /// so `installed()` and the launch path agree on what an override means.
+/// Supplies the CLI path for each new process of a managed install (a cloud
+/// computer's harness bundles). Called once per spawn; the process keeps that
+/// exact file for its lifetime, so a later answer never affects it. `None`
+/// falls back to the usual override/discovery order.
+pub type ExecutableSource = std::sync::Arc<dyn Fn() -> Option<PathBuf> + Send + Sync>;
+
 pub(crate) fn validate_native_override(path: &Path) -> Result<PathBuf, crate::HarnessError> {
     validate_native_override_with(path, Platform::current())
 }
