@@ -88,14 +88,10 @@ builder image), packages, signs, uploads, and keeps `release.json` as the
 workflow artifact `cloud-runtime-release-<sha256>`. Without the signing key it
 packages only; without the R2 secrets it does not upload.
 
-Repository secrets:
-
-| Secret | Used by |
-| --- | --- |
-| `ZUSE_RUNTIME_RELEASE_SIGNING_KEY` | release workflow, signing (Ed25519 PEM) |
-| `ZUSE_CLOUD_RUNTIME_R2_BUCKET`, `ZUSE_CLOUD_RUNTIME_R2_ENDPOINT` | release workflow and old-runtime matrix |
-| `ZUSE_CLOUD_RUNTIME_R2_ACCESS_KEY_ID`, `ZUSE_CLOUD_RUNTIME_R2_SECRET_ACCESS_KEY` | release workflow (write) |
-| `ZUSE_CLOUD_RUNTIME_R2_READ_ACCESS_KEY_ID`, `ZUSE_CLOUD_RUNTIME_R2_READ_SECRET_ACCESS_KEY` | old-runtime matrix (read only) |
+The secrets are environment secrets, not repository secrets: both the release
+job and the old-runtime matrix declare a GitHub environment, and see nothing
+outside it. See [GitHub environments](#github-environments-staging-and-production)
+for the list.
 
 Keep the R2 write token scoped to the runtime bucket and separate from the
 API's R2 credentials. Pull request jobs only ever get the read token.
