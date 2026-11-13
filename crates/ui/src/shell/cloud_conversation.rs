@@ -31,6 +31,8 @@ pub(super) struct CloudConversation {
     error: Option<String>,
     authorized: bool,
     access_revoked: bool,
+    /// When this view opened; phase timings in the log are measured from it.
+    pub(super) opened_at: std::time::Instant,
     history_read: Option<Task<()>>,
     history: history::State,
     read_again: bool,
@@ -92,6 +94,10 @@ impl CloudConversation {
         let session = target.initial_session.clone();
         let cache_key = TranscriptCache::key(&target);
         let cached = cx.default_global::<TranscriptCache>().get(&cache_key);
+        if let Some(entries) = &cached {
+            tracing::info!(workspace = %target.workspace, ms = 0u64, hit = true, source = "memory",
+                messages = entries.len(), "Cloud chat open: cached history read");
+        }
         let state = cx.new(|_| {
             let mut state = AppState::new();
             // Account-owned rendering is available before a guest connects.
@@ -194,6 +200,7 @@ impl CloudConversation {
             error: None,
             authorized: false,
             access_revoked: false,
+            opened_at: std::time::Instant::now(),
             history_read: None,
             history: history::State::default(),
             read_again: false,
@@ -443,6 +450,7 @@ impl CloudConversation {
                         let alive = this.update(cx, |this, cx| {
                             if owner {
                                 if !this.authorized {
+                                    tracing::info!(workspace = %this.target.workspace, ms = this.opened_at.elapsed().as_millis() as u64, "Cloud chat open: account confirmed");
                                     this.authorized = true;
                                     this.access_revoked = false;
                                     this.read_provisional_history(cx);
@@ -573,6 +581,12 @@ impl CloudConversation {
         }));
     }
     fn apply_history(&mut self, value: Value, cx: &mut Context<Self>) {
+        if !self.history.fresh_received {
+            tracing::info!(workspace = %self.target.workspace, ms = self.opened_at.elapsed().as_millis() as u64,
+                messages = value["head"]["transcript"]["reset"].as_array().map_or(0, Vec::len),
+                replaced_cache = self.history.provisional_painted,
+                "Cloud chat open: fresh history painted");
+        }
         // A validated fresh receipt wins even if the local cache finishes later.
         self.history.fresh_received = true;
         self.history.provisional_read = None;
@@ -2914,6 +2928,116 @@ mod tests {
         cx: &mut TestAppContext,
     ) {
         provisional_cache_fixture(cx, "workspace-missing");
+    }
+    /// The engine's saved copy answers; the account check and the fresh read
+    /// never do (still signing in, offline, or the computer is asleep).
+    struct SavedCopyOnly {
+        requests: std::sync::Mutex<Vec<Value>>,
+    }
+    #[async_trait::async_trait]
+    impl zuse_rpc::RpcService for SavedCopyOnly {
+        async fn handle(
+            &self,
+            method: &str,
+            params: Value,
+        ) -> Result<zuse_rpc::RpcReply, zuse_rpc::RpcError> {
+            match method {
+                methods::CLOUD_ACCOUNT_STATUS | methods::CLOUD_EVENTS => Ok(
+                    zuse_rpc::RpcReply::Stream(Box::pin(futures::stream::pending())),
+                ),
+                methods::CLOUD_HISTORY => {
+                    self.requests.lock().unwrap().push(params.clone());
+                    if params["cacheOnly"] != true {
+                        futures::future::pending::<()>().await;
+                    }
+                    let mut value = retained_history(false);
+                    value["provisional"] = json!(true);
+                    value["head"]["transcript"]["reset"][0]["id"] = json!("saved-before-restart");
+                    Ok(zuse_rpc::RpcReply::Value(value))
+                }
+                _ => Err(zuse_rpc::RpcError::UnknownMethod(method.into())),
+            }
+        }
+    }
+    /// After a restart nothing is in memory. Opening a cloud chat paints the
+    /// saved copy at once, before the account check or any fresh read, and a
+    /// reopen in the same session paints from memory without a disk read.
+    #[gpui::test]
+    fn after_restart_the_saved_copy_paints_before_account_or_fresh_history(
+        cx: &mut TestAppContext,
+    ) {
+        use std::sync::Arc;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _entered = runtime.enter();
+        cx.update(|cx| {
+            initialize(cx);
+            gpui_tokio::init_from_handle(cx, runtime.handle().clone());
+        });
+        let service = Arc::new(SavedCopyOnly {
+            requests: std::sync::Mutex::new(vec![]),
+        });
+        let directory = tempfile::tempdir().unwrap();
+        let open = |cx: &mut TestAppContext| {
+            let controller = crate::state::EngineHandle::from_test_client(zuse_rpc::memory_client(
+                service.clone(),
+            ));
+            let boot = boot(directory.path());
+            cx.new(|cx| {
+                CloudConversation::new(
+                    CloudTarget {
+                        controller,
+                        subject: "owner".into(),
+                        organization: None,
+                        workspace: "task".into(),
+                        initial_session: "session".into(),
+                    },
+                    json!({"workspaceId":"task","state":"paused"}),
+                    Value::Null,
+                    boot,
+                    cx,
+                )
+            })
+        };
+        let pump = |cx: &mut TestAppContext| {
+            for _ in 0..30 {
+                cx.run_until_parked();
+                runtime.block_on(tokio::task::yield_now());
+            }
+        };
+        let shown = |view: &Entity<CloudConversation>, cx: &mut TestAppContext| {
+            view.read_with(cx, |view, cx| {
+                view.state
+                    .read(cx)
+                    .transcript
+                    .iter()
+                    .map(|row| row.id.clone())
+                    .collect::<Vec<_>>()
+            })
+        };
+
+        let view = open(cx);
+        pump(cx);
+        assert_eq!(shown(&view, cx), ["saved-before-restart"]);
+        view.read_with(cx, |view, _| {
+            assert!(!view.authorized, "painted before the account check");
+            assert!(!view.history.fresh_received, "painted before fresh history");
+        });
+        let requests = service.requests.lock().unwrap().clone();
+        assert_eq!(requests.len(), 1, "{requests:?}");
+        assert_eq!(requests[0]["cacheOnly"], true);
+
+        // Close and reopen within the session: memory paints, no disk read.
+        drop(view);
+        cx.update(|_| {});
+        pump(cx);
+        let view = open(cx);
+        assert_eq!(shown(&view, cx), ["saved-before-restart"]);
+        pump(cx);
+        assert_eq!(service.requests.lock().unwrap().len(), 1);
+        drop(view);
     }
     struct AccountChanges {
         statuses: std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<Value>>>,

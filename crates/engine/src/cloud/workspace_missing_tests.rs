@@ -27,7 +27,9 @@ fn authoritative_workspace_missing_revokes_cache_but_missing_history_and_tools_d
     const CHILD: &str = "ZUSE_TEST_WORKSPACE_MISSING_CHILD";
     if std::env::var_os(CHILD).is_none() {
         let root = tempfile::tempdir().unwrap();
+        let keys = tempfile::tempdir().unwrap();
         let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .env("ZUSE_SECURE_CACHE_DIR", keys.path())
             .args(["--exact", "cloud::workspace_missing_tests::authoritative_workspace_missing_revokes_cache_but_missing_history_and_tools_do_not", "--nocapture"])
             .env(CHILD, "1")
             .env("ZUSE_CLOUD_HISTORY_CACHE_ROOT", root.path())
@@ -106,7 +108,7 @@ async fn http_matrix() {
     );
     let auth = Auth::new(crate::auth::AuthConfig::new(&origin, directory.path()))
         .with_account(Some(account));
-    let client = zuse_rpc::memory_client(Arc::new(Controller { api, auth }));
+    let client = Arc::new(zuse_rpc::memory_client(Arc::new(Controller { api, auth })));
     let root = std::path::PathBuf::from(std::env::var_os("ZUSE_CLOUD_HISTORY_CACHE_ROOT").unwrap());
     let reader = Reader::new(&origin)
         .unwrap()
@@ -121,7 +123,22 @@ async fn http_matrix() {
         .seal("workspace", "session", &head.cursor, None, &head)
         .unwrap();
     let projection = json!({"workspaceId":"workspace","sessionId":"session","cursor":head.cursor,"beforeSequence":null,"ciphertext":upload.ciphertext,"transcriptKey":encoded});
+    let mut other = head.clone();
+    other.workspace_id = "other".into();
+    let sealed = key
+        .seal("other", "session", &other.cursor, None, &other)
+        .unwrap();
+    let other_projection = json!({"workspaceId":"other","sessionId":"session","cursor":other.cursor,"beforeSequence":null,"ciphertext":sealed.ciphertext,"transcriptKey":encoded});
+    let saved = |workspace: &str| {
+        reader
+            .cached_head("cache-token", workspace, "session")
+            .unwrap()
+            .is_some()
+    };
     let seed = || {
+        reader
+            .cache_projection("cache-token", &other_projection)
+            .unwrap();
         reader.cache_projection("cache-token", &projection).unwrap();
         assert!(
             reader
@@ -130,13 +147,17 @@ async fn http_matrix() {
                 .is_some()
         );
     };
-    let cached = || {
-        let db = rusqlite::Connection::open(root.join("encrypted-pages.sqlite3")).unwrap();
-        db.query_row("SELECT COUNT(*) FROM encrypted_pages", [], |row| {
-            row.get::<_, i64>(0)
-        })
-        .unwrap()
-            > 0
+    // What a restarted app paints first: the platform-protected saved head,
+    // read without a token or any in-memory lease.
+    let provisional = |workspace: &'static str| {
+        let client = client.clone();
+        async move {
+            client
+                .call_scoped(READ, json!({"workspaceId":workspace,"sessionId":"session","cacheOnly":true,"expectedAccountId":"general-account"}))
+                .await
+                .unwrap()["head"]
+                .is_object()
+        }
     };
     let params = json!({"workspaceId":"workspace","expectedAccountId":"general-account"});
     for status in [503, 404, 401, 403] {
@@ -151,19 +172,35 @@ async fn http_matrix() {
         } else {
             assert!(!error.to_string().contains("workspace_not_found"));
         }
-        assert_eq!(cached(), status == 503, "metadata status {status}");
+        // 404 proves deletion and 403 withdraws access: forget that workspace.
+        // A 401 is an expired bearer, and a 503 says nothing about access.
+        assert_eq!(
+            saved("workspace"),
+            matches!(status, 503 | 401),
+            "metadata status {status}"
+        );
+        assert!(
+            saved("other"),
+            "metadata status {status} for one workspace keeps other chats"
+        );
+        assert_eq!(
+            provisional("workspace").await,
+            matches!(status, 503 | 401),
+            "restart paint after metadata status {status}"
+        );
+        assert!(provisional("other").await, "status {status}");
     }
     server.status.store(200, Ordering::SeqCst);
     seed();
     let error = client.call_scoped(READ, json!({"workspaceId":"workspace","expectedAccountId":"general-account","toolBlobRef":"blob","offset":0})).await.unwrap_err();
     assert!(error.to_string().contains("not finished syncing"));
     assert!(
-        cached(),
+        saved("workspace") && provisional("workspace").await,
         "unpublished tool404 must preserve encrypted history"
     );
     let _ = client.call_scoped(READ, params).await;
     assert!(
-        cached(),
+        saved("workspace") && provisional("workspace").await,
         "task-history/projection404 must preserve encrypted history"
     );
     assert!(

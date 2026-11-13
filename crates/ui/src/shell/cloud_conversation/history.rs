@@ -181,11 +181,18 @@ impl CloudConversation {
     /// check: the engine only decrypts a page saved for the signed-in account,
     /// and a revocation clears whatever painted.
     pub(super) fn read_provisional_history(&mut self, cx: &mut Context<Self>) {
-        if self.access_revoked
-            || self.history.fresh_received
-            || self.history.provisional_read.is_some()
-            || self.state.read(cx).engine().is_some()
-        {
+        if self.history.provisional_read.is_some() {
+            return;
+        }
+        // An attached computer alone is no reason to skip: until its live
+        // transcript arrives the saved copy is all there is to show.
+        let live = self.live_transcript_replayed(cx);
+        let painted = !self.state.read(cx).transcript.is_empty();
+        if self.access_revoked || self.history.fresh_received || live || painted {
+            tracing::info!(workspace = %self.target.workspace,
+                ms = self.opened_at.elapsed().as_millis() as u64,
+                fresh = self.history.fresh_received, live, painted,
+                "Cloud chat open: cached history skipped");
             return;
         }
         let target = self.target.clone();
@@ -207,7 +214,7 @@ impl CloudConversation {
                 this.history.provisional_request = None;
                 if this.access_revoked
                     || this.history.fresh_received
-                    || this.state.read(cx).engine().is_some()
+                    || this.live_transcript_replayed(cx)
                     || !this.state.read(cx).transcript.is_empty()
                     || this.target.subject != target.subject
                     || this.target.organization != target.organization
@@ -216,9 +223,15 @@ impl CloudConversation {
                 {
                     return;
                 }
+                let ms = this.opened_at.elapsed().as_millis() as u64;
                 let Ok(value) = result else {
+                    tracing::info!(workspace = %target.workspace, ms, "Cloud chat open: cached history read failed");
                     return;
                 };
+                tracing::info!(workspace = %target.workspace, ms,
+                    hit = value["head"].is_object(), source = "disk",
+                    messages = value["head"]["transcript"]["reset"].as_array().map_or(0, Vec::len),
+                    "Cloud chat open: cached history read");
                 if value["provisional"] != true
                     || value["accountId"] != target.subject
                     || value["organizationId"].as_str() != target.organization.as_deref()
@@ -256,6 +269,12 @@ impl CloudConversation {
                 cx.notify();
             });
         }));
+    }
+    /// An attached computer has replayed its live transcript, which outranks
+    /// any saved copy.
+    fn live_transcript_replayed(&self, cx: &App) -> bool {
+        let state = self.state.read(cx);
+        state.engine().is_some() && state.transcript_replayed
     }
     pub(super) fn load_older(&mut self, cx: &mut Context<Self>) {
         if !self.authorized

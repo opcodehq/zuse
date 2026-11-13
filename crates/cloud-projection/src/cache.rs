@@ -110,6 +110,7 @@ impl PageCache {
         let db = Connection::open(path)?;
         db.busy_timeout(std::time::Duration::from_millis(100))?;
         db.execute_batch("CREATE TABLE IF NOT EXISTS encrypted_pages(namespace TEXT NOT NULL,identity TEXT NOT NULL,ciphertext TEXT NOT NULL,digest TEXT NOT NULL,PRIMARY KEY(namespace,identity))")?;
+        Self::add_workspace_column(&db)?;
         let namespace = digest(&serde_json::to_vec(&(origin, scope, account))?);
         Ok(Self {
             db: Mutex::new(db),
@@ -118,6 +119,27 @@ impl PageCache {
             keys: Mutex::new(HashMap::new()),
             heads: Mutex::new(HashMap::new()),
         })
+    }
+
+    /// Rows carry a digest of their workspace id so one workspace's pages can
+    /// be forgotten (deleted, or access lost) without wiping every chat.
+    /// Files written before this column existed keep NULL there.
+    fn add_workspace_column(db: &Connection) -> Result<()> {
+        let present = db
+            .prepare("PRAGMA table_info(encrypted_pages)")?
+            .query_map([], |row| row.get::<_, String>(1))?
+            .filter_map(std::result::Result::ok)
+            .any(|column| column == "workspace");
+        if !present {
+            db.execute_batch("ALTER TABLE encrypted_pages ADD COLUMN workspace TEXT")?;
+        }
+        Ok(())
+    }
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+    fn workspace_digest(workspace: &str) -> String {
+        digest(format!("workspace\n{workspace}").as_bytes())
     }
 
     fn identity(head: &Head, before: Option<i64>) -> String {
@@ -352,8 +374,8 @@ impl PageCache {
         ensure!(ciphertext.len() <= 2 * PAGE_LIMIT, "cache_page_too_large");
         let db = self.db.lock().unwrap();
         db.execute(
-            "INSERT INTO encrypted_pages(namespace,identity,ciphertext,digest) VALUES(?1,?2,?3,?4) ON CONFLICT(namespace,identity) DO UPDATE SET ciphertext=excluded.ciphertext,digest=excluded.digest",
-            params![self.namespace, Self::identity(head, before), ciphertext, digest(ciphertext.as_bytes())],
+            "INSERT INTO encrypted_pages(namespace,identity,ciphertext,digest,workspace) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(namespace,identity) DO UPDATE SET ciphertext=excluded.ciphertext,digest=excluded.digest,workspace=excluded.workspace",
+            params![self.namespace, Self::identity(head, before), ciphertext, digest(ciphertext.as_bytes()), Self::workspace_digest(&head.workspace_id)],
         )?;
         db.execute("DELETE FROM encrypted_pages WHERE rowid IN (SELECT rowid FROM (SELECT rowid,SUM(length(ciphertext)) OVER(ORDER BY rowid DESC) AS bytes FROM encrypted_pages) WHERE bytes>67108864)",[])?;
         db.execute("DELETE FROM encrypted_pages WHERE rowid IN (SELECT rowid FROM encrypted_pages ORDER BY rowid DESC LIMIT -1 OFFSET 256)",[])?;
@@ -366,6 +388,41 @@ impl PageCache {
         self.db.lock().unwrap().execute(
             "DELETE FROM encrypted_pages WHERE namespace=?1",
             [&self.namespace],
+        )?;
+        Ok(())
+    }
+    /// Forget one workspace's cached pages for every account under `root`,
+    /// keeping all other chats. Rows written before workspaces were recorded
+    /// cannot be attributed, so they go too. Without its ciphertext a saved
+    /// key opens nothing, so no provisional paint survives for the workspace.
+    pub fn forget_workspace(root: &Path, workspace: &str) -> Result<()> {
+        if let Some(registry) = CACHES.get() {
+            for cache in registry
+                .lock()
+                .unwrap()
+                .values()
+                .filter(|cache| cache.root == root)
+            {
+                cache
+                    .heads
+                    .lock()
+                    .unwrap()
+                    .retain(|_, (head, _)| head.workspace_id != workspace);
+            }
+        }
+        let path = root.join("encrypted-pages.sqlite3");
+        let metadata = match std::fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error.into()),
+        };
+        ensure!(metadata.file_type().is_file(), "cache_file_invalid");
+        let db = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+        db.busy_timeout(Duration::from_millis(100))?;
+        Self::add_workspace_column(&db)?;
+        db.execute(
+            "DELETE FROM encrypted_pages WHERE workspace=?1 OR workspace IS NULL",
+            [Self::workspace_digest(workspace)],
         )?;
         Ok(())
     }

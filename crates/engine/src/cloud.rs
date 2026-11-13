@@ -209,19 +209,39 @@ pub fn definitive_create_rejection(message: &str) -> Option<&'static str> {
 
 pub const LIST: &str = zuse_protocol::methods::CLOUD_WORKSPACES;
 pub const READ: &str = zuse_protocol::methods::CLOUD_HISTORY;
+/// Where saved cloud chat history lives. A named profile (`ZUSE_DATA_DIR`,
+/// e.g. the shared staging profile) keeps its own copy, so one profile's
+/// sign-out never wipes another's. Within a root, entries are scoped by API
+/// origin, workspace scope and account.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn native_history_cache_root() -> Option<std::path::PathBuf> {
+    let var = |name| std::env::var_os(name).filter(|value| !value.is_empty());
+    var("ZUSE_CLOUD_HISTORY_CACHE_ROOT")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            var("ZUSE_DATA_DIR")
+                .map(|dir| std::path::PathBuf::from(dir).join("cache/cloud-history"))
+        })
+        .or_else(|| {
+            var("HOME").map(|home| std::path::PathBuf::from(home).join(".zuse/cache/cloud-history"))
+        })
+}
+/// Sign-out, and confirmed loss of access to the whole account feed.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn clear_native_history_cache() -> Result<()> {
     sidebar_cache::clear_all();
-    let root = std::env::var_os("ZUSE_CLOUD_HISTORY_CACHE_ROOT")
-        .map(std::path::PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME")
-                .map(|home| std::path::PathBuf::from(home).join(".zuse/cache/cloud-history"))
-        });
-    if let Some(root) = root {
+    if let Some(root) = native_history_cache_root() {
         zuse_cloud_projection::reader::Reader::clear_native_cache(&root)?;
     }
     Ok(())
+}
+/// Confirmed deletion of, or loss of access to, one workspace: forget only
+/// its saved history and keep every other chat's.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn forget_native_workspace_history(workspace: &str) {
+    if let Some(root) = native_history_cache_root() {
+        let _ = zuse_cloud_projection::reader::Reader::forget_native_workspace(&root, workspace);
+    }
 }
 pub const CLEANUP_MIRROR: &str = zuse_protocol::methods::CLOUD_CLEANUP_MIRROR;
 pub const DELETE: &str = zuse_protocol::methods::CLOUD_DELETE;
@@ -445,17 +465,23 @@ impl CloudApi {
                 && matches!(status.as_u16(), 401 | 403)
                 && (path == ["v1", "cloud", "projects"] || path == ["v1", "cloud", "workspaces"])
             {
-                sidebar_cache::clear_all();
+                // A 401 is an expired bearer that the next refresh replaces;
+                // only a 403 withdraws the account's catalog.
+                if status.as_u16() == 403 {
+                    sidebar_cache::clear_all();
+                }
                 // Keep authority failures distinct from repository editing errors.
                 return Err(CloudHttpFailure(status).into());
             }
+            // Same here: a 403 withdraws this one workspace, so forget its
+            // saved history and keep every other chat's.
             #[cfg(not(target_arch = "wasm32"))]
             if !self.hosted
-                && matches!(status.as_u16(), 401 | 403)
+                && status.as_u16() == 403
                 && path.starts_with(&["v1", "cloud", "workspaces"])
                 && path.len() >= 4
             {
-                let _ = clear_native_history_cache();
+                forget_native_workspace_history(path[3]);
             }
             if path.last() == Some(&"tool-output") {
                 let body: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
@@ -777,13 +803,7 @@ impl CloudApi {
             }
             #[cfg(not(target_arch = "wasm32"))]
             {
-                let root = std::env::var_os("ZUSE_CLOUD_HISTORY_CACHE_ROOT")
-                    .map(std::path::PathBuf::from)
-                    .or_else(|| {
-                        std::env::var_os("HOME").map(|home| {
-                            std::path::PathBuf::from(home).join(".zuse/cache/cloud-history")
-                        })
-                    });
+                let root = native_history_cache_root();
                 let scope = organization
                     .as_ref()
                     .map(|org| format!("organization:{org}"))
@@ -1562,9 +1582,10 @@ impl CloudApi {
                         {
                             // Only the workspace metadata lookup proves deletion. Missing
                             // projections, older pages and unpublished tools do not revoke it.
+                            // Deletion forgets this workspace's history, not every chat's.
                             #[cfg(not(target_arch = "wasm32"))]
                             if !self.hosted {
-                                let _ = clear_native_history_cache();
+                                forget_native_workspace_history(id);
                             }
                             anyhow::Error::new(zuse_rpc::RpcError::Capability(
                                 "workspace_not_found".into(),
@@ -1621,14 +1642,8 @@ impl CloudApi {
                     if self.hosted {
                         history
                     } else {
-                        let root = std::env::var_os("ZUSE_CLOUD_HISTORY_CACHE_ROOT")
-                            .map(std::path::PathBuf::from)
-                            .or_else(|| {
-                                std::env::var_os("HOME").map(|home| {
-                                    std::path::PathBuf::from(home).join(".zuse/cache/cloud-history")
-                                })
-                            });
-                        root.and_then(|root| history.with_page_cache(&root, &account).ok())
+                        native_history_cache_root()
+                            .and_then(|root| history.with_page_cache(&root, &account).ok())
                             .unwrap_or(history)
                     }
                 };
