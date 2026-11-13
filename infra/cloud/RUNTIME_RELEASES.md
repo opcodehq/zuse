@@ -153,3 +153,19 @@ network requests.
 
 - `capabilities`: the command-admission receipt object from `runtime-capabilities` (what `runtime-update.py` re-probes on install).
 - `bootstrapCapabilities`: the capability **names** the runtime advertises at bootstrap, from `bootstrap-capabilities`. The server uses these to decide whether updating a computer to this release gives it a feature a waiting message needs. A runtime without the `bootstrap-capabilities` subcommand predates in-place updates and cannot be released through this pipeline.
+
+## GitHub environments (staging and production)
+
+The release workflow runs in a GitHub environment: pushes to `main` publish to
+**staging**; production is a manual `workflow_dispatch` with `environment: production`.
+Each environment holds the same secret names with its own values:
+
+| Secret | Purpose |
+|---|---|
+| `ZUSE_RUNTIME_RELEASE_SIGNING_KEY` | Ed25519 private key (PEM) matching `RELEASE_SIGNING_PUBLIC_KEY`. One key signs both channels, because the public key is compiled into runtimes and installed in bases. |
+| `ZUSE_CLOUD_RUNTIME_R2_BUCKET`, `ZUSE_CLOUD_RUNTIME_R2_ENDPOINT` | That environment's release bucket. |
+| `ZUSE_CLOUD_RUNTIME_R2_ACCESS_KEY_ID`, `ZUSE_CLOUD_RUNTIME_R2_SECRET_ACCESS_KEY` | Write token, used only by the release job. |
+| `ZUSE_CLOUD_RUNTIME_R2_READ_ACCESS_KEY_ID`, `ZUSE_CLOUD_RUNTIME_R2_READ_SECRET_ACCESS_KEY` | Read-only token (staging), used by the old-runtime CI matrix. |
+
+The server reads `ZUSE_CLOUD_RUNTIME_R2_*` for presigned downloads and falls back
+to `CLOUD_TRANSCRIPT_R2_*` with the `runtime/` prefix when they are unset.
