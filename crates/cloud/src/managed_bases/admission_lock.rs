@@ -1,6 +1,6 @@
 //! A narrowly privileged row lock, not registry mutation authority.
 use super::*;
-pub(super) async fn record(
+pub(crate) async fn record(
     tx: &mut Transaction<'_, Postgres>,
     provider: &str,
     release: &str,

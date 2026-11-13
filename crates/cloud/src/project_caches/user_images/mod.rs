@@ -16,6 +16,7 @@ use sha2::{Digest, Sha256};
 use zuse_protocol::cloud_computers::{MachineRecipe, ProviderId};
 
 pub mod boxd;
+pub mod selection;
 pub mod worker;
 
 pub const MIGRATION: &str = include_str!("../../../migrations/0036_user_images.sql");
