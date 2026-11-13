@@ -35,6 +35,7 @@ pub mod startup;
 pub mod workspace_wait;
 
 pub mod environment;
+pub mod machine;
 pub mod tool_output;
 
 pub mod grants;
