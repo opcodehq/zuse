@@ -94,10 +94,34 @@ impl ComputerControl {
         let revision = request.expected_revision + 1;
         let recipe = serde_json::to_value(&request.recipe)
             .map_err(|_| ApiError::bad_request("invalid_machine_recipe"))?;
+        let previous: Option<Value> = sqlx::query_scalar(
+            "SELECT recipe FROM cloud_machine_versions WHERE owner_id=$1 AND revision=$2",
+        )
+        .bind(owner)
+        .bind(request.expected_revision)
+        .fetch_optional(&mut *tx)
+        .await?;
         sqlx::query("INSERT INTO cloud_machine_versions(owner_id,revision,actor_id,actor,recipe,digest,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)")
             .bind(owner).bind(revision).bind(actor).bind(actor_metadata).bind(&recipe).bind(&digest).bind(now)
             .execute(&mut *tx)
             .await?;
+        // Only the setup script is in the image: an instructions-only edit
+        // queues nothing. Removing the script supersedes a waiting build.
+        use crate::project_caches::user_images::{image_digest, worker};
+        let before = previous
+            .and_then(|v| serde_json::from_value::<MachineRecipe>(v).ok())
+            .and_then(|r| image_digest(&r));
+        let after = image_digest(&request.recipe);
+        if before != after && worker::schema_ready_tx(&mut tx).await? {
+            worker::enqueue_tx(
+                &mut tx,
+                owner,
+                "recipe",
+                now + worker::SAVE_DEBOUNCE_MS,
+                now,
+            )
+            .await?;
+        }
         tx.commit().await?;
         Ok(MachineVersion {
             revision,

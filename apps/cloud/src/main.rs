@@ -880,6 +880,13 @@ async fn main() -> Result<()> {
                     "Project preparation configuration unavailable"
                 );
             }
+            match runtime.configure_user_images_from_env().await {
+                Ok(true) => tracing::info!("User image builder enabled"),
+                Ok(false) => {}
+                Err(error) => {
+                    tracing::warn!(code = error.code, "User image builder unavailable")
+                }
+            }
 
             for (provider, code) in registry.configuration_errors() {
                 tracing::warn!(
@@ -1090,6 +1097,7 @@ async fn main() -> Result<()> {
                 // the priority lifecycle burst. Missing optional schema is cached.
                 // Provider preparation cannot hold up lifecycle/control dispatch.
                 runtime.dispatch_project_preparation(now_ms());
+                runtime.dispatch_user_images(now_ms());
                 match runtime.work_task_drain_once(now_ms()).await {
                     Ok(true) => zuse_cloud::events::hint::send(),
                     Err(error) => tracing::warn!(code = error.code, "Task drain deferred"),

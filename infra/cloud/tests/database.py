@@ -49,9 +49,9 @@ class DatabaseBootstrapTest(unittest.TestCase):
         self.url = f"postgresql://zuse_test@127.0.0.1:{self.port}/{name}?sslmode=disable"
 
     def test_release_manifest_contains_command_and_recreation_after_admission(self):
-        expected=("0027_computer_recreations.sql","0031_machine_images.sql","0033_prized_provider.sql","0034_runtime_releases.sql","0035_launch_asset_release.sql","0036_harness_bundles.sql")
+        expected=("0031_machine_images.sql","0033_prized_provider.sql","0034_runtime_releases.sql","0035_launch_asset_release.sql","0036_harness_bundles.sql","0037_user_images.sql")
         self.assertEqual(database.FILES[-6:],expected)
-        self.assertEqual(len(database.FILES),34)
+        self.assertEqual(len(database.FILES),35)
         self.assertIn("0026_task_command_admission.sql",database.FILES)
         self.assertNotIn("0022_computer_recreations.sql",database.FILES)
         self.assertNotIn("0022_recreation.sql",database.FILES)

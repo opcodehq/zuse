@@ -7,6 +7,7 @@ pub mod identity;
 pub(crate) mod pilot;
 pub(crate) mod selection;
 pub(crate) mod source;
+pub mod user_images;
 pub use selection::{CacheHit, lookup_tx};
 mod requests;
 pub mod worker;

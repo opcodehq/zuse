@@ -132,6 +132,8 @@ pub struct RuntimeControl {
     startup_schema: tokio::sync::OnceCell<(bool, bool, bool)>,
     pub(crate) project_cache_inflight: std::sync::atomic::AtomicBool,
     pub(crate) project_cache_control: crate::project_caches::worker::CacheControl,
+    pub(crate) user_image_inflight: std::sync::atomic::AtomicBool,
+    pub(crate) user_image_control: crate::project_caches::user_images::worker::UserImageControl,
     task_command_schema_ready: tokio::sync::OnceCell<bool>,
     command_admission_creation: bool,
     recreation_schema_ready: tokio::sync::OnceCell<bool>,
@@ -317,6 +319,11 @@ impl RuntimeControl {
             project_cache_control: crate::project_caches::worker::CacheControl::from_pool(
                 pool.clone(),
             ),
+            user_image_inflight: std::sync::atomic::AtomicBool::new(false),
+            user_image_control:
+                crate::project_caches::user_images::worker::UserImageControl::from_pool(
+                    pool.clone(),
+                ),
             scope_authority: std::sync::OnceLock::new(),
             recreation_schema_ready: tokio::sync::OnceCell::new(),
             admission_batch_schema: tokio::sync::OnceCell::new(),
