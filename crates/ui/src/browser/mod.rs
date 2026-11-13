@@ -55,7 +55,17 @@ fn annotation_script(theme: &crate::theme::Theme, generation: u64) -> String {
 use model::{PageState, Presentation};
 gpui::actions!(
     browser,
-    [Reload, FocusAddress, NewTab, CloseTab, Back, Forward, ZoomIn, ZoomOut, ZoomReset]
+    [
+        Reload,
+        FocusAddress,
+        NewTab,
+        CloseTab,
+        Back,
+        Forward,
+        ZoomIn,
+        ZoomOut,
+        ZoomReset
+    ]
 );
 
 pub(crate) fn bind_keys(cx: &mut App, keymap: &crate::settings::KeymapConfig) {
