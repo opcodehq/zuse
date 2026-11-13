@@ -45,10 +45,10 @@ pub(super) fn refusal(code: &str) -> Option<Refusal> {
 
 /// A message waiting for its computer. Its echo stays in the chat.
 #[derive(Clone)]
-struct Held {
-    request: Value,
-    text: Option<String>,
-    staged: Vec<StagedAttachment>,
+pub(super) struct Held {
+    pub(super) request: Value,
+    pub(super) text: Option<String>,
+    pub(super) staged: Vec<StagedAttachment>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -82,13 +82,23 @@ pub(in crate::composer) struct State {
     work: Option<Task<()>>,
 }
 
-fn message_id(request: &Value) -> Option<&str> {
+pub(super) fn message_id(request: &Value) -> Option<&str> {
     request["action"]["messageId"].as_str()
 }
 
-/// The same message under a new identity. After recreation its files go to
-/// the new computer again.
-fn renewed(mut request: Value, recreated: bool, sleeping: bool) -> Value {
+impl State {
+    /// Whether the message waits here, held or about to be sent again.
+    pub(super) fn holds(&self, message: &str) -> bool {
+        self.held
+            .iter()
+            .chain(self.ready.iter())
+            .any(|held| message_id(&held.request) == Some(message))
+    }
+}
+
+/// The same message under a new identity. With `reupload` (after recreation,
+/// or when its files went missing) its files go to the computer again.
+fn renewed(mut request: Value, reupload: bool, sleeping: bool) -> Value {
     let command = uuid::Uuid::new_v4().to_string();
     let message = uuid::Uuid::new_v4().to_string();
     let queue = request["action"]["type"] == "queue";
@@ -100,7 +110,7 @@ fn renewed(mut request: Value, recreated: bool, sleeping: bool) -> Value {
         request["action"]["payload"]["messageId"] = json!(message);
     }
     request["wake"] = json!(wake::intent(queue, sleeping));
-    if recreated {
+    if reupload {
         if queue {
             if let Some(input) = request["action"]["input"].as_object_mut() {
                 input.remove("computerFiles");
@@ -379,6 +389,39 @@ impl Composer {
         self.send_next_ready_cloud_message(cx);
         cx.notify();
     }
+    /// Send one message again under a new identity with its files uploaded
+    /// to the computer again; its echo keeps its place in the chat. While the
+    /// computer updates it waits with the held messages. Returns its new id.
+    pub(super) fn send_cloud_message_again(
+        &mut self,
+        mut message: Held,
+        cx: &mut Context<Self>,
+    ) -> Option<String> {
+        let sleeping = self.cloud.native.as_ref().is_some_and(|task| task.wake);
+        let old = message_id(&message.request).map(str::to_owned);
+        message.request = renewed(message.request, true, sleeping);
+        let new = message_id(&message.request).map(str::to_owned);
+        let session = self
+            .cloud
+            .native
+            .as_ref()
+            .map(|task| task.target.initial_session.clone());
+        if let (Some(session), Some(old), Some(new)) = (session, old, new.clone()) {
+            self.state.update(cx, |state, cx| {
+                if state.rekey_echo(&session, &old, &new) {
+                    cx.notify();
+                }
+            });
+        }
+        if self.cloud.runtime.phase.is_some() {
+            self.cloud.runtime.held.push(message);
+        } else {
+            self.cloud.runtime.ready.push_back(message);
+            self.send_next_ready_cloud_message(cx);
+        }
+        cx.notify();
+        new
+    }
     /// After a resent message is admitted, the next one goes.
     pub(super) fn send_next_ready_cloud_message(&mut self, cx: &mut Context<Self>) {
         if self.cloud.task.is_some() || self.cloud.pending_native.is_some() {
@@ -516,7 +559,7 @@ impl Composer {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
 
     #[test]
@@ -570,7 +613,7 @@ mod tests {
     }
 
     /// A cloud task composer whose RPC requests land in the returned channel.
-    fn composer_with_requests(
+    pub(in crate::composer) fn composer_with_requests(
         cx: &mut gpui::TestAppContext,
     ) -> (
         Entity<Composer>,
@@ -605,13 +648,15 @@ mod tests {
         });
         (composer, state, receive, replies_tx)
     }
-    fn next(requests: &mut tokio::sync::mpsc::Receiver<String>) -> Option<Value> {
+    pub(in crate::composer) fn next(
+        requests: &mut tokio::sync::mpsc::Receiver<String>,
+    ) -> Option<Value> {
         requests
             .try_recv()
             .ok()
             .map(|line| serde_json::from_str(line.trim()).expect("request frame"))
     }
-    fn reply(
+    pub(in crate::composer) fn reply(
         runtime: &tokio::runtime::Runtime,
         replies: &tokio::sync::mpsc::Sender<String>,
         frame: Value,
@@ -620,13 +665,16 @@ mod tests {
             .block_on(replies.send(format!("{frame}\n")))
             .unwrap();
     }
-    fn runtime() -> tokio::runtime::Runtime {
+    pub(in crate::composer) fn runtime() -> tokio::runtime::Runtime {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .unwrap()
     }
-    fn settle(cx: &mut gpui::TestAppContext, runtime: &tokio::runtime::Runtime) {
+    pub(in crate::composer) fn settle(
+        cx: &mut gpui::TestAppContext,
+        runtime: &tokio::runtime::Runtime,
+    ) {
         for _ in 0..8 {
             cx.run_until_parked();
             runtime.block_on(async { tokio::task::yield_now().await });
@@ -650,7 +698,7 @@ mod tests {
             json!({"id":request["id"],"err":format!("capability error: {prefix}{code}")}),
         );
     }
-    fn admit(
+    pub(in crate::composer) fn admit(
         runtime: &tokio::runtime::Runtime,
         replies: &tokio::sync::mpsc::Sender<String>,
         request: &Value,
@@ -662,7 +710,10 @@ mod tests {
                 "data":{"commandId":request["params"]["request"]["commandId"],"durablyAdmitted":true}}}),
         );
     }
-    fn echoed(state: &Entity<AppState>, cx: &mut gpui::TestAppContext) -> Vec<(String, String)> {
+    pub(in crate::composer) fn echoed(
+        state: &Entity<AppState>,
+        cx: &mut gpui::TestAppContext,
+    ) -> Vec<(String, String)> {
         state.read_with(cx, |state, _| {
             state
                 .pending_echoes()

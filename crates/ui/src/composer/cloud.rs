@@ -3,6 +3,7 @@ use super::*;
 use crate::localization::message as tr;
 use serde_json::{Value, json};
 use zuse_i18n::messages as msg;
+mod reupload;
 mod runtime_update;
 mod unknown;
 mod wake;
@@ -31,6 +32,8 @@ pub(super) struct Launch {
     pub(super) unknown: unknown::State,
     /// Messages waiting while their computer updates its runtime.
     pub(super) runtime: runtime_update::State,
+    /// Admitted messages' files, kept until their computer takes them.
+    pub(super) reupload: reupload::State,
     /// The cloud computer's stage, set by the conversation that owns this
     /// composer and shown in the tray's single status line.
     status: Option<(String, bool)>,
@@ -104,6 +107,7 @@ impl Composer {
         self.cloud.task = None;
         self.cloud.unknown = Default::default();
         self.cloud.runtime = Default::default();
+        self.cloud.reupload = Default::default();
         self.cloud.native = None;
         self.cloud.pending_native = None;
         self.cloud.pending_native_text = None;
@@ -408,6 +412,10 @@ impl Composer {
                         let sent=std::mem::take(&mut this.cloud.native_staged);
                         if let Some(files)=this.attachments.get_mut(&this.current_key){files.retain(|file|!sent.iter().any(|sent|sent.id==file.id));}
                         this.sync_attachment_chips(cx);
+                        // Its files stay here until the computer takes it, in
+                        // case they go missing there first.
+                        let text=this.cloud.pending_native_text.clone();
+                        this.keep_cloud_files(&request,text,sent);
                         if let Some(text)=this.cloud.pending_native_text.take() {
                             // A sent or queued message already cleared its draft; anything there now is newer.
                             if request["action"]["type"]=="submit" {
@@ -520,6 +528,10 @@ impl Composer {
         Some((self.cloud.message.as_deref().unwrap_or(if self.cloud.task.is_some() {"Starting computer"} else if self.cloud.admitted() {"Cloud startup needs attention. Your message is queued."} else {"Cloud startup needs attention. Your message is saved here; delivery is unconfirmed."}), self.cloud.task.is_some()))
     }
     pub(crate) fn cloud_activity(&self) -> Option<(&str, bool)> {
+        if self.cloud_reupload_in_flight() {
+            // Its files are going to the computer again: still just waiting.
+            return Some(("Waiting for agent…", true));
+        }
         if self.cloud.task.is_some() {
             return Some((
                 match self
@@ -555,6 +567,7 @@ impl Composer {
         messages: &[zuse_model::SessionMessageEntry],
         cx: &mut Context<Self>,
     ) {
+        self.observe_cloud_reupload_transcript(messages);
         if self
             .cloud
             .admitted_native
@@ -572,6 +585,7 @@ impl Composer {
         cx: &mut Context<Self>,
     ) {
         self.observe_cloud_unknown(admissions, cx);
+        self.observe_cloud_reupload(admissions, cx);
         let Some(pending) = self.cloud.admitted_native.as_ref() else {
             return;
         };
