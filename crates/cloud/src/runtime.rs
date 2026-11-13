@@ -126,6 +126,8 @@ pub struct RuntimeControl {
     scope_authority: std::sync::OnceLock<Arc<scope::ScopeAuthority>>,
     pool: PgPool,
     admission_batch_schema: tokio::sync::OnceCell<bool>,
+    /// Set once the attachment release schema is seen; never cached as absent.
+    asset_release_schema: std::sync::atomic::AtomicBool,
     startup_schema: tokio::sync::OnceCell<(bool, bool, bool)>,
     pub(crate) project_cache_inflight: std::sync::atomic::AtomicBool,
     pub(crate) project_cache_control: crate::project_caches::worker::CacheControl,
@@ -315,6 +317,7 @@ impl RuntimeControl {
             scope_authority: std::sync::OnceLock::new(),
             recreation_schema_ready: tokio::sync::OnceCell::new(),
             admission_batch_schema: tokio::sync::OnceCell::new(),
+            asset_release_schema: std::sync::atomic::AtomicBool::new(false),
             startup_schema: tokio::sync::OnceCell::new(),
             task_command_schema_ready: tokio::sync::OnceCell::new(),
             command_admission_creation: false,

@@ -1078,6 +1078,9 @@ async fn main() -> Result<()> {
                             "Abandoned launch upload cleanup deferred"
                         );
                     }
+                    if let Err(error) = runtime.sweep_asset_releases_once(now_ms()).await {
+                        tracing::warn!(code = error.code, "Attachment release sweep deferred");
+                    }
                     asset_cleanup_at = now_ms() + 60_000;
                 }
                 if once {

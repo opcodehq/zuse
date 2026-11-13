@@ -122,12 +122,34 @@ impl RuntimeControl {
         // returned above. Terminal completion always starts a full idle window.
         self.record_activity_tx(&mut tx, &row, now, report.state.terminal())
             .await?;
+        // The computer fetches every server-held file a run binds before its
+        // turn starts, so these states prove delivery. A command that ends
+        // without starting only stops holding its files.
+        let release = match report.state {
+            wire::ExecutionState::Running
+            | wire::ExecutionState::WaitingInput
+            | wire::ExecutionState::Completed => {
+                self.settle_command_assets_tx(&mut tx, id, &report.command_id, true, now)
+                    .await?
+            }
+            state if state.terminal() => {
+                self.settle_command_assets_tx(&mut tx, id, &report.command_id, false, now)
+                    .await?
+            }
+            _ => vec![],
+        };
         if report.state.terminal() {
             self.enqueue_task_drain_tx(&mut tx, &row, required(&existing, "session_id")?, now)
                 .await?;
         }
         tx.commit().await?;
         self.notify_task_drain();
+        // Object deletes run after commit; the sweep retries a failure.
+        if !release.is_empty()
+            && let Err(error) = self.release_assets(id, &release, now).await
+        {
+            tracing::warn!(code = error.code, "Attachment object release deferred");
+        }
         Ok(json!({"commandId":report.command_id,"revision":report.revision,"state":state}))
     }
 }

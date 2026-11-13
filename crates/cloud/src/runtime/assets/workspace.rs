@@ -127,6 +127,9 @@ impl RuntimeControl {
             .bind(&asset)
             .fetch_one(&mut *tx)
             .await?;
+            if matches!(state.as_str(), "releasing" | "released") {
+                return Err(released());
+            }
             if state == "ready" {
                 return Err(ApiError::conflict("launch_asset_already_committed"));
             }
@@ -335,6 +338,9 @@ impl RuntimeControl {
         self.workspace_asset_locked(id, access, fence, &mut tx)
             .await?;
         let item:Value=sqlx::query_scalar("SELECT to_jsonb(a) FROM zuse_rust_launch_assets a WHERE workspace_id=$1 AND asset_id=$2 FOR UPDATE").bind(id).bind(&asset_id).fetch_optional(&mut *tx).await?.ok_or_else(||ApiError::conflict("launch_asset_incomplete"))?;
+        if matches!(item["state"].as_str(), Some("releasing" | "released")) {
+            return Err(released());
+        }
         let count = expected.size_bytes.div_ceil(wire::CHUNK_BYTES);
         let chunks = item["chunks"].clone();
         if chunks.as_object().is_none_or(|v| v.len() != count) {

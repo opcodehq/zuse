@@ -552,6 +552,9 @@ impl CloudApi {
                     Some("launch_asset_incomplete") => {
                         Some("The cloud attachment upload is incomplete. Retry the same message.")
                     }
+                    Some("launch_asset_released") => Some(
+                        "This cloud attachment was already delivered or has expired. Attach the file again.",
+                    ),
                     Some(
                         "launch_asset_integrity_failed"
                         | "launch_asset_manifest_conflict"

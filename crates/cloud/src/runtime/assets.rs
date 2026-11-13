@@ -1,15 +1,23 @@
 //! Encrypted prelaunch assets share the future workspace's purge namespace.
+mod release;
 mod workspace;
 use super::*;
 use crate::access::Access;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+pub(super) use release::Holder;
+pub use release::{STALE_CHUNK_CIPHERTEXT_MS, UNDELIVERED_ASSET_TTL_MS};
 use zuse_protocol::cloud_assets::{self as wire, Asset, Chunk, Commit, Download};
 pub const MIGRATION: &str = include_str!("../../migrations/0008_launch_assets.sql");
+pub const RELEASE_MIGRATION: &str = include_str!("../../migrations/0035_launch_asset_release.sql");
 fn invalid() -> ApiError {
     ApiError::bad_request("invalid_launch_asset")
 }
 fn failed() -> ApiError {
     ApiError::unavailable("launch_asset_unavailable")
+}
+/// The computer already received it, or it expired: upload it again to resend.
+fn released() -> ApiError {
+    ApiError::conflict("launch_asset_released")
 }
 fn digest(bytes: &[u8]) -> String {
     URL_SAFE_NO_PAD.encode(Sha256::digest(bytes))
@@ -167,6 +175,9 @@ impl RuntimeControl {
         sqlx::query("INSERT INTO zuse_rust_launch_assets(workspace_id,asset_id,state,created_at,updated_at) VALUES($1,$2,'uploading',$3,$3) ON CONFLICT DO NOTHING").bind(&workspace).bind(&asset).bind(at).execute(&mut *tx).await?;
         let (mut chunks,state):(Value,String)=sqlx::query_as("SELECT chunks,state FROM zuse_rust_launch_assets WHERE workspace_id=$1 AND asset_id=$2 FOR UPDATE").bind(&workspace).bind(&asset).fetch_one(&mut *tx).await?;
         let seq = request.seq.to_string();
+        if matches!(state.as_str(), "releasing" | "released") {
+            return Err(released());
+        }
         if state == "ready" && chunks.get(&seq).is_none() {
             return Err(ApiError::conflict("launch_asset_already_committed"));
         }
@@ -347,7 +358,18 @@ impl RuntimeControl {
             if !ids.insert(&asset.asset_id) {
                 return Err(invalid());
             }
-            let encoded:Option<Value>=sqlx::query_scalar("SELECT manifest FROM zuse_rust_launch_assets WHERE workspace_id=$1 AND asset_id=$2 AND state='ready'").bind(workspace).bind(&asset.asset_id).fetch_optional(&mut **tx).await?.flatten();
+            // FOR SHARE: a concurrent release waits for this admission's
+            // binding, and this admission never binds an asset being released.
+            let row:Option<(Option<Value>,String)>=sqlx::query_as("SELECT manifest,state FROM zuse_rust_launch_assets WHERE workspace_id=$1 AND asset_id=$2 FOR SHARE").bind(workspace).bind(&asset.asset_id).fetch_optional(&mut **tx).await?;
+            if row
+                .as_ref()
+                .is_some_and(|(_, state)| matches!(state.as_str(), "releasing" | "released"))
+            {
+                return Err(released());
+            }
+            let encoded = row
+                .filter(|(_, state)| state == "ready")
+                .and_then(|(manifest, _)| manifest);
             let plain = self
                 .master
                 .open_api(
