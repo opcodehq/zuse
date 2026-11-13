@@ -2268,11 +2268,6 @@ pub struct Shell {
     /// Chat outlet, pull request dashboard, or settings pages.
     route: Route,
     settings_focus: FocusHandle,
-    overview_tabs: Vec<top_bar::OverviewEntry>,
-    active_overview_tab: u64,
-    next_overview_tab: u64,
-    overview_scroll: gpui::ScrollHandle,
-    overview_add_menu: popover::Popup<()>,
     settings_end_focus: FocusHandle,
     settings_nav_focus: Vec<FocusHandle>,
     settings_return_focus: Option<FocusHandle>,
@@ -2940,14 +2935,6 @@ impl Shell {
             right_tab_scroll: gpui::ScrollHandle::new(),
             route,
             settings_focus: cx.focus_handle(),
-            overview_tabs: vec![top_bar::OverviewEntry::new(
-                0,
-                top_bar::OverviewTab::from_route(route).unwrap_or(top_bar::OverviewTab::Threads),
-            )],
-            active_overview_tab: 0,
-            next_overview_tab: 1,
-            overview_scroll: gpui::ScrollHandle::new(),
-            overview_add_menu: Default::default(),
             settings_end_focus: cx.focus_handle(),
             settings_nav_focus: SettingsSection::ALL
                 .iter()
@@ -4445,9 +4432,6 @@ impl Shell {
                 .unwrap_or_default();
             self.pull_request_cache = Default::default();
             self.pull_requests_page = None;
-            for tab in &mut self.overview_tabs {
-                tab.clear_pull_requests_page();
-            }
             self.reset_pull_request_pane();
             // Their tabs read as closed; rows skip a missing surface.
             self.chat_pull_requests.clear();
@@ -4656,6 +4640,8 @@ impl Shell {
             move |this: &mut Self, source, event, window, cx| {
                 if matches!(event, FilesEvent::OpenFile(_) | FilesEvent::RevealFile(_))
                     && !this.accepts_file_navigation(&event_panel_key, &source, cx)
+                    && !(this.active_main_file(cx) == Some(id)
+                        && source.read(cx).is_current_target(cx))
                 {
                     return;
                 }
@@ -5468,7 +5454,7 @@ impl Shell {
         dirty.sort_by_key(|(key, _)| (key != &current, key.clone()));
         if let Some((key, RightSurface::File(id))) = dirty.into_iter().next() {
             // Its tab stands in for the conversation of the chat it belongs to.
-            self.select_main_file_tab(&key, id);
+            self.select_main_file_tab(&key, id, cx);
             self.apply_nav(NavEntry::Chat(key), cx);
         }
     }
@@ -5755,7 +5741,6 @@ impl Shell {
     // ---- routes / settings ----
 
     fn set_route(&mut self, route: Route, cx: &mut Context<Self>) {
-        self.sync_overview_route(route, cx);
         if matches!(self.route, Route::Settings(SettingsSection::Archived))
             && !matches!(route, Route::Settings(SettingsSection::Archived))
         {
@@ -8218,20 +8203,8 @@ impl Shell {
     fn render_title_bar(&mut self, cx: &mut Context<Self>) -> AnyElement {
         // The Plugins page has no tabs: a bare strip that still drags.
         if matches!(self.route, Route::Plugins) {
-            let left = (self.sidebar_now() + Theme::SPACE_LG).max(
-                self.title_bar_content_start()
-                    + TITLEBAR_ACTION_SLOT_WIDTH * self.titlebar_plus_alpha(cx),
-            );
-            let tabs = self.render_overview_tabs(cx);
-            let bar = div()
-                .size_full()
-                .flex()
-                .items_center()
-                .pt(px(Theme::TITLEBAR_TOP_PAD))
-                .pl(px(left))
-                .child(tabs);
             return self
-                .titlebar_drag_region("plugins-titlebar", bar, cx)
+                .titlebar_drag_region("plugins-titlebar", div().size_full(), cx)
                 .into_any_element();
         }
         if matches!(self.route, Route::Archives | Route::Usage | Route::Zot) {
@@ -11003,18 +10976,16 @@ impl Shell {
                 .aria_label(tr(cx, msg::projects::projects_sidebar_new_project))
                 .on_click(cx.listener(|this, _, _, cx| this.open_add_space(cx))),
             )
-            .when(self.state.read(cx).cloud_user_id().is_some(), |view| {
-                view.child(
-                    row(
-                        "sidebar-plugins-row",
-                        icons::DITHER_PLUG,
-                        "Plugins",
-                        plugins_open,
-                    )
-                    .aria_label(tr(cx, msg::plugins::plugins_back))
-                    .on_click(cx.listener(|this, _, _, cx| this.open_plugins_page(cx))),
+            .child(
+                row(
+                    "sidebar-plugins-row",
+                    icons::DITHER_PLUG,
+                    "Plugins",
+                    plugins_open,
                 )
-            })
+                .aria_label(tr(cx, msg::plugins::plugins_back))
+                .on_click(cx.listener(|this, _, _, cx| this.open_plugins_page(cx))),
+            )
             // Pull requests span every chat, so the entry lives with the
             // other global destinations rather than in a chat's top bar.
             .child(
@@ -14273,6 +14244,7 @@ impl Shell {
                     close_id: "right-surface-close",
                     ix,
                     active: is_active,
+                    workspace_style: true,
                     title,
                     dirty,
                     leading,
@@ -18649,7 +18621,7 @@ mod exit_regressions {
     }
 
     #[gpui::test]
-    fn overview_tabs_remain_visible_on_the_new_thread_canvas(cx: &mut TestAppContext) {
+    fn new_thread_canvas_has_no_overview_tab_strip(cx: &mut TestAppContext) {
         let (shell, cx, _dir) = pull_request_shell(cx);
         cx.simulate_resize(gpui::size(px(1400.0), px(800.0)));
         shell.update(cx, |shell, cx| {
@@ -18659,10 +18631,9 @@ mod exit_regressions {
         });
         cx.update(|window, cx| window.draw(cx).clear());
         assert!(shell.read_with(cx, |shell, cx| !shell.has_conversation(cx)));
-        assert!(cx.debug_bounds("overview-threads").is_some());
-        assert!(cx.debug_bounds("overview-pull-requests").is_some());
-        assert!(cx.debug_bounds("overview-add").is_some());
-        assert!(cx.debug_bounds("open-pull-requests").is_none());
+        assert!(cx.debug_bounds("overview-threads").is_none());
+        assert!(cx.debug_bounds("overview-pull-requests").is_none());
+        assert!(cx.debug_bounds("overview-add").is_none());
     }
 
     #[gpui::test]
@@ -18677,7 +18648,7 @@ mod exit_regressions {
         cx.update(|window, cx| window.draw(cx).clear());
         assert!(cx.debug_bounds("workspace-app-logo").is_some());
         assert!(shell.read_with(cx, |shell, _| shell.workspace_gutter() > 0.));
-        assert!(cx.debug_bounds("overview-pull-requests").is_some());
+        assert!(cx.debug_bounds("overview-pull-requests").is_none());
         let navigation = cx.debug_bounds("titlebar-navigation").unwrap();
         let toggle = cx.debug_bounds("workspace-hide-sidebar").unwrap();
         assert!(navigation.right() <= toggle.left());

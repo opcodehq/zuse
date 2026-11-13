@@ -751,6 +751,7 @@ impl Shell {
                     close_id: "pull-request-tab-close",
                     ix,
                     active: is_active,
+                    workspace_style: false,
                     title: title.into(),
                     dirty: false,
                     leading,
@@ -947,13 +948,7 @@ impl Shell {
             .gap(px(row_gap))
             .pl(px(row_left))
             .pr(px(right_pad))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .overflow_hidden()
-                    .child(self.render_overview_tabs(cx)),
-            )
+            .child(div().flex_1().min_w_0())
             .child(controls);
         let bar = div().h(px(Theme::TITLEBAR_HEIGHT)).flex_none().child(inner);
         self.titlebar_drag_region("pull-requests-titlebar", bar, cx)

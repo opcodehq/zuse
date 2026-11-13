@@ -214,20 +214,17 @@ def main(helper):
             key('Return')
             first=selection(1)
             assert first['comment']=='hellox world',first
-            assert first['elements'][0]['selector']=='button#pick',first
+            assert first['elements'][0]['selector']=='button#pick.primary.text-2xl.font-medium',first
             assert js('window.clicked || 0')==0
-            pull(1) # The native consumer asks for another result; editors persist.
-            focus_note(1);key('End');type_keys('!');key('Return')
+            pull(1)
+            assert js("document.querySelectorAll('[data-zuse-note]').length")==1
+            focus_note(0);key('End');type_keys('!');key('Return')
             second=selection(1)
             assert second['comment']=='second draft!',second
             assert second['id']!=first['id']
-            assert js("document.querySelectorAll('[data-zuse-note]').length")==2
+            until(lambda: not js("!!document.querySelector('[data-zuse-annotation]')"))
+            assert first['keep_open'] and not second['keep_open']
             print('PASS caret clicks, numbered pins, anchored independent editors and IME typing',flush=True)
-            # Updating one pin replaces its own staged note using the same ID.
-            pull(1);focus_note(0);key('End');type_keys(' updated');key('Return')
-            updated=selection(1)
-            assert updated['id']==first['id'] and updated['comment']=='hellox world updated',updated
-            print('PASS updating a note preserves its annotation identity',flush=True)
             begin(2);click_element('#secret');until(lambda: js("!!document.activeElement?.hasAttribute('data-zuse-note')"))
             send('commit',text='private field');key('Return')
             private=selection(2)
@@ -239,20 +236,8 @@ def main(helper):
             stroke=selection(4)
             assert len(stroke['strokes'])==1 and len(stroke['strokes'][0]['points'])>=3,stroke
             print('PASS region and drawing comments are separate annotations',flush=True)
-            # Erasing a submitted note also removes its composer reference;
-            # undo restores exactly the committed version.
-            pull(4)
-            r=note_rect(0);u=page_scale/js('devicePixelRatio')
-            click(r[0]+r[2]-21*u,r[1]+21*u) # Collapse only this editor.
-            key('4','4');until(lambda:'erase, 1 targets' in state())
-            click(40,155)
-            removed=selection(4);assert removed['remove_id']==stroke['id'],removed
-            pull(4);key('z','z',mods=4)
-            restored=selection(4);assert restored['id']==stroke['id'] and restored['comment']=='fix drawing',restored
-            pull(4);key('Delete');removed=selection(4);assert removed['remove_id']==stroke['id']
-            pull(4);key('z','z',mods=4);assert selection(4)['id']==stroke['id']
-            pull(4);send('cancel-selection');assert selection(4) is None
-            print('PASS erase, clear and undo stay synchronized with staged notes',flush=True)
+            until(lambda: not js("!!document.querySelector('[data-zuse-annotation]')"))
+            print('PASS submitted annotation closes the overlay',flush=True)
             send('screenshot');assert wait(b'P').startswith(b'\x89PNG\r\n\x1a\n')
             js("document.cookie='control_test=yes; path=/'")
             assert 'control_test=yes' in js('document.cookie')

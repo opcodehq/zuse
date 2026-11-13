@@ -2225,17 +2225,20 @@ mod tests {
     use super::*;
 
     #[gpui::test]
-    fn browser_annotations_stage_without_focus_and_edit_without_losing_other_notes(
+    fn browser_annotations_focus_composer_and_edit_without_losing_other_notes(
         cx: &mut gpui::TestAppContext,
     ) {
         let (_dir, handle) = super::super::tests::composer_focus_window(cx);
         handle.update(cx, |composer, window, cx| {
             composer.focus_pending = false;
+            let other = crate::context_items::BrowserAnnotation::from_selection("https://example.com", &serde_json::json!({"comment":"Other draft", "elements":[{"tag":"button","selector":"button#other","text":"Other"}]}).to_string()).unwrap();
+            composer.stage_browser_annotation("another-draft".into(), crate::context_items::ContextItem::from_browser_annotation(other), cx);
+            assert!(!composer.focus_pending, "Another draft must not steal focus");
             for comment in ["First browser note", "Second browser note"] {
                 let annotation = crate::context_items::BrowserAnnotation::from_selection("https://example.com", &serde_json::json!({"comment":comment,"elements":[{"tag":"button","selector":"button#save","text":"Save"}]}).to_string()).unwrap();
                 composer.stage_browser_annotation(composer.current_key.clone(), crate::context_items::ContextItem::from_browser_annotation(annotation), cx);
             }
-            assert!(!composer.focus_pending, "Staging a browser comment must not take page focus");
+            assert!(composer.focus_pending, "Staging a browser comment must focus its composer");
             let contexts = composer.staged_contexts(cx);
             assert_eq!(contexts.len(), 2);
             let key = composer.current_key.clone();

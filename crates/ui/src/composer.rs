@@ -8131,7 +8131,6 @@ impl Composer {
         cx.notify();
     }
 
-    /// Browser notes are staged without stealing focus from the page editor.
     pub(crate) fn stage_browser_annotation(
         &mut self,
         key: String,
@@ -8142,6 +8141,9 @@ impl Composer {
             state.add_context_item(&key, context);
             cx.notify();
         });
+        if self.current_key == key {
+            self.focus_pending = true;
+        }
         cx.notify();
     }
 

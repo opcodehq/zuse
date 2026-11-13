@@ -357,20 +357,26 @@ impl Shell {
                     .map(|view| view.read(cx).title.clone())
                     .unwrap_or_else(|| "New chat".into());
                 let active = index == self.cloud_tabs.active;
-                div()
-                    .id(("cloud-conversation-tab", index))
+                crate::surface_chrome::workspace_tab(
+                    ("cloud-conversation-tab", index),
+                    active,
+                    &theme,
+                )
                     .flex()
+                    .flex_none()
                     .items_center()
                     .min_w_0()
-                    .max_w(px(220.))
-                    .px(px(8.))
-                    .py(px(5.))
+                    .w(px(160.))
+                    .h(px(28.))
+                    .px(px(9.))
                     .gap(px(8.))
-                    .rounded_md()
-                    .when(active, |tab| tab.bg(theme.muted_fill()))
+                    .when(active, |tab| {
+                        tab.text_color(super::tabs::active_tab_text_color(&theme))
+                    })
+                    .when(!active, |tab| tab.text_color(theme.text_muted))
                     .cursor_pointer()
-                    .text_size(px(12.))
-                    .child(div().min_w_0().truncate().child(title))
+                    .text_size(crate::typography::text_md())
+                    .child(div().flex_1().min_w_0().truncate().child(title))
                     .child(
                         div()
                             .id(("close-cloud-tab", index))
@@ -386,12 +392,12 @@ impl Shell {
             .collect::<Vec<_>>();
         Some(
             div()
-                .flex_none()
+                .id("cloud-conversation-tabs")
                 .flex()
+                .min_w_0()
+                .overflow_x_scroll()
                 .items_center()
                 .gap(px(4.))
-                .px(px(8.))
-                .py(px(4.))
                 .children(tabs)
                 .child(
                     div()

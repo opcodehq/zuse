@@ -103,12 +103,8 @@ function payload(note, comment=note.input.value.trim()) {
   }
   return JSON.stringify({id:note.id,comment,elements,regions:note.kind==='region'?[note.region]:[],strokes:note.kind==='draw'?[note.stroke]:[],viewport:{width:innerWidth,height:innerHeight,scroll_x:Math.round(scrollX),scroll_y:Math.round(scrollY)},page_title:document.title});
 }
-function synchronize(before, after) {
-  for(const note of before) if(!after.includes(note) && note.submitted) emit(JSON.stringify({remove_id:note.id}));
-  for(const note of after) if(!before.includes(note) && note.submitted) emit(note.submitted);
-}
 function replaceNotes(after) {
-  const before=notes;notes=after;synchronize(before,after);
+  const before=notes;notes=after;
   for(const note of before) if(!after.includes(note)) {note.editor.remove();note.pin.remove();}
   if(!notes.some(n=>n.id===activeId)) activeId=null;
   layout();
@@ -135,7 +131,7 @@ function createNote(kind, target) {
   if(kind==='element') {const existing=notes.find(note=>note.kind===kind && note.node===target);if(existing) {focus(existing);return;}}
   remember();
   const number=++sequence;
-  const note={id:crypto.randomUUID(),number,kind,open:true,submitted:null};
+  const note={id:crypto.randomUUID(),number,kind,open:true};
   if(kind==='element') note.node=target;
   else if(kind==='region') note.region=target;
   else note.stroke=target;
@@ -170,7 +166,14 @@ function createNote(kind, target) {
 }
 function commit(note) {
   if(!note.input.value.trim() || note.add.disabled) return;
-  note.submitted=payload(note);emit(note.submitted);layout();
+  const result=JSON.parse(payload(note));
+  notes=notes.filter(item=>item!==note);
+  history=history.map(snapshot=>snapshot.filter(item=>item!==note));
+  note.input.blur();note.editor.remove();note.pin.remove();
+  if(activeId===note.id)activeId=null;
+  result.keep_open=notes.length>0;
+  emit(JSON.stringify(result));
+  if(notes.length)layout();else close();
 }
 function layout() {
   if(closed) return;
@@ -195,8 +198,7 @@ function layout() {
     if(!note.editor.isConnected)host.append(note.editor);if(!note.pin.isConnected)pins.append(note.pin);
     note.pin.style.zoom=String(u);note.pin.style.left=Math.max(2,Math.min(r.x/u-10,viewportWidth-note.pin.getBoundingClientRect().width/u-2))+'px';note.pin.style.top=Math.max(2,Math.min(r.y/u-10,viewportHeight-24))+'px';note.pin.setAttribute('aria-pressed',String(activeId===note.id));
     note.editor.hidden=!note.open;note.editor.style.display=note.open?'block':'none';note.editor.style.zoom=String(u);note.editor.style.width=Math.min(304,available)+'px';note.editor.style.maxHeight=Math.max(0,viewportHeight-contentTop-8)+'px';note.editor.style.zIndex=activeId===note.id?'15':'10';
-    const dirty=note.submitted===null || JSON.parse(note.submitted).comment!==note.input.value.trim();
-    note.add.disabled=!note.input.value.trim()||!dirty;note.add.textContent=note.submitted?'Update in composer':'Add to composer';note.status.textContent=note.submitted?(dirty?'Edited':'Added'):'↵ to add';
+    note.add.disabled=!note.input.value.trim();note.status.textContent='↵ to add';
     // Anchor directly below this mark. Only flip above when the viewport has
     // no room; resizing or focusing another note never rebuilds its textarea.
     const width=note.editor.getBoundingClientRect().width/u, height=note.editor.getBoundingClientRect().height/u;

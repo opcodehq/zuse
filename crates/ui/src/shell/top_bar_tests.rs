@@ -103,16 +103,36 @@ struct TabHost {
 impl Render for TabHost {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.shell.update(cx, |shell, cx| {
+            let theme = Theme::of(cx).clone();
             div()
                 .size_full()
                 .flex()
                 .flex_col()
-                .child(shell.render_overview_tabs(cx))
-                .child(shell.render_thread_conversations(cx))
+                .child(
+                    div()
+                        .h(px(Theme::TITLEBAR_HEIGHT))
+                        .child(shell.render_title_bar(cx)),
+                )
+                .child(shell.render_sidebar_nav(&theme, cx))
                 .child(div().flex_1())
                 .child(shell.composer.clone())
         })
     }
+}
+
+#[gpui::test]
+fn sidebar_opens_plugins_and_pull_requests_without_overview_tabs(cx: &mut TestAppContext) {
+    let (shell, cx) = setup(cx);
+    let plugins = cx.debug_bounds("sidebar-plugins-row").unwrap().center();
+    cx.simulate_click(plugins, gpui::Modifiers::default());
+    assert!(shell.read_with(cx, |shell, _| matches!(shell.route, Route::Plugins)));
+    cx.update(|window, cx| window.draw(cx).clear());
+    let requests = cx
+        .debug_bounds("sidebar-pull-requests-row")
+        .unwrap()
+        .center();
+    cx.simulate_click(requests, gpui::Modifiers::default());
+    assert!(shell.read_with(cx, |shell, _| matches!(shell.route, Route::PullRequests)));
 }
 
 #[gpui::test]
@@ -140,6 +160,61 @@ fn conversations_and_add_button_precede_other_tabs(cx: &mut TestAppContext) {
         .unwrap();
     assert!(chat.right() <= add.left());
     assert!(add.right() <= diff.left());
+    assert!(chat.top() >= px(0.) && chat.bottom() <= px(Theme::TITLEBAR_HEIGHT));
+    assert_eq!(chat.size.height, px(28.));
+}
+
+#[gpui::test]
+fn sibling_chats_keep_thread_review_tabs(cx: &mut TestAppContext) {
+    let (shell, cx) = setup(cx);
+    cx.update(|window, cx| {
+        shell.update(cx, |shell, cx| {
+            let mut sibling = shell.state.read(cx).chats[0].clone();
+            sibling.id = "second-chat".into();
+            sibling.thread_id = Some("chat".into());
+            shell.state.update(cx, |state, _| state.chats.push(sibling));
+            shell.active_chat = "chat".into();
+            shell.open_review_tab(window, cx);
+            let review = shell.active_main_diff(cx).unwrap();
+            shell.open_chat("second-chat".into(), cx);
+            shell.active_chat = "second-chat".into();
+            assert_eq!(shell.main_tab_rows(cx).len(), 1);
+            assert_eq!(shell.active_main_tab(cx), None);
+            shell.activate_main_tab(Some(main_tabs::MainTab::Diff(review)), cx);
+            assert_eq!(shell.active_main_diff(cx), Some(review));
+        })
+    });
+}
+
+#[gpui::test]
+fn delayed_new_chat_does_not_interrupt_other_navigation(cx: &mut TestAppContext) {
+    let (shell, cx) = setup(cx);
+    shell.update(cx, |shell, cx| {
+        let mut created = shell.state.read(cx).chats[0].clone();
+        created.id = "created-chat".into();
+        created.thread_id = Some("chat".into());
+        shell.open_plugins_page(cx);
+        shell.finish_thread_conversation("chat", Ok(created), cx);
+        assert!(matches!(shell.route, Route::Plugins));
+        assert_eq!(shell.state.read(cx).selected_chat.as_deref(), Some("chat"));
+        assert!(
+            shell
+                .state
+                .read(cx)
+                .chats
+                .iter()
+                .any(|chat| chat.id == "created-chat")
+        );
+        shell.open_chat("chat".into(), cx);
+        let mut next = shell.state.read(cx).chats[0].clone();
+        next.id = "next-chat".into();
+        next.thread_id = Some("chat".into());
+        shell.finish_thread_conversation("chat", Ok(next), cx);
+        assert_eq!(
+            shell.state.read(cx).selected_chat.as_deref(),
+            Some("next-chat")
+        );
+    });
 }
 
 fn setup(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestContext) {
@@ -210,126 +285,6 @@ fn setup(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestContext) {
     let shell = host.read_with(cx, |host, _| host.shell.clone());
     cx.update(|window, cx| window.draw(cx).clear());
     (shell, cx)
-}
-
-#[gpui::test]
-fn overview_tabs_have_room_and_keep_add_button_visible(cx: &mut TestAppContext) {
-    let (shell, cx) = setup(cx);
-    shell.update(cx, |shell, cx| {
-        shell.add_overview_tab(OverviewTab::PullRequests, cx);
-        shell.add_overview_tab(OverviewTab::Plugins, cx);
-    });
-    for width in [600.0, 360.0] {
-        cx.simulate_resize(gpui::size(px(width), px(700.0)));
-        cx.update(|window, cx| {
-            window.refresh();
-            window.draw(cx).clear();
-        });
-        let threads = cx.debug_bounds("overview-threads").unwrap();
-        let plugins = cx.debug_bounds("overview-plugins").unwrap();
-        let add = cx.debug_bounds("overview-add").unwrap();
-        if width == 600.0 {
-            assert_eq!(f32::from(threads.size.width), OVERVIEW_TAB_WIDTH);
-        }
-        if width == 600.0 {
-            assert!(plugins.right() <= add.left());
-        }
-        assert!(f32::from(add.right()) <= width);
-    }
-}
-
-#[gpui::test]
-fn thread_overview_labels_follow_live_thread_titles(cx: &mut TestAppContext) {
-    let (shell, cx) = setup(cx);
-    shell.update(cx, |shell, cx| {
-        shell.state.update(cx, |state, _| {
-            state.chats[0].title = Some("Understand Project Purpose".into());
-        });
-        assert_eq!(
-            shell.overview_label(&shell.overview_tabs[0], cx).as_ref(),
-            "Understand Project Purpose"
-        );
-        shell.add_overview_tab(OverviewTab::Threads, cx);
-        assert_eq!(
-            shell
-                .overview_label(shell.overview_tabs.last().unwrap(), cx)
-                .as_ref(),
-            "New threads"
-        );
-        shell.state.update(cx, |state, _| {
-            state.chats[0].title = Some("Renamed project\nsummary".into());
-        });
-        assert_eq!(
-            shell.overview_label(&shell.overview_tabs[0], cx).as_ref(),
-            "Renamed project summary"
-        );
-        shell
-            .state
-            .update(cx, |state, cx| state.select_chat(Some("chat".into()), cx));
-        assert_eq!(
-            shell
-                .overview_label(shell.overview_tabs.last().unwrap(), cx)
-                .as_ref(),
-            "Renamed project summary"
-        );
-        shell.state.update(cx, |state, _| {
-            state.chats[0].title = None;
-            state.chats[0].last_message_preview = Some("Investigate the build".into());
-        });
-        assert_eq!(
-            shell
-                .overview_label(shell.overview_tabs.last().unwrap(), cx)
-                .as_ref(),
-            "Investigate the build"
-        );
-    });
-}
-
-#[gpui::test]
-fn overview_supports_duplicate_tabs_and_restores_neighbor(cx: &mut TestAppContext) {
-    let (shell, cx) = setup(cx);
-    shell.read_with(cx, |shell, _| assert_eq!(shell.overview_tabs.len(), 1));
-    let add = cx.debug_bounds("overview-add").unwrap().center();
-    cx.simulate_click(add, gpui::Modifiers::default());
-    let requests = cx
-        .debug_bounds("add-overview-pull-requests")
-        .unwrap()
-        .center();
-    cx.simulate_click(requests, gpui::Modifiers::default());
-    shell.read_with(cx, |shell, _| {
-        assert_eq!(shell.route, Route::PullRequests);
-        assert_eq!(shell.overview_tabs.len(), 2);
-    });
-    shell.update(cx, |shell, cx| {
-        shell.add_overview_tab(OverviewTab::Threads, cx);
-        let new_thread = shell.active_overview_tab;
-        assert_eq!(
-            shell
-                .overview_label(shell.overview_tabs.last().unwrap(), cx)
-                .as_ref(),
-            "New threads"
-        );
-        assert!(shell.state.read(cx).selected_chat.is_none());
-        shell.activate_overview_tab(0, cx);
-        assert!(shell.state.read(cx).selected_chat.is_some());
-        shell.activate_overview_tab(new_thread, cx);
-        assert!(shell.state.read(cx).selected_chat.is_none());
-        shell.add_overview_tab(OverviewTab::PullRequests, cx);
-        shell.add_overview_tab(OverviewTab::Plugins, cx);
-        shell.add_overview_tab(OverviewTab::Plugins, cx);
-        assert_eq!(shell.overview_tabs.len(), 6);
-        let last = shell.active_overview_tab;
-        shell.close_overview_tab(last, cx);
-        assert_eq!(shell.route, Route::Plugins);
-        shell.close_overview_tab(shell.active_overview_tab, cx);
-        assert_eq!(shell.route, Route::PullRequests);
-        shell.close_overview_tab(shell.active_overview_tab, cx);
-        assert_eq!(shell.route, Route::Chat);
-        shell.close_overview_tab(new_thread, cx);
-        shell.close_overview_tab(1, cx);
-        shell.close_overview_tab(0, cx);
-        assert_eq!(shell.overview_tabs.len(), 1);
-    });
 }
 
 #[gpui::test]

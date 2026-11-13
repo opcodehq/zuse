@@ -2189,7 +2189,7 @@ mod tests {
                 });
                 assert!(shell.state.read(cx).selected_chat.is_none());
                 assert!(shell.main_chrome_visible(cx));
-                assert!(shell.conversation_tab_row_visible(cx));
+                assert!(!shell.conversation_tab_row_visible(cx));
                 shell
             });
             CloudChromeHost {
@@ -2202,7 +2202,8 @@ mod tests {
         assert!(cx.debug_bounds("workspace-app-logo").is_some());
         assert!(cx.debug_bounds("top-bar-branch").is_some());
         assert!(cx.debug_bounds("native-cloud-computer").is_some());
-        assert!(cx.debug_bounds("conversation-tab-row").is_some());
+        assert!(cx.debug_bounds("titlebar-conversation-tabs").is_some());
+        assert!(cx.debug_bounds("conversation-tab-row").is_none());
         assert!(cx.debug_bounds("cloud-new-tab").is_some());
         let toggle = cx
             .debug_bounds("toggle-changes")
