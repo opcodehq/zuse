@@ -54,7 +54,7 @@ pub(super) fn command(
                 .max_by_key(|row| row["createdAt"].as_i64().unwrap_or_default())
         })
     else {
-        return refused(rows);
+        return refused(rows, messages);
     };
     let (label, busy) = match row["executionState"].as_str()? {
         "starting" => ("Starting agent turn…", true),
@@ -69,13 +69,22 @@ pub(super) fn command(
     })
 }
 /// The newest message failed for a known reason before it ran (the computer
-/// refused it): say why until another message is sent.
-fn refused(rows: &[Value]) -> Option<Activity> {
+/// refused it): say why until another message is sent. A refusal older than
+/// the latest turn in the transcript is stale, whether or not that turn's
+/// command row was among the rows read, and is never shown again.
+fn refused(rows: &[Value], messages: &[zuse_model::SessionMessageEntry]) -> Option<Activity> {
     let newest = rows
         .iter()
         .filter(|row| row["messageId"].as_str().is_some_and(|id| !id.is_empty()))
         .max_by_key(|row| row["createdAt"].as_i64().unwrap_or_default())?;
     if newest["executionState"] != "failed" {
+        return None;
+    }
+    let refused_at = newest["createdAt"].as_i64().unwrap_or_default();
+    if messages
+        .iter()
+        .any(|entry| entry.created_at > refused_at || newest["messageId"] == entry.id.as_str())
+    {
         return None;
     }
     let label = zuse_engine::cloud::task_commands::refusal_message(newest["errorCode"].as_str()?)?;
@@ -209,6 +218,7 @@ mod tests {
         let refused = json!({"executionState":"failed","errorCode":"cloud_command_upload_outside_uploads","messageId":"refused","text":"see file","createdAt":2});
         let shown = command(&json!([refused])).unwrap();
         assert!(shown.label.contains("Attach it again"));
+        assert!(!shown.label.contains("didn't run"), "calm, not alarming");
         assert!(!shown.busy);
         // A failure with no known refusal reason (a turn that ran and failed)
         // is not described as a refusal.
@@ -226,5 +236,26 @@ mod tests {
             command(&json!([refused, waiting])).unwrap().label,
             "Waiting for agent…"
         );
+    }
+    fn entry(id: &str, role: &str, created_at: i64) -> zuse_model::SessionMessageEntry {
+        serde_json::from_value(json!({"id":id,"role":role,"parts":[{"kind":"text","id":format!("text:{id}"),"text":"done"}],
+            "createdAt":created_at,"deviceId":"fixture"}))
+        .expect("valid message")
+    }
+    #[test]
+    fn a_refusal_older_than_the_latest_turn_in_the_transcript_is_not_shown() {
+        let refused = json!([{"executionState":"failed","errorCode":"cloud_command_upload_missing","messageId":"refused","text":"see file","createdAt":2}]);
+        // The transcript only holds turns from before the refusal: it shows.
+        let before = vec![entry("old", "user", 1), entry("reply", "assistant", 1)];
+        assert!(super::command(&refused, &before).is_some());
+        // A later turn ran (its command row may not be among the rows read):
+        // the refusal is stale and never shown again.
+        let after = vec![entry("old", "user", 1), entry("later", "user", 3)];
+        assert!(super::command(&refused, &after).is_none());
+        let answered = vec![entry("old", "user", 1), entry("reply", "assistant", 5)];
+        assert!(super::command(&refused, &answered).is_none());
+        // The refused message itself reaching the transcript means it ran.
+        let itself = vec![entry("refused", "user", 1)];
+        assert!(super::command(&refused, &itself).is_none());
     }
 }

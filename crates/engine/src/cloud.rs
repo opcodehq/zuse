@@ -85,9 +85,11 @@ fn task_rejection(code: &str) -> Option<&'static str> {
             "Too many attachments are still uploading. Wait for them to finish, then send again."
         }
         "invalid_launch_asset" => "This attachment couldn't be uploaded. Try attaching it again.",
-        // The computer refused a delivered message before running it.
+        // The computer couldn't find a delivered message's file. The app
+        // sends it again on its own while it still has the file; this is
+        // what's left when it can't.
         "cloud_command_upload_missing" | "cloud_command_upload_outside_uploads" => {
-            "An attached file wasn't on the computer, so this message didn't run. Attach it again and send."
+            "Couldn't find an attached file on the computer. Attach it again to send."
         }
         "cloud_command_assets_too_many" => {
             "Too many attachments for one message, so it didn't run. Remove some and send again."
