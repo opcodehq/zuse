@@ -7,6 +7,12 @@ name: Cloud runtime release
 
 on:
   workflow_dispatch:
+    inputs:
+      environment:
+        description: Release channel to publish to (each GitHub environment holds its own signing key and R2 secrets)
+        type: choice
+        options: [staging, production]
+        default: staging
   push:
     branches: [main]
     paths:
@@ -21,13 +27,16 @@ permissions:
   contents: read
 
 concurrency:
-  group: cloud-runtime-release-${{ github.ref }}
+  group: cloud-runtime-release-${{ inputs.environment || 'staging' }}-${{ github.ref }}
   # Never cancel a release halfway through an upload.
   cancel-in-progress: false
 
 jobs:
   release:
     runs-on: ubuntu-24.04
+    # Pushes to main publish to staging; production is an explicit manual run.
+    # Secrets are environment-scoped with the same names in both environments.
+    environment: ${{ inputs.environment || 'staging' }}
     # Must equal the build stage of infra/cloud/runtime.Dockerfile (checked
     # below) so released runtimes link against the same glibc as base runtimes.
     container: rust:1.99-bookworm
