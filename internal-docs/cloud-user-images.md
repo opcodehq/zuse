@@ -73,7 +73,7 @@ worker and routes) cannot satisfy fresh-boot pins and is retired.
 ## Implementation (2026-11-13)
 
 Code: `crates/cloud/src/project_caches/user_images/`, guest helper
-`infra/cloud/user-image-guest.py`, migration `0036_user_images.sql` (replaces
+`infra/cloud/user-image-guest.py`, migration `0037_user_images.sql`, after `0036_harness_bundles.sql` (replaces
 the unused `cloud_machine_images` placeholder from 0031).
 
 - **Image input** is the setup script and its time limit only
