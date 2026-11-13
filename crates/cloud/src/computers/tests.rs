@@ -648,7 +648,7 @@ async fn machine_status_reports_build_progress_failure_log_and_last_good_image_a
         include_str!("../../tests/fixtures/projects.sql"),
         include_str!("../../migrations/0009_computers.sql"),
         include_str!("../../migrations/0031_machine_images.sql"),
-        include_str!("../../migrations/0036_user_images.sql"),
+        include_str!("../../migrations/0037_user_images.sql"),
     ] {
         sqlx::raw_sql(sql).execute(&pool).await.unwrap();
     }
