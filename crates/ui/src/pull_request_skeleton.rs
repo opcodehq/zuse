@@ -40,82 +40,51 @@ pub(crate) fn board(
 ) -> AnyElement {
     let rows = (0..6)
         .map(|index| {
-            let identity = div()
-                .flex_1()
-                .min_w_0()
-                .flex()
-                .flex_col()
-                .gap(px(Theme::SPACE_XS))
+            // Mirrors the row: title and age, then the meta line and diff,
+            // beside the star.
+            crate::pull_requests::table_row_shell(layout, index == 0, index == 5, theme)
                 .child(
                     div()
-                        .h(px(20.0))
-                        .flex()
-                        .items_center()
-                        .gap(px(8.0))
-                        .child(bar(px(14.0), 14.0, index, view, theme, cx))
-                        .child(bar(relative(WIDTHS[index]), 12.0, index, view, theme, cx)),
-                )
-                .child(
-                    div()
-                        .pl(px(22.0))
-                        .flex()
-                        .flex_wrap()
-                        .items_center()
-                        .gap(px(Theme::SPACE_SM))
-                        .child(bar(px(16.0), 16.0, index, view, theme, cx))
-                        .child(bar(px(72.0), 10.0, index, view, theme, cx))
-                        .child(bar(px(52.0), 16.0, index, view, theme, cx))
-                        .child(bar(px(120.0), 12.0, index, view, theme, cx)),
-                );
-            let row = crate::pull_requests::table_row_shell(layout, index == 0, index == 5, theme)
-                .child(identity);
-            if layout == crate::pull_requests::PullRequestTableLayout::Narrow {
-                row.child(
-                    div()
-                        .pl(px(22.0))
-                        .h(px(28.0))
-                        .flex()
-                        .items_center()
-                        .gap(px(Theme::SPACE_SM))
-                        .child(bar(px(72.0), 10.0, index, view, theme, cx))
-                        .child(div().flex_1())
-                        .child(bar(px(44.0), 10.0, index, view, theme, cx))
-                        .child(
-                            div()
-                                .size(px(28.0))
-                                .flex_none()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .child(bar(px(14.0), 14.0, index, view, theme, cx)),
-                        ),
-                )
-                .into_any_element()
-            } else {
-                row.child(
-                    div()
-                        .w(px(112.0))
-                        .flex_none()
+                        .flex_1()
+                        .min_w_0()
                         .flex()
                         .flex_col()
-                        .items_end()
-                        .gap(px(Theme::SPACE_XS))
-                        .child(div().h(px(16.0)).flex().items_center().child(bar(
-                            px(44.0),
-                            10.0,
-                            index,
-                            view,
-                            theme,
-                            cx,
-                        )))
-                        .child(div().h(px(16.0)).flex().items_center().child(bar(
-                            px(72.0),
-                            10.0,
-                            index,
-                            view,
-                            theme,
-                            cx,
-                        ))),
+                        .gap(px(6.0))
+                        .child(
+                            div()
+                                .h(px(20.0))
+                                .flex()
+                                .items_center()
+                                .gap(px(8.0))
+                                .child(bar(px(16.0), 16.0, index, view, theme, cx))
+                                .child(div().flex_1().min_w_0().child(bar(
+                                    relative(WIDTHS[index]),
+                                    12.0,
+                                    index,
+                                    view,
+                                    theme,
+                                    cx,
+                                )))
+                                .child(bar(px(20.0), 10.0, index, view, theme, cx)),
+                        )
+                        .child(
+                            div()
+                                .h(px(18.0))
+                                .pl(px(24.0))
+                                .flex()
+                                .items_center()
+                                .gap(px(Theme::SPACE_SM))
+                                .child(bar(px(16.0), 16.0, index, view, theme, cx))
+                                .child(div().flex_1().min_w_0().child(bar(
+                                    relative(0.65),
+                                    10.0,
+                                    index,
+                                    view,
+                                    theme,
+                                    cx,
+                                )))
+                                .child(bar(px(56.0), 10.0, index, view, theme, cx)),
+                        ),
                 )
                 .child(
                     div()
@@ -127,7 +96,6 @@ pub(crate) fn board(
                         .child(bar(px(14.0), 14.0, index, view, theme, cx)),
                 )
                 .into_any_element()
-            }
         })
         .collect::<Vec<_>>();
     div()
@@ -139,16 +107,116 @@ pub(crate) fn board(
         .flex()
         .flex_col()
         .gap(px(8.0))
+        .child(div().min_h(px(24.0)).flex().items_center().child(bar(
+            px(120.0),
+            10.0,
+            0,
+            view,
+            theme,
+            cx,
+        )))
         .child(
             div()
-                .min_h(px(24.0))
-                .px(px(8.0))
+                .w_full()
+                .rounded(px(12.0))
+                .overflow_hidden()
+                .bg(widgets::block_fill(theme))
                 .flex()
-                .items_center()
-                .child(bar(px(120.0), 10.0, 0, view, theme, cx)),
+                .flex_col()
+                .children(rows),
         )
-        .child(widgets::section_card(theme).mt_0().w_full().children(rows))
         .into_any_element()
+}
+
+pub(crate) fn timeline(view: EntityId, theme: &Theme, cx: &mut App) -> AnyElement {
+    let mut card = div()
+        .rounded(px(12.0))
+        .overflow_hidden()
+        .bg(widgets::block_fill(theme))
+        .flex()
+        .flex_col();
+    for index in 0..3 {
+        card = card.child(
+            widgets::card_row(theme, index == 0)
+                .px(px(12.0))
+                .py(px(10.0))
+                .flex_nowrap()
+                .items_start()
+                .gap(px(8.0))
+                .child(bar(px(16.0), 16.0, index, view, theme, cx))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .gap(px(10.0))
+                        .child(bar(relative(WIDTHS[index]), 12.0, index, view, theme, cx))
+                        .child(bar(relative(0.48), 10.0, index, view, theme, cx)),
+                )
+                .child(bar(px(52.0), 10.0, index, view, theme, cx)),
+        );
+    }
+    div()
+        .id("pr-timeline-skeleton")
+        .debug_selector(|| "pr-timeline-skeleton".into())
+        .role(gpui::Role::ProgressIndicator)
+        .aria_label("Loading commits")
+        .mt(px(24.0))
+        .flex()
+        .flex_col()
+        .gap(px(12.0))
+        .child(
+            div()
+                .px(px(8.0))
+                .child(bar(px(90.0), 12.0, 0, view, theme, cx)),
+        )
+        .child(
+            div()
+                .px(px(8.0))
+                .child(bar(px(80.0), 10.0, 1, view, theme, cx)),
+        )
+        .child(card)
+        .into_any_element()
+}
+
+pub(crate) fn activity(view: EntityId, theme: &Theme, cx: &mut App) -> AnyElement {
+    let mut content = div()
+        .id("pr-activity-skeleton")
+        .debug_selector(|| "pr-activity-skeleton".into())
+        .role(gpui::Role::ProgressIndicator)
+        .aria_label("Loading activity")
+        .mt(px(24.0))
+        .px(px(8.0))
+        .flex()
+        .flex_col()
+        .gap(px(16.0));
+    for index in 0..3 {
+        content = content.child(
+            div()
+                .min_w_0()
+                .flex()
+                .items_start()
+                .gap(px(10.0))
+                .child(bar(px(24.0), 24.0, index, view, theme, cx))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .rounded(px(8.0))
+                        .border_1()
+                        .border_color(theme.border)
+                        .p(px(12.0))
+                        .flex()
+                        .flex_col()
+                        .gap(px(10.0))
+                        .child(bar(relative(0.45), 10.0, index, view, theme, cx))
+                        .child(bar(relative(0.85), 10.0, index, view, theme, cx))
+                        .child(bar(relative(0.6), 10.0, index, view, theme, cx)),
+                ),
+        );
+    }
+    content.into_any_element()
 }
 
 /// The Summary's card stack below a real header.

@@ -54,6 +54,10 @@ pub(crate) fn frame_row(frame_id: &str) -> &str {
 }
 
 impl MermaidCache {
+    pub(crate) fn view_width(&self) -> Option<f32> {
+        self.view.map(|(target, _)| target.0)
+    }
+
     /// Start a paint pass. A theme change discards every diagram, since the
     /// palette is baked into the generated SVG; the media is returned for
     /// release.

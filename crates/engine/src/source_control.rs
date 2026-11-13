@@ -43,7 +43,7 @@ const GITHUB_RESULT_LIMIT: &str = "20";
 const GITHUB_JSON_FIELDS: &str = "number,title,url,state,baseRefName,headRefName,updatedAt,isCrossRepository,headRepositoryOwner,isDraft,reviewDecision";
 const GITHUB_SEARCH_QUERY: &str = "query($search: String!, $owner: String!, $name: String!, $after: String) { repository(owner: $owner, name: $name) { nameWithOwner } search(query: $search, type: ISSUE, first: 50, after: $after) { issueCount pageInfo { hasNextPage endCursor } nodes { ... on PullRequest { author { login } headRefOid viewerDidAuthor viewerLatestReviewRequest { id } reviewRequests(first: 100) { nodes { id } pageInfo { hasNextPage } } statusCheckRollup { commit { oid } state contexts { totalCount checkRunCountsByState { state count } statusContextCountsByState { state count } } } number title url state isDraft mergeable reviewDecision createdAt updatedAt additions deletions repository { nameWithOwner } } } } }";
 
-const GITHUB_PR_METADATA_QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) { viewer { login } repository(owner: $owner, name: $name) { pullRequest(number: $number) { headRefOid baseRefOid viewerDidAuthor viewerLatestReviewRequest { id } reviewRequests(first: 100) { nodes { id } pageInfo { hasNextPage } } statusCheckRollup { commit { oid } state contexts(first: 100) { nodes { ... on CheckRun { name status conclusion detailsUrl databaseId startedAt completedAt } ... on StatusContext { context state targetUrl } } totalCount checkRunCountsByState { state count } statusContextCountsByState { state count } } } } } }";
+const GITHUB_PR_METADATA_QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) { viewer { login } repository(owner: $owner, name: $name) { pullRequest(number: $number) { headRefOid baseRefOid commits(first: 100) { nodes { commit { oid additions deletions } } } viewerDidAuthor viewerLatestReviewRequest { id } reviewRequests(first: 100) { nodes { id } pageInfo { hasNextPage } } statusCheckRollup { commit { oid } state contexts(first: 100) { nodes { ... on CheckRun { name status conclusion detailsUrl databaseId startedAt completedAt } ... on StatusContext { context state targetUrl } } totalCount checkRunCountsByState { state count } statusContextCountsByState { state count } } } } } }";
 
 fn remove_nulls(value: &mut serde_json::Value) {
     match value {
@@ -628,6 +628,53 @@ impl GitHubCli {
             .map_err(|_| ChangeRequestError::Decode)
     }
 
+    pub(crate) async fn commit_diff_request(
+        &self,
+        url: &str,
+        oid: &str,
+        refresh: bool,
+    ) -> PrResult {
+        let url = validated_pull_request_url(url)?;
+        if !zuse_protocol::change_request_assessment::valid_head_oid(oid) {
+            return Err(ChangeRequestError::Decode);
+        }
+        let oid = oid.to_owned();
+        let github = self.clone();
+        let key = format!("commit-diff:{url}:{oid}");
+        self.cached_pr_request(key, refresh, async move {
+            let _slot = github
+                .read_slots
+                .acquire()
+                .await
+                .map_err(|_| ChangeRequestError::CommandFailed)?;
+            let parsed = reqwest::Url::parse(&url).map_err(|_| ChangeRequestError::Decode)?;
+            let parts: Vec<_> = parsed.path().trim_matches('/').split('/').collect();
+            let output = github
+                .runner
+                .run(ProcessRequest {
+                    args: vec![
+                        "api".into(),
+                        format!("repos/{}/{}/commits/{oid}", parts[0], parts[1]),
+                        "-H".into(),
+                        "Accept: application/vnd.github.diff".into(),
+                    ],
+                    ..github_request()
+                })
+                .await
+                .map_err(classify_run_error)?;
+            if !output.success {
+                return Err(classify_github_failure(&output.stderr));
+            }
+            if output.stdout_truncated {
+                return Err(ChangeRequestError::Decode);
+            }
+            Ok(serde_json::Value::String(
+                String::from_utf8_lossy(&output.stdout).into_owned(),
+            ))
+        })
+        .await
+    }
+
     pub(crate) async fn detail_request(
         &self,
         url: &str,
@@ -692,21 +739,57 @@ impl GitHubCli {
             Method::Merge => "--merge",
             Method::Rebase => "--rebase",
         };
-        let mut args: Vec<String> = match update {
+        let mut stdin = None;
+        let mut args: Vec<String> = match &update {
             Update::Merge { method } => {
-                vec!["merge".into(), url.clone(), method_flag(method).into()]
+                vec!["merge".into(), url.clone(), method_flag(*method).into()]
             }
             Update::EnableAutoMerge { method } => vec![
                 "merge".into(),
                 url.clone(),
                 "--auto".into(),
-                method_flag(method).into(),
+                method_flag(*method).into(),
             ],
             Update::DisableAutoMerge => vec!["merge".into(), url.clone(), "--disable-auto".into()],
             Update::MarkReady => vec!["ready".into(), url.clone()],
             Update::MarkDraft => vec!["ready".into(), url.clone(), "--undo".into()],
             Update::Close => vec!["close".into(), url.clone()],
             Update::Reopen => vec!["reopen".into(), url.clone()],
+            Update::Edit { title, body } => {
+                if title.trim().is_empty() || title.len() > 1024 || body.len() > 60000 {
+                    return Err(ChangeRequestError::Decode);
+                }
+                stdin = Some(body.as_bytes().to_vec());
+                vec![
+                    "edit".into(),
+                    url.clone(),
+                    "--title".into(),
+                    title.clone(),
+                    "--body-file".into(),
+                    "-".into(),
+                ]
+            }
+            Update::AddReviewers { reviewers } => {
+                if reviewers.is_empty()
+                    || reviewers.len() > 15
+                    || reviewers.iter().any(|reviewer| {
+                        reviewer.is_empty()
+                            || reviewer.starts_with('-')
+                            || reviewer.len() > 100
+                            || !reviewer.chars().all(|ch| {
+                                ch.is_ascii_alphanumeric() || ch == '-' || ch == '/' || ch == '_'
+                            })
+                    })
+                {
+                    return Err(ChangeRequestError::Decode);
+                }
+                vec![
+                    "edit".into(),
+                    url.clone(),
+                    "--add-reviewer".into(),
+                    reviewers.join(","),
+                ]
+            }
         };
         if matches!(
             update,
@@ -719,6 +802,7 @@ impl GitHubCli {
             .runner
             .run(ProcessRequest {
                 args: std::iter::once("pr".to_owned()).chain(args).collect(),
+                stdin,
                 ..github_request()
             })
             .await;
@@ -876,7 +960,7 @@ impl GitHubCli {
         if diff {
             args.push("--color=never".into());
         } else {
-            args.extend(["--json".into(), "title,body,url,number,author,baseRefName,headRefName,headRefOid,state,isDraft,reviewDecision,mergeable,additions,deletions,comments,reviews,files,statusCheckRollup,autoMergeRequest,headRepository".into()]);
+            args.extend(["--json".into(), "title,body,url,number,author,baseRefName,headRefName,headRefOid,state,isDraft,reviewDecision,mergeable,additions,deletions,comments,reviews,files,statusCheckRollup,autoMergeRequest,headRepository,commits".into()]);
         }
         let output = self
             .runner
@@ -917,6 +1001,25 @@ impl GitHubCli {
                 detail.viewer_login = metadata.viewer_login.clone();
                 let checks = metadata.checks();
                 let base = metadata.base_ref_oid.clone();
+                if metadata.head_ref_oid.as_deref() == Some(detail.head_ref_oid.as_str()) {
+                    if let Some(commits) = detail.commits.as_mut() {
+                        for commit in commits {
+                            if let Some(stats) = metadata
+                                .commits
+                                .as_ref()
+                                .and_then(|value| value["nodes"].as_array())
+                                .and_then(|nodes| {
+                                    nodes.iter().map(|node| &node["commit"]).find(|stats| {
+                                        stats["oid"].as_str() == Some(commit.oid.as_str())
+                                    })
+                                })
+                            {
+                                commit.additions = stats["additions"].as_u64();
+                                commit.deletions = stats["deletions"].as_u64();
+                            }
+                        }
+                    }
+                }
                 let (head, ci, authored, requested) = metadata.into_fields();
                 if head == detail.head_ref_oid {
                     if let Some(base) = base.filter(|base| {
@@ -1237,9 +1340,11 @@ impl GitHubCli {
             .split_once('/')
             .ok_or(ChangeRequestError::UnsupportedRepository)?;
         let qualifier = match filter {
-            zuse_protocol::ChangeRequestFilter::All => "",
-            zuse_protocol::ChangeRequestFilter::Authored => "author:@me ",
-            zuse_protocol::ChangeRequestFilter::Reviewing => "review-requested:@me ",
+            zuse_protocol::ChangeRequestFilter::All => "is:open ",
+            zuse_protocol::ChangeRequestFilter::Authored => "is:open author:@me ",
+            zuse_protocol::ChangeRequestFilter::Reviewing => "is:open review-requested:@me ",
+            zuse_protocol::ChangeRequestFilter::Merged => "is:merged ",
+            zuse_protocol::ChangeRequestFilter::AllStates => "",
         };
         let request = ProcessRequest {
             args: vec![
@@ -1252,7 +1357,7 @@ impl GitHubCli {
                 "-f".into(),
                 format!("name={name}"),
                 "-f".into(),
-                format!("search=is:pr is:open {qualifier}repo:{repository} sort:updated-desc"),
+                format!("search=is:pr {qualifier}repo:{repository} sort:updated-desc"),
             ]
             .into_iter()
             .chain(
@@ -1866,6 +1971,8 @@ struct GhSearchPullRequest {
 #[serde(rename_all = "camelCase")]
 struct GhPrMetadata {
     #[serde(default)]
+    commits: Option<serde_json::Value>,
+    #[serde(default)]
     head_ref_oid: Option<String>,
     /// Read here rather than through `gh pr view --json`: older `gh`
     /// releases (Ubuntu's 2.45) reject `baseRefOid` as an unknown field.
@@ -2264,7 +2371,6 @@ fn to_list_item(
         || name.is_empty()
         || repository_parts.next().is_some()
         || repository.chars().any(char::is_whitespace)
-        || !matches!(pull_request.state, GhPullRequestState::Open)
     {
         return Err(ChangeRequestError::Decode);
     }
@@ -2662,6 +2768,7 @@ mod tests {
         };
         let head = "a".repeat(40);
         let metadata = json!({"headRefOid": head, "viewerDidAuthor": true,
+            "commits": {"nodes": [{"commit": {"oid": head, "additions": 12, "deletions": 3}}]},
             "viewerLatestReviewRequest": null,
             "reviewRequests": {"nodes": [], "pageInfo": {"hasNextPage": false}},
             "statusCheckRollup": {"commit": {"oid": head}, "state": "FAILURE", "contexts": {"totalCount": 1,
@@ -2670,6 +2777,7 @@ mod tests {
         let metadata_response = json!({"data": {"repository": {"pullRequest": metadata}}});
         let detail = json!({"url": url, "number": 123, "title": "Add dashboard", "author": null,
             "headRefOid": head, "comments": [], "reviewDecision": null,
+            "commits": [{"oid": head, "messageHeadline": "Add dashboard", "committedDate": "2026-08-19T12:00:00Z", "authors": [{"login": null, "name": "Contributor"}]}],
             "statusCheckRollup": [{"name": "linux", "conclusion": "SUCCESS", "detailsUrl": "https://github.com/acme/zuse/actions/runs/1"}]});
         let mut moved_head = metadata_response.clone();
         moved_head["data"]["repository"]["pullRequest"]["headRefOid"] = "b".repeat(40).into();
@@ -2827,6 +2935,15 @@ mod tests {
             assert!(loaded.author.login.is_empty());
             assert!(loaded.comments.is_empty());
             assert_eq!(loaded.head_ref_oid, head);
+            let commits = loaded.commits.as_ref().unwrap();
+            assert_eq!(commits[0].oid, head);
+            assert_eq!(commits[0].message_headline, "Add dashboard");
+            assert_eq!(
+                (commits[0].additions, commits[0].deletions),
+                (Some(12), Some(3))
+            );
+            assert_eq!(commits[0].authors[0].login, None);
+            assert_eq!(commits[0].authors[0].name.as_deref(), Some("Contributor"));
             assert_eq!(
                 loaded.ci.state,
                 zuse_protocol::change_request_assessment::CiState::Failed
@@ -2975,6 +3092,56 @@ mod tests {
             json!({"body": body})
         );
         assert!(!requests[8].args.iter().any(|arg| arg.contains(body)));
+    }
+
+    #[tokio::test]
+    async fn commit_diff_is_validated_and_cached_by_commit() {
+        let url = "https://github.com/a/b/pull/1";
+        let first = "a".repeat(40);
+        let second = "b".repeat(40);
+        let runner = FakeProcessRunner::with_responses([
+            command_success("first patch"),
+            command_success("second patch"),
+        ]);
+        let github = GitHubCli::with_runner(runner.clone());
+        assert_eq!(
+            github
+                .commit_diff_request(url, &first, false)
+                .await
+                .unwrap(),
+            "first patch"
+        );
+        assert_eq!(
+            github
+                .commit_diff_request(url, &first, false)
+                .await
+                .unwrap(),
+            "first patch"
+        );
+        assert_eq!(
+            github
+                .commit_diff_request(url, &second, false)
+                .await
+                .unwrap(),
+            "second patch"
+        );
+        assert!(
+            github
+                .commit_diff_request(url, "../other", false)
+                .await
+                .is_err()
+        );
+        let requests = runner.requests();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(
+            requests[0].args,
+            [
+                "api",
+                &format!("repos/a/b/commits/{first}"),
+                "-H",
+                "Accept: application/vnd.github.diff"
+            ]
+        );
     }
 
     #[tokio::test]
@@ -3180,6 +3347,59 @@ mod tests {
             assert_eq!(requests.len(), 1);
             assert_eq!(requests[0].args, args);
         }
+    }
+
+    #[tokio::test]
+    async fn pr_edits_send_literal_body_and_validate_reviewers() {
+        use zuse_protocol::ChangeRequestUpdate as Update;
+        let url = "https://github.com/a/b/pull/7";
+        let runner = FakeProcessRunner::with_responses([
+            command_success(Vec::new()),
+            command_success(Vec::new()),
+        ]);
+        let github = GitHubCli::with_runner(runner.clone());
+        let body = "Description\n$(not-a-shell-command)";
+        github
+            .update_pull_request(
+                url,
+                Update::Edit {
+                    title: "A title".into(),
+                    body: body.into(),
+                },
+            )
+            .await
+            .unwrap();
+        github
+            .update_pull_request(
+                url,
+                Update::AddReviewers {
+                    reviewers: vec!["octocat".into(), "org/team".into()],
+                },
+            )
+            .await
+            .unwrap();
+        let requests = runner.requests();
+        assert_eq!(
+            requests[0].args,
+            ["pr", "edit", url, "--title", "A title", "--body-file", "-"]
+        );
+        assert_eq!(requests[0].stdin.as_deref(), Some(body.as_bytes()));
+        assert_eq!(
+            requests[1].args,
+            ["pr", "edit", url, "--add-reviewer", "octocat,org/team"]
+        );
+        assert!(
+            github
+                .update_pull_request(
+                    url,
+                    Update::AddReviewers {
+                        reviewers: vec!["--help".into(), "x y".into()]
+                    }
+                )
+                .await
+                .is_err()
+        );
+        assert_eq!(runner.requests().len(), 2);
     }
 
     #[tokio::test]
@@ -3599,7 +3819,7 @@ mod tests {
             github
                 .update_pull_request_at_head(
                     "https://github.com/acme/app/pull/1",
-                    update,
+                    update.clone(),
                     Some(&head)
                 )
                 .await
@@ -3847,12 +4067,15 @@ mod tests {
 
     #[tokio::test]
     async fn pr_filters_are_scoped_cached_and_never_prefetched() {
-        use zuse_protocol::ChangeRequestFilter::{All, Authored, Reviewing};
+        use zuse_protocol::ChangeRequestFilter::{All, AllStates, Authored, Merged, Reviewing};
         let runner = FakeProcessRunner::with_responses(
-            (0..3).map(|_| command_success(search_response(vec![]))),
+            (0..5).map(|_| command_success(search_response(vec![]))),
         );
         let github = GitHubCli::with_runner(runner.clone());
-        for (index, filter) in [All, Authored, Reviewing].into_iter().enumerate() {
+        for (index, filter) in [All, Authored, Reviewing, Merged, AllStates]
+            .into_iter()
+            .enumerate()
+        {
             github
                 .list_page("acme/zuse", filter, None, false, false)
                 .await
@@ -3865,21 +4088,76 @@ mod tests {
             assert_eq!(runner.requests().len(), index + 1);
         }
         let requests = runner.requests();
-        for (request, qualifier) in
-            requests
-                .iter()
-                .zip(["", "author:@me ", "review-requested:@me "])
-        {
+        for (request, qualifier) in requests.iter().zip([
+            "is:open ",
+            "is:open author:@me ",
+            "is:open review-requested:@me ",
+            "is:merged ",
+            "",
+        ]) {
             assert_eq!(
                 request.args.last().unwrap(),
-                &format!("search=is:pr is:open {qualifier}repo:acme/zuse sort:updated-desc")
+                &format!("search=is:pr {qualifier}repo:acme/zuse sort:updated-desc")
             );
         }
         github
             .list_page("acme/zuse", All, None, false, false)
             .await
             .unwrap();
-        assert_eq!(runner.requests().len(), 3);
+        assert_eq!(runner.requests().len(), 5);
+    }
+
+    #[tokio::test]
+    async fn pr_lifecycle_filters_decode_merged_and_closed_results() {
+        use zuse_protocol::{ChangeRequestFilter, ChangeRequestState};
+        let response = || {
+            command_success(search_response(vec![
+                search_pull_request(
+                    "acme/zuse",
+                    1,
+                    "Merged",
+                    "MERGED",
+                    "UNKNOWN",
+                    "2026-08-10T09:30:00Z",
+                    "2026-08-19T12:00:00Z",
+                    false,
+                    None,
+                ),
+                search_pull_request(
+                    "acme/zuse",
+                    2,
+                    "Closed",
+                    "CLOSED",
+                    "UNKNOWN",
+                    "2026-08-10T09:30:00Z",
+                    "2026-08-19T12:00:00Z",
+                    false,
+                    None,
+                ),
+            ]))
+        };
+        let runner = FakeProcessRunner::with_responses([response()]);
+        let github = GitHubCli::with_runner(runner);
+        let page = github
+            .list_page(
+                "acme/zuse",
+                ChangeRequestFilter::AllStates,
+                None,
+                false,
+                false,
+            )
+            .await
+            .unwrap();
+        assert!(
+            page.items
+                .iter()
+                .any(|item| item.state == ChangeRequestState::Merged)
+        );
+        assert!(
+            page.items
+                .iter()
+                .any(|item| item.state == ChangeRequestState::Closed)
+        );
     }
 
     #[tokio::test]
@@ -4190,7 +4468,6 @@ mod tests {
             ("/repository/nameWithOwner", serde_json::json!("zuse")),
             ("/repository/nameWithOwner", serde_json::json!("a/b/c")),
             ("/url", serde_json::json!("file:///tmp/pr")),
-            ("/state", serde_json::json!("CLOSED")),
             ("/mergeable", serde_json::json!("BLOCKED")),
         ] {
             let mut item = base.clone();

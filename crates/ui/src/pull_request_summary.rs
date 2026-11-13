@@ -17,6 +17,7 @@ const FEEDBACK_PREVIEW: usize = 5;
 /// What the header knows, from the loaded details or the board's row.
 pub(super) struct HeaderFacts {
     pub title: String,
+    pub title_reserve: f32,
     pub author: String,
     /// Already phrased, e.g. "updated 3 days ago".
     pub age: Option<String>,
@@ -41,12 +42,16 @@ pub(super) enum MergeMenu {
 }
 
 /// The lifecycle state's glyph, tint and word.
-fn state_style(
+pub(super) fn state_style(
     state: &str,
     draft: bool,
     theme: &Theme,
 ) -> (&'static str, gpui::Hsla, &'static str) {
-    let state = if draft { "DRAFT" } else { state };
+    let state = if draft && state.eq_ignore_ascii_case("open") {
+        "DRAFT"
+    } else {
+        state
+    };
     match state.to_ascii_uppercase().as_str() {
         "MERGED" => (crate::icons::GIT_MERGE, theme.syntax.keyword, "Merged"),
         "CLOSED" => (crate::icons::PULL_REQUEST_CLOSED, theme.danger, "Closed"),
@@ -73,16 +78,18 @@ pub(super) fn state_mark(state: &str, draft: bool, theme: &Theme) -> AnyElement 
 }
 
 /// The page's headline, wrapping rather than truncating.
-fn page_title(title: String, theme: &Theme) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id("pr-detail-title")
-        .debug_selector(|| "pr-detail-title".into())
-        .min_w_0()
-        .text_size(crate::typography::text_xl())
-        .line_height(crate::typography::ui_rems(26.0))
-        .font_weight(gpui::FontWeight::MEDIUM)
-        .text_color(theme.text_strong)
-        .child(title)
+fn page_title(title: String, reserve: f32, theme: &Theme) -> gpui::Div {
+    div().min_w_0().pr(px(reserve)).child(
+        div()
+            .id("pr-detail-title")
+            .debug_selector(|| "pr-detail-title".into())
+            .min_w_0()
+            .text_size(crate::typography::ui_rems(20.0))
+            .line_height(crate::typography::ui_rems(28.0))
+            .font_weight(gpui::FontWeight::MEDIUM)
+            .text_color(theme.text_strong)
+            .child(title),
+    )
 }
 
 /// Title, byline with the checkout command, refs with the change totals,
@@ -94,6 +101,7 @@ pub(super) fn detail_header(
 ) -> gpui::Stateful<gpui::Div> {
     let HeaderFacts {
         title,
+        title_reserve,
         author,
         age,
         checkout,
@@ -237,7 +245,11 @@ pub(super) fn detail_header(
         .min_w_0()
         .flex()
         .flex_col()
-        .child(page_title(title, theme).px(px(8.0)))
+        .child(
+            div()
+                .px(px(8.0))
+                .child(page_title(title, title_reserve, theme)),
+        )
         .child(
             div()
                 .id("pr-detail-meta")
@@ -247,18 +259,10 @@ pub(super) fn detail_header(
                 .px(px(8.0))
                 .flex()
                 .flex_col()
-                .gap(px(4.0))
+                .gap(px(8.0))
                 .text_size(crate::typography::text_xs())
                 .child(byline)
                 .children(refs_line),
-        )
-        .child(
-            div()
-                .debug_selector(|| "pr-detail-divider".into())
-                .mt(px(12.0))
-                .h(px(1.0))
-                .flex_none()
-                .bg(theme.border),
         )
 }
 
@@ -396,6 +400,17 @@ fn review_decision(raw: &str, theme: &Theme) -> Option<(String, gpui::Hsla)> {
 }
 
 impl PullRequestDetailPage {
+    pub(super) fn title_reserve(&self, state: &str, draft: bool) -> f32 {
+        if !state.eq_ignore_ascii_case("open") {
+            return 0.0;
+        }
+        let desired: f32 = if draft || self.updating_pr {
+            210.0
+        } else {
+            160.0
+        };
+        desired.min((self.page_width.unwrap_or(500.0) - 40.0).max(0.0))
+    }
     /// Merge, in the pane's header. Choosing a method is the confirmation;
     /// a blocked pull request can still arm auto-merge or try anyway.
     pub(super) fn merge_control(
@@ -631,8 +646,16 @@ impl PullRequestDetailPage {
             return;
         }
         let Some(engine) = self.state.read(cx).engine().cloned() else {
+            self.update_notice =
+                Some("Connect to the engine before updating this pull request.".into());
+            cx.notify();
             return;
         };
+        let is_edit = matches!(
+            &update,
+            zuse_protocol::ChangeRequestUpdate::Edit { .. }
+                | zuse_protocol::ChangeRequestUpdate::AddReviewers { .. }
+        );
         let mut params = serde_json::json!({"url": self.url, "update": update,
             "headRefOid": self.detail.as_ref().map(|detail| &detail.head_ref_oid).filter(|head| zuse_protocol::change_request_assessment::valid_head_oid(head))});
         if let Some(target) = &self.target {
@@ -646,7 +669,7 @@ impl PullRequestDetailPage {
         self.error = None;
         // Both land on whatever the head becomes, so pin the one on screen.
         let method = if matches!(
-            update,
+            &update,
             zuse_protocol::ChangeRequestUpdate::Merge { .. }
                 | zuse_protocol::ChangeRequestUpdate::EnableAutoMerge { .. }
         ) {
@@ -676,6 +699,13 @@ impl PullRequestDetailPage {
             cache.borrow_mut().evict(&target, &url);
             let _ = this.update(cx, |page, cx| {
                 page.updating_pr = false;
+                if is_edit
+                    && result
+                        .as_ref()
+                        .is_ok_and(|value| value["refusal"].is_null())
+                {
+                    page.edit_mode = None;
+                }
                 page.refresh(cx);
                 page.update_notice = match result {
                     Ok(value) => value["refusal"].as_str().map(str::to_owned),
@@ -720,6 +750,7 @@ impl PullRequestDetailPage {
     pub(super) fn header_facts(&self, detail: &ChangeRequestDetail) -> HeaderFacts {
         HeaderFacts {
             title: detail.title.clone(),
+            title_reserve: self.title_reserve(&detail.state, detail.is_draft),
             author: detail.author.login.clone(),
             age: self.age(detail),
             checkout: Some((
@@ -749,7 +780,11 @@ impl PullRequestDetailPage {
             .flex()
             .flex_col()
             .gap(px(8.0))
-            .child(page_title(detail.title.clone(), theme))
+            .child(page_title(
+                detail.title.clone(),
+                self.title_reserve(&detail.state, detail.is_draft),
+                theme,
+            ))
             .child(
                 div()
                     .id("pr-detail-meta")
@@ -962,6 +997,7 @@ impl PullRequestDetailPage {
             div()
                 .flex()
                 .flex_col()
+                .pt(px(8.0))
                 .child(
                     div()
                         .id("pr-description")
@@ -986,6 +1022,7 @@ impl PullRequestDetailPage {
                                     window,
                                     self.diagrams.clone(),
                                     cx.weak_entity(),
+                                    true,
                                 ))
                             },
                         )
@@ -1085,8 +1122,11 @@ impl PullRequestDetailPage {
                             .id("pr-review-preview")
                             .flex()
                             .flex_col()
+                            .gap(px(8.0))
                             .children(feedback.iter().take(FEEDBACK_PREVIEW).map(
-                                |(index, comment)| self.feedback_row(*index, comment, theme, cx),
+                                |(index, comment)| {
+                                    self.feedback_row(*index, comment, theme, window, cx)
+                                },
                             ))
                             .when(feedback_count > FEEDBACK_PREVIEW, |el| {
                                 el.child(
@@ -1193,7 +1233,7 @@ impl PullRequestDetailPage {
             .child(section_gap())
             .child(description_toggle)
             .children(description)
-            .child(section_gap())
+            .child(div().h(px(24.0)).flex_none())
             .child(checks_toggle)
             .children(checks_list)
             .children(feedback_section)
@@ -1313,6 +1353,7 @@ impl PullRequestDetailPage {
         index: usize,
         comment: &zuse_protocol::ChangeRequestComment,
         theme: &Theme,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
         let id = comment.id.clone();
@@ -1323,19 +1364,26 @@ impl PullRequestDetailPage {
         } else {
             &comment.created_at
         };
-        let snippet = review_snippet(&comment.body);
+        let location = self
+            .detail
+            .as_ref()
+            .and_then(|detail| inline_thread(detail, index))
+            .map(thread_location);
         div()
             .id(SharedString::from(format!("pr-review-preview-{index}")))
             .min_w_0()
-            .px(px(8.0))
-            .py(px(5.0))
+            .rounded(px(6.0))
+            .border_1()
+            .border_color(theme.border)
             .flex()
             .flex_col()
-            .gap(px(2.0))
             .child(
                 div()
                     .min_w_0()
+                    .px(px(12.0))
+                    .py(px(8.0))
                     .flex()
+                    .flex_wrap()
                     .items_center()
                     .gap(px(8.0))
                     .text_size(crate::typography::text_sm())
@@ -1350,7 +1398,11 @@ impl PullRequestDetailPage {
                             .min_w_0()
                             .truncate()
                             .font_weight(gpui::FontWeight::MEDIUM)
-                            .child(comment.author.login.clone()),
+                            .child(if comment.author.login.is_empty() {
+                                "Deleted account".to_owned()
+                            } else {
+                                comment.author.login.clone()
+                            }),
                     )
                     .children(state.map(|state| {
                         div()
@@ -1386,15 +1438,56 @@ impl PullRequestDetailPage {
                         )
                     }),
             )
-            .when(!snippet.is_empty(), |el| {
+            .children(
+                location
+                    .filter(|location| !location.is_empty())
+                    .map(|location| {
+                        div()
+                            .px(px(12.0))
+                            .pb(px(6.0))
+                            .font_family(theme.font_mono.clone())
+                            .text_size(crate::typography::text_xs())
+                            .text_color(theme.text_muted)
+                            .child(location)
+                    }),
+            )
+            .children(
+                self.activity_bodies
+                    .get(index)
+                    .filter(|_| !comment.body.is_empty())
+                    .map(|body| {
+                        div()
+                            .px(px(12.0))
+                            .py(px(10.0))
+                            .border_t_1()
+                            .border_color(theme.border)
+                            .min_w_0()
+                            .child(rich_text(
+                                &super::super::pull_request_media::feedback_preview(body),
+                                format!("{}feedback-{index}", self.selection_prefix),
+                                &self.url,
+                                theme,
+                                window,
+                                self.diagrams.clone(),
+                                cx.weak_entity(),
+                                false,
+                            ))
+                    }),
+            )
+            .when(!comment.body.is_empty(), |el| {
                 el.child(
                     div()
-                        .pl(px(26.0))
-                        .min_w_0()
-                        .truncate()
-                        .text_size(crate::typography::text_sm())
-                        .text_color(theme.text)
-                        .child(snippet),
+                        .id(SharedString::from(format!("pr-feedback-activity-{index}")))
+                        .px(px(12.0))
+                        .pb(px(8.0))
+                        .text_size(crate::typography::text_xs())
+                        .text_color(theme.text_muted)
+                        .cursor_pointer()
+                        .hover(|style| style.text_color(theme.text))
+                        .child("View in activity")
+                        .on_click(
+                            cx.listener(|page, _, _, cx| page.select_tab(super::Tab::Activity, cx)),
+                        ),
                 )
             })
     }
@@ -1490,44 +1583,11 @@ fn merge_blocker(detail: &ChangeRequestDetail) -> &'static str {
     }
 }
 
-/// A review's first line of prose, for a one-line preview.
-fn review_snippet(body: &str) -> String {
-    body.lines()
-        .map(|line| {
-            line.trim()
-                .trim_start_matches(['#', '>', '*', '-', '_', ' '])
-                .trim_end_matches(['*', '_', ' '])
-        })
-        .find(|line| {
-            !line.is_empty()
-                && !line.starts_with('<')
-                && !line.starts_with('!')
-                // GitHub's `> [!WARNING]` alert marker.
-                && !line.starts_with("[!")
-        })
-        .unwrap_or_default()
-        .to_owned()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::pull_request_test_support::{self as fixture, ScriptedRpc};
     use std::sync::Mutex;
-
-    #[test]
-    fn review_snippet_skips_markup_for_the_first_line_of_prose() {
-        assert_eq!(
-            review_snippet("<!-- bot -->\n\n## **Summary**\nDetails"),
-            "Summary"
-        );
-        assert_eq!(review_snippet("![badge](x)\n> Looks good"), "Looks good");
-        assert_eq!(review_snippet("  \n"), "");
-        assert_eq!(
-            review_snippet("> [!WARNING]\n> Rate limit exceeded"),
-            "Rate limit exceeded"
-        );
-    }
 
     #[test]
     fn deferred_merges_need_a_pinned_head_and_no_conflicts() {
@@ -1661,7 +1721,7 @@ mod tests {
                 let update = zuse_protocol::ChangeRequestUpdate::Merge {
                     method: zuse_protocol::ChangeRequestMergeMethod::Squash,
                 };
-                page.update_pr(update, cx);
+                page.update_pr(update.clone(), cx);
                 page.update_pr(update, cx);
             })
             .unwrap();

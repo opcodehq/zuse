@@ -351,18 +351,15 @@ impl PullRequestDetailPage {
                 None,
             ));
         }
-        // The chat composer's compact pill: same surface, radius, height and
-        // insets, with the send circle on the last line's centerline.
         let row_height = crate::composer::COMPACT_TOTAL_HEIGHT - crate::composer::PILL_BORDER_V;
         let mut surface = div()
             .id("pr-comment-surface")
             .debug_selector(|| "pr-comment-surface".into())
-            .min_h(px(crate::composer::COMPACT_TOTAL_HEIGHT))
-            .rounded(px(crate::composer::COMPOSER_RADIUS))
+            .min_h(px(60.0))
+            .rounded(px(6.0))
             .border_1()
             .border_color(theme.composer_surface_border())
             .bg(theme.composer_surface_bg())
-            .when(!theme.is_frost(), |el| el.shadow_lg())
             .flex()
             .flex_col()
             .on_mouse_down(
@@ -386,7 +383,7 @@ impl PullRequestDetailPage {
         surface = surface.child(
             div()
                 .flex()
-                .items_end()
+                .flex_col()
                 .pl(px(16.0))
                 .pr(px(8.0))
                 .gap(px(crate::composer::ACTION_PRIMARY_GAP))
@@ -394,16 +391,18 @@ impl PullRequestDetailPage {
                     div()
                         .flex_1()
                         .min_w_0()
-                        .min_h(px(row_height))
+                        .w_full()
+                        .min_h(px(26.0))
                         .max_h(px(140.0))
-                        .py(px(12.0))
+                        .py(px(8.0))
                         .flex()
-                        .items_center()
+                        .items_start()
                         .overflow_hidden()
                         .child(div().w_full().child(self.comment_input.clone())),
                 )
                 .child(
                     div()
+                        .self_end()
                         .h(px(row_height))
                         .flex_none()
                         .flex()
@@ -448,11 +447,7 @@ impl PullRequestDetailPage {
                         ),
                 ),
         );
-        stack = stack.child(crate::frost::frosted(
-            crate::composer::COMPOSER_RADIUS,
-            16.0,
-            surface,
-        ));
+        stack = stack.child(crate::frost::frosted(6.0, 16.0, surface));
         // Docked in the flow between the thread and the section navigation:
         // the thread ends above it instead of scrolling behind two stacked
         // floating layers. Same column as the thread, so their edges align.
@@ -468,7 +463,7 @@ impl PullRequestDetailPage {
                     .max_w(px(DETAIL_COLUMN_MAX))
                     .pt_0()
                     .pb_0()
-                    .px(px(if narrow { NARROW_PAD_X } else { DETAIL_PAD_X }))
+                    .px(px(if narrow { NARROW_PAD_X } else { DETAIL_PAD_X } + 8.0))
                     .child(stack),
             )
             .into_any_element()
@@ -483,7 +478,7 @@ impl PullRequestDetailPage {
                 .page_width
                 .unwrap_or(DETAIL_COLUMN_MAX)
                 .min(DETAIL_COLUMN_MAX);
-            released.extend(diagrams.set_view((column.max(1.0), 480.0), window.scale_factor()));
+            released.extend(diagrams.set_view((column.max(1.0), 4096.0), window.scale_factor()));
             released
         };
         if !released.is_empty() {

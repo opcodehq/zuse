@@ -26,7 +26,15 @@ pub fn frosted(corner_radius: f32, blur_radius: f32, child: impl IntoElement) ->
         corner_radius,
         blur_radius,
         floating: false,
+        always: false,
         child: child.into_any_element(),
+    }
+}
+
+pub fn backdrop(corner_radius: f32, blur_radius: f32, child: impl IntoElement) -> Frosted {
+    Frosted {
+        always: true,
+        ..frosted(corner_radius, blur_radius, child)
     }
 }
 
@@ -44,6 +52,7 @@ pub struct Frosted {
     corner_radius: f32,
     blur_radius: f32,
     floating: bool,
+    always: bool,
     child: AnyElement,
 }
 
@@ -92,7 +101,7 @@ impl Element for Frosted {
         cx: &mut App,
     ) {
         let theme = Theme::of(cx);
-        let blur = theme.is_frost() || (self.floating && theme.floating_glass());
+        let blur = self.always || theme.is_frost() || (self.floating && theme.floating_glass());
         if blur {
             window.paint_layer(bounds, |window| {
                 window.paint_backdrop_blur(

@@ -84,6 +84,15 @@ impl PullRequestPane {
         self.views += 1;
         self.tabs[ix].viewed = self.views;
         self.active = Some(self.tabs[ix].url.clone());
+        if let Some(bounds) = self.tab_scroll.bounds_for_item(ix) {
+            let viewport = self.tab_scroll.bounds();
+            let max = self.tab_scroll.max_offset().x;
+            if max > px(0.0) {
+                let offset = (viewport.right() - bounds.right()).max(-max).min(px(0.0));
+                self.tab_scroll.set_offset(gpui::point(offset, px(0.0)));
+            }
+        }
+        self.tab_scroll.scroll_to_item(ix);
     }
 
     /// Drop tabs past the cap, least recently viewed first, never the
@@ -98,6 +107,9 @@ impl PullRequestPane {
                 return;
             };
             self.tabs.remove(oldest);
+        }
+        if let Some(active) = self.active_index() {
+            self.tab_scroll.scroll_to_item(active);
         }
     }
 
@@ -639,9 +651,12 @@ impl Shell {
                 Theme::TITLEBAR_HEIGHT - zuse_viewport::workspace_style::GUTTER
             ))
             .child(content);
+        // Same insets as the chat's right pane: the board's own right gutter
+        // is the seam, so the pane adds none on its left (one 4px gap, not 8).
         let panel = div()
             .size_full()
-            .p(px(zuse_viewport::workspace_style::GUTTER))
+            .py(px(zuse_viewport::workspace_style::GUTTER))
+            .pr(px(zuse_viewport::workspace_style::GUTTER))
             .child(panel);
         let transition = self.active_tween_endpoints(self.pull_request_pane.tween);
         let content_width = stable_panel_content_width(target, transition).max(visible);
@@ -689,7 +704,12 @@ impl Shell {
             .map(|tab| {
                 let page = tab.page.read(cx);
                 let (number, title) = page.identity();
-                (number, title, page.is_loading())
+                (
+                    number,
+                    title,
+                    page.is_loading(),
+                    page.lifecycle_icon(&theme),
+                )
             })
             .collect();
         let mut strip = div()
@@ -724,7 +744,7 @@ impl Shell {
             .on_drop::<PullRequestTabDrag>(
                 cx.listener(|this, payload, _, cx| this.drop_pull_request_tab(payload, cx)),
             );
-        for (ix, (number, title, loading)) in rows.into_iter().enumerate() {
+        for (ix, (number, title, loading, (glyph, color))) in rows.into_iter().enumerate() {
             let is_active = active == Some(ix);
             let label: SharedString = match number {
                 Some(number) => format!("#{number} {title}"),
@@ -741,7 +761,11 @@ impl Shell {
                 )
                 .into_any_element()
             } else {
-                crate::surface_chrome::tab_chip_icon(icons::PULL_REQUEST, is_active, &theme)
+                icons::icon(glyph)
+                    .size(px(14.0))
+                    .flex_none()
+                    .text_color(color)
+                    .into_any_element()
             };
             let tooltip = label.clone();
             let ghost_title: SharedString = title.clone().into();
@@ -751,7 +775,7 @@ impl Shell {
                     close_id: "pull-request-tab-close",
                     ix,
                     active: is_active,
-                    workspace_style: false,
+                    workspace_style: true,
                     title: title.into(),
                     dirty: false,
                     leading,

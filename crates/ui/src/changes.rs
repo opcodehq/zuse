@@ -4537,6 +4537,15 @@ pub(crate) fn readonly_diff_line(
     diff_line_row(line, spans, theme, gutter_px, DiffCodeWidth::Clipped, None)
 }
 
+pub(crate) fn readonly_wrapped_diff_line(
+    line: &DiffLine,
+    spans: &[zuse_syntax::HighlightSpan],
+    theme: &Theme,
+    gutter_px: f32,
+) -> AnyElement {
+    diff_line_row(line, spans, theme, gutter_px, DiffCodeWidth::Wrapped, None)
+}
+
 /// Read-only unified row whose code plane scrolls with `scroll` while the
 /// gutters stay put. Every row shares one extent, so a whole multi-file
 /// stream moves as one horizontal plane.

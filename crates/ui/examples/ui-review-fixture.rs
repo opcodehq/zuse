@@ -145,7 +145,7 @@ fn main() -> anyhow::Result<()> {
             // Every Threads row state: running, waiting on input, failed
             // unseen and finished unseen (chat-3, bold).
             s.chats[7].last_message_at = Some(chrono::Utc::now());
-            let session = |chat_id: &str, device_id: &str, status| zuse_protocol::Session { last_completed_turn: None, running_subagents: 0, background_tasks: Vec::new(), chat_id: chat_id.into(), device_id: device_id.into(), status, started_at: Some(chrono::Utc::now()), updated_at: chrono::Utc::now() };
+            let session = |chat_id: &str, device_id: &str, status| zuse_protocol::Session { last_completed_turn: None, running_subagents: 0, background_tasks: Vec::new(), awaiting_input: None, chat_id: chat_id.into(), device_id: device_id.into(), status, started_at: Some(chrono::Utc::now()), updated_at: chrono::Utc::now() };
             s.apply_sessions(vec![
                 session("zuse-publish", "local", zuse_protocol::SessionStatus::Working),
                 session("chat-5", "local", zuse_protocol::SessionStatus::AwaitingInput),

@@ -9,10 +9,10 @@ use zuse_i18n::messages as msg;
 
 /// The stream's and toolbar's inset from the pane edges.
 const STREAM_PAD_X: f32 = 16.0;
-const TREE_ROW_HEIGHT: f32 = 28.0;
-const TREE_INDENT: f32 = 14.0;
+const TREE_ROW_HEIGHT: f32 = 24.0;
+const TREE_INDENT: f32 = 12.0;
 const PICKER_WIDTH: f32 = 320.0;
-const PICKER_HEIGHT: f32 = 360.0;
+const PICKER_HEIGHT: f32 = 320.0;
 /// Frosted pinned header: blur and veil strong enough to erase the text
 /// scrolling under it, light enough to keep the header rows' tone.
 const STICKY_BLUR: f32 = 32.0;
@@ -397,15 +397,6 @@ impl PullRequestDetailPage {
         self.rebuild_stream(cx);
     }
 
-    pub(super) fn toggle_split(&mut self, cx: &mut Context<Self>) {
-        self.review.split = !self.review.split;
-        let split = self.review.split;
-        crate::settings::update(crate::settings::SavePolicy::Immediate, cx, |settings| {
-            settings.diff_split = split;
-        });
-        self.rebuild_stream(cx);
-    }
-
     /// A stream row. The list owns virtualization; rows are pure functions
     /// of the cached patch.
     pub(super) fn render_code_row(
@@ -432,20 +423,20 @@ impl PullRequestDetailPage {
             ),
             _ => None,
         };
-        match row {
+        let rendered = match row {
             StreamRow::File(file) => self.file_header(file, false, &theme, cx),
             StreamRow::Row(ix) => {
                 let row = &rows[ix];
                 meta(row, &theme).unwrap_or_else(|| {
-                    crate::changes::readonly_scrolled_diff_line(
-                        &diff_line(row),
-                        &row.spans,
-                        &theme,
-                        gutter,
-                        text_width,
-                        &self.review.horizontal,
-                        index,
-                    )
+                    div()
+                        .debug_selector(move || format!("pr-unified-row-{index}"))
+                        .child(crate::changes::readonly_wrapped_diff_line(
+                            &diff_line(row),
+                            &row.spans,
+                            &theme,
+                            gutter,
+                        ))
+                        .into_any_element()
                 })
             }
             StreamRow::Pair(file, pair) => {
@@ -473,6 +464,14 @@ impl PullRequestDetailPage {
                     )
                 })
             }
+        };
+        if index + 1 == self.review.stream.len() {
+            div()
+                .pb(px(NAV_CLEARANCE))
+                .child(rendered)
+                .into_any_element()
+        } else {
+            rendered
         }
     }
 
@@ -718,9 +717,8 @@ impl PullRequestDetailPage {
             .track_scroll(&self.review.tree_scroll)
             .flex()
             .flex_col()
-            .gap(px(1.0))
-            .pt(px(4.0))
-            .pb(px(8.0));
+            .pt(px(2.0))
+            .pb(px(4.0));
         let loading = self.diff.is_none();
         if loading {
             list = list.child(crate::pull_request_skeleton::tree(
@@ -822,7 +820,7 @@ impl PullRequestDetailPage {
             .min_h_0()
             .flex()
             .flex_col()
-            .gap(px(8.0))
+            .gap(px(4.0))
             .child(
                 div()
                     .h(px(crate::surface_chrome::CONTROL_SIZE))
@@ -844,14 +842,6 @@ impl PullRequestDetailPage {
                             .child(file_count.to_string()),
                     )
                     .child(counts(additions, deletions, 11.0, theme)),
-            )
-            .child(
-                // The shared input grows along its parent axis; this parent is a column.
-                crate::surface_chrome::input()
-                    .flex_none()
-                    .id("pr-file-search")
-                    .debug_selector(|| "pr-file-search".into())
-                    .child(div().flex_1().min_w_0().child(self.file_search.clone())),
             )
             .child(
                 div().flex_1().min_h_0().relative().child(
@@ -891,16 +881,46 @@ impl PullRequestDetailPage {
             .items_center()
             .gap(px(2.0))
             .child(
-                action("pr-files", "Find a changed file", theme)
-                    .track_focus(&self.files_focus)
-                    .aria_expanded(self.files_expanded)
-                    .when(self.files_expanded, |el| el.bg(theme.glass_hover()))
-                    .on_click(cx.listener(move |page, _, window, cx| {
-                        page.toggle_files(cx);
-                        if page.files_expanded {
-                            window.focus(&page.file_search.read(cx).focus_handle(cx), cx);
-                        }
-                    })),
+                div()
+                    .flex()
+                    .items_center()
+                    .min_w_0()
+                    .rounded(px(6.0))
+                    .when(self.files_expanded, |el| {
+                        el.flex_1().max_w(px(250.0)).bg(theme.glass_hover())
+                    })
+                    .child(
+                        action("pr-files", "Find a changed file", theme)
+                            .track_focus(&self.files_focus)
+                            .aria_expanded(self.files_expanded)
+                            .on_click(cx.listener(move |page, _, window, cx| {
+                                page.toggle_files(cx);
+                                if page.files_expanded {
+                                    window.focus(&page.file_search.read(cx).focus_handle(cx), cx);
+                                }
+                            })),
+                    )
+                    .when(self.files_expanded, |el| {
+                        el.child(
+                            div()
+                                .id("pr-file-search")
+                                .debug_selector(|| "pr-file-search".into())
+                                .flex_1()
+                                .min_w_0()
+                                .pr(px(8.0))
+                                .child(div().flex_1().min_w_0().child(self.file_search.clone()))
+                                .on_key_down(cx.listener(
+                                    |page, event: &gpui::KeyDownEvent, window, cx| {
+                                        if event.keystroke.key == "escape" {
+                                            page.files_expanded = false;
+                                            window.focus(&page.files_focus, cx);
+                                            cx.stop_propagation();
+                                            cx.notify();
+                                        }
+                                    },
+                                )),
+                        )
+                    }),
             )
             .child(
                 div()
@@ -936,20 +956,6 @@ impl PullRequestDetailPage {
                 .on_click(cx.listener(|page, _, _, cx| page.toggle_all_folds(cx))),
             )
             .child(
-                action(
-                    "pr-split",
-                    if self.review.split {
-                        "Show unified diff"
-                    } else {
-                        "Show split diff"
-                    },
-                    theme,
-                )
-                .aria_selected(self.review.split)
-                .when(self.review.split, |el| el.bg(theme.glass_hover()))
-                .on_click(cx.listener(|page, _, _, cx| page.toggle_split(cx))),
-            )
-            .child(
                 action("pr-copy-patch", "Copy diff", theme).on_click(move |_, _, cx| {
                     cx.write_to_clipboard(gpui::ClipboardItem::new_string(
                         diff.as_ref()
@@ -980,13 +986,18 @@ impl PullRequestDetailPage {
         div()
             .id("pr-code-workspace")
             .debug_selector(|| "pr-code-workspace".into())
+            .on_mouse_down_out(cx.listener(|page, _, _, cx| {
+                if page.files_expanded {
+                    page.files_expanded = false;
+                    cx.notify();
+                }
+            }))
             .relative()
             .flex_1()
             .min_h_0()
             .min_w_0()
             .flex()
             .flex_col()
-            .pb(px(NAV_CLEARANCE))
             .child(toolbar)
             .child(stream_frame(theme, viewport))
             .when(self.files_expanded, |el| {
@@ -995,7 +1006,10 @@ impl PullRequestDetailPage {
                     div()
                         .id("pr-file-picker-dismiss")
                         .absolute()
-                        .inset_0()
+                        .top(px(40.0))
+                        .bottom_0()
+                        .left_0()
+                        .right_0()
                         .occlude()
                         .on_mouse_down(
                             gpui::MouseButton::Left,
@@ -1016,8 +1030,8 @@ impl PullRequestDetailPage {
                         .max_w(gpui::relative(0.9))
                         .h(px(PICKER_HEIGHT))
                         .max_h(gpui::relative(0.9))
-                        .p(px(8.0))
-                        .rounded(px(12.0))
+                        .p(px(6.0))
+                        .rounded(px(10.0))
                         .border_1()
                         .border_color(theme.border)
                         .bg(theme.surface_raised)

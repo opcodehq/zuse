@@ -1088,7 +1088,7 @@ pub struct ChangeRequestSummary {
     pub review_decision: ChangeRequestReviewDecision,
 }
 
-/// Relationship filter for one repository; never widens repository scope.
+/// Repository-scoped listing filter. `All` retains its original meaning of all open requests.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ChangeRequestFilter {
@@ -1096,6 +1096,10 @@ pub enum ChangeRequestFilter {
     Authored,
     All,
     Reviewing,
+    /// Merged requests, regardless of relationship to the viewer.
+    Merged,
+    /// Requests in every lifecycle state, including closed without merging.
+    AllStates,
 }
 
 /// Provider-neutral change request metadata for global listing surfaces.
@@ -1161,9 +1165,16 @@ pub enum ChangeRequestMergeMethod {
 }
 
 /// A change to a pull request the user asked for explicitly.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum ChangeRequestUpdate {
+    Edit {
+        title: String,
+        body: String,
+    },
+    AddReviewers {
+        reviewers: Vec<String>,
+    },
     Merge {
         method: ChangeRequestMergeMethod,
     },
@@ -1214,6 +1225,8 @@ pub struct ChangeRequestDetail {
     pub review_threads: Option<Vec<ChangeRequestReviewThread>>,
     pub files: Vec<ChangeRequestFile>,
     pub status_check_rollup: Vec<ChangeRequestCheck>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub commits: Option<Vec<ChangeRequestCommit>>,
     /// Set while auto-merge is armed; absent from older engines.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auto_merge_request: Option<ChangeRequestAutoMerge>,
@@ -1232,6 +1245,25 @@ impl ChangeRequestDetail {
                 .flat_map(|thread| &thread.comments),
         )
     }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ChangeRequestCommit {
+    pub oid: String,
+    pub message_headline: String,
+    pub authored_date: String,
+    pub committed_date: String,
+    pub authors: Vec<ChangeRequestCommitAuthor>,
+    pub additions: Option<u64>,
+    pub deletions: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ChangeRequestCommitAuthor {
+    pub login: Option<String>,
+    pub name: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

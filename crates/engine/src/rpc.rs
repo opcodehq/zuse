@@ -4866,12 +4866,16 @@ impl EngineRpc {
                     head_ref_oid: Option<String>,
                     #[serde(default)]
                     base_ref_oid: Option<String>,
+                    #[serde(default)]
+                    commit_oid: Option<String>,
                 }
                 let p: P = parse_params(params)?;
                 if p.refresh {
                     self.github.invalidate_watches();
                 }
-                let value = if p.summary && method == methods::GET_CHANGE_REQUEST {
+                let value = if method == methods::GET_CHANGE_REQUEST_DIFF && p.commit_oid.is_some() {
+                    self.github.commit_diff_request(&p.url, p.commit_oid.as_deref().unwrap(), p.refresh).await.map_err(change_request_rpc_error)?
+                } else if p.summary && method == methods::GET_CHANGE_REQUEST {
                     self.github
                         .summary_request(&p.url, p.refresh)
                         .await
