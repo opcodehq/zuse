@@ -23,6 +23,7 @@ pub mod device_proof;
 pub mod devices;
 pub mod error;
 pub mod events;
+pub mod harness_bundles;
 pub mod host_link;
 pub mod jobs;
 pub mod managed_bases;

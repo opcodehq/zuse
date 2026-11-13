@@ -1,5 +1,9 @@
 # Managed cloud harnesses
 
+To update one agent CLI on existing computers without a new machine image, use
+signed harness bundles instead: [HARNESS_BUNDLES.md](HARNESS_BUNDLES.md). This
+page covers the release tree baked into managed bases and the authority image.
+
 `harness-release.py` is the offline release manager used by the Rust guest launcher.
 It does not implement account onboarding. Existing device authentication stays at
 the account authority; the Rust Codex adapter consumes sealed execution credentials.
