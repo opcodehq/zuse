@@ -19,7 +19,7 @@ pub mod boxd;
 pub mod selection;
 pub mod worker;
 
-pub const MIGRATION: &str = include_str!("../../../migrations/0036_user_images.sql");
+pub const MIGRATION: &str = include_str!("../../../migrations/0037_user_images.sql");
 /// Guest helper run as root on builder and verifier VMs.
 pub const GUEST_HELPER: &str = include_str!("../../../../../infra/cloud/user-image-guest.py");
 /// Providers with a user image builder. Others start from the managed base.
