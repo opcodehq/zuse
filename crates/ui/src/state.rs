@@ -993,6 +993,10 @@ pub struct AppState {
     /// chat's doc holds them (every device sees the same queue).
     pub queue: Vec<zuse_doc::QueuedMessage>,
     pub(crate) cloud_queue_revisions: HashMap<(String, String), i64>,
+    /// Why a cloud chat's queue isn't sending (its first row waits), as the
+    /// server reports it: `(chat id, code)`. A runtime update or Update
+    /// computer shows as a status above the composer.
+    pub(crate) cloud_queue_error: Option<(String, String)>,
     pub context_usage: Option<zuse_protocol::ContextUsage>,
     /// The selected chat has a transcript from a `WatchDocMessages` reset
     /// (including a retained reset from an earlier visit). An
@@ -1160,6 +1164,7 @@ impl AppState {
             transcript: Vec::new(),
             queue: Vec::new(),
             cloud_queue_revisions: HashMap::new(),
+            cloud_queue_error: None,
             context_usage: None,
             transcript_replayed: false,
             transcript_history: NativeHistory::default(),
@@ -2471,6 +2476,13 @@ impl AppState {
             }
         }
         self.queue = items;
+    }
+
+    /// Why the selected cloud chat's queue waits, while it has rows.
+    pub(crate) fn selected_cloud_queue_error(&self) -> Option<&str> {
+        let (chat, code) = self.cloud_queue_error.as_ref()?;
+        (self.selected_chat.as_deref() == Some(chat.as_str()) && !self.queue.is_empty())
+            .then_some(code.as_str())
     }
 
     /// Unconfirmed echoes for the selected chat, in send order.
@@ -4329,6 +4341,9 @@ fn spawn_queue_watch(
     struct QueueFrame {
         #[serde(default)]
         items: Vec<zuse_doc::QueuedMessage>,
+        /// A cloud queue's reason for waiting.
+        #[serde(default, rename = "queueError")]
+        queue_error: Option<String>,
     }
     cx.spawn(async move |this, cx| {
         const RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
@@ -4378,6 +4393,8 @@ fn spawn_queue_watch(
                                 .cloud_queue_revisions
                                 .insert((chat_id.clone(), id), revision);
                         }
+                        state.cloud_queue_error =
+                            frame.queue_error.map(|code| (chat_id.clone(), code));
                         state.apply_queue(frame.items);
                         cx.notify();
                     }

@@ -1,3 +1,8 @@
+//! Fallback for servers that refuse a message whose computer must update
+//! first. Current servers queue such a message themselves (see
+//! [`super::waiting`]), so nothing is held here; this only runs when a server
+//! answers with a refusal. Update computer below serves both paths.
+//!
 //! A message refused because its computer's runtime is too old never becomes a
 //! dead end. It stays in the chat while the computer updates:
 //!
@@ -25,7 +30,7 @@ const UPDATE_LIMIT: Duration = Duration::from_secs(180);
 const RECREATION_POLL: Duration = Duration::from_secs(2);
 const RECREATION_LIMIT: Duration = Duration::from_secs(30 * 60);
 pub(super) const UPDATING: &str = "Updating computer…";
-const RESTART_NOTE: &str = "This restarts the computer; your files and chats are kept.";
+pub(super) const RESTART_NOTE: &str = "This restarts the computer; your files and chats are kept.";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Refusal {
@@ -125,11 +130,13 @@ fn renewed(mut request: Value, reupload: bool, sleeping: bool) -> Value {
 impl Composer {
     /// The computer is updating or being recreated: new sends wait with the
     /// held messages instead of being refused again.
+    /// Only while this app already holds refused messages (an older server):
+    /// otherwise the server queues a waiting message itself.
     pub(super) fn cloud_runtime_update_holds(&self) -> bool {
         matches!(
             self.cloud.runtime.phase,
             Some(Phase::Updating { .. } | Phase::Recreating { .. })
-        )
+        ) && !self.cloud.runtime.held.is_empty()
     }
     fn take_pending_as_held(&mut self) -> Option<Held> {
         let request = self.cloud.pending_native.take()?;
@@ -241,9 +248,9 @@ impl Composer {
     /// Update computer: recreate it on the newest base, follow the
     /// recreation, then send the held messages again.
     pub(in crate::composer) fn update_cloud_computer(&mut self, cx: &mut Context<Self>) {
-        if !matches!(self.cloud.runtime.phase, Some(Phase::NotSent(_)))
-            || self.cloud.runtime.held.is_empty()
-        {
+        let held = matches!(self.cloud.runtime.phase, Some(Phase::NotSent(_)))
+            && !self.cloud.runtime.held.is_empty();
+        if !held && !self.cloud_queue_needs_update_computer(cx) {
             return;
         }
         let Some(task) = self.cloud.native.as_ref() else {
@@ -499,10 +506,16 @@ impl Composer {
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> Option<TrayPill> {
-        let phase = self.cloud.runtime.phase.as_ref()?;
-        if self.cloud.runtime.held.is_empty() {
-            return None;
-        }
+        let Some(phase) = self
+            .cloud
+            .runtime
+            .phase
+            .as_ref()
+            .filter(|_| !self.cloud.runtime.held.is_empty())
+        else {
+            // Nothing held here: the server's queue says what it waits for.
+            return self.cloud_queue_waiting_row(theme, cx);
+        };
         let spinner = |cx: &mut Context<Self>| -> gpui::AnyElement {
             crate::loaders::mini_mono_spinner(
                 "cloud-runtime-update-spinner",

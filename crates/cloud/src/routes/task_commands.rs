@@ -16,19 +16,43 @@ pub(super) struct SessionsQuery {
 pub(super) struct AssetQuery {
     offset: Option<usize>,
 }
+/// See [`zuse_protocol::cloud_runtime_updates::QUEUE_WHILE_WAITING`].
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct SubmitQuery {
+    #[serde(default)]
+    queue_while_waiting: bool,
+}
 
 pub(super) async fn submit(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
+    Query(query): Query<SubmitQuery>,
     Json(request): Json<zuse_protocol::cloud_task_commands::Request>,
 ) -> Result<Json<Value>, ApiError> {
     let access = state.access(&headers, AccessKind::Content).await?;
     let session = request.session_id.clone();
+    let options = crate::runtime::task_commands::Submit {
+        queue_while_waiting: query.queue_while_waiting,
+    };
     let response = match runtime(&state)?
-        .task_command_submit(&id, &access, request, chrono::Utc::now().timestamp_millis())
+        .task_command_submit_with(
+            &id,
+            &access,
+            request,
+            options,
+            chrono::Utc::now().timestamp_millis(),
+        )
         .await
     {
+        Ok(response)
+            if response["waitingFor"] == zuse_protocol::cloud_runtime_updates::RUNTIME_UPDATING =>
+        {
+            // Queued until the update commits: ask the runtime to poll now.
+            state.gateway.nudge_runtime_update(&id);
+            response
+        }
         Ok(response) => response,
         Err(error) => {
             // Only returned for computers that support in-place updates.

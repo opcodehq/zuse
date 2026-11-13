@@ -308,5 +308,9 @@ pub(super) async fn transition(
     // jsonb_set operates on CURRENT config, preserving restore generation/grants
     // written in this transaction rather than replaying a stale source snapshot.
     sqlx::query("UPDATE api_cloud_workspaces SET request_config=jsonb_set(request_config,'{rustRecreation,phase}',to_jsonb($2::text)),status_code=$3,revision=revision+1,updated_at=GREATEST(updated_at+1,$4) WHERE workspace_id=$1 AND request_config->'rustRecreation'->>'operationId'=$5").bind(required(row,"workspace_id")?).bind(next).bind(format!("computer-recreate-{next}")).bind(now).bind(required(op,"operation_id")?).execute(&mut **tx).await?;
+    if next == "ready" {
+        // Messages queued while it was recreated go out now.
+        RuntimeControl::resume_waiting_queues_tx(tx, row, now).await?;
+    }
     Ok(())
 }

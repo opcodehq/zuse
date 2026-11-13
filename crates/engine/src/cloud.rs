@@ -867,13 +867,14 @@ impl CloudApi {
                 let request: zuse_protocol::cloud_task_commands::Request =
                     serde_json::from_value(params["request"].clone())?;
                 let body = Some(serde_json::to_value(&request)?);
+                let query = task_commands::submit_query(&params);
                 let response = self
                     .request_scoped(
                         &token,
                         &["v1", "cloud", "workspaces", workspace, "task-commands"],
                         body.clone(),
                         organization.as_deref(),
-                        &[],
+                        &query,
                     )
                     .await;
                 let response = match response {
@@ -884,7 +885,7 @@ impl CloudApi {
                             &["v1", "cloud", "workspaces", workspace, "task-commands"],
                             body,
                             organization.as_deref(),
-                            &[],
+                            &query,
                         )
                         .await?
                     }

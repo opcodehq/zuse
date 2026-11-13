@@ -32,6 +32,11 @@ fn queue_error_label(code: Option<&str>) -> Option<&'static str> {
         }
         "cloud_task_queue_runtime_recovery_required" => "Review interrupted action to continue",
         "cloud_task_session_config_invalid" => "Check agent and model · message kept",
+        zuse_protocol::cloud_runtime_updates::RUNTIME_UPDATING
+        | zuse_protocol::cloud_runtime_updates::RECREATING => "Updating computer · message kept",
+        zuse_protocol::cloud_runtime_updates::RUNTIME_UPDATE_UNAVAILABLE => {
+            "Needs Update computer · message kept"
+        }
         _ => "Message kept · edit or remove",
     })
 }
@@ -305,6 +310,17 @@ mod error_tests {
         assert_eq!(
             queue_error_label(Some("cloud_task_queue_runtime_recovery_required")),
             Some("Review interrupted action to continue")
+        );
+        // Waiting for the computer is a status, not a problem with the message.
+        assert_eq!(
+            queue_error_label(Some(zuse_protocol::cloud_runtime_updates::RUNTIME_UPDATING)),
+            Some("Updating computer · message kept")
+        );
+        assert_eq!(
+            queue_error_label(Some(
+                zuse_protocol::cloud_runtime_updates::RUNTIME_UPDATE_UNAVAILABLE
+            )),
+            Some("Needs Update computer · message kept")
         );
     }
 }
