@@ -15318,6 +15318,7 @@ impl Render for Shell {
                 WorkspaceCommand::Settings => self.open_last_settings(cx),
                 WorkspaceCommand::Plugins => self.open_plugins_page(cx),
                 WorkspaceCommand::Accounts => self.open_settings(SettingsSection::Harnesses, cx),
+                WorkspaceCommand::ModelSettings => self.open_settings(SettingsSection::Defaults, cx),
                 WorkspaceCommand::Diff if !self.active_chat.is_empty() => {
                     self.open_review_tab(window, cx)
                 }
@@ -20845,7 +20846,36 @@ impl Shell {
             }
             // The new-session view with its context tray above the composer.
             "new-thread" => self.open_new_session(None, cx),
+            "settings/defaults" => {
+                let state = self.state.clone();
+                let page = self
+                    .defaults_page
+                    .get_or_insert_with(|| {
+                        cx.new(|cx| settings::defaults::DefaultsPage::new(state, cx))
+                    })
+                    .clone();
+                page.update(cx, |page, cx| page.fixture_seed(cx));
+            }
             _ => {}
+        }
+        // `main:composer-loadout` seeds the model loadout, `-plan` turns plan
+        // mode on and `-full` sets full access (`composer-loadout-plan-full`).
+        let composer_flags: Vec<&str> = variant
+            .strip_prefix("composer-")
+            .map(|flags| flags.split('-').collect())
+            .unwrap_or_default();
+        if composer_flags.contains(&"loadout") {
+            let pickers = self.composer.read(cx).pickers().clone();
+            pickers.update(cx, |pickers, cx| pickers.fixture_seed_loadout(cx));
+        }
+        if composer_flags.contains(&"full") {
+            self.composer.update(cx, |composer, cx| {
+                composer.fixture_set_permission(zuse_protocol::SandboxLevel::DangerFullAccess, cx)
+            });
+        }
+        if composer_flags.contains(&"plan") {
+            self.composer
+                .update(cx, |composer, cx| composer.fixture_set_plan(cx));
         }
         // `main:usage` adds queued follow-ups and context/plan usage to the
         // worked conversation; `:usage-open` also pins the usage card open.
