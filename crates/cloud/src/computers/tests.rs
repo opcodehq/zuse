@@ -616,3 +616,136 @@ async fn machine_recipes_are_revisioned_validated_and_report_image_state() {
         .await
         .unwrap();
 }
+
+#[tokio::test]
+#[ignore = "requires explicit isolated localhost PostgreSQL"]
+async fn machine_status_reports_build_progress_failure_log_and_last_good_image_and_rebuilds() {
+    let url = std::env::var("ZUSE_CLOUD_TEST_DATABASE_URL").expect("isolated PostgreSQL required");
+    assert!(url.contains("127.0.0.1") || url.contains("localhost"));
+    let admin = PgPool::connect(&url).await.unwrap();
+    let schema = format!("machine_{}", uuid::Uuid::new_v4().simple());
+    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        .execute(&admin)
+        .await
+        .unwrap();
+    let copy = schema.clone();
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(6)
+        .after_connect(move |connection, _| {
+            let schema = copy.clone();
+            Box::pin(async move {
+                sqlx::query(&format!("SET search_path={schema}"))
+                    .execute(connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect(&url)
+        .await
+        .unwrap();
+    for sql in [
+        include_str!("../../tests/fixtures/legacy-catalog.sql"),
+        include_str!("../../tests/fixtures/projects.sql"),
+        include_str!("../../migrations/0009_computers.sql"),
+        include_str!("../../migrations/0031_machine_images.sql"),
+        include_str!("../../migrations/0036_user_images.sql"),
+    ] {
+        sqlx::raw_sql(sql).execute(&pool).await.unwrap();
+    }
+    let store = Store::from_pool(pool.clone())
+        .with_connections(crate::connections::ConnectionControl::from_pool(
+            pool.clone(),
+            crate::crypto::MasterKey::parse("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap(),
+            vec!["user-alice".into()],
+        ))
+        .with_computer_control(ComputerControl::from_pool(
+            pool.clone(),
+            vec!["user-alice".into()],
+        ));
+    let app = router(
+        AppState {
+            store,
+            identity: Arc::new(TestIdentity),
+            organizations_enabled: true,
+            organization_ids: Arc::new(vec!["org-team".into()]),
+            runtime: None,
+            gateway: Arc::new(Hub::default()),
+        },
+        vec![],
+    );
+    let path = "/v1/cloud/machine";
+    let rebuild = "/v1/cloud/machine/rebuild";
+    // Nothing to build without a setup script.
+    let instructions = json!({"expectedRevision":0,"recipe":{"instructions":"Prefer pnpm."}});
+    let saved = call(&app, "PUT", path, "alice", false, instructions).await;
+    assert_eq!(saved.1["imageState"], "none");
+    assert_eq!(
+        call(&app, "POST", rebuild, "alice", false, json!({}))
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    let script = json!({"expectedRevision":1,"recipe":{"setupScript":"npm i -g pnpm"}});
+    let saved = call(&app, "PUT", path, "alice", false, script).await;
+    assert_eq!(saved.0, StatusCode::OK);
+    assert_eq!(saved.1["imageState"], "queued");
+    assert_eq!(saved.1["image"]["reason"], "recipe");
+    assert_eq!(saved.1["image"]["recipeRevision"], 2);
+    let current: String = sqlx::query_scalar("SELECT recipe_digest FROM cloud_machine_images")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    // A ready image from an earlier build and a running build of this script.
+    sqlx::query("INSERT INTO cloud_machine_images(image_id,owner_id,provider,reason,state,phase,recipe_revision,recipe_digest,base_release_id,identity_key,artifact_id,next_attempt_at,built_at,created_at,updated_at) VALUES($1,'user-alice','boxd','recipe','ready','complete',1,$2,'base-v1',$2,'snap-old',0,10,5,10)")
+        .bind(format!("uimg_{}", "a".repeat(32))).bind("b".repeat(64)).execute(&pool).await.unwrap();
+    sqlx::query("UPDATE cloud_machine_images SET state='building',phase='setup',identity_key=$1,base_release_id='base-v1' WHERE state='queued'")
+        .bind("c".repeat(64)).execute(&pool).await.unwrap();
+    let status = call(&app, "GET", path, "alice", false, Value::Null).await.1;
+    assert_eq!(status["imageState"], "building");
+    assert_eq!(status["image"]["phase"], "setup");
+    assert_eq!(status["lastGoodImage"]["builtAt"], 10);
+    assert_eq!(status["lastGoodImage"]["baseReleaseId"], "base-v1");
+    // It fails: error and log excerpt for the owner; the old image still serves.
+    sqlx::query("UPDATE cloud_machine_images SET state='failed',phase='complete',error_code='user_image_setup_failed',log_excerpt='E: Unable to locate package nope' WHERE state='building'")
+        .execute(&pool).await.unwrap();
+    let status = call(&app, "GET", path, "alice", false, Value::Null).await.1;
+    assert_eq!(status["imageState"], "failed");
+    assert_eq!(status["imageError"], "user_image_setup_failed");
+    assert_eq!(
+        status["image"]["logExcerpt"],
+        "E: Unable to locate package nope"
+    );
+    assert_eq!(status["lastGoodImage"]["recipeRevision"], 1);
+    // "Rebuild now" queues a manual build; only administrators may.
+    let rebuilt = call(&app, "POST", rebuild, "alice", false, json!({})).await;
+    assert_eq!(rebuilt.0, StatusCode::OK);
+    assert_eq!(rebuilt.1["imageState"], "queued");
+    assert_eq!(rebuilt.1["image"]["reason"], "manual");
+    let queued: (String, String) = sqlx::query_as(
+        "SELECT reason,recipe_digest FROM cloud_machine_images WHERE state='queued'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(queued, ("manual".into(), current.clone()));
+    assert_eq!(
+        call(&app, "POST", rebuild, "bob", false, json!({})).await.0,
+        StatusCode::FORBIDDEN
+    );
+    // Ready on the current script: no last-good line, built date shown.
+    sqlx::query("UPDATE cloud_machine_images SET state='superseded' WHERE state='queued'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO cloud_machine_images(image_id,owner_id,provider,reason,state,phase,recipe_revision,recipe_digest,base_release_id,identity_key,artifact_id,next_attempt_at,built_at,created_at,updated_at) VALUES($1,'user-alice','boxd','manual','ready','complete',2,$2,'base-v2',$3,'snap-new',0,50,(SELECT max(created_at)+1 FROM cloud_machine_images),50)")
+        .bind(format!("uimg_{}", "d".repeat(32))).bind(&current).bind("e".repeat(64)).execute(&pool).await.unwrap();
+    let status = call(&app, "GET", path, "alice", false, Value::Null).await.1;
+    assert_eq!(status["imageState"], "ready");
+    assert_eq!(status["image"]["builtAt"], 50);
+    assert_eq!(status["image"]["baseReleaseId"], "base-v2");
+    assert!(status.get("lastGoodImage").is_none());
+    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+        .execute(&admin)
+        .await
+        .unwrap();
+}

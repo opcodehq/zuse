@@ -9,6 +9,8 @@ pub(super) struct MachineView {
     instructions: Entity<TextInput>,
     pub error: Option<String>,
     notice: Option<String>,
+    /// Refreshes the status while a build is waiting or running.
+    poll: Option<Task<()>>,
 }
 
 impl MachineView {
@@ -37,12 +39,14 @@ impl MachineView {
             instructions,
             error: None,
             notice: None,
+            poll: None,
         }
     }
     pub fn reset(&mut self, cx: &mut Context<RepositoryPanel>) {
         self.version = None;
         self.error = None;
         self.notice = None;
+        self.poll = None;
         for input in [&self.setup, &self.instructions] {
             input.update(cx, |input, cx| input.set_value(String::new(), cx));
         }
@@ -87,9 +91,81 @@ pub(super) fn image_copy(state: &str) -> (&'static str, &'static str, bool) {
     }
 }
 
+/// What a running build is doing now.
+pub(super) fn phase_copy(phase: &str) -> &'static str {
+    match phase {
+        "allocate" => "Starting a build machine",
+        "setup" => "Running your setup script",
+        "sanitize" => "Removing credentials and history",
+        "capture" | "retire-builder" => "Saving the image",
+        "verify" | "retire-verifier" => "Checking the image boots",
+        "publish" => "Publishing",
+        _ => "Working",
+    }
+}
+
+/// Owner-facing text for a build error code.
+pub(super) fn error_copy(code: &str) -> &'static str {
+    match code {
+        "user_image_setup_failed" => "The setup script exited with an error. Its output is below.",
+        "user_image_setup_timeout" => {
+            "The setup script ran past its time limit. Make it faster or raise the limit."
+        }
+        "user_image_setup_interrupted" => {
+            "The build machine stopped while the script ran. Rebuild to try again."
+        }
+        "user_image_runtime_files_changed" => {
+            "The setup script changed Zuse's own runtime files. Leave /usr/local/bin/zuse-cloud-runtime and /usr/local/lib/zuse alone."
+        }
+        "user_image_runtime_started" => {
+            "The setup script started Zuse's computer service. Don't start or restart zuse-runtime-supervisor."
+        }
+        "user_image_processes_running" => "Processes from the setup script would not stop.",
+        "user_image_verification_failed" | "user_image_fresh_boot_rejected" => {
+            "The built image didn't pass its boot check, so it was not used."
+        }
+        "user_image_build_deadline" => "The build took too long and was stopped.",
+        "user_image_managed_base_retired" => {
+            "Zuse's standard machine was updated during the build. A new build will start."
+        }
+        "user_image_managed_base_unavailable" | "user_image_provider_unavailable" => {
+            "Waiting for build capacity."
+        }
+        "cloud_billing_period_missing" | "cloud_billing_hold" | "shared_credit_exhausted" => {
+            "Builds use cloud compute. Check your plan to build this image."
+        }
+        _ => "The build didn't finish. Rebuild to try again.",
+    }
+}
+
+fn day(ms: i64) -> String {
+    chrono::DateTime::from_timestamp_millis(ms)
+        .map(|d| {
+            d.with_timezone(&chrono::Local)
+                .format("%b %-d, %H:%M")
+                .to_string()
+        })
+        .unwrap_or_default()
+}
+
 impl RepositoryPanel {
     pub(super) fn load_machine(&mut self, cx: &mut Context<Self>) {
         self.call("machine-read", methods::CLOUD_MACHINE, json!({}), cx);
+    }
+    fn rebuild_machine(&mut self, cx: &mut Context<Self>) {
+        if self.pending.values().any(|p| p.kind.starts_with("machine")) {
+            return;
+        }
+        self.machine.error = None;
+        self.machine.notice =
+            Some("Rebuild queued. Running computers keep the image they started with.".into());
+        self.call(
+            "machine-rebuild",
+            methods::CLOUD_MACHINE_REBUILD,
+            json!({}),
+            cx,
+        );
+        cx.notify();
     }
     pub(super) fn receive_machine(&mut self, data: Value, cx: &mut Context<Self>) {
         match serde_json::from_value::<MachineVersion>(data) {
@@ -112,8 +188,22 @@ impl RepositoryPanel {
                         "Saved. Your machine image will be rebuilt; running computers are unchanged.".into()
                     });
                 }
+                let waiting = matches!(version.image_state.as_str(), "queued" | "building");
                 self.machine.version = Some(version);
                 self.machine.error = None;
+                self.machine.poll = waiting.then(|| {
+                    cx.spawn(async move |this, cx| {
+                        cx.background_executor()
+                            .timer(std::time::Duration::from_secs(10))
+                            .await;
+                        let _ = this.update(cx, |this, cx| {
+                            this.machine.poll = None;
+                            if !this.pending.values().any(|p| p.kind.starts_with("machine")) {
+                                this.load_machine(cx);
+                            }
+                        });
+                    })
+                });
             }
             Err(_) => {
                 self.machine.error =
@@ -194,9 +284,25 @@ impl RepositoryPanel {
             return root;
         };
         let (label, detail, warning) = image_copy(&version.image_state);
-        let built = chrono::DateTime::from_timestamp_millis(version.created_at)
-            .map(|d| d.with_timezone(&chrono::Local).format("%b %-d").to_string())
-            .unwrap_or_default();
+        let build = version.image.as_ref();
+        let detail: SharedString = match (version.image_state.as_str(), build) {
+            ("building", Some(b)) => format!(
+                "{}. Computers keep using your previous image until this build is verified.",
+                phase_copy(b.phase.as_deref().unwrap_or_default())
+            )
+            .into(),
+            ("queued", Some(b)) if b.error.is_some() => {
+                error_copy(b.error.as_deref().unwrap_or_default()).into()
+            }
+            _ => detail.into(),
+        };
+        let built = match build {
+            Some(b) if b.state == "ready" => b
+                .built_at
+                .map(|at| format!("Version {} · built {}", b.recipe_revision, day(at)))
+                .unwrap_or_default(),
+            _ => format!("Version {}", version.revision),
+        };
         let status = row()
             .items_center()
             .gap(px(12.))
@@ -236,15 +342,75 @@ impl RepositoryPanel {
                     .flex_none()
                     .text_size(px(11.))
                     .text_color(palette::rgb(MUTED))
-                    .child(format!("Version {} · {built}", version.revision)),
+                    .child(built),
             );
         let mut image = column().child(status);
-        if let Some(error) = version.image_error.clone() {
+        if let Some(error) = version.image_error.as_deref() {
             image = image.child(
                 div()
                     .px(px(12.))
                     .pb(px(12.))
-                    .child(form::message(&error, true)),
+                    .child(form::message(error_copy(error), true)),
+            );
+        }
+        if let Some(log) = build
+            .and_then(|b| b.log_excerpt.clone())
+            .filter(|l| !l.is_empty())
+        {
+            image = image.child(
+                div()
+                    .mx(px(12.))
+                    .mb(px(12.))
+                    .p(px(10.))
+                    .max_h(px(180.))
+                    .overflow_hidden()
+                    .rounded(px(6.))
+                    .bg(s::frame_bg())
+                    .child(form::mono(log)),
+            );
+        }
+        if let Some(good) = &version.last_good_image {
+            let line = match (good.built_at, good.base_release_id.as_deref()) {
+                (Some(at), Some(base)) => format!(
+                    "New computers use your last working image: version {}, built {}, on {base}.",
+                    good.recipe_revision,
+                    day(at)
+                ),
+                (Some(at), None) => format!(
+                    "New computers use your last working image, built {}.",
+                    day(at)
+                ),
+                _ => "New computers use your last working image.".into(),
+            };
+            image = image.child(
+                div()
+                    .px(px(12.))
+                    .pb(px(12.))
+                    .child(s::description_text(line)),
+            );
+        } else if let Some(base) = build
+            .filter(|b| b.state == "ready")
+            .and_then(|b| b.base_release_id.clone())
+        {
+            image = image.child(
+                div()
+                    .px(px(12.))
+                    .pb(px(12.))
+                    .child(s::description_text(format!("Built on {base}."))),
+            );
+        }
+        if version.image_state != "none" && self.can_manage() {
+            image = image.child(
+                row().px(px(12.)).pb(px(12.)).child(
+                    cs::button(
+                        "cloud-machine-rebuild",
+                        "Rebuild now",
+                        false,
+                        busy || version.image_state == "building",
+                        false,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| this.rebuild_machine(cx))),
+                ),
             );
         }
         root = root

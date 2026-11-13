@@ -476,6 +476,41 @@ pub struct MachineVersion {
     pub image_state: String,
     #[serde(default)]
     pub image_error: Option<String>,
+    /// The newest build of the current setup script, when there is one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<MachineImageBuild>,
+    /// The image new computers start from now, while a newer build is
+    /// waiting, running or has failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_good_image: Option<MachineImageBuild>,
+}
+
+/// One user image build as the owner sees it.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MachineImageBuild {
+    /// `queued`, `building`, `ready` or `failed`.
+    pub state: String,
+    /// While building: `allocate`, `setup`, `sanitize`, `capture`, `verify`…
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase: Option<String>,
+    /// Why it was built: `recipe`, `base`, `manual`, `refresh`, `use`.
+    #[serde(default)]
+    pub reason: String,
+    /// The machine recipe revision it was built from.
+    #[serde(default)]
+    pub recipe_revision: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_release_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub built_at: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// Redacted tail of the setup script's output, for a failed build.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_excerpt: Option<String>,
+    #[serde(default)]
+    pub updated_at: i64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

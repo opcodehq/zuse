@@ -89,56 +89,156 @@ impl ComputerControl {
         tx.commit().await?;
         Ok(MachineVersion {
             revision,
-            image_state: if request.recipe.is_empty() {
+            image_state: if crate::project_caches::user_images::image_digest(&request.recipe)
+                .is_none()
+            {
                 "none".into()
             } else {
                 "queued".into()
             },
             image_error: None,
+            image: None,
+            last_good_image: None,
             recipe: request.recipe,
             created_at: now,
         })
     }
 }
 
+/// Owner-facing view of one `cloud_machine_images` row.
+fn image_build(row: &Value) -> MachineImageBuild {
+    let state = match row["state"].as_str() {
+        Some("cleaning" | "failed") => "failed",
+        Some(other) => other,
+        None => "queued",
+    };
+    MachineImageBuild {
+        state: state.into(),
+        phase: (state == "building")
+            .then(|| row["phase"].as_str().map(str::to_owned))
+            .flatten(),
+        reason: row["reason"].as_str().unwrap_or_default().into(),
+        recipe_revision: row["recipe_revision"].as_i64().unwrap_or_default(),
+        base_release_id: row["base_release_id"].as_str().map(str::to_owned),
+        built_at: row["built_at"].as_i64(),
+        error: row["error_code"].as_str().map(str::to_owned),
+        log_excerpt: (state == "failed")
+            .then(|| row["log_excerpt"].as_str().map(str::to_owned))
+            .flatten(),
+        updated_at: row["updated_at"].as_i64().unwrap_or_default(),
+    }
+}
+
 impl Store {
     pub async fn machine(&self, owner: &str) -> Result<MachineVersion, ApiError> {
-        let row: Option<(i64, Value, String, i64)> = sqlx::query_as(
-            "SELECT revision,recipe,digest,created_at FROM cloud_machine_versions WHERE owner_id=$1 ORDER BY revision DESC LIMIT 1",
+        let row: Option<(i64, Value, i64)> = sqlx::query_as(
+            "SELECT revision,recipe,created_at FROM cloud_machine_versions WHERE owner_id=$1 ORDER BY revision DESC LIMIT 1",
         )
         .bind(owner)
         .fetch_optional(&self.pool)
         .await?;
-        let Some((revision, recipe, digest, created_at)) = row else {
+        let Some((revision, recipe, created_at)) = row else {
             return Ok(MachineVersion {
                 revision: 0,
                 recipe: MachineRecipe::default(),
                 created_at: 0,
                 image_state: "none".into(),
                 image_error: None,
+                image: None,
+                last_good_image: None,
             });
         };
         let recipe: MachineRecipe = serde_json::from_value(recipe)
             .map_err(|_| ApiError::unavailable("machine_record_invalid"))?;
-        let (image_state, image_error) = if recipe.is_empty() {
-            ("none".to_owned(), None)
-        } else {
-            let image: Option<(String, Option<String>)> = sqlx::query_as(
-                "SELECT state,error_code FROM cloud_machine_images WHERE owner_id=$1 AND recipe_digest=$2 AND state<>'retired' ORDER BY updated_at DESC LIMIT 1",
-            )
-            .bind(owner)
-            .bind(&digest)
-            .fetch_optional(&self.pool)
-            .await?;
-            image.unwrap_or_else(|| ("queued".to_owned(), None))
-        };
-        Ok(MachineVersion {
+        let mut version = MachineVersion {
             revision,
             recipe,
             created_at,
-            image_state,
-            image_error,
-        })
+            image_state: "none".into(),
+            image_error: None,
+            image: None,
+            last_good_image: None,
+        };
+        // Only the setup script is built into an image.
+        let Some(current) = crate::project_caches::user_images::image_digest(&version.recipe)
+        else {
+            return Ok(version);
+        };
+        version.image_state = "queued".into();
+        let mut tx = self.pool.begin().await?;
+        if !crate::project_caches::user_images::worker::schema_ready_tx(&mut tx).await? {
+            tx.commit().await?;
+            return Ok(version);
+        }
+        let rows: Vec<Value> = sqlx::query_scalar(
+            "(SELECT to_jsonb(i) FROM cloud_machine_images i WHERE owner_id=$1 AND state NOT IN('superseded','retiring','retired') ORDER BY created_at DESC,image_id DESC LIMIT 1) UNION ALL (SELECT to_jsonb(i) FROM cloud_machine_images i WHERE owner_id=$1 AND state='ready' ORDER BY built_at DESC,image_id DESC LIMIT 1)",
+        )
+        .bind(owner)
+        .fetch_all(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        let latest = rows
+            .iter()
+            .find(|r| r["state"] != "ready" || r["recipe_digest"] == current.as_str())
+            .or(rows.first());
+        let good = rows.iter().find(|r| r["state"] == "ready");
+        if let Some(latest) = latest {
+            let mut build = image_build(latest);
+            // A ready image of an older script: the current one is not built yet.
+            if build.state == "ready" && latest["recipe_digest"] != current.as_str() {
+                build = MachineImageBuild {
+                    state: "queued".into(),
+                    reason: "recipe".into(),
+                    recipe_revision: revision,
+                    ..Default::default()
+                };
+            }
+            version.image_state = build.state.clone();
+            version.image_error = build.error.clone().filter(|_| build.state == "failed");
+            version.image = Some(build);
+        }
+        if let Some(good) = good
+            && version.image_state != "ready"
+        {
+            version.last_good_image = Some(image_build(good));
+        }
+        Ok(version)
+    }
+    /// "Rebuild now": a fresh build of the current setup script on the
+    /// newest verified base, even if an identical image is ready.
+    pub async fn rebuild_machine_scoped(
+        &self,
+        access: &crate::access::Access,
+        now: i64,
+    ) -> Result<MachineVersion, ApiError> {
+        let control = self
+            .computers
+            .as_ref()
+            .ok_or_else(|| ApiError::unavailable("cloud_environment_writes_disabled"))?;
+        if !control.accounts.contains(&access.owner_id) {
+            return Err(ApiError::forbidden("cloud_environment_writes_disabled"));
+        }
+        let mut tx = self.pool.begin().await?;
+        if !crate::project_caches::user_images::worker::schema_ready_tx(&mut tx).await? {
+            return Err(ApiError::unavailable("machine_image_builder_unavailable"));
+        }
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
+            .bind(format!("machine:{}", access.owner_id))
+            .execute(&mut *tx)
+            .await?;
+        if !crate::project_caches::user_images::worker::enqueue_tx(
+            &mut tx,
+            &access.owner_id,
+            "manual",
+            now,
+            now,
+        )
+        .await?
+        {
+            return Err(ApiError::conflict("machine_setup_script_required"));
+        }
+        tx.commit().await?;
+        self.machine(&access.owner_id).await
     }
     pub async fn save_machine_scoped(
         &self,
@@ -150,6 +250,7 @@ impl Store {
             .as_ref()
             .ok_or_else(|| ApiError::unavailable("cloud_environment_writes_disabled"))?
             .save_machine_scoped(access, request, now)
-            .await
+            .await?;
+        self.machine(&access.owner_id).await
     }
 }

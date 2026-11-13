@@ -84,6 +84,7 @@ pub(crate) async fn for_new_computer_tx<F>(
     provider: &str,
     build: &Value,
     source: F,
+    now: i64,
 ) -> Result<Option<(Value, UserImageHit)>, ApiError>
 where
     F: Fn(&Value) -> Result<Value, ApiError>,
@@ -91,9 +92,11 @@ where
     let Some(provider_id) = provider_id(provider).filter(|p| PROVIDERS.contains(p)) else {
         return Ok(None);
     };
-    if current_digest_tx(tx, owner).await?.is_none() {
+    let Some(current) = current_digest_tx(tx, owner).await? else {
         return Ok(None);
-    }
+    };
+    // First computer since the newest base (or ever): build in the background.
+    super::schedule::rebuild_on_use_tx(tx, owner, provider, &current, now).await?;
     let rows: Vec<Value> = sqlx::query_scalar("SELECT to_jsonb(i) FROM cloud_machine_images i WHERE owner_id=$1 AND provider=$2 AND state='ready' ORDER BY built_at DESC,image_id LIMIT 4 FOR SHARE")
         .bind(owner)
         .bind(provider)
@@ -118,12 +121,11 @@ where
         }
         // An image on an older base still serves until its rebuild on the
         // newest base verifies, provided that base offers this chat.
-        if let Ok(older) = source(&base) {
-            if older["snapshot_id"] == hit.base_artifact_id.as_str()
-                && older["settings"]["managedReleaseId"] == release
-            {
-                return Ok(Some((older, hit)));
-            }
+        if let Ok(older) = source(&base)
+            && older["snapshot_id"] == hit.base_artifact_id.as_str()
+            && older["settings"]["managedReleaseId"] == release
+        {
+            return Ok(Some((older, hit)));
         }
     }
     Ok(None)

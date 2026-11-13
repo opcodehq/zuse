@@ -560,6 +560,8 @@ pub const CLOUD_PROJECT_ENVIRONMENT_SAVE: &str = "CloudProjectEnvironmentSave";
 /// The account machine recipe every cloud computer's image is built from.
 pub const CLOUD_MACHINE: &str = "CloudMachine";
 pub const CLOUD_MACHINE_SAVE: &str = "CloudMachineSave";
+/// Rebuild the account's user image from its current setup script now.
+pub const CLOUD_MACHINE_REBUILD: &str = "CloudMachineRebuild";
 pub const CLOUD_PROJECT_SECRETS: &str = "CloudProjectSecrets";
 pub const CLOUD_PROJECT_SECRET_SAVE: &str = "CloudProjectSecretSave";
 pub const CLOUD_PROJECT_SECRET_REVOKE: &str = "CloudProjectSecretRevoke";
