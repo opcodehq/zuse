@@ -92,6 +92,7 @@ pub mod cloud_auth;
 
 pub mod cloud_lifecycle;
 
+pub mod cloud_harness_updates;
 pub mod cloud_runtime_updates;
 
 pub mod cloud_projects;
