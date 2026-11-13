@@ -127,3 +127,19 @@ still referenced by computers. Builds require billing capacity like a
 computer. Not yet exercised against a live Boxd base: the detached setup run
 (`systemd-run` availability, upload ownership), memory-snapshot capture of a
 builder whose resident never started, and the verifier's fresh boot.
+
+## Retiring the repository-baking account image (2026-11-13)
+
+New builds through `crates/cloud/src/images.rs` (`POST /v1/cloud/image/build`)
+now return `cloud_image_builds_retired`. The `image-worker` keeps running
+where configured, only to finish builds already in flight and to delete
+legacy snapshots; its UI was already unreachable. A deployment without the
+credential authority (the only path that still launches from those builds)
+can opt back in with `ZUSE_CLOUD_LEGACY_IMAGE_BUILDS=1`.
+
+Per-project caches stay off unless `ZUSE_CLOUD_PROJECT_CACHES=1`.
+
+Follow-up, once no deployment runs without the credential authority and
+`api_cloud_project_builds` has no ready rows: delete `images.rs`, its worker,
+grant issuer, routes, the `CloudImage*` RPC methods and the `image-worker`
+service, and drop their tables in a migration.

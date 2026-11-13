@@ -2538,6 +2538,9 @@ async fn image_build(
         .images
         .as_ref()
         .ok_or_else(|| ApiError::unavailable("cloud_image_writes_disabled"))?;
+    if !control.config.legacy_builds {
+        return Err(ApiError::conflict("cloud_image_builds_retired"));
+    }
     // Check writer ownership before calling the legacy authorization authority.
     control.owned(&access.owner_id).await?.rollback().await?;
     let private:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM api_cloud_projects WHERE account_id=$1 AND included=true AND visibility='private')").bind(&access.owner_id).fetch_one(&control.pool).await?;

@@ -262,6 +262,7 @@ fn config() -> ImageConfig {
         base_version: 1,
         template_version: "rust-v1".into(),
         max_cache_bytes: 4 * 1024 * 1024 * 1024,
+        legacy_builds: true,
     }
 }
 fn request(key: &str) -> ImageBuildRequest {
@@ -358,6 +359,35 @@ async fn image_build_retries_verifies_promotes_and_preserves_last_ready() {
         sqlx::query("INSERT INTO api_cloud_projects(project_id,account_id,repository_identity,repository_url,display_name,default_branch,visibility,git_connection_kind,configuration_digest,state,idempotency_key,created_at,updated_at) VALUES($1,'user-alice',$2,$3,$1,'main','public','github-app','digest','connected',$1,0,0)").bind(id).bind(format!("github.com/owner/{id}")).bind(format!("https://github.com/owner/{id}.git")).execute(&pool).await.unwrap();
     }
     let control = ImageControl::from_pool(pool.clone(), vec!["user-alice".into()], config());
+    // Repository-baking builds are retired unless a deployment opts back in.
+    let retired = ImageControl::from_pool(
+        pool.clone(),
+        vec!["user-alice".into()],
+        ImageConfig {
+            legacy_builds: false,
+            ..config()
+        },
+    );
+    assert_eq!(
+        retired
+            .admit(&access(), request("retired"), None, now())
+            .await
+            .unwrap_err()
+            .code,
+        "cloud_image_builds_retired"
+    );
+    assert_eq!(
+        http(
+            &Store::from_pool(pool.clone()).with_image_control(retired),
+            "POST",
+            "/v1/cloud/image/build",
+            None,
+            Some(json!({"mode":"update","idempotencyKey":"retired"}))
+        )
+        .await
+        .0,
+        axum::http::StatusCode::CONFLICT
+    );
     let store = Store::from_pool(pool.clone()).with_image_control(control.clone());
     let provider = Provider::default();
     let empty = store.image_status("user-alice", false).await.unwrap();
