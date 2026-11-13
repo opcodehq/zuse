@@ -91,7 +91,9 @@ async fn bootstrap_storage_bind_is_idempotent_and_fenced_on_gateway_commit() {
         ("storageIncarnationId", json!("different-disk")),
         ("enrollmentId", json!("different-enrollment")),
         ("phase", json!("prepare")),
-        ("capabilities", json!(["unknown-capability"])),
+        // Unknown names are accepted (a newer runtime may know more than this
+        // server), but malformed names are not.
+        ("capabilities", json!(["Not A Capability!"])),
     ] {
         let mut invalid = request();
         invalid[field] = value;
