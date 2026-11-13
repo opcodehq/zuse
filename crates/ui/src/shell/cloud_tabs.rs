@@ -362,32 +362,32 @@ impl Shell {
                     active,
                     &theme,
                 )
-                    .flex()
-                    .flex_none()
-                    .items_center()
-                    .min_w_0()
-                    .w(px(160.))
-                    .h(px(28.))
-                    .px(px(9.))
-                    .gap(px(8.))
-                    .when(active, |tab| {
-                        tab.text_color(super::tabs::active_tab_text_color(&theme))
-                    })
-                    .when(!active, |tab| tab.text_color(theme.text_muted))
-                    .cursor_pointer()
-                    .text_size(crate::typography::text_md())
-                    .child(div().flex_1().min_w_0().truncate().child(title))
-                    .child(
-                        div()
-                            .id(("close-cloud-tab", index))
-                            .cursor_pointer()
-                            .child(icon(icons::CLOSE).size(px(12.)))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                cx.stop_propagation();
-                                this.close_cloud_tab(index, cx);
-                            })),
-                    )
-                    .on_click(cx.listener(move |this, _, _, cx| this.select_cloud_tab(index, cx)))
+                .flex()
+                .flex_none()
+                .items_center()
+                .min_w_0()
+                .w(px(160.))
+                .h(px(28.))
+                .px(px(9.))
+                .gap(px(8.))
+                .when(active, |tab| {
+                    tab.text_color(super::tabs::active_tab_text_color(&theme))
+                })
+                .when(!active, |tab| tab.text_color(theme.text_muted))
+                .cursor_pointer()
+                .text_size(crate::typography::text_md())
+                .child(div().flex_1().min_w_0().truncate().child(title))
+                .child(
+                    div()
+                        .id(("close-cloud-tab", index))
+                        .cursor_pointer()
+                        .child(icon(icons::CLOSE).size(px(12.)))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.close_cloud_tab(index, cx);
+                        })),
+                )
+                .on_click(cx.listener(move |this, _, _, cx| this.select_cloud_tab(index, cx)))
             })
             .collect::<Vec<_>>();
         Some(
