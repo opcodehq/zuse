@@ -1013,6 +1013,20 @@ impl RuntimeControl {
                 )?);
             }
             let row = self.write_fresh_admission_batch_tx(&mut tx, &plan).await?;
+            if server_admitted && !body.attachments.is_empty() {
+                // The first message's files are bound to its launch command.
+                self.hold_assets_tx(
+                    &mut tx,
+                    &plan.workspace_id,
+                    super::assets::Holder::Command {
+                        session: &plan.session_id,
+                        command: &plan.command_id,
+                    },
+                    &body.attachments,
+                    now,
+                )
+                .await?;
+            }
             tx.commit().await?;
             super::lifecycle::wakeup::send();
             return Ok((create_response(row), true));

@@ -93,6 +93,20 @@ impl RuntimeControl {
                 if inserted.rows_affected() != 1 {
                     return Err(error("cloud_task_queue_identity_conflict"));
                 }
+                if !input.attachments.is_empty() {
+                    // Held until this message is sent or removed.
+                    self.hold_assets_tx(
+                        tx,
+                        id,
+                        super::super::assets::Holder::Queue {
+                            session,
+                            queue: queue_id,
+                        },
+                        &input.attachments,
+                        now,
+                    )
+                    .await?;
+                }
                 Ok(Some(
                     json!({"id":queue_id,"messageId":message_id,"revision":1,"state":"queued","durablyAdmitted":true}),
                 ))
@@ -133,6 +147,17 @@ impl RuntimeControl {
                     .map_err(|_| ApiError::unavailable("cloud_task_command_encryption_failed"))?;
                 sqlx::query("UPDATE zuse_rust_task_command_queue SET ciphertext=$4,revision=revision+1,actor_id=$5,actor=$6,edit_lease_hash=NULL,edit_actor_id=NULL,edit_device_id=NULL,edit_instance_id=NULL,edit_expires_at=NULL,updated_at=$7 WHERE workspace_id=$1 AND session_id=$2 AND queue_id=$3")
                     .bind(id).bind(session).bind(queue_id).bind(ciphertext).bind(&access.actor.account_id).bind(authorized_actor(access)).bind(now).execute(&mut **tx).await?;
+                self.hold_assets_tx(
+                    tx,
+                    id,
+                    super::super::assets::Holder::Queue {
+                        session,
+                        queue: queue_id,
+                    },
+                    &input.attachments,
+                    now,
+                )
+                .await?;
                 Ok(Some(
                     json!({"changed":true,"id":queue_id,"revision":revision+1}),
                 ))

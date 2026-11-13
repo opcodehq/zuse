@@ -421,4 +421,5 @@ mod agent_switch;
 
 mod runtime_outdated;
 
+mod asset_release;
 mod runtime_updates;

@@ -637,6 +637,16 @@ impl RuntimeControl {
             )
             .map_err(|_| ApiError::unavailable("cloud_command_encryption_failed"))?;
         sqlx::query("INSERT INTO zuse_rust_task_command_execution(workspace_id,command_id,session_id,message_id,fingerprint,state,presentation_ciphertext,created_at,updated_at) VALUES($1,$2,$3,$4,$5,'queued',$6,$7,$7)").bind(id).bind(command).bind(session).bind(if run||matches!(payload,SessionCommandPayload::Steer{..}){Some(message)}else{None}).bind(&envelope.fingerprint).bind(cipher).bind(now).execute(&mut **tx).await?;
+        // Server-held files stay in object storage until this command (or
+        // another that binds them) reports the computer has them.
+        self.hold_assets_tx(
+            tx,
+            id,
+            super::super::assets::Holder::Command { session, command },
+            assets,
+            now,
+        )
+        .await?;
         Ok(acceptance)
     }
     async fn insert_task_envelope_tx(

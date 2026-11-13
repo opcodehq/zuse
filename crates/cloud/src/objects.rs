@@ -19,6 +19,10 @@ pub trait Objects: Send + Sync {
     async fn purge_prefix(&self, _prefix: &str) -> Result<bool, ApiError> {
         Err(ApiError::unavailable("cloud_object_purge_unsupported"))
     }
+    /// Delete one object inside a workspace. A missing object is already deleted.
+    async fn delete_object(&self, _key: &str) -> Result<(), ApiError> {
+        Err(ApiError::unavailable("cloud_object_delete_unsupported"))
+    }
     async fn get_archive(&self, key: &str) -> Result<Option<Vec<u8>>, ApiError> {
         self.get(key).await
     }
@@ -465,6 +469,16 @@ impl Objects for R2 {
             .await?;
         Ok(false)
     }
+    async fn delete_object(&self, key: &str) -> Result<(), ApiError> {
+        if !key.starts_with("workspaces/") || key.ends_with('/') {
+            return Err(ApiError::unavailable("cloud_object_delete_scope_invalid"));
+        }
+        let response = self.request(reqwest::Method::DELETE, key, None, 0).await?;
+        if !response.status().is_success() && response.status() != reqwest::StatusCode::NOT_FOUND {
+            return Err(failed());
+        }
+        Ok(())
+    }
     async fn get_asset(&self, key: &str) -> Result<Option<Vec<u8>>, ApiError> {
         let response = self
             .request(reqwest::Method::GET, key, None, 40 * 1024 * 1024)
@@ -799,6 +813,16 @@ mod tests {
                 .unwrap()
                 .contains_key("workspaces/one%2Ftwo-lookalike/keep")
         );
+        // Single-object deletes (a released attachment's manifest) stay
+        // inside a workspace and name one object, never a directory.
+        for bad in ["other/w/key", "workspaces/w/"] {
+            assert!(client.delete_object(bad).await.is_err(), "{bad}");
+        }
+        client
+            .delete_object("workspaces/one%2Ftwo-lookalike/keep")
+            .await
+            .unwrap();
+        assert!(map.lock().unwrap().is_empty());
         server.abort();
     }
 }
