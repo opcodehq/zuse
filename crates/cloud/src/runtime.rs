@@ -29,6 +29,7 @@ mod fast_start;
 pub mod github;
 mod grant_receipts;
 pub mod grants;
+pub mod harness_updates;
 mod internal_observations;
 pub mod keep_running;
 pub mod lifecycle;
@@ -147,6 +148,7 @@ pub struct RuntimeControl {
     object_writes: Arc<tokio::sync::Semaphore>,
     pub(crate) mailbox_changes: tokio::sync::broadcast::Sender<()>,
     runtime_releases: runtime_updates::RuntimeReleaseConfig,
+    harness_bundles: harness_updates::HarnessBundleConfig,
 }
 
 pub use zuse_protocol::cloud::{
@@ -256,6 +258,7 @@ impl RuntimeControl {
         let mut control = Self::from_pool(pool, config.master, config.signer);
         control.transcript_objects = crate::objects::R2::from_env()?;
         control.runtime_releases = runtime_updates::RuntimeReleaseConfig::from_env()?;
+        control.harness_bundles = harness_updates::HarnessBundleConfig::from_env()?;
         control.idle_ms = config.idle_ms;
         control.command_admission_creation = config.command_admission_creation;
         control.recovery_enabled = config.recovery_enabled;
@@ -336,6 +339,7 @@ impl RuntimeControl {
             object_writes: Arc::new(tokio::sync::Semaphore::new(1)),
             mailbox_changes: tokio::sync::broadcast::channel(128).0,
             runtime_releases: runtime_updates::RuntimeReleaseConfig::default(),
+            harness_bundles: harness_updates::HarnessBundleConfig::default(),
         }
     }
     pub async fn ready(&self) -> Result<(), ApiError> {
