@@ -214,6 +214,8 @@ jobs:
     if: needs.compat-releases.outputs.count != '0'
     continue-on-error: true
     runs-on: ubuntu-24.04
+    # Old runtimes are read from the staging release bucket.
+    environment: staging
     strategy:
       fail-fast: false
       matrix:
