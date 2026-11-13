@@ -9,11 +9,19 @@
 //!                                                                               ▼
 //!                                         Didn't send · [Update computer] [Discard]
 //!   Update computer ─▶ recreate onto the latest base ─▶ Updating computer… ─▶ ready ─▶ send it again
+//!                                                                                   │
+//!                                       refused again, or its update fails ◀───────┘
+//!                                         └─▶ back in the draft (text, files, access, model)
 //! ```
 //!
 //! "Send it again" is the same text, files and agent settings under a new
 //! command id. Send is never disabled: a message written while the computer
 //! updates joins the chat at once and waits with the others.
+//!
+//! A held message is either admitted or returned to the draft intact, never
+//! dropped: Update computer is offered once, and a composer that goes away
+//! while messages wait (its tab reused) parks them for the next composer of
+//! the same conversation.
 use super::*;
 use crate::composer::tray::{TrayPill, TrayTone, tray_text_action};
 use zuse_protocol::cloud_runtime_updates::{
@@ -26,6 +34,11 @@ const RECREATION_POLL: Duration = Duration::from_secs(2);
 const RECREATION_LIMIT: Duration = Duration::from_secs(30 * 60);
 pub(super) const UPDATING: &str = "Updating computer…";
 const RESTART_NOTE: &str = "This restarts the computer; your files and chats are kept.";
+/// Update computer finished, yet the message still couldn't go.
+pub(super) const STILL_REFUSED: &str = "The computer updated but couldn't take this message yet. It's back in the box with its settings; send it again.";
+/// The conversation was closed while its message waited for the computer.
+pub(super) const PARKED_NOTE: &str =
+    "Your message didn't send while the computer updated. It's back in the box with its settings.";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Refusal {
@@ -80,6 +93,43 @@ pub(in crate::composer) struct State {
     ready: std::collections::VecDeque<Held>,
     pub(in crate::composer) phase: Option<Phase>,
     work: Option<Task<()>>,
+    /// Update computer already ran for these messages: a second refusal
+    /// returns them to the draft instead of offering it again.
+    recreated: bool,
+}
+
+/// Unsent messages whose composer went away, by conversation. The next
+/// composer for that conversation returns them to its draft.
+#[derive(Default)]
+struct Parked(std::collections::HashMap<String, Vec<Held>>);
+impl gpui::Global for Parked {}
+fn parked_key(target: &crate::state::CloudTarget) -> String {
+    format!(
+        "{}\u{1f}{}\u{1f}{}\u{1f}{}",
+        target.subject,
+        target.organization.as_deref().unwrap_or_default(),
+        target.workspace,
+        target.initial_session
+    )
+}
+
+/// The agent settings a message was sent with, to put back in the pickers.
+fn settings(request: &Value) -> Option<zuse_protocol::ChatConfig> {
+    let run = if request["action"]["type"] == "queue" {
+        &request["action"]["input"]["runSelection"]
+    } else {
+        &request["action"]["payload"]["request"]
+    };
+    Some(zuse_protocol::ChatConfig {
+        harness: serde_json::from_value(run["harness"].clone()).ok()?,
+        model: Some(run["model"].as_str().filter(|m| !m.is_empty())?.to_owned()),
+        reasoning: serde_json::from_value(run["reasoning"].clone())
+            .ok()
+            .flatten(),
+        model_options: serde_json::from_value(run["modelOptions"].clone()).unwrap_or_default(),
+        sandbox: serde_json::from_value(run["sandbox"].clone()).ok()?,
+        plan: false,
+    })
 }
 
 pub(super) fn message_id(request: &Value) -> Option<&str> {
@@ -166,6 +216,10 @@ impl Composer {
                     self.watch_cloud_runtime_update(cx);
                 }
             }
+            Refusal::Unavailable if self.cloud.runtime.recreated => {
+                // Update computer already ran; never offer it twice.
+                self.give_back_held_cloud_messages(STILL_REFUSED, cx);
+            }
             Refusal::Unavailable => {
                 if !matches!(self.cloud.runtime.phase, Some(Phase::Recreating { .. })) {
                     self.cloud.runtime.work = None;
@@ -176,6 +230,11 @@ impl Composer {
         cx.notify();
     }
     fn not_sent(&mut self, reason: NotSent, cx: &mut Context<Self>) {
+        if self.cloud.runtime.recreated && !matches!(reason, NotSent::RecreationFailed(_)) {
+            // The in-place update after Update computer failed too.
+            self.give_back_held_cloud_messages(STILL_REFUSED, cx);
+            return;
+        }
         self.cloud.runtime.work = None;
         self.cloud.runtime.phase = Some(Phase::NotSent(reason));
         cx.notify();
@@ -252,6 +311,7 @@ impl Composer {
         let target = task.target.clone();
         let since = cx.background_executor().now();
         self.failure = None;
+        self.cloud.runtime.recreated = true;
         self.cloud.runtime.phase = Some(Phase::Recreating {
             operation: None,
             since,
@@ -374,15 +434,8 @@ impl Composer {
         for mut message in held {
             let old = message_id(&message.request).map(str::to_owned);
             message.request = renewed(message.request, recreated, sleeping);
-            if let (Some(session), Some(old), Some(new)) =
-                (session.as_deref(), old, message_id(&message.request))
-            {
-                let new = new.to_owned();
-                self.state.update(cx, |state, cx| {
-                    if state.rekey_echo(session, &old, &new) {
-                        cx.notify();
-                    }
-                });
+            if let (Some(session), Some(old)) = (session.as_deref(), old) {
+                self.rekey_held_echo(session, &old, &message, cx);
             }
             self.cloud.runtime.ready.push_back(message);
         }
@@ -406,12 +459,8 @@ impl Composer {
             .native
             .as_ref()
             .map(|task| task.target.initial_session.clone());
-        if let (Some(session), Some(old), Some(new)) = (session, old, new.clone()) {
-            self.state.update(cx, |state, cx| {
-                if state.rekey_echo(&session, &old, &new) {
-                    cx.notify();
-                }
-            });
+        if let (Some(session), Some(old)) = (session, old) {
+            self.rekey_held_echo(&session, &old, &message, cx);
         }
         if self.cloud.runtime.phase.is_some() {
             self.cloud.runtime.held.push(message);
@@ -422,12 +471,67 @@ impl Composer {
         cx.notify();
         new
     }
+    /// The message's echo follows it to its new id, keeping its place. If a
+    /// history reset dropped the echo meanwhile, it rejoins the chat.
+    fn rekey_held_echo(
+        &mut self,
+        session: &str,
+        old: &str,
+        message: &Held,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(new) = message_id(&message.request).map(str::to_owned) else {
+            return;
+        };
+        let moved = self.state.update(cx, |state, cx| {
+            let moved = state.rekey_echo(session, old, &new);
+            if moved {
+                cx.notify();
+            }
+            moved
+        });
+        if !moved
+            && message.request["action"]["type"] == "submit"
+            && let Some(text) = message.text.as_deref()
+        {
+            self.push_cloud_echo(session, &new, text, cx);
+        }
+    }
+    /// Held messages stay in the chat while they wait, even when the
+    /// conversation's history is replaced (a recreated computer's new
+    /// transcript clears unconfirmed echoes).
+    pub(crate) fn show_held_cloud_messages(&mut self, cx: &mut Context<Self>) {
+        let Some(session) = self
+            .cloud
+            .native
+            .as_ref()
+            .map(|task| task.target.initial_session.clone())
+        else {
+            return;
+        };
+        let waiting: Vec<(String, String)> = self
+            .cloud
+            .runtime
+            .held
+            .iter()
+            .chain(self.cloud.runtime.ready.iter())
+            .filter(|held| held.request["action"]["type"] == "submit")
+            .filter_map(|held| Some((message_id(&held.request)?.to_owned(), held.text.clone()?)))
+            .collect();
+        for (message, text) in waiting {
+            self.push_cloud_echo(&session, &message, &text, cx);
+        }
+    }
     /// After a resent message is admitted, the next one goes.
     pub(super) fn send_next_ready_cloud_message(&mut self, cx: &mut Context<Self>) {
         if self.cloud.task.is_some() || self.cloud.pending_native.is_some() {
             return;
         }
         let Some(next) = self.cloud.runtime.ready.pop_front() else {
+            if self.cloud.runtime.held.is_empty() && self.cloud.runtime.phase.is_none() {
+                // Every held message went out.
+                self.cloud.runtime.recreated = false;
+            }
             return;
         };
         self.cloud.pending_native = Some(next.request);
@@ -445,18 +549,78 @@ impl Composer {
     /// Discard: the held messages leave the chat; their text and files return
     /// to the draft so nothing typed is lost.
     pub(in crate::composer) fn discard_held_cloud_messages(&mut self, cx: &mut Context<Self>) {
+        self.give_back_held_cloud_messages_with(None, cx);
+    }
+    /// Stop waiting: every held message returns to the draft, with `note`.
+    fn give_back_held_cloud_messages(&mut self, note: &'static str, cx: &mut Context<Self>) {
+        self.give_back_held_cloud_messages_with(Some(note), cx);
+    }
+    fn give_back_held_cloud_messages_with(
+        &mut self,
+        note: Option<&'static str>,
+        cx: &mut Context<Self>,
+    ) {
         let runtime = &mut self.cloud.runtime;
         runtime.work = None;
         runtime.phase = None;
+        runtime.recreated = false;
         let mut held = std::mem::take(&mut runtime.held);
         held.extend(runtime.ready.drain(..));
-        self.failure = None;
+        self.failure = note.map(Into::into);
         self.return_held_to_draft(held, cx);
         cx.notify();
     }
+    /// The composer is going away (its conversation's tab was reused) with
+    /// messages still waiting: park them for the conversation's next
+    /// composer, which also takes their echoes out of the chat.
+    pub(in crate::composer) fn park_unsent_cloud_messages(&mut self, cx: &mut App) {
+        let Some(task) = self.cloud.native.as_ref() else {
+            return;
+        };
+        let key = parked_key(&task.target);
+        let runtime = &mut self.cloud.runtime;
+        runtime.work = None;
+        runtime.phase = None;
+        let mut unsent = std::mem::take(&mut runtime.held);
+        unsent.extend(runtime.ready.drain(..));
+        if unsent.is_empty() {
+            return;
+        }
+        cx.default_global::<Parked>()
+            .0
+            .entry(key)
+            .or_default()
+            .extend(unsent);
+    }
+    /// Messages parked by an earlier composer of this conversation come back
+    /// in the draft with their settings and a calm note.
+    pub(super) fn adopt_parked_cloud_messages(&mut self, cx: &mut Context<Self>) {
+        let Some(task) = self.cloud.native.as_ref() else {
+            return;
+        };
+        let key = parked_key(&task.target);
+        if !cx
+            .try_global::<Parked>()
+            .is_some_and(|parked| parked.0.contains_key(&key))
+        {
+            return;
+        }
+        let Some(parked) = cx.global_mut::<Parked>().0.remove(&key) else {
+            return;
+        };
+        self.failure = Some(PARKED_NOTE.into());
+        self.return_held_to_draft(parked, cx);
+        cx.notify();
+    }
+    /// Text, files and the agent settings they were sent with all return,
+    /// so sending again sends the same message.
     fn return_held_to_draft(&mut self, held: Vec<Held>, cx: &mut Context<Self>) {
         if held.is_empty() {
             return;
+        }
+        if let Some(choice) = held.iter().find_map(|held| settings(&held.request)) {
+            self.pickers
+                .update(cx, |pickers, cx| pickers.set_cloud_task_choice(choice, cx));
         }
         if let Some(session) = self
             .cloud
@@ -1018,5 +1182,277 @@ pub(super) mod tests {
                 Some(Phase::NotSent(NotSent::UpdateFailed))
             );
         });
+    }
+
+    fn sandbox(composer: &Entity<Composer>, cx: &mut gpui::TestAppContext) -> SandboxLevel {
+        composer.read_with(cx, |c, cx| {
+            c.pickers
+                .read(cx)
+                .cloud_task_choice()
+                .expect("bound task settings")
+                .sandbox
+        })
+    }
+    /// Refuse `first` as needing Update computer, run it to `ready`, and
+    /// return the message as it is sent again on the fresh computer.
+    fn recreate_then_resend(
+        composer: &Entity<Composer>,
+        cx: &mut gpui::TestAppContext,
+        runtime: &tokio::runtime::Runtime,
+        requests: &mut tokio::sync::mpsc::Receiver<String>,
+        replies: &tokio::sync::mpsc::Sender<String>,
+        first: &Value,
+    ) -> Value {
+        refuse(runtime, replies, first, RUNTIME_UPDATE_UNAVAILABLE);
+        settle(cx, runtime);
+        // The conversation's saved settings come back while it waits (a
+        // history refresh), so the picker no longer shows the message's.
+        composer.update(cx, |c, cx| {
+            c.pickers.update(cx, |pickers, cx| {
+                pickers.set_cloud_task_sandbox(SandboxLevel::WorkspaceWrite, cx)
+            });
+            c.update_cloud_computer(cx);
+        });
+        settle(cx, runtime);
+        let start = next(requests).expect("recreation is requested");
+        reply(
+            runtime,
+            replies,
+            json!({"id":start["id"],"ok":{"accountId":"owner","organizationId":null,"workspaceId":"task",
+                "computerRecreation":{"operationId":"op","state":"quiescing"}}}),
+        );
+        settle(cx, runtime);
+        wait(cx, runtime, RECREATION_POLL);
+        let check = next(requests).expect("followed until ready");
+        reply(
+            runtime,
+            replies,
+            json!({"id":check["id"],"ok":{"accountId":"owner","organizationId":null,"workspaceId":"task",
+                "computerRecreation":{"operationId":"op","state":"ready"}}}),
+        );
+        settle(cx, runtime);
+        let resend = next(requests).expect("the message is sent again");
+        assert_eq!(resend["method"], methods::CLOUD_TASK_COMMAND);
+        resend
+    }
+    fn assert_back_in_the_draft(
+        composer: &Entity<Composer>,
+        state: &Entity<AppState>,
+        cx: &mut gpui::TestAppContext,
+        text: &str,
+    ) {
+        composer.update(cx, |c, cx| {
+            assert!(c.cloud.runtime.phase.is_none(), "no second Update computer");
+            assert!(c.cloud.runtime.held.is_empty() && c.cloud.runtime.ready.is_empty());
+            assert_eq!(c.input.read(cx).text(), text, "its text is back");
+            assert!(c.failure.is_some(), "a note says what happened");
+        });
+        assert_eq!(
+            sandbox(composer, cx),
+            SandboxLevel::DangerFullAccess,
+            "its access mode is back"
+        );
+        assert!(echoed(state, cx).is_empty(), "it left the chat");
+    }
+
+    #[gpui::test]
+    fn a_message_refused_again_after_update_computer_returns_to_the_draft_intact(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let runtime = runtime();
+        let _entered = runtime.enter();
+        let (composer, state, mut requests, replies) = composer_with_requests(cx);
+        let first = send(&composer, cx, &runtime, &mut requests, "yoo");
+        assert_eq!(
+            first["params"]["request"]["action"]["payload"]["request"]["sandbox"],
+            "danger-full-access"
+        );
+        let resend = recreate_then_resend(&composer, cx, &runtime, &mut requests, &replies, &first);
+        refuse(&runtime, &replies, &resend, RUNTIME_UPDATE_UNAVAILABLE);
+        settle(cx, &runtime);
+        assert_back_in_the_draft(&composer, &state, cx, "yoo");
+        composer.read_with(cx, |c, _| {
+            assert_eq!(c.failure.as_deref(), Some(STILL_REFUSED))
+        });
+        wait(cx, &runtime, RECREATION_POLL * 5);
+        assert!(next(&mut requests).is_none(), "nothing else is sent");
+    }
+
+    #[gpui::test]
+    fn an_update_that_fails_after_update_computer_returns_the_message(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let runtime = runtime();
+        let _entered = runtime.enter();
+        let (composer, state, mut requests, replies) = composer_with_requests(cx);
+        let first = send(&composer, cx, &runtime, &mut requests, "yoo");
+        let resend = recreate_then_resend(&composer, cx, &runtime, &mut requests, &replies, &first);
+        // The fresh computer must update in place first; that fails.
+        refuse(&runtime, &replies, &resend, RUNTIME_UPDATING);
+        settle(cx, &runtime);
+        composer.read_with(cx, |c, _| {
+            assert!(matches!(
+                c.cloud.runtime.phase,
+                Some(Phase::Updating { .. })
+            ))
+        });
+        wait(cx, &runtime, POLL);
+        let poll = next(&mut requests).expect("the update is followed");
+        reply(
+            &runtime,
+            &replies,
+            json!({"id":poll["id"],"ok":status("failed")}),
+        );
+        settle(cx, &runtime);
+        assert_back_in_the_draft(&composer, &state, cx, "yoo");
+    }
+
+    #[gpui::test]
+    fn a_quick_update_after_update_computer_still_sends_the_message(cx: &mut gpui::TestAppContext) {
+        let runtime = runtime();
+        let _entered = runtime.enter();
+        let (composer, state, mut requests, replies) = composer_with_requests(cx);
+        let first = send(&composer, cx, &runtime, &mut requests, "yoo");
+        let resend = recreate_then_resend(&composer, cx, &runtime, &mut requests, &replies, &first);
+        refuse(&runtime, &replies, &resend, RUNTIME_UPDATING);
+        settle(cx, &runtime);
+        wait(cx, &runtime, POLL);
+        let poll = next(&mut requests).expect("the update is followed");
+        reply(
+            &runtime,
+            &replies,
+            json!({"id":poll["id"],"ok":status("committed")}),
+        );
+        settle(cx, &runtime);
+        let last = next(&mut requests).expect("sent once more");
+        assert_eq!(
+            last["params"]["request"]["action"]["payload"]["request"]["sandbox"],
+            "danger-full-access",
+            "with the access mode it was written with"
+        );
+        admit(&runtime, &replies, &last);
+        settle(cx, &runtime);
+        composer.read_with(cx, |c, _| {
+            assert!(c.cloud.runtime.phase.is_none());
+            assert!(!c.cloud.runtime.recreated);
+        });
+        assert_eq!(echoed(&state, cx).len(), 1, "it is in the chat");
+    }
+
+    #[gpui::test]
+    fn a_history_reset_while_the_computer_updates_keeps_the_message_in_the_chat(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let runtime = runtime();
+        let _entered = runtime.enter();
+        let (composer, state, mut requests, replies) = composer_with_requests(cx);
+        let first = send(&composer, cx, &runtime, &mut requests, "yoo");
+        refuse(&runtime, &replies, &first, RUNTIME_UPDATE_UNAVAILABLE);
+        settle(cx, &runtime);
+        composer.update(cx, |c, cx| c.update_cloud_computer(cx));
+        settle(cx, &runtime);
+        let start = next(&mut requests).expect("recreation is requested");
+        // The recreated computer's transcript replaces the history, which
+        // clears unconfirmed echoes.
+        state.update(cx, |state, cx| {
+            state.prepare_runtime_replacement(cx);
+            state.selected_chat = Some("session".into());
+        });
+        assert!(echoed(&state, cx).is_empty());
+        composer.update(cx, |c, cx| c.show_held_cloud_messages(cx));
+        assert_eq!(echoed(&state, cx).len(), 1, "back in the chat");
+        reply(
+            &runtime,
+            &replies,
+            json!({"id":start["id"],"ok":{"accountId":"owner","organizationId":null,"workspaceId":"task",
+                "computerRecreation":{"operationId":"op","state":"quiescing"}}}),
+        );
+        settle(cx, &runtime);
+        state.update(cx, |state, cx| {
+            state.prepare_runtime_replacement(cx);
+            state.selected_chat = Some("session".into());
+        });
+        wait(cx, &runtime, RECREATION_POLL);
+        let check = next(&mut requests).expect("followed until ready");
+        reply(
+            &runtime,
+            &replies,
+            json!({"id":check["id"],"ok":{"accountId":"owner","organizationId":null,"workspaceId":"task",
+                "computerRecreation":{"operationId":"op","state":"ready"}}}),
+        );
+        settle(cx, &runtime);
+        let resend = next(&mut requests).expect("the message is sent again");
+        let renewed = resend["params"]["request"]["action"]["messageId"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert_eq!(
+            echoed(&state, cx),
+            vec![(renewed, "yoo".to_owned())],
+            "it rejoins the chat under its new id when it is sent again"
+        );
+    }
+
+    #[gpui::test]
+    fn a_closed_conversation_gives_its_waiting_message_to_the_next_composer(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let runtime = runtime();
+        let _entered = runtime.enter();
+        let (composer, state, mut requests, replies) = composer_with_requests(cx);
+        let first = send(&composer, cx, &runtime, &mut requests, "yoo");
+        refuse(&runtime, &replies, &first, RUNTIME_UPDATE_UNAVAILABLE);
+        settle(cx, &runtime);
+        composer.update(cx, |c, cx| c.update_cloud_computer(cx));
+        settle(cx, &runtime);
+        // Its tab is reused for another conversation while the computer is
+        // recreated: the composer goes away.
+        let weak = composer.downgrade();
+        drop(composer);
+        settle(cx, &runtime);
+        assert!(weak.upgrade().is_none(), "the composer was released");
+
+        // Reopened: the saved settings say "Ask for approval".
+        let (send_tx, _receive) = tokio::sync::mpsc::channel(16);
+        let (_replies_tx, replies_rx) = tokio::sync::mpsc::channel(16);
+        let controller = crate::state::EngineHandle::from_test_client(zuse_rpc::RpcClient::new(
+            send_tx, replies_rx,
+        ));
+        let reopened = cx.new(|cx| Composer::new(state.clone(), cx));
+        reopened.update(cx, |c, cx| {
+            let target = crate::state::CloudTarget {
+                controller,
+                subject: "owner".into(),
+                organization: None,
+                workspace: "task".into(),
+                initial_session: "session".into(),
+            };
+            c.set_cloud_task(
+                target,
+                json!({"agent":"codex","model":"gpt-6.1-sol","runtimeMode":"approval-required"}),
+                cx,
+            );
+        });
+        reopened.read_with(cx, |c, cx| {
+            assert_eq!(c.input.read(cx).text(), "yoo", "its text is back");
+            assert_eq!(c.failure.as_deref(), Some(PARKED_NOTE));
+        });
+        assert!(
+            echoed(&state, cx).is_empty(),
+            "it waits in the draft, not the chat"
+        );
+        assert_eq!(
+            sandbox(&reopened, cx),
+            SandboxLevel::DangerFullAccess,
+            "with its access mode"
+        );
+        // Only once: another refresh of the same conversation adds nothing.
+        reopened.update(cx, |c, cx| {
+            c.input.update(cx, |input, cx| input.set_text("", cx));
+            let target = c.cloud.native.as_ref().unwrap().target.clone();
+            c.set_cloud_task(target, json!({"agent":"codex","model":"gpt-6.1-sol"}), cx);
+            assert_eq!(c.input.read(cx).text(), "");
+        });
+        drop(replies);
     }
 }

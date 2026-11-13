@@ -7216,6 +7216,7 @@ impl Composer {
         cx.on_release(|this, cx| {
             this.input.update(cx, |input, _| input.cancel_dictation());
             this.release_queue_previews(cx);
+            this.park_unsent_cloud_messages(cx);
         })
         .detach();
         let input = cx.new(|cx| {

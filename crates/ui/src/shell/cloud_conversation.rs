@@ -626,6 +626,9 @@ impl CloudConversation {
             self.execution = None;
             self.state
                 .update(cx, |state, cx| state.prepare_runtime_replacement(cx));
+            // A message waiting for the computer stays in the chat.
+            self.composer
+                .update(cx, |composer, cx| composer.show_held_cloud_messages(cx));
         }
         if let Some(title) = head
             .chat

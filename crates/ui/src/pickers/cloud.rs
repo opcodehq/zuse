@@ -283,7 +283,7 @@ impl Pickers {
         self.set_cloud_task_choice(choice, cx);
         true
     }
-    pub(super) fn set_cloud_task_choice(&mut self, choice: ChatConfig, cx: &mut Context<Self>) {
+    pub(crate) fn set_cloud_task_choice(&mut self, choice: ChatConfig, cx: &mut Context<Self>) {
         let Some(binding) = &mut self.cloud.task_binding else {
             return;
         };

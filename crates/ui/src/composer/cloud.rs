@@ -101,6 +101,9 @@ impl Composer {
                 as u32,
         });
         self.cloud.cached = None;
+        // A message an earlier composer of this conversation couldn't send
+        // comes back in the draft.
+        self.adopt_parked_cloud_messages(cx);
         cx.notify();
     }
     pub(crate) fn clear_cloud_task(&mut self, cx: &mut Context<Self>) {
