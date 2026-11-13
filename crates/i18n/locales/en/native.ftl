@@ -859,8 +859,8 @@ native-composer_plan_chip = Plan
 # Context: composer add menu and plan mode toggle.
 native-composer_cloud_plan_unavailable = Plan mode is unavailable for cloud launches. Turn it off before starting.
 
-# Context: pull request CI watch switch that lets the chat repair failing checks.
-native-pr_watch_auto_fix = Auto-fix failures
+# Context: pull request watch switch that lets the chat fix failing checks, review comments and merge conflicts.
+native-pr_watch_auto_fix = Auto-fix CI and reviews
 
 # Context: the same switch once all repairs are used; turning it on grants a fresh budget.
 native-pr_watch_restart_auto_fix = Restart auto-fix
@@ -870,4 +870,4 @@ native-pr_watch_restart_auto_fix = Restart auto-fix
 native-pr_watch_repairs_used = { $used } of { $limit } used
 
 # Context: tooltip for the auto-fix switch.
-native-pr_watch_auto_fix_help = When CI fails, let this chat repair it up to three times, committing and pushing normally. It never force-pushes or merges. Restarting grants a fresh budget after you review earlier repairs.
+native-pr_watch_auto_fix_help = Let this chat fix failing CI, review comments and merge conflicts, up to five times per PR, committing and pushing normally. It never force-pushes, merges or replies on the PR. On by default for PRs this chat opens. Restarting grants a fresh budget after you review earlier follow-ups.

@@ -2271,6 +2271,43 @@ impl AppState {
         }
     }
 
+    /// Give an echo a new message id in place: a message sent again under a
+    /// new identity keeps its spot and time in the chat. False when absent.
+    pub(crate) fn rekey_echo(&mut self, chat_id: &str, from: &str, to: &str) -> bool {
+        let Some(echo) = self
+            .echoes
+            .get_mut(chat_id)
+            .and_then(|echoes| echoes.iter_mut().find(|e| e.id == from))
+        else {
+            return false;
+        };
+        echo.id = to.to_owned();
+        for part in &mut echo.parts {
+            if let zuse_model::MessagePart::Text { id, .. } = part {
+                *id = format!("text:{to}");
+            }
+        }
+        self.transcript_revision = self.transcript_revision.wrapping_add(1);
+        true
+    }
+
+    /// Drop a cloud message that only the server's admission record shows
+    /// (it never reached the transcript) — it was discarded or retried.
+    pub(crate) fn remove_admission_message(&mut self, chat_id: &str, message_id: &str) {
+        self.remove_echo(chat_id, message_id);
+        let previous_len = self.transcript.len();
+        self.transcript.retain(|entry| {
+            entry.id != message_id
+                || !entry.parts.iter().any(|part| {
+                    matches!(part, zuse_model::MessagePart::Text { id, .. } if id.starts_with("admission:"))
+                })
+        });
+        if self.transcript.len() != previous_len {
+            self.prepared_transcripts.remove(chat_id);
+            self.transcript_revision = self.transcript_revision.wrapping_add(1);
+        }
+    }
+
     /// Composer send fired: overlay the chat as Working until the host writes
     /// the user message back into the transcript (or the TTL lapses). A remote
     /// send has no live session row until the host drains the queued command —

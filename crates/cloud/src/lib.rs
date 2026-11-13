@@ -31,6 +31,7 @@ pub mod project_caches;
 pub mod providers;
 pub mod routes;
 pub mod runtime;
+pub mod runtime_releases;
 pub mod store;
 pub mod tickets;
 pub mod tunnels;
@@ -40,6 +41,7 @@ pub const REFERENCE_COMMIT: &str = "2016cf4f0cc240e6797916dd5cab1d8bebab89ae";
 pub mod gateway;
 
 pub mod billing;
+pub mod certification;
 
 pub mod objects;
 pub mod transcript;
@@ -52,4 +54,5 @@ pub mod images;
 
 #[cfg(feature = "hosted-browser")]
 pub mod hosted_browser;
+pub mod plugins;
 pub mod slack;

@@ -54,7 +54,7 @@ use crate::state::{AppState, Indicator};
 use crate::theme::Theme;
 
 mod chip;
-mod cloud;
+pub(crate) mod cloud;
 mod editing;
 mod message_recall;
 pub use editing::StashedPrompt;
@@ -449,10 +449,19 @@ struct AttachmentDraft {
 
 /// A staged attachment offered by the `@` list.
 struct AttachmentRow {
+    /// A connected plugin offered by `@`, rather than a staged attachment.
+    plugin: Option<MentionPlugin>,
     index: u32,
     label: String,
     /// The picture, for an image.
     image: Option<std::sync::Arc<gpui::Image>>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct MentionPlugin {
+    pub id: String,
+    pub name: String,
+    pub domain: String,
 }
 
 /// What the composer holds that a send could carry. A staged image or diff
@@ -1352,6 +1361,17 @@ impl TextProjection {
                 }),
         );
         links.extend(
+            zuse_protocol::plugin_mentions::plugin_mention_links(raw)
+                .into_iter()
+                .map(|link| FileMentionLink {
+                    range: link.range,
+                    basename: link.name,
+                    path: link.plugin_id,
+                    kind: ChipKind::Plugin,
+                    attachment: None,
+                }),
+        );
+        links.extend(
             zuse_protocol::attachment_mentions::attachment_mentions(raw)
                 .into_iter()
                 .map(|mention| FileMentionLink {
@@ -1539,7 +1559,11 @@ fn mention_display_labels(links: &[FileMentionLink]) -> Vec<String> {
                         .collect();
                     // A chat's "path" is its id: always show its title.
                     // A link's label is its own: never a path suffix.
-                    if duplicates.is_empty() || matches!(link.kind, ChipKind::Chat | ChipKind::Link)
+                    if duplicates.is_empty()
+                        || matches!(
+                            link.kind,
+                            ChipKind::Chat | ChipKind::Plugin | ChipKind::Link
+                        )
                     {
                         return link.basename.clone();
                     }
@@ -1595,6 +1619,7 @@ fn has_mention_scheme(raw: &str) -> bool {
         || raw.contains(zuse_protocol::attachment_mentions::IMAGE_MENTION_SCHEME)
         || raw.contains(zuse_protocol::attachment_mentions::ATTACHMENT_MENTION_SCHEME)
         || raw.contains(zuse_protocol::chat_mentions::CHAT_MENTION_SCHEME)
+        || raw.contains(zuse_protocol::plugin_mentions::PLUGIN_MENTION_SCHEME)
 }
 
 /// Project a sent message's raw Markdown for transcript display: mention links
@@ -5894,6 +5919,13 @@ pub enum ComposerEvent {
     /// Only a verified foreground Run receipt may reattach execution passively.
     CloudForegroundAdmitted,
     CloudSleepRequested,
+    /// A message with files needs its computer awake before they upload.
+    CloudWakeRequested,
+    /// Update computer started recreating the task's computer; the
+    /// conversation reconnects as it does after Recreate computer.
+    CloudComputerRecreating {
+        recreation: serde_json::Value,
+    },
     /// An accepted task selects the current native conversation surface.
     CloudAdmitted {
         workspace: serde_json::Value,
@@ -6381,6 +6413,8 @@ struct FileMentionState {
     /// user can act on (host daemon too old for `SearchFiles`, device
     /// offline), and the empty state hid them (user report).
     error: Option<SharedString>,
+    /// Connected plugins, refreshed whenever an `@` token opens or changes.
+    plugins: Vec<MentionPlugin>,
     /// Full token text, not just the cursor-relative query: moving within a
     /// dismissed token keeps it closed, while any edit re-enables completion.
     dismissed: Option<(Range<usize>, String)>,
@@ -6628,6 +6662,9 @@ pub struct Composer {
     pub(crate) queue_edit_finishing: bool,
     pub(crate) queue_edit_task: Option<Task<()>>,
     pub(crate) queue_edit_renew_task: Option<Task<()>>,
+    /// A cloud chat's saved edit still sending its files to the computer; the
+    /// composer is free meanwhile (see [`Composer::save_cloud_queue_edit`]).
+    pub(crate) queue_edit_saving: Option<Task<()>>,
     /// Focus once on mount, navigation, or after opening/closing a queue edit.
     pub(crate) focus_pending: bool,
     dictation_hold: Option<DictationHold>,
@@ -6655,6 +6692,8 @@ pub struct Composer {
     /// Whether the modifier overlay should currently reveal the queue hint.
     /// The shell owns modifier tracking and clears this on window deactivation.
     queue_shortcut_revealed: bool,
+    /// The selected chat's open PR `(chat, url)` and its auto-fix button.
+    pr_auto_fix: Option<(String, String, Entity<crate::pr_watch::PrWatchControl>)>,
     /// Interrupt/answer commands get their own slot: assigning `send_task`
     /// DROPPED an in-flight send future mid-upload — no banner, no cleanup,
     /// `sending` stuck true forever (2026-08-19 incident, "press Stop while
@@ -7122,6 +7161,51 @@ impl Composer {
         }
     }
 
+    /// The auto-fix button for the selected chat's open PR, kept for as long
+    /// as the chat and PR stay the same so its watch stream survives renders.
+    fn pr_auto_fix_button(&mut self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let open = {
+            let state = self.state.read(cx);
+            state
+                .selected_chat_row()
+                .filter(|_| !state.selected_chat_is_zot_coordinator())
+                .and_then(|chat| {
+                    let summary = state.change_request_for_chat(chat)?;
+                    (summary.state == zuse_protocol::ChangeRequestState::Open).then(|| {
+                        let target = (state.local_device_id.as_deref()
+                            != Some(chat.device_id.as_str()))
+                        .then(|| chat.device_id.clone());
+                        (chat.id.clone(), summary.url.clone(), target)
+                    })
+                })
+        };
+        let Some((chat, url, target)) = open else {
+            self.pr_auto_fix = None;
+            return None;
+        };
+        if !self
+            .pr_auto_fix
+            .as_ref()
+            .is_some_and(|(c, u, _)| *c == chat && *u == url)
+        {
+            let state = self.state.clone();
+            let control = cx.new(|cx| {
+                crate::pr_watch::PrWatchControl::button(
+                    state,
+                    chat.clone(),
+                    url.clone(),
+                    target,
+                    cx,
+                )
+            });
+            cx.observe(&control, |_, _, cx| cx.notify()).detach();
+            self.pr_auto_fix = Some((chat, url, control));
+        }
+        self.pr_auto_fix
+            .as_ref()
+            .map(|(.., control)| control.clone().into_any_element())
+    }
+
     pub(crate) fn set_queue_shortcut_revealed(&mut self, revealed: bool, cx: &mut Context<Self>) {
         if self.queue_shortcut_revealed != revealed {
             self.queue_shortcut_revealed = revealed;
@@ -7353,6 +7437,7 @@ impl Composer {
             queue_edit_finishing: false,
             queue_edit_task: None,
             queue_edit_renew_task: None,
+            queue_edit_saving: None,
             focus_pending: true,
             dictation_hold: None,
             queue_drag: None,
@@ -7365,6 +7450,7 @@ impl Composer {
             tray: Default::default(),
             todo_scroll: gpui::ScrollHandle::new(),
             queue_shortcut_revealed: false,
+            pr_auto_fix: None,
             last_available_width: None,
             last_input_width: 0.0,
             flip_morph: None,
@@ -8678,6 +8764,11 @@ impl Composer {
         // response lands — clearing here made the popup bounce through the
         // skeleton (and a different height) on every keystroke.
         let refining = self.mention.token.is_some() && token.is_some();
+        self.mention.plugins = if token.is_some() {
+            crate::settings::plugins::connected_mention_plugins(self.state.clone(), cx)
+        } else {
+            Vec::new()
+        };
         self.mention.token = token.clone();
         if !refining {
             self.mention.results.clear();
@@ -8764,13 +8855,16 @@ impl Composer {
     }
 
     fn move_mention(&mut self, delta: isize, cx: &mut Context<Self>) {
-        let attachments = self.mention_attachment_matches().len();
+        let local = self.mention_attachment_matches();
+        let attachments = local.len();
+        let staged = local.iter().filter(|row| row.plugin.is_none()).count();
         let rows = attachments + self.mention.results.len();
         self.mention.active = crate::popover::menu_step(self.mention.active, rows, delta);
         if let Some(active) = self.mention.active {
             // Keep the keyboard cursor visible in the scrolled row stack,
             // past the section headings above it.
-            let headings = usize::from(attachments > 0)
+            let headings = usize::from(staged > 0)
+                + usize::from(active >= staged && attachments > staged)
                 + usize::from(active >= attachments && !self.mention.results.is_empty());
             self.mention_scroll.scroll_to_item(active + headings);
         }
@@ -8815,6 +8909,7 @@ impl Composer {
                     att.name.clone()
                 };
                 normalize(&label).contains(&wanted).then(|| AttachmentRow {
+                    plugin: None,
                     index,
                     label,
                     image: att.image().cloned(),
@@ -8822,6 +8917,22 @@ impl Composer {
             })
             .collect();
         rows.sort_by_key(|row| row.index);
+        // Connected plugins follow attachments, above file results.
+        rows.extend(
+            self.mention
+                .plugins
+                .iter()
+                .filter(|plugin| {
+                    normalize(&plugin.name).contains(&wanted)
+                        || normalize(&plugin.id).contains(&wanted)
+                })
+                .map(|plugin| AttachmentRow {
+                    plugin: Some(plugin.clone()),
+                    index: 0,
+                    label: plugin.name.clone(),
+                    image: None,
+                }),
+        );
         rows
     }
 
@@ -8833,7 +8944,16 @@ impl Composer {
         let Some(active) = self.mention.active else {
             return;
         };
-        if let Some(row) = rows.get(active) {
+        if let Some(plugin) = rows.get(active).and_then(|row| row.plugin.as_ref()) {
+            let Some(link) =
+                zuse_protocol::plugin_mentions::plugin_mention_link(&plugin.id, &plugin.name)
+            else {
+                return;
+            };
+            self.input.update(cx, |input, cx| {
+                input.replace_mention_link(token.range, &link, cx)
+            });
+        } else if let Some(row) = rows.get(active) {
             let link = zuse_protocol::attachment_mentions::attachment_mention_link(
                 row.index,
                 row.image.is_none().then_some(row.label.as_str()),
@@ -8917,12 +9037,48 @@ impl Composer {
                     .pt(px(if first { 2.0 } else { 6.0 }))
                     .into_any_element()
             };
-            if !attachment_rows.is_empty() {
+            let staged = attachment_rows
+                .iter()
+                .filter(|row| row.plugin.is_none())
+                .count();
+            if staged > 0 {
                 rows.push(heading("Attachments", true));
             }
             // Staged attachments stay pinned above every file result.
             for (ix, row) in attachment_rows.iter().enumerate() {
                 let selected = self.mention.active == Some(ix);
+                if let Some(plugin) = &row.plugin {
+                    if ix == staged {
+                        rows.push(heading("Plugins", staged == 0));
+                    }
+                    rows.push(
+                        crate::popover::menu_row(
+                            theme,
+                            selected,
+                            format!("plugin-mention-result-{ix}"),
+                        )
+                        .id(("plugin-mention-result", ix))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.mention.active = Some(ix);
+                            this.accept_mention(cx);
+                        }))
+                        .child(crate::popover::completion_row_content(
+                            theme,
+                            crate::settings::plugins::catalog_ui::plugin_logo(
+                                theme,
+                                &plugin.domain,
+                                &plugin.name,
+                                16.,
+                            )
+                            .rounded(px(4.))
+                            .into_any_element(),
+                            plugin.name.clone().into(),
+                            "Connected plugin".into(),
+                        ))
+                        .into_any_element(),
+                    );
+                    continue;
+                }
                 let (icon, detail) = match &row.image {
                     Some(image) => (
                         img(image.clone())
@@ -9819,7 +9975,7 @@ impl Composer {
 
     /// New chats need a runnable agent, but may target the device's home
     /// directory without a project. Existing chats carry their own run config.
-    fn send_blocked(&self, cx: &App) -> bool {
+    pub(crate) fn send_blocked(&self, cx: &App) -> bool {
         if self.pickers.read(cx).importing_chat(cx) {
             return true;
         }
@@ -9839,7 +9995,19 @@ impl Composer {
         {
             return true;
         }
-        if state.configuration_blocked() {
+        // A cloud task sends with its own saved settings and wakes a sleeping
+        // computer itself; the chat configuration is read from the computer's
+        // engine, which a sleeping computer never answers.
+        // Until its saved choices load, a cloud task cannot build a message.
+        if self.native_cloud_task() && self.pickers.read(cx).cloud_task_choice().is_none() {
+            return true;
+        }
+        // A cloud task needs no configuration read from its (perhaps sleeping)
+        // computer, but an access change still saving must land first, or the
+        // message could carry the previous mode.
+        if state.configuration_blocked()
+            && (!self.native_cloud_task() || state.configuration_write_unsettled())
+        {
             return true;
         }
         if state.review_comment_flush_pending(&self.current_key) {
@@ -11090,7 +11258,7 @@ impl Composer {
                         .child(crate::loaders::mini_glyph_spinner(
                             "composer-worktree-progress-spinner",
                             1.5,
-                            theme.glyph,
+                            theme.loader_glyph(),
                             cx.entity_id(),
                             cx,
                         ))
@@ -13257,10 +13425,11 @@ impl Render for Composer {
         // its chips (one attached surface growing upward); in a thread they
         // form their own surface tucked behind the card's top edge.
         // The chat's pull request and diff size, above everything else.
+        let auto_fix = (!new_chat).then(|| self.pr_auto_fix_button(cx)).flatten();
         let chips = (!new_chat)
             .then(|| {
                 let theme = Theme::of(cx).clone();
-                crate::pull_request_card::composer_chips(self.state.read(cx), &theme, cx)
+                crate::pull_request_card::composer_chips(self.state.read(cx), &theme, auto_fix, cx)
             })
             .flatten();
         let checkout = (!new_chat

@@ -11,6 +11,11 @@ mod retirement;
 #[cfg(test)]
 mod retirement_tests;
 mod stages;
+pub(in crate::runtime) use stages::{
+    EFFECT_MAX_SUBMISSIONS, EFFECT_SETTLE_MS, EFFECT_WAIT_LIMIT_MS,
+};
+#[cfg(test)]
+mod stages_tests;
 use zeroize::Zeroizing;
 use zuse_cloud_runtime::recovery::{Binding, RustStorage};
 use zuse_protocol::cloud::{ArchiveManifest, ArchivePhase, RecoveryArchive};
@@ -175,6 +180,16 @@ pub trait RecoveryProvider: Send + Sync {
         } else {
             OperationState::Pending
         })
+    }
+    /// Where the capture helper launched for `operation` stands on the guest.
+    /// Adapters without a guest status read report it running; the upload
+    /// time limit still bounds it.
+    async fn capture_status(
+        &self,
+        _id: &str,
+        _operation: &str,
+    ) -> Result<CaptureStatus, ProviderError> {
+        Ok(CaptureStatus::Running)
     }
     async fn retire_receipt(&self, id: &str) -> Result<ProviderOperation, ProviderError> {
         self.retire(id).await?;
@@ -489,15 +504,53 @@ fn hash_bytes(bytes: &[u8]) -> String {
 fn quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
+/// The capture helper's state on the guest, read from its status directory.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CaptureStatus {
+    /// Its process is alive.
+    Running,
+    /// It published the archive (`uploaded`).
+    Uploaded,
+    /// It gave up (`failed`).
+    Failed,
+    /// Not running and no result: not started yet, or ended without one.
+    Idle,
+}
+/// Reads the helper's status directory `$1` as the guest task user.
+const CAPTURE_STATUS_SCRIPT: &str = r#"d="$1"; if [ -f "$d/uploaded" ]; then echo uploaded; elif [ -f "$d/failed" ]; then echo failed; elif [ -f "$d/pid" ] && read p <"$d/pid" && kill -0 "$p" 2>/dev/null; then echo running; else echo idle; fi"#;
+pub(super) fn capture_status_command(run_as: &str, status_root: &str, operation: &str) -> String {
+    format!(
+        "{run_as} sh -c {} sh {}",
+        quote(CAPTURE_STATUS_SCRIPT),
+        quote(&format!("{status_root}/{operation}"))
+    )
+}
+pub(super) fn capture_status(
+    result: &crate::providers::ExecResult,
+) -> Result<CaptureStatus, ProviderError> {
+    if result.exit_code != 0 {
+        return Err(ProviderError::Unavailable);
+    }
+    match std::str::from_utf8(&result.stdout).map(str::trim) {
+        Ok("running") => Ok(CaptureStatus::Running),
+        Ok("uploaded") => Ok(CaptureStatus::Uploaded),
+        Ok("failed") => Ok(CaptureStatus::Failed),
+        Ok("idle") => Ok(CaptureStatus::Idle),
+        _ => Err(ProviderError::InvalidResponse),
+    }
+}
+/// Launches one capture attempt. A previous attempt's `failed` marker is
+/// cleared so the status read reflects this attempt only.
 pub(super) fn capture_command(plan: &CapturePlan) -> (String, String) {
     let staged = format!("/tmp/zuse-recovery-{}", plan.operation_id);
     let directory = format!("/var/lib/zuse/recovery/{}", plan.operation_id);
     let command = format!(
-        "set -eu\nsudo -n install -d -o zuse -g zuse -m 700 {}\nsudo -n install -o zuse -g zuse -m 600 {} {}/config.json\nsudo -n rm -- {}\nsudo -n -u zuse /usr/local/lib/zuse/launch-rust-recovery {}",
+        "set -eu\nsudo -n install -d -o zuse -g zuse -m 700 {}\nsudo -n install -o zuse -g zuse -m 600 {} {}/config.json\nsudo -n rm -- {}\nsudo -n rm -f -- {}/failed\nsudo -n -u zuse /usr/local/lib/zuse/launch-rust-recovery {}",
         quote(&directory),
         quote(&staged),
         quote(&directory),
         quote(&staged),
+        quote(&directory),
         quote(&plan.operation_id)
     );
     (staged, command)
@@ -541,6 +594,15 @@ impl RecoveryProvider for crate::providers::boxd::Boxd {
         }
         Ok(())
     }
+    async fn capture_status(
+        &self,
+        id: &str,
+        operation: &str,
+    ) -> Result<CaptureStatus, ProviderError> {
+        let command =
+            capture_status_command("sudo -n -u zuse env", "/var/lib/zuse/recovery", operation);
+        capture_status(&self.exec(id, &command).await?)
+    }
     async fn pause(&self, id: &str) -> Result<(), ProviderError> {
         self.hibernate(id).await
     }
@@ -572,6 +634,55 @@ impl zuse_cloud_runtime::recovery::Objects for Reader {
         anyhow::bail!("archive_verifier_read_only")
     }
 }
+/// A short, log-safe reason for a failed verification: the verifier's own
+/// error code, or the I/O error kind (a full scratch disk is the common one).
+pub(super) fn verification_reason(error: &anyhow::Error) -> String {
+    for cause in error.chain() {
+        if let Some(io) = cause.downcast_ref::<std::io::Error>() {
+            return if io.kind() == std::io::ErrorKind::StorageFull {
+                "recovery_scratch_insufficient".into()
+            } else {
+                format!("io_{:?}", io.kind()).to_ascii_lowercase()
+            };
+        }
+    }
+    let message = error.to_string();
+    if !message.is_empty()
+        && message.len() <= 64
+        && message
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+    {
+        message
+    } else {
+        "unclassified".into()
+    }
+}
+/// How a failed verification is handled.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum VerificationFailure {
+    /// Not enough scratch space where verification runs: needs capacity.
+    ScratchFull,
+    /// Archive storage or this job's fence was briefly unavailable: retry.
+    Transient,
+    /// The archive itself does not verify; retrying cannot change that.
+    Rejected,
+}
+pub(super) fn classify_verification(reason: &str) -> VerificationFailure {
+    match reason {
+        "recovery_scratch_insufficient" | "recovery_scratch_unavailable" => {
+            VerificationFailure::ScratchFull
+        }
+        "archive_object_unavailable"
+        | "archive_verification_fenced"
+        | "verifier_panicked"
+        | "io_interrupted"
+        | "io_timedout" => VerificationFailure::Transient,
+        _ => VerificationFailure::Rejected,
+    }
+}
+/// Transient verification failures allowed before the operation asks for attention.
+pub(super) const VERIFICATION_MAX_ATTEMPTS: i64 = 3;
 pub(super) async fn active_job(
     tx: &mut Transaction<'_, Postgres>,
     job: &jobs::Job,
@@ -755,8 +866,21 @@ impl RuntimeControl {
                     })
                 });
                 tokio::pin!(task);
-                let verified = loop {
-                    tokio::select! {result=&mut task=>break result.map_err(|_|ApiError::unavailable("archive-verification-failed"))?.map_err(|_|ApiError::unavailable("archive-verification-failed"))?,_=tokio::time::sleep(Duration::from_secs(30))=>{if !jobs::extend(&self.pool,job,"workspace",clock_ms(),LEASE).await?{return Err(fenced())}}}
+                let outcome = loop {
+                    tokio::select! {result=&mut task=>break result,_=tokio::time::sleep(Duration::from_secs(30))=>{if !jobs::extend(&self.pool,job,"workspace",clock_ms(),LEASE).await?{return Err(fenced())}}}
+                };
+                let verified = match outcome {
+                    Ok(Ok(verified)) => verified,
+                    Ok(Err(error)) => {
+                        return Err(self
+                            .recovery_verification_failed(job, &verification_reason(&error))
+                            .await?);
+                    }
+                    Err(_) => {
+                        return Err(self
+                            .recovery_verification_failed(job, "verifier_panicked")
+                            .await?);
+                    }
                 };
                 let mut tx = self.pool.begin().await?;
                 let (row, generation, _) = locked_workspace(&mut tx, &job.resource_id).await?;

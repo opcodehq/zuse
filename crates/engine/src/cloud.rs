@@ -11,11 +11,13 @@ pub mod local_terminal;
 pub mod mirror;
 mod recreation;
 mod repair;
+mod runtime_update;
 #[cfg(not(target_arch = "wasm32"))]
 mod sidebar_cache;
 #[cfg(unix)]
 pub mod sync;
 pub mod task_commands;
+mod unknown_outcome;
 #[cfg(test)]
 mod workspace_missing_tests;
 // The cloud modules share this account authority, independently of workspace login.
@@ -43,7 +45,96 @@ impl std::fmt::Display for CloudHttpFailure {
 }
 impl std::error::Error for CloudHttpFailure {}
 
+/// The server definitively refused a cloud message or attachment; the text
+/// says why. Carried as a type so RPC layers keep it instead of a generic
+/// "not confirmed" message.
+#[derive(Debug)]
+pub(crate) struct TaskRejection(pub &'static str);
+impl std::fmt::Display for TaskRejection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0)
+    }
+}
+impl std::error::Error for TaskRejection {}
+impl TaskRejection {
+    pub(crate) fn rpc(&self) -> zuse_rpc::RpcError {
+        zuse_rpc::RpcError::Capability(format!(
+            "{}{}",
+            zuse_protocol::cloud_task_commands::TASK_REJECTED_PREFIX,
+            self.0
+        ))
+    }
+}
+
+/// What a rejected cloud message or attachment means for the user.
+fn task_rejection(code: &str) -> Option<&'static str> {
+    Some(match code {
+        "cloud_task_permission_policy_changed" | "cloud_task_permission_policy_invalid" => {
+            "This access mode can't be used for this task. Pick another access mode and send again."
+        }
+        "cloud_task_model_not_installed" | "cloud_task_model_catalog_missing" => {
+            "This computer doesn't have that model. Pick another model and send again."
+        }
+        "cloud_task_model_required" | "cloud_task_agent_required" => {
+            "Choose an agent and model for this task, then send again."
+        }
+        "cloud_task_model_reasoning_invalid" => {
+            "That reasoning level isn't available for this model. Pick another and send again."
+        }
+        "cloud_task_upload_limit" => {
+            "Too many attachments are still uploading. Wait for them to finish, then send again."
+        }
+        "invalid_launch_asset" => "This attachment couldn't be uploaded. Try attaching it again.",
+        // The computer refused a delivered message before running it.
+        "cloud_command_upload_missing" | "cloud_command_upload_outside_uploads" => {
+            "An attached file wasn't on the computer, so this message didn't run. Attach it again and send."
+        }
+        "cloud_command_assets_too_many" => {
+            "Too many attachments for one message, so it didn't run. Remove some and send again."
+        }
+        "cloud_command_assets_too_large" => {
+            "These attachments are too large together, so this message didn't run. Remove some and send again."
+        }
+        "cloud_command_agent_changed"
+        | "cloud_command_model_changed"
+        | "cloud_command_agent_not_installed"
+        | "cloud_command_agent_catalog_invalid" => {
+            "This computer can't run that agent or model, so this message didn't run. Pick another and send again."
+        }
+        "cloud_command_permission_policy_changed" | "cloud_command_permission_policy_missing" => {
+            "This access mode can't be used for this task, so this message didn't run. Pick another access mode and send again."
+        }
+        "cloud_command_policy_or_runtime_fenced"
+        | "cloud_command_checkout_fenced"
+        | "cloud_command_admission_update_required"
+        | "cloud_command_thread_missing"
+        | "cloud_canonical_command_binding_required"
+        | "cloud_conversation_scope_rejected"
+        | "cloud_interrupt_target_invalid"
+        | "cloud_control_runtime_binding_invalid"
+        | "command-admission-rejected" => {
+            "The computer couldn't accept this message, so it didn't run. Send it again."
+        }
+        zuse_protocol::cloud_task_commands::RUNTIME_OUTDATED => {
+            "This computer is on an older version that can't take files or a different access mode yet. Send without them for now; it will update itself soon."
+        }
+        zuse_protocol::cloud_runtime_updates::RUNTIME_UPDATING => {
+            "Updating this computer to take this message. It will be ready in a few seconds; send it again then."
+        }
+        zuse_protocol::cloud_runtime_updates::RUNTIME_UPDATE_UNAVAILABLE => {
+            "This computer needs an update to take files or a different access mode. Use Update computer."
+        }
+        _ => return None,
+    })
+}
+
 pub(crate) fn rpc_error(error: anyhow::Error) -> zuse_rpc::RpcError {
+    if let Some(rejection) = error.downcast_ref::<TaskRejection>() {
+        return rejection.rpc();
+    }
+    if let Some(unknown) = error.downcast_ref::<unknown_outcome::UnknownOutcome>() {
+        return unknown.rpc();
+    }
     match error.downcast::<zuse_rpc::RpcError>() {
         Ok(error) => error,
         Err(error) => zuse_rpc::RpcError::Failed(error.to_string()),
@@ -146,6 +237,7 @@ pub fn handles(method: &str) -> bool {
             | zuse_protocol::methods::CLOUD_SYNC_CONFIGURE
             | zuse_protocol::methods::CLOUD_SYNC_RETRY
             | zuse_protocol::methods::CLOUD_COMPUTER_RECREATION
+            | zuse_protocol::methods::CLOUD_RUNTIME_UPDATE_STATUS
             | zuse_protocol::methods::CLOUD_ALLOCATION_RETRY
             | zuse_protocol::methods::CLOUD_RUNTIME_REPAIR
             | zuse_protocol::methods::CLOUD_PAUSE
@@ -602,6 +694,30 @@ impl CloudApi {
                     }
                 };
                 anyhow::bail!("{message}");
+            }
+            // Message and attachment rejections name their reason; "busy"
+            // would send the user waiting for something that never ends.
+            if status.is_client_error()
+                && path.first() == Some(&"v1")
+                && path
+                    .iter()
+                    .any(|part| *part == "task-commands" || *part == "assets")
+            {
+                let value: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+                if let Some(unknown) = value["error"]
+                    .as_str()
+                    .and_then(unknown_outcome::UnknownOutcome::from_code)
+                {
+                    return Err(unknown.into());
+                }
+                // The app acts on these itself (waits for the update, or offers
+                // Update computer), so it gets the code rather than a sentence.
+                if let Some(code) = value["error"].as_str().and_then(runtime_update::rejection) {
+                    return Err(TaskRejection(code).into());
+                }
+                if let Some(message) = value["error"].as_str().and_then(task_rejection) {
+                    return Err(TaskRejection(message).into());
+                }
             }
             return Err(CloudHttpFailure(status).into());
         }
@@ -1379,6 +1495,10 @@ impl CloudApi {
                 self.computer_recreation(&token, &account, organization.as_deref(), &params)
                     .await?
             }
+            zuse_protocol::methods::CLOUD_RUNTIME_UPDATE_STATUS => {
+                self.runtime_update_status(&token, &account, organization.as_deref(), &params)
+                    .await?
+            }
             zuse_protocol::methods::CLOUD_ALLOCATION_RETRY => {
                 self.allocation_retry(&token, &account, organization.as_deref(), &params)
                     .await?
@@ -1723,6 +1843,44 @@ pub async fn handle(auth: &Auth, method: &str, params: Value) -> Result<Value> {
 #[cfg(test)]
 mod beta_tests {
     use super::*;
+    #[test]
+    fn rejected_messages_say_why_instead_of_busy() {
+        assert!(
+            super::task_rejection("cloud_task_model_not_installed")
+                .unwrap()
+                .contains("model")
+        );
+        assert!(super::task_rejection("something_new").is_none());
+    }
+    #[test]
+    fn runtime_update_rejections_say_what_happens_next() {
+        let updating =
+            super::task_rejection(zuse_protocol::cloud_runtime_updates::RUNTIME_UPDATING).unwrap();
+        assert!(updating.starts_with("Updating this computer to take this message"));
+        let unavailable =
+            super::task_rejection(zuse_protocol::cloud_runtime_updates::RUNTIME_UPDATE_UNAVAILABLE)
+                .unwrap();
+        assert!(unavailable.contains("Update computer"));
+    }
+    #[test]
+    fn an_outdated_computer_runtime_is_a_definitive_rejection_naming_the_fix() {
+        let message =
+            super::task_rejection(zuse_protocol::cloud_task_commands::RUNTIME_OUTDATED).unwrap();
+        assert!(message.contains("older version"));
+        assert!(
+            !message.contains("recreate"),
+            "recreation keeps the same runtime"
+        );
+        let rpc = TaskRejection(message).rpc();
+        assert!(matches!(
+            rpc,
+            zuse_rpc::RpcError::Capability(code)
+                if code == format!(
+                    "{}{message}",
+                    zuse_protocol::cloud_task_commands::TASK_REJECTED_PREFIX
+                )
+        ));
+    }
     #[test]
     fn cloud_computers_are_off_in_production_unless_enabled() {
         assert!(!beta_enabled_for(None, "https://api.zuse.sh"));

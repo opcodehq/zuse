@@ -593,6 +593,8 @@ impl Composer {
         } else if let Some(notice) = self.cloud_model_notice_row(&theme, cx) {
             rows.push(TrayRow::Pill(notice));
         }
+        rows.extend(self.cloud_unknown_row(&theme, cx).map(TrayRow::Pill));
+        rows.extend(self.cloud_runtime_update_row(&theme, cx).map(TrayRow::Pill));
         rows.extend(self.live_cloud_row(&theme, cx).map(TrayRow::Pill));
         rows.extend(self.connection_row(cx).map(TrayRow::Pill));
         rows.extend(self.project_creation_row(&theme, cx).map(TrayRow::Pill));
@@ -1630,7 +1632,7 @@ impl Composer {
             pill.icon_element(crate::loaders::mini_glyph_spinner(
                 "tray-sign-in-spinner",
                 2.5,
-                theme.glyph,
+                theme.loader_glyph(),
                 cx.entity_id(),
                 cx,
             ))

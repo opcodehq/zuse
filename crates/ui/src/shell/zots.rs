@@ -232,7 +232,7 @@ fn thread_mark(
             .into_any_element()
     };
     match phase {
-        ThreadPhase::Working => crate::loaders::terminal_spinner(key, 13.0, theme.text_muted),
+        ThreadPhase::Working => crate::loaders::retro_loader(key, 13.0, theme.loader_glyph()),
         ThreadPhase::NeedsYou(status) => {
             match super::spaces::status_glyph(status, false, false, awaiting, theme) {
                 Some((path, tone)) => glyph(path, tone),
@@ -366,10 +366,10 @@ impl Shell {
                         )
                     })
                     .when(working, |d| {
-                        d.child(crate::loaders::terminal_spinner(
+                        d.child(crate::loaders::retro_loader(
                             format!("zot-working-{}", zot.id),
                             13.0,
-                            theme.text_muted,
+                            theme.loader_glyph(),
                         ))
                     })
                     .when(!working && needs > 0, |d| {

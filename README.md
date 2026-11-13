@@ -155,7 +155,7 @@ The browser’s **Settings → Providers** page includes installed versions, upd
 For LAN access, supply a certificate trusted by the connecting device and a matching private key. Replace the example hostname with your certificate's LAN hostname or IP:
 
 ```sh
-cargo run -p zuse-cli -- --listen 0.0.0.0:27656 --ipc-port 0 \
+cargo run -p zuse-cli -- serve --listen 0.0.0.0:27656 --ipc-port 0 \
   --tls-cert certs/lan-cert.pem --tls-key certs/lan-key.pem \
   --public-origin https://zuse.local:27656 --data-dir .context/lan-profile
 ```
@@ -167,7 +167,7 @@ Direct HTTPS uses Secure browser cookies and WSS for agent RPC. See [development
 Choose **Settings → General → Language** to follow the system language or select
 English, French, German, Simplified Chinese, Traditional Chinese, Japanese, or
 Korean. Desktop and browser choices are saved locally. CLI output uses
-`zuse-server --language zh-Hans` or `ZUSE_LANGUAGE=zh-Hans`; command and protocol
+`zuse --language zh-Hans` or `ZUSE_LANGUAGE=zh-Hans`; command and protocol
 spellings stay the same. Non-English translations are previews pending screen
 review. See [localization](internal-docs/localization.md) for contribution and
 review instructions.
@@ -216,11 +216,13 @@ An explicit paired connection never falls back to another local engine. Remote d
 Install Zuse on the machine that should run your agents, then start it:
 
 ```sh
-zuse-server --lan        # same network: prints a private link and QR code
-zuse-server --account    # anywhere: sign in with a code, then open the printed link
+zuse serve --lan        # same network: prints a private link and QR code
+zuse serve --account    # anywhere: sign in with a code, then open the printed link
 ```
 
-On a local network the browser warns about the computer's private certificate the first time, because the web app needs HTTPS. Continue only on a network you trust, or add `--tailscale-serve` for a certificate browsers already accept. Run `zuse-server pair` for another link, or `zuse-server status` to see what is reachable.
+On a local network the browser warns about the computer's private certificate the first time, because the web app needs HTTPS. Continue only on a network you trust, or add `--tailscale-serve` for a certificate browsers already accept. Run `zuse pair` for another link, `zuse link` to make a running server available through your account, or `zuse status` to see what is reachable.
+
+The desktop app includes the `zuse` command. For a server without a display, download the `zuse-cli` archive for your platform from the release instead: it holds only `bin/zuse` and the web app it serves, with no desktop libraries. To keep the server running, install it as a service with `zuse daemon install --serve --lan` (systemd on Linux, launchd on macOS). `zuse-server` still works as the old name for `zuse serve`.
 
 ## License
 
@@ -242,7 +244,7 @@ cargo run -p zuse-relay -- --host-token-file relay-host-token --assets dist/web
 Then start the execution host with outbound relay access:
 
 ```sh
-cargo run -p zuse-cli --bin zuse-server -- --relay-origin http://127.0.0.1:27657 --relay-host-token-file relay-host-token
+cargo run -p zuse-cli -- serve --relay-origin http://127.0.0.1:27657 --relay-host-token-file relay-host-token
 ```
 
 Create an invitation from the execution host's Settings → Devices. Its link points to the relay. The host opens outbound sockets; agent RPC, file uploads and subscriptions still authenticate and decrypt on the execution host. Remote relay origins require trusted HTTPS. For LAN/public serving, use `--tls-cert`/`--tls-key`, or explicitly configure `--public-origin https://…` behind a trusted HTTPS reverse proxy. The routing credential authorizes host registration only; it cannot authenticate paired RPC.

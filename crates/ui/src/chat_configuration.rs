@@ -125,6 +125,15 @@ impl AppState {
             .is_some_and(|id| self.chat_configuration.pending.contains_key(id))
     }
 
+    /// A configuration change for the selected chat is saving or its result
+    /// is uncertain.
+    pub(crate) fn configuration_write_unsettled(&self) -> bool {
+        self.selected_chat.as_ref().is_some_and(|id| {
+            self.chat_configuration.pending.contains_key(id)
+                || self.chat_configuration.uncertain.contains_key(id)
+        })
+    }
+
     pub(crate) fn configuration_blocked(&self) -> bool {
         if self.selected_chat.is_none() || self.side_chat_unsaved() {
             return false;

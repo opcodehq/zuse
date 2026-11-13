@@ -273,21 +273,7 @@ impl Identity {
         CloudRuntimeBootstrapRequest {
             credential_public_jwk: self.stored.credential_public_jwk.clone(),
             signing_public_jwk: self.stored.signing_public_jwk.clone(),
-            capabilities: Some(vec![
-                "rust-fast-start-v1".into(),
-                zuse_protocol::cloud::STARTUP_BIND_CAPABILITY.into(),
-                crate::project_cache::CAPABILITY.into(),
-                "rust-rpc-v1".into(),
-                "rust-session-commands-v1".into(),
-                zuse_protocol::cloud_task_commands::CAPABILITY.into(),
-                "rust-organization-execution-v1".into(),
-                "rust-workload-secrets-v1".into(),
-                zuse_protocol::cloud_lifecycle::CAPABILITY.into(),
-                zuse_protocol::cloud_lifecycle::MEMORY_CAPABILITY.into(),
-                zuse_protocol::cloud_lifecycle::RECREATION_CAPABILITY.into(),
-                "rust-transcript-projection-v1".into(),
-                "rust-full-state-recovery-v1".into(),
-            ]),
+            capabilities: Some(bootstrap_capabilities()),
             rpc_protocol: Some(zuse_protocol::cloud_gateway::RUST_RPC.into()),
         }
     }
@@ -431,6 +417,28 @@ impl Identity {
         ensure!(decode(text)?.len() == 32, "runtime_transcript_key_invalid");
         Ok(Zeroizing::new(text.into()))
     }
+}
+/// Capability names this runtime advertises: sent at bootstrap, printed by
+/// `zuse-cloud-runtime bootstrap-capabilities`, and attested after an update.
+pub fn bootstrap_capabilities() -> Vec<String> {
+    vec![
+        "rust-fast-start-v1".into(),
+        zuse_protocol::cloud::STARTUP_BIND_CAPABILITY.into(),
+        crate::project_cache::CAPABILITY.into(),
+        "rust-rpc-v1".into(),
+        "rust-session-commands-v1".into(),
+        zuse_protocol::cloud_task_commands::CAPABILITY.into(),
+        zuse_protocol::cloud_task_commands::DIRECT_UPLOADS_CAPABILITY.into(),
+        zuse_protocol::cloud_task_commands::MESSAGE_ACCESS_MODE_CAPABILITY.into(),
+        "rust-organization-execution-v1".into(),
+        "rust-workload-secrets-v1".into(),
+        zuse_protocol::cloud_lifecycle::CAPABILITY.into(),
+        zuse_protocol::cloud_lifecycle::MEMORY_CAPABILITY.into(),
+        zuse_protocol::cloud_lifecycle::RECREATION_CAPABILITY.into(),
+        "rust-transcript-projection-v1".into(),
+        "rust-full-state-recovery-v1".into(),
+        zuse_protocol::cloud_runtime_updates::CAPABILITY.into(),
+    ]
 }
 fn validate_binding(stored: &Stored, boot: &CloudRuntimeBootstrap, generation: i64) -> Result<()> {
     ensure!(

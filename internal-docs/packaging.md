@@ -2,7 +2,35 @@
 
 Release downloads include macOS DMGs and archives for Apple silicon and Intel,
 a Windows x64 setup executable and portable zip, and Linux `.deb`, `.rpm` and
-archives for x64 and ARM64. The release's `SHA256SUMS` covers every asset.
+archives for x64 and ARM64. Each platform also has a standalone command-line
+archive, `zuse-cli-VERSION-PLATFORM-ARCH.tar.gz` (a `.zip` on Windows), for
+machines without a display. The release's `SHA256SUMS` covers every asset.
+
+## Command line only
+
+The desktop `zuse` links the windowing and WebKitGTK libraries, so it cannot
+start on a headless Linux server without them. The `zuse-cli` archive holds the
+same commands without the window:
+
+```text
+bin/zuse              the command (bin\zuse.exe on Windows)
+bin/zuse-server       old name for `zuse serve` (a link; bin\zuse-server.cmd on Windows)
+share/zuse/web/       the browser app `zuse serve` serves
+share/zuse/legal/     licences and notices
+manifest.json         SHA-256 inventory; the link is listed under "links"
+```
+
+Extract it anywhere and run `bin/zuse serve --lan`, or copy the tree under a
+prefix such as `/usr/local` (`tar -xzf zuse-cli-*.tar.gz --strip-components=1
+-C /usr/local`). `zuse serve` finds `../share/zuse/web` beside its executable;
+`--assets` or `ZUSE_WEB_ASSETS` overrides that. Run without a command, it says
+the desktop app is not installed and lists the commands. Only `appshot`,
+opening links and `--paired-link-file` need the desktop app.
+
+Cargo builds this binary as `zuse-cli` (beside the desktop app's `zuse`);
+packages install it as `bin/zuse` here and as `zuse-server` in the app
+packages. Invoked as `zuse-server`, by file name or through the Windows
+launcher, it keeps that command's old interface.
 
 ## Install from a Linux terminal
 
@@ -27,7 +55,8 @@ For a system installation, use `sudo apt install ./zuse-VERSION-linux-ARCH.deb`
 or `sudo dnf install ./zuse-VERSION-linux-ARCH.rpm`. Replace VERSION and ARCH
 with the downloaded filename (ARCH is `x86_64` or `aarch64`). These install under
 `/opt/zuse`, register `zuse`, `zuse-server` and `zuse-relay` in `/usr/bin`, and
-register the desktop entry. Package managers resolve runtime dependencies.
+register the desktop entry. `zuse serve` is the server; `zuse-server` remains
+for scripts that use the old name. Package managers resolve runtime dependencies.
 Remove with `sudo apt remove zuse` or `sudo dnf remove zuse`; profiles remain.
 The glibc 2.39/Ubuntu 24.04 build baseline applies to all Linux formats.
 
@@ -46,9 +75,12 @@ On Windows, run `python scripts/package.py` with Python 3.11 or newer and
 Git Bash installed.
 
 This builds the release browser and native executables from the checkout, then
-creates `dist/build/zuse-VERSION-PLATFORM-ARCH.tar.gz` (a `.zip` on Windows). Keep the terminal open
-until the command completes. The output directory must not already contain an
-archive with that name. `--profile dev` selects a development native build.
+creates `dist/build/zuse-VERSION-PLATFORM-ARCH.tar.gz` and the standalone
+`dist/build/zuse-cli-VERSION-PLATFORM-ARCH.tar.gz` (`.zip` on Windows). Keep the
+terminal open until the command completes. The output directory must not already
+contain archives with those names. `python3 scripts/verify-cli-archive.py
+ARCHIVE` checks the standalone archive's inventory and, on its own platform,
+starts `zuse serve` from a fresh profile and fetches the packaged page. `--profile dev` selects a development native build.
 For a preview of the workspace version, use `--version 0.26.0-preview.5`.
 The archive and manifest retain that suffix; macOS bundle versions remain numeric.
 
@@ -59,8 +91,9 @@ python3 scripts/package.py --binaries target/release --assets dist/web \
   --platform linux --arch x86_64 --output dist/build/local
 ```
 
-The three required executables are `zuse`, `zuse-server`, and `zuse-relay`
-(with `.exe` extensions on Windows).
+The three required cargo executables are `zuse`, `zuse-cli`, and `zuse-relay`
+(with `.exe` extensions on Windows). `zuse-cli` is installed as `zuse-server` in
+the app package and as `bin/zuse` in the standalone archive.
 The packager checks their binary platform and architecture. Prebuilt inputs
 are labelled as such; their source revision and optimization level are not
 inferred. Browser assets must come from the matching source/protocol build.
@@ -93,9 +126,10 @@ Zuse-owned launch/desktop links. Package directories and profiles are preserved.
 Stop running instances and any daemon you enabled before removing old package
 directories manually. No daemon is enabled automatically.
 
-You can also run `./bin/zuse` directly from any extracted location. `bin/zuse-server`
-and `bin/zuse-relay` locate their packaged browser assets regardless of the current
-directory; `--assets` overrides that default. Native Browser Access settings also
+You can also run `./bin/zuse` directly from any extracted location; `zuse serve`
+finds `libexec/web` beside the executable. `bin/zuse-server` and `bin/zuse-relay`
+locate their packaged browser assets regardless of the current directory;
+`--assets` overrides that default. Native Browser Access settings also
 discover the installed assets. `ZUSE_WEB_ASSETS` can override asset discovery.
 
 Linux requires compatible system libraries, including WebKitGTK 4.1, JSON-GLib,
@@ -112,7 +146,7 @@ Apple silicon (`aarch64`) or Intel (`x86_64`) download for your Mac.
 Extract the archive and copy `Zuse.app` into Applications. The archive also
 includes command-line launchers in `bin/`; keep them alongside the app if used.
 The bundle includes its icon, URL scheme, microphone description and browser
-assets. Local packages are unsigned unless `ZUSE_MACOS_SIGN_IDENTITY` is set;
+assets; `Zuse.app/Contents/MacOS/zuse serve` finds them in `Resources/web`. Local packages are unsigned unless `ZUSE_MACOS_SIGN_IDENTITY` is set;
 Apple account credentials additionally enable notarization. Tagged releases
 require both signing and notarization on a separate runner.
 Gatekeeper acceptance and microphone permission require verification on a Mac.
@@ -127,8 +161,8 @@ The installer is unsigned, like the portable zip below.
 Extract the zip anywhere you can write to and run `zuse.exe`. No installer or
 administrator rights are needed. `bin\zuse-server.cmd` and `bin\zuse-relay.cmd`
 start the helpers in `libexec\` with the packaged browser assets in `web\`;
-`--assets` or `ZUSE_WEB_ASSETS` overrides that default. Profiles default to
-`%LOCALAPPDATA%\Zuse`.
+`--assets` or `ZUSE_WEB_ASSETS` overrides that default. `zuse.exe serve` finds
+the same `web\` beside it. Profiles default to `%LOCALAPPDATA%\Zuse`.
 
 The release zip is not code-signed, so SmartScreen warns on first launch:
 choose **More info**, then **Run anyway**. The embedded browser uses the

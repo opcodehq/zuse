@@ -286,13 +286,21 @@ jobs:
         run: |
           cp release-tools/scripts/install.sh dist/release/install.sh
           python3 release-tools/scripts/publish_distributions.py --check-only "$TAG" dist/release
+          # The standalone command ships beside every app archive.
+          version="${{ needs.verify.outputs.version }}"
+          for archive in linux-x86_64.tar.gz linux-aarch64.tar.gz macos-aarch64.tar.gz macos-x86_64.tar.gz windows-x86_64.zip; do
+            if [ ! -f "dist/release/zuse-cli-$version-$archive" ]; then
+              echo "::error::Release is missing zuse-cli-$version-$archive"
+              exit 1
+            fi
+          done
           cd dist/release
           sha256sum zuse-* install.sh > SHA256SUMS
           cat SHA256SUMS
           cd ../..
           python3 release-tools/scripts/release_notes.py "$TAG" > dist/changelog.md
           test -s dist/changelog.md
-          python3 release-tools/scripts/distribution-notes.py "$TAG" dist/changelog.md > dist/notes.md
+          python3 release-tools/scripts/distribution-notes.py "$TAG" dist/changelog.md --cli-archives > dist/notes.md
       - name: Publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

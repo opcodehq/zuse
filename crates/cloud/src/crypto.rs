@@ -109,6 +109,14 @@ impl MasterKey {
             .map_err(|_| CryptoError::InvalidKey)?;
         Ok(Self(Zeroizing::new(key)))
     }
+    /// A distinct key for the imported Executor credential and source stores.
+    pub(crate) fn executor_key(&self) -> Zeroizing<String> {
+        use hmac::{Hmac, Mac};
+        let mut mac =
+            <Hmac<sha2::Sha256> as Mac>::new_from_slice(self.0.as_slice()).expect("HMAC key");
+        mac.update(b"zuse-executor-v2:postgres:v1");
+        Zeroizing::new(URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes()))
+    }
     pub fn seal(&self, aad: &[u8], plaintext: &[u8]) -> Result<String, CryptoError> {
         serde_json::to_string(&encrypt(self.0.as_slice(), aad, plaintext)?)
             .map_err(|_| CryptoError::EncryptionFailed)

@@ -23,7 +23,6 @@ pub mod archived;
 pub mod cloud_billing;
 mod command_labels;
 pub mod composer;
-mod custom_acp;
 pub mod defaults;
 pub mod devices;
 pub mod files;

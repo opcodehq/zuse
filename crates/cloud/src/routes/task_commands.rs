@@ -25,9 +25,19 @@ pub(super) async fn submit(
 ) -> Result<Json<Value>, ApiError> {
     let access = state.access(&headers, AccessKind::Content).await?;
     let session = request.session_id.clone();
-    let response = runtime(&state)?
+    let response = match runtime(&state)?
         .task_command_submit(&id, &access, request, chrono::Utc::now().timestamp_millis())
-        .await?;
+        .await
+    {
+        Ok(response) => response,
+        Err(error) => {
+            // Only returned for computers that support in-place updates.
+            if error.code == zuse_protocol::cloud_runtime_updates::RUNTIME_UPDATING {
+                state.gateway.nudge_runtime_update(&id);
+            }
+            return Err(error);
+        }
+    };
     if let Some(control) = &state.runtime {
         control.dispatch_task_drain(&id, Some(&session));
     }

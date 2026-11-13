@@ -40,6 +40,11 @@ pub struct HarnessDescriptor {
     /// "unknown": consumers fall back to detection (see [`descriptor_enabled`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
+    /// For agents that only run signed in: whether this device has a usable
+    /// login (or an API key / proxy that stands in for one). `None` — the
+    /// agent runs without one, or an older engine — never hides it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signed_in: Option<bool>,
 }
 
 impl HarnessDescriptor {
@@ -83,6 +88,7 @@ fn describe(harness: &dyn Harness) -> HarnessDescriptor {
         installed: harness.installed(),
         can_install: false,
         enabled: None,
+        signed_in: None,
     }
 }
 
@@ -136,6 +142,9 @@ pub struct HarnessRegistry {
     pending_updates: Mutex<std::collections::HashSet<HarnessId>>,
     update_generation: tokio::sync::watch::Sender<u64>,
     pinned_models: Mutex<HashMap<HarnessId, Vec<zuse_protocol::Model>>>,
+    /// Hidden and added models per provider (see [`crate::model_prefs`]).
+    /// Opened with the prefs file; bare registries have none.
+    model_prefs: std::sync::OnceLock<crate::model_prefs::ModelPrefs>,
 }
 
 impl Default for HarnessRegistry {
@@ -247,6 +256,7 @@ impl HarnessRegistry {
             pending_updates: Mutex::new(std::collections::HashSet::new()),
             update_generation,
             pinned_models: Mutex::new(HashMap::new()),
+            model_prefs: std::sync::OnceLock::new(),
         }
     }
 
@@ -346,6 +356,9 @@ impl HarnessRegistry {
     /// Load `harness-prefs.json` from the engine data dir and remember the
     /// path for writes. Corrupt/missing files fall back to the default set.
     pub fn load_prefs(&self, data_dir: &Path) {
+        let _ = self
+            .model_prefs
+            .set(crate::model_prefs::ModelPrefs::open(data_dir));
         let path = data_dir.join("harness-prefs.json");
         let loaded = std::fs::read_to_string(&path)
             .ok()
@@ -522,6 +535,41 @@ impl HarnessRegistry {
             .cloned()
     }
 
+    /// Replace how a lazily registered harness is built, keeping its
+    /// descriptor and place. For host wiring that exists only after the
+    /// registry does (credential resolvers). A harness already registered or
+    /// resolved as a concrete instance is someone's deliberate choice (tests,
+    /// embedders) and is left alone.
+    pub(crate) fn set_factory(&self, id: HarnessId, factory: Factory) {
+        if let Some(Slot::Lazy { factory: slot, .. }) = self.slots().get_mut(&id) {
+            *slot = factory;
+        }
+    }
+
+    /// This device's model choices, when the registry has a data dir.
+    pub fn model_prefs(&self) -> Option<&crate::model_prefs::ModelPrefs> {
+        self.model_prefs.get()
+    }
+
+    /// `models` as pickers should see them: the user's hidden models
+    /// removed and added IDs appended.
+    pub fn apply_model_prefs(
+        &self,
+        id: HarnessId,
+        models: Vec<zuse_protocol::Model>,
+    ) -> Vec<zuse_protocol::Model> {
+        let Some(prefs) = self.model_prefs() else {
+            return models;
+        };
+        let reasoning = self
+            .descriptors()
+            .into_iter()
+            .find(|d| d.id == id)
+            .map(|d| d.reasoning_levels)
+            .unwrap_or_default();
+        prefs.apply(id, models, &reasoning)
+    }
+
     /// Register a slot resolved on first `resolve` (the factory result is
     /// cached). `installed` is the CLI-presence probe run per `descriptors()`
     /// call; it must never spawn.
@@ -663,6 +711,7 @@ pub fn default_registry() -> HarnessRegistry {
             installed: true,
             can_install: false,
             enabled: None,
+            signed_in: None,
         },
         Box::new(|| zuse_providers::ClaudeHarness::new().installed()),
         Box::new(|| Ok(Arc::new(zuse_providers::ClaudeHarness::new()) as Arc<dyn Harness>)),
@@ -691,6 +740,7 @@ pub fn default_registry() -> HarnessRegistry {
             installed: true,
             can_install: false,
             enabled: None,
+            signed_in: None,
         },
         Box::new(|| zuse_providers::CodexHarness::new().installed()),
         Box::new(|| Ok(Arc::new(zuse_providers::CodexHarness::new()) as Arc<dyn Harness>)),
@@ -708,6 +758,7 @@ pub fn default_registry() -> HarnessRegistry {
             installed: true,
             can_install: false,
             enabled: None,
+            signed_in: None,
         },
         Box::new(|| zuse_providers::CursorHarness::new().installed()),
         Box::new(|| Ok(Arc::new(zuse_providers::CursorHarness::new()) as Arc<dyn Harness>)),
@@ -726,6 +777,7 @@ pub fn default_registry() -> HarnessRegistry {
             installed: true,
             can_install: false,
             enabled: None,
+            signed_in: None,
         },
         Box::new(|| zuse_providers::AcpHarness::devin().installed()),
         Box::new(|| Ok(Arc::new(zuse_providers::AcpHarness::devin()) as Arc<dyn Harness>)),
@@ -748,6 +800,7 @@ pub fn default_registry() -> HarnessRegistry {
             installed: true,
             can_install: false,
             enabled: None,
+            signed_in: None,
         },
         Box::new(|| zuse_providers::AcpHarness::grok().installed()),
         Box::new(|| Ok(Arc::new(zuse_providers::AcpHarness::grok()) as Arc<dyn Harness>)),
@@ -766,6 +819,7 @@ pub fn default_registry() -> HarnessRegistry {
             installed: true,
             can_install: false,
             enabled: None,
+            signed_in: None,
         },
         Box::new(|| zuse_providers::AcpHarness::hermes().installed()),
         Box::new(|| Ok(Arc::new(zuse_providers::AcpHarness::hermes()) as Arc<dyn Harness>)),
@@ -781,6 +835,7 @@ pub fn default_registry() -> HarnessRegistry {
             installed: true,
             can_install: false,
             enabled: None,
+            signed_in: None,
         },
         Box::new(|| zuse_providers::PiHarness::new().installed()),
         Box::new(|| Ok(Arc::new(zuse_providers::PiHarness::new()) as Arc<dyn Harness>)),
@@ -797,6 +852,7 @@ pub fn default_registry() -> HarnessRegistry {
             installed: true,
             can_install: false,
             enabled: None,
+            signed_in: None,
         },
         Box::new(|| zuse_providers::MuseHarness::new().installed()),
         Box::new(|| Ok(Arc::new(zuse_providers::MuseHarness::new()) as Arc<dyn Harness>)),
@@ -822,6 +878,7 @@ pub fn default_registry() -> HarnessRegistry {
             installed: true,
             can_install: false,
             enabled: None,
+            signed_in: None,
         },
         Box::new(|| zuse_providers::OpencodeHarness::new().installed()),
         Box::new(|| Ok(Arc::new(zuse_providers::OpencodeHarness::new()) as Arc<dyn Harness>)),
@@ -840,6 +897,7 @@ pub fn default_registry() -> HarnessRegistry {
             installed: true,
             can_install: false,
             enabled: None,
+            signed_in: None,
         },
         Box::new(|| zuse_providers::AcpHarness::antigravity().installed()),
         Box::new(|| Ok(Arc::new(zuse_providers::AcpHarness::antigravity()) as Arc<dyn Harness>)),
@@ -859,6 +917,7 @@ pub fn default_registry() -> HarnessRegistry {
                 installed: true,
                 can_install: false,
                 enabled: None,
+                signed_in: None,
             },
             Box::new(move || build().installed()),
             Box::new(move || Ok(Arc::new(build()) as Arc<dyn Harness>)),
@@ -882,6 +941,7 @@ mod tests {
             installed: true,
             can_install: false,
             enabled: Some(true),
+            signed_in: None,
         };
         assert!(descriptor.steers_mid_turn());
 
@@ -909,6 +969,7 @@ mod tests {
                 installed: true,
                 can_install: false,
                 enabled: None,
+                signed_in: None,
             },
             Box::new(|| false),
             Box::new(move || {
@@ -1063,6 +1124,7 @@ mod tests {
                 installed: true,
                 can_install: false,
                 enabled: None,
+                signed_in: None,
             },
             Box::new(move || installed),
             Box::new(|| Err(HarnessError::NotInstalled("test slot".into()))),
@@ -1146,6 +1208,7 @@ mod tests {
                 installed: true,
                 can_install: false,
                 enabled: None,
+                signed_in: None,
             },
             Box::new(move || probe.load(Ordering::SeqCst)),
             Box::new(|| Err(HarnessError::NotInstalled("test slot".into()))),

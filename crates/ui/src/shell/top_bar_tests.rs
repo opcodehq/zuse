@@ -333,7 +333,7 @@ fn overview_supports_duplicate_tabs_and_restores_neighbor(cx: &mut TestAppContex
 }
 
 #[gpui::test]
-fn branch_pill_aligns_with_create_pr_and_fits_compact_composer(cx: &mut TestAppContext) {
+fn branch_pill_fits_compact_composer(cx: &mut TestAppContext) {
     let (shell, cx) = setup(cx);
     for width in [436.0, 768.0] {
         cx.simulate_resize(gpui::size(px(width), px(700.0)));
@@ -347,9 +347,6 @@ fn branch_pill_aligns_with_create_pr_and_fits_compact_composer(cx: &mut TestAppC
             window.draw(cx).clear();
         });
         let branch = cx.debug_bounds("top-bar-branch").expect("branch pill");
-        let create = cx.debug_bounds("composer-create-pr").expect("Create PR");
-        assert!((f32::from(branch.top()) - f32::from(create.top())).abs() < 1.0);
-        assert!(branch.left() >= create.right());
         let input = shell.read_with(cx, |shell, cx| {
             shell
                 .composer
@@ -362,7 +359,7 @@ fn branch_pill_aligns_with_create_pr_and_fits_compact_composer(cx: &mut TestAppC
             branch.right() <= input.right(),
             "branch {branch:?}, input {input:?}"
         );
-        assert!(create.left() >= input.left());
+        assert!(branch.left() >= input.left());
         assert!(branch.bottom() <= input.top());
     }
 }

@@ -38,6 +38,7 @@ jsonwebtoken = { version = "11.1", default-features = false, features = ["rust_c
 prost = "0.14"
 quick-xml = { version = "0.41", features = ["serialize"] }
 percent-encoding = "2.3"
+url = "2"
 reqwest.workspace = true
 rsa = "0.9"
 serde.workspace = true

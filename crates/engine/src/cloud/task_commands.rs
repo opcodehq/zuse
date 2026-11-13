@@ -41,6 +41,12 @@ impl Manager {
     }
 }
 
+/// What a message that failed for a known refusal reason (its execution's
+/// `errorCode`) means for the user. `None` for failures with no such reason.
+pub fn refusal_message(code: &str) -> Option<&'static str> {
+    super::task_rejection(code)
+}
+
 pub const ASSET_PREFIX: &str = "cloud-asset://";
 pub fn asset_ref(asset: &Asset) -> Result<String> {
     let encoded = URL_SAFE_NO_PAD.encode(serde_json::to_vec(asset)?);
@@ -113,13 +119,66 @@ pub fn is_command_method(name: &str) -> bool {
             | methods::STEER_QUEUED_MESSAGE_NOW
     )
 }
+/// Whether `path` has the shape of a file uploaded to a cloud computer
+/// (`<data>/uploads/<id>-<name>`). The computer itself checks it is one of its
+/// own uploads before a run reads it.
+fn computer_upload_path(path: &str) -> bool {
+    let path = std::path::Path::new(path);
+    path.is_absolute()
+        && path.as_os_str().len() <= 1024
+        && path.components().all(|part| {
+            matches!(
+                part,
+                std::path::Component::RootDir | std::path::Component::Normal(_)
+            )
+        })
+        && path
+            .parent()
+            .and_then(|parent| parent.file_name())
+            .is_some_and(|name| name == "uploads")
+}
+/// Splits a queued message's files: `cloud-asset://` refs are files a server
+/// still holds, and absolute paths are files already uploaded straight to the
+/// computer (a queued row lists both kinds under `attachments`).
+fn queued_files(p: &Value) -> Result<(Vec<Asset>, Vec<String>)> {
+    let mut computer: Vec<String> =
+        serde_json::from_value(p.get("computerFiles").cloned().unwrap_or(json!([])))?;
+    let mut assets = Vec::new();
+    for path in p
+        .get("attachments")
+        .unwrap_or(&json!([]))
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("Cloud attachments are unavailable."))?
+    {
+        let path = path
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Invalid cloud attachment."))?;
+        if path.starts_with(ASSET_PREFIX) {
+            assets.push(Value::String(path.to_owned()));
+        } else if path.starts_with('/') {
+            if !computer.iter().any(|known| known == path) {
+                computer.push(path.to_owned());
+            }
+        } else {
+            parse_asset_ref(path)?;
+        }
+    }
+    let assets = paths(&Value::Array(assets))?;
+    ensure!(
+        assets.len() + computer.len() <= zuse_protocol::cloud_assets::MAX_ASSETS,
+        "Attach up to eight files."
+    );
+    Ok((assets, computer))
+}
 fn input(p: &Value) -> Result<wire::Input> {
+    let (attachments, computer_files) = queued_files(p)?;
     Ok(wire::Input {
         run_selection: serde_json::from_value(
             p.get("runSelection").cloned().unwrap_or(Value::Null),
         )?,
         text: p["text"].as_str().unwrap_or_default().to_owned(),
-        attachments: paths(p.get("attachments").unwrap_or(&json!([])))?,
+        attachments,
+        computer_files,
         file_refs: serde_json::from_value(p.get("fileRefs").cloned().unwrap_or(json!([])))?,
         skill_refs: serde_json::from_value(p.get("skillRefs").cloned().unwrap_or(json!([])))?,
         annotations: serde_json::from_value(p.get("annotations").cloned().unwrap_or(json!([])))?,
@@ -143,7 +202,18 @@ pub(super) fn normalize(name: &str, p: &Value) -> Result<wire::Request> {
         methods::QUEUE_COMMAND => {
             let mut payload: SessionCommandPayload = serde_json::from_value(p["command"].clone())?;
             let attachments = if let SessionCommandPayload::Run { request, .. } = &mut payload {
-                let assets = paths(&serde_json::to_value(&request.attachments)?)?;
+                // Files already uploaded straight to the computer stay on the
+                // run by their path there; `cloud-asset://` refs are files a
+                // server still holds. Any other path (this device's) fails.
+                let (computer, held): (Vec<String>, Vec<String>) =
+                    std::mem::take(&mut request.attachments)
+                        .into_iter()
+                        .partition(|path| computer_upload_path(path));
+                let assets = paths(&serde_json::to_value(&held)?)?;
+                ensure!(
+                    assets.len() + computer.len() <= zuse_protocol::cloud_assets::MAX_ASSETS,
+                    "Attach up to eight files."
+                );
                 // Local cwd, worktree and MCP configuration are never guest authority.
                 ensure!(
                     request.worktree.is_none() && request.mcp.is_none() && request.resume.is_none(),
@@ -165,7 +235,7 @@ pub(super) fn normalize(name: &str, p: &Value) -> Result<wire::Request> {
                 if request.cwd.is_empty() {
                     request.cwd = ".".into();
                 }
-                request.attachments.clear();
+                request.attachments = computer;
                 assets
             } else {
                 if let SessionCommandPayload::Steer { prompt, .. } = &payload {
@@ -292,7 +362,12 @@ fn queue_shape(mut page: Value) -> Result<Value> {
         for row in rows {
             let assets: Vec<Asset> =
                 serde_json::from_value(row.get("attachments").cloned().unwrap_or(json!([])))?;
-            row["attachments"] = json!(assets.iter().map(asset_ref).collect::<Result<Vec<_>>>()?);
+            let mut files = assets.iter().map(asset_ref).collect::<Result<Vec<_>>>()?;
+            // Files uploaded straight to the computer are listed by their path there.
+            let computer: Vec<String> =
+                serde_json::from_value(row.get("computerFiles").cloned().unwrap_or(json!([])))?;
+            files.extend(computer);
+            row["attachments"] = json!(files);
             row["issuedBy"] = json!("cloud-authority");
             row["issuedAt"] = row.get("createdAt").cloned().unwrap_or(json!(0));
             if !row["editing"].is_null() {
@@ -446,6 +521,18 @@ fn queue_hint(frame: &Value, workspace: &str) -> bool {
         })
     })
 }
+/// Uploads marked for the computer, and reads of a file already there (an
+/// absolute path rather than a server `cloud-asset://` ref), go to the
+/// computer itself instead of server asset storage.
+pub(super) fn computer_file_call(name: &str, p: &Value) -> bool {
+    match name {
+        methods::UPLOAD_CHUNK | methods::UPLOAD_COMMIT => p["computer"] == true,
+        methods::READ_ATTACHMENT_CHUNK => {
+            p["path"].as_str().is_some_and(|path| path.starts_with('/'))
+        }
+        _ => false,
+    }
+}
 /// Called before acquiring an execution environment. A sleeping guest stays asleep.
 pub(super) async fn maybe_forward(
     api: Arc<CloudApi>,
@@ -459,6 +546,12 @@ pub(super) async fn maybe_forward(
 ) -> Result<Option<zuse_rpc::RpcReply>, zuse_rpc::RpcError> {
     use futures::StreamExt;
     use zuse_rpc::{RpcError, RpcReply};
+    // Files for a run, a queued message or a queued message's edit go straight
+    // to the awake computer; the server never stores them, and they read back
+    // from the computer. Server-held files of older clients still read back.
+    if computer_file_call(name, &p) {
+        return Ok(None);
+    }
     let supported = is_command_method(name)
         || matches!(
             name,
@@ -539,7 +632,7 @@ pub(super) async fn maybe_forward(
         let result=api.request_scoped(&token,&["v1","cloud","workspaces",&workspace,"task-commands"],Some(serde_json::to_value(&request)?),organization.as_deref(),&[]).await;
         // The exact typed body/ID is retained by this owned operation. A lost HTTP
         // response never becomes a different command or an opaque guest RPC.
-        let result=match result {Ok(value)=>value,Err(original)=>{
+        let result=match result {Ok(value)=>value,Err(original) if original.downcast_ref::<super::TaskRejection>().is_some()||original.downcast_ref::<super::unknown_outcome::UnknownOutcome>().is_some()=>return Err(original),Err(original)=>{
             scoped(&auth,&account,organization.as_deref())?;
             match api.request_scoped(&token,&["v1","cloud","workspaces",&workspace,"task-commands"],Some(serde_json::to_value(&request)?),organization.as_deref(),&[]).await{
                 Ok(value)=>value,Err(_)=>return Err(original),
@@ -559,7 +652,7 @@ pub(super) async fn maybe_forward(
             .uploads
             .revoke(&cleanup.1, cleanup.2.as_deref(), &cleanup.3);
     }
-    run.map_err(|error|RpcError::Failed(if error.to_string().contains("cloud_task_steer_selection_changed") {"This queued message uses different agent settings, or the active settings could not be verified. It is still queued. Stop the current turn and use Send now, or let it run afterward.".into()} else if error.to_string().contains("cannot save the selected agent") {error.to_string()} else {"The cloud action was not confirmed. Your draft is preserved; check the queue before retrying the same action.".into()}))
+    run.map_err(|error|if let Some(rejection)=error.downcast_ref::<super::TaskRejection>() {rejection.rpc()} else if let Some(unknown)=error.downcast_ref::<super::unknown_outcome::UnknownOutcome>() {unknown.rpc()} else {RpcError::Failed(if error.to_string().contains("cloud_task_steer_selection_changed") {"This queued message uses different agent settings, or the active settings could not be verified. It is still queued. Stop the current turn and use Send now, or let it run afterward.".into()} else if error.to_string().contains("cannot save the selected agent") {error.to_string()} else {"The cloud action was not confirmed. Your draft is preserved; check the queue before retrying the same action.".into()})})
 }
 
 /// Read-only projection of a durable initial admission, visibly distinct from

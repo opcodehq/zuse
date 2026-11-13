@@ -590,7 +590,7 @@ impl RuntimeControl {
                 sqlx::query("UPDATE api_cloud_workspaces SET request_config=jsonb_set(request_config,'{rustMemoryParked}',$2),runtime_state='offline',status_code='runtime-memory-parked' WHERE workspace_id=$1")
                     .bind(id).bind(marker).execute(&mut *tx).await?;
             }
-            RuntimeRequest::Resumed { operation_id } => {
+            RuntimeRequest::Resumed { operation_id, wake } => {
                 if operation_id != d.operation_id
                     || d.action != Action::Resume
                     || !matches!(d.phase.as_str(), "waking" | "launching" | "ready")
@@ -601,8 +601,10 @@ impl RuntimeControl {
                 // This authenticated Ready receipt is stronger than a worker
                 // observing it two seconds later. Complete ONLY its matching
                 // durable job atomically, fencing any late worker delivery.
-                sqlx::query("WITH operation AS (UPDATE zuse_rust_lifecycle_operations SET phase='ready',updated_at=GREATEST(updated_at,$3),provider_effects=jsonb_set(provider_effects,'{timings}',jsonb_build_object('ready',$3::bigint)||COALESCE(provider_effects->'timings','{}'::jsonb)) WHERE operation_id=$2 AND workspace_id=$1 AND generation=$4 AND source_machine_id=$5 AND storage_incarnation_id=$6 RETURNING operation_id), workspace AS (UPDATE api_cloud_workspaces SET state='ready',runtime_state='online',status_code='ready',request_config=jsonb_set(request_config-'rustMemoryParked','{rustLifecycleOperation}',$7),next_action_at=$8,revision=revision+1,updated_at=GREATEST(updated_at+1,$3) WHERE workspace_id=$1 AND EXISTS(SELECT 1 FROM operation) RETURNING workspace_id) UPDATE zuse_rust_jobs SET state='completed',lease_token=NULL,lease_expires_at=NULL,last_error_code=NULL,updated_at=GREATEST(updated_at,$3) WHERE resource_id=$1 AND resource_generation=$4 AND kind=$9 AND payload->>'operationId'=$2 AND state IN ('pending','running') AND EXISTS(SELECT 1 FROM workspace)")
-                    .bind(id).bind(&d.operation_id).bind(now).bind(d.generation).bind(&d.source_machine_id).bind(&d.storage_incarnation_id).bind(json!({"id":d.operation_id,"action":d.action,"phase":"ready"})).bind(now+self.idle_ms).bind(JOB_KIND).execute(&mut *tx).await?;
+                // Record how the computer woke so the app can say whether it
+                // kept memory; wake time runs from the resume operation's start.
+                sqlx::query("WITH operation AS (UPDATE zuse_rust_lifecycle_operations SET phase='ready',updated_at=GREATEST(updated_at,$3),provider_effects=jsonb_set(provider_effects,'{timings}',jsonb_build_object('ready',$3::bigint)||COALESCE(provider_effects->'timings','{}'::jsonb)) WHERE operation_id=$2 AND workspace_id=$1 AND generation=$4 AND source_machine_id=$5 AND storage_incarnation_id=$6 RETURNING operation_id,created_at), workspace AS (UPDATE api_cloud_workspaces SET state='ready',runtime_state='online',status_code='ready',request_config=jsonb_set(jsonb_set(request_config-'rustMemoryParked','{rustLifecycleOperation}',$7),'{rustLastWake}',CASE WHEN request_config#>>'{rustLifecycleOperation,id}'=$2 AND request_config#>>'{rustLifecycleOperation,phase}'='ready' AND request_config ? 'rustLastWake' THEN request_config->'rustLastWake' ELSE jsonb_build_object('fromMemory',$10::jsonb,'at',$3::bigint,'ms',GREATEST(0,$3::bigint-(SELECT created_at FROM operation))) END),next_action_at=$8,revision=revision+1,updated_at=GREATEST(updated_at+1,$3) WHERE workspace_id=$1 AND EXISTS(SELECT 1 FROM operation) RETURNING workspace_id) UPDATE zuse_rust_jobs SET state='completed',lease_token=NULL,lease_expires_at=NULL,last_error_code=NULL,updated_at=GREATEST(updated_at,$3) WHERE resource_id=$1 AND resource_generation=$4 AND kind=$9 AND payload->>'operationId'=$2 AND state IN ('pending','running') AND EXISTS(SELECT 1 FROM workspace)")
+                    .bind(id).bind(&d.operation_id).bind(now).bind(d.generation).bind(&d.source_machine_id).bind(&d.storage_incarnation_id).bind(json!({"id":d.operation_id,"action":d.action,"phase":"ready"})).bind(now+self.idle_ms).bind(JOB_KIND).bind(json!(wake.map(|w| w.from_memory))).execute(&mut *tx).await?;
             }
         }
         if acknowledged && !completed_on_ack {
@@ -650,12 +652,47 @@ impl RuntimeControl {
     ) -> Result<(), ApiError> {
         let result = self.lifecycle_step(provider, job, now).await;
         if let Err(error) = &result {
+            // A computer its provider no longer has will not come back. Count
+            // consecutive "missing" answers (claims and other outcomes don't
+            // count) and stop after a few, leaving the workspace settled so
+            // the user can recreate it instead of watching "Starting computer".
+            let missing = if error.code == MACHINE_MISSING {
+                sqlx::query_scalar::<_, i32>("UPDATE zuse_rust_jobs SET payload=jsonb_set(payload,'{missingObservations}',to_jsonb(COALESCE((payload->>'missingObservations')::int,0)+1)) WHERE job_id=$1 AND lease_token=$2 AND state='running' RETURNING (payload->>'missingObservations')::int")
+                    .bind(&job.id).bind(&job.lease_token).fetch_optional(&self.pool).await?.unwrap_or(0)
+            } else {
+                self.clear_missing_observations(job).await?;
+                0
+            };
+            if missing >= MISSING_CONFIRMATIONS {
+                sqlx::query("UPDATE zuse_rust_jobs SET state='failed',last_error_code=$3,lease_token=NULL,lease_expires_at=NULL,updated_at=$4 WHERE job_id=$1 AND lease_token=$2 AND state='running'")
+                    .bind(&job.id).bind(&job.lease_token).bind(error.code).bind(clock_ms()).execute(&self.pool).await?;
+                sqlx::query("UPDATE api_cloud_workspaces SET state='paused',desired_state='paused',runtime_state='offline',status_code=$3,request_config=jsonb_set(request_config,'{rustLifecycleOperation,phase}','\"paused\"'),revision=revision+1,updated_at=GREATEST(updated_at+1,$4) WHERE workspace_id=$1 AND request_config->'rustLifecycleOperation'->>'id'=$2 AND desired_state<>'deleted' AND state NOT IN ('deleting','deleted')")
+                    .bind(&job.resource_id).bind(job.payload["operationId"].as_str()).bind(error.code).bind(clock_ms()).execute(&self.pool).await?;
+                tracing::warn!(workspace = %job.resource_id, missing,
+                    "Retained computer missing at its provider; lifecycle stopped");
+                return result;
+            }
             jobs::retry(&self.pool, &job, clock_ms(), error.code).await?;
             sqlx::query("UPDATE api_cloud_workspaces w SET status_code=$3,revision=revision+1,updated_at=GREATEST(updated_at+1,(extract(epoch from clock_timestamp())*1000)::bigint) WHERE workspace_id=$1 AND request_config->'rustLifecycleOperation'->>'id'=$2 AND desired_state<>'deleted' AND state NOT IN ('deleting','deleted') AND request_config->'rustLifecycleOperation'->>'phase' NOT IN ('paused','ready') AND request_config->'rustMemoryTransportRecovery'->>'operationId' IS DISTINCT FROM $2 AND EXISTS(SELECT 1 FROM zuse_rust_control_owners o WHERE o.resource_kind='workspace' AND o.resource_id=w.workspace_id AND o.backend='rust' AND o.generation=$4)").bind(&job.resource_id).bind(job.payload["operationId"].as_str()).bind(error.code).bind(job.generation).execute(&self.pool).await?;
+        } else if job.payload.get("missingObservations").is_some() {
+            self.clear_missing_observations(job).await?;
         }
         result
     }
+    /// Only consecutive "missing" answers count toward giving up.
+    async fn clear_missing_observations(&self, job: &jobs::Job) -> Result<(), ApiError> {
+        sqlx::query("UPDATE zuse_rust_jobs SET payload=payload-'missingObservations' WHERE job_id=$1 AND payload ? 'missingObservations'")
+            .bind(&job.id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
 }
+/// The provider no longer has the retained computer (in any cluster).
+pub(crate) const MACHINE_MISSING: &str = "cloud_retained_machine_missing";
+/// Consecutive "missing" observations before giving up.
+const MISSING_CONFIRMATIONS: i32 = 3;
+
 pub(super) async fn require_resume_capacity(
     pin: Option<&crate::managed_bases::candidate::StagingBasePin>,
     tx: &mut Transaction<'_, Postgres>,

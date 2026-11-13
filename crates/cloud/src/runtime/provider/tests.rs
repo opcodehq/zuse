@@ -161,7 +161,8 @@ impl Provider for Fixture {
             !command.contains(std::str::from_utf8(&token).unwrap()),
             "Boot credentials must be uploaded privately rather than embedded in commands"
         );
-        assert!(command.contains("launch-rust-runtime"));
+        let layout = crate::runtime::machine_layout::Layout::for_provider(self.id);
+        assert!(command.contains(layout.launcher()));
         self.launches.fetch_add(1, Ordering::SeqCst);
         Ok(ExecResult {
             stdout: vec![],
@@ -172,7 +173,8 @@ impl Provider for Fixture {
     async fn upload(&self, id: &str, path: &str, data: &[u8]) -> Result<(), ProviderError> {
         self.assert_unlocked().await;
         assert_eq!(id, "original-resource");
-        assert!(path.starts_with("/tmp/zuse-rust-boot-"));
+        let layout = crate::runtime::machine_layout::Layout::for_provider(self.id);
+        assert!(path.starts_with(&layout.staged_boot("")), "{path}");
         self.uploads.fetch_add(1, Ordering::SeqCst);
         *self.token.lock().unwrap() = data.to_vec();
         Ok(())

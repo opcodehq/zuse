@@ -14,6 +14,7 @@ use zuse_protocol::{
 use zuse_rpc::{RpcService, methods};
 
 mod active;
+mod agent_warmup;
 mod early_ingress;
 mod early_start;
 
@@ -54,6 +55,8 @@ enum Command {
     },
     /// Report implementation protocols and this binary hash without enrolling.
     RuntimeCapabilities,
+    /// Print the capabilities this binary advertises at bootstrap (JSON array).
+    BootstrapCapabilities,
     /// Report project-cache protocol without enrolling or preparing anything.
     ProjectCacheCapabilities,
     /// Exact identity-fenced native network transport recovery; no engine boot.
@@ -92,6 +95,13 @@ enum Command {
     Recover,
 }
 fn main() -> Result<()> {
+    if std::env::args_os().count() == 2
+        && std::env::args_os().nth(1).as_deref()
+            == Some(std::ffi::OsStr::new("bootstrap-capabilities"))
+    {
+        println!("{}", bootstrap_capabilities_json()?);
+        return Ok(());
+    }
     if std::env::args_os().count() == 2
         && std::env::args_os().nth(1).as_deref()
             == Some(std::ffi::OsStr::new("runtime-capabilities"))
@@ -184,11 +194,34 @@ fn main() -> Result<()> {
         zuse_engine::command_host::run_blocking()?;
         return Ok(());
     }
-    tokio::runtime::Builder::new_multi_thread()
+    let result = tokio::runtime::Builder::new_multi_thread()
         .thread_stack_size(zuse_engine::RUNTIME_STACK_SIZE)
         .enable_all()
         .build()?
-        .block_on(run())
+        .block_on(run());
+    // A runtime update installed a new binary (or a failed first start of one
+    // restored the previous binary): replace this process in place, so the
+    // resident supervisor keeps the same child and needs no relaunch.
+    #[cfg(unix)]
+    if let Some(next) = zuse_cloud_runtime::updates::take_exec().or_else(|| {
+        result
+            .is_err()
+            .then(zuse_cloud_runtime::updates::failed_start)
+            .flatten()
+    }) {
+        if let Err(error) = &result {
+            tracing::warn!(%error, "Runtime failed during update probation");
+        }
+        return Err(zuse_cloud_runtime::updates::exec(&next).into());
+    }
+    result
+}
+/// Compact JSON array of the capabilities this binary sends at bootstrap. The
+/// release pipeline records it and refuses a binary when this fails.
+fn bootstrap_capabilities_json() -> Result<String> {
+    Ok(serde_json::to_string(
+        &zuse_cloud_runtime::identity::bootstrap_capabilities(),
+    )?)
 }
 async fn run() -> Result<()> {
     let secret_filter = Arc::new(zuse_providers::credentials::redaction::Secrets::default());
@@ -208,6 +241,10 @@ async fn run() -> Result<()> {
             "{}",
             serde_json::to_string(&zuse_cloud_runtime::capabilities::current()?)?
         );
+        return Ok(());
+    }
+    if matches!(args.command, Some(Command::BootstrapCapabilities)) {
+        println!("{}", bootstrap_capabilities_json()?);
         return Ok(());
     }
 
@@ -326,6 +363,13 @@ async fn run() -> Result<()> {
         .transpose()?;
     let _data_lock = DataLock::acquire(&directory, inherited)?;
     let directory = std::fs::canonicalize(directory)?;
+    // Cold-boot boundary: finish or roll back an owned swap, or install an
+    // already staged release, before enrolling or serving anything.
+    #[cfg(unix)]
+    if let Some(next) = zuse_cloud_runtime::updates::cold_boot(&directory) {
+        zuse_cloud_runtime::updates::request_exec(next);
+        return Ok(());
+    }
     let binding = IdentityBinding {
         workspace,
         api_url: authority.origin(),
@@ -460,6 +504,9 @@ async fn run() -> Result<()> {
                 "claude"
             }
         });
+    if !args.test_harness {
+        agent_warmup::spawn(selected_agent, &directory);
+    }
     let default_harness = if args.test_harness {
         HarnessId::Mock
     } else if selected_agent == "codex" {
@@ -480,6 +527,11 @@ async fn run() -> Result<()> {
     )?);
     phase.complete();
     drop(phase);
+    // Providers that do not keep memory restart this process on wake. Keep
+    // remembering open chat terminals; they reopen once the workload
+    // environment is attached (below).
+    core.terminals
+        .persist_to(directory.join("cloud-terminals.json"));
     if track_preparation {
         let data = directory.clone();
         let boot = bootstrap.clone();
@@ -501,6 +553,10 @@ async fn run() -> Result<()> {
                 Ok(())
             }))?;
     }
+    // Plugin calls use the renewable runtime credential, never a WorkOS session.
+    core.plugins.set_runtime(Arc::new(
+        zuse_cloud_runtime::plugins::RuntimePluginClient::new(authority.clone(), updates.clone()),
+    ));
     core.sessions.set_ipc_port(ipc.local_addr()?.port());
     core.registry.set_secret_filter(secret_filter.clone());
     core.sessions.set_secret_filter(secret_filter.clone());
@@ -1150,6 +1206,13 @@ async fn run() -> Result<()> {
             }
         }
         workload.attach_terminals(core.terminals.clone()).await?;
+        // Reopen the chat terminals that were open before a restart (fresh
+        // shells, same ids, a restart notice). After the workload environment
+        // so restored shells get its bindings and command path.
+        let reopened = core.terminals.restore();
+        if reopened > 0 {
+            tracing::info!(reopened, "Reopened terminals after a restart");
+        }
         let resume = if bootstrap.launch_intent.is_none() {
             let directive = authority
                 .lifecycle(
@@ -1217,6 +1280,8 @@ async fn run() -> Result<()> {
                     &bootstrap,
                     zuse_protocol::cloud_lifecycle::RuntimeRequest::Resumed {
                         operation_id: d.operation_id,
+                        // This process started fresh: memory was not kept.
+                        wake: Some(zuse_protocol::cloud_lifecycle::Wake { from_memory: false }),
                     },
                 )
                 .await?;
@@ -1228,6 +1293,19 @@ async fn run() -> Result<()> {
                 .ok_or_else(|| anyhow::anyhow!("runtime_not_enrolled"))?
                 .clone(),
         );
+        // Enrolled, storage committed, engine adopted: an updated runtime in
+        // probation is now healthy and keeps the new binary.
+        #[cfg(unix)]
+        zuse_cloud_runtime::updates::startup_healthy();
+        let runtime_updates = active::RuntimeUpdates::start(
+            &directory,
+            &core,
+            storage.database_path(),
+            &authority,
+            &updates,
+            &cancel,
+        )
+        .await;
         let result = active::run(
             &core,
             &authority,
@@ -1243,8 +1321,10 @@ async fn run() -> Result<()> {
             &updates,
             resume_brokers.as_ref(),
             task_progress.as_ref(),
+            runtime_updates.as_ref(),
         )
         .await;
+        drop(runtime_updates);
         drop(ipc_task);
         result
     }

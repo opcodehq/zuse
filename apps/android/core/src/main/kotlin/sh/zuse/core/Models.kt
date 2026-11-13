@@ -39,6 +39,12 @@ data class Session(
     val providerId: String,
     val model: String,
     val worktreeId: String? = null,
+    val preview: String? = null,
+    /** ISO time of the latest message, or of creation for an empty chat. */
+    val activityAt: String? = null,
+    val branch: String? = null,
+    /** Engine run status at list time (working, awaitingInput, errored, idle). */
+    val status: String? = null,
 )
 
 @Serializable
@@ -117,6 +123,8 @@ data class PendingMessage(
     val text: String,
     val attempted: Boolean = false,
     val attachments: List<JsonElement> = emptyList(),
+    /** Why the host or this app refused the message. A refused message was certainly not sent. */
+    val rejected: String? = null,
 ) {
     val payload
         get() =

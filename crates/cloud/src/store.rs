@@ -14,6 +14,7 @@ pub struct Store {
     pub(crate) connections: Option<std::sync::Arc<crate::connections::ConnectionControl>>,
     pub(crate) computers: Option<std::sync::Arc<crate::computers::ComputerControl>>,
     pub devices: Option<std::sync::Arc<crate::devices::Authority>>,
+    pub(crate) plugins: Option<std::sync::Arc<crate::plugins::PluginControl>>,
     pub(crate) images: Option<std::sync::Arc<crate::images::ImageControl>>,
     pub(crate) github: Option<std::sync::Arc<crate::github::LegacyGithub>>,
     pub(crate) github_joining:
@@ -348,6 +349,7 @@ impl Store {
             connections: None,
             computers: None,
             devices: None,
+            plugins: None,
             pool,
             billing: None,
             images: None,
@@ -367,6 +369,7 @@ impl Store {
             connections: None,
             computers: None,
             devices: None,
+            plugins: None,
             pool,
             billing: None,
             images: None,
@@ -380,6 +383,9 @@ impl Store {
     }
 
     pub async fn ready(&self) -> Result<(), ApiError> {
+        if let Some(plugins) = &self.plugins {
+            plugins.ready().await?;
+        }
         let present: bool = sqlx::query_scalar("SELECT to_regclass('api_cloud_workspaces') IS NOT NULL AND to_regclass('api_entitlements') IS NOT NULL AND to_regclass('api_machines') IS NOT NULL")
             .fetch_one(&self.pool).await?;
         if !present {
@@ -533,6 +539,12 @@ impl Workspace {
             ),
         ] {
             out[to] = row[from].clone();
+        }
+        // How the computer last woke: from memory, or restarted from disk.
+        let wake = &config["rustLastWake"];
+        if wake["at"].is_i64() {
+            out["lastWake"] = json!({"fromMemory":wake["fromMemory"].as_bool(),
+                "at":wake["at"],"ms":wake["ms"].as_i64()});
         }
         if let Some(operation) = config.get("rustDeleteOperation") {
             out["deletion"] = json!({"operationId":operation["id"],"phase":operation["phase"]});

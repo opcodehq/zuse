@@ -541,6 +541,181 @@ pub(crate) async fn retained_source(
     Ok(artifact.to_owned())
 }
 
+/// A newer base an explicit "Update computer" recreation may move onto.
+pub(crate) struct RecreationTarget {
+    pub release_id: String,
+    pub artifact_id: String,
+    /// `ManagedBaseRelease::settings()`: the release-derived workspace config.
+    pub settings: Value,
+}
+
+/// What a computer needs from a base to restore its captured state there.
+pub(crate) struct RecreationNeeds<'a> {
+    pub agent: &'a str,
+    pub size: &'a str,
+    pub organization: bool,
+}
+
+/// The restore-relevant identity of a base, verified release or staging
+/// candidate alike.
+pub(crate) struct RecreationBase<'a> {
+    pub provider: ProviderId,
+    pub architecture: &'a str,
+    pub capabilities: &'a ProviderCapabilities,
+    pub manifest: &'a ImageManifest,
+    pub harnesses: &'a [PinnedHarness],
+}
+impl<'a> From<&'a ManagedBaseRelease> for RecreationBase<'a> {
+    fn from(r: &'a ManagedBaseRelease) -> Self {
+        Self {
+            provider: r.provider,
+            architecture: &r.architecture,
+            capabilities: &r.capabilities,
+            manifest: &r.manifest,
+            harnesses: &r.harnesses,
+        }
+    }
+}
+
+/// The archive written by the current base must be restorable on the target:
+/// same provider and architecture, the same wire protocol and storage format,
+/// and explicit recreation (verified archive restore) support. The computer's
+/// agent and size must still be offered, under the same supervisor and
+/// organization rules as new computers.
+pub(crate) fn recreation_compatible(
+    current: RecreationBase<'_>,
+    candidate: RecreationBase<'_>,
+    needs: &RecreationNeeds<'_>,
+) -> bool {
+    let agent = if needs.agent == "claude-code" {
+        "claude"
+    } else {
+        needs.agent
+    };
+    candidate.provider == current.provider
+        && candidate.architecture == current.architecture
+        && candidate.manifest.runtime_rpc_protocol == current.manifest.runtime_rpc_protocol
+        && candidate.manifest.rust_runtime_storage_format
+            == current.manifest.rust_runtime_storage_format
+        && candidate.manifest.rust_recreation_version == Some(1)
+        && candidate
+            .harnesses
+            .iter()
+            .any(|h| h.agent.as_str() == agent)
+        && candidate
+            .capabilities
+            .sizes
+            .iter()
+            .any(|s| s.id == needs.size)
+        && (candidate.provider != ProviderId::Boxd
+            || candidate.manifest.rust_runtime_supervisor_version == Some(1))
+        && (!needs.organization
+            || candidate.manifest.rust_organization_execution_version == Some(1))
+        && feature_versions(current.manifest)
+            .into_iter()
+            .zip(feature_versions(candidate.manifest))
+            .all(|(had, has)| had.is_none() || has.is_some_and(|has| Some(has) >= had))
+}
+
+/// Opt-in base features recorded on a computer. Moving to a base without one
+/// would leave its stored config claiming a feature the guest lacks.
+fn feature_versions(m: &ImageManifest) -> [Option<u32>; 14] {
+    [
+        m.rust_memory_sleep_version,
+        m.rust_tool_output_version,
+        m.rust_workload_secrets_version,
+        m.rust_repository_fetch_version,
+        m.rust_github_credentials_version,
+        m.rust_github_cli_version,
+        m.rust_organization_execution_version,
+        m.rust_runtime_supervisor_version,
+        m.rust_runtime_repair_version,
+        m.rust_command_admission_version,
+        m.rust_environment_recipe_version,
+        m.rust_slack_version,
+        m.rust_launch_model_config_version,
+        m.rust_launch_assets_version,
+    ]
+}
+
+async fn locked_release(
+    tx: &mut Transaction<'_, Postgres>,
+    provider: &str,
+    release_id: &str,
+    states: &[&str],
+) -> Result<Option<ManagedBaseRelease>, ApiError> {
+    let Some(row) = admission_lock::record(tx, provider, release_id).await? else {
+        return Ok(None);
+    };
+    if !row["state"].as_str().is_some_and(|s| states.contains(&s))
+        || row["runtime_manifest"].is_null()
+    {
+        return Ok(None);
+    }
+    let release: ManagedBaseRelease = serde_json::from_value(row["runtime_manifest"].clone())
+        .map_err(|_| ApiError::unavailable("managed_base_manifest_invalid"))?;
+    release
+        .validate()
+        .map_err(|_| ApiError::unavailable("managed_base_manifest_invalid"))?;
+    if release.provider.as_str() != provider
+        || release.release_id != release_id
+        || json!(release.artifact_id) != row["artifact_id"]
+    {
+        return Err(ApiError::unavailable("managed_base_manifest_invalid"));
+    }
+    Ok(Some(release))
+}
+
+/// Newest verified base this computer can be recreated onto. Returns the
+/// current release when nothing newer is compatible (an ordinary recreation).
+pub(crate) async fn latest_recreation_target(
+    tx: &mut Transaction<'_, Postgres>,
+    provider: &str,
+    current_release_id: &str,
+    needs: &RecreationNeeds<'_>,
+) -> Result<RecreationTarget, ApiError> {
+    let current = locked_release(tx, provider, current_release_id, &["verified", "retired"])
+        .await?
+        .ok_or_else(|| ApiError::conflict("cloud_restore_managed_base_required"))?;
+    // Strictly newer than the pinned release: never a silent downgrade, even
+    // when the pinned release has since been retired.
+    let records:Vec<String>=sqlx::query_scalar("SELECT b.release_id FROM cloud_managed_bases b JOIN cloud_managed_bases c ON c.provider=b.provider AND c.release_id=$2 WHERE b.provider=$1 AND b.state='verified' AND b.runtime_manifest IS NOT NULL AND (b.created_at,b.release_id)>(c.created_at,c.release_id) ORDER BY b.created_at DESC,b.release_id DESC").bind(provider).bind(current_release_id).fetch_all(&mut **tx).await?;
+    for id in records {
+        let Some(candidate) = locked_release(tx, provider, &id, &["verified"]).await? else {
+            continue;
+        };
+        if recreation_compatible((&current).into(), (&candidate).into(), needs) {
+            return Ok(RecreationTarget {
+                release_id: candidate.release_id.clone(),
+                artifact_id: candidate.artifact_id.clone(),
+                settings: candidate.settings(),
+            });
+        }
+    }
+    Ok(RecreationTarget {
+        release_id: current.release_id.clone(),
+        artifact_id: current.artifact_id.clone(),
+        settings: current.settings(),
+    })
+}
+
+/// The release a recreation already chose. Like `retained_source`, a target
+/// retired after admission still restores; a missing one needs an operator.
+pub(crate) async fn recreation_target(
+    tx: &mut Transaction<'_, Postgres>,
+    provider: &str,
+    release_id: &str,
+) -> Result<RecreationTarget, ApiError> {
+    let release = locked_release(tx, provider, release_id, &["verified", "retired"])
+        .await?
+        .ok_or_else(|| ApiError::conflict("cloud_restore_managed_base_required"))?;
+    Ok(RecreationTarget {
+        release_id: release.release_id.clone(),
+        artifact_id: release.artifact_id.clone(),
+        settings: release.settings(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -552,6 +727,52 @@ mod tests {
             "harnesses":[{"agent":"codex","version":"fixture-1","sha256":"b".repeat(64),"catalog":{"id":"codex","name":"Codex","defaultModel":"fixture","models":[{"id":"fixture","label":"Fixture"}]}}],
             "manifest":{"managedBase":true,"rustRuntimeSupervisorVersion":1,"version":1,"buildId":"managed-fixture-v1","templateVersion":"fixture","configurationDigest":"fixture","planDigest":"c".repeat(64),"runtimeRpcProtocol":"zuse-rpc-v1","rustRuntimeStorageFormat":zuse_protocol::cloud::RUST_RUNTIME_STORAGE_FORMAT,"rustSessionCommandVersion":1,"credentialsRemoved":true,"repositories":[],"rustRepositoryFetchVersion":1,"rustEnvironmentRecipeVersion":1,"rustLaunchModelConfigVersion":1,"rustLaunchAssetsVersion":1}
         })).unwrap()
+    }
+    #[test]
+    fn recreation_target_must_restore_the_captured_state() {
+        let current = release();
+        let mut newer = release();
+        newer.release_id = "managed-fixture-v2".into();
+        newer.manifest.rust_recreation_version = Some(1);
+        let needs = RecreationNeeds {
+            agent: "codex",
+            size: "default",
+            organization: false,
+        };
+        assert!(recreation_compatible(
+            (&current).into(),
+            (&newer).into(),
+            &needs
+        ));
+        let rejected = |change: fn(&mut ManagedBaseRelease)| {
+            let mut other = newer.clone();
+            change(&mut other);
+            !recreation_compatible((&current).into(), (&other).into(), &needs)
+        };
+        assert!(rejected(|r| r.architecture = "aarch64".into()));
+        assert!(rejected(|r| r.provider = ProviderId::E2b));
+        assert!(rejected(
+            |r| r.manifest.rust_runtime_storage_format = "zuse-rust-engine-v2".into()
+        ));
+        assert!(rejected(
+            |r| r.manifest.runtime_rpc_protocol = "zuse-rpc-v2".into()
+        ));
+        assert!(rejected(|r| r.manifest.rust_recreation_version = None));
+        assert!(rejected(|r| r.harnesses.clear()));
+        assert!(rejected(|r| r.capabilities.sizes.clear()));
+        assert!(rejected(
+            |r| r.manifest.rust_runtime_supervisor_version = None
+        ));
+        // A feature the computer already relies on cannot disappear.
+        assert!(rejected(|r| r.manifest.rust_launch_assets_version = None));
+        assert!(!recreation_compatible(
+            (&current).into(),
+            (&newer).into(),
+            &RecreationNeeds {
+                organization: true,
+                ..needs
+            }
+        ));
     }
     #[test]
     fn github_cli_capability_requires_a_versioned_installed_binary_receipt() {

@@ -68,6 +68,7 @@ pub(super) async fn exercise<F: Fn(&str) -> Value>(
     prepare: &F,
 ) {
     steer_inference_remains_active(control, pool, now, prepare).await;
+    guest_refusal_fails_without_holding_the_conversation(control, pool, now, prepare).await;
     // A persisted v2 task cannot become runnable through a v1-only guest.
     let gated = "missing-command-cap";
     sqlx::query_scalar::<_, Value>(WRITE_V2.as_str())
@@ -496,6 +497,96 @@ pub(super) async fn exercise<F: Fn(&str) -> Value>(
             .unwrap()
             .iter()
             .any(|v| v["commandId"] == "uncertain-control" && v["unknownReviewed"] != true)
+    );
+}
+
+// A guest that refused a message before anything ran (here: an attachment
+// that is not one of its uploads) acknowledges Rejected with the reason. The
+// message fails with that reason and the next one is admitted and delivered,
+// with no unknown outcome to review.
+async fn guest_refusal_fails_without_holding_the_conversation<F: Fn(&str) -> Value>(
+    control: &Arc<RuntimeControl>,
+    pool: &PgPool,
+    now: i64,
+    prepare: &F,
+) {
+    let id = "guest-refusal";
+    let session = format!("session-{id}");
+    sqlx::query_scalar::<_, Value>(WRITE_V2.as_str())
+        .bind(prepare(id))
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    online(pool, id, now).await;
+    let page = control
+        .command_lease(id, "stop-runtime-fixture", &lease(id, false), now)
+        .await
+        .unwrap();
+    let refused = page
+        .leases
+        .iter()
+        .find(|v| v.command.kind == "zuse.session.run")
+        .expect("the launch Run is delivered");
+    let refused_id = refused.command.command_id.clone();
+    control
+        .command_ack(
+            id,
+            "stop-runtime-fixture",
+            &zuse_protocol::cloud_commands::RuntimeAcknowledgment {
+                command_id: refused_id.clone(),
+                lease_token: refused.lease_token.clone(),
+                fingerprint: refused.command.fingerprint.clone(),
+                state: zuse_protocol::cloud_commands::AcknowledgmentState::Rejected,
+                category: Some("cloud_command_upload_outside_uploads".into()),
+                result_iv: None,
+                result_ciphertext: None,
+            },
+            now,
+        )
+        .await
+        .unwrap();
+    let (state, code, delivery): (String, String, String) = sqlx::query_as("SELECT e.state,e.error_code,c.state FROM zuse_rust_task_command_execution e JOIN zuse_rust_mailbox_commands c USING(workspace_id,command_id) WHERE e.workspace_id=$1 AND e.command_id=$2").bind(id).bind(&refused_id).fetch_one(pool).await.unwrap();
+    assert_eq!(
+        (state.as_str(), code.as_str(), delivery.as_str()),
+        ("failed", "cloud_command_upload_outside_uploads", "rejected")
+    );
+    let status = control
+        .task_command_status(id, &access(), &refused_id)
+        .await
+        .unwrap();
+    assert_eq!(status["executionState"], "failed");
+    assert_eq!(status["errorCode"], "cloud_command_upload_outside_uploads");
+    // The next message on the same conversation is admitted, not held for
+    // review, and is the next Run delivered.
+    control
+        .task_command_submit(id, &access(), run(id, "after-refusal"), now)
+        .await
+        .expect("a refused message must not hold the conversation");
+    let next = control
+        .command_lease(id, "stop-runtime-fixture", &lease(id, false), now)
+        .await
+        .unwrap();
+    assert!(
+        next.leases
+            .iter()
+            .any(|v| v.command.command_id == "after-refusal"),
+        "the next message is delivered after a definitive refusal"
+    );
+    let history = control
+        .task_history(&access(), id, &session, None)
+        .await
+        .unwrap();
+    let rows = history["commandAdmissions"].as_array().unwrap();
+    let row = rows
+        .iter()
+        .find(|v| v["commandId"] == refused_id.as_str())
+        .unwrap();
+    assert_eq!(row["executionState"], "failed");
+    assert_eq!(row["errorCode"], "cloud_command_upload_outside_uploads");
+    assert!(
+        !rows
+            .iter()
+            .any(|v| v["executionState"] == "outcome-unknown")
     );
 }
 

@@ -225,7 +225,15 @@ class RpcClient(
                     (if (parsed is JsonArray) parsed.toList() else listOf(parsed)).forEach(::frame)
                 }
         } catch (error: Throwable) {
-            fail(error)
+            // A reply that cannot be read may belong to a request the host already ran,
+            // so pending calls must see a connection failure, never an argument error.
+            fail(
+                error as? ClientException
+                    ?: ClientException(
+                            "The host sent a reply that could not be read. Reconnect to synchronize."
+                        )
+                        .apply { initCause(error) }
+            )
         }
     }
 

@@ -9,16 +9,38 @@ pub enum ProviderId {
     Boxd,
     E2b,
     Daytona,
+    Prized,
 }
 impl ProviderId {
-    pub const ALL: [Self; 4] = [Self::Boat, Self::Boxd, Self::E2b, Self::Daytona];
+    pub const ALL: [Self; 5] = [
+        Self::Boat,
+        Self::Boxd,
+        Self::E2b,
+        Self::Daytona,
+        Self::Prized,
+    ];
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Boat => "boat",
             Self::Boxd => "boxd",
             Self::E2b => "e2b",
             Self::Daytona => "daytona",
+            Self::Prized => "prized",
         }
+    }
+    /// The worker-only environment variable holding this provider's API key.
+    /// Every list of reserved or scrubbed provider credentials derives from it.
+    pub fn api_key_env(self) -> &'static str {
+        match self {
+            Self::Boat => "BOAT_API_KEY",
+            Self::Boxd => "BOXD_API_KEY",
+            Self::E2b => "E2B_API_KEY",
+            Self::Daytona => "DAYTONA_API_KEY",
+            Self::Prized => "PRIZED_API_KEY",
+        }
+    }
+    pub fn is_api_key_env(name: &str) -> bool {
+        Self::ALL.iter().any(|id| id.api_key_env() == name)
     }
 }
 

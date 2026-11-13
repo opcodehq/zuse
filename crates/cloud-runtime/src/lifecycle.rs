@@ -317,6 +317,7 @@ pub async fn memory_sleep(
                     &current,
                     RuntimeRequest::Resumed {
                         operation_id: resumed.operation_id.clone(),
+                        wake: Some(zuse_protocol::cloud_lifecycle::Wake { from_memory: true }),
                     },
                 )
                 .await

@@ -30,10 +30,20 @@ VERSION=1
 LIMIT=65536
 SAFE=re.compile(r'[A-Za-z0-9_.:-]{1,160}\Z')
 INHERIT=('PATH','HOME','USER','LOGNAME','LANG','LC_ALL','SHELL','TMPDIR',
-         'ZUSE_HARNESS_ROOT','ZUSE_HARNESS_CHANNEL','ZUSE_RUNTIME_BINARY')
+         'ZUSE_HARNESS_ROOT','ZUSE_HARNESS_CHANNEL','ZUSE_RUNTIME_BINARY',
+         # Home-directory layouts (no root, e.g. Prized) relocate these tools.
+         'ZUSE_HARNESS_RELEASE_TOOL','ZUSE_RUNTIME_SUPERVISOR')
 FIELDS={'version','action','operationId','workspaceId','generation','storageIncarnationId','apiUrl','bootTokenFile','retained'}
 
 class Rejected(Exception):pass
+
+# In-place runtime updates (internal-docs/cloud-runtime-updates.md). The new
+# runtime owns its probation, but one that crashes before its own update code
+# runs cannot roll itself back: the watchdog below does it without its help.
+UPDATE_STATE=Path('/var/lib/zuse/runtime-update')
+UPDATE_HELPER=Path('/usr/local/libexec/zuse/runtime-update.py')
+UPDATE_ROLLBACK_WAIT=60
+SHA256=re.compile(r'[a-f0-9]{64}\Z')
 
 def require(value,code):
     if not value:raise Rejected(code)
@@ -67,6 +77,22 @@ def load_private(path):
         with os.fdopen(fd,'rb',closefd=False) as source:return json.load(source)
     finally:os.close(fd)
 
+def read_json(path,owner=None):
+    """A small regular JSON file (never a link or FIFO), or None when absent."""
+    try:fd=os.open(path,os.O_RDONLY|os.O_CLOEXEC|os.O_NOFOLLOW|os.O_NONBLOCK)
+    except FileNotFoundError:return None
+    try:
+        info=os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_size>LIMIT or (owner is not None and info.st_uid!=owner):return None
+        with os.fdopen(fd,'rb',closefd=False) as source:return json.loads(source.read(LIMIT+1))
+    finally:os.close(fd)
+
+def file_sha256(path):
+    digest=hashlib.sha256()
+    with open(path,'rb') as source:
+        while block:=source.read(1048576):digest.update(block)
+    return digest.hexdigest()
+
 def text(value,code):
     require(isinstance(value,str) and 0<len(value)<=512 and all(ord(c)>=32 for c in value),code)
     return value
@@ -99,8 +125,12 @@ def child_session(parent):
     if os.getppid()!=parent:os.kill(os.getpid(),signal.SIGTERM)
 
 class Supervisor:
-    def __init__(self,data,checkout,status_root,launcher,binary,recovery_root=None,recovery_launcher=None):
+    def __init__(self,data,checkout,status_root,launcher,binary,recovery_root=None,recovery_launcher=None,update_state=UPDATE_STATE,update_helper=UPDATE_HELPER,update_layout='auto'):
         self.data=data;self.checkout=checkout;self.status_root=status_root;self.launcher=launcher;self.binary=binary
+        self.update_state=update_state;self.update_helper=update_helper;self.update_layout=update_layout
+        # Last launch environment (relaunched once, only to recover from a failed
+        # update), the child exit already judged, and a pending root rollback.
+        self.launch_env=None;self.observed=None;self.rollback_wait=None
         private_directory(data)
         self.ipc=data/'.runtime-supervision';private_directory(self.ipc)
         self.identity_path=data/'cloud-runtime-supervision.json'
@@ -124,6 +154,8 @@ class Supervisor:
             self.recreation_module=module
         self.repairs_path=data/'cloud-runtime-supervisor-repairs.json'
         self.repairs=load_private(self.repairs_path) if self.repairs_path.exists() else {}
+        self.rollbacks_path=data/'cloud-runtime-supervisor-update-rollbacks.json'
+        self.rollbacks=load_private(self.rollbacks_path) if self.rollbacks_path.exists() else {}
         self.socket_path=self.ipc/'control.sock'
         self.base_env={key:value for key,value in os.environ.items() if key in INHERIT}
         self.base_env.update(HOME=str(data.parent),USER=pwd.getpwuid(os.getuid()).pw_name,
@@ -165,6 +197,7 @@ class Supervisor:
         self.reap()
         require(self.repair_launch or not any(r.get('phase')!='ready' for r in self.repairs.values()),'runtime_supervisor_repair_in_progress')
         require(not any(child.poll() is None for child in self.recoveries.values()),'runtime_supervisor_recovery_busy')
+        require(self.rollback_wait is None,'runtime_supervisor_update_rollback_in_progress')
         identity,operation=validated(request,self.status_root)
         if self.record:require(self.record['identity']==identity,'runtime_supervisor_fenced')
         if self.recovery_binding:require(all(identity.get(key)==value for key,value in self.recovery_binding.items()),'runtime_supervisor_recovery_fenced')
@@ -215,15 +248,111 @@ class Supervisor:
                 ZUSE_RUNTIME_GENERATION=str(identity['generation']),ZUSE_STORAGE_INCARNATION_ID=identity['storageIncarnationId'],
                 ZUSE_RUNTIME_OPERATION_ID=operation,ZUSE_RUNTIME_RETAINED='true' if retained else 'false')
             if not retained:env['ZUSE_RUNTIME_BOOT_TOKEN_FILE']=request['bootTokenFile']
-            self.status_root.mkdir(mode=0o700,parents=True,exist_ok=True)
-            log=os.open(self.status_root/'rust-runtime.log',os.O_WRONLY|os.O_APPEND|os.O_CREAT|os.O_CLOEXEC|os.O_NOFOLLOW,0o600)
-            parent=os.getpid()
-            try:self.child=subprocess.Popen([str(self.launcher),'--foreground'],env=env,stdin=subprocess.DEVNULL,stdout=log,stderr=log,preexec_fn=lambda:child_session(parent),close_fds=True)
-            finally:os.close(log)
+            self.spawn(env)
         receipts[operation]=fingerprint
         self.record=dict(version=VERSION,identity=identity,receipts=dict(list(receipts.items())[-32:]))
         atomic(self.identity_path,self.record)
         return dict(version=VERSION,status='accepted',operationId=operation,childPid=self.child.pid)
+    def spawn(self,env):
+        self.status_root.mkdir(mode=0o700,parents=True,exist_ok=True)
+        log=os.open(self.status_root/'rust-runtime.log',os.O_WRONLY|os.O_APPEND|os.O_CREAT|os.O_CLOEXEC|os.O_NOFOLLOW,0o600)
+        parent=os.getpid()
+        try:self.child=subprocess.Popen([str(self.launcher),'--foreground'],env=env,stdin=subprocess.DEVNULL,stdout=log,stderr=log,preexec_fn=lambda:child_session(parent),close_fds=True)
+        finally:os.close(log)
+        self.launch_env=dict(env)
+    # ------------------------------------------------------------ update watchdog
+    def owned_layout(self):
+        """Same rule as the runtime: an owned binary in a writable directory swaps
+        itself (Prized); otherwise the root helper does (root bases)."""
+        if self.update_layout!='auto':return self.update_layout=='owned'
+        try:meta=self.binary.lstat()
+        except OSError:return False
+        return stat.S_ISREG(meta.st_mode) and meta.st_uid==os.geteuid() and os.access(self.binary.parent,os.W_OK|os.X_OK)
+    def update_probation(self):
+        """The update whose new runtime has not yet proved healthy, or None."""
+        if self.owned_layout():
+            journal=self.binary.parent.parent/'runtime-update'
+            entry=read_json(journal/'journal.json',owner=os.getuid())
+            if (isinstance(entry,dict) and entry.get('version')==1 and entry.get('phase') in ('swapped','probation')
+                    and isinstance(entry.get('updateId'),str) and SAFE.fullmatch(entry['updateId'])
+                    and all(isinstance(entry.get(k),str) and SHA256.fullmatch(entry[k]) for k in ('sha256','previousSha256'))):
+                return dict(layout='owned',journal=journal,entry=entry,updateId=entry['updateId'],sha256=entry['sha256'])
+            return None
+        if self.update_layout=='auto' and not self.update_helper.is_file():return None
+        # Root-owned and world-readable; the helper's journal next to it is root-only.
+        result=read_json(self.update_state/'result.json')
+        if not(isinstance(result,dict) and result.get('outcome')=='committed'
+                and isinstance(result.get('updateId'),str) and SAFE.fullmatch(result['updateId'])
+                and isinstance(result.get('sha256'),str) and SHA256.fullmatch(result['sha256'])):return None
+        healthy=read_json(self.data/'runtime-updates'/'healthy.json',owner=os.getuid())
+        if isinstance(healthy,dict) and healthy.get('sha256')==result['sha256'] and healthy.get('updateId')==result['updateId']:return None
+        return dict(layout='root',updateId=result['updateId'],sha256=result['sha256'])
+    def watch_update(self):
+        """Roll back an update whose new runtime died before it proved healthy,
+        then relaunch the previous runtime ONCE. Apart from this, the supervisor
+        never relaunches an exited child."""
+        if self.rollback_wait:return self.finish_rollback()
+        child=self.child
+        if child is None or child.returncode is None or child is self.observed:return
+        self.observed=child
+        # Exit 0 is a requested shutdown (pause, repair, SIGTERM); the runtime's
+        # own probation decides at its next start.
+        if child.returncode==0 or self.stopping or any(r.get('phase')!='ready' for r in self.repairs.values()):return
+        try:probation=self.update_probation()
+        except (OSError,ValueError):return
+        # One rollback (and one relaunch) per update: a restored runtime that
+        # also dies is left to normal recovery.
+        if probation is None or probation['updateId'] in self.rollbacks:return
+        update=probation['updateId']
+        self.rollbacks[update]=dict(sha256=probation['sha256'],layout=probation['layout'],exitCode=child.returncode,phase='rolling-back',at=int(time.time()))
+        self.rollbacks=dict(list(self.rollbacks.items())[-8:]);atomic(self.rollbacks_path,self.rollbacks)
+        print(json.dumps(dict(event='runtime_update_watchdog_rollback',updateId=update,exitCode=child.returncode)),file=sys.stderr,flush=True)
+        if probation['layout']=='owned':
+            try:self.restore_owned(probation['journal'],probation['entry'])
+            except (OSError,Rejected) as error:return self.rollback_done(update,'failed:'+str(error))
+            return self.rollback_done(update,'rolled-back')
+        updates=self.data/'runtime-updates';updates.mkdir(mode=0o700,exist_ok=True)
+        # The root helper's path unit runs on rollback.json and restores `previous`.
+        atomic(updates/'rollback.json',dict(updateId=update,sha256=probation['sha256']))
+        self.rollback_wait=dict(updateId=update,deadline=time.monotonic()+UPDATE_ROLLBACK_WAIT)
+    def finish_rollback(self):
+        update=self.rollback_wait['updateId']
+        try:result=read_json(self.update_state/'result.json')
+        except (OSError,ValueError):result=None
+        if isinstance(result,dict) and result.get('updateId')==update and result.get('outcome') in ('rolled-back','failed'):
+            self.rollback_wait=None;return self.rollback_done(update,result['outcome'])
+        if time.monotonic()>self.rollback_wait['deadline']:
+            self.rollback_wait=None;return self.rollback_done(update,'unconfirmed')
+    def rollback_done(self,update,outcome):
+        record=self.rollbacks[update];record['phase']=outcome
+        if outcome=='rolled-back' and self.launch_env is not None and not self.alive():
+            if self.repair_module is not None:self.repair_module.retire_owned(os.getpid())
+            env=dict(self.launch_env)
+            # The failed start consumed any boot credential: resume the stored identity.
+            if (self.data/'cloud-runtime-identity.json').is_file():
+                env['ZUSE_RUNTIME_RETAINED']='true';env.pop('ZUSE_RUNTIME_BOOT_TOKEN_FILE',None)
+            self.spawn(env);self.observed=None;record.update(phase='relaunched',childPid=self.child.pid)
+        atomic(self.rollbacks_path,self.rollbacks)
+    def restore_owned(self,journal,entry):
+        """Prized: put `previous` back over the binary (same user) and journal it."""
+        previous=entry['previousSha256']
+        require(file_sha256(journal/'previous')==previous,'runtime_update_previous_mismatch')
+        try:current=file_sha256(self.binary)
+        except OSError:current=None
+        if current!=previous:
+            temporary=self.binary.parent/('.zuse-cloud-runtime.rollback-'+uuid.uuid4().hex)
+            try:
+                with open(journal/'previous','rb') as source,open(temporary,'xb') as output:
+                    while block:=source.read(1048576):output.write(block)
+                    output.flush();os.fchmod(output.fileno(),0o755);os.fsync(output.fileno())
+                require(file_sha256(temporary)==previous,'runtime_update_previous_mismatch')
+                os.replace(temporary,self.binary)
+            finally:temporary.unlink(missing_ok=True)
+            directory=os.open(self.binary.parent,os.O_DIRECTORY|os.O_CLOEXEC)
+            try:os.fsync(directory)
+            finally:os.close(directory)
+        entry=dict(entry,phase='rolled-back',errorCode='runtime_update_rolled_back',updatedAt=int(time.time()*1000))
+        atomic(journal/'journal.json',entry)
     def recovery(self,request):
         require(set(request)=={'version','action','operationId'} and request['version']==VERSION,'supervisor_recovery_request_invalid')
         operation=request['operationId'];require(isinstance(operation,str) and SAFE.fullmatch(operation),'supervisor_operation_invalid')
@@ -245,7 +374,10 @@ class Supervisor:
             require(all(self.record['identity'].get(key)==value for key,value in binding.items()),'runtime_supervisor_fenced')
         else:require(config.get('mode')=='restore','runtime_supervisor_recovery_unbound')
         require(config.get('home')==str(self.data.parent) and config.get('repositoriesPath')==str(self.checkout),'supervisor_recovery_layout_invalid')
-        self.recovery_binding=binding;atomic(self.recovery_binding_path,binding)
+        # A repeated handoff must not touch the data directory: an in-flight
+        # capture fingerprints it, and a rewrite fails that capture.
+        if self.recovery_binding!=binding or not self.recovery_binding_path.exists():atomic(self.recovery_binding_path,binding)
+        self.recovery_binding=binding
         child=self.recoveries.get(operation)
         if child is None or child.poll() is not None:
             require(not(directory/'cancelled').exists(),'supervisor_recovery_cancelled')
@@ -362,6 +494,8 @@ class Supervisor:
         try:
             while not self.stopping:
                 self.reap()
+                try:self.watch_update()
+                except Exception as error:print(json.dumps(dict(event='runtime_update_watchdog_failed',error=type(error).__name__)),file=sys.stderr,flush=True)
                 for operation,started in list(self.cancelled.items()):
                     child=self.recoveries.get(operation)
                     if child and child.poll() is None and time.monotonic()-started>5:
@@ -423,6 +557,32 @@ def rpc(data,request,connect_timeout=3):
             require(block and len(response)+len(block)<=LIMIT,'supervisor_response_invalid');response.extend(block)
     value=json.loads(response.split(b'\n',1)[0]);require('error' not in value,value.get('error','runtime_supervisor_rejected'));return value
 
+AGENT_RECORD='cloud-agent-executable'
+HARNESS_RELEASES=Path('/opt/zuse/harnesses/releases')
+
+def warm_agent(data,releases=HARNESS_RELEASES):
+    """Start reading the selected agent's executable at boot, before the
+    runtime starts. A computer that restarted without its memory (Daytona,
+    Boat after ten minutes) otherwise pages a ~300 MB binary in from a cold,
+    lazily restored disk at the first prompt. Best effort; returns the reader
+    process. A separate process, not a thread, so it can never overlap the
+    supervisor's fork-with-preexec launches."""
+    try:
+        # The record is task-writable: never follow a link, never block on a
+        # FIFO, and read a bounded path.
+        fd=os.open(data/AGENT_RECORD,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK|os.O_CLOEXEC)
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):return None
+            raw=os.read(fd,4097)
+        finally:os.close(fd)
+        if len(raw)>4096:return None
+        target=Path(raw.decode().strip()).resolve(strict=True)
+        root=releases.resolve(strict=True)
+        if root not in target.parents or not stat.S_ISREG(target.stat().st_mode):return None
+    except (OSError,ValueError,RuntimeError):return None
+    try:return subprocess.Popen(['cat',str(target)],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,close_fds=True)
+    except OSError:return None
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--version',action='store_true')
@@ -433,6 +593,9 @@ def main():
     parser.add_argument('--binary',type=Path,default=Path(os.environ.get('ZUSE_RUNTIME_BINARY','/usr/local/bin/zuse-cloud-runtime')))
     parser.add_argument('--recovery-root',type=Path,default=Path(os.environ.get('ZUSE_RECOVERY_STATUS_ROOT','/var/lib/zuse/recovery')))
     parser.add_argument('--recovery-launcher',type=Path,default=Path('/usr/local/lib/zuse/launch-rust-recovery'))
+    parser.add_argument('--update-state',type=Path,default=UPDATE_STATE)
+    parser.add_argument('--update-helper',type=Path,default=UPDATE_HELPER)
+    parser.add_argument('--update-layout',choices=('auto','root','owned'),default='auto')
     parser.add_argument('--operation-id')
     parser.add_argument('action',nargs='?',choices=('serve','launch','ping','recover','cancel-recovery','rpc'))
     args=parser.parse_args()
@@ -442,7 +605,8 @@ def main():
         if os.getuid()==0:
             account=pwd.getpwnam('zuse');os.initgroups(account.pw_name,account.pw_gid);os.setgid(account.pw_gid);os.setuid(account.pw_uid)
         os.umask(0o077)
-        Supervisor(args.data_dir,args.workspace_root,args.status_dir,args.launcher,args.binary,args.recovery_root,args.recovery_launcher).run();return
+        warm_agent(args.data_dir)
+        Supervisor(args.data_dir,args.workspace_root,args.status_dir,args.launcher,args.binary,args.recovery_root,args.recovery_launcher,args.update_state,args.update_helper,args.update_layout).run();return
     if args.action=='rpc':
         payload=sys.stdin.buffer.read(LIMIT+1);require(len(payload)<=LIMIT,'supervisor_frame_invalid')
         print(json.dumps(rpc(args.data_dir,json.loads(payload))));return

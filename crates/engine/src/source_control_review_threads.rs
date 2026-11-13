@@ -45,7 +45,7 @@ impl GitHubCli {
         Ok(value)
     }
 
-    pub(super) async fn fetch_review_threads(
+    pub(crate) async fn fetch_review_threads(
         &self,
         url: &str,
     ) -> Result<Vec<ChangeRequestReviewThread>, ChangeRequestError> {

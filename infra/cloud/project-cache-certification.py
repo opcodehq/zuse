@@ -10,6 +10,8 @@ HERE=Path(__file__).resolve().parent
 HASH=re.compile(r'[a-f0-9]{64}\Z');ID=re.compile(r'[A-Za-z0-9_.:-]{1,180}\Z')
 CAP_KEYS={'version','runtimeSha256','environmentCacheVersion','secretFreeSourceBundleVersion','retainedTaskStorageAbsentRequired','credentialFreePreparationRequired','preparationCaptureVersion'}
 PINS={'runtimeSha256','supervisorSha256','serviceSha256','manifestSha256','helperSha256'}
+OPTIONAL_PINS={'runtimeUpdateHelperSha256'}
+def pins(spec):return PINS|(OPTIONAL_PINS&set(spec)) if isinstance(spec,dict) else PINS
 IDENTITY=('version','ownerId','projectId','repositoryIdentity','provider','architecture','baseReleaseId','baseArtifactId','baseArtifactVersion','baseRuntimeSha256','recipeSource','recipeDigest','sourceCommit','dependencyInputs')
 DOCS={'capability.json','prepared-stamp.json','capture.json','restore.json','cleanup.json','pre-capture.json','filesystem.json'}
 MARKER='.zuse-cache-certification/dependency-marker.txt'
@@ -62,11 +64,11 @@ def validate_release(release,report,raw_report):
  for case in cases:
   exact(case,{'agent','case','passed','elapsedMs'},'base_case_fields');require(type(case['elapsedMs']) in (int,float) and math.isfinite(case['elapsedMs']) and case['elapsedMs']>=0,'base_case_duration')
  require(isinstance(cases,list) and len(cases)==len(expected_cases) and {(v.get('agent'),v.get('case')) for v in cases}==expected_cases and all(v.get('passed') is True for v in cases),'base_cases_incomplete')
- spec=release.get('initialRuntimeBootstrap');exact(spec,{'version','mode'}|PINS,'base_bootstrap_required');require(type(spec['version']) is int and spec['version']==1 and spec['mode']=='stopped-memory-snapshot-v1' and all(is_hash(spec[k]) for k in PINS),'base_bootstrap_invalid');return spec
+ spec=release.get('initialRuntimeBootstrap');exact(spec,{'version','mode'}|pins(spec),'base_bootstrap_required');require(type(spec['version']) is int and spec['version']==1 and spec['mode']=='stopped-memory-snapshot-v1' and all(is_hash(spec[k]) for k in pins(spec)),'base_bootstrap_invalid');return spec
 
 def bootstrap(proof,release,op,key,machine):
  exact(proof,{'request','receipt'},'bootstrap_evidence');q=proof['request'];r=proof['receipt'];exact(q,{'version','provider','purpose','operationId','workspaceId','generation','storageIncarnationId','sourceMachineId','imagePins'},'bootstrap_request')
- expected=dict(version=1,provider='boxd',purpose='cache-preparation',operationId=op,workspaceId='cache:'+key,generation=1,storageIncarnationId='cache:'+op,sourceMachineId=machine,imagePins={k:release['initialRuntimeBootstrap'][k] for k in PINS})
+ expected=dict(version=1,provider='boxd',purpose='cache-preparation',operationId=op,workspaceId='cache:'+key,generation=1,storageIncarnationId='cache:'+op,sourceMachineId=machine,imagePins={k:release['initialRuntimeBootstrap'][k] for k in pins(release['initialRuntimeBootstrap'])})
  require(type(q.get('version')) is int and type(q.get('generation')) is int and q==expected and all(canonical(r.get(k))==canonical(v) for k,v in q.items()) and r.get('status')=='ready' and r.get('requestSha256')==digest(canonical(q)),'bootstrap_binding')
  exact(r,set(q)|{'status','requestSha256','unitStartSubmitted','resident'},'bootstrap_receipt');v=r['resident'];exact(v,{'residentPid','residentStartTicks','bootNonceSha256','ipcVerified','unbound','childAlive','recoveryAlive'},'bootstrap_resident')
  require(type(v['residentPid']) is int and v['residentPid']>1 and type(v['residentStartTicks']) is int and v['residentStartTicks']>0 and is_hash(v['bootNonceSha256']) and v['ipcVerified'] is True and v['unbound'] is True and v['childAlive'] is False and v['recoveryAlive'] is False and type(r['unitStartSubmitted']) is bool,'bootstrap_not_idle')
@@ -159,13 +161,13 @@ def primitive_commands(release,guest_plan,plan_bytes,operation,builder=None,veri
  # This emits commands only, never constructs an SDK/client or reads keys. The
  # future driver must first record/read back original SDK identities and obtain
  # separate provider GO. It cannot run against this tool's cleaned test IDs.
- module('managed-base-release').validate_release(release);spec=release.get('initialRuntimeBootstrap');exact(spec,{'version','mode'}|PINS,'base_bootstrap_required')
- require(type(spec['version']) is int and spec['version']==1 and spec['mode']=='stopped-memory-snapshot-v1' and all(is_hash(spec[k]) for k in PINS) and release['provider']=='boxd','base_bootstrap_invalid')
+ module('managed-base-release').validate_release(release);spec=release.get('initialRuntimeBootstrap');exact(spec,{'version','mode'}|pins(spec),'base_bootstrap_required')
+ require(type(spec['version']) is int and spec['version']==1 and spec['mode']=='stopped-memory-snapshot-v1' and all(is_hash(spec[k]) for k in pins(spec)) and release['provider']=='boxd','base_bootstrap_invalid')
  exact(guest_plan,{'version','cacheKey','operationId','identity','recipe','sourceBundleSha256','home','cacheRoot','bundle','supervisor'},'guest_plan_fields');key=identity_key(guest_plan['identity'])
  require(type(guest_plan['version']) is int and guest_plan['version']==1 and guest_plan['cacheKey']==key and guest_plan['operationId']==operation and identifier(operation) and bool(builder)!=bool(verifier) and identifier(builder or verifier) and (builder is not None and cache_artifact is None and cache_version is None or verifier is not None and identifier(cache_artifact) and cache_artifact!=release['artifactId'] and is_version(cache_version)) and guest_plan['identity']['baseReleaseId']==release['releaseId'] and guest_plan['identity']['baseArtifactId']==release['artifactId'] and guest_plan['identity']['baseRuntimeSha256']==spec['runtimeSha256'] and guest_plan['home']=='/home/zuse' and guest_plan['cacheRoot']=='/opt/zuse/project-caches' and guest_plan['bundle']=='/opt/zuse/preparation/source.bundle' and guest_plan['supervisor'] is True and is_hash(guest_plan['sourceBundleSha256']) and isinstance(guest_plan['recipe'],dict) and not guest_plan['recipe'].get('secretBindings'),'guest_plan_binding')
  loader=(HERE/'managed-base-fresh-boot-loader.py').read_text();commands={}
  for role,machine in ([('builder',builder)] if builder else [('verifier',verifier)]):
-  q=dict(version=1,provider='boxd',purpose='cache-preparation',operationId=operation,workspaceId='cache:'+key,generation=1,storageIncarnationId='cache:'+operation,sourceMachineId=machine,imagePins={k:spec[k] for k in PINS});body=base64.b64encode(canonical(q)).decode()
+  q=dict(version=1,provider='boxd',purpose='cache-preparation',operationId=operation,workspaceId='cache:'+key,generation=1,storageIncarnationId='cache:'+operation,sourceMachineId=machine,imagePins={k:spec[k] for k in pins(spec)});body=base64.b64encode(canonical(q)).decode()
   commands[role+'Bootstrap']={'request':q,'requestSha256':digest(canonical(q)),'command':'sudo -n /usr/bin/python3 -I -B -c '+shlex.quote(loader)+' '+shlex.quote(spec['helperSha256'])+' '+shlex.quote(body)}
  common='sudo -n -u zuse env -i HOME=/home/zuse PATH=/opt/zuse/bin:/usr/local/bin:/usr/bin:/bin /usr/local/bin/zuse-cloud-runtime '
  capture='sudo -n env -i HOME=/home/zuse PATH=/usr/bin:/bin /usr/local/bin/zuse-cloud-runtime capture-project-cache --plan /opt/zuse/preparation/project-cache.json --plan-sha256 '+digest(plan_bytes)

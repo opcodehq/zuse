@@ -5,9 +5,7 @@ use crate::{state::AppState, theme::Theme};
 use gpui::{Context, Entity, SharedString, Subscription, Task, Window, div, prelude::*, px};
 use std::time::Duration;
 use zuse_i18n::messages as msg;
-use zuse_protocol::pr_watch::{
-    MAX_REPAIR_ATTEMPTS, PrWatchRequest, PrWatchStatus, SetPrWatchRequest,
-};
+use zuse_protocol::pr_watch::{PrWatchRequest, PrWatchStatus, SetPrWatchRequest};
 use zuse_rpc::methods;
 
 pub(crate) struct PrWatchControl {
@@ -15,6 +13,8 @@ pub(crate) struct PrWatchControl {
     request: PrWatchRequest,
     target: Option<String>,
     compact: bool,
+    /// The small composer button rather than the labelled switch.
+    button: bool,
     status: Option<PrWatchStatus>,
     error: Option<String>,
     connected: bool,
@@ -59,6 +59,7 @@ impl PrWatchControl {
             request: PrWatchRequest { chat_id, url },
             target,
             compact,
+            button: false,
             status: None,
             error: None,
             connected: false,
@@ -71,6 +72,102 @@ impl PrWatchControl {
         control.connect(cx);
         control
     }
+    /// The compact auto-fix button that sits right of the composer's PR chip.
+    pub(crate) fn button(
+        state: Entity<AppState>,
+        chat_id: String,
+        url: String,
+        target: Option<String>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut control = Self::new(state, chat_id, url, target, true, cx);
+        control.button = true;
+        control
+    }
+
+    fn render_button(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let theme = Theme::of(cx).clone();
+        let status = self.status.as_ref();
+        let fixing = status.is_some_and(|s| s.auto_fix);
+        let repairing = status.is_some_and(|s| s.repairing);
+        let exhausted = status.is_some_and(|s| s.attempts >= s.max_attempts.max(1));
+        let writable = self
+            .state
+            .read(cx)
+            .chats
+            .iter()
+            .find(|c| c.id == self.request.chat_id)
+            .is_some_and(|c| !c.archived && c.config.as_ref().is_some_and(|c| !c.plan));
+        let ready = self.connected
+            && !self.busy
+            && ((writable && status.is_some_and(|s| s.can_auto_fix)) || fixing);
+        let gold = theme.loader_glyph().mid;
+        let label = if repairing {
+            "Fixing…"
+        } else if exhausted && !fixing {
+            "Restart auto-fix"
+        } else {
+            "Auto-fix"
+        };
+        let tooltip = self
+            .error
+            .clone()
+            .or_else(|| status.and_then(|s| s.error.clone()))
+            .or_else(|| {
+                status.and_then(|s| {
+                    s.last_follow_up.as_ref().map(|label| {
+                        format!(
+                            "Last follow-up: {label} · {} of {}",
+                            s.attempts, s.max_attempts
+                        )
+                    })
+                })
+            })
+            .unwrap_or_else(|| tr(cx, msg::native::pr_watch_auto_fix_help).to_string());
+        crate::pull_request_card::retro_chip(&theme, cx)
+            .id("composer-pr-auto-fix")
+            .debug_selector(|| "composer-pr-auto-fix".into())
+            .role(gpui::Role::Switch)
+            .aria_toggled(if fixing {
+                gpui::Toggled::True
+            } else {
+                gpui::Toggled::False
+            })
+            .aria_label(tr(cx, msg::native::pr_watch_auto_fix))
+            .tab_index(if ready { 0 } else { -1 })
+            .text_color(if fixing { theme.text } else { theme.text_muted })
+            .when(!ready, |el| el.opacity(0.5))
+            .tooltip(crate::settings::widgets::text_tooltip(SharedString::from(
+                tooltip,
+            )))
+            // The light: the golden pixel chase while fixing, a lit golden
+            // pixel when on, an unlit one when off.
+            .child(if repairing {
+                crate::loaders::retro_loader(
+                    format!("pr-auto-fix-working-{}", cx.entity_id()),
+                    12.0,
+                    theme.loader_glyph(),
+                )
+            } else {
+                crate::pull_request_card::pixel_light(if fixing {
+                    gold
+                } else {
+                    theme.text_muted.opacity(0.35)
+                })
+                .into_any_element()
+            })
+            .child(label)
+            .when(ready, |el| {
+                el.cursor_pointer()
+                    .hover(|style| style.bg(theme.element_active))
+                    .on_click(cx.listener(move |control, _, _, cx| {
+                        cx.stop_propagation();
+                        control.set(!fixing, !fixing, exhausted && !fixing, cx);
+                    }))
+            })
+            .into_any_element()
+    }
+
     fn connect(&mut self, cx: &mut Context<Self>) {
         let Some(engine) = self.state.read(cx).engine().cloned() else {
             return;
@@ -185,6 +282,7 @@ mod tests {
             error: None,
             repairing: false,
             can_auto_fix: true,
+            last_follow_up: None,
         };
         let rpc = ScriptedRpc::new({
             let status = status.clone();
@@ -242,11 +340,15 @@ mod tests {
 
 impl Render for PrWatchControl {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.button {
+            return self.render_button(cx);
+        }
         let theme = Theme::of(cx).clone();
         let status = self.status.as_ref();
         let watching = status.is_some_and(|s| s.enabled);
         let fixing = status.is_some_and(|s| s.auto_fix);
-        let exhausted = status.map_or(0, |s| s.attempts) >= MAX_REPAIR_ATTEMPTS;
+        // Older engines report their own, smaller budget.
+        let exhausted = status.is_some_and(|s| s.attempts >= s.max_attempts.max(1));
         let writable = self
             .state
             .read(cx)
@@ -259,6 +361,19 @@ impl Render for PrWatchControl {
             .error
             .clone()
             .or_else(|| status.and_then(|s| s.error.clone()));
+        let follow_up = status
+            .filter(|_| !self.compact && error.is_none())
+            .and_then(|s| {
+                let label = s.last_follow_up.as_ref()?;
+                Some(if s.repairing {
+                    format!("Following up on {label}…")
+                } else {
+                    format!(
+                        "Last follow-up: {label} · {} of {}",
+                        s.attempts, s.max_attempts
+                    )
+                })
+            });
         let fix_ready = ready && ((writable && status.is_some_and(|s| s.can_auto_fix)) || fixing);
         let toggle = div()
             .id("pr-auto-fix-toggle")
@@ -329,6 +444,9 @@ impl Render for PrWatchControl {
                         })),
                 )
             })
+            .when_some(follow_up, |el, text| {
+                el.child(div().min_w_0().child(SharedString::from(text)))
+            })
             .when_some(error.filter(|_| !self.compact), |el, error| {
                 el.child(
                     div()
@@ -337,5 +455,6 @@ impl Render for PrWatchControl {
                         .child(SharedString::from(error)),
                 )
             })
+            .into_any_element()
     }
 }

@@ -35,6 +35,8 @@ pub enum ChipKind {
     Directory,
     /// Another chat, dropped from the sidebar.
     Chat,
+    /// A connected plugin, picked from the `@` menu.
+    Plugin,
     /// A bare web URL, shown as its favicon and short label. Unlike the
     /// other kinds it has no pill and is not atomic: the caret can enter it,
     /// and then the editor shows the raw URL.
@@ -185,6 +187,7 @@ pub(crate) fn chip_icon(
         ChipKind::Link => ChipIcon::Favicon(SharedString::from(path.to_string())),
         ChipKind::Command => ChipIcon::Glyph(crate::icons::COMMAND),
         ChipKind::Chat => ChipIcon::Glyph(crate::icons::CHAT_ROUND_LINE),
+        ChipKind::Plugin => ChipIcon::Glyph(crate::icons::SETTINGS_PLUGINS),
         ChipKind::File => ChipIcon::FileTheme(asset_path(FileIconIdentity::file(path), appearance)),
         ChipKind::Directory => ChipIcon::FileTheme(asset_path(
             FileIconIdentity::directory(path.trim_end_matches('/'), false),

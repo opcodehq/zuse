@@ -372,7 +372,7 @@ impl RuntimeControl {
                 .inspect_retained(&d.source_machine_id)
                 .await
                 .map_err(provider_error)?
-                .ok_or_else(|| ApiError::conflict("cloud_retained_machine_missing"))?;
+                .ok_or_else(|| ApiError::conflict(super::MACHINE_MISSING))?;
             if machine.id != d.source_machine_id {
                 return Err(ApiError::conflict(
                     "cloud_retained_machine_identity_conflict",

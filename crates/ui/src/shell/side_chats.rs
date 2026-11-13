@@ -392,6 +392,8 @@ impl Shell {
                         ComposerEvent::CloudAdmitted { .. }
                         | ComposerEvent::CloudForegroundAdmitted
                         | ComposerEvent::CloudSleepRequested
+                        | ComposerEvent::CloudWakeRequested
+                        | ComposerEvent::CloudComputerRecreating { .. }
                         | ComposerEvent::CloudLaunchChanged
                         | ComposerEvent::ResumeCloud { .. }
                         | ComposerEvent::NewThreadTransitionStarted

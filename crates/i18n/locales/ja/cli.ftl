@@ -78,7 +78,7 @@ cli-unlink = アカウント経由でのこのコンピューターの提供を�
 
 cli-status = アカウントとネットワークの状態を表示する
 
-cli-server_unavailable = エージェントポート { $port } で Zuse サーバーが実行されていません。先に zuse-server を起動するか、--ipc-port を指定してください。
+cli-server_unavailable = エージェントポート { $port } で Zuse サーバーが実行されていません。先に zuse serve を起動するか、--ipc-port を指定してください。
 
 cli-default_device = 新しいデバイス
 
@@ -90,7 +90,7 @@ cli-certificate_warning = 初回はブラウザーがこのコンピューター
 
 cli-link_warning = このリンクを持つ人は誰でもこのコンピューターを使用できます。未使用のリンクは 10 分で期限切れになります。
 
-cli-local_only = このリンクはこのコンピューターでのみ機能します。他のデバイスを接続するには --lan または --account を指定して zuse-server を起動してください。
+cli-local_only = このリンクはこのコンピューターでのみ機能します。他のデバイスを接続するには --lan または --account を指定して zuse serve を起動してください。
 
 cli-sign_in_prompt = { $url } を開いてコード { $code } を確認してください
 
@@ -117,3 +117,61 @@ cli-status_no_routes = ネットワーク: このコンピューターのみ
 cli-assets_missing = ブラウザー用ファイルが見つかりません。--assets を指定するか ZUSE_WEB_ASSETS を設定するまで、ブラウザーではこのサーバーを開けません。
 
 cli-invitation_failed = 接続リンクを作成できませんでした
+
+cli-zuse_about = コーディングエージェント向けのマルチデバイスコントローラー
+
+cli-arguments = 引数
+
+cli-version = バージョンを表示
+
+cli-engine_port = エンジンのループバック RPC ポート。既定は ZUSE_IPC_PORT または 27654。serve では 0 で空きポートを選択
+
+cli-lan = このネットワークと tailnet 上のペアリング済みデバイスから直接接続できるようにする。通信はエンドツーエンドで暗号化
+
+cli-lan_port = --lan 接続のポート
+
+cli-tailscale_serve = --lan をブラウザー向けに Tailscale HTTPS でも公開する
+
+cli-headless = ウィンドウなしでエンジンを実行する
+
+cli-overview_status = ワークスペース、エンジン、リモートアクセスの状態を表示する
+
+cli-session_login = サインインし、次回のエンジン起動時にワークスペースの同期をオンにする
+
+cli-login_no_browser = このコンピューターでブラウザーを開く代わりにサインインリンクを表示する
+
+cli-session_logout = 保存されたセッションを削除する。次回のエンジン起動はローカルのみ
+
+cli-sync = 実行中のエンジンの同期状態を表示する
+
+cli-daemon = Zuse をバックグラウンドサービスとして実行する
+
+cli-daemon_install = サービスをインストール、有効化して起動する
+
+cli-daemon_serve = zuse headless の代わりに、続く引数で zuse serve を実行する
+
+cli-daemon_serve_args = zuse serve の引数
+
+cli-daemon_uninstall = サービスを停止して削除する
+
+cli-daemon_start = インストール済みのサービスを起動する
+
+cli-daemon_stop = サービスを停止する
+
+cli-daemon_restart = サービスを再起動する
+
+cli-daemon_status = サービスの状態を表示する
+
+cli-update = 新しいリリースを確認してインストールする
+
+cli-update_check = 更新があるかどうかだけを表示する
+
+cli-appshot = 実行中のアプリで Appshot を撮る
+
+cli-open_url = 開く Zuse リンク
+
+cli-paired_link_file = 接続に使うペアリングリンクを含むプライベートファイル
+
+cli-desktop_missing = ここには Zuse デスクトップアプリがインストールされていないため、ウィンドウを開けません。代わりに次のコマンドを使ってください。
+
+cli-status_remote = リモートアクセス

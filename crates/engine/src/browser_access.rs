@@ -250,6 +250,8 @@ impl BrowserAccess {
         self.status().await
     }
 }
+/// Packaged web files: beside the executable (Linux libexec, Windows), in the
+/// macOS bundle's Resources, or in share/zuse of the standalone CLI archive.
 pub fn discover_assets() -> Option<PathBuf> {
     if let Some(path) = std::env::var_os("ZUSE_WEB_ASSETS").map(PathBuf::from) {
         return Some(path);
@@ -260,6 +262,7 @@ pub fn discover_assets() -> Option<PathBuf> {
     {
         paths.push(directory.join("web"));
         paths.push(directory.join("../Resources/web"));
+        paths.push(directory.join("../share/zuse/web"));
     }
     if let Ok(directory) = std::env::current_dir() {
         paths.push(directory.join("dist/web"));

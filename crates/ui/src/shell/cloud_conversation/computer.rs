@@ -88,6 +88,23 @@ pub(in crate::shell) struct ComputerSummary {
     pub branch: Option<String>,
     pub created: Option<String>,
     pub size: Option<String>,
+    /// How it last woke: from memory, or restarted on a provider that does
+    /// not keep memory across sleep.
+    pub last_wake: Option<String>,
+}
+
+/// "Woke from memory · 1.2 s" or "Restarted on wake · 6.4 s". Absent until the
+/// computer has woken once under a runtime that reports it.
+pub(in crate::shell) fn last_wake_label(row: &serde_json::Value) -> Option<String> {
+    let wake = &row["lastWake"];
+    let kind = match wake["fromMemory"].as_bool()? {
+        true => "Woke from memory",
+        false => "Restarted on wake",
+    };
+    Some(match wake["ms"].as_i64() {
+        Some(ms) if ms >= 0 => format!("{kind} · {:.1} s", ms as f64 / 1000.0),
+        _ => kind.to_owned(),
+    })
 }
 /// The computer menu's pages.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -134,7 +151,7 @@ pub(super) struct State {
     /// Which page of the menu shows.
     page: Page,
     /// SSH access: the host once prepared, the preparation, its failure.
-    ssh: Option<super::ssh::Prepared>,
+    ssh: Option<crate::cloud_ssh::Prepared>,
     ssh_task: Option<Task<()>>,
     ssh_error: Option<String>,
     /// The apps this computer can open a folder in (the shell detects them).
@@ -266,6 +283,10 @@ pub(super) fn issue(row: &Value) -> Option<(&'static str, &'static str)> {
 }
 fn issue_code(code: &str) -> Option<(&'static str, &'static str)> {
     match code {
+        "cloud_retained_machine_missing" => Some((
+            "This computer no longer exists",
+            "Its provider no longer has this computer, so it can't wake. Recreate it from this menu, or start a new chat. This conversation is saved.",
+        )),
         "repository_preparation_failed"
         | "github_repository_access_denied"
         | "github_reconnect_required" => Some((
@@ -486,6 +507,29 @@ impl CloudConversation {
         }));
         cx.notify();
     }
+    /// The composer's Update computer started a recreation: follow it like
+    /// one started from this menu.
+    pub(super) fn computer_recreation_started(
+        &mut self,
+        recreation: Value,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.authorized {
+            return;
+        }
+        self.computer.metadata["computerRecreation"] = recreation;
+        self.execution = None;
+        self.terminal = None;
+        self.status = json!({"state":"connecting","message":"Updating computer…"});
+        self.state.update(cx, |state, cx| {
+            state.detach_cloud_conversation_execution(cx)
+        });
+        self.environment = None;
+        self.watch_environment(false, cx);
+        self.refresh_computer(cx);
+        self.refresh_history(cx);
+        cx.notify();
+    }
     fn sync_body(&self) -> Value {
         json!({"expectedAccountId":self.target.subject,"expectedOrganizationId":self.target.organization,"workspaceId":self.target.workspace})
     }
@@ -659,6 +703,7 @@ impl CloudConversation {
                         .map(|first| first.to_uppercase().collect::<String>() + chars.as_str())
                         .unwrap_or_default()
                 }),
+            last_wake: last_wake_label(row),
             created: row["createdAt"]
                 .as_i64()
                 .and_then(chrono::DateTime::from_timestamp_millis)
@@ -761,10 +806,10 @@ impl CloudConversation {
         let port = self.boot.ipc_port;
         self.computer.ssh_error = None;
         self.computer.ssh_task = Some(cx.spawn(async move |this, cx| {
-            let result: Result<super::ssh::Prepared, String> = async {
+            let result: Result<crate::cloud_ssh::Prepared, String> = async {
                 let key = cx
                     .background_executor()
-                    .spawn(async { super::ssh::ensure_key() })
+                    .spawn(async { crate::cloud_ssh::ensure_key() })
                     .await?;
                 let prepared = gpui_tokio::Tokio::spawn(cx, async move {
                     engine
@@ -780,12 +825,18 @@ impl CloudConversation {
                     .as_str()
                     .unwrap_or("/home/zuse/workspace")
                     .to_owned();
+                let host_key = prepared["hostKey"].as_str().map(str::to_owned);
                 let host_workspace = workspace.clone();
                 cx.background_executor()
-                    .spawn(async move { super::ssh::install_host(&host_workspace, &user, port) })
+                    .spawn(async move {
+                        if let Some(host_key) = host_key {
+                            crate::cloud_ssh::pin_host_key(&host_workspace, &host_key)?;
+                        }
+                        crate::cloud_ssh::install_host(&host_workspace, &user, port)
+                    })
                     .await?;
-                Ok(super::ssh::Prepared {
-                    host: super::ssh::host_alias(&workspace),
+                Ok(crate::cloud_ssh::Prepared {
+                    host: crate::cloud_ssh::host_alias(&workspace),
                     path,
                 })
             }
@@ -804,9 +855,9 @@ impl CloudConversation {
                                 this.close_computer(cx);
                             }
                             SshAction::Terminal => {
-                                let command = super::ssh::terminal_command(&prepared);
+                                let command = crate::cloud_ssh::terminal_command(&prepared);
                                 cx.background_executor()
-                                    .spawn(async move { super::ssh::open_terminal(&command) })
+                                    .spawn(async move { crate::cloud_ssh::open_terminal(&command) })
                                     .detach();
                                 this.close_computer(cx);
                             }
@@ -824,7 +875,7 @@ impl CloudConversation {
     fn render_ssh_page(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::of(cx).for_popup();
         let busy = self.computer.ssh_task.is_some();
-        let host = super::ssh::host_alias(&self.target.workspace);
+        let host = crate::cloud_ssh::host_alias(&self.target.workspace);
         let mut page = div()
             .id("native-computer-ssh")
             .flex()
@@ -1023,6 +1074,9 @@ impl CloudConversation {
                 text(summary.provider.clone().unwrap_or_else(|| "Cloud".into())),
             ))
             .child(detail("Status", icons::MONITOR, status))
+            .when_some(summary.last_wake.clone(), |menu, wake| {
+                menu.child(detail("Last wake", icons::CLOCK_CIRCLE, text(wake)))
+            })
             .when_some(summary.created.clone(), |menu, created| {
                 menu.child(detail("Created", icons::CALENDAR, text(created)))
             });
@@ -1777,5 +1831,27 @@ mod tests {
                 .1
                 .contains("setup output")
         );
+    }
+}
+
+#[cfg(test)]
+mod wake_label_tests {
+    use serde_json::json;
+    #[test]
+    fn last_wake_says_whether_memory_was_kept() {
+        assert_eq!(
+            super::last_wake_label(&json!({"lastWake":{"fromMemory":true,"at":1,"ms":1234}})),
+            Some("Woke from memory · 1.2 s".into())
+        );
+        assert_eq!(
+            super::last_wake_label(&json!({"lastWake":{"fromMemory":false,"at":1,"ms":6400}})),
+            Some("Restarted on wake · 6.4 s".into())
+        );
+        // An older runtime reports no wake kind; say nothing rather than guess.
+        assert_eq!(
+            super::last_wake_label(&json!({"lastWake":{"fromMemory":null,"at":1,"ms":900}})),
+            None
+        );
+        assert_eq!(super::last_wake_label(&json!({})), None);
     }
 }

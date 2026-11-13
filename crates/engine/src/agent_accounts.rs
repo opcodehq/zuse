@@ -94,10 +94,13 @@ use zuse_protocol::{
 use crate::repos::home_dir;
 use crate::{EngineError, new_id, now_ms};
 
+mod connection;
 mod dictation;
+mod login_status;
 mod oauth;
 #[cfg(test)]
 mod provider_tests;
+pub use connection::{ClaudeConnections, SetClaudeConnection};
 mod stores;
 mod usage;
 
@@ -741,6 +744,10 @@ struct Inner {
     cli_overrides: Mutex<HashMap<HarnessId, PathBuf>>,
     /// The refreshed Codex account dictation uploads with.
     dictation: dictation::DictationAccount,
+    /// How Claude Code reaches Anthropic (see [`connection`]).
+    connection: Mutex<connection::ConnectionStore>,
+    /// Which agents the last list found signed in (see [`login_status`]).
+    logins: Mutex<login_status::LoginCache>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -817,6 +824,8 @@ impl AgentAccounts {
             .unwrap_or_else(|_| reqwest::Client::new());
         // Last known usage from the previous run — a missing or torn file is
         // just a cold cache.
+        let connection =
+            connection::ConnectionStore::load(&config.root_dir().join("claude-connection.json"));
         let usage = std::fs::read_to_string(config.usage_cache_file())
             .ok()
             .and_then(|raw| serde_json::from_str::<UsageCacheFile>(&raw).ok())
@@ -837,6 +846,8 @@ impl AgentAccounts {
                 identities: Mutex::new(HashMap::new()),
                 cli_overrides: Mutex::new(HashMap::new()),
                 dictation: Default::default(),
+                connection: Mutex::new(connection),
+                logins: Mutex::new(Default::default()),
             }),
         }
     }
@@ -1064,6 +1075,7 @@ impl AgentAccounts {
         if let Some(login) = antigravity {
             accounts.push(login.account());
         }
+        self.note_logins(&accounts);
         Ok(AgentAccountsSnapshot { accounts, warnings })
     }
 

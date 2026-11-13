@@ -117,7 +117,18 @@ mod mac {
                 drop(Owned(result));
             }
             // errSecMissingEntitlement: the process is not provisioned for it.
-            status != -34018
+            if status == -34018 {
+                return false;
+            }
+            // A lookup can answer "not found" in builds that still cannot
+            // write (unsigned development builds), which silently lost every
+            // cached chat key: prove a write and read back before relying on it.
+            let account = format!("probe-{}", std::process::id());
+            write("sh.zuse.keychain-probe", &account, b"ok");
+            let usable =
+                read("sh.zuse.keychain-probe", &account).as_deref() == Some(b"ok".as_slice());
+            clear("sh.zuse.keychain-probe", Some(&account));
+            usable
         })
     }
     pub fn read(service: &str, account: &str) -> Option<Vec<u8>> {

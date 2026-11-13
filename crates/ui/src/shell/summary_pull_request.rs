@@ -296,10 +296,10 @@ impl Shell {
                     })
                     .child(SharedString::from(format!("#{}", model.number)))
                     .child(if self.summary_pr.busy {
-                        crate::loaders::dither_ring(
+                        crate::loaders::retro_loader(
                             "session-info-pull-request-busy",
                             12.0,
-                            theme.text_muted,
+                            theme.loader_glyph(),
                         )
                     } else {
                         icon(icons::ALT_ARROW_DOWN)

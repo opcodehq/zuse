@@ -20,6 +20,7 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.*
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
@@ -37,6 +38,15 @@ fun Composer(workspace: WorkspaceViewModel) {
     var modelMenu by remember { mutableStateOf(false) }
     val focus = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
+    val input = remember { androidx.compose.ui.focus.FocusRequester() }
+    // A chat created from the new chat screen keeps writing focus, so the screen does not jump.
+    LaunchedEffect(workspace.inputsReady) {
+        if (workspace.focusComposer && workspace.inputsReady) {
+            withFrameNanos {}
+            runCatching { input.requestFocus() }
+            workspace.focusComposer = false
+        }
+    }
     BackHandler(focused) {
         focus.clearFocus()
         keyboard?.hide()
@@ -83,6 +93,7 @@ fun Composer(workspace: WorkspaceViewModel) {
             workspace.inputsReady,
             placeholder = placeholder,
             onFocus = { focused = it },
+            focusRequester = input,
             topContent = {
                 val context = workspace.composerContext
                 if (expanded && context != null)
@@ -164,6 +175,7 @@ fun ComposerFrame(
     inputDescription: String = "Ask Zuse",
     placeholder: String = "Ask Zuse",
     onFocus: (Boolean) -> Unit = {},
+    focusRequester: androidx.compose.ui.focus.FocusRequester? = null,
     topContent: @Composable () -> Unit = {},
     leadingAction: @Composable RowScope.() -> Unit,
     trailingAction: @Composable RowScope.() -> Unit,
@@ -201,6 +213,11 @@ fun ComposerFrame(
                     maxLines = 6,
                     modifier =
                         Modifier.fillMaxWidth()
+                            .then(
+                                if (focusRequester != null)
+                                    Modifier.focusRequester(focusRequester)
+                                else Modifier
+                            )
                             .onFocusChanged { onFocus(it.isFocused) }
                             .then(
                                 if (expanded) Modifier.heightIn(min = 96.dp, max = 196.dp)

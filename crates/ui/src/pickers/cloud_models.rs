@@ -162,6 +162,7 @@ impl Pickers {
                             installed: true,
                             can_install: false,
                             enabled: Some(true),
+                            signed_in: None,
                         })
                         .collect(),
                 );

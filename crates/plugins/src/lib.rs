@@ -11,7 +11,7 @@ use zuse_protocol::plugins::{PluginRequest, PluginResponse, PluginTenant, Plugin
 
 pub mod local;
 
-const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
+const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PluginError {
@@ -63,7 +63,10 @@ impl PluginClient {
         credentials: Arc<dyn PluginCredentials>,
     ) -> Result<Self, PluginError> {
         let endpoint = Url::parse(endpoint).map_err(|_| PluginError::InvalidEndpoint)?;
-        if endpoint.scheme() != "https"
+        let local_fixture = cfg!(feature = "test-support")
+            && endpoint.scheme() == "http"
+            && endpoint.host_str() == Some("127.0.0.1");
+        if (endpoint.scheme() != "https" && !local_fixture)
             || endpoint.host_str().is_none()
             || !endpoint.username().is_empty()
             || endpoint.password().is_some()

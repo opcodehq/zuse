@@ -3,7 +3,7 @@
 import { spawn, execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, chmodSync, rmSync, existsSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, dirname } from "node:path";
+import { basename, join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -44,16 +44,19 @@ ${events.map((e) => `printf '%s\\n' '${JSON.stringify(e).replace(/'/g, "'\\''")}
   return path;
 }
 
-/** Start zuse-server on ephemeral ports with a fresh profile. */
+/** Arguments before the serve flags: none for a binary still named zuse-server. */
+export const serveCommand = (binary) => (basename(binary).startsWith("zuse-server") ? [] : ["serve"]);
+
+/** Start `zuse serve` on ephemeral ports with a fresh profile. */
 /** `prepare(profileDir)` seeds the fresh profile before boot; `env` adds engine environment. */
 export async function startEngine({ assets, server, extraArgs = [], agent = {}, prepare, env: extraEnv = {} } = {}) {
   const root = mkdtempSync(join(tmpdir(), "zuse-e2e-"));
   const bin = join(root, "bin");
   const claude = writeFixtureAgent(bin, agent);
-  const binary = server ?? process.env.ZUSE_SERVER ?? [join(repo, "target/release/zuse-server"), join(repo, "target/debug/zuse-server")].find(existsSync);
-  if (!binary) throw new Error("Build zuse-server first (cargo build -p zuse-cli --bin zuse-server)");
+  const binary = server ?? process.env.ZUSE_SERVER ?? [join(repo, "target/release/zuse-cli"), join(repo, "target/debug/zuse-cli")].find(existsSync);
+  if (!binary) throw new Error("Build the zuse command first (cargo build -p zuse-cli)");
   if (prepare) { mkdirSync(join(root, "profile"), { recursive: true }); prepare(join(root, "profile")); }
-  const child = spawn(binary, ["--listen", "127.0.0.1:0", "--ipc-port", "0", "--data-dir", join(root, "profile"), "--language", "en", ...(assets ? ["--assets", assets] : []), ...extraArgs], {
+  const child = spawn(binary, [...serveCommand(binary), "--listen", "127.0.0.1:0", "--ipc-port", "0", "--data-dir", join(root, "profile"), "--language", "en", ...(assets ? ["--assets", assets] : []), ...extraArgs], {
     env: (({ ZUSE_BROWSER_TOKEN, ZUSE_PUBLIC_ORIGIN, ZUSE_TLS_CERT, ZUSE_TLS_KEY, ...env }) => ({ ...env, PATH: `${bin}:${process.env.PATH}`, CLAUDE_CODE_EXECUTABLE: claude, RUST_LOG: "error", ...extraEnv }))(process.env),
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -62,12 +65,12 @@ export async function startEngine({ assets, server, extraArgs = [], agent = {}, 
   child.stderr.on("data", (d) => (log += d));
   let url, ipcPort;
   for (let i = 0; i < 200 && !(url && ipcPort); i++) {
-    if (child.exitCode !== null) throw new Error(`zuse-server exited:\n${log}`);
+    if (child.exitCode !== null) throw new Error(`zuse serve exited:\n${log}`);
     url = log.match(/Open (http\S+)/)?.[1];
     ipcPort = log.match(/Agent tools listen on 127\.0\.0\.1:(\d+)/)?.[1];
     await sleep(100);
   }
-  if (!url) throw new Error(`zuse-server did not become ready:\n${log}`);
+  if (!url) throw new Error(`zuse serve did not become ready:\n${log}`);
   return {
     root,
     url,

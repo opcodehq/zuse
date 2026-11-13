@@ -70,7 +70,7 @@ The source review now includes the exact measured release commit `322f6544dfad0a
 
 ## Reproduce the chat comparison
 
-Use Node 22+, a WebGPU-capable Chromium, matching `dist/web` and `target/debug/zuse-server`, and the disposable T3 0.1.7 binary/profile under `.context/t3-benchmark`. Never point the fixture at real user profiles. The runner creates its own projects, provider CLI, logs, databases and authentication sessions.
+Use Node 22+, a WebGPU-capable Chromium, matching `dist/web` and `target/debug/zuse-cli`, and the disposable T3 0.1.7 binary/profile under `.context/t3-benchmark`. Never point the fixture at real user profiles. The runner creates its own projects, provider CLI, logs, databases and authentication sessions.
 
 ```sh
 CHROME_BIN=/path/to/chrome BENCH_RUNS=3 \

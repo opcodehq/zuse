@@ -20,6 +20,7 @@ on:
       - crates/providers/Cargo.toml
       - crates/cloud/**
       - crates/protocol/src/cloud*.rs
+      - crates/protocol/fixtures/runtime-release-*.json
       - crates/protocol/src/session_commands.rs
       - crates/doc/src/commands.rs
       - crates/rpc/src/cloud.rs
@@ -58,6 +59,7 @@ on:
       - crates/providers/Cargo.toml
       - crates/cloud/**
       - crates/protocol/src/cloud*.rs
+      - crates/protocol/fixtures/runtime-release-*.json
       - crates/protocol/src/session_commands.rs
       - crates/doc/src/commands.rs
       - crates/rpc/src/cloud.rs
@@ -105,11 +107,13 @@ jobs:
       - run: rustfmt --edition 2024 --check crates/protocol/src/cloud.rs crates/protocol/src/cloud_gateway.rs crates/protocol/src/cloud_commands.rs crates/protocol/src/session_commands.rs crates/protocol/src/cloud_auth.rs crates/protocol/src/cloud_lifecycle.rs crates/protocol/src/cloud_computers.rs crates/protocol/src/cloud_connections.rs
       - run: rustfmt --edition 2024 --config skip_children=true --check crates/engine/src/execution.rs crates/engine/src/parking.rs crates/engine/src/sessions.rs crates/engine/src/rpc.rs crates/engine/src/native_harness/tests.rs crates/engine/src/doc_host.rs crates/engine/src/workspace_host.rs crates/engine/src/profile.rs crates/engine/src/lib.rs crates/sync/src/store.rs crates/doc/src/queue.rs crates/doc/src/rebuild.rs crates/doc/src/commands.rs crates/providers/src/claude/mod.rs crates/providers/src/credentials.rs crates/providers/src/lib.rs crates/providers/src/codex/mod.rs crates/providers/src/codex/auth.rs
       - run: python3 infra/cloud/tests/harness-release.py
+      - run: python3 -W error::ResourceWarning infra/cloud/tests/runtime-release.py
       - run: python3 -W error::ResourceWarning infra/cloud/tests/auth-driver.py
       - run: python3 infra/cloud/tests/single-host.py
       - run: python3 infra/cloud/tests/github-app-check.py
       - run: python3 infra/cloud/tests/launch-runtime.py
       - run: python3 infra/cloud/tests/runtime-supervisor.py
+      - run: python3 infra/cloud/tests/runtime-update.py
       - run: python3 infra/cloud/tests/runtime-repair.py
       - run: python3 infra/cloud/tests/runtime-recreation.py
       - run: python3 infra/cloud/tests/recovery-launcher.py
@@ -159,6 +163,11 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           key: cloud
           cache-on-failure: true
+      # The plugin Postgres tests run the bundled Executor v2 worker under Bun,
+      # pinned to the version the API image ships.
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.10
       - run: sudo apt-get update && sudo apt-get install -y cmake libclang-dev libasound2-dev ripgrep
       # The guest binary backs the runtime and Postgres recovery tests below.
       - run: cargo build --locked -p zuse-cloud-guest
@@ -167,12 +176,103 @@ jobs:
       - run: cargo test --locked -p zuse-cloud-projection
       - run: cargo test --locked -p zuse-cloud-runtime -- --include-ignored
       - run: cargo test --locked -p zuse-cloud-runtime --features engine --lib grok_auth::tests
-      - run: cargo test --locked -p zuse-cloud -- --include-ignored
+      # The staging pilot test drives a child process against its own schema and
+      # times out on locks when it shares the database with the parallel suite.
+      - run: cargo test --locked -p zuse-cloud -- --include-ignored --skip staging_pilot_is_separate_bounded_and_reconciles_original_effects
+      - run: cargo test --locked -p zuse-cloud --lib staging_pilot_is_separate_bounded_and_reconciles_original_effects -- --include-ignored --exact project_caches::pilot_tests::staging_pilot_is_separate_bounded_and_reconciles_original_effects
       # These fixtures use the same workspace IDs across isolated database schemas.
       # Serialize them so the shared provider-effect guard remains enforced.
       - run: cargo test --locked -p zuse-cloud --features runtime-acceptance --test postgres rust_cloud -- --ignored --test-threads=1 --skip rust_cloud_composer_launch_close_and_reopen
       - run: cargo test --locked -p zuse-cloud --features runtime-acceptance --test postgres recovery_acceptance -- --ignored --test-threads=1
       - run: cargo test --locked -p zuse-protocol cloud
+
+  # Old-runtime matrix: the current server suite against previously released
+  # guest runtimes listed in infra/cloud/runtime-compat.json. No-op while the
+  # list is empty; non-blocking until it is populated and green.
+  compat-releases:
+    runs-on: ubuntu-24.04
+    outputs:
+      count: ${{ steps.list.outputs.count }}
+      matrix: ${{ steps.list.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: infra/cloud/runtime-compat.json
+          sparse-checkout-cone-mode: false
+      - id: list
+        run: |
+          python3 - <<'EOF' >> "$GITHUB_OUTPUT"
+          import json
+          releases = json.load(open("infra/cloud/runtime-compat.json"))["releases"][:3]
+          print(f"count={len(releases)}")
+          print(f"matrix={json.dumps(releases, separators=(',', ':'))}")
+          EOF
+
+  old-runtime:
+    name: old runtime ${{ matrix.release.version }}
+    needs: compat-releases
+    if: needs.compat-releases.outputs.count != '0'
+    continue-on-error: true
+    runs-on: ubuntu-24.04
+    # Old runtimes are read from the staging release bucket.
+    environment: staging
+    strategy:
+      fail-fast: false
+      matrix:
+        release: ${{ fromJSON(needs.compat-releases.outputs.matrix) }}
+    env:
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_INCREMENTAL: 0
+      ZUSE_CLOUD_TEST_GUEST_BIN: ${{ github.workspace }}/old-runtime/zuse-cloud-runtime
+      ZUSE_CLOUD_TEST_DATABASE_URL: postgres://zuse_test:zuse_test@127.0.0.1:5432/zuse_test
+      # Read-only credentials; absent on fork pull requests, which skip the job's tests.
+      ZUSE_CLOUD_RUNTIME_R2_BUCKET: ${{ secrets.ZUSE_CLOUD_RUNTIME_R2_BUCKET }}
+      ZUSE_CLOUD_RUNTIME_R2_ENDPOINT: ${{ secrets.ZUSE_CLOUD_RUNTIME_R2_ENDPOINT }}
+      ZUSE_CLOUD_RUNTIME_R2_ACCESS_KEY_ID: ${{ secrets.ZUSE_CLOUD_RUNTIME_R2_READ_ACCESS_KEY_ID }}
+      ZUSE_CLOUD_RUNTIME_R2_SECRET_ACCESS_KEY: ${{ secrets.ZUSE_CLOUD_RUNTIME_R2_READ_SECRET_ACCESS_KEY }}
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: zuse_test
+          POSTGRES_PASSWORD: zuse_test
+          POSTGRES_DB: zuse_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch and verify old runtime
+        id: fetch
+        env:
+          SHA256: ${{ matrix.release.sha256 }}
+          ARCH: ${{ matrix.release.architecture }}
+        run: |
+          if [ -z "$ZUSE_CLOUD_RUNTIME_R2_BUCKET" ] || [ -z "$ZUSE_CLOUD_RUNTIME_R2_ACCESS_KEY_ID" ]; then
+            echo "::notice::Runtime release bucket credentials unavailable; skipping old-runtime suite"
+            echo "fetched=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          python3 infra/cloud/runtime-release.py download --sha256 "$SHA256" --arch "$ARCH" --out "$ZUSE_CLOUD_TEST_GUEST_BIN"
+          echo "fetched=true" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.fetch.outputs.fetched == 'true'
+      - uses: Swatinem/rust-cache@v2
+        if: steps.fetch.outputs.fetched == 'true'
+        with:
+          key: cloud
+          save-if: false
+      - if: steps.fetch.outputs.fetched == 'true'
+        run: sudo apt-get update && sudo apt-get install -y cmake libclang-dev libasound2-dev ripgrep
+      - if: steps.fetch.outputs.fetched == 'true'
+        run: cargo test --locked -p zuse-cloud --features runtime-acceptance --test postgres rust_cloud -- --ignored --test-threads=1 --skip rust_cloud_composer_launch_close_and_reopen
+      - if: steps.fetch.outputs.fetched == 'true'
+        run: cargo test --locked -p zuse-cloud --features runtime-acceptance --test postgres recovery_acceptance -- --ignored --test-threads=1
 
   engine:
     runs-on: ubuntu-24.04

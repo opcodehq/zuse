@@ -3,6 +3,8 @@ use super::*;
 use crate::localization::message as tr;
 use serde_json::{Value, json};
 use zuse_i18n::messages as msg;
+mod runtime_update;
+mod unknown;
 mod wake;
 #[derive(Default)]
 pub(super) struct Launch {
@@ -25,6 +27,10 @@ pub(super) struct Launch {
     native_staged: Vec<StagedAttachment>,
     rejected_drafts: Vec<(String, Vec<StagedAttachment>)>,
     pause_command: Option<String>,
+    /// An earlier message whose delivery outcome is unknown.
+    pub(super) unknown: unknown::State,
+    /// Messages waiting while their computer updates its runtime.
+    pub(super) runtime: runtime_update::State,
     /// The cloud computer's stage, set by the conversation that owns this
     /// composer and shown in the tray's single status line.
     status: Option<(String, bool)>,
@@ -96,6 +102,8 @@ impl Composer {
     }
     pub(crate) fn clear_cloud_task(&mut self, cx: &mut Context<Self>) {
         self.cloud.task = None;
+        self.cloud.unknown = Default::default();
+        self.cloud.runtime = Default::default();
         self.cloud.native = None;
         self.cloud.pending_native = None;
         self.cloud.pending_native_text = None;
@@ -105,6 +113,11 @@ impl Composer {
             .update(cx, |pickers, cx| pickers.clear_cloud_task_binding(cx));
         self.input.update(cx, |input, cx| input.set_text("", cx));
         cx.notify();
+    }
+    /// Whether this composer belongs to a cloud chat, whose files go
+    /// straight to its computer.
+    pub(crate) fn is_native_cloud(&self) -> bool {
+        self.cloud.native.is_some()
     }
     pub(crate) fn set_cloud_task_sleeping(&mut self, sleeping: bool) {
         if let Some(task) = &mut self.cloud.native {
@@ -117,12 +130,18 @@ impl Composer {
         queue: bool,
         cx: &mut Context<Self>,
     ) -> bool {
-        let Some(task) = &self.cloud.native else {
+        if self.cloud.native.is_none() {
             return false;
-        };
+        }
         if self.cloud.task.is_some() {
             return true;
         }
+        if self.cloud_unknown_blocks_send(cx) {
+            return true;
+        }
+        let Some(task) = &self.cloud.native else {
+            return false;
+        };
         if queue
             && task.queue_selection_version
                 != zuse_protocol::cloud_task_commands::QUEUE_RUN_SELECTION_VERSION
@@ -187,9 +206,145 @@ impl Composer {
             );
             self.cloud.pending_native_text = Some(text.clone());
             self.cloud.native_staged = self.staged().to_vec();
+            if queue {
+                // A queued message leaves the draft at once; its row appears
+                // in the queue once saved, and a failure returns it.
+                self.clear_sent_draft(cx);
+            } else {
+                self.show_native_send(&task.target.initial_session.clone(), &message, &text, cx);
+            }
+        } else if let Some(request) = self.cloud.pending_native.clone()
+            && request["action"]["type"] == "submit"
+            && let (Some(message), Some(text)) = (
+                request["action"]["messageId"].as_str(),
+                self.cloud.pending_native_text.clone(),
+            )
+        {
+            // Retry: the same message identity rejoins the conversation now.
+            let session = task.target.initial_session.clone();
+            self.show_native_send(&session, message, &text, cx);
+        } else if self
+            .cloud
+            .pending_native
+            .as_ref()
+            .is_some_and(|request| request["action"]["type"] == "queue")
+        {
+            // Retry of a queued message: it leaves the draft again.
+            self.clear_sent_draft(cx);
+        }
+        if self.cloud_runtime_update_holds() {
+            // The computer is updating: the message is in the chat and goes
+            // out with the others once it's done.
+            self.hold_cloud_send(cx);
+            return true;
         }
         self.dispatch_cloud_task(cx);
         true
+    }
+    /// The message joins the conversation the moment it is sent; uploading
+    /// its files and server admission continue behind it. A failure puts it
+    /// back in the draft (see [`Self::return_native_send`]).
+    fn show_native_send(
+        &mut self,
+        session: &str,
+        message: &str,
+        text: &str,
+        cx: &mut Context<Self>,
+    ) {
+        self.push_cloud_echo(session, message, text, cx);
+        self.clear_sent_draft(cx);
+    }
+    /// Put a sent message in the conversation before the server confirms it.
+    fn push_cloud_echo(
+        &mut self,
+        session: &str,
+        message: &str,
+        text: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let message = message.to_owned();
+        let text = text.to_owned();
+        let session = session.to_owned();
+        self.state.update(cx, |state, cx| {
+            let device = state
+                .selected_chat_row()
+                .map(|chat| chat.device_id.clone())
+                .unwrap_or_default();
+            state.push_echo(
+                &session,
+                zuse_model::SessionMessageEntry {
+                    id: message.clone(),
+                    role: zuse_model::MessageRole::User,
+                    parts: vec![zuse_model::MessagePart::Text {
+                        id: format!("text:{message}"),
+                        text,
+                    }],
+                    created_at: chrono::Utc::now().timestamp_millis(),
+                    device_id: device,
+                    status: None,
+                    continuation_of: None,
+                    duration_ms: None,
+                },
+            );
+            cx.notify();
+        });
+    }
+    /// The sent text and files leave the draft; delivery continues behind it.
+    fn clear_sent_draft(&mut self, cx: &mut Context<Self>) {
+        self.input.update(cx, |input, cx| input.set_text("", cx));
+        if let Some(files) = self.attachments.get_mut(&self.current_key) {
+            let sent = &self.cloud.native_staged;
+            files.retain(|file| !sent.iter().any(|sent| sent.id == file.id));
+        }
+        self.sync_attachment_chips(cx);
+        cx.notify();
+    }
+    /// Undo [`Self::show_native_send`] (or a queued message leaving the
+    /// draft) after a failed send: the message leaves the conversation and its
+    /// text and files return to an empty draft, so Retry re-sends the same
+    /// message identity.
+    fn return_native_send(&mut self, cx: &mut Context<Self>) {
+        let Some(request) = self.cloud.pending_native.clone() else {
+            return;
+        };
+        let (Some(task), Some(message)) = (
+            self.cloud.native.as_ref(),
+            request["action"]["messageId"].as_str(),
+        ) else {
+            return;
+        };
+        let kind = request["action"]["type"].as_str();
+        if kind == Some("submit") {
+            let session = task.target.initial_session.clone();
+            let message = message.to_owned();
+            self.state
+                .update(cx, |state, _| state.remove_echo(&session, &message));
+        } else if kind != Some("queue") {
+            return;
+        }
+        if let Some(text) = self.cloud.pending_native_text.clone() {
+            if self.input.read(cx).text().is_empty() {
+                self.input.update(cx, |input, cx| input.set_text(text, cx));
+            } else {
+                // A newer draft is in the box: keep it, let it be sent, and
+                // keep the unsent message's text visible instead of retrying it.
+                self.cloud.pending_native = None;
+                self.cloud.pending_native_text = None;
+                self.failure_key = None;
+                self.failure = Some(format!("This message wasn't sent: “{text}”").into());
+            }
+        }
+        let restored = self.cloud.native_staged.clone();
+        let files = self
+            .attachments
+            .entry(self.current_key.clone())
+            .or_default();
+        for file in restored {
+            if !files.iter().any(|existing| existing.id == file.id) {
+                files.push(file);
+            }
+        }
+        self.sync_attachment_chips(cx);
     }
     pub(super) fn interrupt_cloud_task(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(task) = &self.cloud.native else {
@@ -216,18 +371,24 @@ impl Composer {
         let staged = self.cloud.native_staged.clone();
         self.failure = None;
         self.cloud.task = Some(cx.spawn(async move |this, cx| {
-            let field=if request["action"]["type"]=="queue" {"input"} else {""};
-            let assets=if field=="input" {&request["action"]["input"]["attachments"]} else {&request["action"]["attachments"]};
-            if !staged.is_empty() && assets.as_array().map_or(true,|assets|assets.len()!=staged.len()) {
-                let mut assets=Vec::new();
-                for attachment in &staged {
-                    match upload_native_asset(&target,attachment).await {
-                        Ok(asset)=>assets.push(asset),
-                        Err(error)=>{let _=this.update(cx,|this,cx|this.cloud_failure(error,cx));return;}
+            if !staged.is_empty() && !computer_files_delivered(&request, staged.len()) {
+                // A message's files go straight to its computer, never to server
+                // storage, whether it runs now or waits in the queue: wake it,
+                // wait for its connection, then upload.
+                let engine=match computer_engine(&this,cx).await {
+                    Ok(engine)=>engine,
+                    Err(ComputerWait::Gone)=>return,
+                    Err(ComputerWait::TimedOut)=>{
+                        let _=this.update(cx,|this,cx|{this.return_native_send(cx);this.cloud_failure(COMPUTER_TIMEOUT.into(),cx)});
+                        return;
                     }
-                }
-                if field=="input" {request["action"]["input"]["attachments"]=json!(assets);} else {request["action"]["attachments"]=json!(assets);}
-                // Retain the exact asset receipts and command before dispatch.
+                };
+                let paths=match upload_to_computer(&engine,cx.background_executor(),&staged).await {
+                    Ok(paths)=>paths,
+                    Err(error)=>{let _=this.update(cx,|this,cx|{this.return_native_send(cx);this.cloud_failure(error,cx)});return;}
+                };
+                set_computer_files(&mut request, paths);
+                // Retain the uploaded paths so a retry doesn't upload again.
                 let _=this.update(cx,|this,_|this.cloud.pending_native=Some(request.clone()));
             }
             let result = target.controller.client().call_scoped(methods::CLOUD_TASK_COMMAND,
@@ -241,13 +402,14 @@ impl Composer {
                         let foreground=request["action"]["type"]=="submit" && request["action"]["payload"]["kind"]=="run";
                         if foreground {
                             this.cloud.admitted_native=Some(json!({"commandId":request["commandId"],"messageId":request["action"]["messageId"]}));
+                            this.remember_cloud_run(&request);
                         }
                         this.cloud.pending_native = None;
                         let sent=std::mem::take(&mut this.cloud.native_staged);
                         if let Some(files)=this.attachments.get_mut(&this.current_key){files.retain(|file|!sent.iter().any(|sent|sent.id==file.id));}
                         this.sync_attachment_chips(cx);
                         if let Some(text)=this.cloud.pending_native_text.take() {
-                            if this.input.read(cx).text()==text {this.input.update(cx, |input,cx| input.set_text("",cx));}
+                            // A sent or queued message already cleared its draft; anything there now is newer.
                             if request["action"]["type"]=="submit" {
                                 if let Some(message)=request["action"]["messageId"].as_str() {
                                     let message=message.to_owned();let session=target.initial_session.clone();
@@ -265,9 +427,46 @@ impl Composer {
                         }
                         if foreground {cx.emit(ComposerEvent::CloudForegroundAdmitted);}
                         cx.emit(ComposerEvent::CloudLaunchChanged);
+                        // Messages held for a computer update go out one by one.
+                        this.send_next_ready_cloud_message(cx);
                     }
-                    Ok(_) => this.failure = Some("Message admission was not verified. Retry the original message to check its saved identity.".into()),
-                    Err(error) => this.failure = Some(format!("Message admission interrupted: {error}. Retry preserves the same message identity.").into()),
+                    Err(zuse_rpc::RpcError::Capability(code)) if runtime_update::refusal(&code).is_some() => {
+                        // The computer's runtime must update first. The message
+                        // stays in the chat and is sent again once it has.
+                        if let Some(refusal) = runtime_update::refusal(&code) { this.hold_cloud_refusal(refusal, cx); }
+                    }
+                    Ok(_) => {
+                        this.return_native_send(cx);
+                        this.failure = Some("Message admission was not verified. Retry the original message to check its saved identity.".into());
+                    }
+                    Err(zuse_rpc::RpcError::Capability(code)) if code.starts_with(zuse_protocol::cloud_task_commands::TASK_REJECTED_PREFIX) => {
+                        // Refused outright (model, access, attachment): nothing was
+                        // admitted, so the next Send builds a new message with the
+                        // corrected choices instead of retrying this one.
+                        this.return_native_send(cx);
+                        this.cloud.pending_native = None;
+                        this.cloud.pending_native_text = None;
+                        this.cloud.native_staged.clear();
+                        let message = code.trim_start_matches(zuse_protocol::cloud_task_commands::TASK_REJECTED_PREFIX).to_owned();
+                        this.failure = Some(format!("Couldn't send: {message}").into());
+                        this.release_ready_cloud_messages(cx);
+                    }
+                    Err(zuse_rpc::RpcError::Capability(code)) if code.starts_with(zuse_protocol::cloud_task_commands::TASK_UNKNOWN_OUTCOME_PREFIX) => {
+                        // An earlier message's outcome is unknown, so nothing was
+                        // admitted. Keep the draft and read history, which shows
+                        // that message with Retry and Discard.
+                        this.return_native_send(cx);
+                        this.cloud.pending_native = None;
+                        this.cloud.pending_native_text = None;
+                        this.cloud.native_staged.clear();
+                        this.failure = Some("Your earlier message didn't go through. Retry or discard it first. Your draft is kept.".into());
+                        this.release_ready_cloud_messages(cx);
+                        cx.emit(ComposerEvent::CloudLaunchChanged);
+                    }
+                    Err(error) => {
+                        this.return_native_send(cx);
+                        this.failure = Some(format!("Couldn't send: {error} Retry sends the same message.").into());
+                    }
                 }
                 cx.notify();
             });
@@ -343,6 +542,9 @@ impl Composer {
                 true,
             ));
         }
+        if self.cloud_unknown_retrying() {
+            return Some(("Sending message…", true));
+        }
         self.cloud
             .admitted_native
             .as_ref()
@@ -369,6 +571,7 @@ impl Composer {
         admissions: &Value,
         cx: &mut Context<Self>,
     ) {
+        self.observe_cloud_unknown(admissions, cx);
         let Some(pending) = self.cloud.admitted_native.as_ref() else {
             return;
         };
@@ -394,6 +597,14 @@ impl Composer {
     }
     pub(super) fn cached_cloud(&self) -> bool {
         self.cloud.cached.is_some()
+    }
+    /// Bound to a cloud task, which sends with its own saved settings.
+    pub(super) fn native_cloud_task(&self) -> bool {
+        self.cloud.native.is_some()
+    }
+    /// A cloud message whose delivery isn't confirmed keeps its request.
+    pub(super) fn cloud_send_unconfirmed(&self) -> bool {
+        self.cloud.pending_native.is_some()
     }
     pub(crate) fn set_cached_cloud(&mut self, paused: bool, cx: &mut Context<Self>) {
         if self.cloud.cached != Some(paused) {
@@ -985,46 +1196,95 @@ impl Composer {
     }
 }
 
-async fn upload_native_asset(
-    target: &crate::state::CloudTarget,
-    attachment: &StagedAttachment,
-) -> Result<Value, String> {
-    use base64::Engine as _;
-    use sha2::Digest as _;
-    if attachment.bytes().is_empty()
-        || attachment.bytes().len() > zuse_protocol::cloud_assets::MAX_BYTES
-    {
-        return Err("Cloud attachments must be non-empty and at most 20 MB.".into());
+/// A cloud chat's computer was asked to wake but isn't connected yet.
+pub(crate) enum ComputerWait {
+    /// The composer went away while waiting.
+    Gone,
+    /// The computer didn't connect within [`COMPUTER_WAIT`].
+    TimedOut,
+}
+/// How long a message's files wait for their computer to connect.
+pub(crate) const COMPUTER_WAIT: std::time::Duration = std::time::Duration::from_secs(180);
+pub(crate) const COMPUTER_TIMEOUT: &str =
+    "The computer didn't start in time to receive the files. Send again to retry.";
+/// Wake a cloud chat's computer if it sleeps and wait up to
+/// [`COMPUTER_WAIT`] for its connection, so files can go straight to it
+/// instead of server storage.
+pub(crate) async fn computer_engine(
+    this: &gpui::WeakEntity<Composer>,
+    cx: &mut gpui::AsyncApp,
+) -> Result<crate::state::EngineHandle, ComputerWait> {
+    let ready = |cx: &mut gpui::AsyncApp| {
+        this.read_with(cx, |this, cx| {
+            let state = this.state.read(cx);
+            (state.connection == crate::state::ConnectionStatus::Ready)
+                .then(|| state.engine().cloned())
+                .flatten()
+        })
+    };
+    match ready(cx) {
+        Ok(Some(engine)) => return Ok(engine),
+        Ok(None) => {}
+        Err(_) => return Err(ComputerWait::Gone),
     }
-    for (seq, bytes) in attachment
-        .bytes()
-        .chunks(zuse_protocol::cloud_assets::CHUNK_BYTES)
-        .enumerate()
-    {
-        target.controller.client().call_scoped(methods::CLOUD_TASK_ASSET,json!({
-            "workspaceId":target.workspace,"expectedAccountId":target.subject,"expectedOrganizationId":target.organization,
-            "method":methods::UPLOAD_CHUNK,"params":{"uploadId":attachment.id,"seq":seq,"data":base64::engine::general_purpose::STANDARD.encode(bytes)}
-        })).await.map_err(|error|error.to_string())?;
+    let _ = this.update(cx, |_, cx| cx.emit(ComposerEvent::CloudWakeRequested));
+    let started = std::time::Instant::now();
+    loop {
+        if started.elapsed() > COMPUTER_WAIT {
+            return Err(ComputerWait::TimedOut);
+        }
+        cx.background_executor()
+            .timer(std::time::Duration::from_millis(250))
+            .await;
+        match ready(cx) {
+            Ok(Some(engine)) => return Ok(engine),
+            Ok(None) => {}
+            Err(_) => return Err(ComputerWait::Gone),
+        }
     }
-    let value=target.controller.client().call_scoped(methods::CLOUD_TASK_ASSET,json!({
-        "workspaceId":target.workspace,"expectedAccountId":target.subject,"expectedOrganizationId":target.organization,
-        "method":methods::UPLOAD_COMMIT,"params":{"uploadId":attachment.id,"fileName":attachment.name}
-    })).await.map_err(|error|error.to_string())?;
-    if value["accountId"] != target.subject
-        || value["organizationId"].as_str() != target.organization.as_deref()
-    {
-        return Err("Cloud attachment access changed.".into());
+}
+/// Upload files straight to a connected cloud computer, two at a time (each
+/// upload holds its whole encoded file), keeping their order. Returns their
+/// paths on the computer.
+pub(crate) async fn upload_to_computer(
+    engine: &crate::state::EngineHandle,
+    executor: &gpui::BackgroundExecutor,
+    staged: &[StagedAttachment],
+) -> Result<Vec<String>, String> {
+    use futures::{StreamExt as _, TryStreamExt as _};
+    futures::stream::iter(staged.iter())
+        .map(|attachment| {
+            attachments::upload_attachment(
+                engine,
+                executor,
+                Some(attachments::COMPUTER),
+                &attachment.id,
+                attachment,
+                None,
+            )
+        })
+        .buffered(2)
+        .try_collect::<Vec<_>>()
+        .await
+        .map_err(|error| format!("The files couldn't reach the computer: {error}"))
+}
+/// Whether a message's files already reached its computer: a run carries
+/// their paths in its request, a queued message in its input.
+fn computer_files_delivered(request: &Value, files: usize) -> bool {
+    let paths = if request["action"]["type"] == "queue" {
+        &request["action"]["input"]["computerFiles"]
+    } else {
+        &request["action"]["payload"]["request"]["attachments"]
+    };
+    paths.as_array().is_some_and(|paths| paths.len() == files)
+}
+/// Record where a message's files landed on its computer.
+fn set_computer_files(request: &mut Value, paths: Vec<String>) {
+    if request["action"]["type"] == "queue" {
+        request["action"]["input"]["computerFiles"] = json!(paths);
+    } else {
+        request["action"]["payload"]["request"]["attachments"] = json!(paths);
     }
-    let asset = &value["data"]["asset"];
-    let hash = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .encode(sha2::Sha256::digest(attachment.bytes()));
-    if asset["sizeBytes"].as_u64() != Some(attachment.bytes().len() as u64)
-        || asset["sha256"] != hash
-        || asset["originalName"] != attachment.name
-    {
-        return Err("The cloud attachment receipt did not match its file.".into());
-    }
-    Ok(asset.clone())
 }
 
 #[cfg(test)]
@@ -1169,12 +1429,198 @@ mod cached_tests {
                 c.input.update(cx,|input,cx|input.set_text("Keep this queued draft",cx));
                 c.attachments.insert(c.current_key.clone(),vec![StagedAttachment::from_file("notes.txt",b"retained bytes".to_vec())]);
                 assert!(c.send_cloud_task("Keep this queued draft".into(),true,cx));
-                assert_eq!(c.input.read(cx).text(),"Keep this queued draft");assert_eq!(c.staged().len(),1);
-                if version==0 {assert!(c.cloud.pending_native.is_none());assert!(c.failure.as_deref().unwrap().contains("draft is preserved"));}
-                else {let request=c.cloud.pending_native.as_ref().unwrap();assert_eq!(request["action"]["input"]["runSelection"],json!({"harness":"grok","model":"selected-grok","reasoning":"high","modelOptions":{"speed":"fast"},"sandbox":"workspace-write"}));assert_eq!(request["action"]["input"]["text"],"Keep this queued draft");assert_eq!(c.cloud.native_staged.len(),1);c.cloud.task=None;}
+                if version==0 {assert_eq!(c.input.read(cx).text(),"Keep this queued draft");assert_eq!(c.staged().len(),1);assert!(c.cloud.pending_native.is_none());assert!(c.failure.as_deref().unwrap().contains("draft is preserved"));}
+                else {assert_eq!(c.input.read(cx).text(),"","a queued message leaves the draft at once");assert!(c.staged().is_empty());let request=c.cloud.pending_native.as_ref().unwrap();assert_eq!(request["action"]["input"]["runSelection"],json!({"harness":"grok","model":"selected-grok","reasoning":"high","modelOptions":{"speed":"fast"},"sandbox":"workspace-write"}));assert_eq!(request["action"]["input"]["text"],"Keep this queued draft");assert_eq!(c.cloud.native_staged.len(),1);c.cloud.task=None;}
             });
             drop(receive);
         }
+    }
+    #[gpui::test]
+    fn a_cloud_send_joins_the_chat_at_once_and_returns_to_the_draft_on_failure(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _entered = runtime.enter();
+        let (send, receive) = tokio::sync::mpsc::channel(1);
+        let (_replies, replies) = tokio::sync::mpsc::channel(1);
+        let controller =
+            crate::state::EngineHandle::from_test_client(zuse_rpc::RpcClient::new(send, replies));
+        let state = cx.new(|_| {
+            let mut state = crate::state::AppState::new();
+            state.apply_cloud_account(json!({"user":{"id":"owner"},"orgId":null}));
+            // A cloud conversation's selected chat is its session.
+            state.selected_chat = Some("session".into());
+            state
+        });
+        let composer = cx.new(|cx| Composer::new(state.clone(), cx));
+        composer.update(cx, |c, cx| {
+            let target = crate::state::CloudTarget {
+                controller,
+                subject: "owner".into(),
+                organization: None,
+                workspace: "task".into(),
+                initial_session: "session".into(),
+            };
+            c.set_cloud_task(
+                target,
+                json!({"agent":"codex","model":"gpt-6.1-sol","runtimeMode":"full-access"}),
+                cx,
+            );
+            c.input.update(cx, |input, cx| input.set_text("Look at this", cx));
+            assert!(c.send_cloud_task("Look at this".into(), false, cx));
+            // Before any upload or admission completes.
+            assert_eq!(c.input.read(cx).text(), "", "the draft clears at once");
+            let echoed = |cx: &App| {
+                state
+                    .read(cx)
+                    .pending_echoes()
+                    .iter()
+                    .any(|entry| matches!(&entry.parts[..], [zuse_model::MessagePart::Text { text, .. }] if text == "Look at this"))
+            };
+            assert!(echoed(cx), "the message is in the chat at once");
+            // Delivery fails: it leaves the chat and returns to the draft.
+            c.cloud.task = None;
+            c.return_native_send(cx);
+            assert!(!echoed(cx));
+            assert_eq!(c.input.read(cx).text(), "Look at this");
+            assert!(c.cloud.pending_native.is_some(), "Retry keeps the same identity");
+        });
+        drop(receive);
+    }
+    #[gpui::test]
+    fn a_sleeping_cloud_task_takes_a_new_access_mode_into_its_next_message(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _entered = runtime.enter();
+        let (send, receive) = tokio::sync::mpsc::channel(1);
+        let (_replies, replies) = tokio::sync::mpsc::channel(1);
+        let controller =
+            crate::state::EngineHandle::from_test_client(zuse_rpc::RpcClient::new(send, replies));
+        let state = cx.new(|_| {
+            let mut state = crate::state::AppState::new();
+            state.apply_cloud_account(json!({"user":{"id":"owner"},"orgId":null}));
+            // Selected, but the configuration lives on the sleeping computer.
+            state.selected_chat = Some("session".into());
+            state
+        });
+        let composer = cx.new(|cx| Composer::new(state.clone(), cx));
+        composer.update(cx, |c, cx| {
+            assert!(c.state.read(cx).configuration_blocked());
+            let target = crate::state::CloudTarget {
+                controller,
+                subject: "owner".into(),
+                organization: None,
+                workspace: "task".into(),
+                initial_session: "session".into(),
+            };
+            c.set_cloud_task(
+                target,
+                json!({"agent":"codex","model":"gpt-6.1-sol","runtimeMode":"auto"}),
+                cx,
+            );
+            c.set_cloud_task_sleeping(true);
+            assert!(c.set_cloud_task_permission(SandboxLevel::DangerFullAccess, cx));
+            assert_eq!(
+                c.pickers.read(cx).cloud_task_choice().unwrap().sandbox,
+                SandboxLevel::DangerFullAccess
+            );
+            assert!(c.send_cloud_task("Go ahead".into(), false, cx));
+            // While that message is unconfirmed, access stays as it was sent.
+            assert!(c.set_cloud_task_permission(SandboxLevel::WorkspaceWrite, cx));
+            assert_eq!(
+                c.pickers.read(cx).cloud_task_choice().unwrap().sandbox,
+                SandboxLevel::DangerFullAccess
+            );
+            let request = &c.cloud.pending_native.as_ref().unwrap()["action"]["payload"]["request"];
+            assert_eq!(request["sandbox"], json!(SandboxLevel::DangerFullAccess));
+            assert_eq!(request["autoApprove"], true);
+            c.cloud.task = None;
+        });
+        drop(receive);
+    }
+    #[gpui::test]
+    fn a_sleeping_cloud_task_can_send_before_its_engine_configuration_loads(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _entered = runtime.enter();
+        let (send, receive) = tokio::sync::mpsc::channel(1);
+        let (_replies, replies) = tokio::sync::mpsc::channel(1);
+        let controller =
+            crate::state::EngineHandle::from_test_client(zuse_rpc::RpcClient::new(send, replies));
+        let state = cx.new(|_| {
+            let mut state = crate::state::AppState::new();
+            state.apply_cloud_account(json!({"user":{"id":"owner"},"orgId":null}));
+            // The cloud chat is selected, but its configuration lives on the
+            // sleeping computer's engine and has not been confirmed.
+            state.selected_chat = Some("session".into());
+            state
+        });
+        let composer = cx.new(|cx| Composer::new(state.clone(), cx));
+        composer.update(cx, |c, cx| {
+            assert!(c.state.read(cx).configuration_blocked());
+            let target = crate::state::CloudTarget {
+                controller,
+                subject: "owner".into(),
+                organization: None,
+                workspace: "task".into(),
+                initial_session: "session".into(),
+            };
+            c.set_cloud_task(
+                target,
+                json!({"agent":"codex","model":"gpt-6.1-sol","runtimeMode":"full-access"}),
+                cx,
+            );
+            c.set_cloud_task_sleeping(true);
+            assert!(
+                !c.send_blocked(cx),
+                "the task's own saved settings are enough; Send wakes the computer"
+            );
+            assert!(c.send_cloud_task("Wake up and continue".into(), false, cx));
+            let request = c.cloud.pending_native.as_ref().expect("command built");
+            assert_eq!(
+                request["action"]["payload"]["request"]["prompt"],
+                "Wake up and continue"
+            );
+            assert_eq!(request["wake"], "explicit-resume");
+            c.cloud.task = None;
+        });
+        drop(receive);
+    }
+    #[gpui::test]
+    fn a_cloud_task_opened_without_saved_settings_waits_for_them_before_send(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _entered = runtime.enter();
+        let (send, receive) = tokio::sync::mpsc::channel(1);
+        let (_replies, replies) = tokio::sync::mpsc::channel(1);
+        let controller =
+            crate::state::EngineHandle::from_test_client(zuse_rpc::RpcClient::new(send, replies));
+        let state = cx.new(|_| {
+            let mut state = crate::state::AppState::new();
+            state.apply_cloud_account(json!({"user":{"id":"owner"},"orgId":null}));
+            state.selected_chat = Some("session".into());
+            state
+        });
+        let composer = cx.new(|cx| Composer::new(state.clone(), cx));
+        composer.update(cx, |c, cx| {
+            let target = crate::state::CloudTarget {
+                controller,
+                subject: "owner".into(),
+                organization: None,
+                workspace: "task".into(),
+                initial_session: "session".into(),
+            };
+            // A sidebar row carries no agent or model.
+            c.set_cloud_task(target, json!({"workspaceId":"task"}), cx);
+            assert!(
+                c.send_blocked(cx),
+                "Send waits for the task's saved choices instead of failing"
+            );
+        });
+        drop(receive);
     }
     #[gpui::test]
     fn new_cloud_request_uses_selected_provider_and_its_model_before_dispatch(
@@ -1360,5 +1806,111 @@ mod cached_tests {
             &*actions.borrow(),
             &[("Continue the retained conversation".to_owned(), true)]
         );
+    }
+
+    #[test]
+    fn a_messages_computer_files_go_in_its_run_or_its_queued_input() {
+        let mut run = json!({"action":{"type":"submit","payload":{"request":{"attachments":[]}}}});
+        assert!(!computer_files_delivered(&run, 1));
+        set_computer_files(&mut run, vec!["/u/a.png".into()]);
+        assert_eq!(
+            run["action"]["payload"]["request"]["attachments"],
+            json!(["/u/a.png"])
+        );
+        assert!(computer_files_delivered(&run, 1));
+        let mut queued = json!({"action":{"type":"queue","input":{"text":"later"}}});
+        assert!(!computer_files_delivered(&queued, 1));
+        set_computer_files(&mut queued, vec!["/u/a.png".into(), "/u/b.txt".into()]);
+        assert_eq!(
+            queued["action"]["input"]["computerFiles"],
+            json!(["/u/a.png", "/u/b.txt"])
+        );
+        assert!(queued["action"]["input"].get("attachments").is_none());
+        assert!(computer_files_delivered(&queued, 2));
+    }
+    #[gpui::test]
+    fn a_queued_message_with_files_wakes_the_computer_instead_of_uploading_to_the_server(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _entered = runtime.enter();
+        let (send, mut receive) = tokio::sync::mpsc::channel(8);
+        let (_replies, replies) = tokio::sync::mpsc::channel(1);
+        let controller =
+            crate::state::EngineHandle::from_test_client(zuse_rpc::RpcClient::new(send, replies));
+        let state = cx.new(|_| {
+            let mut state = crate::state::AppState::new();
+            state.apply_cloud_account(json!({"user":{"id":"owner"},"orgId":null}));
+            state.selected_chat = Some("session".into());
+            state
+        });
+        let composer = cx.new(|cx| Composer::new(state, cx));
+        let wakes = std::rc::Rc::new(std::cell::Cell::new(0));
+        let woke = wakes.clone();
+        let _subscription = cx.update(|cx| {
+            cx.subscribe(&composer, move |_, event, _| {
+                if matches!(event, ComposerEvent::CloudWakeRequested) {
+                    woke.set(woke.get() + 1);
+                }
+            })
+        });
+        composer.update(cx, |c, cx| {
+            let target = crate::state::CloudTarget {
+                controller,
+                subject: "owner".into(),
+                organization: None,
+                workspace: "task".into(),
+                initial_session: "session".into(),
+            };
+            c.set_cloud_task(
+                target,
+                json!({"agent":"codex","model":"gpt-6.1-sol","sandbox":"workspace-write",
+                    "queueRunSelectionVersion":zuse_protocol::cloud_task_commands::QUEUE_RUN_SELECTION_VERSION}),
+                cx,
+            );
+            c.set_cloud_task_sleeping(true);
+            c.input
+                .update(cx, |input, cx| input.set_text("Use this after the turn", cx));
+            c.attachments.insert(
+                c.current_key.clone(),
+                vec![StagedAttachment::from_file("shot.png", b"png bytes".to_vec())],
+            );
+            assert!(c.send_cloud_task("Use this after the turn".into(), true, cx));
+            assert_eq!(c.input.read(cx).text(), "", "the draft clears at once");
+            assert!(c.staged().is_empty());
+            let request = c.cloud.pending_native.as_ref().unwrap();
+            assert_eq!(request["action"]["type"], "queue");
+            assert_eq!(request["wake"], "preserve-sleep");
+        });
+        // The send asks for the computer and waits for its connection.
+        cx.run_until_parked();
+        assert_eq!(wakes.get(), 1);
+        assert!(
+            receive.try_recv().is_err(),
+            "nothing goes to server asset storage while the computer wakes"
+        );
+        composer.update(cx, |c, cx| {
+            let request = c.cloud.pending_native.as_ref().unwrap();
+            assert!(request["action"]["input"].get("attachments").is_none());
+            assert!(request["action"]["input"].get("computerFiles").is_none());
+            // The computer never connects: the message and its file return.
+            c.cloud.task = None;
+            c.return_native_send(cx);
+            assert_eq!(c.input.read(cx).text(), "Use this after the turn");
+            assert_eq!(c.staged().len(), 1);
+            assert!(
+                c.cloud.pending_native.is_some(),
+                "Retry keeps the same identity"
+            );
+            // Retry leaves the draft again and keeps the same queued message.
+            let queue_id = c.cloud.pending_native.as_ref().unwrap()["action"]["queueId"].clone();
+            assert!(c.send_cloud_task("Use this after the turn".into(), true, cx));
+            assert_eq!(c.input.read(cx).text(), "");
+            assert_eq!(
+                c.cloud.pending_native.as_ref().unwrap()["action"]["queueId"],
+                queue_id
+            );
+            c.cloud.task = None;
+        });
     }
 }

@@ -30,7 +30,9 @@ pub mod github;
 mod grant_receipts;
 pub mod grants;
 mod internal_observations;
+pub mod keep_running;
 pub mod lifecycle;
+pub(crate) mod machine_layout;
 pub mod mailbox;
 mod object_writes;
 pub mod preparation;
@@ -40,6 +42,7 @@ pub mod recovery;
 pub mod recreation;
 pub mod repair;
 pub mod restore;
+pub mod runtime_updates;
 pub mod scope;
 mod startup_binding;
 mod statement_batch;
@@ -141,6 +144,7 @@ pub struct RuntimeControl {
     recovery_workspaces: Vec<String>,
     object_writes: Arc<tokio::sync::Semaphore>,
     pub(crate) mailbox_changes: tokio::sync::broadcast::Sender<()>,
+    runtime_releases: runtime_updates::RuntimeReleaseConfig,
 }
 
 pub use zuse_protocol::cloud::{
@@ -249,6 +253,7 @@ impl RuntimeControl {
             .map_err(|_| anyhow::anyhow!("Cannot connect runtime-control database"))?;
         let mut control = Self::from_pool(pool, config.master, config.signer);
         control.transcript_objects = crate::objects::R2::from_env()?;
+        control.runtime_releases = runtime_updates::RuntimeReleaseConfig::from_env()?;
         control.idle_ms = config.idle_ms;
         control.command_admission_creation = config.command_admission_creation;
         control.recovery_enabled = config.recovery_enabled;
@@ -327,6 +332,7 @@ impl RuntimeControl {
             transcript_objects: None,
             object_writes: Arc::new(tokio::sync::Semaphore::new(1)),
             mailbox_changes: tokio::sync::broadcast::channel(128).0,
+            runtime_releases: runtime_updates::RuntimeReleaseConfig::default(),
         }
     }
     pub async fn ready(&self) -> Result<(), ApiError> {
@@ -816,24 +822,13 @@ impl RuntimeControl {
         now: i64,
     ) -> Result<(Value, String), ApiError> {
         use zuse_protocol::cloud::CloudStoragePhase;
-        if request.capabilities.as_ref().is_some_and(|caps| {
-            caps.len() > 10
-                || caps.iter().any(|cap| {
-                    !matches!(
-                        cap.as_str(),
-                        "rust-rpc-v1"
-                            | "rust-session-commands-v1"
-                            | "rust-workspace-lifecycle-v1"
-                            | "rust-memory-sleep-v1"
-                            | "rust-transcript-projection-v1"
-                            | "rust-full-state-recovery-v1"
-                            | "rust-organization-execution-v1"
-                            | "rust-computer-recreation-v1"
-                            | zuse_protocol::cloud_task_commands::CAPABILITY
-                            | zuse_cloud_runtime::project_cache::CAPABILITY
-                    )
-                })
-        }) {
+        // Unknown names are kept: a newer runtime can know capabilities this
+        // server does not (for example after a server rollback).
+        if request
+            .capabilities
+            .as_ref()
+            .is_some_and(|caps| !crate::runtime_releases::names_valid(caps))
+        {
             return Err(ApiError::bad_request("invalid_runtime_capabilities"));
         }
         let id = required(row, "workspace_id")?;
@@ -966,7 +961,7 @@ impl RuntimeControl {
         let head = request.session_head_version.unwrap_or(0);
         self.runtime_scope_access(id, credential, now).await?;
         let mut tx = self.pool.begin().await?;
-        let (row, _, _) = locked_workspace(&mut tx, id).await?;
+        let (row, generation, _) = locked_workspace(&mut tx, id).await?;
         if !enrollment_matches(&row)
             || blocked(&row)
             || row["desired_state"] != "ready"
@@ -1016,7 +1011,10 @@ impl RuntimeControl {
                 config["startupTimings"]["agentReadyAt"] = json!(now);
             }
             sqlx::query("UPDATE api_cloud_workspaces SET runtime_state='online',request_config=$2,revision=revision+1,updated_at=GREATEST(updated_at+1,$3) WHERE workspace_id=$1")
-                .bind(id).bind(config).bind(now).execute(&mut *tx).await?;
+                .bind(id).bind(&config).bind(now).execute(&mut *tx).await?;
+            proposed["runtime_state"] = json!("online");
+            proposed["request_config"] = config;
+            Self::reconcile_abandoned_allocation(&mut tx, &proposed, generation, now).await?;
             tx.commit().await?;
             self.notify_task_drain();
             return Ok(json!({"agentReady":true,"workspaceReady":false}));
@@ -1064,6 +1062,7 @@ impl RuntimeControl {
         .bind(id)
         .fetch_one(&mut *tx)
         .await?;
+        Self::reconcile_abandoned_allocation(&mut tx, &row, generation, now).await?;
         tx.commit().await?;
         Ok(crate::store::Workspace { row }.public())
     }
@@ -1627,6 +1626,18 @@ fn native_commands_supported(row: &Value) -> bool {
                         .any(|cap| cap == zuse_protocol::cloud_task_commands::CAPABILITY))
         })
 }
+/// Whether the guest runtime on this computer advertised `capability` at its
+/// last bootstrap, or in its last committed runtime update attestation (which
+/// replaces the stored set). A sleeping computer is judged by that record. A
+/// computer that never stored any capabilities is treated as an old runtime,
+/// since a guest that predates a capability never advertised it either.
+pub(crate) fn runtime_capable(row: &Value, capability: &str) -> bool {
+    // Only the bootstrap receipt: it is replaced on every bootstrap, while a
+    // storage enrollment can outlive a replaced guest.
+    row["request_config"]["runtimeBootstrapReceipt"]["capabilities"]
+        .as_array()
+        .is_some_and(|caps| caps.iter().any(|cap| cap == capability))
+}
 fn native_commands_accepted(row: &Value) -> bool {
     native_commands_supported(row)
         || (!task_commands::command_mode(row)
@@ -1654,3 +1665,27 @@ mod recreation_bootstrap_tests;
 
 #[cfg(test)]
 mod lock_tests;
+impl RuntimeControl {
+    /// Derive the plugin tenant only after verifying enrollment and runtime fencing.
+    pub(crate) async fn plugin_identity(
+        &self,
+        workspace: &str,
+        credential: &str,
+        at: i64,
+    ) -> Result<crate::plugins::PluginIdentity, ApiError> {
+        let mut tx = self.pool.begin().await?;
+        let (row, _, _) = locked_workspace(&mut tx, workspace).await?;
+        mailbox::runtime_auth(&row, credential, at)?;
+        let owner = required(&row, "account_id")?.to_owned();
+        let tenant = if owner.starts_with("organization:") {
+            owner.clone()
+        } else {
+            format!("personal:{owner}")
+        };
+        tx.commit().await?;
+        Ok(crate::plugins::PluginIdentity {
+            tenant,
+            subject: owner,
+        })
+    }
+}

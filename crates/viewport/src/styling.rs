@@ -3,6 +3,9 @@ use gpui::{prelude::*, *};
 
 /// Two-pixel ordered dither, with a bottom-weighted fill and pointer emphasis.
 /// Painted as GPU quads; there is no bitmap allocation or idle animation loop.
+/// Corner radius shared by dithered actions and their painted pattern.
+const DITHER_RADIUS: f32 = 6.;
+
 pub fn dither_background(primary: bool, enabled: bool) -> AnyElement {
     canvas(
         |_, _, _| (),
@@ -25,7 +28,24 @@ pub fn dither_background(primary: bool, enabled: bool) -> AnyElement {
                 for x in 0..columns {
                     let threshold = (bayer[(y & 3) * 4 + (x & 3)] + 0.5) / 16.;
                     let lit = density > threshold - intensity * 0.1;
-                    let border = x == 0 || y == 0 || x + 1 == columns || y + 1 == rows;
+                    // Clip to the button's rounded rectangle: canvas cells
+                    // are not masked by the parent's corner radius.
+                    let (cx, cy) = (x as f32 * 2. + 1., y as f32 * 2. + 1.);
+                    let dx = (DITHER_RADIUS - cx)
+                        .max(cx - (width - DITHER_RADIUS))
+                        .max(0.);
+                    let dy = (DITHER_RADIUS - cy)
+                        .max(cy - (height - DITHER_RADIUS))
+                        .max(0.);
+                    let edge = if dx > 0. && dy > 0. {
+                        DITHER_RADIUS - (dx * dx + dy * dy).sqrt()
+                    } else {
+                        cx.min(cy).min(width - cx).min(height - cy)
+                    };
+                    if edge < 0. {
+                        continue;
+                    }
+                    let border = edge < 2.;
                     let tier = if lit { 1. } else { 0.4 };
                     let alpha = if border {
                         0.5 + 0.25 * intensity
@@ -65,7 +85,7 @@ pub fn dither_action(
         .relative()
         .h(px(28.))
         .px_3()
-        .rounded(px(6.))
+        .rounded(px(DITHER_RADIUS))
         .overflow_hidden()
         .flex()
         .items_center()

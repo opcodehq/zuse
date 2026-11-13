@@ -145,6 +145,8 @@ def bundle(args):
         if boat_boot and getattr(args,'fresh_memory_bootstrap',False):raise ValueError('ambiguous_bootstrap_mode')
         if fresh_boot:
             files['managed-base-fresh-boot.py'] = Path(__file__).with_name('managed-base-fresh-boot.py')
+            # Root runtime swap helper; pinned as runtimeUpdateHelperSha256.
+            files['runtime-update.py'] = Path(__file__).with_name('runtime-update.py')
         identifier = 'zuse-base-' + sha(canonical({'runtime':args.runtime_sha256,'harness':args.harness_release,'files':{n:file_sha(p) for n,p in files.items()}}))[:32]
         plan = dict(managedBase=True,rustRuntimeSupervisorVersion=1,buildId=identifier,templateVersion=identifier,configurationDigest=identifier,
                     home='/home/zuse',cacheRoot='/home/zuse/.zuse-image/cache',statusDirectory='/opt/zuse/preparation/status',
@@ -158,6 +160,7 @@ def bundle(args):
                     runtimeSha256=args.runtime_sha256,runtimeVersion=manifest['runtimeVersion'],platform=manifest['platform'],files=entries)
         if fresh_boot:
             result['managedBaseFreshBootVersion'] = 1
+            result['managedBaseRuntimeUpdateVersion'] = 1
             if boat_boot:result['managedBaseFreshBootMode']='post-hydration-first-start-v1'
         write(args.output/'bundle.json',result)
         return result
@@ -472,6 +475,8 @@ def candidate(args):
     if 'codex-assets.tar' in names:allowed.add('codex-assets.tar')
     if bundle.get('managedBaseFreshBootVersion') == 1:allowed.add('managed-base-fresh-boot.py')
     elif 'managedBaseFreshBootVersion' in bundle:raise ValueError('candidate_fresh_boot_version_invalid')
+    if bundle.get('managedBaseRuntimeUpdateVersion') == 1 and bundle.get('managedBaseFreshBootVersion') == 1:allowed.add('runtime-update.py')
+    elif 'managedBaseRuntimeUpdateVersion' in bundle:raise ValueError('candidate_runtime_update_version_invalid')
     if bundle.get('managedBaseFreshBootMode') not in (None,'post-hydration-first-start-v1') or 'managedBaseFreshBootMode' in bundle and bundle.get('managedBaseFreshBootVersion')!=1:raise ValueError('candidate_fresh_boot_mode_invalid')
     legacy=allowed-{'runtime-repair.py','runtime-recreation.py'}
     derived = bundle.get('managedBaseDerivationVersion') == 1
@@ -520,12 +525,15 @@ def candidate(args):
     if bundle.get('managedBaseFreshBootVersion') == 1:
         spec=build.get('initialRuntimeBootstrap',{})
         keys={'version','mode','runtimeSha256','supervisorSha256','serviceSha256','manifestSha256','helperSha256'}
+        update_helper=bundle.get('managedBaseRuntimeUpdateVersion')==1
+        if update_helper:keys.add('runtimeUpdateHelperSha256')
         boat_mode=bundle.get('managedBaseFreshBootMode')=='post-hydration-first-start-v1'
         if (provider!=('boat' if boat_mode else 'boxd') or set(spec)!=keys or spec.get('version')!=1 or spec.get('mode')!=('post-hydration-first-start-v1' if boat_mode else 'stopped-memory-snapshot-v1')
                 or any(not DIGEST.fullmatch(spec.get(k,'')) for k in keys-{'version','mode'})
                 or spec['runtimeSha256']!=bundle['runtimeSha256']
                 or spec['helperSha256']!=next(e['sha256'] for e in entries if e['path']=='managed-base-fresh-boot.py')
                 or spec['supervisorSha256']!=next(e['sha256'] for e in entries if e['path']=='runtime-supervisor.py')
+                or update_helper and spec['runtimeUpdateHelperSha256']!=next(e['sha256'] for e in entries if e['path']=='runtime-update.py')
                 or proof.get('initialRuntimeBootstrap')!=spec):
             raise ValueError('candidate_fresh_boot_pin_binding_required')
         observed=proof.get('initialRuntimeBootstrapReceipt',{});request=observed.get('request',{});receipt=observed.get('receipt',{})

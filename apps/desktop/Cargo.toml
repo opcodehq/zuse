@@ -10,21 +10,12 @@ name = "zuse"
 path = "src/main.rs"
 
 [dependencies]
+zuse-commands.workspace = true
 zuse-remote.workspace = true
 zuse-engine.workspace = true
-zuse-rpc.workspace = true
 zuse-ui.workspace = true
-zuse-update.workspace = true
-zuse-mcp.workspace = true
-tokio.workspace = true
 clap.workspace = true
 anyhow.workspace = true
-libc.workspace = true
-serde_json.workspace = true
-base64 = "0.22"
-uuid.workspace = true
-tracing.workspace = true
-tracing-subscriber.workspace = true
 
 # The custom allocator is macOS-only (see main.rs): glibc measured flat on the
 # same streaming/scroll workloads, so Linux keeps the system allocator.
@@ -32,10 +23,8 @@ tracing-subscriber.workspace = true
 mimalloc.workspace = true
 
 [target.'cfg(windows)'.dependencies]
+zuse-update.workspace = true
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console"] }
-
-[dev-dependencies]
-tempfile.workspace = true
 
 [build-dependencies]
 embed-resource = "3.0.11"

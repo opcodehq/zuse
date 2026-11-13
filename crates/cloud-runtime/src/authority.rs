@@ -48,6 +48,44 @@ impl Authority {
             origin: parsed,
         })
     }
+    pub async fn plugin_tools(
+        &self,
+        bootstrap: &CloudRuntimeBootstrap,
+        request: &zuse_protocol::plugins::PluginToolRequest,
+    ) -> Result<Value> {
+        ensure!(
+            bootstrap.runtime_credential_expires_at > now_ms(),
+            "runtime_plugin_credential_expired"
+        );
+        let mut url = self.origin.clone();
+        url.path_segments_mut()
+            .map_err(|_| anyhow::anyhow!("runtime_api_origin_invalid"))?
+            .extend(["v1", "plugins", "runtime", &bootstrap.workspace_id, "tools"]);
+        let mut response = self
+            .client
+            .post(url)
+            .bearer_auth(&bootstrap.runtime_credential)
+            .timeout(Duration::from_secs(60))
+            .json(request)
+            .send()
+            .await
+            .map_err(|_| anyhow::anyhow!("runtime_plugins_unavailable"))?;
+        ensure!(response.status().is_success(), "runtime_plugins_rejected");
+        let mut body = Vec::new();
+        while let Some(part) = response
+            .chunk()
+            .await
+            .map_err(|_| anyhow::anyhow!("runtime_plugins_unavailable"))?
+        {
+            ensure!(
+                body.len() + part.len() <= 8 * 1024 * 1024,
+                "runtime_plugins_response_too_large"
+            );
+            body.extend_from_slice(&part);
+        }
+        serde_json::from_slice(&body)
+            .map_err(|_| anyhow::anyhow!("runtime_plugins_invalid_response"))
+    }
     pub async fn asset(
         &self,
         bootstrap: &CloudRuntimeBootstrap,
@@ -149,6 +187,33 @@ impl Authority {
         credential: &str,
         body: &Value,
     ) -> Result<Value> {
+        self.send(
+            reqwest::Method::POST,
+            workspace,
+            suffix,
+            credential,
+            Some(body),
+        )
+        .await
+    }
+    /// Same bearer, redirect and error handling as [`Self::post`], without a body.
+    pub(crate) async fn get(
+        &self,
+        workspace: &str,
+        suffix: &[&str],
+        credential: &str,
+    ) -> Result<Value> {
+        self.send(reqwest::Method::GET, workspace, suffix, credential, None)
+            .await
+    }
+    async fn send(
+        &self,
+        method: reqwest::Method,
+        workspace: &str,
+        suffix: &[&str],
+        credential: &str,
+        body: Option<&Value>,
+    ) -> Result<Value> {
         let name = match suffix {
             ["runtime", "bootstrap"] => Some("bootstrap-http"),
             ["runtime", "bootstrap", "ack"] => Some("bootstrap-ack-http"),
@@ -165,9 +230,9 @@ impl Authority {
             .clear()
             .extend(["v1", "cloud", "workspaces", workspace])
             .extend(suffix.iter().copied());
-        let mut response = self
+        let request = self
             .client
-            .post(url)
+            .request(method, url)
             // Native OAuth refresh may take fifteen seconds plus checkpoint writes.
             // Keep unrelated control calls at the original ten-second budget.
             .timeout(Duration::from_secs(
@@ -181,14 +246,15 @@ impl Authority {
                     10
                 },
             ))
-            .bearer_auth(credential)
-            .json(body)
-            .send()
-            .await
-            .map_err(|_| Failure {
-                code: "runtime_authority_unreachable",
-                retryable: true,
-            })?;
+            .bearer_auth(credential);
+        let request = match body {
+            Some(body) => request.json(body),
+            None => request,
+        };
+        let mut response = request.send().await.map_err(|_| Failure {
+            code: "runtime_authority_unreachable",
+            retryable: true,
+        })?;
         let status = response.status();
         ensure!(
             response
@@ -515,6 +581,35 @@ impl Authority {
             &["runtime", "preparation"],
             &bootstrap.runtime_credential,
             &serde_json::to_value(update)?,
+        )
+        .await?;
+        Ok(())
+    }
+    /// `GET /v1/cloud/workspaces/{id}/runtime/update`.
+    pub async fn runtime_update(
+        &self,
+        bootstrap: &CloudRuntimeBootstrap,
+    ) -> Result<zuse_protocol::cloud_runtime_updates::UpdateOffer> {
+        let value = self
+            .get(
+                &bootstrap.workspace_id,
+                &["runtime", "update"],
+                &bootstrap.runtime_credential,
+            )
+            .await?;
+        serde_json::from_value(value).map_err(|_| anyhow::anyhow!("runtime_update_offer_invalid"))
+    }
+    /// `POST /v1/cloud/workspaces/{id}/runtime/update/attestation`.
+    pub async fn runtime_update_attestation(
+        &self,
+        bootstrap: &CloudRuntimeBootstrap,
+        attestation: &zuse_protocol::cloud_runtime_updates::RuntimeAttestation,
+    ) -> Result<()> {
+        self.post(
+            &bootstrap.workspace_id,
+            &["runtime", "update", "attestation"],
+            &bootstrap.runtime_credential,
+            &serde_json::to_value(attestation)?,
         )
         .await?;
         Ok(())

@@ -78,10 +78,13 @@ impl crate::mailbox::Executor for EngineExecutor {
         fingerprint: &str,
         created_at: i64,
     ) -> Result<()> {
+        // Check before the first write (the progress row), so a refusal is
+        // definitive and never leaves the conversation awaiting review.
+        let checked = self.check_task_binding(payload)?;
         if let Some(progress) = &self.progress {
             progress.register(payload, fingerprint)?;
         }
-        let payload = self.resolve_task_binding(payload).await?;
+        let payload = self.bind_task(payload, checked).await?;
         self.conversation(&payload.session_id)?;
         if matches!(
             payload.payload,
@@ -165,30 +168,30 @@ impl crate::mailbox::Executor for EngineExecutor {
             .core
             .workspace
             .chat(&payload.session_id)?
-            .ok_or_else(|| anyhow::anyhow!("mailbox_conversation_missing"))?;
-        ensure!(
+            .ok_or_else(|| crate::mailbox::reject("mailbox_conversation_missing"))?;
+        crate::mailbox::require(
             chat.id == self.thread || chat.thread_id.as_deref() == Some(&self.thread),
-            "mailbox_conversation_scope_rejected"
-        );
-        ensure!(
+            "mailbox_conversation_scope_rejected",
+        )?;
+        crate::mailbox::require(
             !chat.archived && chat.device_id == self.core.device_id,
-            "mailbox_conversation_unavailable"
-        );
+            "mailbox_conversation_unavailable",
+        )?;
         let config = self
             .core
             .workspace
             .chat_config(&chat.id)
             .or_else(|| self.core.workspace.chat_config(&self.thread))
-            .ok_or_else(|| anyhow::anyhow!("mailbox_conversation_settings_missing"))?;
-        ensure!(
+            .ok_or_else(|| crate::mailbox::reject("mailbox_conversation_settings_missing"))?;
+        crate::mailbox::require(
             config.harness != zuse_protocol::HarnessId::Mock || self.allow_test,
-            "runtime_test_harness_disabled"
-        );
+            "runtime_test_harness_disabled",
+        )?;
         let cwd = chat
             .cwd
             .as_deref()
             .unwrap_or_else(|| self.checkout.to_str().unwrap_or(""));
-        ensure!(!cwd.is_empty(), "mailbox_checkout_missing");
+        crate::mailbox::require(!cwd.is_empty(), "mailbox_checkout_missing")?;
         let model_options = match &payload.model_options {
             Some(options) => serde_json::to_value(options)?,
             None => serde_json::to_value(&config.model_options)?,

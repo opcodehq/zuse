@@ -10,6 +10,8 @@ from urllib.parse import urlsplit, unquote, parse_qs
 
 HERE = Path(__file__).resolve().parent
 ENVIRONMENTS = ("staging", "production")
+# Worker-only cloud-computer provider keys; mirrors ProviderId::api_key_env.
+PROVIDER_KEYS = ("BOXD_API_KEY", "BOAT_API_KEY", "E2B_API_KEY", "DAYTONA_API_KEY", "PRIZED_API_KEY")
 
 
 def domain(value):
@@ -85,7 +87,8 @@ def initialize(root, production, staging, image):
             "# Enable only with the computers migration and certified authority image.\n"
             "ZUSE_CLOUD_AUTH_WRITE_ACCOUNTS=\n"
         ))
-        private_write(directory / "worker.env", "# Provider keys are never supplied to API/auth containers.\nBOXD_API_KEY=\nBOAT_API_KEY=\nE2B_API_KEY=\nDAYTONA_API_KEY=\nZUSE_CLOUD_WORKER_POLL_MS=1000\n")
+        private_write(directory / "worker.env", "# Provider keys are never supplied to API/auth containers.\n"
+                      + "".join(f"{key}=\n" for key in PROVIDER_KEYS) + "ZUSE_CLOUD_WORKER_POLL_MS=1000\n")
 
 
 def database_identity(raw):
@@ -245,7 +248,7 @@ def main():
             raise ValueError("Configure the matching control-plane ticket issuer before starting services")
     if args.command == "up" and args.environment != "edge":
         worker = read_env(root / args.environment / "worker.env")
-        if not any(worker.get(key) for key in ("BOXD_API_KEY", "BOAT_API_KEY", "E2B_API_KEY", "DAYTONA_API_KEY")):
+        if not any(worker.get(key) for key in PROVIDER_KEYS):
             raise ValueError("Configure at least one worker provider key before starting services")
         # Preflight must never drain an allocation, deletion or credential operation.
         subprocess.run(command + ["run", "--rm", "--no-deps", "worker", "worker", "--check"], env=process_env, check=True)

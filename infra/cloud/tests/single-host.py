@@ -3,6 +3,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 import unittest
@@ -12,6 +13,16 @@ MODULE = Path(__file__).resolve().parents[1] / "single-host" / "deploy.py"
 spec = importlib.util.spec_from_file_location("single_host", MODULE)
 deploy = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(deploy)
+
+
+def provider_keys():
+    """Every ProviderId::api_key_env value, read from the Rust source of truth."""
+    source = (Path(__file__).resolve().parents[3] / "crates/protocol/src/cloud_computers.rs").read_text()
+    body = source[source.index("fn api_key_env"):]
+    keys = re.findall(r'Self::\w+ => "([A-Z0-9_]+)"', body[:body.index("\n    }\n")])
+    assert "PRIZED_API_KEY" in keys and len(keys) == len(set(keys)) >= 5, keys
+    return keys
+
 
 
 class SingleHostTests(unittest.TestCase):
@@ -41,16 +52,25 @@ class SingleHostTests(unittest.TestCase):
         ).replace("API_ISSUER=REPLACE_WITH_CONTROL_PLANE_ISSUER", "API_ISSUER=https://stage.example.com")
             + "\nCLOUD_DATA_ENCRYPTION_KEY=fixture\nRELAY_MINT_PRIVATE_JWK=fixture\n")
         worker = self.root / "staging" / "worker.env"
-        # A Boat-only deployment must not require a Boxd credential.
-        worker.write_text(worker.read_text().replace("BOAT_API_KEY=\n", "BOAT_API_KEY=fixture\n"))
+        template = worker.read_text()
+        # Any single provider is enough; none requires a Boxd credential.
+        for key in provider_keys():
+            with self.subTest(key=key):
+                self.assertIn(f"\n{key}=\n", template)
+                worker.write_text(template.replace(f"\n{key}=\n", f"\n{key}=fixture\n"))
+                with patch("sys.argv", [str(MODULE), "--config-root", str(self.root), "up", "staging"]), \
+                        patch.object(deploy.subprocess, "run") as run:
+                    deploy.main()
+                commands = [call.args[0] for call in run.call_args_list]
+                self.assertEqual(len(commands), 2)
+                self.assertEqual(commands[0][-6:], ["run", "--rm", "--no-deps", "worker", "worker", "--check"])
+                self.assertFalse(any("--once" in command for command in commands))
+                self.assertIn("--detach", commands[1])
+        worker.write_text(template)
         with patch("sys.argv", [str(MODULE), "--config-root", str(self.root), "up", "staging"]), \
-                patch.object(deploy.subprocess, "run") as run:
+                patch.object(deploy.subprocess, "run") as run, self.assertRaises(ValueError):
             deploy.main()
-        commands = [call.args[0] for call in run.call_args_list]
-        self.assertEqual(len(commands), 2)
-        self.assertEqual(commands[0][-6:], ["run", "--rm", "--no-deps", "worker", "worker", "--check"])
-        self.assertFalse(any("--once" in command for command in commands))
-        self.assertIn("--detach", commands[1])
+        run.assert_not_called()
 
     def test_github_secrets_are_api_only_and_readable_by_container_user(self):
         from types import SimpleNamespace

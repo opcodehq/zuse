@@ -31,7 +31,9 @@ pub(super) fn request(row: &Value, directive: &Directive) -> Result<Option<Reque
         generation: directive.generation,
         storage_incarnation_id: directive.storage_incarnation_id.clone(),
         source_machine_id: directive.source_machine_id.clone(),
-        image_pins: spec.pins(),
+        // A retained disk keeps a runtime swapped in place; expect the
+        // computer's committed runtime release, not the base's initial one.
+        image_pins: spec.pins_for(&Purpose::RetainedResume, &row["request_config"]),
     };
     if !request.valid() {
         return Err(ApiError::conflict("cloud_lifecycle_fenced"));

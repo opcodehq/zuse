@@ -126,7 +126,7 @@ impl AllocationProvider for Boxd {
         )
     }
     async fn launch(&self, machine: &str, launch: &RuntimeLaunch) -> Result<(), ProviderError> {
-        let (staged, command) = launch_command(launch);
+        let (staged, command) = launch_command(launch, super::machine_layout::Layout::Root);
         self.upload(machine, &staged, launch.boot_token.as_bytes())
             .await?;
         let result = self.exec(machine, &command).await?;
@@ -136,14 +136,16 @@ impl AllocationProvider for Boxd {
         Ok(())
     }
 }
-pub(super) fn launch_command(launch: &RuntimeLaunch) -> (String, String) {
-    let staged = format!("/tmp/zuse-rust-boot-{}", launch.operation_id);
-    let boot = format!("/var/lib/zuse/workspace/rust-boot-{}", launch.operation_id);
+pub(super) fn launch_command(
+    launch: &RuntimeLaunch,
+    layout: super::machine_layout::Layout,
+) -> (String, String) {
+    let staged = layout.staged_boot(&launch.operation_id);
+    let boot = layout.boot_file(&launch.operation_id);
     let mut command = format!(
-        "set -eu\nsudo -n install -o zuse -g zuse -m 600 {} {}\nsudo -n rm -- {}\nsudo -n -u zuse env",
-        quote(&staged),
-        quote(&boot),
-        quote(&staged)
+        "set -eu\n{}{}",
+        layout.install_boot(&quote(&staged), &quote(&boot)),
+        layout.run_as_task()
     );
     for (key, value) in [
         ("ZUSE_CLOUD_WORKSPACE_ID", launch.workspace_id.clone()),
@@ -155,7 +157,7 @@ pub(super) fn launch_command(launch: &RuntimeLaunch) -> (String, String) {
     ] {
         command.push_str(&format!(" {key}={}", quote(&value)));
     }
-    command.push_str(" /usr/local/lib/zuse/launch-rust-runtime\n");
+    command.push_str(&format!(" {}\n", layout.launcher()));
     (staged, command)
 }
 fn quote(value: &str) -> String {
@@ -272,6 +274,7 @@ impl RuntimeControl {
             .map_err(|_| ApiError::unavailable("cloud_boot_grant_unavailable"))?;
         sqlx::query("INSERT INTO zuse_rust_allocations (operation_id,workspace_id,generation,snapshot_id,machine_name,storage_incarnation_id,sealed_boot_token,boot_expires_at,phase,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'planned',$9,$9)")
             .bind(&operation).bind(id).bind(generation).bind(snapshot).bind(name).bind(&incarnation).bind(sealed).bind(now+BOOT_TTL).bind(now).execute(&mut **tx).await?;
+        super::runtime_updates::fresh_machine(&mut config);
         config["runtimeGeneration"] = json!(generation);
         config["gatewayEpoch"] = json!(epoch);
         config["runtimeRpcProtocol"] = json!(zuse_protocol::cloud_gateway::RUST_RPC);

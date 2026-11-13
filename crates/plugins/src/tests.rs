@@ -12,6 +12,23 @@ use tokio_rustls::{
 };
 
 struct Credentials(Mutex<String>);
+
+#[tokio::test]
+async fn plaintext_api_requires_fixture_feature_and_numeric_loopback() {
+    let credentials = Arc::new(Credentials(Mutex::new("local-user".into())));
+    for url in [
+        "http://example.com",
+        "http://192.168.1.10",
+        "http://localhost",
+    ] {
+        assert!(matches!(
+            PluginClient::new(url, credentials.clone()).await,
+            Err(PluginError::InvalidEndpoint)
+        ));
+    }
+    let local = PluginClient::new("http://127.0.0.1:8088", credentials).await;
+    assert_eq!(local.is_ok(), cfg!(feature = "test-support"));
+}
 #[async_trait]
 impl PluginCredentials for Credentials {
     async fn current(&self) -> Result<PluginCredential, PluginError> {

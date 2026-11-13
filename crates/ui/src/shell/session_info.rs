@@ -565,6 +565,14 @@ impl Shell {
         .when_some(summary.size.clone(), |row, size| {
             row.child(row_meta(&theme).child(size))
         });
+        // A computer that restarted on wake lost its terminals' processes and
+        // background work; say so rather than look identical to a memory wake.
+        // Only once running: while a new wake is pending, the stored result
+        // still describes the previous one.
+        let wake_row = summary.last_wake.clone().filter(|_| running).map(|wake| {
+            info_row(&theme, row_glyph(icons::CLOCK_CIRCLE, &theme), wake.into())
+                .id("cloud-session-info-wake")
+        });
         // Performance: one row with CPU at a glance, unfolding to the bars.
         let cpu = resources["cpuPercent"].as_f64();
         let (performance_header, performance_open) = self.session_info_section(
@@ -709,6 +717,7 @@ impl Shell {
             .children(repository_row)
             .children(branch_row)
             .child(size_row)
+            .children(wake_row)
             .child(fade_rule(&theme))
             .children(performance)
             .child(fade_rule(&theme))
@@ -835,10 +844,10 @@ impl Shell {
         for task in &running {
             let stopping = self.background_stops.contains(&task.id);
             let control: AnyElement = if stopping {
-                crate::loaders::dither_ring(
+                crate::loaders::retro_loader(
                     SharedString::from(format!("session-info-background-stopping-{}", task.id)),
                     12.0,
-                    theme.text_muted,
+                    theme.loader_glyph(),
                 )
             } else if task.stoppable {
                 let (chat_id, id) = (chat_id.to_owned(), task.id.clone());

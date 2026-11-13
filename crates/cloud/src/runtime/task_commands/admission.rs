@@ -83,6 +83,36 @@ impl RuntimeControl {
         }
         Ok((policy, revision))
     }
+    /// Re-seal the task policy with a new access mode, keeping its revision
+    /// (the runtime binds commands to the revision, not the mode).
+    async fn set_task_runtime_mode_tx(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        row: &Value,
+        policy: &Policy,
+        revision: i64,
+        mode: zuse_protocol::cloud::CloudRuntimeMode,
+        now: i64,
+    ) -> Result<(), ApiError> {
+        let id = required(row, "workspace_id")?;
+        let owner = required(row, "account_id")?;
+        let mut updated = policy.clone();
+        updated.runtime_mode = mode;
+        let ciphertext = self
+            .master
+            .seal_api(
+                &context(owner, id, "", "policy", &revision.to_string()),
+                &serde_json::to_string(&updated).map_err(|_| error("cloud_task_policy_invalid"))?,
+            )
+            .map_err(|_| ApiError::unavailable("cloud_task_command_encryption_failed"))?;
+        let changed = sqlx::query("UPDATE zuse_rust_task_command_policies SET ciphertext=$3,updated_at=$4 WHERE workspace_id=$1 AND owner_id=$2 AND policy_revision=$5")
+            .bind(id).bind(owner).bind(ciphertext).bind(now).bind(revision)
+            .execute(&mut **tx).await?;
+        if changed.rows_affected() != 1 {
+            return Err(error("cloud_task_policy_changed"));
+        }
+        Ok(())
+    }
     pub async fn task_command_submit(
         &self,
         id: &str,
@@ -368,6 +398,17 @@ impl RuntimeControl {
         let (policy, revision) = self.task_policy_tx(tx, row).await?;
         let run = matches!(payload, SessionCommandPayload::Run { .. });
         if let SessionCommandPayload::Run { request, .. } = payload {
+            // An older guest runtime fails on a run carrying computer file
+            // paths, leaving the command's outcome unknown and the chat
+            // locked; refuse it here, before anything is enqueued, and
+            // update the runtime in place when a release can.
+            if !request.attachments.is_empty()
+                && !crate::runtime::runtime_capable(row, wire::DIRECT_UPLOADS_CAPABILITY)
+            {
+                return Err(self
+                    .demand_runtime_update(tx, row, wire::DIRECT_UPLOADS_CAPABILITY, now)
+                    .await);
+            }
             let harness = request
                 .harness
                 .as_ref()
@@ -407,7 +448,19 @@ impl RuntimeControl {
                 _ => (zuse_protocol::SandboxLevel::WorkspaceWrite, false),
             };
             if request.sandbox != sandbox || request.auto_approve != auto {
-                return Err(error("cloud_task_permission_policy_changed"));
+                // Access is chosen per message: a different, valid mode
+                // becomes the task's policy from this message on.
+                let mode = requested_runtime_mode(request.sandbox, request.auto_approve)
+                    .ok_or_else(|| error("cloud_task_permission_policy_invalid"))?;
+                // An unchanged mode is admitted as before, so plain messages
+                // keep working on computers that predate per-message access.
+                if !crate::runtime::runtime_capable(row, wire::MESSAGE_ACCESS_MODE_CAPABILITY) {
+                    return Err(self
+                        .demand_runtime_update(tx, row, wire::MESSAGE_ACCESS_MODE_CAPABILITY, now)
+                        .await);
+                }
+                self.set_task_runtime_mode_tx(tx, row, &policy, revision, mode, now)
+                    .await?;
             }
             let requested =
                 agents::agent(harness).ok_or_else(|| error("cloud_task_agent_not_installed"))?;
@@ -628,5 +681,45 @@ impl RuntimeControl {
         Ok(
             json!({"commandId":envelope.command_id,"workspaceSequence":sequence,"revision":revision,"acceptedAt":now,"state":state,"deliveryState":state,"executionState":"queued"}),
         )
+    }
+}
+
+/// The task access mode a run request asks for; only the pairings the app
+/// sends are valid (full access always auto-approves, the others never do).
+fn requested_runtime_mode(
+    sandbox: zuse_protocol::SandboxLevel,
+    auto_approve: bool,
+) -> Option<zuse_protocol::cloud::CloudRuntimeMode> {
+    use zuse_protocol::{SandboxLevel as S, cloud::CloudRuntimeMode as M};
+    match (sandbox, auto_approve) {
+        (S::DangerFullAccess, true) => Some(M::FullAccess),
+        (S::Auto, false) => Some(M::Auto),
+        (S::WorkspaceWrite, false) => Some(M::ApprovalRequired),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod access_mode_tests {
+    use super::requested_runtime_mode;
+    use zuse_protocol::{SandboxLevel as S, cloud::CloudRuntimeMode as M};
+
+    #[test]
+    fn a_message_may_choose_any_access_mode_the_app_offers() {
+        assert!(matches!(
+            requested_runtime_mode(S::DangerFullAccess, true),
+            Some(M::FullAccess)
+        ));
+        assert!(matches!(
+            requested_runtime_mode(S::Auto, false),
+            Some(M::Auto)
+        ));
+        assert!(matches!(
+            requested_runtime_mode(S::WorkspaceWrite, false),
+            Some(M::ApprovalRequired)
+        ));
+        // Auto-approval only ever comes with full access.
+        assert!(requested_runtime_mode(S::DangerFullAccess, false).is_none());
+        assert!(requested_runtime_mode(S::WorkspaceWrite, true).is_none());
     }
 }

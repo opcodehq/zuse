@@ -1760,7 +1760,10 @@ fn forward_deadline(method: &str) -> std::time::Duration {
         methods::GET_BRANCH_GRAPH => Duration::from_secs(60),
         zuse_protocol::creation_source::RESOLVE => Duration::from_secs(180),
         // Allow the adapter discovery budget plus relay and shutdown overhead.
-        methods::LIST_MODELS | methods::LIST_COMMANDS => Duration::from_secs(100),
+        methods::LIST_MODELS
+        | methods::LIST_PROVIDER_MODELS
+        | methods::SET_PROVIDER_MODELS
+        | methods::LIST_COMMANDS => Duration::from_secs(100),
         _ => Duration::from_secs(30),
     }
 }
@@ -1822,6 +1825,8 @@ fn forwardable(method: &str) -> bool {
             | methods::SET_TITLE_SETTINGS
             | methods::SET_HARNESS_ENABLED
             | methods::LIST_MODELS
+            | methods::LIST_PROVIDER_MODELS
+            | methods::SET_PROVIDER_MODELS
             | methods::INSPECT_RECOVERY
             | methods::RESOLVE_RECOVERY
             | methods::LIST_SKILLS
@@ -1928,6 +1933,8 @@ fn forwardable(method: &str) -> bool {
             | methods::COMPLETE_AGENT_LOGIN
             | methods::POLL_AGENT_LOGIN
             | methods::CANCEL_AGENT_LOGIN
+            | methods::GET_CLAUDE_CONNECTION
+            | methods::SET_CLAUDE_CONNECTION
             // Uploads/attachments target the chat's host device (the agent reads
             // the committed file from that device's disk).
             | methods::UPLOAD_CHUNK
@@ -3601,7 +3608,7 @@ impl EngineRpc {
                 RpcReply::value(&crate::machine_resources::snapshot(&root).await)
             }
             methods::ENGINE_READY => RpcReply::value(&serde_json::json!({ "ready": true })),
-            methods::LIST_HARNESSES => RpcReply::value(&self.registry.descriptors()),
+            methods::LIST_HARNESSES => RpcReply::value(&self.descriptors_with_logins().await),
             methods::INSTALL_HARNESS => {
                 let p: ListModelsParams = parse_params(params)?;
                 let installing = self.registry.installs.begin(p.harness)?;
@@ -3712,7 +3719,7 @@ impl EngineRpc {
                 }
                 // Fresh catalog in the reply: the page repaints from it in one
                 // round trip, and a refused/raced toggle self-corrects.
-                RpcReply::value(&self.registry.descriptors())
+                RpcReply::value(&self.descriptors_with_logins().await)
             }
             methods::LIST_MODELS => {
                 let p: ListModelsParams = parse_params(params)?;
@@ -3730,7 +3737,67 @@ impl EngineRpc {
                 )
                 .await
                 .map_err(|e| RpcError::Failed(e.to_string()))?;
-                RpcReply::value(&models)
+                RpcReply::value(&self.registry.apply_model_prefs(p.harness, models))
+            }
+            methods::LIST_PROVIDER_MODELS | methods::SET_PROVIDER_MODELS => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct Params {
+                    harness: HarnessId,
+                    #[serde(default)]
+                    force: bool,
+                    #[serde(default)]
+                    prefs: Option<zuse_protocol::ProviderModelPrefs>,
+                }
+                let p: Params = parse_params(params)?;
+                let prefs = self.registry.model_prefs().cloned().ok_or_else(|| {
+                    RpcError::Failed("Model settings are unavailable here.".into())
+                })?;
+                if method == methods::SET_PROVIDER_MODELS {
+                    let next = p
+                        .prefs
+                        .ok_or_else(|| RpcError::Failed("prefs required".into()))?;
+                    prefs
+                        .set(p.harness, next)
+                        .map_err(|e| RpcError::Failed(e.to_string()))?;
+                }
+                let lease = std::sync::Arc::new(self.registry.execution_lease(p.harness).await);
+                let harness = self
+                    .registry
+                    .resolve(p.harness)
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                // A catalog that can't load still lists the added IDs.
+                let catalog = crate::model_catalogs::list_with_lease(
+                    self.repos.data_dir(),
+                    harness,
+                    p.force,
+                    Some(lease),
+                    self.registry.pinned_models(p.harness),
+                )
+                .await
+                .unwrap_or_default();
+                RpcReply::value(&prefs.entries(p.harness, &catalog))
+            }
+            methods::GET_CLAUDE_CONNECTION => {
+                RpcReply::value(&self.agent_accounts.get_claude_connection().await)
+            }
+            methods::SET_CLAUDE_CONNECTION => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct Params {
+                    #[serde(default)]
+                    forget: bool,
+                    #[serde(flatten)]
+                    set: crate::agent_accounts::SetClaudeConnection,
+                }
+                let p: Params = parse_params(params)?;
+                let view = if p.forget {
+                    self.agent_accounts.forget_claude_proxy()
+                } else {
+                    self.agent_accounts.set_claude_connection(p.set).await
+                }
+                .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(&view)
             }
             methods::LIST_SKILLS => {
                 #[derive(Deserialize)]
@@ -7506,6 +7573,21 @@ mod context_usage_tests {
         remote.clear_context_usage().unwrap();
         tx.send_replace(crate::doc_host::TranscriptSnapshot::default());
         assert!(stream.next().await.unwrap()["contextUsage"].is_null());
+    }
+}
+
+impl EngineRpc {
+    /// The harness catalog with each login-bound agent's sign-in state, so
+    /// the composer can leave out agents that would only fail.
+    async fn descriptors_with_logins(&self) -> Vec<crate::registry::HarnessDescriptor> {
+        let mut descriptors = self.registry.descriptors();
+        let status = self.agent_accounts.login_status().await;
+        for descriptor in &mut descriptors {
+            if descriptor.installed {
+                descriptor.signed_in = status.get(&descriptor.id).copied();
+            }
+        }
+        descriptors
     }
 }
 

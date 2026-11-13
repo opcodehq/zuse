@@ -664,7 +664,7 @@ impl Shell {
                 .child(crate::loaders::mini_glyph_spinner(
                     format!("thread-conversation-working-{id}"),
                     2.0,
-                    theme.glyph,
+                    theme.loader_glyph(),
                     cx.entity_id(),
                     cx,
                 ))

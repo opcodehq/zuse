@@ -93,6 +93,20 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
         private set
 
     var error by mutableStateOf<String?>(null)
+
+    /** The last connection failure, shown quietly while reconnecting rather than as an error. */
+    var connectionIssue by mutableStateOf<String?>(null)
+        private set
+
+    /** Whether the open computer dropped and is being retried, which is worth a small banner. */
+    val reconnecting: Boolean
+        get() =
+            source != null &&
+                !connected &&
+                (status.startsWith("Reconnecting") || status.startsWith("Offline"))
+
+    /** A failed new-chat request, shown on the new chat sheet only. */
+    var createError by mutableStateOf<String?>(null)
     var busy by mutableStateOf(false)
         private set
 
@@ -124,6 +138,12 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
         private set
 
     var pairingLink by mutableStateOf<String?>(null)
+
+    /** The chat reselected when the app started, which phones should not jump into. */
+    var restoredAtLaunch: String? = null
+        private set
+
+    private var launching = true
     private var rpc: RpcClient? = null
     private var connectionJob: Job? = null
     private var timelineJob: Job? = null
@@ -162,6 +182,9 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
         action {
             vault.read("devices")?.let {
                 devices.addAll(WireJson.decodeFromString<List<SavedDevice>>(it))
+            }
+            vault.read("new-chat-modes")?.let {
+                checkoutModes.putAll(WireJson.decodeFromString<Map<String, String>>(it))
             }
             account.hydrate()
             signedIn = account.signedIn
@@ -325,15 +348,194 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    /** Chats on one computer, loaded over a short-lived connection for the home list. */
     data class ComputerInbox(
         val target: Source,
         val label: String,
+        val projects: List<Project> = emptyList(),
         val chats: List<Session> = emptyList(),
-        val status: String = "Loading…",
+        /** Null while the first load is in flight. */
+        val reachable: Boolean? = null,
     )
 
     val computerInboxes = mutableStateMapOf<String, ComputerInbox>()
     private var inboxJob: Job? = null
+    var inboxRefreshing by mutableStateOf(false)
+        private set
+
+    /** The home list's place filter: a place key from [places], or null for every place. */
+    var placeFilter by mutableStateOf<String?>(null)
+
+    /** Linked computers already paired directly are listed once, as the paired computer. */
+    private val linkedComputers: List<RemoteEnvironment>
+        get() {
+            val paired = devices.mapNotNull { it.environmentId }.toSet()
+            return computers.filter { it.environmentId !in paired }
+        }
+
+    private fun placeKey(target: Source): String =
+        when (target) {
+            is Source.Device -> "device:${target.device.id}"
+            is Source.Computer -> "computer:${target.device.environmentId}"
+            is Source.Cloud -> CLOUD_PLACE
+        }
+
+    private fun placeLabel(target: Source): String =
+        when (target) {
+            is Source.Device -> target.device.label
+            is Source.Computer -> target.device.label ?: "Computer"
+            is Source.Cloud -> "Zuse Cloud"
+        }
+
+    /** Everywhere a chat can run: paired computers, linked computers and Zuse Cloud. */
+    val places: List<Pair<String, String>>
+        get() =
+            devices.map { "device:${it.id}" to it.label } +
+                linkedComputers.map { "computer:${it.environmentId}" to (it.label ?: "Computer") } +
+                (if (signedIn) listOf(CLOUD_PLACE to "Zuse Cloud") else emptyList())
+
+    val sourceLabel: String
+        get() = source?.let(::placeLabel) ?: "your computer"
+
+    val currentPlace: String?
+        get() = source?.let(::placeKey)
+
+    /** Nothing to show chats from yet: no computer paired and not signed in. */
+    val unconfigured: Boolean
+        get() =
+            devices.isEmpty() &&
+                computers.isEmpty() &&
+                !signedIn &&
+                source == null &&
+                !(BuildConfig.DEBUG && status.startsWith("Preview"))
+
+    val activePlaceFilter: String?
+        get() = placeFilter?.takeIf { key -> places.any { it.first == key } }
+
+    /** Every chat the home list can show, from all computers and Zuse Cloud. */
+    fun chatRows(): List<ChatRow> {
+        val rows = mutableListOf<ChatRow>()
+        fun add(target: Source, projects: List<Project>, chats: List<Session>) {
+            val key = placeKey(target)
+            val label = placeLabel(target)
+            chats.forEach { chat ->
+                val project =
+                    projects
+                        .firstOrNull { it.id == chat.projectId }
+                        ?.takeIf { it.id != CanonicalWorkspace.PROJECTLESS }
+                rows +=
+                    ChatRow(
+                        "$key|${chat.id}",
+                        chat.id,
+                        key,
+                        label,
+                        chat.projectId,
+                        project?.name,
+                        chat.title,
+                        chat.preview,
+                        ChatStatus.from(chat.status),
+                        chat.branch,
+                        ChatList.parseTime(chat.activityAt),
+                    )
+            }
+        }
+        computerInboxes.values.forEach { add(it.target, it.projects, it.chats) }
+        val current = source
+        if (current != null && current !is Source.Cloud && computerInboxes.values.none { it.target == current })
+            add(current, projects, sessions)
+        if (current == null && BuildConfig.DEBUG && status.startsWith("Preview"))
+            add(Source.Device(SavedDevice("preview", "Demo computer", "", "")), projects, sessions)
+        cloudChats.forEach { chat ->
+            rows +=
+                ChatRow(
+                    "$CLOUD_PLACE|${chat.chatId}",
+                    chat.chatId,
+                    CLOUD_PLACE,
+                    "Zuse Cloud",
+                    chat.projectId,
+                    chat.repositoryDisplayName,
+                    chat.title,
+                    status = ChatStatus.from(chat.runtimeState),
+                )
+        }
+        return rows
+    }
+
+    fun isOpen(row: ChatRow): Boolean {
+        val current = source
+        return when {
+            row.placeKey == CLOUD_PLACE -> (current as? Source.Cloud)?.chat?.chatId == row.chatId
+            current == null -> selectedSession?.id == row.chatId
+            else ->
+                selectedSession?.id == row.chatId &&
+                    (row.placeKey == placeKey(current) ||
+                        computerInboxes.values.none { it.target == current })
+        }
+    }
+
+    /** Opens a home-list row on its computer, connecting to that computer when needed. */
+    fun openChat(row: ChatRow) {
+        newChatOpen = false
+        if (row.placeKey == CLOUD_PLACE) {
+            cloudChats.firstOrNull { it.chatId == row.chatId }?.let { connect(Source.Cloud(it)) }
+            return
+        }
+        val inbox = computerInboxes[row.placeKey]
+        val session =
+            inbox?.chats?.firstOrNull { it.id == row.chatId }
+                ?: sessions.firstOrNull { it.id == row.chatId }
+                ?: return
+        if (inbox == null) {
+            selectedProject = projects.firstOrNull { it.id == session.projectId }
+            selectSession(session)
+        } else openInboxChat(inbox.target, session)
+    }
+
+    /** A new chat being written in the chat screen; nothing exists on a host until it is sent. */
+    var newChatOpen by mutableStateOf(false)
+        private set
+
+    /** The first message of the new chat, kept when the new chat is left unsent. */
+    var newChatPrompt by mutableStateOf("")
+
+    /** Ask the chat composer to take focus once, so a just-created chat keeps the keyboard up. */
+    var focusComposer by mutableStateOf(false)
+
+    fun openNewChat() {
+        prepareNewChat()
+        createError = null
+        newChatOpen = true
+    }
+
+    fun closeNewChat() {
+        newChatOpen = false
+        createError = null
+    }
+
+    /**
+     * Where a new chat should go: the filtered place, else the current computer when reachable,
+     * else the first computer that is.
+     */
+    fun prepareNewChat() {
+        val reachable = { key: String -> computerInboxes[key]?.reachable != false }
+        val computersFirst = places.map { it.first }.filter { it != CLOUD_PLACE }
+        val current = source?.takeIf { it !is Source.Cloud }?.let(::placeKey)
+        val wanted =
+            activePlaceFilter?.takeIf { it != CLOUD_PLACE }
+                ?: current?.takeIf(reachable)
+                ?: computersFirst.firstOrNull(reachable)
+                ?: current
+                ?: computersFirst.firstOrNull()
+                ?: return
+        if (current == wanted) return
+        targetFor(wanted)?.let { connect(it) }
+    }
+
+    fun targetFor(placeKey: String): Source? =
+        devices.firstOrNull { "device:${it.id}" == placeKey }?.let { Source.Device(it) }
+            ?: linkedComputers
+                .firstOrNull { "computer:${it.environmentId}" == placeKey }
+                ?.let { Source.Computer(it) }
 
     fun openInboxChat(target: Source, session: Session) {
         if (source == target && connected) {
@@ -342,11 +544,28 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
         } else connect(target, initialSession = session)
     }
 
-    fun refreshComputerInboxes() {
+    /** Places whose chats could not be loaded on the last refresh. */
+    val unreachablePlaces: List<String>
+        get() =
+            computerInboxes
+                .filter { (key, inbox) ->
+                    inbox.reachable == false && activePlaceFilter.let { it == null || it == key }
+                }
+                .values
+                .map { it.label }
+
+    fun refreshHome() {
+        refreshComputerInboxes()
+        if (signedIn) refreshCloud()
+    }
+
+    /** Reloads every computer's chats; [quiet] refreshes in place without a progress indicator. */
+    fun refreshComputerInboxes(quiet: Boolean = false) {
+        if (!foreground) return
         inboxJob?.cancel()
         val targets =
             devices.map { "device:${it.id}" to ComputerInbox(Source.Device(it), it.label) } +
-                computers.map {
+                linkedComputers.map {
                     "computer:${it.environmentId}" to
                         ComputerInbox(Source.Computer(it), it.label ?: "Computer")
                 }
@@ -354,7 +573,12 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
         targets.forEach { (key, value) ->
             if (key !in computerInboxes) computerInboxes[key] = value
         }
-        inboxJob =
+        if (targets.isEmpty()) {
+            inboxRefreshing = false
+            return
+        }
+        if (!quiet) inboxRefreshing = true
+        val job =
             viewModelScope.launch {
                 val limit = kotlinx.coroutines.sync.Semaphore(3)
                 supervisorScope {
@@ -363,7 +587,7 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
                             limit.acquire()
                             var client: RpcClient? = null
                             try {
-                                val chats =
+                                val (projects, chats) =
                                     withTimeout(12_000) {
                                         client =
                                             when (val target = row.target) {
@@ -405,13 +629,19 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
                                                 else -> error("Invalid computer")
                                             }
                                         val active = requireNotNull(client)
-                                        if (active.canonical)
-                                            CanonicalWorkspace(active).allSessions()
-                                        else
-                                            active
-                                                .call("workspace.list")
-                                                .decode<List<Project>>()
-                                                .flatMap {
+                                        if (active.canonical) {
+                                            val workspace = CanonicalWorkspace(active)
+                                            val projects = workspace.projects()
+                                            val live = workspace.runtimeStatuses()
+                                            projects to
+                                                workspace.allSessions().map {
+                                                    it.copy(status = live[it.id])
+                                                }
+                                        } else {
+                                            val projects =
+                                                active.call("workspace.list").decode<List<Project>>()
+                                            projects to
+                                                projects.flatMap {
                                                     active
                                                         .call(
                                                             "session.list",
@@ -419,16 +649,24 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
                                                         )
                                                         .decode<List<Session>>()
                                                 }
+                                        }
                                     }
-                                computerInboxes[key] = row.copy(chats = chats, status = "Connected")
+                                computerInboxes[key] =
+                                    row.copy(projects = projects, chats = chats, reachable = true)
+                                // Titles are named by the host after the first reply.
+                                val open = selectedSession
+                                if (row.target == source && open != null)
+                                    chats
+                                        .firstOrNull { it.id == open.id && it.title != open.title }
+                                        ?.let { selectedSession = open.copy(title = it.title) }
                             } catch (cancelled: CancellationException) {
                                 if (cancelled is TimeoutCancellationException)
                                     computerInboxes[key] =
-                                        row.copy(status = "Unavailable · tap to reconnect")
+                                        (computerInboxes[key] ?: row).copy(reachable = false)
                                 else throw cancelled
                             } catch (_: Throwable) {
                                 computerInboxes[key] =
-                                    row.copy(status = "Unavailable · tap to reconnect")
+                                    (computerInboxes[key] ?: row).copy(reachable = false)
                             } finally {
                                 client?.close()
                                 limit.release()
@@ -437,10 +675,15 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
                     }
                 }
             }
+        inboxJob = job
+        job.invokeOnCompletion { viewModelScope.launch { if (inboxJob === job) inboxRefreshing = false } }
     }
 
     fun connect(next: Source, initialSession: Session? = null) {
         error = null
+        connectionIssue = null
+        // Opening a particular chat leaves the new chat; switching computers for it does not.
+        if (initialSession != null || next is Source.Cloud) newChatOpen = false
         archivedSessions.clear()
         archivesLoading = false
         persistDraft()
@@ -496,11 +739,15 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
                             selectedSession == null &&
                             previous != null &&
                             (target !is Source.Cloud || target.chat.sessionId == previous.id)
-                    )
+                    ) {
+                        // Reopened at launch: selected for tablets, but phones start on the list.
+                        if (launching) restoredAtLaunch = previous.id
                         selectSession(previous)
+                    }
                 } catch (failure: Exception) {
                     error = "Could not restore the previous chat: ${failure.message}"
                 }
+                launching = false
                 while (isActive && foreground && current == generation) {
                     var client: RpcClient? = null
                     var readyAt: Long? = null
@@ -563,6 +810,7 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
                         projects.addAll(rows)
                         connected = true
                         error = null
+                        connectionIssue = null
                         status = "Connected"
                         val selected = selectedSession
                         if (selected != null) {
@@ -617,7 +865,8 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
                         status = "Offline · retrying"
                         connected = false
                         synced = false
-                        error = failure.message ?: "Connection interrupted."
+                        // The banner shows reconnection; a snackbar per retry is only noise.
+                        connectionIssue = failure.message
                         timelineJob?.cancel()
                         client?.close()
                         rpc = null
@@ -642,6 +891,7 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
         foreground = value
         if (!value) {
             persistDraft()
+            inboxJob?.cancel()
             connectionJob?.cancel()
             timelineJob?.cancel()
             rpc?.close()
@@ -680,7 +930,10 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
     val composerContext: String?
         get() =
             projects
-                .firstOrNull { it.id == selectedSession?.projectId }
+                .firstOrNull {
+                    it.id == selectedSession?.projectId &&
+                        it.id != CanonicalWorkspace.PROJECTLESS
+                }
                 ?.name
                 ?.takeIf { it.isNotBlank() }
 
@@ -821,9 +1074,18 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
                     computerInboxes[entry.key] =
                         entry.value.copy(
                             chats =
-                                (entry.value.chats.filterNot { it.projectId == project.id } + rows)
+                                (entry.value.chats.filterNot { it.projectId == project.id } +
+                                        rows.map { row ->
+                                            row.copy(
+                                                status =
+                                                    entry.value.chats
+                                                        .firstOrNull { it.id == row.id }
+                                                        ?.status
+                                            )
+                                        })
                                     .distinctBy { it.id },
-                            status = "Connected",
+                            projects = projects.toList(),
+                            reachable = true,
                         )
                 }
         }
@@ -986,7 +1248,7 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
                 } catch (failure: Throwable) {
                     if (current == sessionGeneration) {
                         synced = false
-                        error = failure.message
+                        connectionIssue = failure.message
                         rpc?.close()
                     }
                 }
@@ -1155,21 +1417,53 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
                 for (item in queued) {
                     if (current != sessionGeneration || !synced) break
                     val retry = requestedRetries.remove(item.id)
+                    // A refused message holds the queue so later messages cannot overtake it.
+                    if (item.rejected != null && !retry) break
                     if (item.attempted && !retry) continue
                     val archive =
                         vault.updateMetadata(key) {
                             it.copy(
                                 pending =
                                     it.pending.map { old ->
-                                        if (old.id == item.id) old.copy(attempted = true) else old
+                                        if (old.id == item.id)
+                                            old.copy(attempted = true, rejected = null)
+                                        else old
                                     }
                             )
                         }
                     if (current != sessionGeneration) break
                     pending.clear()
                     pending.addAll(archive.pending)
-                    if (client.canonical) CanonicalWorkspace(client).send(item)
-                    else client.call("messages.send", item.payload)
+                    try {
+                        if (client.canonical) CanonicalWorkspace(client).send(item)
+                        else client.call("messages.send", item.payload)
+                    } catch (failure: Exception) {
+                        if (failure is CancellationException || RequestOutcome.uncertain(failure))
+                            throw failure
+                        // Refused before it ran: not uncertain, so it can be retried as is.
+                        val refused =
+                            vault.updateMetadata(key) {
+                                it.copy(
+                                    pending =
+                                        it.pending.map { old ->
+                                            if (old.id == item.id)
+                                                old.copy(
+                                                    attempted = false,
+                                                    rejected =
+                                                        failure.message ?: "The message was not sent.",
+                                                )
+                                            else old
+                                        }
+                                )
+                            }
+                        if (current == sessionGeneration) {
+                            pending.clear()
+                            pending.addAll(refused.pending)
+                        }
+                        // Later messages wait so they never arrive ahead of this one.
+                        flushRequested = false
+                        break
+                    }
                     val updated =
                         vault.updateMetadata(key) {
                             it.copy(pending = it.pending.filterNot { p -> p.id == item.id })
@@ -1337,6 +1631,7 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun loadBranches() = action {
         val project = selectedProject ?: return@action
+        branches.clear()
         val epoch = generation
         val result: List<Branch> =
             rpc?.let {
@@ -1351,94 +1646,151 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    private val checkoutModes = mutableStateMapOf<String, String>()
+
+    /** The checkout mode a new chat in this project starts with. */
+    fun checkoutMode(projectId: String?): CheckoutMode =
+        CheckoutMode.default(projectId, checkoutModes)
+
+    fun rememberCheckoutMode(projectId: String?, mode: CheckoutMode) {
+        if (projectId == null || mode !in CheckoutMode.available(projectId)) return
+        if (checkoutModes[projectId] == mode.name) return
+        checkoutModes[projectId] = mode.name
+        val snapshot = checkoutModes.toMap()
+        action { vault.write("new-chat-modes", WireJson.encodeToString(snapshot)) }
+    }
+
     fun createChat(
         model: ModelChoice,
         branch: Branch?,
         fresh: Boolean,
         initialPrompt: String = "",
         done: () -> Unit,
-    ) = action {
-        if (busy) return@action
+    ) {
+        if (busy) return
+        createError = null
+        viewModelScope.launch {
+            busy = true
+            try {
+                createChatNow(model, branch, fresh, initialPrompt, done)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Throwable) {
+                createError =
+                    if (RequestOutcome.uncertain(failure))
+                        "The connection dropped while creating the chat. Try again; it will not be created twice."
+                    else failure.message ?: "Could not create the chat. Try again."
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    private suspend fun createChatNow(
+        model: ModelChoice,
+        branch: Branch?,
+        fresh: Boolean,
+        initialPrompt: String,
+        done: () -> Unit,
+    ) {
         val project = selectedProject ?: throw ClientException("Choose a connected project.")
-        val client = rpc ?: return@action
+        val client = rpc ?: throw ClientException("Connecting to your computer. Try again in a moment.")
         val epoch = generation
         val archiveIdentity = identity()
-        busy = true
-        try {
-            // Branch selection is a server-side checkout; surface errors before creating a chat.
-            if (!client.canonical && branch != null && !branch.current && !fresh)
-                client.call(
-                    "git.switchBranch",
+        val isolated = fresh || (branch != null && !branch.current)
+        // Refuse before recording an intent: a request that is never sent is not uncertain.
+        require(!isolated || project.id != CanonicalWorkspace.PROJECTLESS) {
+            "Choose a project to use a worktree or another branch."
+        }
+        // Branch selection is a server-side checkout; surface errors before creating a chat.
+        if (!client.canonical && branch != null && !branch.current && !fresh)
+            client.call(
+                "git.switchBranch",
+                obj(
+                    "folderId" to project.id.json(),
+                    "branch" to branch.name.json(),
+                    "remote" to branch.remote?.json(),
+                ),
+            )
+        val intentKey = "chat-create:$archiveIdentity:${project.id}"
+        val wanted =
+            obj(
+                "projectId" to project.id.json(),
+                "providerId" to model.provider.json(),
+                "model" to model.id.json(),
+                "runtimeMode" to "approval-required".json(),
+                "workspacePolicy" to obj("_tag" to (if (fresh) "fresh" else "main").json()),
+            )
+        // An earlier attempt may have reached the host before the connection dropped. When this
+        // host can tell, a request that never landed is dropped; one that did is opened again.
+        val stored = vault.read(intentKey)?.let(WireJson::parseToJsonElement)
+        var body = wanted
+        if (stored != null && stored.field("body") != wanted) {
+            val landed =
+                !client.canonical ||
+                    CanonicalWorkspace(client).exists(requireNotNull(stored.text("id")))
+            if (landed) body = stored.field("body").jsonObject else vault.write(intentKey, null)
+        }
+        val recovered = body != wanted
+        val (request, savedPrompt) = vault.prepareChatIntent(intentKey, body, initialPrompt)
+        val response =
+            try {
+                if (client.canonical)
                     obj(
-                        "folderId" to project.id.json(),
-                        "branch" to branch.name.json(),
-                        "remote" to branch.remote?.json(),
-                    ),
-                )
-            val intentKey = "chat-create:$archiveIdentity:${project.id}"
-            val (request, savedPrompt) =
-                vault.prepareChatIntent(
-                    intentKey,
-                    obj(
-                        "projectId" to project.id.json(),
-                        "providerId" to model.provider.json(),
-                        "model" to model.id.json(),
-                        "runtimeMode" to "approval-required".json(),
-                        "workspacePolicy" to obj("_tag" to (if (fresh) "fresh" else "main").json()),
-                    ),
-                    initialPrompt,
-                )
-            val response =
-                try {
-                    if (client.canonical)
-                        obj(
-                            "initialSession" to
-                                WireJson.encodeToJsonElement(
-                                    CanonicalWorkspace(client).create(request, branch, fresh)
-                                )
-                        )
-                    else client.call("chat.create", request)
-                } catch (failure: RpcRequestFailure) {
-                    vault.write(intentKey, null)
-                    throw failure
-                }
-            val created: Session = response.field("initialSession").decode()
-            if (savedPrompt.isNotBlank() || initialPrompt != savedPrompt) {
-                val operation = requireNotNull(request.text("operationId"))
-                val item =
-                    PendingMessage(
-                        operation,
-                        UUID.nameUUIDFromBytes(("initial:" + operation).toByteArray()).toString(),
-                        created.id,
-                        savedPrompt.trim(),
-                    )
-                vault.updateMetadata("$archiveIdentity|${created.id}") { record ->
-                    var updated =
-                        if (savedPrompt.isBlank() || record.pending.any { it.id == item.id }) record
-                        else record.copy(pending = record.pending + item)
-                    if (initialPrompt != savedPrompt)
-                        updated =
-                            updated.copy(
-                                draftRevision = updated.draftRevision + 1,
-                                draft = initialPrompt,
+                        "initialSession" to
+                            WireJson.encodeToJsonElement(
+                                CanonicalWorkspace(client)
+                                    .create(
+                                        request,
+                                        branch.takeUnless { recovered },
+                                        request.field("workspacePolicy").text("_tag") == "fresh",
+                                    )
                             )
-                    updated
-                }
+                    )
+                else client.call("chat.create", request)
+            } catch (failure: Throwable) {
+                if (!RequestOutcome.uncertain(failure)) vault.write(intentKey, null)
+                throw failure
             }
-            vault.write(intentKey, null)
-            if (epoch == generation) {
-                selectSession(created)
-                done()
-                loadSessions()
+        val created: Session = response.field("initialSession").decode()
+        if (savedPrompt.isNotBlank() || initialPrompt != savedPrompt) {
+            val operation = requireNotNull(request.text("operationId"))
+            val item =
+                PendingMessage(
+                    operation,
+                    UUID.nameUUIDFromBytes(("initial:" + operation).toByteArray()).toString(),
+                    created.id,
+                    savedPrompt.trim(),
+                )
+            vault.updateMetadata("$archiveIdentity|${created.id}") { record ->
+                var updated =
+                    if (savedPrompt.isBlank() || record.pending.any { it.id == item.id }) record
+                    else record.copy(pending = record.pending + item)
                 if (initialPrompt != savedPrompt)
-                    error =
-                        "Recovered the previous chat. Your edited message is saved in the composer."
-            } else {
-                done()
-                error = "Chat created on the original computer. Open it there to continue."
+                    updated =
+                        updated.copy(
+                            draftRevision = updated.draftRevision + 1,
+                            draft = initialPrompt,
+                        )
+                updated
             }
-        } finally {
-            busy = false
+        }
+        vault.write(intentKey, null)
+        if (epoch == generation) {
+            newChatPrompt = ""
+            focusComposer = true
+            newChatOpen = false
+            selectSession(created)
+            done()
+            loadSessions()
+            if (recovered || initialPrompt != savedPrompt)
+                error =
+                    if (initialPrompt != savedPrompt)
+                        "Opened the chat from your earlier attempt. Your new message is in the composer."
+                    else "Opened the chat from your earlier attempt."
+        } else {
+            done()
+            error = "Chat created on the original computer. Open it there to continue."
         }
     }
 
@@ -1854,6 +2206,10 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
         } finally {
             busy = false
         }
+    }
+
+    companion object {
+        const val CLOUD_PLACE = "cloud"
     }
 
     override fun onCleared() {

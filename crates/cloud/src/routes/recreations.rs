@@ -4,6 +4,9 @@ use super::*;
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct Start {
     idempotency_key: String,
+    /// `"latest"`: "Update computer" onto the newest compatible base.
+    #[serde(default)]
+    target_release: Option<String>,
 }
 pub(super) async fn start(
     State(state): State<AppState>,
@@ -22,6 +25,7 @@ pub(super) async fn start(
                 &id,
                 &access,
                 &body.idempotency_key,
+                body.target_release.as_deref(),
                 chrono::Utc::now().timestamp_millis(),
             )
             .await?,

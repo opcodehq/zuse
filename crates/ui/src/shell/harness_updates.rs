@@ -464,7 +464,7 @@ impl Shell {
                 loaders::mini_glyph_spinner(
                     "home-agent-update-activity",
                     2.0,
-                    theme.glyph,
+                    theme.loader_glyph(),
                     cx.entity_id(),
                     cx,
                 )

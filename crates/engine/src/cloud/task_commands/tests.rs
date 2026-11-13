@@ -337,3 +337,110 @@ fn passive_attachment_requires_confirmed_explicit_run_and_current_actor_scope() 
         );
     }
 }
+
+#[test]
+fn a_queued_message_keeps_files_on_the_computer_apart_from_server_assets() {
+    let computer = "/home/zuse/.zuse-data/uploads/u1/shot.png";
+    let reference = asset_ref(&asset()).unwrap();
+    let params = json!({"chatId":"session-a","cloudCommandId":"queued-files","text":"later",
+        "attachments":[reference, computer]});
+    let value = serde_json::to_value(normalize(methods::QUEUE_MESSAGE, &params).unwrap()).unwrap();
+    let input = &value["action"]["input"];
+    assert_eq!(input["computerFiles"], json!([computer]));
+    assert_eq!(input["attachments"][0]["assetId"], "asset-a");
+    assert_eq!(input["attachments"].as_array().unwrap().len(), 1);
+    // A row read back and edited keeps its computer files exactly once.
+    let edited = json!({"chatId":"session-a","cloudCommandId":"edit","id":"row","revision":1,
+        "text":"edited","attachments":[computer],"computerFiles":[computer]});
+    let value =
+        serde_json::to_value(normalize(methods::UPDATE_QUEUED_MESSAGE, &edited).unwrap()).unwrap();
+    assert_eq!(value["action"]["input"]["computerFiles"], json!([computer]));
+    assert!(
+        value["action"]["input"]["attachments"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    // A relative path is neither kind of file.
+    let bad =
+        json!({"chatId":"session-a","cloudCommandId":"bad","text":"x","attachments":["shot.png"]});
+    assert!(normalize(methods::QUEUE_MESSAGE, &bad).is_err());
+    let many = json!({"chatId":"session-a","cloudCommandId":"many","text":"x",
+        "attachments":(0..9).map(|n|format!("/u/{n}.png")).collect::<Vec<_>>()});
+    assert!(normalize(methods::QUEUE_MESSAGE, &many).is_err());
+}
+
+#[test]
+fn a_run_keeps_files_uploaded_to_the_computer_and_refuses_this_devices_paths() {
+    let computer = "/home/zuse/.zuse-data/uploads/a1b2c3d4-shot.png".to_owned();
+    let reference = asset_ref(&asset()).unwrap();
+    let value = serde_json::to_value(
+        normalize(
+            methods::QUEUE_COMMAND,
+            &run(".", vec![computer.clone(), reference]),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    // The computer's file rides on the run; the server-held one binds apart.
+    assert_eq!(
+        value["action"]["payload"]["request"]["attachments"],
+        json!([computer])
+    );
+    assert_eq!(value["action"]["attachments"][0]["assetId"], "asset-a");
+    assert_eq!(value["action"]["payload"]["request"]["prompt"], "inspect");
+    for local in [
+        "/Users/test/secret.txt",
+        "/home/zuse/.zuse-data/uploads/../../etc/passwd",
+        "uploads/a-shot.png",
+    ] {
+        assert!(
+            normalize(methods::QUEUE_COMMAND, &run(".", vec![local.into()])).is_err(),
+            "{local}"
+        );
+    }
+    let many = (0..9)
+        .map(|n| format!("/data/uploads/{n}-a.png"))
+        .collect::<Vec<_>>();
+    assert!(normalize(methods::QUEUE_COMMAND, &run(".", many)).is_err());
+}
+
+#[test]
+fn queue_rows_list_files_on_the_computer_by_their_path_there() {
+    let page = queue_shape(json!({"items":[{"id":"row","attachments":[asset()],
+        "computerFiles":["/home/zuse/.zuse-data/uploads/u1/shot.png"],"createdAt":5}]}))
+    .unwrap();
+    let files = page["items"][0]["attachments"].as_array().unwrap();
+    assert_eq!(files.len(), 2);
+    assert!(files[0].as_str().unwrap().starts_with(ASSET_PREFIX));
+    assert_eq!(files[1], "/home/zuse/.zuse-data/uploads/u1/shot.png");
+}
+
+#[test]
+fn computer_files_upload_to_and_read_from_the_computer_not_the_server() {
+    assert!(computer_file_call(
+        methods::UPLOAD_CHUNK,
+        &json!({"uploadId":"u","computer":true})
+    ));
+    assert!(computer_file_call(
+        methods::UPLOAD_COMMIT,
+        &json!({"uploadId":"u","computer":true})
+    ));
+    assert!(!computer_file_call(
+        methods::UPLOAD_CHUNK,
+        &json!({"uploadId":"u"})
+    ));
+    assert!(computer_file_call(
+        methods::READ_ATTACHMENT_CHUNK,
+        &json!({"path":"/home/zuse/.zuse-data/uploads/u1/shot.png"})
+    ));
+    let reference = asset_ref(&asset()).unwrap();
+    assert!(!computer_file_call(
+        methods::READ_ATTACHMENT_CHUNK,
+        &json!({ "path": reference })
+    ));
+    assert!(!computer_file_call(
+        methods::QUEUE_MESSAGE,
+        &json!({"computer":true})
+    ));
+}

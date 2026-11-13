@@ -158,6 +158,9 @@ class DistributionTests(unittest.TestCase):
         stable = subprocess.check_output([sys.executable, str(script), 'v0.26.0', str(notes)], text=True)
         self.assertNotIn('This is a preview release for testing.', stable)
         self.assertIn('Existing feature.', stable)
+        self.assertNotIn('Command line only', stable)
+        current = subprocess.check_output([sys.executable, str(script), 'v0.26.0', str(notes), '--cli-archives'], text=True)
+        self.assertIn('zuse-cli-0.26.0-<platform>-<arch>.tar.gz', current)
 
     def test_cached_native_inputs_must_match_a_clean_release_tag(self):
         prepare = fixtures.load('prepare_distribution', 'prepare-distribution.py')

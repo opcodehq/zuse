@@ -38,6 +38,7 @@ members = [
     "crates/ui-block",
     "apps/desktop",
     "apps/cli",
+    "crates/commands",
     "apps/relay",
     "apps/control",
     "apps/web",
@@ -91,6 +92,7 @@ zuse-visual = { path = "crates/visual" }
 zuse-visual-gpu = { path = "crates/visual-gpu" }
 zuse-ui-block = { path = "crates/ui-block" }
 zuse-serve = { path = "crates/serve" }
+zuse-commands = { path = "crates/commands" }
 zuse-viewport = { path = "crates/viewport" }
 zuse-model = { path = "crates/model" }
 zuse-plugins = { path = "crates/plugins" }

@@ -69,7 +69,7 @@ export async function start() {
 async function loop() {
   for (let attempt = 0; ; attempt++) {
     if (ownerSession && (await checkSession()) === "signedOut") {
-      setState("connection", { kind: "authRequired", message: "Open the access link printed by zuse-server." });
+      setState("connection", { kind: "authRequired", message: "Open the access link printed by zuse serve." });
       await sleep(8000);
       continue;
     }

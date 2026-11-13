@@ -1,8 +1,8 @@
-//! `zuse daemon …` — install/manage `zuse headless` as a background service:
-//! a systemd **user** unit on Linux (the VPS deployment target), a launchd
-//! LaunchAgent on macOS. The unit runs the current executable with the
-//! `ZUSE_*` environment captured at install time, so
-//! `ZUSE_EDGE_URL=… zuse daemon install` bakes that override in.
+//! `zuse daemon …` — install/manage `zuse headless` (or, with `--serve`,
+//! `zuse serve`) as a background service: a systemd **user** unit on Linux
+//! (the VPS deployment target), a launchd LaunchAgent on macOS. The unit runs
+//! the current executable with the `ZUSE_*` environment captured at install
+//! time, so `ZUSE_EDGE_URL=… zuse daemon install` bakes that override in.
 //!
 //! Auth is decoupled: without a saved session the service remains up on the
 //! local-only profile. `zuse login` and a service restart opt into sync.
@@ -34,10 +34,29 @@ const CAPTURED_ENV: &[&str] = &[
     "ZUSE_CALLBACK_PORT",
     "ZUSE_HARNESS",
     "ZUSE_DEVICE_NAME",
+    "ZUSE_LANGUAGE",
+    "ZUSE_WEB_ASSETS",
+    "ZUSE_PUBLIC_ORIGIN",
+    "ZUSE_TLS_CERT",
+    "ZUSE_TLS_KEY",
     "RUST_LOG",
 ];
 
-pub fn install(data_dir: &Path) -> anyhow::Result<()> {
+/// What the service runs: `headless`, or `serve` and its flags.
+pub struct Service {
+    pub arguments: Vec<String>,
+}
+impl Service {
+    fn description(&self) -> &'static str {
+        if self.arguments.iter().any(|argument| argument == "serve") {
+            "Zuse server"
+        } else {
+            "Zuse headless engine"
+        }
+    }
+}
+
+pub fn install(data_dir: &Path, service: &Service) -> anyhow::Result<()> {
     let exe = std::env::current_exe().context("resolving the zuse executable path")?;
     let env = captured_env();
     if cfg!(target_os = "macos") {
@@ -48,7 +67,7 @@ pub fn install(data_dir: &Path) -> anyhow::Result<()> {
         let _ = run_quiet("launchctl", &["bootout", &launchd_service_target()?]);
         std::fs::write(
             &plist,
-            render_launchd_plist(&exe, &env, &data_dir.join("daemon.log")),
+            render_launchd_plist(&exe, service, &env, &data_dir.join("daemon.log")),
         )?;
         run(
             "launchctl",
@@ -61,7 +80,7 @@ pub fn install(data_dir: &Path) -> anyhow::Result<()> {
     } else if cfg!(target_os = "linux") {
         let unit = systemd_unit_path()?;
         std::fs::create_dir_all(unit.parent().expect("systemd user dir"))?;
-        std::fs::write(&unit, render_systemd_unit(&exe, &env))?;
+        std::fs::write(&unit, render_systemd_unit(&exe, service, &env))?;
         run("systemctl", &["--user", "daemon-reload"])?;
         run("systemctl", &["--user", "enable", "--now", SYSTEMD_UNIT])?;
         println!("Installed and started {SYSTEMD_UNIT} ({}).", unit.display());
@@ -226,20 +245,39 @@ fn captured_env() -> Vec<(String, String)> {
         .collect()
 }
 
-fn render_systemd_unit(exe: &Path, env: &[(String, String)]) -> String {
-    let mut unit = String::from(
-        "[Unit]\nDescription=Zuse headless engine\nAfter=network-online.target\nStartLimitIntervalSec=60\nStartLimitBurst=5\n\n[Service]\n",
+fn render_systemd_unit(exe: &Path, service: &Service, env: &[(String, String)]) -> String {
+    let mut unit = format!(
+        "[Unit]\nDescription={}\nAfter=network-online.target\nStartLimitIntervalSec=60\nStartLimitBurst=5\n\n[Service]\n",
+        service.description()
     );
     for (key, value) in env {
         // systemd unquotes the value; escape the characters it treats specially.
         let value = value.replace('\\', "\\\\").replace('"', "\\\"");
         unit.push_str(&format!("Environment=\"{key}={value}\"\n"));
     }
+    let mut command = systemd_exec_path(exe);
+    for argument in &service.arguments {
+        command.push(' ');
+        command.push_str(&systemd_quote(argument));
+    }
     unit.push_str(&format!(
-        "ExecStart={} headless\nRestart=on-failure\nRestartSec=5\nEnvironmentFile=-%h/.zuse/env\n\n[Install]\nWantedBy=default.target\n",
-        systemd_exec_path(exe)
+        "ExecStart={command}\nRestart=on-failure\nRestartSec=5\nEnvironmentFile=-%h/.zuse/env\n\n[Install]\nWantedBy=default.target\n",
     ));
     unit
+}
+
+/// One ExecStart word: specifiers and variables stay literal, and quotes keep
+/// spaces inside the argument.
+fn systemd_quote(argument: &str) -> String {
+    let literal = argument.replace('%', "%%").replace('$', "$$");
+    let plain = !literal.is_empty()
+        && literal
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_.,:/=@+%$".contains(c));
+    if plain {
+        return literal;
+    }
+    format!("\"{}\"", literal.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
 /// The ExecStart binary path. An exe under `~/.zuse/app/` came from the
@@ -261,7 +299,19 @@ fn exec_path_for(exe: &Path, home: Option<&Path>) -> String {
     }
 }
 
-fn render_launchd_plist(exe: &Path, env: &[(String, String)], log: &Path) -> String {
+fn render_launchd_plist(
+    exe: &Path,
+    service: &Service,
+    env: &[(String, String)],
+    log: &Path,
+) -> String {
+    let mut arguments = String::new();
+    for argument in &service.arguments {
+        arguments.push_str(&format!(
+            "      <string>{}</string>\n",
+            xml_escape(argument)
+        ));
+    }
     let mut env_dict = String::new();
     for (key, value) in env {
         env_dict.push_str(&format!(
@@ -279,8 +329,7 @@ fn render_launchd_plist(exe: &Path, env: &[(String, String)], log: &Path) -> Str
     <key>ProgramArguments</key>
     <array>
       <string>{exe}</string>
-      <string>headless</string>
-    </array>
+{arguments}    </array>
     <key>EnvironmentVariables</key>
     <dict>
 {env_dict}    </dict>
@@ -297,6 +346,7 @@ fn render_launchd_plist(exe: &Path, env: &[(String, String)], log: &Path) -> Str
 "#,
         label = LAUNCHD_LABEL,
         exe = xml_escape(&exe.to_string_lossy()),
+        arguments = arguments,
         env_dict = env_dict,
         log = xml_escape(&log.to_string_lossy()),
     )
@@ -379,10 +429,17 @@ fn run_quiet(program: &str, args: &[&str]) -> anyhow::Result<()> {
 mod tests {
     use super::*;
 
+    fn headless() -> Service {
+        Service {
+            arguments: vec!["headless".into()],
+        }
+    }
+
     #[test]
     fn systemd_unit_shape() {
         let unit = render_systemd_unit(
             Path::new("/usr/local/bin/zuse"),
+            &headless(),
             &[
                 ("PATH".into(), "/usr/bin:/bin".into()),
                 ("ZUSE_EDGE_URL".into(), "https://edge.example".into()),
@@ -390,6 +447,7 @@ mod tests {
             ],
         );
         assert!(unit.contains("ExecStart=/usr/local/bin/zuse headless\n"));
+        assert!(unit.contains("Description=Zuse headless engine\n"));
         assert!(unit.contains("Environment=\"PATH=/usr/bin:/bin\"\n"));
         assert!(unit.contains("Environment=\"ZUSE_EDGE_URL=https://edge.example\"\n"));
         // Inner quotes escaped so systemd re-parses the value verbatim.
@@ -401,6 +459,47 @@ mod tests {
         assert!(!unit.contains("ConditionPathExists"));
         assert!(unit.contains("EnvironmentFile=-%h/.zuse/env"));
         assert!(unit.contains("WantedBy=default.target"));
+    }
+
+    #[test]
+    fn serve_services_keep_each_argument_whole_and_literal() {
+        let service = Service {
+            arguments: [
+                "--ipc-port",
+                "27700",
+                "serve",
+                "--lan",
+                "--data-dir",
+                "/srv/zuse data",
+                "--public-origin",
+                "https://box.example/$HOME%h",
+                "--token",
+                r#"a"b\c"#,
+            ]
+            .map(String::from)
+            .to_vec(),
+        };
+        let unit = render_systemd_unit(Path::new("/usr/bin/zuse"), &service, &[]);
+        assert!(unit.contains("Description=Zuse server\n"));
+        assert!(unit.contains(
+            r#"ExecStart=/usr/bin/zuse --ipc-port 27700 serve --lan --data-dir "/srv/zuse data" --public-origin https://box.example/$$HOME%%h --token "a\"b\\c""#
+        ));
+        let plist = render_launchd_plist(
+            Path::new("/Applications/Zuse.app/Contents/MacOS/zuse"),
+            &service,
+            &[],
+            Path::new("/tmp/daemon.log"),
+        );
+        let arguments: Vec<_> = plist
+            .lines()
+            .skip_while(|line| !line.contains("ProgramArguments"))
+            .take_while(|line| !line.contains("</array>"))
+            .filter_map(|line| line.trim().strip_prefix("<string>"))
+            .filter_map(|line| line.strip_suffix("</string>"))
+            .collect();
+        assert_eq!(arguments[0], "/Applications/Zuse.app/Contents/MacOS/zuse");
+        assert_eq!(arguments[3..6], ["serve", "--lan", "--data-dir"]);
+        assert_eq!(arguments[6], "/srv/zuse data");
     }
 
     #[test]
@@ -428,6 +527,7 @@ mod tests {
     fn launchd_plist_shape() {
         let plist = render_launchd_plist(
             Path::new("/Users/x/zuse & co/zuse"),
+            &headless(),
             &[("ZUSE_EDGE_URL".into(), "https://e?a=1&b=2".into())],
             Path::new("/Users/x/.zuse/daemon.log"),
         );
@@ -481,10 +581,11 @@ mod tests {
                     .any(|(name, actual)| name == key && actual == value),
                 "missing captured {key}"
             );
-            let unit = render_systemd_unit(Path::new("/usr/bin/zuse"), &env);
+            let unit = render_systemd_unit(Path::new("/usr/bin/zuse"), &headless(), &env);
             assert!(unit.contains(&format!("Environment=\"{key}={value}\"")));
             let plist = render_launchd_plist(
                 Path::new("/Applications/Zuse"),
+                &headless(),
                 &env,
                 Path::new("/tmp/daemon.log"),
             );

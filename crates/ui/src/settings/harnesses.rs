@@ -36,13 +36,21 @@ use zuse_rpc::methods;
 use crate::motion;
 use crate::pickers::visible_harnesses;
 use crate::popover::{self, Loadable};
-use crate::settings::accounts::{self, AccountsPage};
+use crate::settings::accounts;
 use crate::settings::widgets;
 use crate::state::AppState;
 use crate::theme::Theme;
 
+#[path = "accounts_panel.rs"]
+mod accounts_panel;
+#[path = "acp_setup.rs"]
+mod acp_setup;
 #[path = "completion.rs"]
 mod completion;
+#[path = "provider_browser.rs"]
+mod provider_browser;
+
+use crate::composer::{ComposerInput, ComposerInputEvent};
 
 /// Update policies in menu order: the short label, and the note shown under
 /// the row title for the chosen one.
@@ -214,8 +222,6 @@ fn checked_label(checked_at: Option<i64>, now_ms: i64) -> String {
 }
 
 pub struct HarnessesPage {
-    custom_acp: Entity<super::custom_acp::CustomAcpCard>,
-    _custom_changed: gpui::Subscription,
     state: Entity<AppState>,
     scroll: widgets::PageScroll,
     harnesses: Loadable<Vec<HarnessDescriptor>>,
@@ -236,31 +242,25 @@ pub struct HarnessesPage {
     expanded_harness: Option<HarnessId>,
     open_options: std::collections::HashSet<HarnessId>,
     /// Active account section; each computer/provider retains its own login owner.
-    accounts_page: Option<Entity<AccountsPage>>,
-    account_pages: std::collections::HashMap<(Option<String>, HarnessId), Entity<AccountsPage>>,
     update_task: Option<Task<()>>,
     update_action_task: Option<Task<()>>,
     /// A manual provider refresh is checking available CLI updates.
     checking_updates: bool,
+    /// The list/detail browser's tabs, models and Claude connection.
+    browser: provider_browser::BrowserState,
+    /// Adding and editing ACP agents.
+    acp: acp_setup::AcpState,
+    /// Select this provider once the next catalog lands (a just-added agent).
+    pending_select: Option<HarnessId>,
+    /// The Accounts tab's actions and in-place sign-in.
+    logins: accounts_panel::AccountsState,
+    /// Usage was re-probed once since the page opened.
+    usage_probed: bool,
 }
 
 impl HarnessesPage {
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
-        let custom_acp = cx.new(|cx| super::custom_acp::CustomAcpCard::new(state.clone(), cx));
-        let custom_changed = cx.subscribe(
-            &custom_acp,
-            |this: &mut Self, _, event: &super::custom_acp::Changed, cx| match event {
-                super::custom_acp::Changed::Reload => this.load(cx),
-                super::custom_acp::Changed::Advanced(id) => {
-                    this.expanded_harness = Some(*id);
-                    this.open_options.insert(*id);
-                    cx.notify();
-                }
-            },
-        );
         let mut page = Self {
-            custom_acp,
-            _custom_changed: custom_changed,
             state,
             scroll: widgets::PageScroll::default(),
             harnesses: Loadable::Idle,
@@ -276,11 +276,14 @@ impl HarnessesPage {
 
             expanded_harness: None,
             open_options: Default::default(),
-            accounts_page: None,
-            account_pages: Default::default(),
             update_task: None,
             update_action_task: None,
             checking_updates: false,
+            browser: provider_browser::BrowserState::new(cx),
+            acp: acp_setup::AcpState::new(cx),
+            pending_select: None,
+            logins: accounts_panel::AccountsState::new(cx),
+            usage_probed: false,
         };
         page.load(cx);
         page
@@ -288,125 +291,6 @@ impl HarnessesPage {
 
     pub(crate) fn refresh_on_visit(&mut self, cx: &mut Context<Self>) {
         self.load(cx);
-        self.custom_acp.update(cx, |card, cx| {
-            card.set_target(self.target_device.clone(), cx)
-        });
-        if let Some(accounts) = &self.accounts_page {
-            accounts.update(cx, |page, cx| page.refresh_on_visit(cx));
-        }
-    }
-
-    fn toggle_agent_details(&mut self, harness: HarnessId, cx: &mut Context<Self>) {
-        if !self.harnesses.ready().is_some_and(|items| {
-            items
-                .iter()
-                .any(|item| item.id == harness && (descriptor_enabled(item) || !item.installed))
-        }) {
-            return;
-        }
-        if self.expanded_harness == Some(harness) {
-            self.expanded_harness = None;
-        } else {
-            self.expanded_harness = Some(harness);
-            if accounts::signs_in(harness) {
-                let key = (self.target_device.clone(), harness);
-                let page = if let Some(page) = self.account_pages.get(&key).cloned() {
-                    page.update(cx, |page, cx| page.refresh_metadata(cx));
-                    page
-                } else {
-                    let state = self.state.clone();
-                    let target = self.target_device.clone();
-                    let page = cx.new(|cx| AccountsPage::new_embedded(state, target, harness, cx));
-                    self.account_pages.insert(key, page.clone());
-                    page
-                };
-                self.accounts_page = Some(page);
-            }
-        }
-        cx.notify();
-    }
-
-    fn render_agent_details(
-        &self,
-        harness: HarnessId,
-        theme: &Theme,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        if self
-            .harnesses
-            .ready()
-            .and_then(|items| items.iter().find(|item| item.id == harness))
-            .is_some_and(|item| !item.installed)
-        {
-            let command = zuse_providers::install::manual_command(harness);
-            return div().flex().flex_col().gap(px(6.)).px(px(12.)).pt(px(4.)).pb(px(16.))
-                .child(div().text_size(px(11.)).font_weight(gpui::FontWeight::MEDIUM).text_color(theme.text_muted).child(tr(cx, msg::providers::provider_card_install)))
-                .child(div().flex().items_center().gap(px(8.)).rounded(px(7.)).bg(theme.settings_frame_bg().opacity(0.4)).px(px(10.)).py(px(6.))
-                    .child(div().flex_1().min_w_0().font_family(theme.font_mono.clone()).text_size(px(11.)).child(command.unwrap_or("Install this agent on the execution host, then refresh its status.")))
-                    .when_some(command, |row, command| row.child(widgets::action_button(theme, widgets::ActionTone::Quiet).id("copy-provider-install").aria_label(tr(cx, msg::native::copy_install_command)).role(gpui::Role::Button).tab_index(0).size(px(24.)).px_0().justify_center().child(crate::icons::icon(crate::icons::COPY).size(px(12.)).text_color(theme.text_muted)).on_click(move |_,_,cx|cx.write_to_clipboard(gpui::ClipboardItem::new_string(command.to_owned()))))))
-                .into_any_element();
-        }
-        let accounts = accounts::signs_in(harness)
-            .then(|| self.accounts_page.clone())
-            .flatten()
-            .map(|page| page.into_any_element());
-        let cli_sign_in = (!accounts::signs_in(harness))
-            .then(|| self.render_cli_sign_in(harness, theme, cx))
-            .flatten();
-        // Expanded sections share the provider row's horizontal inset.
-        let content = div()
-            .flex()
-            .flex_col()
-            .gap(px(16.))
-            .px(px(12.))
-            .pt(px(4.))
-            .pb(px(16.))
-            .when_some(accounts, |details, accounts| details.child(accounts))
-            .when_some(cli_sign_in, |details, sign_in| details.child(sign_in))
-            .child({
-                let expanded = self.open_options.contains(&harness);
-                let phase = self
-                    .updates
-                    .ready()
-                    .and_then(|rows| rows.iter().find(|row| row.harness == harness))
-                    .map(|row| row.phase);
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(8.))
-                    .child(
-                        zuse_viewport::provider_options::header(
-                            format!("provider-options-{harness:?}"),
-                            expanded,
-                            phase,
-                            true,
-                            cx,
-                        )
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if !this.open_options.insert(harness) {
-                                this.open_options.remove(&harness);
-                                this.policy_selects.remove(&harness);
-                            }
-                            cx.notify();
-                        })),
-                    )
-                    .when(expanded, |v| {
-                        v.child(
-                            div()
-                                .pl(px(30.))
-                                .flex()
-                                .flex_col()
-                                .gap(px(16.))
-                                .child(self.render_completion_for(harness, theme, cx))
-                                .children(self.render_updates_for(harness, theme, cx)),
-                        )
-                    })
-            });
-        if motion::reduced_motion(cx) {
-            content.into_any_element()
-        } else {
-            motion::menu_in(format!("agent-details-{harness:?}"), content).into_any_element()
-        }
     }
 
     /// Sign in row for agents whose own CLI owns sign-in (no Accounts section):
@@ -548,17 +432,15 @@ impl HarnessesPage {
     /// Escape that reached Settings unclaimed goes to the expanded provider's
     /// accounts (an open login) first. Returns whether it was consumed.
     pub(crate) fn dismiss_on_escape(&mut self, cx: &mut Context<Self>) -> bool {
-        if self
-            .custom_acp
-            .update(cx, |card, cx| card.dismiss_on_escape(cx))
-        {
+        if self.acp.open {
+            self.close_acp(cx);
             return true;
         }
-        self.expanded_harness.is_some()
-            && self
-                .accounts_page
-                .as_ref()
-                .is_some_and(|accounts| accounts.update(cx, |page, cx| page.dismiss_on_escape(cx)))
+        if self.logins.login.is_some() {
+            self.cancel_login(cx);
+            return true;
+        }
+        false
     }
 
     fn supports_updates(&self, cx: &Context<Self>) -> bool {
@@ -599,10 +481,7 @@ impl HarnessesPage {
         self.policy_selects.clear();
         self.open_options.clear();
         self.target_device = target;
-        self.custom_acp.update(cx, |card, cx| {
-            card.set_target(self.target_device.clone(), cx)
-        });
-        self.accounts_page = None;
+        self.acp.snapshot = None;
         self.expanded_harness = None;
         self.error = None;
         self.harnesses = Loadable::Idle;
@@ -687,6 +566,8 @@ impl HarnessesPage {
                 }
             })
         });
+        self.load_browser_accounts(cx);
+        self.load_acp_agents(cx);
         self.load_task = Some(cx.spawn(async move |this, cx| {
             let result = engine.client().call(methods::LIST_HARNESSES, params).await;
             this.update(cx, |page, cx| {
@@ -697,6 +578,10 @@ impl HarnessesPage {
                     },
                     Err(err) => Loadable::Error(err.to_string()),
                 };
+                if let Some(id) = page.pending_select.take() {
+                    page.select_provider(id, cx);
+                }
+                page.default_selection(cx);
                 cx.notify();
             })
             .ok();
@@ -928,388 +813,6 @@ impl HarnessesPage {
         }));
     }
 
-    fn rows(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
-        let theme = Theme::of(cx).for_settings_surface();
-        let Loadable::Ready(list) = &self.harnesses else {
-            return Vec::new();
-        };
-        let descriptors = visible_harnesses(list);
-        let enabled_count = descriptors.iter().filter(|d| descriptor_enabled(d)).count();
-        descriptors
-            .into_iter()
-            .filter(|descriptor| {
-                !matches!(descriptor.id, HarnessId::CustomAcp(_))
-                    || self.expanded_harness == Some(descriptor.id)
-            })
-            .enumerate()
-            .map(|(ix, descriptor)| {
-                let harness = descriptor.id;
-                let installed = descriptor.installed;
-                let enabled = match self.pending_toggle {
-                    Some((pending, on)) if pending == harness => on,
-                    _ => descriptor_enabled(&descriptor),
-                };
-                // The one enabled harness left can't be switched off — the
-                // composer needs something to run — but only when it could
-                // actually run: an uninstalled last harness stays togglable
-                // (its hint says to turn it off) and the composer handles the
-                // resulting empty set (mirrors the engine guard).
-                let last_enabled = enabled && enabled_count == 1 && installed;
-                // Turning OFF never needs the CLI (a default-on agent the
-                // user doesn't want must not be stuck on because it isn't
-                // installed); turning ON still does.
-                let interactive = !last_enabled && (enabled || installed);
-                let (icon_path, tint) = crate::pickers::harness_brand_icon(harness);
-
-                let update = match &self.updates {
-                    Loadable::Ready(statuses) => {
-                        statuses.iter().find(|status| status.harness == harness)
-                    }
-                    _ => None,
-                };
-
-                let installing = self.installing == Some(harness);
-                let version = update
-                    .filter(|_| installed)
-                    .and_then(|status| status.installed_version.clone())
-                    .map(|version| SharedString::from(format!("v{version}")));
-                let (tone, text) =
-                    provider_status(harness, installed, enabled, descriptor.can_install, update);
-                // Installing REPLACES the status in place, so the row's text
-                // never shifts while the install runs.
-                let status_line = div()
-                    .mt(px(2.))
-                    .min_w_0()
-                    .flex()
-                    .items_center()
-                    .gap(px(6.))
-                    .text_size(px(11.))
-                    .line_height(px(14.85))
-                    .text_color(theme.text_muted)
-                    .map(|line| {
-                        if installing {
-                            line.child(crate::loaders::mini_mono_spinner(
-                                format!("harness-install-spinner-{harness:?}"),
-                                1.5,
-                                theme.text_muted,
-                                cx.entity_id(),
-                                cx,
-                            ))
-                            .child(SharedString::from(install_label(&descriptor.name)))
-                        } else {
-                            line.child(
-                                div()
-                                    .flex_none()
-                                    .size(px(6.))
-                                    .rounded_full()
-                                    .bg(tone.color(&theme)),
-                            )
-                            .child(div().min_w_0().truncate().child(SharedString::from(text)))
-                        }
-                    });
-                // widgets::row_tile with the brand tint honored (the Claude
-                // mark keeps its orange, like the picker rail).
-                let tile = div()
-                    .flex_none()
-                    .size(px(28.0))
-                    .rounded(px(7.0))
-                    .bg(theme.settings_frame_bg().opacity(0.6))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(crate::icons::brand_icon(
-                        icon_path,
-                        16.0,
-                        tint.unwrap_or(theme.text_muted),
-                    ));
-                let can_expand = enabled || !installed;
-                let expanded = can_expand && self.expanded_harness == Some(harness);
-                // The update action follows the version; policy remains in the details.
-                let update_action = update.and_then(|status| {
-                    let (id, label, primary) = match status.phase {
-                        HarnessUpdatePhase::Available
-                        | HarnessUpdatePhase::ManualActionRequired
-                            if status.can_apply =>
-                        {
-                            ("harness-update", "Update", true)
-                        }
-                        HarnessUpdatePhase::WaitingForIdle
-                        | HarnessUpdatePhase::Preparing
-                        | HarnessUpdatePhase::Downloading => {
-                            ("harness-update-cancel", "Cancel", false)
-                        }
-                        _ => return None,
-                    };
-                    let tooltip = match (primary, status.latest_version.as_deref()) {
-                        (true, Some(latest)) => format!("Update to v{latest}"),
-                        (true, None) => "Update to the latest version".to_owned(),
-                        (false, _) => "Cancel update".to_owned(),
-                    };
-                    let button = div()
-                        .id((id, ix))
-                        .flex_none()
-                        .h(px(24.0))
-                        .relative()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .gap(px(4.0))
-                        .role(gpui::Role::Button)
-                        .aria_label(label)
-                        .tip(tooltip)
-                        .rounded(px(6.0))
-                        .text_size(crate::typography::text_xs())
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .cursor_pointer()
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            // Inside the details trigger: act, don't expand.
-                            cx.stop_propagation();
-                            if primary {
-                                this.apply_harness_update(harness, cx)
-                            } else {
-                                this.cancel_harness_update(harness, cx)
-                            }
-                        }));
-                    Some(
-                        button
-                            .h(px(20.))
-                            .px(px(4.))
-                            .gap(px(4.))
-                            .rounded(px(4.))
-                            .text_size(px(10.))
-                            .text_color(if primary {
-                                theme.warning
-                            } else {
-                                theme.text_muted
-                            })
-                            .hover(|v| v.bg(theme.settings_frame_bg().opacity(0.6)))
-                            .child(
-                                crate::icons::icon(if primary {
-                                    crate::icons::ARROW_UP
-                                } else {
-                                    crate::icons::CLOSE
-                                })
-                                .size(px(14.))
-                                .text_color(if primary {
-                                    theme.warning
-                                } else {
-                                    theme.text_muted
-                                }),
-                            )
-                            .when(primary, |v| {
-                                v.child(SharedString::from(
-                                    status
-                                        .latest_version
-                                        .as_ref()
-                                        .map(|v| format!("v{v}"))
-                                        .unwrap_or_else(|| "Update".into()),
-                                ))
-                            }),
-                    )
-                });
-                let header = widgets::card_row(&theme, ix == 0)
-                    .py(px(8.))
-                    .min_h(px(48.))
-                    .gap(px(12.))
-                    .id(("harness-row", ix))
-                    .when(can_expand, |el| {
-                        el.hover(|s| s.bg(theme.settings_frame_bg().opacity(0.3)))
-                    })
-                    .child(
-                        div()
-                            .id(("harness-details-trigger", ix))
-                            .group(format!("harness-details-{ix}"))
-                            .flex_1()
-                            .min_w_0()
-                            .min_h(px(28.0))
-                            .rounded(px(7.0))
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap(px(12.0))
-                            .when(can_expand, |el| {
-                                el.role(gpui::Role::Button)
-                                    .aria_label(format!("{} preferences", descriptor.name))
-                                    .aria_expanded(expanded)
-                                    .tab_index(0)
-                                    .cursor_pointer()
-                                    .focus_visible(|s| s.border_2().border_color(theme.accent))
-                                    .on_click(cx.listener(move |page, _, _, cx| {
-                                        page.toggle_agent_details(harness, cx)
-                                    }))
-                                    .on_key_down(cx.listener(
-                                        move |page, event: &gpui::KeyDownEvent, _, cx| {
-                                            if !event.is_held
-                                                && matches!(
-                                                    event.keystroke.key.as_str(),
-                                                    "enter" | "space"
-                                                )
-                                            {
-                                                page.toggle_agent_details(harness, cx);
-                                                cx.stop_propagation();
-                                            }
-                                        },
-                                    ))
-                            })
-                            .child(tile.when(!enabled, |v| v.opacity(0.6)))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .flex()
-                                    .flex_col()
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .items_baseline()
-                                            .gap(px(6.))
-                                            .child(widgets::row_title(
-                                                &theme,
-                                                descriptor.name.clone(),
-                                            ))
-                                            .when_some(version, |name, version| {
-                                                name.child(
-                                                    div()
-                                                        .flex_none()
-                                                        .font_family(theme.font_mono.clone())
-                                                        .text_size(px(10.))
-                                                        .line_height(px(13.5))
-                                                        .text_color(theme.text_muted)
-                                                        .child(version),
-                                                )
-                                            })
-                                            .children(update_action),
-                                    )
-                                    .child(status_line),
-                            )
-                            // Install / Cancel sit with the row's other
-                            // action, before the caret, so carets line up.
-                            .when(
-                                offers_install(harness, installed, descriptor.can_install)
-                                    && self.installing != Some(harness),
-                                |el| {
-                                    el.child(
-                                        widgets::ghost_action(&theme)
-                                            .id(("harness-install", ix))
-                                            .flex_none()
-                                            .when(self.installing.is_none(), |el| {
-                                                el.on_click(cx.listener(move |this, _, _, cx| {
-                                                    cx.stop_propagation();
-                                                    this.install(harness, cx)
-                                                }))
-                                            })
-                                            .child(tr(cx, msg::providers::provider_card_install)),
-                                    )
-                                },
-                            )
-                            .when(self.installing == Some(harness), |el| {
-                                el.child(
-                                    widgets::ghost_action(&theme)
-                                        .id(("harness-cancel-install", ix))
-                                        .flex_none()
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            cx.stop_propagation();
-                                            this.cancel_install(cx)
-                                        }))
-                                        .child(tr(cx, msg::settings::organizations_cancel)),
-                                )
-                            }),
-                    )
-                    .child(
-                        widgets::toggle_switch(
-                            &theme,
-                            enabled,
-                            format!("harness-switch-{harness:?}"),
-                        )
-                        .id(("harness-toggle", ix))
-                        .when(!interactive && !enabled, |el| el.opacity(0.55))
-                        .when(interactive, |el| {
-                            el.cursor_pointer()
-                                .tab_index(0)
-                                .role(gpui::Role::Switch)
-                                .aria_label(descriptor.name.clone())
-                                .aria_toggled(if enabled {
-                                    gpui::Toggled::True
-                                } else {
-                                    gpui::Toggled::False
-                                })
-                                .focus_visible(|s| {
-                                    s.border_2().border_color(theme.accent).opacity(1.0)
-                                })
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.toggle(harness, !enabled, cx);
-                                }))
-                                .on_key_down(cx.listener(
-                                    move |this, event: &gpui::KeyDownEvent, _, cx| {
-                                        if !event.is_held
-                                            && matches!(
-                                                event.keystroke.key.as_str(),
-                                                "enter" | "space"
-                                            )
-                                        {
-                                            this.toggle(harness, !enabled, cx);
-                                            cx.stop_propagation();
-                                        }
-                                    },
-                                ))
-                        }),
-                    )
-                    .child(
-                        div()
-                            .id(("harness-disclosure", ix))
-                            .size(px(28.))
-                            .flex_none()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(7.))
-                            .when(can_expand, |button| {
-                                button
-                                    .role(gpui::Role::Button)
-                                    .aria_label(format!("{} preferences", descriptor.name))
-                                    .aria_expanded(expanded)
-                                    .tab_index(0)
-                                    .cursor_pointer()
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.toggle_agent_details(harness, cx)
-                                    }))
-                                    .on_key_down(cx.listener(
-                                        move |this, event: &gpui::KeyDownEvent, _, cx| {
-                                            if !event.is_held
-                                                && matches!(
-                                                    event.keystroke.key.as_str(),
-                                                    "enter" | "space"
-                                                )
-                                            {
-                                                this.toggle_agent_details(harness, cx);
-                                                cx.stop_propagation();
-                                            }
-                                        },
-                                    ))
-                            })
-                            .child(
-                                crate::icons::icon(if expanded {
-                                    crate::icons::ALT_ARROW_UP
-                                } else {
-                                    crate::icons::ALT_ARROW_DOWN
-                                })
-                                .size(px(14.))
-                                .text_color(
-                                    theme.text_muted.opacity(if can_expand { 1. } else { 0.35 }),
-                                ),
-                            ),
-                    );
-                div()
-                    .flex()
-                    .flex_col()
-                    .child(header)
-                    .when(expanded, |row| {
-                        row.child(self.render_agent_details(harness, &theme, cx))
-                    })
-                    .into_any_element()
-            })
-            .collect()
-    }
     /// Review fixtures: a seeded provider list; `acp` opens the Add ACP
     /// agent dialog, `expanded` expands the first provider.
     #[cfg(feature = "browser-fixture")]
@@ -1323,6 +826,7 @@ impl HarnessesPage {
             installed,
             can_install: true,
             enabled: Some(enabled),
+            signed_in: None,
         };
         self.harnesses = Loadable::Ready(vec![
             descriptor(HarnessId::ClaudeCode, "Claude Code", true, true),
@@ -1368,13 +872,11 @@ impl HarnessesPage {
             ),
         ]);
         if variant == "expanded" {
-            self.toggle_agent_details(HarnessId::ClaudeCode, cx);
-            if let Some(accounts) = &self.accounts_page {
-                accounts.update(cx, |page, cx| page.fixture_seed(cx));
-            }
+            self.select_provider(HarnessId::ClaudeCode, cx);
         }
-        self.custom_acp
-            .update(cx, |card, cx| card.fixture_seed(variant == "acp", cx));
+        if variant == "acp" {
+            self.open_acp(cx);
+        }
         cx.notify();
     }
 
@@ -1429,13 +931,7 @@ impl Render for HarnessesPage {
                     )
                     .into_any_element()
             }
-            Loadable::Ready(_) => {
-                let rows = self.rows(cx);
-                widgets::section_card(&theme)
-                    .mt_0()
-                    .children(rows)
-                    .into_any_element()
-            }
+            Loadable::Ready(_) => self.render_browser(&theme, cx),
         };
         crate::toast::take_error(&mut self.error, cx);
         let update_error = match &self.updates {
@@ -1517,9 +1013,6 @@ impl Render for HarnessesPage {
                         button
                             .cursor_pointer()
                             .on_click(cx.listener(|this, _, _, cx| {
-                                this.custom_acp.update(cx, |card, cx| {
-                                    card.set_target(this.target_device.clone(), cx)
-                                });
                                 this.check_updates(cx);
                                 this.load(cx);
                                 cx.notify();
@@ -1528,9 +1021,6 @@ impl Render for HarnessesPage {
                                 if !event.is_held
                                     && matches!(event.keystroke.key.as_str(), "enter" | "space")
                                 {
-                                    this.custom_acp.update(cx, |card, cx| {
-                                        card.set_target(this.target_device.clone(), cx)
-                                    });
                                     this.check_updates(cx);
                                     this.load(cx);
                                     cx.notify();
@@ -1564,11 +1054,11 @@ impl Render for HarnessesPage {
                         .track_scroll(&self.scroll.scroll)
                         .child(
                             widgets::settings_page_column(window)
-                                .child(widgets::section_title(&theme, &tr(cx, msg::settings::settings_page_providers), &tr(cx, msg::native::verify_what_s_installed_signed_in_and_which_subscription_each_provider_runs_on)))
+                                .max_w(px(1040. + 2. * widgets::page_padding(window)))
+                                .child(widgets::section_title_with_action(&theme, &tr(cx, msg::settings::settings_page_providers), None, "The coding agents on this computer, the accounts they sign in with, and the models they offer.", Some(div().flex().items_center().gap(px(6.)).child(check).into_any_element())))
                                 .child(div().mt(px(20.)).flex().flex_col().gap(px(16.))
-                                    .child(widgets::group_with_action(&theme, "Agent providers", "Enable the coding agents you use, verify their local setup, and control which models appear in Zuse.", Some(div().flex().items_center().gap(px(6.)).child(check).into_any_element()))
-                                        .children(update_error).child(body))
-                                    .child(self.custom_acp.clone())
+                                    .children(update_error)
+                                    .child(body)
 ),
                         ),
                 )
@@ -1602,6 +1092,7 @@ mod tests {
             installed: true,
             can_install: false,
             enabled: Some(true),
+            signed_in: None,
         };
         window
             .update(cx, |page, _, cx| {
@@ -1609,53 +1100,35 @@ mod tests {
                     descriptor(zuse_protocol::HarnessId::ClaudeCode, "Claude Code"),
                     descriptor(zuse_protocol::HarnessId::Codex, "Codex"),
                 ]);
-                page.toggle_agent_details(zuse_protocol::HarnessId::ClaudeCode, cx);
+                page.select_provider(zuse_protocol::HarnessId::ClaudeCode, cx);
                 assert_eq!(
                     page.expanded_harness,
                     Some(zuse_protocol::HarnessId::ClaudeCode)
                 );
-                assert_eq!(
-                    page.accounts_page
-                        .as_ref()
-                        .unwrap()
-                        .read(cx)
-                        .embedded_harness(),
-                    Some(zuse_protocol::HarnessId::ClaudeCode)
-                );
             })
             .unwrap();
         cx.update_window(window.into(), |_, window, cx| window.draw(cx).clear())
             .unwrap();
+        // Picking another provider replaces the detail pane; it never collapses.
         window
             .update(cx, |page, _, cx| {
-                page.toggle_agent_details(zuse_protocol::HarnessId::Codex, cx);
+                page.select_provider(zuse_protocol::HarnessId::Codex, cx);
+                page.select_provider(zuse_protocol::HarnessId::Codex, cx);
                 assert_eq!(page.expanded_harness, Some(zuse_protocol::HarnessId::Codex));
-                assert_eq!(
-                    page.accounts_page
-                        .as_ref()
-                        .unwrap()
-                        .read(cx)
-                        .embedded_harness(),
-                    Some(zuse_protocol::HarnessId::Codex)
-                );
             })
             .unwrap();
         cx.update_window(window.into(), |_, window, cx| window.draw(cx).clear())
             .unwrap();
-        // Antigravity signs in through the very same Accounts section.
+        // Antigravity signs in through the very same Accounts tab.
         window
             .update(cx, |page, _, cx| {
                 page.harnesses = super::Loadable::Ready(vec![descriptor(
                     zuse_protocol::HarnessId::Antigravity,
                     "Antigravity",
                 )]);
-                page.toggle_agent_details(zuse_protocol::HarnessId::Antigravity, cx);
+                page.select_provider(zuse_protocol::HarnessId::Antigravity, cx);
                 assert_eq!(
-                    page.accounts_page
-                        .as_ref()
-                        .unwrap()
-                        .read(cx)
-                        .embedded_harness(),
+                    page.expanded_harness,
                     Some(zuse_protocol::HarnessId::Antigravity)
                 );
             })

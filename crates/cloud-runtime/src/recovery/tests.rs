@@ -262,6 +262,12 @@ async fn full_native_wal_round_trip_retains_history_journals_work_and_fresh_iden
     let verifier = Recovery::acquire(binding(), verifier_layout.clone(), key()).unwrap();
     verifier.verify(&objects).await.unwrap();
     assert!(verifier_layout.work.join("verified").exists());
+    let stage = verifier_layout.work.join("remote-verification");
+    assert!(stage.join("data").is_dir());
+    assert!(
+        !stage.join("repositories").exists(),
+        "verification validates repositories without writing them to scratch"
+    );
     let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(
         File::open(layout.work.join("capture.tar.gz")).unwrap(),
     ));
@@ -434,6 +440,52 @@ async fn external_links_are_refused_without_exporting_partial_manifest() {
     let objects = Memory::default();
     assert!(helper.backup(&objects).await.is_err());
     assert!(objects.bytes.lock().unwrap().is_empty());
+    assert!(
+        partial_captures(&layout.work).is_empty(),
+        "a failed capture removes its partial archive"
+    );
+}
+fn partial_captures(work: &Path) -> Vec<String> {
+    std::fs::read_dir(work)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name.ends_with(".next"))
+        .collect()
+}
+#[tokio::test]
+async fn capture_clears_partial_archives_left_by_earlier_attempts() {
+    let temp = tempfile::tempdir().unwrap();
+    let layout = layout(temp.path());
+    let _db = seed(&layout);
+    let helper = Recovery::acquire(binding(), layout.clone(), key()).unwrap();
+    for stale in ["capture.tar.0b7b8bd0.next", "capture.tar.136a640f.next"] {
+        put(&layout.work.join(stale), vec![7; 4096]);
+    }
+    helper.backup(&Memory::default()).await.unwrap();
+    assert!(partial_captures(&layout.work).is_empty());
+    assert!(layout.work.join("capture.tar.gz").is_file());
+}
+#[test]
+fn excluded_entries_churning_in_a_captured_directory_do_not_change_it() {
+    let temp = tempfile::tempdir().unwrap();
+    let layout = layout(temp.path());
+    put(&layout.data.join("device-id"), "device");
+    let seen = files::Seen::observe("data", &layout.data, Path::new("")).unwrap();
+    // The supervisor replaces its recovery record by rename on every handoff.
+    for _ in 0..3 {
+        let next = layout.data.join(".runtime-write-supervisor-next");
+        std::fs::write(&next, "{}").unwrap();
+        std::fs::rename(
+            &next,
+            layout.data.join("cloud-runtime-supervisor-recovery.json"),
+        )
+        .unwrap();
+        std::fs::write(layout.data.join("engine.lock"), "1").unwrap();
+    }
+    assert!(seen.unchanged("data", Path::new("")).unwrap());
+    // A captured entry appearing mid-capture still invalidates it.
+    put(&layout.data.join("late-journal.json"), "{}");
+    assert!(!seen.unchanged("data", Path::new("")).unwrap());
 }
 #[test]
 fn original_node_ciphertext_authenticates_only_in_its_operation_and_position() {
@@ -830,4 +882,15 @@ async fn populated_restored_storage_requires_matching_authority_and_installation
         )
         .is_err()
     );
+}
+
+#[test]
+fn verification_refuses_to_start_when_scratch_cannot_hold_it() {
+    files::ensure_space(1 << 30, 100 << 20).unwrap();
+    let error = files::ensure_space(132 << 20, 373 << 20).unwrap_err();
+    assert_eq!(error.to_string(), "recovery_scratch_insufficient");
+    // The margin is kept free even when the payload alone would fit.
+    assert!(files::ensure_space(100 << 20, 90 << 20).is_err());
+    let temp = tempfile::tempdir().unwrap();
+    assert!(files::available(temp.path()).unwrap() > 0);
 }

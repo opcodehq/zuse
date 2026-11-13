@@ -2731,6 +2731,8 @@ impl Shell {
                 }
                 ComposerEvent::ResumeCloud { .. }
                 | ComposerEvent::CloudSleepRequested
+                | ComposerEvent::CloudWakeRequested
+                | ComposerEvent::CloudComputerRecreating { .. }
                 | ComposerEvent::CloudForegroundAdmitted => {}
                 ComposerEvent::WorkspaceCommand(command) => {
                     this.pending_workspace_command = Some(*command);
@@ -9349,7 +9351,7 @@ impl Shell {
         let working = status == zuse_protocol::ChatIndicator::Working && !queued && !undelivered;
         let compact_status = sidebar.then(|| {
             let glyph = if working {
-                loaders::terminal_spinner(format!("{row_id}-working"), 13.0, theme.text_muted)
+                loaders::retro_loader(format!("{row_id}-working"), 13.0, theme.loader_glyph())
                     .into_any_element()
             } else if status == zuse_protocol::ChatIndicator::Completed && !queued && !undelivered {
                 icon(icons::CHECK)
@@ -9450,10 +9452,10 @@ impl Shell {
                             .text_color(status_color)
                             .into_any_element()
                     } else if working {
-                        loaders::terminal_spinner(
+                        loaders::retro_loader(
                             format!("{row_id}-working"),
                             13.0,
-                            theme.text_muted,
+                            theme.loader_glyph(),
                         )
                         .into_any_element()
                     } else {
@@ -9941,10 +9943,10 @@ impl Shell {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .child(loaders::terminal_spinner(
+                            .child(loaders::retro_loader(
                                 format!("{row_id}-working"),
                                 10.0,
-                                theme.text_muted,
+                                theme.loader_glyph(),
                             )),
                     )
                     .into_any_element()
@@ -11217,7 +11219,7 @@ impl Shell {
             None => loaders::mini_glyph_spinner(
                 "sidebar-update-progress",
                 1.5,
-                theme.glyph,
+                theme.loader_glyph(),
                 cx.entity_id(),
                 cx,
             )
@@ -12991,8 +12993,12 @@ impl Shell {
                 self.viewport_height - Theme::TITLEBAR_HEIGHT - 160.0,
                 cx,
             );
-            return div()
-                .relative()
+            // Dropped files and dragged workspace paths attach to the cloud
+            // chat's own composer, like any conversation.
+            let composer = conversation.read(cx).composer.clone();
+            return self
+                .chat_dropzone("chat-dropzone", composer, cx)
+                .debug_selector(|| "chat-dropzone".into())
                 .flex_1()
                 .min_w_0()
                 .h_full()
@@ -13769,7 +13775,7 @@ impl Shell {
                 .child(loaders::mini_glyph_spinner(
                     format!("sending-indicator-{}", cx.entity_id()),
                     2.5,
-                    theme.glyph,
+                    theme.loader_glyph(),
                     cx.entity_id(),
                     cx,
                 ))
@@ -14236,7 +14242,7 @@ impl Shell {
                 loaders::mini_glyph_spinner(
                     format!("subagent-tab-{ix}"),
                     2.0,
-                    theme.glyph,
+                    theme.loader_glyph(),
                     cx.entity_id(),
                     cx,
                 )

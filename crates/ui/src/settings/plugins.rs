@@ -1058,6 +1058,8 @@ impl PluginsCard {
                         "Connect plugin"
                     },
                 )
+                .rounded_full()
+                .bg(theme.settings_frame_bg())
                 .when(
                     !connected
                         && (self.busy
@@ -1827,4 +1829,32 @@ pub fn fixture_seed(state: Entity<AppState>, variant: &str, cx: &mut App) {
                 "tenants":[{"id":"fixture","name":"Personal"},{"id":"org","name":"Fixture org"}]});
         cx.notify();
     });
+}
+
+/// Connected plugins offered by the composer's `@` menu, read from the app's
+/// one shared plugins entity (created on first use so it starts loading).
+pub(crate) fn connected_mention_plugins(
+    state: Entity<AppState>,
+    cx: &mut App,
+) -> Vec<crate::composer::MentionPlugin> {
+    let card = PluginsCard::shared(state, cx);
+    let snapshot = &card.read(cx).plugins.snapshot;
+    let catalog = snapshot["catalog"].as_array().cloned().unwrap_or_default();
+    let mut seen = std::collections::HashSet::new();
+    snapshot["connections"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|row| row["state"] == "connected" && row["enabled"] != false)
+        .filter_map(|row| row["pluginId"].as_str())
+        .filter(|id| seen.insert(id.to_string()))
+        .filter_map(|id| {
+            let entry = catalog.iter().find(|entry| entry["id"] == id)?;
+            Some(crate::composer::MentionPlugin {
+                id: id.to_owned(),
+                name: entry["name"].as_str().unwrap_or(id).to_owned(),
+                domain: entry["domain"].as_str().unwrap_or_default().to_owned(),
+            })
+        })
+        .collect()
 }

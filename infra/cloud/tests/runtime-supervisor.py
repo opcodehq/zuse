@@ -8,6 +8,7 @@ import shutil
 import sqlite3
 import signal
 import socket
+import stat
 import threading
 import subprocess
 import sys
@@ -158,8 +159,11 @@ while True:time.sleep(.1)
         config=dict(operationId=operation,workspaceId='task',mode='restore',home=str(self.data.parent),repositoriesPath=str(self.checkout),supervisorBinding=dict(workspaceId='task',generation=2,storageIncarnationId='disk'),token='never-in-ipc',key='never-in-receipts')
         path=directory/'config.json';path.write_text(json.dumps(config));path.chmod(0o600)
         request=dict(version=1,action='recover',operationId=operation)
-        first=helper.rpc(self.data,request);second=helper.rpc(self.data,request)
+        first=helper.rpc(self.data,request)
+        binding=self.data/'cloud-runtime-supervisor-recovery.json';before=(binding.stat().st_ino,binding.stat().st_mtime_ns,self.data.stat().st_mtime_ns)
+        second=helper.rpc(self.data,request)
         self.assertEqual(first['childPid'],second['childPid'])
+        self.assertEqual(before,(binding.stat().st_ino,binding.stat().st_mtime_ns,self.data.stat().st_mtime_ns),'a repeated handoff must not rewrite the data directory under a capture')
         with self.assertRaises(helper.Rejected):helper.rpc(self.data,self.request())
         helper.rpc(self.data,dict(version=1,action='cancel-recovery',operationId=operation))
         deadline=time.monotonic()+4
@@ -262,6 +266,175 @@ while True:time.sleep(.1)
         Path(request['bootTokenFile']).unlink();Path(request['bootTokenFile']).symlink_to(self.status/'not-a-token')
         with self.assertRaises(helper.Rejected):helper.rpc(self.data,request)
 
+UPDATE_TESTS=Path(__file__).resolve().with_name('runtime-update.py')
+update_spec=importlib.util.spec_from_file_location('runtime_update_tests',UPDATE_TESTS)
+update_tests=importlib.util.module_from_spec(update_spec);update_spec.loader.exec_module(update_tests)
+update_helper=update_tests.helper
+
+@unittest.skipUnless(sys.platform=='linux','Linux guest peer credentials')
+class UpdateWatchdogTest(unittest.TestCase):
+    """A new runtime that dies before it proves healthy is rolled back by the
+    supervisor (without its help) and the previous runtime relaunched once."""
+    def setUp(self):
+        self.temp=tempfile.TemporaryDirectory(prefix='zuse-watchdog-');self.addCleanup(self.temp.cleanup)
+        self.root=Path(self.temp.name);os.chmod(self.root,0o755)
+        self.data=self.root/'home'/'.zuse-data';self.data.mkdir(parents=True,mode=0o700);os.chmod(self.data.parent,0o755)
+        self.updates=self.data/'runtime-updates';self.updates.mkdir(mode=0o700)
+        self.status=self.root/'status';self.status.mkdir(mode=0o700);self.checkout=self.root/'repo';self.checkout.mkdir()
+        self.state=self.root/'state';self.state.mkdir(mode=0o755)
+        self.bin=self.root/'bin';self.bin.mkdir(mode=0o755);self.binary=self.bin/'zuse-cloud-runtime'
+        self.old=update_tests.runtime_bytes('old');self.new=update_tests.runtime_bytes('new')
+        self.binary.write_bytes(self.old);self.binary.chmod(0o755)
+        self.recovery=self.root/'recovery';self.recovery.mkdir(mode=0o700)
+        # A runtime that crashes at once when the new release is installed.
+        self.launcher=self.root/'launch';self.launcher.write_text('''#!/usr/bin/env python3
+import json,os,sys,time
+from pathlib import Path
+p=Path(os.environ['ZUSE_USER_DATA']);binary=Path(os.environ['ZUSE_RUNTIME_BINARY']).read_bytes()
+with (p/'launches.jsonl').open('a') as out:out.write(json.dumps({'pid':os.getpid(),'retained':os.environ['ZUSE_RUNTIME_RETAINED'],'new':b'release new' in binary,'token':os.environ.get('ZUSE_RUNTIME_BOOT_TOKEN_FILE')})+'\\n')
+(p/'cloud-runtime-identity.json').write_text('{}')
+token=os.environ.get('ZUSE_RUNTIME_BOOT_TOKEN_FILE')
+if token and os.path.exists(token):os.unlink(token)
+if b'release new' in binary:sys.exit(1)
+while True:time.sleep(.1)
+''');self.launcher.chmod(0o700)
+        self.server=None
+    def serve(self,layout):
+        self.server=subprocess.Popen(['python3',str(SCRIPT),'--data-dir',str(self.data),'--workspace-root',str(self.checkout),'--status-dir',str(self.status),
+            '--launcher',str(self.launcher),'--binary',str(self.binary),'--recovery-root',str(self.recovery),'--recovery-launcher',str(self.root/'none'),
+            '--update-state',str(self.state),'--update-helper',str(self.root/'none'),'--update-layout',layout,'serve'],
+            stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,start_new_session=True)
+        def stop():
+            if self.server.poll() is None:self.server.terminate();self.server.wait(timeout=8)
+            self.server.stderr.close()
+        self.addCleanup(stop)
+        end=time.monotonic()+4
+        while time.monotonic()<end:
+            try:helper.rpc(self.data,{'version':1,'action':'ping'});return
+            except (OSError,helper.Rejected):time.sleep(.01)
+        self.fail('supervisor failed to start')
+    def launch(self):
+        token=self.status/'rust-boot-op-first';token.write_text('private-fixture-token');token.chmod(0o600)
+        helper.rpc(self.data,dict(version=1,action='launch',operationId='op-first',workspaceId='task',generation=2,storageIncarnationId='disk',apiUrl='http://127.0.0.1',retained=False,bootTokenFile=str(token)))
+    def launches(self):
+        path=self.data/'launches.jsonl'
+        return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+    def wait_for(self,condition,timeout=8):
+        end=time.monotonic()+timeout
+        while time.monotonic()<end:
+            if condition():return
+            time.sleep(.05)
+        self.fail('condition not reached')
+    def alive_pid(self):
+        ping=helper.rpc(self.data,{'version':1,'action':'ping'})
+        return ping['childPid'] if ping['childAlive'] else None
+    def assert_no_further_relaunch(self,count):
+        time.sleep(2.5)
+        self.assertEqual(len(self.launches()),count)
+        self.assertIsNone(self.alive_pid())
+    def helper_env(self):
+        overrides=dict(DATA_DIR=self.updates,STATE_DIR=self.state,RUNTIME_ROOT=self.root/'opt-runtime',INSTALLED=self.binary,
+            PUBLIC_KEY=self.root/'release.pub',OWNER_UID=os.getuid(),TASK_UID=os.getuid(),TASK_GID=os.getgid(),ARCHITECTURE='x86_64')
+        saved={k:os.environ.get(k) for k in ('ZUSE_RUNTIME_UPDATE_'+n for n in overrides)}
+        def restore():
+            for k,v in saved.items():
+                if v is None:os.environ.pop(k,None)
+                else:os.environ[k]=v
+        self.addCleanup(restore)
+        for name,value in overrides.items():os.environ['ZUSE_RUNTIME_UPDATE_'+name]=str(value)
+    def commit_with_helper(self):
+        """The real root helper installs the new release (as after a `now` swap)."""
+        old_umask=os.umask(0o022);self.addCleanup(os.umask,old_umask)
+        keys=self.root/'keys';keys.mkdir();private=keys/'release.pem'
+        update_tests.openssl('genpkey','-algorithm','ed25519','-out',str(private))
+        public=update_tests.openssl('pkey','-in',str(private),'-pubout','-outform','DER')[-32:]
+        (self.root/'release.pub').write_text(__import__('base64').b64encode(public).decode()+'\n');(self.root/'release.pub').chmod(0o644)
+        (self.root/'opt-runtime'/'releases').mkdir(parents=True,mode=0o755)
+        self.helper_env()
+        digest=update_tests.sha(self.new)
+        release={'sha256':digest,'version':'2.0.0','architecture':'x86_64','storageFormats':['zuse-rust-engine-v1']}
+        message=keys/'message';message.write_bytes(update_helper.signing_bytes(release))
+        signature=update_tests.openssl('pkeyutl','-sign','-inkey',str(private),'-rawin','-in',str(message))
+        staged=self.updates/'staged'/digest;staged.mkdir(parents=True,mode=0o700)
+        (staged/'zuse-cloud-runtime').write_bytes(self.new)
+        (staged/'release.json').write_text(json.dumps({'release':release,'signature':__import__('base64').b64encode(signature).decode(),'updateId':'update-1'}))
+        (self.updates/'request.json').write_text(json.dumps({'sha256':digest,'updateId':'update-1','requestedAt':1}))
+        self.assertEqual(update_helper.main(['run']),0)
+        self.assertEqual(json.loads((self.state/'result.json').read_text())['outcome'],'committed')
+        self.assertEqual(self.binary.read_bytes(),self.new)
+        return digest
+    def run_helper_on_rollback(self):
+        """Stands in for the helper's systemd path unit (PathExists=rollback.json)."""
+        done=threading.Event();outcome={}
+        def watch():
+            end=time.monotonic()+10
+            while time.monotonic()<end:
+                if (self.updates/'rollback.json').exists():
+                    outcome['request']=json.loads((self.updates/'rollback.json').read_text())
+                    outcome['code']=update_helper.main(['run']);break
+                time.sleep(.02)
+            done.set()
+        threading.Thread(target=watch,daemon=True).start()
+        return done,outcome
+
+    def test_root_crash_in_probation_rolls_back_through_the_helper_and_relaunches_once(self):
+        digest=self.commit_with_helper();self.serve('root')
+        done,outcome=self.run_helper_on_rollback()
+        self.launch()
+        self.assertTrue(done.wait(10));self.assertEqual(outcome['code'],0)
+        self.assertEqual(outcome['request'],{'updateId':'update-1','sha256':digest})
+        result=json.loads((self.state/'result.json').read_text())
+        self.assertEqual((result['outcome'],result['updateId']),('rolled-back','update-1'))
+        self.assertEqual(self.binary.read_bytes(),self.old)
+        self.wait_for(lambda:len(self.launches())==2 and self.alive_pid())
+        first,second=self.launches()
+        self.assertEqual((first['new'],second['new']),(True,False))
+        # The failed start consumed the boot credential: the relaunch resumes the stored identity.
+        self.assertEqual((second['retained'],second['token']),('true',None))
+        self.assertEqual(self.alive_pid(),second['pid'])
+        record=json.loads((self.data/'cloud-runtime-supervisor-update-rollbacks.json').read_text())['update-1']
+        self.assertEqual((record['phase'],record['layout'],record['exitCode']),('relaunched','root',1))
+        # The restored runtime also dying is left to normal recovery.
+        os.kill(second['pid'],signal.SIGKILL)
+        self.assert_no_further_relaunch(2)
+        self.assertFalse((self.updates/'rollback.json').exists())
+
+    def test_root_healthy_release_is_never_rolled_back(self):
+        digest=update_tests.sha(self.new);self.binary.write_bytes(self.new)
+        (self.state/'result.json').write_text(json.dumps({'updateId':'update-1','outcome':'committed','sha256':digest,'previousSha256':update_tests.sha(self.old),'errorCode':None}))
+        healthy=self.updates/'healthy.json';healthy.write_text(json.dumps({'sha256':digest,'updateId':'update-1','at':1}));healthy.chmod(0o600)
+        self.serve('root');self.launch()
+        self.wait_for(lambda:len(self.launches())==1)
+        self.assert_no_further_relaunch(1)
+        self.assertFalse((self.updates/'rollback.json').exists())
+        self.assertEqual(self.binary.read_bytes(),self.new)
+
+    def test_owned_crash_in_probation_restores_previous_and_relaunches_once(self):
+        journal=self.root/'runtime-update';journal.mkdir(mode=0o700)
+        (journal/'previous').write_bytes(self.old);self.binary.write_bytes(self.new)
+        entry=dict(version=1,phase='swapped',updateId='update-1',sha256=update_tests.sha(self.new),previousSha256=update_tests.sha(self.old),updatedAt=1)
+        (journal/'journal.json').write_text(json.dumps(entry));(journal/'journal.json').chmod(0o600)
+        self.serve('owned');self.launch()
+        self.wait_for(lambda:len(self.launches())==2 and self.alive_pid())
+        self.assertEqual(self.binary.read_bytes(),self.old)
+        self.assertEqual(stat.S_IMODE(self.binary.stat().st_mode),0o755)
+        saved=json.loads((journal/'journal.json').read_text())
+        self.assertEqual((saved['phase'],saved['errorCode'],saved['updateId'],saved['previousSha256']),('rolled-back','runtime_update_rolled_back','update-1',entry['previousSha256']))
+        self.assertEqual([l['new'] for l in self.launches()],[True,False])
+        os.kill(self.launches()[1]['pid'],signal.SIGKILL)
+        self.assert_no_further_relaunch(2)
+
+    def test_owned_journal_committed_or_clean_exit_is_left_alone(self):
+        journal=self.root/'runtime-update';journal.mkdir(mode=0o700)
+        (journal/'previous').write_bytes(self.old);self.binary.write_bytes(self.new)
+        entry=dict(version=1,phase='committed',updateId='update-1',sha256=update_tests.sha(self.new),previousSha256=update_tests.sha(self.old),updatedAt=1)
+        (journal/'journal.json').write_text(json.dumps(entry));(journal/'journal.json').chmod(0o600)
+        self.serve('owned');self.launch()
+        self.wait_for(lambda:len(self.launches())==1)
+        self.assert_no_further_relaunch(1)
+        self.assertEqual(self.binary.read_bytes(),self.new)
+        self.assertEqual(json.loads((journal/'journal.json').read_text())['phase'],'committed')
+
 class ConnectionReadinessTest(unittest.TestCase):
     def test_delayed_listener_waits_before_one_request_is_sent(self):
         with tempfile.TemporaryDirectory(prefix='zuse-rpc-ready-') as directory:
@@ -303,5 +476,35 @@ class ConnectionReadinessTest(unittest.TestCase):
             started=time.monotonic()
             with self.assertRaises(OSError):helper.rpc(Path(directory),{'version':1,'action':'ping'},connect_timeout=.05)
             self.assertLess(time.monotonic()-started,.5)
+
+class AgentWarmupTest(unittest.TestCase):
+    def test_boot_reads_only_the_recorded_agent_inside_harness_releases(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);releases=root/'releases';agent=releases/'release-1'/'codex'
+            agent.parent.mkdir(parents=True);agent.write_bytes(b'x'*(3<<20))
+            data=root/'data';data.mkdir()
+            self.assertIsNone(helper.warm_agent(data,releases),'no record yet: nothing to read')
+            (data/helper.AGENT_RECORD).write_text(str(agent))
+            reader=helper.warm_agent(data,releases);self.assertIsNotNone(reader)
+            self.assertEqual(reader.wait(5),0,'a separate reader process reads it through')
+            outside=root/'elsewhere';outside.write_bytes(b'secret')
+            (data/helper.AGENT_RECORD).write_text(str(outside))
+            self.assertIsNone(helper.warm_agent(data,releases),'paths outside harness releases are ignored')
+            (data/helper.AGENT_RECORD).write_text(str(agent.parent))
+            self.assertIsNone(helper.warm_agent(data,releases),'directories are ignored')
+            link=releases/'release-1'/'link';link.symlink_to(outside)
+            (data/helper.AGENT_RECORD).write_text(str(link))
+            self.assertIsNone(helper.warm_agent(data,releases),'symlinks leaving releases are ignored')
+            record=data/helper.AGENT_RECORD;record.unlink();os.mkfifo(record)
+            started=time.monotonic()
+            self.assertIsNone(helper.warm_agent(data,releases),'a FIFO record is ignored without blocking')
+            self.assertLess(time.monotonic()-started,1)
+            record.unlink();record.symlink_to(data/'elsewhere-record')
+            self.assertIsNone(helper.warm_agent(data,releases),'a linked record is not followed')
+            record.unlink();record.write_text(str(agent)+' '*5000)
+            self.assertIsNone(helper.warm_agent(data,releases),'an oversized record is ignored')
+            (releases/'loop-a').symlink_to(releases/'loop-b');(releases/'loop-b').symlink_to(releases/'loop-a')
+            record.write_text(str(releases/'loop-a'))
+            self.assertIsNone(helper.warm_agent(data,releases),'a symlink loop is ignored')
 
 if __name__=='__main__':unittest.main()

@@ -19,7 +19,7 @@ profile_args = ["-PdeploymentProfile=staging"] if args.staging else []
 app_id = "sh.zuse.android.staging" if args.staging else "sh.zuse.android"
 subprocess.run(["cargo", "build", "-j", "2", "-p", "zuse-cli"], cwd=root, check=True)
 metadata = json.loads(subprocess.check_output(["cargo", "metadata", "--no-deps", "--format-version", "1"], cwd=root))
-binary = Path(metadata["target_directory"]) / "debug" / "zuse-server"
+binary = Path(metadata["target_directory"]) / "debug" / "zuse-cli"
 subprocess.run(["cargo", "build", "-j", "2", "--release", "-p", "zuse-mobile-bridge"], cwd=root, check=True)
 java = Path(os.environ["JAVA_HOME"])
 
@@ -38,7 +38,7 @@ with tempfile.TemporaryDirectory(prefix="zuse-native-acceptance-") as data:
     env["ZUSE_MOCK_QUESTION"] = "1"
     env["ZUSE_MOCK_DELAY_MS"] = "25"
     with open(Path(data) / "server.log", "w") as log:
-        server = subprocess.Popen([str(binary), "--listen", f"127.0.0.1:{port}", "--ipc-port", "0", "--data-dir", data], cwd=root, env=env, stdout=log, stderr=log)
+        server = subprocess.Popen([str(binary), "serve", "--listen", f"127.0.0.1:{port}", "--ipc-port", "0", "--data-dir", data], cwd=root, env=env, stdout=log, stderr=log)
         try:
             deadline = time.monotonic() + 60
             while True:

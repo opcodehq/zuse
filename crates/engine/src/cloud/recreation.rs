@@ -31,7 +31,15 @@ impl CloudApi {
                     .as_str()
                     .filter(|id| uuid::Uuid::parse_str(id).is_ok())
                     .ok_or_else(|| anyhow::anyhow!("Computer recreation request is missing."))?;
-                Some(json!({"idempotencyKey":key}))
+                // "latest" moves the computer onto the newest verified base
+                // (Update computer); without it recreation keeps its release.
+                match params.get("targetRelease").filter(|v| !v.is_null()) {
+                    None => Some(json!({"idempotencyKey":key})),
+                    Some(target) if target == "latest" => {
+                        Some(json!({"idempotencyKey":key,"targetRelease":"latest"}))
+                    }
+                    Some(_) => anyhow::bail!("Unknown computer recreation target."),
+                }
             }
             "status" | "retry" => {
                 let operation = params["operationId"]

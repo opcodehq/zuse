@@ -1,0 +1,16 @@
+{
+	"repository": "https://github.com/UsefulSoftwareCo/executor",
+	"commit": "50bea37fe5d146701990901a878ea940c5012564",
+	"sourceSha256": "fb47cde4ba0480204d9886f21cf104c8e96103798ac64c958bad8b72f34d7556",
+	"packages": [
+		"sdk",
+		"apps",
+		"app-cache",
+		"app-data",
+		"reactivity",
+		"telemetry",
+		"utils",
+		"fumadb-effect"
+	],
+	"effectRevision": "c7d1ffff31a3e2ae0b0b0796b742bddeb797269d"
+}

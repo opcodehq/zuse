@@ -187,6 +187,7 @@ impl AllocationProvider for RuntimeProvider {
             .await
     }
     async fn launch(&self, machine: &str, launch: &RuntimeLaunch) -> Result<(), ProviderError> {
+        let layout = super::machine_layout::Layout::for_provider(self.provider.id());
         let mut verification = String::new();
         if let Some(binding) = &self.artifact_binding {
             binding.validate(self.provider.id(), &binding.artifact_id)?;
@@ -201,19 +202,35 @@ impl AllocationProvider for RuntimeProvider {
                 verification = format!(
                     "set -eu\nprintf '%s\\n' {} {} | sha256sum -c - >/dev/null || exit 78\n",
                     quote(&format!(
-                        "{}  /usr/local/bin/zuse-cloud-runtime",
-                        binding.runtime_sha256
+                        "{}  {}",
+                        binding.runtime_sha256,
+                        layout.runtime_binary()
                     )),
                     quote(&format!(
-                        "{}  /opt/zuse/preparation/status/manifest.json",
-                        binding.manifest_sha256
+                        "{}  {}",
+                        binding.manifest_sha256,
+                        layout.image_manifest()
                     ))
                 );
             } else {
-                let result=self.startup_timings.measure("launchBinaryVerification",self.provider.execute(machine,"sha256sum /usr/local/bin/zuse-cloud-runtime /opt/zuse/preparation/status/manifest.json")).await?;
+                let check = format!(
+                    "sha256sum {} {}",
+                    layout.runtime_binary(),
+                    layout.image_manifest()
+                );
+                let result = self
+                    .startup_timings
+                    .measure(
+                        "launchBinaryVerification",
+                        self.provider.execute(machine, &check),
+                    )
+                    .await?;
                 let expected = format!(
-                    "{}  /usr/local/bin/zuse-cloud-runtime\n{}  /opt/zuse/preparation/status/manifest.json",
-                    binding.runtime_sha256, binding.manifest_sha256
+                    "{}  {}\n{}  {}",
+                    binding.runtime_sha256,
+                    layout.runtime_binary(),
+                    binding.manifest_sha256,
+                    layout.image_manifest()
                 );
                 if result.exit_code != 0
                     || std::str::from_utf8(&result.stdout).map(str::trim).ok()
@@ -223,7 +240,7 @@ impl AllocationProvider for RuntimeProvider {
                 }
             }
         }
-        let (staged, command) = launch_command(launch);
+        let (staged, command) = launch_command(launch, layout);
         let command = format!("{verification}{command}");
         self.startup_timings
             .measure(
@@ -361,13 +378,16 @@ impl RetainedProvider for RuntimeProvider {
         workspace: &str,
         api: &str,
     ) -> Result<(), ProviderError> {
+        let layout = super::machine_layout::Layout::for_provider(self.provider.id());
         let command = format!(
-            "sudo -n -u zuse env ZUSE_RUNTIME_RETAINED=true ZUSE_CLOUD_WORKSPACE_ID={} ZUSE_API_URL={} ZUSE_RUNTIME_GENERATION={} ZUSE_STORAGE_INCARNATION_ID={} ZUSE_RUNTIME_RESUME_OPERATION_ID={} /usr/local/lib/zuse/launch-rust-runtime",
+            "{} ZUSE_RUNTIME_RETAINED=true ZUSE_CLOUD_WORKSPACE_ID={} ZUSE_API_URL={} ZUSE_RUNTIME_GENERATION={} ZUSE_STORAGE_INCARNATION_ID={} ZUSE_RUNTIME_RESUME_OPERATION_ID={} {}",
+            layout.run_as_task(),
             quote(workspace),
             quote(api),
             d.generation,
             quote(&d.storage_incarnation_id),
-            quote(&d.operation_id)
+            quote(&d.operation_id),
+            layout.launcher()
         );
         if self
             .provider
@@ -440,9 +460,25 @@ impl super::recovery::RecoveryProvider for RuntimeProvider {
         }
         Ok(())
     }
+    async fn capture_status(
+        &self,
+        id: &str,
+        operation: &str,
+    ) -> Result<super::recovery::CaptureStatus, ProviderError> {
+        let layout = super::machine_layout::Layout::for_provider(self.provider.id());
+        let command = super::recovery::capture_status_command(
+            layout.run_as_task(),
+            layout.recovery_status_root(),
+            operation,
+        );
+        super::recovery::capture_status(&self.provider.execute(id, &command).await?)
+    }
     async fn stop_capture(&self, id: &str, operation: &str) -> Result<(), ProviderError> {
+        let layout = super::machine_layout::Layout::for_provider(self.provider.id());
         let command = format!(
-            "sudo -n -u zuse /usr/local/lib/zuse/launch-rust-recovery {} --cancel",
+            "{} {} {} --cancel",
+            layout.run_as_task(),
+            layout.recovery_launcher(),
             quote(operation)
         );
         if self.provider.execute(id, &command).await?.exit_code != 0 {

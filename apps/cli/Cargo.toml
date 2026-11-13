@@ -5,29 +5,23 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
+# The standalone `zuse` command, without the desktop window. Cargo names it
+# zuse-cli beside the desktop app's `zuse`; packages install it as `zuse`, and
+# as `zuse-server` for the old interface.
 [[bin]]
-name = "zuse-server"
+name = "zuse-cli"
 path = "src/main.rs"
 
 [dependencies]
-zuse-i18n.workspace = true
-tokio-util = { workspace = true, features = ["rt"] }
+zuse-commands.workspace = true
 zuse-engine.workspace = true
-zuse-serve.workspace = true
-zuse-protocol.workspace = true
-zuse-remote.workspace = true
-zuse-rpc.workspace = true
-zuse-mcp.workspace = true
-serde_json.workspace = true
-gethostname.workspace = true
-qrcode = { version = "0.14", default-features = false }
-tokio.workspace = true
-clap = { workspace = true, features = ["env"] }
+clap.workspace = true
 anyhow.workspace = true
-tracing-subscriber.workspace = true
 
 [dev-dependencies]
-async-trait.workspace = true
+zuse-rpc.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
 tempfile.workspace = true
 rcgen = "0.14"
 reqwest.workspace = true

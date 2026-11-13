@@ -66,6 +66,9 @@ jobs:
       # Downloads the pinned toolkit for its licence files; runs no dependency code.
       - run: cargo fetch --locked
       - run: python scripts/package.py --platform ${{ inputs.platform }} --arch ${{ inputs.arch }} --version "${{ inputs.version }}" --skip-build --output dist/release
+      # The standalone command must start and serve its web files without the
+      # desktop app's libraries, which this runner does not install.
+      - run: python scripts/verify-cli-archive.py dist/release/zuse-cli-*
       - uses: actions/upload-artifact@v4
         with:
           name: zuse-${{ inputs.platform }}-${{ inputs.arch }}
@@ -146,6 +149,8 @@ jobs:
           rm -f "$RUNNER_TEMP/certificate.p12"
           keychain="$RUNNER_TEMP/zuse-signing.keychain-db"
           if [ -e "$keychain" ]; then security delete-keychain "$keychain"; fi
+      # Only after the credentials are gone.
+      - run: python scripts/verify-cli-archive.py dist/release/zuse-cli-*
       - uses: actions/upload-artifact@v4
         with:
           name: zuse-macos-${{ inputs.arch }}

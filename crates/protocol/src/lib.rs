@@ -31,6 +31,7 @@ pub mod managed_connection;
 pub mod methods;
 pub mod motion;
 pub mod permission;
+pub mod plugin_mentions;
 pub mod plugins;
 pub mod pr_watch;
 pub mod presentation;
@@ -90,6 +91,8 @@ pub mod plugin_state;
 pub mod cloud_auth;
 
 pub mod cloud_lifecycle;
+
+pub mod cloud_runtime_updates;
 
 pub mod cloud_projects;
 

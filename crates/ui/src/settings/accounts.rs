@@ -587,17 +587,6 @@ impl AccountsPage {
         page
     }
 
-    /// Retarget the page at another device's logins: every accounts RPC is
-    /// relay-forwardable, so the whole page — list, usage probes, switch,
-    /// forget, login flows — follows the passthrough.
-    pub(crate) fn refresh_metadata(&mut self, cx: &mut Context<Self>) {
-        self.load(false, cx);
-    }
-
-    pub(crate) fn refresh_on_visit(&mut self, cx: &mut Context<Self>) {
-        self.load(force_usage_for(LoadTrigger::Refresh), cx);
-    }
-
     /// Review fixture: one live Claude login with usage meters.
     #[cfg(feature = "browser-fixture")]
     pub(crate) fn fixture_seed(&mut self, cx: &mut Context<Self>) {
@@ -626,11 +615,6 @@ impl AccountsPage {
             warnings: Vec::new(),
         });
         cx.notify();
-    }
-
-    #[cfg(test)]
-    pub(crate) fn embedded_harness(&self) -> Option<HarnessId> {
-        self.embedded_harness
     }
 
     /// Params with the `targetDeviceId` passthrough merged in.
@@ -1092,16 +1076,6 @@ impl AccountsPage {
             }));
         }
         cx.notify();
-    }
-
-    /// Escape that reached Settings unclaimed cancels an open login first,
-    /// so it never closes Settings under the dialog. Returns whether it did.
-    pub(crate) fn dismiss_on_escape(&mut self, cx: &mut Context<Self>) -> bool {
-        if self.login.is_none() {
-            return false;
-        }
-        self.cancel_login(cx);
-        true
     }
 
     fn retry_login(&mut self, cx: &mut Context<Self>) {

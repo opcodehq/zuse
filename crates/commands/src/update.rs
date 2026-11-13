@@ -53,7 +53,7 @@ pub async fn update(edge_url: &str, check_only: bool) -> anyhow::Result<()> {
                 "downloading {}…",
                 zuse_update::mac_app_artifact(&manifest.version)
             );
-            let data_dir = super::paths::data_dir();
+            let data_dir = crate::paths::data_dir();
             let staged = zuse_update::stage_mac_app(edge_url, &manifest, &data_dir).await?;
             zuse_update::apply_mac_app(&staged, &bundle)?;
             println!("updated {} — relaunch Zuse to finish.", bundle.display());

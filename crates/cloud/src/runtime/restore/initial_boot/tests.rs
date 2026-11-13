@@ -15,6 +15,11 @@ struct Probe {
     installed: AtomicBool,
     uploads: AtomicUsize,
     launches: AtomicUsize,
+    /// The restore target is hibernated until a wake lands.
+    asleep: AtomicBool,
+    /// Each wake submission: `true` lands, `false` fails without an answer.
+    wakes: Mutex<Vec<bool>>,
+    wake_calls: AtomicUsize,
 }
 impl Probe {
     async fn check_proof(&self) {
@@ -45,7 +50,11 @@ impl AllocationProvider for Probe {
         Ok(Some(Machine {
             id: "restore-target".into(),
             name: "restore-original".into(),
-            state: MachineState::Running,
+            state: if self.asleep.load(Ordering::SeqCst) {
+                MachineState::Paused
+            } else {
+                MachineState::Running
+            },
             vcpu: None,
             memory_bytes: None,
         }))
@@ -145,8 +154,15 @@ impl RecoveryProvider for Probe {
     async fn inspect(&self, id: &str) -> Result<Option<Machine>, ProviderError> {
         AllocationProvider::find(self, id).await
     }
-    async fn wake(&self, _: &str, _: &MachineState) -> Result<(), ProviderError> {
-        panic!("running target")
+    async fn wake(&self, id: &str, state: &MachineState) -> Result<(), ProviderError> {
+        assert_eq!((id, state), ("restore-target", &MachineState::Paused));
+        let landed = self.wakes.lock().unwrap().remove(0);
+        self.wake_calls.fetch_add(1, Ordering::SeqCst);
+        if !landed {
+            return Err(ProviderError::OutcomeUnknown);
+        }
+        self.asleep.store(false, Ordering::SeqCst);
+        Ok(())
     }
     async fn capture(&self, _: &CapturePlan) -> Result<(), ProviderError> {
         panic!("restore only")
@@ -297,6 +313,9 @@ async fn fresh_restore_boot_reconciles_original_and_fences_credentials_after_hel
             installed: AtomicBool::new(false),
             uploads: AtomicUsize::new(0),
             launches: AtomicUsize::new(0),
+            asleep: AtomicBool::new(false),
+            wakes: Mutex::new(vec![]),
+            wake_calls: AtomicUsize::new(0),
         };
         let result = control
             .restore_once(&probe, chrono::Utc::now().timestamp_millis())
@@ -349,6 +368,180 @@ async fn fresh_restore_boot_reconciles_original_and_fences_credentials_after_hel
             .unwrap();
             assert!(c["initialRuntimeBootstrapReceipt"].is_null());
             assert!(c["rustRecoveryRestore"].is_null());
+        }
+        pool.close().await;
+        sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+            .execute(&admin)
+            .await
+            .unwrap();
+    }
+    admin.close().await;
+}
+
+/// An unanswered restore wake is resolved by inspection, like recovery's.
+#[tokio::test]
+#[ignore = "requires isolated localhost PostgreSQL"]
+async fn unanswered_restore_wake_is_resubmitted_only_when_the_target_is_still_asleep_and_is_bounded()
+ {
+    use crate::runtime::recovery::{EFFECT_MAX_SUBMISSIONS, EFFECT_SETTLE_MS};
+    let url = std::env::var("ZUSE_CLOUD_TEST_DATABASE_URL").unwrap();
+    assert!(matches!(
+        reqwest::Url::parse(&url).unwrap().host_str(),
+        Some("localhost" | "127.0.0.1" | "::1")
+    ));
+    let admin = PgPool::connect(&url).await.unwrap();
+    for lands in [true, false] {
+        let schema = format!("restore_wake_{}", uuid::Uuid::new_v4().simple());
+        sqlx::query(&format!("CREATE SCHEMA {schema}"))
+            .execute(&admin)
+            .await
+            .unwrap();
+        let scope = schema.clone();
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(4)
+            .after_connect(move |c, _| {
+                let scope = scope.clone();
+                Box::pin(async move {
+                    sqlx::query(&format!("SET search_path={scope}"))
+                        .execute(c)
+                        .await?;
+                    Ok(())
+                })
+            })
+            .connect(&url)
+            .await
+            .unwrap();
+        for sql in [
+            include_str!("../../../../tests/fixtures/legacy-catalog.sql"),
+            include_str!("../../../../tests/fixtures/billing.sql"),
+            jobs::MIGRATION,
+            crate::runtime::lifecycle::MIGRATION,
+            crate::runtime::recovery::MIGRATION,
+            crate::runtime::restore::MIGRATION,
+            include_str!("../../../../migrations/0012_provider_receipts.sql"),
+            include_str!("../../../../migrations/0013_recovery_receipts.sql"),
+            include_str!("../../../../migrations/0014_restore_receipts.sql"),
+        ] {
+            sqlx::raw_sql(sql).execute(&pool).await.unwrap();
+        }
+        sqlx::query("INSERT INTO api_cloud_billing_periods(period_id,account_id,status,period_start,period_end,base_price_micros,included_provider_cost_micros,markup_basis_points,overage_cap_micros,updated_at) VALUES('period','user-bob','active',0,9999999999999,0,1000000000,0,0,0)").execute(&pool).await.unwrap();
+        let signing = ed25519_dalek::SigningKey::from_bytes(&[76; 32]);
+        let jwk = json!({"kty":"OKP","crv":"Ed25519","d":URL_SAFE_NO_PAD.encode([76;32]),"x":URL_SAFE_NO_PAD.encode(signing.verifying_key().as_bytes())});
+        let control = RuntimeControl::from_pool(
+            pool.clone(),
+            MasterKey::parse(&URL_SAFE_NO_PAD.encode([77; 32])).unwrap(),
+            TicketSigner::from_jwk(&jwk.to_string(), "https://api.example.test").unwrap(),
+        );
+        let manifest = json!({"version":1,"operationId":"archive-original","workspaceId":"ws-bob","chatId":"chat-bob","sessionId":"session-bob","chunks":["a".repeat(64)],"archiveSha256":"b".repeat(64)});
+        let archive = json!({"version":1,"id":"archive-original","sourceSandboxId":"old-source","archivedAtMs":1,"expiresAtMs":9999999999999_i64,"phase":"restoring","verifiedChunks":1,"manifest":manifest});
+        let binding = json!({"operationId":"archive-original","workspaceId":"ws-bob","chatId":"chat-bob","sessionId":"session-bob","rustStorage":{"accountId":"user-bob","database":"engine.sqlite","storageIncarnationId":"original-disk"}});
+        let config = json!({"runtimeGeneration":3,"gatewayEpoch":3,"rustProviderControllerVersion":1,"recoveryArchive":archive,"rustRuntimeStorage":{"storageIncarnationId":"original-disk"},"rustRestoreOperationId":"restore-original"});
+        sqlx::query("UPDATE api_cloud_workspaces SET provider='boxd',state='provisioning',desired_state='ready',runtime_state='offline',provider_sandbox_id='restore-target',request_config=$1 WHERE workspace_id='ws-bob'").bind(config).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO zuse_rust_control_owners VALUES('workspace','ws-bob','rust',3,0)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO zuse_rust_recovery_operations(operation_id,workspace_id,generation,restore_generation,source_machine_id,storage_incarnation_id,binding,phase,manifest,expires_at,verified_at,verified_archive_sha256,created_at,updated_at) VALUES('archive-original','ws-bob',2,3,'old-source','original-disk',$1,'restoring',$2,9999999999999,1,$3,1,1)").bind(binding).bind(manifest).bind("b".repeat(64)).execute(&pool).await.unwrap();
+        // The stuck shape: an unanswered wake written before records carried a time.
+        sqlx::query("INSERT INTO zuse_rust_restores(operation_id,archive_operation_id,workspace_id,generation,command_id,snapshot_id,machine_name,machine_id,sealed_boot_token,boot_expires_at,phase,created_at,updated_at,provider_effects) VALUES('restore-original','archive-original','ws-bob',3,'restore-command','managed-artifact','restore-original','restore-target','sealed',9999999999999,'allocated',1,1,$1)").bind(json!({"wake":{"state":"uncertain","receipt":null,"requestId":"original-wake"}})).execute(&pool).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        jobs::enqueue(
+            &mut tx,
+            "restore-test",
+            JOB_KIND,
+            "ws-bob",
+            3,
+            &json!({"operationId":"restore-original"}),
+            chrono::Utc::now().timestamp_millis(),
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+        let probe = Probe {
+            pool: pool.clone(),
+            mode: "ready",
+            boat: false,
+            calls: AtomicUsize::new(0),
+            starts: Mutex::new(None),
+            installed: AtomicBool::new(false),
+            uploads: AtomicUsize::new(0),
+            launches: AtomicUsize::new(0),
+            asleep: AtomicBool::new(true),
+            wakes: Mutex::new(vec![lands; EFFECT_MAX_SUBMISSIONS as usize]),
+            wake_calls: AtomicUsize::new(0),
+        };
+        let claim = |pool: PgPool| async move {
+            let job = {
+                sqlx::query("UPDATE zuse_rust_jobs SET due_at=0,lease_expires_at=0")
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+                jobs::claim(
+                    &pool,
+                    JOB_KIND,
+                    "workspace",
+                    chrono::Utc::now().timestamp_millis(),
+                    120000,
+                )
+                .await
+                .unwrap()
+                .unwrap()
+            };
+            job
+        };
+        let age = |pool: PgPool| async move {
+            sqlx::query("UPDATE zuse_rust_restores SET provider_effects=jsonb_set(provider_effects,'{wake,recordedAtMs}',to_jsonb($1::bigint))").bind(chrono::Utc::now().timestamp_millis() - EFFECT_SETTLE_MS).execute(&pool).await.unwrap();
+        };
+        let effect = |pool: PgPool| async move {
+            sqlx::query_scalar::<_, Value>(
+                "SELECT provider_effects->'wake' FROM zuse_rust_restores",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        };
+        let machine = || RecoveryProvider::inspect(&probe, "restore-target");
+        // First observation only starts the settle window.
+        let job = claim(pool.clone()).await;
+        let target = machine().await.unwrap().unwrap();
+        assert!(!control.restore_wake(&probe, &job, &target).await.unwrap());
+        assert_eq!(probe.wake_calls.load(Ordering::SeqCst), 0);
+        if lands {
+            age(pool.clone()).await;
+            let job = claim(pool.clone()).await;
+            let target = machine().await.unwrap().unwrap();
+            assert!(!control.restore_wake(&probe, &job, &target).await.unwrap());
+            assert_eq!(probe.wake_calls.load(Ordering::SeqCst), 1);
+            let record = effect(pool.clone()).await;
+            assert_eq!(record["state"], "accepted");
+            assert_eq!(record["submissions"], 2);
+            let job = claim(pool.clone()).await;
+            let target = machine().await.unwrap().unwrap();
+            assert!(control.restore_wake(&probe, &job, &target).await.unwrap());
+            assert_eq!(effect(pool.clone()).await["state"], "completed");
+        } else {
+            let mut last = None;
+            for _ in 0..EFFECT_MAX_SUBMISSIONS {
+                age(pool.clone()).await;
+                let job = claim(pool.clone()).await;
+                let target = machine().await.unwrap().unwrap();
+                last = control.restore_wake(&probe, &job, &target).await.err();
+            }
+            assert_eq!(
+                probe.wake_calls.load(Ordering::SeqCst),
+                EFFECT_MAX_SUBMISSIONS as usize - 1
+            );
+            assert!(last.is_some());
+            let job = claim(pool.clone()).await;
+            let target = machine().await.unwrap().unwrap();
+            assert_eq!(
+                control
+                    .restore_wake(&probe, &job, &target)
+                    .await
+                    .unwrap_err()
+                    .code,
+                "cloud_restore_wake_failed"
+            );
         }
         pool.close().await;
         sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))

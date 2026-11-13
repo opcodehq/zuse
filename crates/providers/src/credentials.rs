@@ -3,6 +3,10 @@ pub mod redaction;
 use crate::{HarnessError, process::Command};
 use async_trait::async_trait;
 use zeroize::Zeroizing;
+use zuse_protocol::RunRequest;
+
+/// Environment a host injects into one agent process: a brokered credential,
+/// or a whole endpoint (base URL plus access key).
 pub struct ChildEnvironment {
     values: Vec<(String, Zeroizing<String>)>,
 }
@@ -29,6 +33,13 @@ impl ChildEnvironment {
         self.values = workload;
         self
     }
+    /// The value set for `key`, if any.
+    pub fn get(&self, key: &str) -> Option<&str> {
+        self.values
+            .iter()
+            .find(|(name, _)| name == key)
+            .map(|(_, value)| value.as_str())
+    }
     pub(crate) fn external_grok_auth(&self) -> bool {
         self.values
             .iter()
@@ -43,10 +54,6 @@ impl ChildEnvironment {
             .env_remove("OPENAI_API_KEY")
             .env_remove("CODEX_API_KEY")
             .env_remove("CODEX_ACCESS_TOKEN")
-            .env_remove("BOXD_API_KEY")
-            .env_remove("BOAT_API_KEY")
-            .env_remove("E2B_API_KEY")
-            .env_remove("DAYTONA_API_KEY")
             .env_remove("CLOUD_DATA_ENCRYPTION_KEY")
             .env_remove("CLOUD_CREDENTIAL_VAULT_KEY")
             .env_remove("RELAY_MINT_PRIVATE_JWK")
@@ -57,6 +64,9 @@ impl ChildEnvironment {
             .env_remove("ZUSE_GROK_AUTH_SOCKET")
             .env_remove("GROK_OIDC_ISSUER")
             .env_remove("GROK_OIDC_CLIENT_ID");
+        for id in zuse_protocol::cloud_computers::ProviderId::ALL {
+            command.env_remove(id.api_key_env());
+        }
         for (key, value) in &self.values {
             command.env(key, value.as_str());
         }
@@ -69,6 +79,20 @@ pub trait CredentialResolver: Send + Sync {
     /// bypass cached grants here, without forcing an OAuth-token refresh.
     async fn before_turn(&self) -> Result<ChildEnvironment, HarnessError> {
         self.environment().await
+    }
+    /// The environment for one run, which may carry host stamps (a Claude
+    /// connection). `Ok(None)` leaves the process on whatever login it would
+    /// use anyway. Defaults to [`Self::environment`].
+    async fn environment_for(
+        &self,
+        _request: Option<&zuse_protocol::RunRequest>,
+    ) -> Result<Option<ChildEnvironment>, HarnessError> {
+        self.environment().await.map(Some)
+    }
+    /// Whether a retained process re-checks this authority before each turn.
+    /// A resolver whose runs are restarted by their own stamps opts out.
+    fn revalidates(&self) -> bool {
+        true
     }
 }
 
@@ -149,6 +173,24 @@ mod retained_tests {
         assert!(!error.contains("private"));
         *resolver.0.lock().unwrap() = None;
         assert!(live.validate().await.is_err());
+    }
+    #[test]
+    fn apply_removes_every_cloud_provider_key() {
+        let mut command = Command::new("probe");
+        ChildEnvironment::empty().apply(&mut command);
+        let removed: Vec<String> = command
+            .as_std_mut()
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(key, _)| key.to_string_lossy().into_owned())
+            .collect();
+        for id in zuse_protocol::cloud_computers::ProviderId::ALL {
+            assert!(
+                removed.iter().any(|key| key == id.api_key_env()),
+                "{} reaches brokered processes",
+                id.api_key_env()
+            );
+        }
     }
 }
 

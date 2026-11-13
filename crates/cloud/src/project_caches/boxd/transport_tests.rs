@@ -415,6 +415,7 @@ fn operation() -> Operation {
                     service_sha256: "c".repeat(64),
                     manifest_sha256: "d".repeat(64),
                     helper_sha256: "e".repeat(64),
+                    runtime_update_helper_sha256: None,
                 },
             ),
             source_bundle_sha256: format!("{:x}", Sha256::digest(b"public-source-fixture")),

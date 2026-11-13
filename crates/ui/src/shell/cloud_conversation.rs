@@ -5,7 +5,7 @@ use crate::state::CloudTarget;
 use serde_json::{Value, json};
 mod activity;
 mod computer;
-mod ssh;
+
 pub(super) use computer::Tone;
 mod history;
 
@@ -40,6 +40,8 @@ pub(super) struct CloudConversation {
     execution: Option<Task<()>>,
     operation: Option<Task<()>>,
     sleep_command: Option<String>,
+    /// A message's files asked for a wake while a sleep was still running.
+    wake_after_sleep: bool,
     computer: computer::State,
     _subscriptions: Vec<Subscription>,
 }
@@ -132,6 +134,10 @@ impl CloudConversation {
                 ComposerEvent::CloudLaunchChanged => this.refresh_history(cx),
                 ComposerEvent::CloudForegroundAdmitted => this.foreground_admitted(cx),
                 ComposerEvent::CloudSleepRequested => this.sleep(cx),
+                ComposerEvent::CloudWakeRequested => this.wake_for_upload(cx),
+                ComposerEvent::CloudComputerRecreating { recreation } => {
+                    this.computer_recreation_started(recreation.clone(), cx)
+                }
                 ComposerEvent::Sent {
                     chat_id,
                     message_id,
@@ -197,6 +203,7 @@ impl CloudConversation {
             execution: None,
             operation: None,
             sleep_command: None,
+            wake_after_sleep: false,
             computer: computer::State::default(),
             _subscriptions: subscriptions,
         };
@@ -414,37 +421,59 @@ impl CloudConversation {
             && self.state.read(cx).engine().is_some()
             && matches!(self.state.read(cx).connection, ConnectionStatus::Ready)
     }
+    /// Authorize this chat while the signed-in account is its owner. The
+    /// watch never ends on its own: a different account (or signing out)
+    /// withdraws access and the owner's return restores it, and a dropped
+    /// status stream (an engine restart) is resubscribed. Ending it on the
+    /// first mismatch used to hide the composer until the chat was reopened.
     fn watch_account(&mut self, cx: &mut Context<Self>) {
         let target = self.target.clone();
         self.account = Some(cx.spawn(async move |this, cx| {
-            let result = target
-                .controller
-                .client()
-                .subscribe_scoped(methods::CLOUD_ACCOUNT_STATUS, json!({}))
-                .await;
-            let Ok(mut stream) = result else {
-                let _ = this.update(cx, |this, cx| this.revoke(cx));
-                return;
-            };
-            while let Some(value) = stream.recv().await {
-                if value["user"]["id"].as_str() != Some(target.subject.as_str())
-                    || value["orgId"].as_str() != target.organization.as_deref()
+            loop {
+                let result = target
+                    .controller
+                    .client()
+                    .subscribe_scoped(methods::CLOUD_ACCOUNT_STATUS, json!({}))
+                    .await;
+                if let Ok(mut stream) = result {
+                    while let Some(value) = stream.recv().await {
+                        let owner = value["user"]["id"].as_str() == Some(target.subject.as_str())
+                            && value["orgId"].as_str() == target.organization.as_deref();
+                        let loading = value["user"].is_null();
+                        let alive = this.update(cx, |this, cx| {
+                            if owner {
+                                if !this.authorized {
+                                    this.authorized = true;
+                                    this.access_revoked = false;
+                                    this.read_provisional_history(cx);
+                                    this.refresh_history(cx);
+                                    this.watch_environment(false, cx);
+                                    this.watch_events(cx);
+                                    cx.notify();
+                                }
+                            } else if this.authorized || !(loading || this.access_revoked) {
+                                this.revoke(cx);
+                            }
+                        });
+                        if alive.is_err() {
+                            return;
+                        }
+                    }
+                }
+                if this
+                    .update(cx, |this, cx| {
+                        if this.authorized {
+                            this.revoke(cx);
+                        }
+                    })
+                    .is_err()
                 {
-                    let _ = this.update(cx, |this, cx| this.revoke(cx));
                     return;
                 }
-                let _ = this.update(cx, |this, cx| {
-                    if !this.authorized {
-                        this.authorized = true;
-                        this.access_revoked = false;
-                        this.read_provisional_history(cx);
-                        this.refresh_history(cx);
-                        this.watch_environment(false, cx);
-                        this.watch_events(cx);
-                    }
-                });
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(2))
+                    .await;
             }
-            let _ = this.update(cx, |this, cx| this.revoke(cx));
         }));
     }
     fn revoke(&mut self, cx: &mut Context<Self>) {
@@ -662,6 +691,19 @@ impl CloudConversation {
         }
         self.refresh_history(cx);
     }
+    /// Wake the computer so a message's files can go straight to it.
+    fn wake_for_upload(&mut self, cx: &mut Context<Self>) {
+        if self.ready(cx) {
+            return;
+        }
+        // A sleep in progress would drop the wake; start it once sleep ends.
+        if self.operation.is_some() {
+            self.wake_after_sleep = true;
+            return;
+        }
+        self.environment = None;
+        self.watch_environment(true, cx);
+    }
     fn watch_environment(&mut self, interactive: bool, cx: &mut Context<Self>) {
         if !self.authorized
             || interactive
@@ -765,6 +807,10 @@ impl CloudConversation {
                     Ok(value) => {
                         this.sleep_command = None;
                         this.apply_computer_metadata(&value["workspace"], cx);
+                        if std::mem::take(&mut this.wake_after_sleep) {
+                            this.environment = None;
+                            this.watch_environment(true, cx);
+                        }
                     }
                     Err(error) => {
                         this.error = Some(error.to_string());
@@ -891,7 +937,7 @@ impl Shell {
                                 .child(crate::loaders::mini_glyph_spinner(
                                     "cloud-launch-working",
                                     2.5,
-                                    theme.glyph,
+                                    theme.loader_glyph(),
                                     cx.entity_id(),
                                     cx,
                                 ))
@@ -2288,6 +2334,102 @@ mod tests {
             assert_eq!(shell.composer.read(cx).input.read(cx).text(), "");
         });
     }
+    #[gpui::test]
+    fn files_dropped_on_a_cloud_chat_attach_to_its_displayed_composer(cx: &mut TestAppContext) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _entered = runtime.enter();
+        let directory = tempfile::tempdir().unwrap();
+        cx.update(|cx| {
+            initialize(cx);
+            gpui_tokio::init_from_handle(cx, runtime.handle().clone());
+            settings::init(UiSettings::default(), directory.path(), cx);
+            crate::history::init(
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                cx,
+            );
+        });
+        let controller = crate::state::EngineHandle::from_test_client(zuse_rpc::memory_client(
+            std::sync::Arc::new(PendingController),
+        ));
+        let (host, cx) = cx.add_window_view(|_, cx| {
+            let shell = cx.new(|cx| {
+                let state = cx.new(|_| {
+                    let mut state = AppState::new();
+                    account(&mut state);
+                    state
+                });
+                let mut shell = Shell::new(state, boot(directory.path()), cx);
+                shell.open_cloud_conversation(
+                    CloudTarget {
+                        controller,
+                        subject: "owner".into(),
+                        organization: None,
+                        workspace: "task".into(),
+                        initial_session: "session".into(),
+                    },
+                    json!({"workspaceId":"task","initialSessionId":"session"}),
+                    json!({"firstMessage":"Accepted task","agent":"codex","model":"fixture"}),
+                    cx,
+                );
+                shell
+                    .cloud_conversation
+                    .as_ref()
+                    .unwrap()
+                    .update(cx, |conversation, _| conversation.authorized = true);
+                shell
+            });
+            ConversationHost {
+                shell,
+                _directory: directory,
+            }
+        });
+        let shell = host.read_with(cx, |host, _| host.shell.clone());
+        cx.update(|window, cx| window.draw(cx).clear());
+        let files = tempfile::tempdir().unwrap();
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::RgbImage::new(1, 1)
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        std::fs::write(files.path().join("shot.png"), png.into_inner()).unwrap();
+        let to = cx.debug_bounds("chat-dropzone").unwrap().center();
+        let paths = gpui::ExternalPaths(vec![files.path().join("shot.png")].into());
+        cx.simulate_event(gpui::FileDropEvent::Entered {
+            position: to,
+            paths,
+        });
+        cx.update(|window, cx| window.draw(cx).clear());
+        cx.simulate_event(gpui::FileDropEvent::Pending { position: to });
+        cx.update(|window, cx| window.draw(cx).clear());
+        cx.simulate_event(gpui::FileDropEvent::Submit { position: to });
+        cx.run_until_parked();
+        shell.read_with(cx, |shell, cx| {
+            let names = |composer: &Entity<Composer>| {
+                composer
+                    .read(cx)
+                    .staged()
+                    .iter()
+                    .map(|file| file.name.clone())
+                    .collect::<Vec<_>>()
+            };
+            let shown = names(&shell.conversation_composer(cx));
+            assert_eq!(
+                shown.len(),
+                1,
+                "the drop lands in the composer the cloud chat shows"
+            );
+            assert!(shown[0].ends_with(".png"), "{shown:?}");
+            assert!(
+                names(&shell.composer).is_empty(),
+                "not the hidden local composer"
+            );
+        });
+    }
     struct ProvisionalHistoryController {
         fresh_failure: Option<&'static str>,
         events: std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<Value>>>,
@@ -2769,5 +2911,104 @@ mod tests {
         cx: &mut TestAppContext,
     ) {
         provisional_cache_fixture(cx, "workspace-missing");
+    }
+    struct AccountChanges {
+        statuses: std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<Value>>>,
+    }
+    #[async_trait::async_trait]
+    impl zuse_rpc::RpcService for AccountChanges {
+        async fn handle(
+            &self,
+            method: &str,
+            _params: Value,
+        ) -> Result<zuse_rpc::RpcReply, zuse_rpc::RpcError> {
+            match method {
+                methods::CLOUD_ACCOUNT_STATUS => {
+                    let mut rx = self
+                        .statuses
+                        .lock()
+                        .unwrap()
+                        .take()
+                        .expect("one subscription");
+                    Ok(zuse_rpc::RpcReply::Stream(Box::pin(
+                        futures::stream::poll_fn(move |cx| rx.poll_recv(cx)),
+                    )))
+                }
+                methods::CLOUD_HISTORY => Ok(zuse_rpc::RpcReply::Value(retained_history(false))),
+                methods::CLOUD_EVENTS | methods::CLOUD_ENVIRONMENT => Ok(
+                    zuse_rpc::RpcReply::Stream(Box::pin(futures::stream::pending())),
+                ),
+                _ => Err(zuse_rpc::RpcError::UnknownMethod(method.into())),
+            }
+        }
+    }
+
+    #[gpui::test]
+    fn a_passing_account_mismatch_does_not_hide_the_composer_for_good(cx: &mut TestAppContext) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _entered = runtime.enter();
+        cx.update(|cx| {
+            initialize(cx);
+            gpui_tokio::init_from_handle(cx, runtime.handle().clone());
+        });
+        let (statuses, rx) = tokio::sync::mpsc::unbounded_channel();
+        let controller = crate::state::EngineHandle::from_test_client(zuse_rpc::memory_client(
+            std::sync::Arc::new(AccountChanges {
+                statuses: std::sync::Mutex::new(Some(rx)),
+            }),
+        ));
+        let directory = tempfile::tempdir().unwrap();
+        let view = cx.new(|cx| {
+            CloudConversation::new(
+                CloudTarget {
+                    controller,
+                    subject: "owner".into(),
+                    organization: None,
+                    workspace: "task".into(),
+                    initial_session: "session".into(),
+                },
+                json!({"workspaceId":"task","agent":"codex","model":"gpt-6.1-sol","runtimeMode":"full-access"}),
+                Value::Null,
+                boot(directory.path()),
+                cx,
+            )
+        });
+        let mut pump = |cx: &mut TestAppContext| {
+            for _ in 0..12 {
+                cx.run_until_parked();
+                runtime.block_on(tokio::task::yield_now());
+            }
+        };
+        let composer_shown = |view: &Entity<CloudConversation>, cx: &mut TestAppContext| {
+            view.read_with(cx, |view, _| {
+                view.authorized && view.computer.composer_enabled()
+            })
+        };
+        // Sign-in still loading: no user yet.
+        statuses.send(json!({"user":null,"orgId":null})).unwrap();
+        pump(cx);
+        assert!(!composer_shown(&view, cx));
+        // The owner's session arrives: the chat opens.
+        statuses
+            .send(json!({"user":{"id":"owner"},"orgId":null}))
+            .unwrap();
+        pump(cx);
+        assert!(composer_shown(&view, cx), "the owner can send");
+        // Another account takes over: access is withdrawn...
+        statuses
+            .send(json!({"user":{"id":"someone-else"},"orgId":null}))
+            .unwrap();
+        pump(cx);
+        assert!(!composer_shown(&view, cx));
+        view.read_with(cx, |view, _| assert!(view.access_revoked));
+        // ...and given back when the owner returns, without reopening the chat.
+        statuses
+            .send(json!({"user":{"id":"owner"},"orgId":null}))
+            .unwrap();
+        pump(cx);
+        assert!(composer_shown(&view, cx), "the owner can send again");
     }
 }
