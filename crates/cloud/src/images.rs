@@ -17,6 +17,13 @@ pub struct ImageConfig {
     pub base_version: u64,
     pub template_version: String,
     pub max_cache_bytes: u64,
+    /// New repository-baking builds are retired: account images are built
+    /// from the setup script (`project_caches::user_images`). This builder
+    /// only finishes in-flight builds and deletes legacy snapshots, unless a
+    /// deployment that still has no credential authority opts back in with
+    /// `ZUSE_CLOUD_LEGACY_IMAGE_BUILDS=1`. Never part of a stored operation.
+    #[serde(default, skip_serializing)]
+    pub legacy_builds: bool,
 }
 impl ImageConfig {
     pub fn from_env() -> anyhow::Result<Option<Self>> {
@@ -32,6 +39,7 @@ impl ImageConfig {
             base_version: std::env::var("ZUSE_CLOUD_RUST_IMAGE_BASE_VERSION")?.parse()?,
             template_version: std::env::var("ZUSE_CLOUD_RUST_IMAGE_TEMPLATE_VERSION")?,
             max_cache_bytes: 4 * 1024 * 1024 * 1024,
+            legacy_builds: std::env::var("ZUSE_CLOUD_LEGACY_IMAGE_BUILDS").as_deref() == Ok("1"),
         };
         anyhow::ensure!(
             !config.base_snapshot.is_empty()
@@ -141,6 +149,9 @@ impl ImageControl {
         at: i64,
     ) -> Result<(), ApiError> {
         let account = &access.owner_id;
+        if !self.config.legacy_builds {
+            return Err(ApiError::conflict("cloud_image_builds_retired"));
+        }
         if request.provider_id.as_deref().is_some_and(|p| p != "boxd") {
             return Err(ApiError::conflict("cloud_provider_unavailable"));
         }

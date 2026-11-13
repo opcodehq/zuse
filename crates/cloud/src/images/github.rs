@@ -178,6 +178,7 @@ mod tests {
                 base_version: 1,
                 template_version: "template".into(),
                 max_cache_bytes: 1024,
+                legacy_builds: true,
             },
             plan: ImagePlan {
                 managed_base: false,
