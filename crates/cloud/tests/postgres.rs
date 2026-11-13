@@ -6316,6 +6316,8 @@ async fn billing_portal_preserves_provider_customer_and_owner() {
 #[path = "cases/launch_assets.rs"]
 mod launch_assets;
 
+#[path = "cases/machine_delivery.rs"]
+mod machine_delivery;
 #[path = "cases/plugins.rs"]
 mod plugins;
 #[path = "cases/startup_binding.rs"]
