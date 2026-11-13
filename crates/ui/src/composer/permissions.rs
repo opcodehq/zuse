@@ -1,8 +1,6 @@
 //! Access picks configure the current chat and become the global new-chat default.
 use super::*;
-use crate::localization::message as tr;
 use crate::{icons, popover};
-use zuse_i18n::messages as msg;
 
 use zuse_protocol::presentation::{ACCESS_LEVELS as LEVELS, access_details};
 fn label(level: SandboxLevel) -> &'static str {
@@ -31,6 +29,24 @@ fn effective(level: SandboxLevel, harness: Option<&HarnessId>) -> SandboxLevel {
         level
     }
 }
+/// Full access's own tone: a warm orange that reads as "unlocked" without
+/// borrowing the error red or the attention yellow used elsewhere.
+pub(super) fn full_access_tone(theme: &Theme) -> gpui::Hsla {
+    if theme.appearance.is_dark() {
+        gpui::hsla(24. / 360., 0.78, 0.64, 1.)
+    } else {
+        gpui::hsla(22. / 360., 0.72, 0.46, 1.)
+    }
+}
+
+/// The tint an access level's icon and label take in the trigger and menu.
+fn level_tone(level: SandboxLevel, theme: &Theme) -> Option<gpui::Hsla> {
+    match level {
+        SandboxLevel::DangerFullAccess => Some(full_access_tone(theme)),
+        _ => None,
+    }
+}
+
 impl Composer {
     /// Apply an access choice to the draft or selected chat and remember it globally.
     fn choose_permission(
@@ -192,15 +208,18 @@ impl Composer {
             && !self.native_cloud_task()
             && !pending
             && self.state.read(cx).configuration_blocked();
-        // Safe modes rest muted and brighten on hover; full access stays in
-        // the warning tone so the unlocked state is never mistaken for them.
+        // Just the level's glyph (its name is the tooltip): muted at rest,
+        // brighter on hover, orange only while full access is on.
+        let _ = icon_only;
         let full_access = selected == SandboxLevel::DangerFullAccess;
         let hover_key: SharedString = format!("composer-permission-{}", cx.entity_id()).into();
+        let full_tone = full_access_tone(theme);
         let tint = if full_access {
-            theme.warning
+            full_tone
         } else {
             motion::hover_blend(&hover_key, theme.text_muted, theme.text)
         };
+        let glyph_tint = level_tone(selected, theme).unwrap_or(tint);
         div()
             .id("composer-permissions")
             .relative()
@@ -217,11 +236,10 @@ impl Composer {
                     .aria_label(format!("Permission mode: {}", label(selected)))
                     .aria_expanded(self.permission_open)
                     .tab_index(0)
-                    .h(px(28.))
-                    .px(px(if icon_only { 7. } else { 10. }))
+                    .size(px(28.))
                     .flex()
                     .items_center()
-                    .gap(px(6.))
+                    .justify_center()
                     .rounded(px(7.))
                     .text_size(crate::typography::text_xs())
                     .font_weight(gpui::FontWeight::MEDIUM)
@@ -230,34 +248,27 @@ impl Composer {
                     // An unconfirmed mode keeps its name, dimmed, so the
                     // control doesn't change width while the chat connects.
                     .when(pending || unconfirmed, |view| view.opacity(0.5))
-                    .bg(if self.permission_open {
-                        theme.muted_fill().opacity(0.7)
-                    } else {
-                        motion::hover_blend(
+                    .bg(match (full_access, self.permission_open) {
+                        (true, true) => full_tone.opacity(0.14),
+                        (true, false) => motion::hover_blend(
+                            &hover_key,
+                            full_tone.opacity(0.0),
+                            full_tone.opacity(0.1),
+                        ),
+                        (false, true) => theme.muted_fill().opacity(0.7),
+                        (false, false) => motion::hover_blend(
                             &hover_key,
                             theme.muted_fill().opacity(0.0),
                             theme.muted_fill().opacity(0.6),
-                        )
+                        ),
                     })
                     .on_hover(motion::hover_listener(hover_key.clone()))
                     .child(
                         icons::icon(access_details(selected).icon)
                             .size(px(14.))
-                            .text_color(tint),
+                            .text_color(glyph_tint),
                     )
-                    .when(!icon_only, |el| {
-                        el.child(if pending {
-                            crate::localization::text("settings-wallpaper_saving", cx)
-                        } else {
-                            (label(selected)).to_string()
-                        })
-                    })
-                    .when(icon_only, |el| el.tip(label(selected)))
-                    .child(
-                        icons::icon(icons::ALT_ARROW_DOWN)
-                            .size(px(12.))
-                            .text_color(tint.opacity(tint.a * 0.6)),
-                    )
+                    .tip(label(selected))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         if !pending {
                             this.permission_inspector = None;
@@ -288,50 +299,33 @@ impl Composer {
                     .aria_label(label(level))
                     .aria_selected(checked)
                     .when_some(blocked, |row, reason| row.aria_description(reason))
-                    .h(px(44.))
+                    .h(px(30.))
                     .py(px(0.))
-                    .gap(px(10.))
+                    .gap(px(8.))
+                    .tip(blocked.unwrap_or(description(level)))
                     .when(blocked.is_some(), |row| row.opacity(0.45).cursor_default())
                     .child(
                         icons::icon(access_details(level).icon)
                             .flex_none()
-                            .size(px(16.))
-                            .text_color(if checked {
-                                popup_theme.text
-                            } else {
-                                popup_theme.text_muted
-                            }),
+                            .size(px(13.))
+                            .text_color(
+                                level_tone(level, &popup_theme).unwrap_or(popup_theme.text_muted),
+                            ),
                     )
                     .child(
                         div()
                             .flex_1()
                             .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .gap(px(1.))
-                            .child(
-                                div()
-                                    .truncate()
-                                    .line_height(px(17.))
-                                    .text_size(crate::typography::text_sm())
-                                    .font_weight(gpui::FontWeight::MEDIUM)
-                                    .text_color(popup_theme.text)
-                                    .child(label(level)),
-                            )
-                            .child(
-                                div()
-                                    .truncate()
-                                    .line_height(px(15.))
-                                    .text_size(crate::typography::text_xs())
-                                    .text_color(popup_theme.text_muted)
-                                    .child(blocked.unwrap_or(description(level))),
-                            ),
+                            .truncate()
+                            .text_size(crate::typography::text_xs())
+                            .text_color(popup_theme.text)
+                            .child(label(level)),
                     )
                     .child(div().flex_none().size(px(14.)).when(checked, |slot| {
                         slot.child(
                             icons::icon(icons::CHECK)
-                                .size(px(14.))
-                                .text_color(popup_theme.accent),
+                                .size(px(13.))
+                                .text_color(popup_theme.text_muted),
                         )
                     }))
                     .when(blocked.is_none(), |row| {
@@ -345,57 +339,21 @@ impl Composer {
                     .into_iter()
                     .enumerate()
                     .map(|(index, level)| row(index, level).into_any_element());
-                let menu = popover::popover_card(&popup_theme)
+                // Just the three levels on one card.
+                let menu = popover::inner_card(&popup_theme)
                     .id("composer-permission-menu")
                     .role(Role::ListBox)
-                    .w(px(260.))
+                    .w(px(188.))
+                    .p(px(3.))
                     .flex()
                     .flex_col()
-                    .gap(px(2.))
-                    .child(popover::menu_heading(&popup_theme, "Agent access"))
+                    .gap(px(1.))
+                    .text_color(popup_theme.text)
                     .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                         this.permission_open = false;
                         cx.notify();
                     }))
-                    .children(rows)
-                    .when(self.state.read(cx).selected_chat.is_some(), |menu| {
-                        menu.child(popover::menu_separator()).child(
-                            div()
-                                .id("open-permission-rules")
-                                .role(Role::Button)
-                                .aria_label(tr(cx, msg::native::saved_permission_rules_c6bd67ad))
-                                .px(px(10.))
-                                .py(px(8.))
-                                .text_size(crate::typography::text_xs())
-                                .text_color(popup_theme.text)
-                                .cursor_pointer()
-                                .child(tr(cx, msg::native::saved_permission_rules))
-                                .on_click(
-                                    cx.listener(|this, _, _, cx| {
-                                        this.open_permission_inspector(cx)
-                                    }),
-                                ),
-                        )
-                    });
-                let menu = menu.when(unconfirmed, |view| {
-                    view.child(
-                        div()
-                            .id("refresh-saved-permissions")
-                            .role(Role::Button)
-                            .aria_label(tr(cx, msg::native::refresh_saved_chat_choices))
-                            .cursor_pointer()
-                            .px(px(8.))
-                            .py(px(8.))
-                            .text_size(crate::typography::text_xs())
-                            .text_color(popup_theme.accent)
-                            .child(if pending {
-                                ("Reading saved chat choices…").to_string()
-                            } else {
-                                crate::localization::text("native-refresh_saved_chat_choices", cx)
-                            })
-                            .on_click(cx.listener(|this, _, _, cx| this.refresh_permission(cx))),
-                    )
-                });
+                    .children(rows);
                 view.child(popover::anchored_menu_above(
                     "composer-permission-popup",
                     menu.into_any_element(),
@@ -433,6 +391,26 @@ impl Composer {
         });
         self.pickers
             .update(cx, |pickers, cx| pickers.set_draft_sandbox(level, cx));
+        cx.notify();
+    }
+    /// Review fixture: store plan mode on the selected chat (or the draft).
+    pub fn fixture_set_plan(&mut self, cx: &mut Context<Self>) {
+        let mut stored = false;
+        self.state.update(cx, |state, cx| {
+            let selected = state.selected_chat.clone();
+            for chat in &mut state.chats {
+                if Some(&chat.id) == selected.as_ref()
+                    && let Some(config) = chat.config.as_mut()
+                {
+                    config.plan = true;
+                    stored = true;
+                }
+            }
+            cx.notify();
+        });
+        if !stored && !self.plan_mode(cx) {
+            self.toggle_plan_mode(cx);
+        }
         cx.notify();
     }
 }

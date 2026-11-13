@@ -55,7 +55,7 @@ fn annotation_script(theme: &crate::theme::Theme, generation: u64) -> String {
 use model::{PageState, Presentation};
 gpui::actions!(
     browser,
-    [Reload, FocusAddress, NewTab, CloseTab, Back, Forward]
+    [Reload, FocusAddress, NewTab, CloseTab, Back, Forward, ZoomIn, ZoomOut, ZoomReset]
 );
 
 pub(crate) fn bind_keys(cx: &mut App, keymap: &crate::settings::KeymapConfig) {
@@ -86,6 +86,14 @@ pub(crate) fn bind_keys(cx: &mut App, keymap: &crate::settings::KeymapConfig) {
     bind!("mod-w", CloseTab);
     bind!("mod-[", Back);
     bind!("mod-]", Forward);
+    // Page zoom is only wired to the Linux WebKit host so far.
+    #[cfg(target_os = "linux")]
+    {
+        bind!("mod-=", ZoomIn);
+        bind!("mod-+", ZoomIn);
+        bind!("mod--", ZoomOut);
+        bind!("mod-0", ZoomReset);
+    }
     let reload = keymap.get(ShortcutId::BrowserReload);
     if available(reload, Some(ShortcutId::BrowserReload))
         && gpui::Keystroke::parse(&platform_combo(reload)).is_ok()
@@ -610,6 +618,24 @@ impl BrowserSurface {
             );
         }
         cx.notify();
+    }
+
+    /// Save a new page zoom (percent) for every browser tab.
+    #[cfg(target_os = "linux")]
+    fn set_zoom(&mut self, percent: u16, cx: &mut Context<Self>) {
+        let percent = crate::settings::browser_zoom_level(percent);
+        if crate::settings::current(cx).browser_zoom != percent {
+            crate::settings::update(crate::settings::SavePolicy::Immediate, cx, |settings| {
+                settings.browser_zoom = percent
+            });
+            cx.refresh_windows();
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn step_zoom(&mut self, step: i8, cx: &mut Context<Self>) {
+        let current = crate::settings::current(cx).browser_zoom;
+        self.set_zoom(crate::settings::browser_zoom_step(current, step), cx);
     }
 
     #[cfg(any(target_os = "macos", target_os = "linux", windows))]

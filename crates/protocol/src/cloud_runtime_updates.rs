@@ -30,12 +30,39 @@ pub const RELEASE_SIGNING_PUBLIC_KEY: &str = "CTEMp+P0mILHcWFjITtV0yipAeHMNdlho7
 
 /// Admission refused a message because the computer is updating its runtime
 /// to gain a feature the message needs. The message did not run; the app keeps
-/// it and resends once [`UpdateStatus`] reports `committed`.
+/// it and resends once [`UpdateStatus`] reports `committed`. A client that
+/// sends [`QUEUE_WHILE_WAITING`] gets the message queued on the server instead.
 pub const RUNTIME_UPDATING: &str = "cloud_computer_runtime_updating";
 /// The computer cannot update in place (no update support, repeated rollbacks,
 /// or a rollback barrier). The app offers "Update computer" (recreation onto
 /// the current base with `targetRelease: "latest"`).
 pub const RUNTIME_UPDATE_UNAVAILABLE: &str = "cloud_computer_runtime_update_unavailable";
+/// The computer is being recreated (Update computer); nothing runs on it
+/// until that finishes.
+pub const RECREATING: &str = "computer_recreation_in_progress";
+
+/// Query flag on `POST /v1/cloud/workspaces/{id}/task-commands` from a client
+/// that shows server-queued messages. A run that would be refused with
+/// [`RUNTIME_UPDATING`], [`RUNTIME_UPDATE_UNAVAILABLE`] or [`RECREATING`] is
+/// instead saved in the conversation's queue (queue id = its message id) and
+/// sent by the server once the computer can take it:
+///
+/// ```text
+/// send ─▶ queued { waitingFor: code } ─▶ update commits / recreation ready
+///                                      ─▶ drained to the computer
+/// ```
+///
+/// The acceptance carries `state: "queued"` and `waitingFor` (one of the codes
+/// above); the queue's `queueError` keeps the same code while it waits. Older
+/// servers ignore the flag and refuse as before; older clients never send it.
+pub const QUEUE_WHILE_WAITING: &str = "queueWhileWaiting";
+/// Whether a refusal code means the run only has to wait for its computer.
+pub fn waits_for_computer(code: &str) -> bool {
+    matches!(
+        code,
+        RUNTIME_UPDATING | RUNTIME_UPDATE_UNAVAILABLE | RECREATING
+    )
+}
 
 /// The fields a release signature covers. Signed bytes are
 /// [`SignedRelease::signing_bytes`]: canonical, compact JSON with keys in the

@@ -446,14 +446,42 @@ impl Pickers {
             cx.processor(move |this, index, _, cx| this.reference_item(&items[index], cx)),
         )
         .size_full();
+        let back = self.loadout_browse.then(|| {
+            div()
+                .id("model-menu-back-to-loadout")
+                .role(gpui::Role::Button)
+                .aria_label("Back to loadout")
+                .size(px(24.))
+                .mr(px(6.))
+                .flex()
+                .flex_none()
+                .items_center()
+                .justify_center()
+                .rounded(px(6.))
+                .cursor_pointer()
+                .hover(|s| s.bg(theme.muted_fill().opacity(0.7)))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.loadout_browse = false;
+                    this.active = this.current_loadout_index(cx).unwrap_or(0);
+                    this.focus_on_mount = true;
+                    cx.notify();
+                }))
+                .child(
+                    crate::icons::icon(crate::icons::ALT_ARROW_LEFT)
+                        .size(px(14.))
+                        .text_color(theme.text_muted),
+                )
+        });
         let search = div()
             .flex_none()
             .h(px(ui::SEARCH_HEIGHT))
-            .px(px(14.))
+            .pl(px(if back.is_some() { 8. } else { 14. }))
+            .pr(px(14.))
             .border_b_1()
             .border_color(theme.border.opacity(0.5))
             .flex()
             .items_center()
+            .children(back)
             .child(div().flex_1().min_w_0().child(self.search.clone()));
         let body = div()
             .flex()

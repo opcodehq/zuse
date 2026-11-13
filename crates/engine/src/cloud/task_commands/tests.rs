@@ -444,3 +444,13 @@ fn computer_files_upload_to_and_read_from_the_computer_not_the_server() {
         &json!({"computer":true})
     ));
 }
+#[test]
+fn only_a_caller_that_shows_queued_messages_asks_to_queue_while_waiting() {
+    use zuse_protocol::cloud_runtime_updates::QUEUE_WHILE_WAITING;
+    assert_eq!(
+        submit_query(&json!({"request":{},"queueWhileWaiting":true})),
+        vec![(QUEUE_WHILE_WAITING.to_owned(), "true".to_owned())]
+    );
+    assert!(submit_query(&json!({"request":{}})).is_empty());
+    assert!(submit_query(&json!({"request":{},"queueWhileWaiting":"yes"})).is_empty());
+}

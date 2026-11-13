@@ -19,6 +19,21 @@ impl RuntimeControl {
             .bind(required(row,"workspace_id")?).bind(session).bind(now).execute(&mut **tx).await?;
         Ok(())
     }
+    /// The computer can take more now (its runtime update committed, or a
+    /// recreation finished): every conversation with queued messages tries
+    /// again at once instead of at its next retry.
+    pub(in crate::runtime) async fn resume_waiting_queues_tx(
+        tx: &mut Transaction<'_, Postgres>,
+        row: &Value,
+        now: i64,
+    ) -> Result<(), ApiError> {
+        if !command_mode(row) {
+            return Ok(());
+        }
+        sqlx::query("INSERT INTO zuse_rust_task_command_drains(workspace_id,session_id,revision,next_attempt_at) SELECT DISTINCT workspace_id,session_id,1,$2::bigint FROM zuse_rust_task_command_queue WHERE workspace_id=$1 AND state='queued' ON CONFLICT(workspace_id,session_id) DO UPDATE SET revision=zuse_rust_task_command_drains.revision+1,next_attempt_at=EXCLUDED.next_attempt_at")
+            .bind(required(row, "workspace_id")?).bind(now).execute(&mut **tx).await?;
+        Ok(())
+    }
     pub(in crate::runtime) fn notify_task_drain(&self) {
         let _ = self.mailbox_changes.send(());
         super::super::lifecycle::wakeup::send();
@@ -112,6 +127,17 @@ impl RuntimeControl {
         let Some(job) = job else { return Ok(false) };
         self.run_task_drain_job(job, now).await
     }
+    /// [`Self::work_task_drain_once`] for one computer's due job only.
+    #[cfg(test)]
+    pub(in crate::runtime) async fn work_task_drain_for(
+        &self,
+        workspace: &str,
+        now: i64,
+    ) -> Result<bool, ApiError> {
+        let job:Option<Value>=sqlx::query_scalar("SELECT to_jsonb(d) FROM zuse_rust_task_command_drains d WHERE workspace_id=$1 AND next_attempt_at<=$2 ORDER BY next_attempt_at,session_id LIMIT 1").bind(workspace).bind(now).fetch_optional(&self.pool).await?;
+        let Some(job) = job else { return Ok(false) };
+        self.run_task_drain_job(job, now).await
+    }
     async fn run_task_drain_job(&self, job: Value, now: i64) -> Result<bool, ApiError> {
         let result = self.promote_task_queue(&job, now).await;
         if let Err(error) = result {
@@ -186,8 +212,11 @@ impl RuntimeControl {
         }
         let access = fresh.as_ref().map_or(&personal, |(a, _)| a);
         self.authorize_task_command_row(&workspace, access, true)?;
-        if super::super::recreation::leases_blocked(&workspace)
-            || super::super::repair::leases_blocked(&workspace)
+        if super::super::recreation::leases_blocked(&workspace) {
+            // Kept queued; sent once the recreation is ready.
+            return Err(error(zuse_protocol::cloud_runtime_updates::RECREATING));
+        }
+        if super::super::repair::leases_blocked(&workspace)
             || super::super::lifecycle::valid_memory_recovery(&workspace)
         {
             return Err(error("cloud_task_queue_runtime_recovery_required"));
@@ -265,7 +294,8 @@ impl RuntimeControl {
         )
         .await?;
         sqlx::query("UPDATE zuse_rust_task_command_queue SET state='claimed',claimed_command_id=$4,updated_at=$5 WHERE workspace_id=$1 AND session_id=$2 AND queue_id=$3 AND state='queued'").bind(id).bind(session).bind(required(&item,"queue_id")?).bind(&command).bind(now).execute(&mut *tx).await?;
-        sqlx::query("UPDATE zuse_rust_task_command_drains SET next_attempt_at=$4 WHERE workspace_id=$1 AND session_id=$2 AND revision=$3").bind(id).bind(session).bind(job["revision"].as_i64().unwrap_or(0)).bind(now+30_000).execute(&mut *tx).await?;
+        // Sent: whatever it was waiting for is over.
+        sqlx::query("UPDATE zuse_rust_task_command_drains SET next_attempt_at=$4,last_error=NULL WHERE workspace_id=$1 AND session_id=$2 AND revision=$3").bind(id).bind(session).bind(job["revision"].as_i64().unwrap_or(0)).bind(now+30_000).execute(&mut *tx).await?;
         tx.commit().await?;
         self.notify_task_drain();
         Ok(())

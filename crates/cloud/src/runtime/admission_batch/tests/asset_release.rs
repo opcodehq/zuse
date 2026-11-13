@@ -426,6 +426,63 @@ async fn delivered_attachments_leave_object_storage_and_undelivered_ones_expire(
     );
     assert_eq!(objects.keys(queued_id), 0);
 
+    // Waiting for the computer: a message this runtime can't take yet (full
+    // access) is queued with its server-held file, which stays in object
+    // storage while it waits and leaves once the updated computer has it.
+    let waiting = upload(&control, "waiting", now).await;
+    let waiting_id = waiting["assetId"].as_str().unwrap();
+    let request: w::Request = serde_json::from_value(json!({"commandId":"run:wait","sessionId":SESSION,"action":{"type":"submit","messageId":"m:run:wait","attachments":[waiting],"payload":{"kind":"run","messageId":"m:run:wait","request":{"prompt":"read the file","harness":"codex","model":"fixture","cwd":".","sandbox":"danger-full-access","autoApprove":true}}}})).unwrap();
+    let accepted = control
+        .task_command_submit_with(
+            WS,
+            &access(),
+            request,
+            crate::runtime::task_commands::Submit {
+                queue_while_waiting: true,
+            },
+            now,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        accepted["waitingFor"],
+        zuse_protocol::cloud_runtime_updates::RUNTIME_UPDATE_UNAVAILABLE
+    );
+    let held: Vec<(String, String)> =
+        sqlx::query_as("SELECT kind,holder FROM zuse_rust_launch_asset_holds WHERE asset_id=$1")
+            .bind(waiting_id)
+            .fetch_all(&application)
+            .await
+            .unwrap();
+    assert_eq!(held, [("queue".to_owned(), "m:run:wait".to_owned())]);
+    assert!(control.work_task_drain_for(WS, now).await.unwrap());
+    assert!(!control.sweep_asset_releases_once(now).await.unwrap());
+    assert_eq!(objects.keys(waiting_id), 2, "kept while it waits");
+    // Update computer finished on a runtime that takes per-message access.
+    sqlx::query("UPDATE api_cloud_workspaces SET request_config=jsonb_set(request_config,'{runtimeBootstrapReceipt,capabilities}',$2) WHERE workspace_id=$1").bind(WS).bind(json!([w::MESSAGE_ACCESS_MODE_CAPABILITY])).execute(&pool).await.unwrap();
+    let mut tx = application.begin().await.unwrap();
+    let (row, _, _) = locked_workspace_with(&mut tx, WS, WorkspaceLock::Command)
+        .await
+        .unwrap();
+    RuntimeControl::resume_waiting_queues_tx(&mut tx, &row, now)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    assert!(control.work_task_drain_for(WS, now).await.unwrap());
+    let claimed: String = sqlx::query_scalar("SELECT claimed_command_id FROM zuse_rust_task_command_queue WHERE workspace_id=$1 AND queue_id='m:run:wait'").bind(WS).fetch_one(&application).await.unwrap();
+    execute(&control, &claimed, &[Starting, Running], now).await;
+    assert_eq!(
+        state(&application, &waiting).await,
+        ("released".into(), Some("delivered".into()))
+    );
+    assert_eq!(
+        objects.keys(waiting_id),
+        0,
+        "left object storage once delivered"
+    );
+    let fingerprint: String = sqlx::query_scalar("SELECT fingerprint FROM zuse_rust_task_command_execution WHERE workspace_id=$1 AND command_id=$2").bind(WS).bind(&claimed).fetch_one(&application).await.unwrap();
+    report(&control, &claimed, &fingerprint, 3, Completed, now).await;
+
     // Abandoned chunk ciphertext does not linger in PostgreSQL.
     sqlx::query("INSERT INTO zuse_rust_launch_assets(workspace_id,asset_id,state,created_at,updated_at) VALUES($1,'asset_abandoned_upload_fixture','uploading',$2,$2)").bind(WS).bind(now).execute(&application).await.unwrap();
     sqlx::query("INSERT INTO zuse_rust_task_asset_chunks(workspace_id,asset_id,chunk_sequence,size_bytes,sha256,ciphertext,ready,updated_at) VALUES($1,'asset_abandoned_upload_fixture',0,1,'x','sealed',false,$2)").bind(WS).bind(now).execute(&application).await.unwrap();
