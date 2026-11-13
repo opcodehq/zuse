@@ -439,6 +439,7 @@ pub fn bootstrap_capabilities() -> Vec<String> {
         "rust-full-state-recovery-v1".into(),
         zuse_protocol::cloud_runtime_updates::CAPABILITY.into(),
         zuse_protocol::cloud_computers::MACHINE_DELIVERY_CAPABILITY.into(),
+        zuse_protocol::cloud_harness_updates::CAPABILITY.into(),
     ]
 }
 fn validate_binding(stored: &Stored, boot: &CloudRuntimeBootstrap, generation: i64) -> Result<()> {

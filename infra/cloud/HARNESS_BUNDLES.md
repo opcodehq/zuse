@@ -171,12 +171,56 @@ change: a bundle that writes a new format must first ship as one that can read
 it, and the previous bundle must list the new format in `readsStateFormats`
 before it can be a rollback target.
 
+## On the computer
+
+Code: `crates/cloud-runtime/src/harness_updates/`. Runtimes advertise
+`rust-harness-update-v1`; older runtimes never poll and keep their image's
+CLIs.
+
+```text
+poll (every 10 min) ─▶ verify signature, agent, adapter, state format (before download)
+  ─▶ wait: a turn finished, or 2 min idle since start/wake (never the first turn)
+  ─▶ download (presigned, no bearer, no redirects) on a low-priority thread
+  ─▶ zstd ─▶ sha256 == signed digest ─▶ extract (files/dirs only, safe paths)
+  ─▶ `--version` with no credentials ─▶ read-only `<data>/harnesses/bundles/<sha256>/`
+  ─▶ staged ─▶ adopt at a boundary ─▶ attest
+```
+
+- **Side by side.** Each version lives under its own digest. Adoption only
+  changes which path *new* harness processes start from: Claude, Codex and
+  Grok harnesses resolve their executable through the store at every spawn
+  (`with_executable_source`), so a running process keeps its exact file and is
+  never killed or replaced.
+- **Boundary.** A staged bundle is adopted when no turn is running and every
+  leased command has an acknowledged outcome, or at process start (before any
+  harness process exists). Nothing downloads at start.
+- **Compatibility.** The computer re-checks adapter contract and session-state
+  format before download and again at adoption. Agents whose current CLI is
+  unknown (no harness release in the image and no bundle yet) are not polled
+  for, so a bundle never replaces a CLI whose session format is unknown.
+- **Retention.** The active and previous bundles per agent are always kept;
+  any other bundle is removed only once no live process (`/proc/<pid>/exe`)
+  runs from it, so memory-suspended sessions keep their CLI. If the active
+  bundle's files go missing, new processes fall back to the previous bundle,
+  then to the image's CLI.
+- **Updaters off.** Bundle-launched Claude processes get
+  `DISABLE_AUTOUPDATER=1 DISABLE_UPDATES=1`; Grok runs with
+  `--no-auto-update`; the Codex app server does not self-update.
+- **Attestation.** Every adoption and refusal is reported once
+  (`…/runtime/harness-updates/attestation`), and each poll reports the
+  current CLI per agent, so the server always knows what each computer runs.
+- The task user owns `<data>/harnesses`. Agents already run as that user, so
+  integrity rests on the signed digest (the same reasoning as runtime updates
+  on bases without root).
+
 ## Test
 
 ```sh
 python3 infra/cloud/tests/harness-bundle.py
 cargo test --locked -p zuse-protocol cloud_harness_updates
 cargo test --locked -p zuse-cloud --lib harness
+cargo test --locked -p zuse-providers --test executable_source
+cargo test --locked -p zuse-cloud-runtime --lib harness_updates
 # Registry, offers, attestation, channels and rollback under the restricted role:
 ZUSE_CLOUD_TEST_DATABASE_URL=postgresql://… cargo test --locked -p zuse-cloud --lib \
   v2_initial_write_is_atomic_under_the_actual_restricted_role -- --ignored
