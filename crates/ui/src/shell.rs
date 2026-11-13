@@ -15226,7 +15226,9 @@ impl Render for Shell {
                 WorkspaceCommand::Settings => self.open_last_settings(cx),
                 WorkspaceCommand::Plugins => self.open_plugins_page(cx),
                 WorkspaceCommand::Accounts => self.open_settings(SettingsSection::Harnesses, cx),
-                WorkspaceCommand::ModelSettings => self.open_settings(SettingsSection::Defaults, cx),
+                WorkspaceCommand::ModelSettings => {
+                    self.open_settings(SettingsSection::Defaults, cx)
+                }
                 WorkspaceCommand::Diff if !self.active_chat.is_empty() => {
                     self.open_review_tab(window, cx)
                 }
