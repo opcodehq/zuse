@@ -217,6 +217,7 @@ pub struct CodexHarness {
     credentials: Option<Arc<dyn auth::CredentialResolver>>,
     models_cache: crate::catalog::Catalog,
     executable: Option<PathBuf>,
+    executable_source: Option<crate::executable::ExecutableSource>,
     /// Grace between `turn/interrupt` and SIGTERM.
     interrupt_grace: Duration,
     /// Grace between SIGTERM and SIGKILL.
@@ -232,6 +233,7 @@ impl Default for CodexHarness {
             credentials: None,
             models_cache: crate::catalog::Catalog::default(),
             executable: None,
+            executable_source: None,
             interrupt_grace: Duration::from_secs(2),
             kill_grace: Duration::from_secs(3),
         }
@@ -298,9 +300,24 @@ impl CodexHarness {
         self
     }
 
+    /// Bind each new app-server process to the path `source` returns at
+    /// spawn (managed installs).
+    pub fn with_executable_source(mut self, source: crate::executable::ExecutableSource) -> Self {
+        self.executable_source = Some(source);
+        self
+    }
+
     fn resolve_executable(&self) -> Result<PathBuf, HarnessError> {
         if let Some(p) = &self.executable {
             return crate::executable::validate_native_override(p);
+        }
+        if let Some(p) = self
+            .executable_source
+            .as_ref()
+            .and_then(|source| source())
+            .filter(|p| p.is_file())
+        {
+            return crate::executable::validate_native_override(&p);
         }
         if let Some(p) = std::env::var_os("CODEX_EXECUTABLE")
             && !p.is_empty()

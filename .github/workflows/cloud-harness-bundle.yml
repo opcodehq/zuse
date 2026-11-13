@@ -1,0 +1,135 @@
+name: Cloud harness bundle
+
+# Packages one exact agent CLI version as a signed, content-addressed harness
+# bundle and uploads it to the runtime release bucket of the chosen GitHub
+# environment. Computers adopt registered bundles without a new machine image.
+# Registering and promoting the bundle are manual operator steps; see
+# infra/cloud/HARNESS_BUNDLES.md.
+
+on:
+  workflow_dispatch:
+    inputs:
+      agent:
+        description: Agent whose CLI to package
+        type: choice
+        options: [claude, codex, grok]
+      version:
+        description: Exact upstream version (never "latest")
+        type: string
+        required: true
+      architecture:
+        description: CPU architecture
+        type: choice
+        options: [x86_64, aarch64]
+        default: x86_64
+      environment:
+        description: GitHub environment (holds its own signing key and R2 secrets)
+        type: choice
+        options: [staging, production]
+        default: staging
+      reads_state_formats:
+        description: Extra session-state formats this CLI continues (comma separated, optional)
+        type: string
+        required: false
+      capabilities:
+        description: Capability names this bundle is certified for (comma separated, optional)
+        type: string
+        required: false
+  pull_request:
+    paths:
+      - infra/cloud/harness-bundle.py
+      - infra/cloud/tests/harness-bundle.py
+      - infra/cloud/fetch-harness-candidates.py
+      - infra/cloud/runtime-release.py
+      - crates/protocol/src/cloud_harness_updates.rs
+      - crates/protocol/fixtures/harness-bundle-v1.json
+      - .github/workflows/cloud-harness-bundle.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloud-harness-bundle-${{ inputs.environment || 'pr' }}-${{ inputs.agent || github.ref }}-${{ inputs.version || '' }}
+  # Never cancel a bundle halfway through an upload.
+  cancel-in-progress: false
+
+jobs:
+  test:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 infra/cloud/tests/harness-bundle.py
+
+  bundle:
+    if: github.event_name == 'workflow_dispatch'
+    # The --version probe runs the CLI, so build on the target architecture.
+    runs-on: ${{ inputs.architecture == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    environment: ${{ inputs.environment }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      AGENT: ${{ inputs.agent }}
+      VERSION: ${{ inputs.version }}
+      ARCH: ${{ inputs.architecture }}
+      READS: ${{ inputs.reads_state_formats }}
+      CAPABILITIES: ${{ inputs.capabilities }}
+      HAS_SIGNING_KEY: ${{ secrets.ZUSE_RUNTIME_RELEASE_SIGNING_KEY != '' }}
+      HAS_R2: ${{ secrets.ZUSE_CLOUD_RUNTIME_R2_BUCKET != '' && secrets.ZUSE_CLOUD_RUNTIME_R2_ENDPOINT != '' && secrets.ZUSE_CLOUD_RUNTIME_R2_ACCESS_KEY_ID != '' && secrets.ZUSE_CLOUD_RUNTIME_R2_SECRET_ACCESS_KEY != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends zstd openssl
+      - run: python3 infra/cloud/tests/harness-bundle.py
+      - name: Fetch and verify the exact upstream version
+        run: |
+          python3 infra/cloud/harness-bundle.py fetch --agent "$AGENT" --version "$VERSION" --arch "$ARCH" \
+            --out work --node "$(command -v node)"
+      - name: Package bundle
+        id: package
+        run: |
+          extra=()
+          IFS=, read -ra reads <<< "$READS"
+          for value in "${reads[@]}"; do [[ -n "${value// }" ]] && extra+=(--reads-state-format "${value// }"); done
+          IFS=, read -ra caps <<< "$CAPABILITIES"
+          for value in "${caps[@]}"; do [[ -n "${value// }" ]] && extra+=(--capability "${value// }"); done
+          python3 infra/cloud/harness-bundle.py build-artifact --agent "$AGENT" --version "$VERSION" --arch "$ARCH" \
+            --tree work/tree --provenance work/provenance.json --out out "${extra[@]}"
+          echo "sha256=$(python3 -c 'import json; print(json.load(open("out/bundle.json"))["bundle"]["sha256"])')" >> "$GITHUB_OUTPUT"
+      - name: Sign bundle
+        if: env.HAS_SIGNING_KEY == 'true'
+        env:
+          SIGNING_KEY: ${{ secrets.ZUSE_RUNTIME_RELEASE_SIGNING_KEY }}
+        run: |
+          umask 077
+          key="$RUNNER_TEMP/release-signing.pem"
+          trap 'rm -f "$key"' EXIT
+          printf '%s\n' "$SIGNING_KEY" > "$key"
+          python3 infra/cloud/harness-bundle.py sign --bundle out/bundle.json --key "$key"
+          python3 infra/cloud/harness-bundle.py verify --bundle out/bundle.json
+      - name: Upload to R2
+        if: env.HAS_SIGNING_KEY == 'true' && env.HAS_R2 == 'true'
+        env:
+          ZUSE_CLOUD_RUNTIME_R2_BUCKET: ${{ secrets.ZUSE_CLOUD_RUNTIME_R2_BUCKET }}
+          ZUSE_CLOUD_RUNTIME_R2_ENDPOINT: ${{ secrets.ZUSE_CLOUD_RUNTIME_R2_ENDPOINT }}
+          ZUSE_CLOUD_RUNTIME_R2_ACCESS_KEY_ID: ${{ secrets.ZUSE_CLOUD_RUNTIME_R2_ACCESS_KEY_ID }}
+          ZUSE_CLOUD_RUNTIME_R2_SECRET_ACCESS_KEY: ${{ secrets.ZUSE_CLOUD_RUNTIME_R2_SECRET_ACCESS_KEY }}
+        run: python3 infra/cloud/harness-bundle.py upload --bundle out/bundle.json --artifact out
+      - name: Summary
+        env:
+          SHA256: ${{ steps.package.outputs.sha256 }}
+        run: |
+          {
+            echo "### Harness bundle $AGENT $VERSION ($ARCH)"
+            echo
+            echo "- sha256: \`$SHA256\`"
+            if [ "$HAS_SIGNING_KEY" = true ]; then echo "- signed: yes"; else echo "- signed: **no** (signing key not available; nothing uploaded)"; fi
+            if [ "$HAS_SIGNING_KEY" = true ] && [ "$HAS_R2" = true ]; then echo "- uploaded: \`runtime/harness/$AGENT/$ARCH/$SHA256.tar.zst\`"; else echo "- uploaded: **no**"; fi
+            echo
+            echo "Register (operator DB role): \`zuse-cloud-api register-harness-bundle --bundle bundle.json --state staging\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cloud-harness-bundle-${{ inputs.agent }}-${{ steps.package.outputs.sha256 }}
+          path: out/bundle.json
+          retention-days: 90

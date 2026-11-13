@@ -91,6 +91,21 @@ pub(super) fn image_copy(state: &str) -> (&'static str, &'static str, bool) {
     }
 }
 
+/// What a successful save changes, and when: instructions, skills and files
+/// reach new chats right away; the setup script only runs in a built image.
+pub(super) fn saved_notice(recipe: &MachineRecipe) -> &'static str {
+    let delivered = recipe.delivery(0).is_some();
+    let scripted = !recipe.setup_script.trim().is_empty();
+    match (delivered, scripted) {
+        (false, false) => "Saved. Computers use the standard machine.",
+        (true, false) => "Saved. New chats get your instructions, skills and files.",
+        (false, true) => "Saved. Your setup script runs once your machine image is built.",
+        (true, true) => {
+            "Saved. New chats get your instructions, skills and files now; your setup script runs once your machine image is built."
+        }
+    }
+}
+
 /// What a running build is doing now.
 pub(super) fn phase_copy(phase: &str) -> &'static str {
     match phase {
@@ -182,11 +197,7 @@ impl RepositoryPanel {
                     input.set_value(version.recipe.instructions.clone(), cx)
                 });
                 if saved {
-                    self.machine.notice = Some(if version.recipe.is_empty() {
-                        "Saved. Computers use the standard machine.".into()
-                    } else {
-                        "Saved. Your machine image will be rebuilt; running computers are unchanged.".into()
-                    });
+                    self.machine.notice = Some(saved_notice(&version.recipe).into());
                 }
                 let waiting = matches!(version.image_state.as_str(), "queued" | "building");
                 self.machine.version = Some(version);
@@ -423,7 +434,7 @@ impl RepositoryPanel {
             ))
             .child(form::section(
                 "Instructions",
-                "Given to every agent in every repository, alongside the repository's own AGENTS.md.",
+                "Given to every agent in every new chat, alongside the repository's own AGENTS.md. Applies as soon as you save; no image build needed.",
                 None,
                 div().p(px(12.)).child(form::script_box(self.machine.instructions.clone())),
             ));
@@ -449,7 +460,7 @@ impl RepositoryPanel {
             }
             root = root.child(form::section(
                 "Also on your machine",
-                "Imported skills and files, copied into every computer.",
+                "Imported skills and files, copied into every new chat's computer as soon as you save.",
                 None,
                 rows,
             ));
@@ -462,12 +473,35 @@ impl RepositoryPanel {
         }
         root.child(form::save_bar(
             "cloud-machine",
-            "Saving rebuilds your image. Running computers keep the one they started with.".into(),
+            "Instructions, skills and files apply to new chats. Setup script changes wait for the image build.".into(),
             self.machine_dirty(cx) && self.can_manage(),
             busy,
             |this, cx| this.discard_machine(cx),
             |this, cx| this.save_machine(cx),
             cx,
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::saved_notice;
+    use zuse_protocol::cloud_computers::MachineRecipe;
+
+    #[test]
+    fn saved_notice_says_what_applies_now_and_what_waits_for_the_image() {
+        let mut recipe = MachineRecipe::default();
+        assert_eq!(
+            saved_notice(&recipe),
+            "Saved. Computers use the standard machine."
+        );
+        recipe.instructions = "Keep commits small.".into();
+        assert!(saved_notice(&recipe).contains("New chats get"));
+        assert!(!saved_notice(&recipe).contains("image"));
+        recipe.setup_script = "npm i -g pnpm".into();
+        assert!(saved_notice(&recipe).contains("New chats get"));
+        assert!(saved_notice(&recipe).contains("once your machine image is built"));
+        recipe.instructions.clear();
+        assert!(!saved_notice(&recipe).contains("New chats"));
     }
 }

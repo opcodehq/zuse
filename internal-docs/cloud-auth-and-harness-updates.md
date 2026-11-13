@@ -138,11 +138,18 @@ Implemented in this branch:
 - An hourly GitHub workflow reports upstream candidates without changing stable.
   It begins scheduling after merge. [Operator instructions](../infra/cloud/HARNESS_RELEASES.md).
 
+- Steps 5-7 are implemented as harness bundles
+  ([operator flow](../infra/cloud/HARNESS_BUNDLES.md)): one exact CLI version per
+  agent and architecture, fetched with npm signature and SHA-512 checks, signed
+  and uploaded per environment; a server registry with staging, canary and
+  stable channels; background delivery to computers, side-by-side install,
+  adoption at quiescent boundaries without touching running processes,
+  state-format pinning, retention of the previous version, rollback by
+  retiring a bundle, and attestation of what each computer runs.
+
 Not implemented/deployed: hosted SIWC registration/browser flow, standalone
-Supabase encrypted credential authority and migration, automated vendor-signed
-artifact downloading, fleet bundle distribution/base-image builds, live
-credential/model compatibility checks, and automatic upgrades of existing
-workspaces at safe turn boundaries. Release promotion has not been performed;
+Supabase encrypted credential authority and migration, live credential/model
+compatibility checks, and the first real bundle registration. Release promotion has not been performed;
 provider allocation benchmarks are not model/auth acceptance evidence.
 
 The hosted integration requirements above still apply. Retaining legacy device

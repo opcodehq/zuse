@@ -1,5 +1,9 @@
 # Managed cloud harnesses
 
+To update one agent CLI on existing computers without a new machine image, use
+signed harness bundles instead: [HARNESS_BUNDLES.md](HARNESS_BUNDLES.md). This
+page covers the release tree baked into managed bases and the authority image.
+
 `harness-release.py` is the offline release manager used by the Rust guest launcher.
 It does not implement account onboarding. Existing device authentication stays at
 the account authority; the Rust Codex adapter consumes sealed execution credentials.
@@ -109,8 +113,9 @@ python3 infra/cloud/harness-release.py --root /opt/zuse/harnesses rollback --cha
 Rollback selects the previous tested release for new computers and retains both
 versions. It does not reverse a state migration. Moving an existing workspace to
 a different release requires a validated state compatibility path and a stopped
-runtime; automatic turn-boundary upgrades and fleet artifact delivery are not yet
-implemented. Nothing in this workflow fetches/rebases the user's checkout.
+runtime. Moving a computer to a newer CLI without a new image is done with
+harness bundles ([HARNESS_BUNDLES.md](HARNESS_BUNDLES.md)): they are delivered
+to computers, installed side by side and adopted at safe boundaries. Nothing in this workflow fetches/rebases the user's checkout.
 
 Three-agent releases use manifest schema 2 and require Grok plus all four provider
 checks in promotion evidence. Existing schema-1 Claude/Codex releases and computer

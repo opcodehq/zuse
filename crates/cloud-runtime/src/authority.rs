@@ -614,6 +614,37 @@ impl Authority {
         .await?;
         Ok(())
     }
+    /// `POST /v1/cloud/workspaces/{id}/runtime/harness-updates`.
+    pub async fn harness_updates(
+        &self,
+        bootstrap: &CloudRuntimeBootstrap,
+        poll: &zuse_protocol::cloud_harness_updates::HarnessPoll,
+    ) -> Result<zuse_protocol::cloud_harness_updates::HarnessOffer> {
+        let value = self
+            .post(
+                &bootstrap.workspace_id,
+                &["runtime", "harness-updates"],
+                &bootstrap.runtime_credential,
+                &serde_json::to_value(poll)?,
+            )
+            .await?;
+        serde_json::from_value(value).map_err(|_| anyhow::anyhow!("harness_update_offer_invalid"))
+    }
+    /// `POST /v1/cloud/workspaces/{id}/runtime/harness-updates/attestation`.
+    pub async fn harness_update_attestation(
+        &self,
+        bootstrap: &CloudRuntimeBootstrap,
+        attestation: &zuse_protocol::cloud_harness_updates::HarnessAttestation,
+    ) -> Result<()> {
+        self.post(
+            &bootstrap.workspace_id,
+            &["runtime", "harness-updates", "attestation"],
+            &bootstrap.runtime_credential,
+            &serde_json::to_value(attestation)?,
+        )
+        .await?;
+        Ok(())
+    }
     pub fn gateway(&self, bootstrap: &CloudRuntimeBootstrap) -> Result<zuse_rpc::cloud::Grant> {
         Ok(zuse_rpc::cloud::Grant {
             workspace_id: bootstrap.workspace_id.clone(),

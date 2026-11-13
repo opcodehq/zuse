@@ -578,6 +578,14 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
                 get(runtime_update_status),
             )
             .route(
+                "/v1/cloud/workspaces/{id}/runtime/harness-updates",
+                post(harness_update_poll).layer(DefaultBodyLimit::max(16 * 1024)),
+            )
+            .route(
+                "/v1/cloud/workspaces/{id}/runtime/harness-updates/attestation",
+                post(harness_update_attestation).layer(DefaultBodyLimit::max(16 * 1024)),
+            )
+            .route(
                 "/v1/cloud/workspaces/{id}/runtime/providers/{provider}/grant",
                 post(provider_grant).layer(DefaultBodyLimit::max(24 * 1024)),
             )
@@ -1995,6 +2003,51 @@ async fn runtime_update_attestation(
     Ok(Json(
         runtime
             .runtime_update_attest(
+                &id,
+                runtime_bearer(&headers)?,
+                attestation,
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .await?,
+    ))
+}
+async fn harness_update_poll(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    body: Result<Json<zuse_protocol::cloud_harness_updates::HarnessPoll>, JsonRejection>,
+) -> Result<Json<zuse_protocol::cloud_harness_updates::HarnessOffer>, ApiError> {
+    let Json(poll) = body.map_err(|_| ApiError::bad_request("invalid_harness_poll"))?;
+    let runtime = state
+        .runtime
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("cloud_runtime_disabled"))?;
+    Ok(Json(
+        runtime
+            .harness_update_poll(
+                &id,
+                runtime_bearer(&headers)?,
+                poll,
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .await?,
+    ))
+}
+async fn harness_update_attestation(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    body: Result<Json<zuse_protocol::cloud_harness_updates::HarnessAttestation>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Json(attestation) =
+        body.map_err(|_| ApiError::bad_request("invalid_harness_attestation"))?;
+    let runtime = state
+        .runtime
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("cloud_runtime_disabled"))?;
+    Ok(Json(
+        runtime
+            .harness_update_attest(
                 &id,
                 runtime_bearer(&headers)?,
                 attestation,

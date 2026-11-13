@@ -1,0 +1,22 @@
+{
+  "_comment": "Shared by crates/protocol (Rust) and infra/cloud/tests/harness-bundle.py (Python). The test key is throwaway; its private half was discarded.",
+  "bundle": {
+    "sha256": "5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef",
+    "agent": "codex",
+    "version": "0.165.0",
+    "architecture": "x86_64",
+    "executable": "codex-package/bin/codex",
+    "adapter": "codex-app-server-v1",
+    "stateFormat": "codex-sessions-v1",
+    "readsStateFormats": [
+      "codex-sessions-v1",
+      "codex-claude-tested-v1"
+    ],
+    "capabilities": [
+      "broker-auth-v1"
+    ]
+  },
+  "signingBytes": "zuse-harness-bundle-v1\n{\"sha256\":\"5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef\",\"agent\":\"codex\",\"version\":\"0.165.0\",\"architecture\":\"x86_64\",\"executable\":\"codex-package/bin/codex\",\"adapter\":\"codex-app-server-v1\",\"stateFormat\":\"codex-sessions-v1\",\"readsStateFormats\":[\"codex-sessions-v1\",\"codex-claude-tested-v1\"],\"capabilities\":[\"broker-auth-v1\"]}",
+  "testPublicKey": "XIca3+gQh/By+BhoKT34o/RGzlOQQnKnecbsPL/0IA8=",
+  "testSignature": "xxtMbB8/TPOBINvxe333KZpy43YMvh8HFNhHpuEsu7dhpc749736BXfRSAkTBONhieaKSe/D9JXbNYsunDeKAw=="
+}
