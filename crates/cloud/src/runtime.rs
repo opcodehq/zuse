@@ -1613,6 +1613,31 @@ fn enrollment_matches(row: &Value) -> bool {
         && receipt["gatewayEpoch"].as_i64() == Some(epoch)
 }
 
+/// The command carrying a task's first message, fixed at creation.
+pub(super) fn launch_command_id(workspace: &str) -> String {
+    format!("launch:{workspace}")
+}
+
+/// Records the first time the runtime reports `key` for the task's first
+/// message. An early agent takes that command while the checkout is still
+/// running, so this is earlier than `repositoryReadyAt`; the full-ready
+/// receipt only fills `messageAcceptedAt` when no earlier report did. The
+/// first report wins.
+pub(super) async fn stamp_initial_command_timing(
+    tx: &mut Transaction<'_, Postgres>,
+    id: &str,
+    command: &str,
+    key: &str,
+    now: i64,
+) -> Result<(), ApiError> {
+    if command != launch_command_id(id) {
+        return Ok(());
+    }
+    sqlx::query("UPDATE api_cloud_workspaces SET request_config=jsonb_set(request_config,'{startupTimings}',CASE WHEN jsonb_typeof(request_config->'startupTimings')='object' THEN request_config->'startupTimings' ELSE '{}'::jsonb END||jsonb_build_object($2::text,$3::bigint)),revision=revision+1,updated_at=GREATEST(updated_at+1,$3) WHERE workspace_id=$1 AND jsonb_typeof(request_config->'startupTimings'->$2) IS DISTINCT FROM 'number'")
+        .bind(id).bind(key).bind(now).execute(&mut **tx).await?;
+    Ok(())
+}
+
 fn receipt_fast_start(config: &Value) -> bool {
     config["runtimeBootstrapReceipt"]["capabilities"]
         .as_array()

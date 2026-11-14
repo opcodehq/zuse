@@ -306,6 +306,17 @@ async fn delivered_attachments_leave_object_storage_and_undelivered_ones_expire(
         now,
     )
     .await;
+    // The runtime's own reports date the first message's acceptance and the
+    // agent taking it.
+    let timings: Value = sqlx::query_scalar(
+        "SELECT request_config->'startupTimings' FROM api_cloud_workspaces WHERE workspace_id=$1",
+    )
+    .bind(WS)
+    .fetch_one(&application)
+    .await
+    .unwrap();
+    assert_eq!(timings["messageAcceptedAt"], now);
+    assert_eq!(timings["firstTurnStartedAt"], now);
 
     // Shared: bound by two commands. The first delivery must not delete it
     // while the second, not yet started, still has to fetch it.

@@ -818,7 +818,7 @@ impl RuntimeControl {
         if in_use {
             return Err(ApiError::conflict("cloud_branch_in_use"));
         }
-        let command = format!("launch:{id}");
+        let command = super::launch_command_id(&id);
         let turn = format!("turn:{id}");
         let title_text = body
             .first_message

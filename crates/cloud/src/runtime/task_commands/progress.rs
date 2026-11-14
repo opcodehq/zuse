@@ -129,6 +129,15 @@ impl RuntimeControl {
             wire::ExecutionState::Running
             | wire::ExecutionState::WaitingInput
             | wire::ExecutionState::Completed => {
+                // The agent took the task's first prompt.
+                super::super::stamp_initial_command_timing(
+                    &mut tx,
+                    id,
+                    &report.command_id,
+                    "firstTurnStartedAt",
+                    now,
+                )
+                .await?;
                 self.settle_command_assets_tx(&mut tx, id, &report.command_id, true, now)
                     .await?
             }

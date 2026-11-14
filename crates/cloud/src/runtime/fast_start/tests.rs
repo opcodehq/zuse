@@ -77,6 +77,7 @@ async fn gateway_ack_and_early_readiness_preserve_checkout_and_initial_command_f
     for sql in [
         include_str!("../../../tests/fixtures/legacy-catalog.sql"),
         crate::jobs::MIGRATION,
+        crate::runtime::mailbox::MIGRATION,
     ] {
         sqlx::raw_sql(sql).execute(&pool).await.unwrap();
     }
@@ -90,7 +91,7 @@ async fn gateway_ack_and_early_readiness_preserve_checkout_and_initial_command_f
     let now = chrono::Utc::now().timestamp_millis();
     let config = json!({"runtimeGeneration":1,"gatewayEpoch":1,"rustFastStartVersion":1,
         "runtimeRpcProtocol":zuse_protocol::cloud_gateway::RUST_RPC,"runtimeCredentialExpiresAtMs":now+600000,
-        "runtimeBootstrapReceipt":{"workspaceId":"ws-bob","generation":1,"gatewayEpoch":1,"capabilities":["rust-fast-start-v1"]},
+        "runtimeBootstrapReceipt":{"workspaceId":"ws-bob","generation":1,"gatewayEpoch":1,"capabilities":["rust-fast-start-v1","rust-session-commands-v1"]},"rustCommandMailboxEnabled":true,
         "runtimeCredentialKeyThumbprint":"credential","runtimeSigningKeyThumbprint":"signing",
         "rustRuntimeStorage":{"storageIncarnationId":"disk"},
         "rustStorageEnrollment":{"phase":"committed","generation":1,"sourceSandboxId":"machine-bob","storageIncarnationId":"disk","credentialKeyThumbprint":"credential","signingKeyThumbprint":"signing"},
@@ -178,6 +179,100 @@ async fn gateway_ack_and_early_readiness_preserve_checkout_and_initial_command_f
         intents, 1,
         "early readiness must not retire or duplicate the initial command"
     );
+    // The task's first message is a server-admitted mailbox command. An early
+    // agent leases and accepts it while the checkout still runs, and the
+    // public timing says so instead of waiting for repository readiness.
+    let envelope = zuse_protocol::cloud_commands::CommandEnvelope {
+        protocol_version: zuse_protocol::cloud_commands::PROTOCOL_VERSION,
+        workspace_id: "ws-bob".into(),
+        session_id: "session-bob".into(),
+        command_id: "launch:ws-bob".into(),
+        kind: "zuse.session.run".into(),
+        fingerprint: format!("hmac-sha256:{}", "a".repeat(43)),
+        schema_version: 1,
+        key_version: 1,
+        destruction_fence: 0,
+        created_at: now,
+        iv: "iv".into(),
+        ciphertext: "ciphertext".into(),
+        dependencies: vec![],
+        actor: None,
+    };
+    sqlx::query(
+        "INSERT INTO zuse_rust_mailboxes(workspace_id,sequence,revision) VALUES('ws-bob',1,1)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO zuse_rust_mailbox_commands(workspace_id,command_id,workspace_sequence,revision,lane,fingerprint,envelope,envelope_bytes,state,accepted_at,updated_at) VALUES('ws-bob','launch:ws-bob',1,1,'task-execution:session-bob',$1,$2,1,'waiting-for-runtime',$3,$3)")
+        .bind(&envelope.fingerprint).bind(serde_json::to_value(&envelope).unwrap()).bind(now).execute(&pool).await.unwrap();
+    let page = control
+        .command_lease(
+            "ws-bob",
+            "runtime-fixture",
+            &zuse_protocol::cloud_commands::LeaseRequest {
+                control_only: false,
+                max_items: None,
+                storage_incarnation_id: "disk".into(),
+                wait_ms: None,
+                after_revision: None,
+            },
+            now + 3,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        page.leases.len(),
+        1,
+        "an early agent leases the first message before the checkout is ready"
+    );
+    let ack: zuse_protocol::cloud_commands::RuntimeAcknowledgment = serde_json::from_value(
+        json!({"commandId":"launch:ws-bob","leaseToken":page.leases[0].lease_token,"fingerprint":envelope.fingerprint,"state":"applied"}),
+    )
+    .unwrap();
+    control
+        .command_ack("ws-bob", "runtime-fixture", &ack, now + 4)
+        .await
+        .unwrap();
+    let accepted: Value = sqlx::query_scalar(
+        "SELECT to_jsonb(w) FROM api_cloud_workspaces w WHERE workspace_id='ws-bob'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let timings = &accepted["request_config"]["startupTimings"];
+    assert_eq!(timings["messageAcceptedAt"], now + 4);
+    assert!(timings["repositoryReadyAt"].is_null());
+    assert_eq!(accepted["state"], "setup");
+    let public = crate::store::Workspace {
+        row: accepted.clone(),
+    }
+    .public();
+    assert_eq!(public["startupTimings"]["agentReadyAt"], now + 2);
+    assert_eq!(public["startupTimings"]["messageAcceptedAt"], now + 4);
+    // Repository readiness completes the launch later without moving the
+    // earlier acceptance.
+    control
+        .ready_launch(
+            "ws-bob",
+            "runtime-fixture",
+            zuse_protocol::cloud::CloudRuntimeReady {
+                phase: "agent-started".into(),
+                launch_command_id: Some("launch:ws-bob".into()),
+                session_head_version: Some(1),
+            },
+            now + 9,
+        )
+        .await
+        .unwrap();
+    let completed: Value = sqlx::query_scalar(
+        "SELECT request_config->'startupTimings' FROM api_cloud_workspaces WHERE workspace_id='ws-bob'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(completed["repositoryReadyAt"], now + 9);
+    assert_eq!(completed["messageAcceptedAt"], now + 4);
     let mut failed = row.clone();
     failed["request_config"]["preparation"]["repository"]["state"] = json!("failed");
     assert!(!RuntimeControl::early_agent_ready(&failed));

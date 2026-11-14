@@ -452,6 +452,16 @@ impl RuntimeControl {
         if super::task_commands::command_mode(&row) {
             self.task_delivery_fact_tx(&mut tx, id, ack, now).await?;
         }
+        if ack.state == zuse_protocol::cloud_commands::AcknowledgmentState::Applied {
+            super::stamp_initial_command_timing(
+                &mut tx,
+                id,
+                &ack.command_id,
+                "messageAcceptedAt",
+                now,
+            )
+            .await?;
+        }
         let result = status_row(&mut tx, id, &ack.command_id).await?;
         tx.commit().await?;
         if super::task_commands::command_mode(&row) {
