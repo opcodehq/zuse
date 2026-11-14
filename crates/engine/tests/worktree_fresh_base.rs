@@ -1,7 +1,8 @@
 //! New worktrees start from the remote's latest commits: the base is fetched
 //! first, `HEAD` means the remote's default branch, unpushed local commits
-//! win over the remote, and an unreachable remote falls back to the local
-//! ref without failing creation.
+//! on top of the remote win, a diverged local default branch loses to the
+//! remote, and an unreachable remote falls back to the local ref without
+//! failing creation.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -141,10 +142,54 @@ async fn named_branch_behind_its_remote_uses_the_remote_commit() {
 #[tokio::test(flavor = "multi_thread")]
 async fn unpushed_local_commits_win_over_the_remote() {
     let f = fixture();
-    f.push_upstream("landed upstream");
     let local = commit(&f.repo, "unpushed local work");
 
     let (head, _) = f.create("main").await;
+
+    assert_eq!(head, local);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn diverged_default_branch_uses_the_remote_commit() {
+    let f = fixture();
+    // Local main picked up commits the remote never got (e.g. the remote's
+    // history was rewritten after this clone) while the remote moved on.
+    commit(&f.repo, "stale local-only commit");
+    let latest = f.push_upstream("landed upstream");
+
+    let (head, progress) = f.create("main").await;
+    assert_eq!(head, latest);
+    assert_eq!(progress, phases("main", false));
+
+    let (head, _) = f.create("HEAD").await;
+    assert_eq!(head, latest);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn diverged_feature_branch_keeps_the_local_commits() {
+    let f = fixture();
+    git(&f.upstream, &["checkout", "-q", "-b", "feature"]);
+    f.push_upstream("feature on the remote");
+    git(&f.repo, &["fetch", "-q", "origin"]);
+    git(
+        &f.repo,
+        &[
+            "checkout",
+            "-q",
+            "-b",
+            "feature",
+            "--track",
+            "origin/feature",
+        ],
+    );
+    // A local rewrite (rebase/amend) not force-pushed yet...
+    git(&f.repo, &["reset", "-q", "--hard", "main"]);
+    let local = commit(&f.repo, "rebased feature");
+    // ...while the remote branch also moves.
+    f.push_upstream("more remote feature work");
+    git(&f.repo, &["checkout", "-q", "main"]);
+
+    let (head, _) = f.create("feature").await;
 
     assert_eq!(head, local);
 }
