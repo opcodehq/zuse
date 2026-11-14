@@ -77,12 +77,15 @@ fn usable(row: &Value, base: &Value, provider: ProviderId) -> Option<UserImageHi
 /// For a new computer. `source` picks the managed-base build for a release
 /// (agent, model and size compatibility); a newest image on an older, still
 /// verified base is used only when that base can run the requested chat.
-/// Returns the build to launch from and the image, if any.
+/// Returns the build to launch from and the image, if any. A `pinned` build
+/// (staging candidate) only takes an image built on its exact base; it never
+/// switches to another base's build.
 pub(crate) async fn for_new_computer_tx<F>(
     tx: &mut Transaction<'_, Postgres>,
     owner: &str,
     provider: &str,
     build: &Value,
+    pinned: bool,
     source: F,
     now: i64,
 ) -> Result<Option<(Value, UserImageHit)>, ApiError>
@@ -118,6 +121,9 @@ where
                 continue;
             }
             return Ok(Some((build.clone(), hit)));
+        }
+        if pinned {
+            continue;
         }
         // An image on an older base still serves until its rebuild on the
         // newest base verifies, provided that base offers this chat.
