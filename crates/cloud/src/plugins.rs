@@ -28,6 +28,22 @@ use zuse_protocol::plugins::{
     PluginReturnTo, PluginTenant, PluginToolRequest,
 };
 
+/// `plugin-migrate` runs with DDL rights, so the tables it creates belong to
+/// that role. The deployment's restricted application role (as in 0034) needs
+/// read/write on the plugin metadata and the Executor SDK's tables.
+const APP_ROLE_GRANTS: &str = r"DO $grants$
+DECLARE schema_name text := current_schema(); app_role text; item record;
+BEGIN
+ app_role := CASE schema_name WHEN 'zuse_staging' THEN 'zuse_cloud_staging' WHEN 'zuse_production' THEN 'zuse_cloud_production' END;
+ IF app_role IS NOT NULL AND EXISTS(SELECT 1 FROM pg_roles WHERE rolname=app_role) THEN
+  FOR item IN SELECT tablename FROM pg_tables WHERE schemaname=schema_name AND (tablename LIKE 'executor\_%' OR tablename LIKE 'zuse\_plugin\_%' OR tablename='zuse_executor_state') LOOP
+   EXECUTE format('GRANT SELECT,INSERT,UPDATE,DELETE ON TABLE %I.%I TO %I',schema_name,item.tablename,app_role);
+  END LOOP;
+  FOR item IN SELECT sequencename FROM pg_sequences WHERE schemaname=schema_name AND (sequencename LIKE 'executor\_%' OR sequencename LIKE 'zuse\_plugin\_%') LOOP
+   EXECUTE format('GRANT USAGE,SELECT ON SEQUENCE %I.%I TO %I',schema_name,item.sequencename,app_role);
+  END LOOP;
+ END IF;
+END $grants$;";
 pub const MIGRATION: &str = include_str!("../migrations/0009_plugins.sql");
 pub const CALLBACK_PORTS: [u16; 4] = [8976, 8977, 8978, 8979];
 
@@ -346,6 +362,7 @@ impl PluginControl {
             .await?;
         sqlx::raw_sql(MIGRATION).execute(pool).await?;
         executor::Executor::migrate(pool, key).await?;
+        sqlx::raw_sql(APP_ROLE_GRANTS).execute(pool).await?;
         lock.commit().await?;
         Ok(())
     }
