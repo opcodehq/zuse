@@ -14017,9 +14017,8 @@ impl Render for Composer {
                     pickers.render_new_thread_target_selectors(cx)
                 })
             });
-        // The file dropzone lives in the shell (the whole conversation column,
-        // shell.rs `chat-dropzone`); drops land back here via `add_paths`.
-        // The card shows the drop target itself (`tray::drop_overlay`).
+        // The shell routes desktop files and workspace paths back here.
+        // Workspace paths show their drop target on the card.
         // Frosted: the pill backdrop-blurs the transcript scrolling under it
         // (the popover glass treatment; radius matches the pill's rounding).
         // The shell keeps this entity under one parent on both routes. The
@@ -14028,7 +14027,7 @@ impl Render for Composer {
             .relative()
             .id("composer-surface")
             .child(crate::frost::floating_glass(surface_radius, 20.0, body))
-            .child(tray::drop_overlay(&theme, cx))
+            .child(tray::drop_overlay(&theme, self.side_chat, cx))
             .child({
                 let measured = self.surface_bounds.clone();
                 // All prepaint completes before any paint. The background

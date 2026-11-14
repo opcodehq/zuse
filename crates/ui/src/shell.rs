@@ -15439,6 +15439,7 @@ impl Render for Shell {
 
         let root = div()
             .id("shell-root")
+            .group("window-attachment-drop")
             .track_focus(&self.shortcut_focus)
             .child(div().track_focus(&self.unfocused))
             .relative()
@@ -15463,6 +15464,20 @@ impl Render for Shell {
                 ..Default::default()
             })
             .text_size(crate::typography::text_base())
+            .when(
+                matches!(self.route, Route::Chat)
+                    && matches!(gate, GatePhase::Ready)
+                    && !restart_required
+                    && !self.onboarding.read(cx).visible(),
+                |root| {
+                    root.on_drop(cx.listener(|this, paths: &gpui::ExternalPaths, _, cx| {
+                        this.conversation_composer(cx).update(cx, |composer, cx| {
+                            composer.add_paths(paths.paths().to_vec(), cx)
+                        });
+                        cx.notify();
+                    }))
+                },
+            )
             .on_drag_move::<SidebarSessionDrag>(cx.listener(Self::contain_pinned_session_drag))
             .on_drop::<SidebarSessionDrag>(cx.listener(|this, _, _, cx| {
                 this.cancel_sidebar_session_transfer(cx);
@@ -15998,6 +16013,15 @@ impl Render for Shell {
                     })
                     .child(main)
                     .children(tab_row)
+                    .when(
+                        on_chat && !restart_required && !self.onboarding.read(cx).visible(),
+                        |column| {
+                            column.child(Self::chat_attachment_overlay(
+                                Theme::of(cx),
+                                self.workspace_gutter() > 0.,
+                            ))
+                        },
+                    )
                     .into_any_element();
                 // The whole app page is one keyed `animate-in` entrance (zuse
                 // App.tsx `<div key={phase} className="animate-in h-full">`):

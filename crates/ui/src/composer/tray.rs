@@ -456,8 +456,12 @@ pub(crate) enum TrayRow {
 }
 
 /// The in-card drop target (`inset-1 rounded-lg border-dashed bg-popover`):
-/// shown only while a file or workspace path is dragged over the card.
-pub(crate) fn drop_overlay(theme: &Theme, cx: &gpui::App) -> gpui::Stateful<gpui::Div> {
+/// shown while a workspace path is dragged over the card.
+pub(crate) fn drop_overlay(
+    theme: &Theme,
+    side_chat: bool,
+    cx: &gpui::App,
+) -> gpui::Stateful<gpui::Div> {
     let theme = theme.for_popup();
     div()
         .id("composer-drop-overlay")
@@ -466,9 +470,6 @@ pub(crate) fn drop_overlay(theme: &Theme, cx: &gpui::App) -> gpui::Stateful<gpui
         .left_0()
         .right_0()
         .bottom_0()
-        .opacity(0.0)
-        .drag_over::<gpui::ExternalPaths>(|style, _, _, _| style.opacity(1.0))
-        .drag_over::<crate::files::WorkspacePathDrag>(|style, _, _, _| style.opacity(1.0))
         .child(
             div()
                 .absolute()
@@ -479,7 +480,9 @@ pub(crate) fn drop_overlay(theme: &Theme, cx: &gpui::App) -> gpui::Stateful<gpui
                 .rounded(px(super::COMPOSER_RADIUS - 2.0))
                 .border_1()
                 .border_dashed()
-                .border_color(theme.accent),
+                .border_color(theme.accent)
+                .opacity(0.0)
+                .drag_over::<crate::files::WorkspacePathDrag>(|style, _, _, _| style.opacity(1.0)),
         )
         .child(
             div()
@@ -488,6 +491,7 @@ pub(crate) fn drop_overlay(theme: &Theme, cx: &gpui::App) -> gpui::Stateful<gpui
                 .left_0()
                 .right_0()
                 .h(px(26.0))
+                .debug_selector(|| "composer-drop-hint".into())
                 .flex()
                 .items_center()
                 .justify_center()
@@ -495,6 +499,13 @@ pub(crate) fn drop_overlay(theme: &Theme, cx: &gpui::App) -> gpui::Stateful<gpui
                 .text_size(px(12.0))
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(theme.text_muted)
+                .opacity(0.0)
+                .drag_over::<crate::files::WorkspacePathDrag>(|style, _, _, _| style.opacity(1.0))
+                .when(!side_chat, |hint| {
+                    hint.group_drag_over::<gpui::ExternalPaths>("window-attachment-drop", |style| {
+                        style.opacity(1.0)
+                    })
+                })
                 .child(
                     icon(icons::UPLOAD)
                         .size(px(14.0))

@@ -395,6 +395,36 @@ fn staged_names(composer: &Entity<Composer>, cx: &App) -> Vec<String> {
         .collect()
 }
 
+#[gpui::test]
+fn external_drop_on_sidebar_attaches_once_to_the_main_chat(cx: &mut TestAppContext) {
+    let (shell, cx) = setup_with_shell(cx, true);
+    let (_files, paths) = external_files();
+    let sidebar = cx.debug_bounds("sidebar-column").expect("sidebar");
+    let overlay = cx
+        .debug_bounds("chat-attachment-overlay")
+        .expect("chat drop feedback");
+    let chat = cx.debug_bounds("conversation-column").expect("chat column");
+    assert!(chat.contains(&overlay.center()));
+    assert!(!overlay.contains(&sidebar.center()));
+    for inset in [
+        overlay.left() - chat.left(),
+        chat.right() - overlay.right(),
+        overlay.top() - chat.top(),
+        chat.bottom() - overlay.bottom(),
+    ] {
+        assert!((px(0.)..=px(1.)).contains(&inset), "inset: {inset:?}");
+    }
+    drop_external(cx, paths, sidebar.center());
+    shell.read_with(cx, |shell, cx| {
+        assert_eq!(
+            staged_names(&shell.composer, cx),
+            ["notes.zip", "Image 2.png"]
+        );
+        assert!(staged_names(&shell.side_chats[&1].composer, cx).is_empty());
+        assert!(staged_names(&shell.side_chats[&2].composer, cx).is_empty());
+    });
+}
+
 /// A mixed drop from outside the app lands in the conversation it is released
 /// over, main or side chat: the archive and the image are staged with chips in
 /// that draft, and the folder and the oversize file are both named in that

@@ -1,10 +1,29 @@
 use super::*;
 
 impl Shell {
-    /// The entire conversation receives attachments in its own composer,
-    /// regardless of which pane had keyboard focus when the drag started.
-    /// The drop target itself shows inside the composer card
-    /// (`composer::tray::drop_overlay`).
+    pub(super) fn chat_attachment_overlay(
+        theme: &Theme,
+        rounded: bool,
+    ) -> gpui::Stateful<gpui::Div> {
+        div()
+            .id("chat-attachment-overlay")
+            .debug_selector(|| "chat-attachment-overlay".into())
+            .absolute()
+            .inset_0()
+            .when(rounded, |overlay| {
+                overlay.rounded(px(zuse_viewport::workspace_style::RADIUS - 1.0))
+            })
+            .border_1()
+            .border_dashed()
+            .border_color(theme.accent)
+            .opacity(0.0)
+            .drag_over::<gpui::ExternalPaths>(|style, _, _, _| style)
+            .group_drag_over::<gpui::ExternalPaths>("window-attachment-drop", |style| {
+                style.opacity(1.0)
+            })
+    }
+
+    /// A conversation receives drops in its own composer, including side chats.
     pub(super) fn chat_dropzone(
         &self,
         id: impl Into<gpui::ElementId>,
