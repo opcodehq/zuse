@@ -220,7 +220,10 @@ pub(super) fn counts(additions: u64, deletions: u64, size: f32, theme: &Theme) -
 
 /// A file's change as a small outlined square: plus for added, a dot for
 /// modified, a bar for deleted, an arrow for renamed.
-fn status_badge(status: crate::changes::FileStatus, theme: &Theme) -> gpui::Stateful<gpui::Div> {
+pub(crate) fn status_badge(
+    status: crate::changes::FileStatus,
+    theme: &Theme,
+) -> gpui::Stateful<gpui::Div> {
     use crate::changes::FileStatus;
     let (label, color) = match status {
         FileStatus::Added => ("Added", theme.success),

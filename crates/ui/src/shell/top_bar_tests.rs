@@ -150,14 +150,17 @@ fn sidebar_opens_plugins_and_pull_requests_without_overview_tabs(cx: &mut TestAp
 }
 
 #[gpui::test]
-fn conversations_and_add_button_precede_other_tabs(cx: &mut TestAppContext) {
+fn review_stays_out_of_conversation_tabs(cx: &mut TestAppContext) {
     let (shell, cx) = setup(cx);
-    let (chat_id, diff_id) = cx.update(|window, cx| {
+    let chat_id = cx.update(|window, cx| {
         shell.update(cx, |shell, cx| {
             let chat_id = shell.state.read(cx).selected_chat.clone().unwrap();
             shell.active_chat = chat_id.clone();
             shell.open_review_tab(window, cx);
-            (chat_id, shell.active_main_diff(cx).unwrap())
+            assert!(shell.review_surface(cx).is_some());
+            assert!(shell.main_tab_rows(cx).is_empty());
+            assert_eq!(shell.active_main_tab(cx), None);
+            chat_id
         })
     });
     cx.update(|window, cx| window.draw(cx).clear());
@@ -167,19 +170,13 @@ fn conversations_and_add_button_precede_other_tabs(cx: &mut TestAppContext) {
         ))
         .unwrap();
     let add = cx.debug_bounds("add-thread-conversation").unwrap();
-    let diff = cx
-        .debug_bounds(Box::leak(
-            format!("main-tab-diff-{diff_id}").into_boxed_str(),
-        ))
-        .unwrap();
     assert!(chat.right() <= add.left());
-    assert!(add.right() <= diff.left());
     assert!(chat.top() >= px(0.) && chat.bottom() <= px(Theme::TITLEBAR_HEIGHT));
     assert_eq!(chat.size.height, px(28.));
 }
 
 #[gpui::test]
-fn sibling_chats_keep_thread_review_tabs(cx: &mut TestAppContext) {
+fn sibling_chats_keep_their_own_review_surfaces(cx: &mut TestAppContext) {
     let (shell, cx) = setup(cx);
     cx.update(|window, cx| {
         shell.update(cx, |shell, cx| {
@@ -189,13 +186,14 @@ fn sibling_chats_keep_thread_review_tabs(cx: &mut TestAppContext) {
             shell.state.update(cx, |state, _| state.chats.push(sibling));
             shell.active_chat = "chat".into();
             shell.open_review_tab(window, cx);
-            let review = shell.active_main_diff(cx).unwrap();
+            let review = shell.review_surface(cx).unwrap();
             shell.open_chat("second-chat".into(), cx);
             shell.active_chat = "second-chat".into();
-            assert_eq!(shell.main_tab_rows(cx).len(), 1);
-            assert_eq!(shell.active_main_tab(cx), None);
-            shell.activate_main_tab(Some(main_tabs::MainTab::Diff(review)), cx);
-            assert_eq!(shell.active_main_diff(cx), Some(review));
+            assert!(shell.review_surface(cx).is_none());
+            shell.open_review_tab(window, cx);
+            assert_ne!(shell.review_surface(cx), Some(review));
+            shell.active_chat = "chat".into();
+            assert_eq!(shell.review_surface(cx), Some(review));
         })
     });
 }

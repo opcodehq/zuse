@@ -8,7 +8,7 @@ pub(super) enum PanelChoice {
     Files,
     /// The chat's pull request, when its branch has one.
     PullRequest,
-    /// The review of the checkout's uncommitted changes (a main-area tab).
+    /// The review of the checkout's changes.
     Changes,
     Terminal,
     Browser,
@@ -22,7 +22,7 @@ impl PanelChoice {
         match self {
             Self::Files => "Files",
             Self::PullRequest => "PR",
-            Self::Changes => "Changes",
+            Self::Changes => "Diff",
             Self::Terminal => "Terminal",
             Self::Browser => "Browser",
             Self::Simulator => "Simulator",
@@ -124,7 +124,7 @@ impl Shell {
         let pull_request = self
             .chat_pull_request_url(cx)
             .map(|url| self.chat_pull_request_open(&url, cx));
-        let review_open = self.main_tab_rows(cx).iter().any(|row| row.review);
+        let review_open = self.review_surface(cx).is_some();
         panel_choices(
             files_open,
             pull_request,

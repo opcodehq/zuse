@@ -758,7 +758,6 @@ impl Shell {
                 let main_tabs::MainTabRow {
                     tab,
                     title,
-                    review,
                     dirty,
                     path,
                 } = row;
@@ -784,19 +783,14 @@ impl Shell {
                     .size(px(14.))
                     .flex_none()
                     .into_any_element(),
-                    None => icon(if review {
-                        icons::GIT_COMPARE
-                    } else {
-                        icons::GIT_BRANCH
-                    })
-                    .size(px(13.))
-                    .flex_none()
-                    .text_color(theme.text_muted)
-                    .into_any_element(),
+                    None => icon(icons::GIT_BRANCH)
+                        .size(px(13.))
+                        .flex_none()
+                        .text_color(theme.text_muted)
+                        .into_any_element(),
                 };
                 let close_label = match tab {
                     main_tabs::MainTab::File(_) => "Close file",
-                    main_tabs::MainTab::Diff(_) if review => "Close review",
                     main_tabs::MainTab::Diff(_) => "Close diff",
                 };
                 // An unsaved file keeps a dot in the close slot until hovered.

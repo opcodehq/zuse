@@ -4,6 +4,7 @@ use crate::tooltip::TooltipExt as _;
 use zuse_i18n::messages as msg;
 #[path = "pull_request_code.rs"]
 mod code;
+pub(crate) use code::status_badge;
 #[path = "pull_request_handoff.rs"]
 mod handoff;
 #[path = "pull_request_interactions.rs"]

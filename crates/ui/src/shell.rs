@@ -3995,7 +3995,15 @@ impl Shell {
                     .get(id)
                     // Contextual title (user request): the pane's scope
                     // label, or the pinned commit's subject.
-                    .map(|changes| (*surface, changes.read(cx).tab_title(), false, None)),
+                    .map(|changes| {
+                        let changes = changes.read(cx);
+                        let title = if changes.is_review() {
+                            "Diff".into()
+                        } else {
+                            changes.tab_title()
+                        };
+                        (*surface, title, false, None)
+                    }),
                 RightSurface::Terminal(tab) => terminals
                     .iter()
                     .find(|(k, _, _)| k == tab)
@@ -4605,9 +4613,7 @@ impl Shell {
         });
     }
 
-    /// A right-pane diff tab with its own scope/base selection. The picker's
-    /// Diffs card and the `+` menu open the main-area review instead (see
-    /// [`Self::open_review_tab`]); tests still drive the pane's diff tabs.
+    /// A right-pane diff tab with its own scope/base selection.
     #[cfg(test)]
     fn add_diff_surface(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let changes = cx.new(|cx| Changes::new(self.state.clone(), cx));
@@ -16025,7 +16031,7 @@ impl Render for Shell {
                         cx,
                     )
                 });
-                // A review or commit-diff tab stands in for the conversation.
+                // A commit-diff tab stands in for the conversation.
                 let main = match matches!(self.route, Route::Chat)
                     .then(|| self.active_main_tab(cx))
                     .flatten()
@@ -20765,8 +20771,8 @@ impl Shell {
     }
     /// Right-pane and main-area tab states for review captures:
     /// `panel/launcher` (the empty pane's surface list), `panel/files` (the
-    /// explorer over a synthetic tree) and `main/review` (the review tab in
-    /// the main area, beside a side chat's tab).
+    /// explorer over a synthetic tree) and `main/review` (the review in
+    /// the right pane, beside a side chat's tab).
     pub fn fixture_open_panel(&mut self, route: &str, window: &mut Window, cx: &mut Context<Self>) {
         self.fixture_reset_panels(cx);
         self.state.update(cx, |state, cx| {
@@ -20801,7 +20807,7 @@ impl Shell {
                         {"path": "README.md", "oldPath": null, "index": "unchanged", "worktree": "modified"},
                     ],
                 }});
-                if let Some(id) = self.active_main_diff(cx)
+                if let Some(id) = self.review_surface(cx)
                     && let Some(changes) = self.diffs.get(&id).cloned()
                 {
                     changes.update(cx, |changes, cx| {
@@ -20875,11 +20881,11 @@ impl Shell {
                     }
                     cx.notify();
                 });
-                // The review needs the room: fold the pane and the tree.
+                // Start the review with the file tree folded.
                 self.close_files_panel(window, cx);
                 self.set_surfaces_open(false, cx);
                 self.open_review_tab(window, cx);
-                if let Some(id) = self.active_main_diff(cx)
+                if let Some(id) = self.review_surface(cx)
                     && let Some(changes) = self.diffs.get(&id).cloned()
                 {
                     changes.update(cx, |changes, cx| {

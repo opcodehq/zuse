@@ -1,4 +1,4 @@
-//! Review, commit-diff and file tabs in the main area. They follow the
+//! Commit-diff and file tabs in the main area. They follow the
 //! conversation tabs in the titlebar strip; while one is active it stands in
 //! for the conversation, and closing it returns to the chat. The right pane
 //! keeps the file tree, browser, terminal and history.
@@ -19,16 +19,12 @@ pub(super) struct MainTabs {
     tabs: Vec<MainTab>,
     /// The tab the main area shows; `None` shows the conversation.
     active: Option<MainTab>,
-    /// The full changes review, when open. There is at most one.
-    review: Option<u64>,
 }
 
 /// A main-area tab as the titlebar strip draws it.
 pub(super) struct MainTabRow {
     pub(super) tab: MainTab,
     pub(super) title: SharedString,
-    /// The review of every change (rather than one commit's diff).
-    pub(super) review: bool,
     /// A file with unsaved edits.
     pub(super) dirty: bool,
     /// A file's workspace path, for its icon and tooltip.
@@ -67,7 +63,7 @@ impl Shell {
             .filter(|tab| self.main_tab_live(*tab))
     }
 
-    /// The active main-area diff (review or commit), if one is on screen.
+    /// The active main-area commit diff, if one is on screen.
     pub(super) fn active_main_diff(&self, cx: &App) -> Option<u64> {
         match self.active_main_tab(cx)? {
             MainTab::Diff(id) => Some(id),
@@ -96,16 +92,10 @@ impl Shell {
             .filter_map(|tab| match *tab {
                 MainTab::Diff(id) => {
                     let changes = self.diffs.get(&id)?;
-                    let review = tabs.review == Some(id);
-                    let title = if review {
-                        SharedString::from("Review")
-                    } else {
-                        changes.read(cx).tab_title()
-                    };
+                    let title = changes.read(cx).tab_title();
                     Some(MainTabRow {
                         tab: *tab,
                         title,
-                        review,
                         dirty: false,
                         path: None,
                     })
@@ -118,7 +108,6 @@ impl Shell {
                         title: path
                             .map(|path| workspace_file_title(path))
                             .unwrap_or_else(|| SharedString::from("File")),
-                        review: false,
                         dirty: file.read(cx).has_unsaved_changes(),
                         path: path.cloned().map(Into::into),
                     })
@@ -127,25 +116,35 @@ impl Shell {
             .collect()
     }
 
-    /// Open (or focus) the review of every change in the chat's checkout.
+    /// The current chat's review surface, if it is open in the right pane.
+    pub(super) fn review_surface(&self, cx: &App) -> Option<u64> {
+        self.right_tabs
+            .get(&self.panel_key(cx))?
+            .iter()
+            .find_map(|surface| {
+                let RightSurface::Diff(id) = surface else {
+                    return None;
+                };
+                self.diffs
+                    .get(id)
+                    .filter(|changes| changes.read(cx).is_review())
+                    .map(|_| *id)
+            })
+    }
+
+    /// Open or focus the checkout review beside the conversation.
     pub(super) fn open_review_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.active_chat.is_empty() {
             return;
         }
-        let key = self.main_tabs_key(cx);
-        self.collapse_surfaces_if_empty(&self.panel_key(cx), cx);
-        if let Some(id) = self
-            .main_tabs
-            .get(&key)
-            .and_then(|tabs| tabs.review)
-            .filter(|id| self.diffs.contains_key(id))
-        {
-            self.activate_main_tab(Some(MainTab::Diff(id)), cx);
-            return;
+        self.activate_main_tab(None, cx);
+        if let Some(id) = self.review_surface(cx) {
+            self.set_right_active(RightSurface::Diff(id), cx);
+        } else {
+            let changes = cx.new(|cx| Changes::for_sidebar_review(self.conversation_state(cx), cx));
+            self.register_diff_surface(changes, window, cx);
         }
-        let changes = cx.new(|cx| Changes::new(self.conversation_state(cx), cx));
-        let id = self.push_main_tab(changes, window, cx);
-        self.main_tabs.entry(key).or_default().review = Some(id);
+        self.set_surfaces_open(true, cx);
     }
 
     /// A History row click: the commit's own diff opens as a main-area tab.
@@ -290,9 +289,6 @@ impl Shell {
             return;
         };
         tabs.tabs.retain(|candidate| *candidate != tab);
-        if tabs.review == Some(id) {
-            tabs.review = None;
-        }
         let was_active = tabs.active == Some(tab);
         if was_active {
             tabs.active = None;
@@ -322,7 +318,7 @@ impl Shell {
         }
     }
 
-    /// The main column while a review or diff tab is active: the diff
+    /// The main column while a commit-diff tab is active: the diff
     /// options row under the titlebar, then the diff.
     pub(super) fn render_main_diff(&mut self, id: u64, cx: &mut Context<Self>) -> AnyElement {
         let Some(changes) = self.diffs.get(&id).cloned() else {
@@ -379,7 +375,7 @@ mod tests {
     use gpui::{AppContext, TestAppContext};
 
     #[gpui::test]
-    fn review_tab_replaces_the_chat_until_closed(cx: &mut TestAppContext) {
+    fn review_opens_once_in_the_right_pane(cx: &mut TestAppContext) {
         let dir = tempfile::tempdir().unwrap();
         cx.update(|cx| {
             gpui_base::init(cx);
@@ -407,30 +403,32 @@ mod tests {
             .update(cx, |shell, window, cx| {
                 // The new-session canvas has nothing to review.
                 shell.open_review_tab(window, cx);
-                assert!(shell.main_tab_rows(cx).is_empty());
+                assert!(shell.review_surface(cx).is_none());
 
                 shell.active_chat = "chat".into();
                 shell.open_review_tab(window, cx);
-                let review = shell.active_main_diff(cx).expect("review is active");
-                // Reopening focuses the same review; the right pane stays shut.
-                shell.activate_main_tab(None, cx);
-                assert_eq!(shell.active_main_diff(cx), None);
-                shell.open_review_tab(window, cx);
-                assert_eq!(shell.active_main_diff(cx), Some(review));
-                assert_eq!(shell.main_tab_rows(cx).len(), 1);
-                assert!(!shell.right_pane_open(cx));
+                let review = shell.review_surface(cx).expect("review is open");
+                assert!(shell.right_pane_open(cx));
+                assert_eq!(shell.resolved_right_active(cx), RightSurface::Diff(review));
+                assert_eq!(shell.active_main_tab(cx), None);
+                assert!(shell.main_tab_rows(cx).is_empty());
 
-                // Tabs belong to their chat.
+                // Reopening focuses the existing surface even after it was hidden.
+                shell.set_surfaces_open(false, cx);
+                shell.open_review_tab(window, cx);
+                assert_eq!(shell.review_surface(cx), Some(review));
+                assert!(shell.right_pane_open(cx));
+                assert_eq!(shell.right_tabs.get("chat").unwrap().len(), 1);
+
+                // Each chat has its own pane and can reopen a closed review.
                 shell.active_chat = "other".into();
-                assert_eq!(shell.active_main_diff(cx), None);
+                assert!(shell.review_surface(cx).is_none());
                 shell.active_chat = "chat".into();
-                assert_eq!(shell.active_main_diff(cx), Some(review));
-
-                // Closing the active tab returns to the conversation.
-                shell.close_main_tab(MainTab::Diff(review), cx);
-                assert_eq!(shell.active_main_diff(cx), None);
-                assert!(shell.main_tab_rows(cx).is_empty());
+                shell.close_right_surface(RightSurface::Diff(review), window, cx);
+                assert!(shell.review_surface(cx).is_none());
                 assert!(!shell.diffs.contains_key(&review));
+                shell.open_review_tab(window, cx);
+                assert_ne!(shell.review_surface(cx), Some(review));
             })
             .unwrap();
     }
