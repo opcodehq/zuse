@@ -51,6 +51,7 @@ and it sends the key only to `*.prized.dev` over HTTPS. The script:
 | `R/status`, `R/recovery`, `R/boot`, `R/state` | runtime status, recovery state, staged and installed boot credentials |
 | `R/preparation/{plan.json,status/manifest.json}` | image plan and the manifest from `prepare-image` |
 | `~/.zuse-data`, `~/workspace` | runtime data (supervisor IPC only) and an empty workspace |
+| `R/libexec/node-v<version>` | Node.js LTS: the release and SHA-256 pinned in `managed-base-install.sh`. `node`, `npm`, `npx` and `corepack` are linked into `~/.local/bin`, the first PATH entry everywhere; npm's global prefix stays `~/.local` |
 
 `~/.profile` and `~/.bashrc` put `R/bin` at the front of PATH. In `.bashrc` the
 PATH line comes first, ahead of the early return for non-interactive shells.

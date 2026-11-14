@@ -34,7 +34,9 @@ CHUNK = 95 * 1024 * 1024  # Prized refuses uploads over 100 MiB per file.
 BUNDLE_FILES = ("runtime", "claude", "codex", "grok", "codex-assets.tar", "harness-manifest.json", "bundle.json")
 # The repository's copies support the home-directory relocation; the bundle's are older.
 REPO_FILES = ("launch-runtime.sh", "launch-recovery.sh", "runtime-supervisor.py", "runtime-repair.py",
-              "runtime-recreation.py", "harness-release.py")
+              "runtime-recreation.py", "harness-release.py",
+              # Read only for its pinned Node.js release and checksum.
+              "managed-base-install.sh")
 LOCAL_FILES = ("install.sh", "zuse-launch", "zuse-supervise", "launch-rust-recovery")
 RESOURCES = {"vcpu": 2, "memoryMb": 4096, "diskGb": 20}
 
@@ -249,6 +251,7 @@ def verify(box, harness):
         "supervisorPing": f"python3 {ROOT}/lib/runtime-supervisor.py --data-dir {HOME}/.zuse-data ping",
         "gh": f"{ROOT}/bin/gh --version | head -n 1",
         "loginShellGh": "bash -lc 'command -v gh && gh --version | head -n 1'",
+        "node": f"env -i HOME={HOME} PATH={HOME}/.local/bin:/usr/bin:/bin node --version",
         "claude": f"h=$(mktemp -d); env -i PATH=/usr/bin:/bin HOME=$h DISABLE_AUTOUPDATER=1 {rel}/claude --version; rc=$?; rm -rf $h; exit $rc",
         "codexAppServer": (f"h=$(mktemp -d); (printf '%s\\n' {shlex.quote(probe)}; sleep 8) | env -i PATH=/usr/bin:/bin HOME=$h "
                            f"timeout 20 {rel}/codex-package/bin/codex app-server 2>/dev/null | head -n 1; rm -rf $h"),
@@ -263,6 +266,7 @@ def verify(box, harness):
     assert ping["version"] == 1 and ping["bound"] is False and ping["childAlive"] is False, "supervisor_not_idle"
     assert results["gh"].startswith("gh version 2."), "gh_version_invalid"
     assert results["loginShellGh"].splitlines()[0] == f"{ROOT}/bin/gh", "gh_login_path_invalid"
+    assert results["node"].startswith("v"), "node_unavailable"
     reply = json.loads(results["codexAppServer"])
     assert reply.get("id") == 1 and "result" in reply, "codex_app_server_initialize_failed"
     assert results["workspaceEmpty"] == "empty" and results["dataDir"] == ".runtime-supervision", "base_not_clean"

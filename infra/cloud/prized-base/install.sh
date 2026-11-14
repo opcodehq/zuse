@@ -26,6 +26,45 @@ chmod 755 "$R" "$R"/{bin,lib,libexec,harnesses,harnesses/releases,harnesses/chan
 install -m 755 "$input/runtime" "$R/bin/zuse-cloud-runtime"
 ln -sfn zuse-cloud-runtime "$R/bin/zuse-grok-auth"
 
+# Node.js LTS: the exact release and SHA-256 the root base pins in
+# managed-base-install.sh (the provider image's /usr/bin/node is an older line).
+# Unpacked under R/libexec and linked into ~/.local/bin, the first PATH entry
+# for agents, repository and machine setup scripts, and login shells. npm's
+# global prefix stays ~/.local, so `npm i -g` tools land next to it.
+node_version="$(sed -n 's/^node_version=\([0-9][0-9.]*\)$/\1/p' "$input/repo/managed-base-install.sh")"
+node_sha256="$(sed -n 's/^node_sha256=\([0-9a-f]\{64\}\)$/\1/p' "$input/repo/managed-base-install.sh")"
+[[ "$node_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "$node_sha256" =~ ^[0-9a-f]{64}$ ]] \
+  || { printf '%s\n' node_pin_missing >&2; exit 1; }
+node_dir="$R/libexec/node-v$node_version"
+if [[ ! -x "$node_dir/bin/node" ]]; then
+  node_work="$(mktemp -d "$H/.zuse-node.XXXXXX")"
+  python3 -I -B - "$node_version" "$node_sha256" "$node_work/node.tar.xz" <<'PY'
+import hashlib,sys,urllib.request
+version,expected,target=sys.argv[1:4]
+url=f'https://nodejs.org/dist/v{version}/node-v{version}-linux-x64.tar.xz'
+with urllib.request.urlopen(urllib.request.Request(url,headers={'User-Agent':'zuse-base-builder'}),timeout=300) as r:
+    data=r.read((200<<20)+1)
+assert len(data)<=200<<20,'node_download_too_large'
+assert hashlib.sha256(data).hexdigest()==expected,'node_checksum_mismatch'
+with open(target,'wb') as out:out.write(data)
+PY
+  tar -xJf "$node_work/node.tar.xz" -C "$node_work" --no-same-owner
+  chmod -R u+rwX,go+rX,go-w "$node_work/node-v$node_version-linux-x64"
+  mv -T "$node_work/node-v$node_version-linux-x64" "$node_dir"
+  rm -rf -- "$node_work"
+fi
+mkdir -p "$H/.local/bin"
+chmod 755 "$H/.local" "$H/.local/bin"
+for tool in node npm npx corepack; do
+  ln -sfn "$node_dir/bin/$tool" "$H/.local/bin/$tool"
+done
+node_check="$(env -i HOME="$H" PATH="$H/.local/bin:/usr/local/bin:/usr/bin:/bin" \
+  /bin/bash --noprofile --norc -ec 'node --version; npm --version >/dev/null; npx --version >/dev/null; corepack --version >/dev/null; npm prefix -g')" \
+  || { printf '%s\n' node_task_user_unavailable >&2; exit 1; }
+[[ "$node_check" == "v$node_version"$'\n'"$H/.local" ]] || { printf '%s\n' node_task_user_unexpected >&2; exit 1; }
+[[ "$(bash -lc 'node --version')" == "v$node_version" ]] || { printf '%s\n' node_login_path_invalid >&2; exit 1; }
+rm -rf -- "$H/.npm"
+
 # Supervisor and its sibling modules must share one directory.
 for helper in runtime-supervisor.py runtime-repair.py runtime-recreation.py; do
   install -m 555 "$input/repo/$helper" "$R/lib/.$helper.next"
