@@ -66,6 +66,8 @@ impl Database {
             MIGRATION,
             // Applying it twice is a no-op.
             MIGRATION,
+            REPOSITORIES_MIGRATION,
+            REPOSITORIES_MIGRATION,
             "CREATE TABLE api_cloud_billing_periods(period_id text PRIMARY KEY,account_id text,status text,currency text,period_start bigint,period_end bigint,included_provider_cost_micros bigint,markup_basis_points bigint,overage_cap_micros bigint); CREATE TABLE api_cloud_billing_ledger(period_id text,kind text,amount_micros bigint); CREATE TABLE api_cloud_billing_reservations(period_id text,provider_cost_micros bigint,expires_at bigint); INSERT INTO api_cloud_billing_periods VALUES('period','user-alice','manual','USD',0,9999999999999,0,0,0);",
         ] {
             sqlx::raw_sql(script).execute(&pool).await.unwrap();
@@ -357,5 +359,110 @@ async fn deadline_and_retired_base_clean_up_without_publishing() {
         );
     }
 
+    db.drop().await;
+}
+
+pub(crate) async fn project(pool: &PgPool, owner: &str, id: &str, name: &str, visibility: &str) {
+    sqlx::query("INSERT INTO api_cloud_projects(project_id,account_id,repository_identity,repository_url,display_name,default_branch,visibility,git_connection_kind,configuration_digest,state,idempotency_key,created_at,updated_at) VALUES($1,$2,$3,$4,$5,'main',$6,'github-app','digest','connected',$1,0,0)")
+        .bind(id).bind(owner).bind(format!("github.com/{name}")).bind(format!("https://github.com/{name}.git")).bind(name).bind(visibility)
+        .execute(pool).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires explicit isolated localhost PostgreSQL"]
+async fn images_bake_included_repositories_and_rebuild_when_the_set_changes() {
+    let db = Database::new("uimgr").await;
+    let pool = db.pool.clone();
+    db.base("base-v1", "base-snapshot", 1).await;
+    project(&pool, "user-alice", "project-app", "team/app", "private").await;
+    project(&pool, "user-alice", "project-docs", "team/docs", "public").await;
+    sqlx::query("UPDATE api_cloud_projects SET included=false WHERE project_id='project-docs'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let host = FakeHost::new();
+    let control = control(&pool, &host);
+    let source = super::repositories_tests::FakeSource::new(3 * 1024 * 1024);
+    control.install_repository_source(source.clone()).unwrap();
+    save(&pool, "user-alice", 0, "npm i -g pnpm", 1_000).await;
+    let now = run(&control, 1_000 + SAVE_DEBOUNCE_MS, 60).await;
+    let row = images(&pool).await[0].clone();
+    assert_eq!(row["state"], "ready", "{row:?}");
+    let repositories = &row["repositories"];
+    assert_eq!(
+        repositories["baked"].as_array().unwrap().len(),
+        1,
+        "{row:?}"
+    );
+    assert_eq!(
+        repositories["baked"][0]["repositoryIdentity"],
+        "github.com/team/app"
+    );
+    assert_eq!(repositories["baked"][0]["commit"], "c".repeat(40));
+    assert_eq!(
+        repositories["baked"][0]["path"],
+        super::repositories::path("github.com/team/app")
+    );
+    assert_eq!(
+        row["repositories_digest"],
+        row["plan"]["identity"]["repositoriesDigest"]
+    );
+    assert_eq!(
+        host.0.lock().unwrap().repos["baked"]
+            .as_object()
+            .unwrap()
+            .len(),
+        1
+    );
+    // New computers on this image find the repository.
+    let mut tx = pool.begin().await.unwrap();
+    let hit = super::selection::for_restore_tx(&mut tx, "user-alice", "boxd", "base-v1")
+        .await
+        .unwrap()
+        .expect("ready image");
+    assert_eq!(
+        hit.repository("github.com/team/app").unwrap().commit,
+        "c".repeat(40)
+    );
+    assert!(hit.repository("github.com/team/docs").is_none());
+    // Same inputs: nothing to do. A new repository, or old baked commits, rebuild.
+    let digest = image_digest(&MachineRecipe {
+        setup_script: "npm i -g pnpm".into(),
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(
+        super::schedule::stale_reason_tx(&mut tx, "user-alice", "boxd", &digest, now)
+            .await
+            .unwrap(),
+        None
+    );
+    sqlx::query("UPDATE api_cloud_projects SET included=true WHERE project_id='project-docs'")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    assert_eq!(
+        super::schedule::stale_reason_tx(&mut tx, "user-alice", "boxd", &digest, now)
+            .await
+            .unwrap(),
+        Some("refresh")
+    );
+    sqlx::query("UPDATE api_cloud_projects SET included=false WHERE project_id='project-docs'")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    assert_eq!(
+        super::schedule::stale_reason_tx(
+            &mut tx,
+            "user-alice",
+            "boxd",
+            &digest,
+            now + super::repositories::MAX_AGE_MS + 1
+        )
+        .await
+        .unwrap(),
+        Some("refresh")
+    );
+    tx.rollback().await.unwrap();
     db.drop().await;
 }

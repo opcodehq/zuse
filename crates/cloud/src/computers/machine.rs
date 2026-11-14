@@ -162,7 +162,39 @@ fn image_build(row: &Value) -> MachineImageBuild {
             .then(|| row["log_excerpt"].as_str().map(str::to_owned))
             .flatten(),
         updated_at: row["updated_at"].as_i64().unwrap_or_default(),
+        repositories: image_repositories(row),
     }
+}
+
+/// What a finished build recorded about repositories, for the owner.
+fn image_repositories(row: &Value) -> Vec<zuse_protocol::cloud_computers::MachineImageRepository> {
+    use zuse_protocol::cloud_computers::MachineImageRepository;
+    let Ok(recorded) = serde_json::from_value::<
+        crate::project_caches::user_images::repositories::ImageRepositories,
+    >(row["repositories"].clone()) else {
+        return vec![];
+    };
+    recorded
+        .baked
+        .into_iter()
+        .map(|r| MachineImageRepository {
+            repository_identity: r.repository_identity,
+            state: "baked".into(),
+            commit: Some(r.commit),
+            reason: None,
+        })
+        .chain(
+            recorded
+                .skipped
+                .into_iter()
+                .map(|r| MachineImageRepository {
+                    repository_identity: r.repository_identity,
+                    state: "skipped".into(),
+                    commit: None,
+                    reason: Some(r.reason),
+                }),
+        )
+        .collect()
 }
 
 impl Store {

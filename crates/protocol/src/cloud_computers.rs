@@ -575,6 +575,24 @@ pub struct MachineImageBuild {
     pub log_excerpt: Option<String>,
     #[serde(default)]
     pub updated_at: i64,
+    /// Repositories this image holds (`baked`, at `commit`) or left out
+    /// (`skipped`, with `reason`). Computers on it fetch only newer commits
+    /// of a baked repository and clone the others.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub repositories: Vec<MachineImageRepository>,
+}
+
+/// One repository in a machine image's build.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MachineImageRepository {
+    pub repository_identity: String,
+    /// `baked` or `skipped`.
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commit: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

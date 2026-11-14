@@ -183,6 +183,99 @@ class UserImageGuestTest(unittest.TestCase):
         supervisor.write_text('patched')
         self.assertEqual(self.run_command('sanitize', json.dumps(self.pins))[1]['error'], 'user_image_pinned_file_changed')
 
+    def snapshot(self, branch='main'):
+        """A depth-1 bare repository tar, made the way the server makes it."""
+        import subprocess, tarfile
+        source = self.root / 'source'
+        env = {'PATH': '/usr/bin:/bin', 'GIT_CONFIG_GLOBAL': '/dev/null', 'GIT_CONFIG_NOSYSTEM': '1',
+               'HOME': str(self.root), 'GIT_AUTHOR_NAME': 'a', 'GIT_AUTHOR_EMAIL': 'a@example.com',
+               'GIT_COMMITTER_NAME': 'a', 'GIT_COMMITTER_EMAIL': 'a@example.com'}
+        run = lambda *a, cwd=None: subprocess.run(a, cwd=cwd, env=env, check=True, capture_output=True, text=True).stdout.strip()
+        run('git', 'init', '-q', '-b', branch, str(source))
+        (source / 'README.md').write_text('hello\n')
+        run('git', 'add', '.', cwd=source)
+        run('git', 'commit', '-q', '-m', 'one', cwd=source)
+        (source / 'README.md').write_text('hello again\n')
+        run('git', 'commit', '-q', '-am', 'two', cwd=source)
+        bare = self.root / 'snapshot.git'
+        run('git', 'init', '-q', '--bare', str(bare))
+        run('git', '-C', str(bare), '-c', 'fetch.unpackLimit=1', 'fetch', '-q', '--depth=1', '--no-tags',
+            'file://' + str(source), f'+refs/heads/{branch}:refs/heads/{branch}')
+        commit = run('git', '-C', str(bare), 'rev-parse', f'refs/heads/{branch}')
+        out = self.root / 'snapshot.tar'
+        with tarfile.open(out, 'w') as archive:
+            for name in ('HEAD', 'shallow', 'objects', 'refs'):
+                archive.add(bare / name, arcname=name)
+        return commit, out.read_bytes()
+
+    def stage(self, key, data):
+        sha = hashlib.sha256(data).hexdigest()
+        chunks = -(-len(data) // guest.REPO_CHUNK)
+        result = self.run_command('repos-stage', key, sha, str(len(data)), str(chunks))[1]
+        self.assertEqual(result['chunks'], {})
+        for n in range(chunks):
+            (self.layout.at(guest.REPO_STAGE) / key / f'chunk.{n}').write_bytes(
+                data[n * guest.REPO_CHUNK:(n + 1) * guest.REPO_CHUNK])
+
+    def test_repositories_unpack_without_remote_and_survive_sanitize(self):
+        commit, data = self.snapshot()
+        key = 'a' * 64
+        self.assertEqual(self.run_command('repos-unpack', key, 'main', commit)[1]['error'], 'user_image_repository_not_staged')
+        self.stage(key, data)
+        status = self.run_command('repos-status')[1]
+        self.assertEqual(status['staged'][key]['chunks'], {'0': len(data)})
+        code, result = self.run_command('repos-unpack', key, 'main', commit)
+        self.assertEqual(code, 0, result)
+        self.assertEqual((result['baked'], result['commit'], result['branch']), (True, commit, 'main'))
+        repo = self.layout.at(guest.REPOS) / f'{key}.git'
+        self.assertEqual((repo / 'config').read_text(), guest.REPO_CONFIG)
+        self.assertFalse((self.layout.at(guest.REPO_STAGE) / key).exists())
+        status = self.run_command('repos-status')[1]
+        self.assertEqual(status['baked'][key]['commit'], commit)
+        # A wrong expected commit is refused and leaves nothing half-installed.
+        other = 'b' * 64
+        self.stage(other, data)
+        self.assertEqual(self.run_command('repos-unpack', other, 'main', 'c' * 40)[1]['error'], 'user_image_repository_commit_mismatch')
+        self.assertFalse(os.path.lexists(self.layout.at(guest.REPOS) / f'{other}.git'))
+        self.assertFalse(os.path.lexists(self.layout.at(guest.REPOS) / f'.{other}.unpack'))
+        # Attempts are counted across restaging.
+        self.assertEqual(self.run_command('repos-skip', other, 'repository_unpack_failed', '0')[1]['attempts'], 1)
+        self.stage(other, data)
+        self.assertEqual(self.run_command('repos-skip', other, 'repository_unpack_failed', '1')[1]['attempts'], 2)
+        self.assertTrue(self.run_command('repos-status')[1]['skipped'][other]['final'])
+        # Sanitize drops the staging area and keeps the baked repository.
+        self.finish_setup()
+        code, result = self.run_command('sanitize', json.dumps(self.pins))
+        self.assertEqual(code, 0, result)
+        self.assertTrue(repo.is_dir())
+        self.assertEqual(self.run_command('check', json.dumps(self.pins))[1]['clean'], True)
+
+    def test_repositories_refuse_remotes_hooks_and_foreign_paths(self):
+        import io, tarfile
+        commit, data = self.snapshot()
+        key = 'd' * 64
+        # A snapshot member outside the bare-repository layout is refused.
+        buffer = io.BytesIO()
+        with tarfile.open(fileobj=io.BytesIO(data)) as source, tarfile.open(fileobj=buffer, mode='w') as archive:
+            for member in source.getmembers():
+                archive.addfile(member, source.extractfile(member) if member.isfile() else None)
+            hook = tarfile.TarInfo('hooks/post-checkout')
+            hook.size = 2
+            archive.addfile(hook, io.BytesIO(b'#!'))
+        self.stage(key, buffer.getvalue())
+        self.assertEqual(self.run_command('repos-unpack', key, 'main', commit)[1]['error'], 'user_image_repository_member_invalid')
+        self.stage(key, data)
+        self.assertEqual(self.run_command('repos-unpack', key, 'main', commit)[0], 0)
+        repo = self.layout.at(guest.REPOS) / f'{key}.git'
+        guest.remove(self.layout.journal)
+        self.assertEqual(self.run_command('check', json.dumps(self.pins))[1]['clean'], True)
+        # Something wrote a remote with a token into a baked repository later.
+        (repo / 'config').write_text(guest.REPO_CONFIG + '[remote "origin"]\n\turl = https://x:ghp_abc@github.com/a/b.git\n')
+        self.assertEqual(self.run_command('check', json.dumps(self.pins))[1]['error'], 'user_image_not_clean')
+        (repo / 'config').write_text(guest.REPO_CONFIG)
+        (self.layout.at(guest.REPOS) / 'stray').write_text('x')
+        self.assertEqual(self.run_command('check', json.dumps(self.pins))[1]['error'], 'user_image_not_clean')
+
     def test_symlinked_pinned_path_is_rejected(self):
         runtime = self.layout.at(guest.PINNED['runtimeSha256'][0])
         target = self.root / 'elsewhere'

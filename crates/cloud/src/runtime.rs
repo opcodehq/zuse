@@ -51,6 +51,7 @@ pub mod task_commands;
 pub mod task_history;
 pub mod tool_output;
 pub mod transcript;
+pub(crate) mod user_image_sources;
 mod worker_scope;
 pub mod workload_secrets;
 

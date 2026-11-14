@@ -16,13 +16,27 @@ made from the captured snapshot:
                        caches and the build journal, empty task directories,
                        then re-verify pins
   check PINS_JSON      read-only: the same cleanliness rules, on the verifier
+  repos-status         baked repositories under /opt/zuse/repos, upload staging
+                       and repositories given up on, after setup
+  repos-stage KEY SHA256 BYTES CHUNKS
+                       (re)start the upload staging of one repository snapshot,
+                       writable by the exec user, under /var/tmp
+  repos-unpack KEY BRANCH COMMIT
+                       verify the staged snapshot, unpack it as a bare
+                       repository with no remote, check BRANCH is at COMMIT and
+                       complete, then install it owned by `zuse`
+  repos-skip KEY REASON FINAL
+                       record a failed attempt (FINAL=1: give up this build)
 
 Nothing here reads or writes a secret, and the setup script never sees one: the
 recipe holds no secrets and the builder has no task, agent or Git credential.
+Repository snapshots are made on the server and arrive without a remote,
+config or credential; the guest writes their config itself and the
+cleanliness check refuses any repository whose config could hold one.
 The resident supervisor is deliberately never started on the builder, so the
 captured image is in the same stopped state as the base itself.
 """
-import hashlib, json, os, pwd, shutil, signal, stat, subprocess, sys, time
+import hashlib, json, os, pwd, re, shutil, signal, stat, subprocess, sys, tarfile, time
 from pathlib import Path
 
 VERSION = 1
@@ -55,6 +69,22 @@ HISTORY = (
 )
 TASK_DIRECTORIES = ('/home/zuse/workspace', '/var/lib/zuse/workspace', '/var/lib/zuse/recovery')
 TOKEN_LINES = ('_authToken', '_auth=', '_auth =', '_password', 'always-auth')
+REPOS = '/opt/zuse/repos'
+REPO_STAGE = '/var/tmp/zuse-repo-stage'
+REPO_KEY = re.compile(r'^[0-9a-f]{64}$')
+REPO_COMMIT = re.compile(r'^([0-9a-f]{40}|[0-9a-f]{64})$')
+REPO_BRANCH = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._/+-]{0,254}$')
+REPO_CONFIG = '[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = true\n'
+REPO_MAX_BYTES = 1024 * 1024 * 1024
+REPO_CHUNK = 2 * 1024 * 1024
+# What a snapshot may contain: a bare repository's packs, refs and shallow
+# boundary. Hooks, info and logs never come from outside; config is rewritten.
+REPO_MEMBER = re.compile(
+    r'^(HEAD|packed-refs|shallow|config|objects|objects/info|objects/info/packs|objects/pack'
+    r'|objects/pack/pack-[0-9a-f]{40,64}\.(pack|idx|rev|bitmap)|objects/[0-9a-f]{2}'
+    r'|objects/[0-9a-f]{2}/[0-9a-f]{38,62}|refs|refs/heads|refs/tags|refs/heads/[A-Za-z0-9._/+-]+)$')
+REPO_CONFIG_MARKERS = ('url', 'remote', 'credential', 'extraheader', 'http', '@', 'include', 'hookspath',
+                       'fsmonitor', 'sshcommand', 'askpass', 'proxy')
 
 
 class Rejected(Exception):
@@ -217,6 +247,7 @@ def leftovers(layout):
     data = layout.home / '.zuse-data'
     if os.path.lexists(data) and (data.is_symlink() or not data.is_dir() or any(data.iterdir())):
         found.append('~/.zuse-data')
+    found.extend(repo_leftovers(layout))
     return found
 
 
@@ -358,6 +389,258 @@ def sanitize(layout, host, pins):
             'userProcessesStopped': True}
 
 
+def repo_git(path, *args, timeout=120):
+    environment = {'PATH': '/usr/bin:/bin', 'GIT_CONFIG_GLOBAL': '/dev/null', 'GIT_CONFIG_NOSYSTEM': '1',
+                   'HOME': '/nonexistent'}
+    command = ['git', '-c', 'safe.directory=*', '-c', 'core.hooksPath=/dev/null', '-C', str(path), *args]
+    result = subprocess.run(command, capture_output=True, text=True, timeout=timeout, env=environment)
+    require(result.returncode == 0, 'user_image_repository_invalid')
+    return result.stdout.strip()
+
+
+def tree_bytes(path):
+    total = 0
+    for directory, _, files in os.walk(path):
+        for name in files:
+            total += os.lstat(os.path.join(directory, name)).st_size
+    return total
+
+
+def repo_unclean(path):
+    """Why one baked repository could carry a credential or code, if it could."""
+    config = path / 'config'
+    if not config.is_file() or config.is_symlink():
+        return 'config'
+    text = config.read_text(errors='replace').lower()
+    if any(marker in text for marker in REPO_CONFIG_MARKERS):
+        return 'config'
+    for extra in ('hooks', 'FETCH_HEAD', 'logs', 'info', 'modules', 'worktrees', 'commondir'):
+        if os.path.lexists(path / extra):
+            return extra
+    for directory, dirs, files in os.walk(path):
+        if any(os.path.islink(os.path.join(directory, item)) for item in dirs + files):
+            return 'symlink'
+    return None
+
+
+def repo_leftovers(layout):
+    """Anything under /opt/zuse/repos that is not a clean, remote-less repository."""
+    root = layout.at(REPOS)
+    if not os.path.lexists(root):
+        return []
+    if root.is_symlink() or not root.is_dir():
+        return [REPOS]
+    found = []
+    for entry in sorted(root.iterdir()):
+        name = entry.name
+        if name.endswith('.json') and REPO_KEY.match(name[:-5]) and entry.is_file() and not entry.is_symlink():
+            continue
+        if not (name.endswith('.git') and REPO_KEY.match(name[:-4])) or entry.is_symlink() or not entry.is_dir():
+            found.append(REPOS + '/' + name)
+        elif reason := repo_unclean(entry):
+            found.append(REPOS + '/' + name + '/' + reason)
+    return found
+
+
+def read_json(path):
+    try:
+        if path.is_file() and not path.is_symlink():
+            return json.loads(path.read_text())
+    except ValueError:
+        pass
+    return None
+
+
+def repo_stage(layout, key):
+    require(isinstance(key, str) and REPO_KEY.match(key), 'user_image_repository_invalid')
+    stage = layout.at(REPO_STAGE)
+    no_symlink(stage, layout.root)
+    return stage, stage / key
+
+
+def repos_status(layout):
+    baked, staged, skipped = {}, {}, {}
+    root = layout.at(REPOS)
+    if root.is_dir() and not root.is_symlink():
+        for entry in root.iterdir():
+            key = entry.name[:-4]
+            if entry.name.endswith('.git') and REPO_KEY.match(key) and entry.is_dir() and not entry.is_symlink():
+                info = read_json(root / (key + '.json'))
+                if isinstance(info, dict) and REPO_COMMIT.match(str(info.get('commit', ''))):
+                    baked[key] = {'baked': True, 'commit': info['commit'], 'branch': info.get('branch'),
+                                  'bytes': int(info.get('bytes', 0))}
+    stage = layout.at(REPO_STAGE)
+    if stage.is_dir() and not stage.is_symlink():
+        for entry in stage.iterdir():
+            if not REPO_KEY.match(entry.name) or entry.is_symlink() or not entry.is_dir():
+                continue
+            manifest = read_json(entry / 'manifest.json')
+            if isinstance(manifest, dict):
+                chunks = {}
+                for item in entry.iterdir():
+                    if item.name.startswith('chunk.') and item.name[6:].isdigit() and item.is_file() \
+                            and not item.is_symlink():
+                        chunks[item.name[6:]] = item.stat().st_size
+                staged[entry.name] = {'sha256': manifest.get('sha256'), 'chunkCount': manifest.get('chunks'),
+                                      'bytes': manifest.get('bytes'), 'chunks': chunks}
+            skip = read_json(entry / 'skip.json')
+            if isinstance(skip, dict):
+                skipped[entry.name] = skip
+    return {'version': VERSION, 'baked': baked, 'staged': staged, 'skipped': skipped}
+
+
+def repo_stage_directory(layout, key):
+    """A fresh staging directory for KEY that keeps its attempt record."""
+    stage, directory = repo_stage(layout, key)
+    stage.mkdir(mode=0o755, parents=True, exist_ok=True)
+    if layout.root == Path('/'):
+        os.chown(stage, 0, 0)
+    os.chmod(stage, 0o755)
+    skip = read_json(directory / 'skip.json')
+    if os.path.lexists(directory):
+        remove(directory)
+    directory.mkdir(mode=0o700)
+    if isinstance(skip, dict):
+        (directory / 'skip.json').write_text(json.dumps(skip))
+    return directory
+
+
+def repos_stage(layout, key, sha256, size, chunks):
+    require(isinstance(sha256, str) and REPO_KEY.match(sha256) and 0 < size <= REPO_MAX_BYTES
+            and chunks == -(-size // REPO_CHUNK), 'user_image_repository_invalid')
+    directory = repo_stage_directory(layout, key)
+    (directory / 'manifest.json').write_text(json.dumps({'sha256': sha256, 'bytes': size, 'chunks': chunks}))
+    if layout.root == Path('/'):
+        # Provider uploads arrive as the exec user, who ran this through sudo.
+        uid, gid = os.environ.get('SUDO_UID', ''), os.environ.get('SUDO_GID', '')
+        require(uid.isdigit() and gid.isdigit(), 'user_image_repository_uploader_unknown')
+        os.chown(directory, int(uid), int(gid))
+    return {'version': VERSION, 'sha256': sha256, 'chunkCount': chunks, 'bytes': size, 'chunks': {}}
+
+
+def repos_skip(layout, key, reason, final):
+    require(isinstance(reason, str) and re.match(r'^[a-z_]{1,64}$', reason), 'user_image_repository_invalid')
+    stage, directory = repo_stage(layout, key)
+    prior = read_json(directory / 'skip.json') or {}
+    if not directory.is_dir() or directory.is_symlink():
+        directory = repo_stage_directory(layout, key)
+    record = {'reason': reason, 'attempts': int(prior.get('attempts', 0)) + 1, 'final': bool(final)}
+    (directory / 'skip.json').write_text(json.dumps(record))
+    return {'version': VERSION, **record}
+
+
+class Chunks:
+    """The staged chunk files, read back as one stream without following links."""
+
+    def __init__(self, paths):
+        self.paths, self.handle = list(paths), None
+
+    def read(self, size=-1):
+        out = b''
+        while size < 0 or len(out) < size:
+            if self.handle is None:
+                if not self.paths:
+                    break
+                fd = os.open(self.paths.pop(0), os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+                self.handle = os.fdopen(fd, 'rb')
+            part = self.handle.read(-1 if size < 0 else size - len(out))
+            if not part:
+                self.handle.close()
+                self.handle = None
+                continue
+            out += part
+        return out
+
+    def close(self):
+        if self.handle is not None:
+            self.handle.close()
+            self.handle = None
+
+
+def repo_extract(paths, work):
+    stream = Chunks(paths)
+    try:
+        with tarfile.open(fileobj=stream, mode='r|') as archive:
+            for member in archive:
+                name = member.name[2:] if member.name.startswith('./') else member.name
+                if name in ('', '.'):
+                    continue
+                require(REPO_MEMBER.match(name) and '..' not in name.split('/') and (member.isfile() or member.isdir()),
+                        'user_image_repository_member_invalid')
+                target = work / name
+                if member.isdir():
+                    target.mkdir(mode=0o755, parents=True, exist_ok=True)
+                    continue
+                target.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+                with open(target, 'xb') as out:
+                    shutil.copyfileobj(archive.extractfile(member), out)
+                os.chmod(target, 0o644)
+    finally:
+        stream.close()
+
+
+def repos_unpack(layout, key, branch, commit):
+    require(isinstance(branch, str) and REPO_BRANCH.match(branch) and '..' not in branch
+            and isinstance(commit, str) and REPO_COMMIT.match(commit), 'user_image_repository_invalid')
+    _, directory = repo_stage(layout, key)
+    manifest = read_json(directory / 'manifest.json') if directory.is_dir() and not directory.is_symlink() else None
+    require(isinstance(manifest, dict), 'user_image_repository_not_staged')
+    size, count = int(manifest['bytes']), int(manifest['chunks'])
+    require(0 < size <= REPO_MAX_BYTES and count == -(-size // REPO_CHUNK), 'user_image_repository_invalid')
+    paths = [directory / f'chunk.{n}' for n in range(count)]
+    for n, path in enumerate(paths):
+        expected = REPO_CHUNK if n + 1 < count else size - REPO_CHUNK * (count - 1)
+        require(path.is_file() and not path.is_symlink() and path.stat().st_size == expected,
+                'user_image_repository_incomplete')
+    digest = hashlib.sha256()
+    stream = Chunks(paths)
+    while part := stream.read(1048576):
+        digest.update(part)
+    stream.close()
+    require(digest.hexdigest() == manifest['sha256'], 'user_image_repository_checksum_mismatch')
+    root = layout.at(REPOS)
+    no_symlink(root, layout.root)
+    root.mkdir(mode=0o755, parents=True, exist_ok=True)
+    if layout.root == Path('/'):
+        os.chown(root, 0, 0)
+    os.chmod(root, 0o755)
+    work = root / f'.{key}.unpack'
+    if os.path.lexists(work):
+        remove(work)
+    work.mkdir(mode=0o700)
+    try:
+        repo_extract(paths, work)
+        # The config is ours, never the snapshot's: no remote, helper or include.
+        (work / 'config').write_text(REPO_CONFIG)
+        repo_git(work, 'symbolic-ref', 'HEAD', 'refs/heads/' + branch)
+        found = repo_git(work, 'rev-parse', '--verify', '--end-of-options', f'refs/heads/{branch}^{{commit}}')
+        require(found == commit, 'user_image_repository_commit_mismatch')
+        repo_git(work, 'fsck', '--connectivity-only', '--no-dangling', '--no-progress', timeout=300)
+        require(repo_unclean(work) is None, 'user_image_repository_unclean')
+        info = {'commit': commit, 'branch': branch, 'bytes': tree_bytes(work)}
+        if layout.root == Path('/'):
+            # The runtime reads it as `zuse`; Git refuses repositories it doesn't own.
+            owner = pwd.getpwnam(USER)
+            for current, dirs, files in os.walk(work):
+                for name in dirs + files:
+                    os.lchown(os.path.join(current, name), owner.pw_uid, owner.pw_gid)
+            os.chown(work, owner.pw_uid, owner.pw_gid)
+        os.chmod(work, 0o755)
+        final = root / f'{key}.git'
+        if os.path.lexists(final):
+            remove(final)
+        os.replace(work, final)
+        temporary = root / f'.{key}.json.tmp'
+        temporary.write_text(json.dumps(info))
+        os.chmod(temporary, 0o644)
+        os.replace(temporary, root / f'{key}.json')
+    finally:
+        if os.path.lexists(work):
+            remove(work)
+    remove(directory)
+    return {'version': VERSION, 'baked': True, **info}
+
+
 def check(layout, pins):
     verify_pins(layout, pins)
     found = leftovers(layout)
@@ -384,12 +667,20 @@ def main(argv, layout=None, host=None):
             result = sanitize(layout, host, json.loads(argv[1]))
         elif command == 'check':
             result = check(layout, json.loads(argv[1]))
+        elif command == 'repos-status':
+            result = repos_status(layout)
+        elif command == 'repos-stage':
+            result = repos_stage(layout, argv[1], argv[2], int(argv[3]), int(argv[4]))
+        elif command == 'repos-unpack':
+            result = repos_unpack(layout, argv[1], argv[2], argv[3])
+        elif command == 'repos-skip':
+            result = repos_skip(layout, argv[1], argv[2], argv[3] == '1')
         else:
             raise Rejected('user_image_command_invalid')
     except Rejected as error:
         print(json.dumps({'version': VERSION, 'error': str(error)}, separators=(',', ':')))
         return 3
-    except (OSError, ValueError, KeyError, IndexError, subprocess.SubprocessError):
+    except (OSError, ValueError, KeyError, IndexError, TypeError, subprocess.SubprocessError, tarfile.TarError):
         print(json.dumps({'version': VERSION, 'error': 'user_image_guest_failed'}, separators=(',', ':')))
         return 3
     print(json.dumps(result, separators=(',', ':')))

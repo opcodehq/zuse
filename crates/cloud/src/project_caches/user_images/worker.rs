@@ -27,6 +27,9 @@ pub struct UserImageControl {
     /// The staging owner pin that lets computers skip billing also lets that
     /// owner's image builds skip it, so staging behaves the same for both.
     staging_compute: OnceLock<Arc<crate::managed_bases::candidate::StagingBasePin>>,
+    /// Makes repository snapshots for the `repositories` phase. Without one,
+    /// images are built without repositories.
+    repository_source: OnceLock<Arc<dyn super::repositories::RepositorySource>>,
 }
 
 pub(crate) async fn schema_ready_tx(tx: &mut Transaction<'_, Postgres>) -> Result<bool, ApiError> {
@@ -146,7 +149,17 @@ impl UserImageControl {
             ready: OnceLock::new(),
             backends: OnceLock::new(),
             staging_compute: OnceLock::new(),
+            repository_source: OnceLock::new(),
         }
+    }
+    /// Install the producer of repository snapshots for image builds.
+    pub fn install_repository_source(
+        &self,
+        source: Arc<dyn super::repositories::RepositorySource>,
+    ) -> Result<(), ApiError> {
+        self.repository_source
+            .set(source)
+            .map_err(|_| ApiError::conflict("user_image_repository_source_already_configured"))
     }
     /// Builds for this pin's owner on its provider skip the billing check, like
     /// computer creation does under `allow_staging_compute`.
@@ -298,6 +311,9 @@ impl UserImageControl {
         }
         let bases: Vec<Value> = sqlx::query_scalar("SELECT to_jsonb(b) FROM cloud_managed_bases b WHERE provider=$1 AND state='verified' AND runtime_manifest IS NOT NULL ORDER BY created_at DESC,release_id DESC LIMIT 8")
             .bind(&provider_name).fetch_all(&mut *tx).await?;
+        // The repository set is frozen with the plan; later edits rebuild.
+        let account_repositories =
+            super::repositories::account_repositories_tx(&mut tx, &owner).await?;
         let Some(base) = bases.iter().find_map(|row| base_from_row(row, provider)) else {
             Self::defer(
                 &mut tx,
@@ -359,7 +375,10 @@ impl UserImageControl {
             base_artifact_version: version,
             base_runtime_sha256: runtime,
             recipe_digest: digest.clone(),
+            repositories_digest: super::repositories::set_digest(&account_repositories),
         };
+        let (planned_repositories, skipped_repositories) =
+            super::repositories::select(&owner, &account_repositories);
         let plan = BuildPlan {
             version: 1,
             image_id: id.clone(),
@@ -367,6 +386,8 @@ impl UserImageControl {
             setup_script: recipe.setup_script.clone(),
             setup_timeout_seconds: recipe.setup_timeout_seconds,
             initial_runtime_bootstrap: bootstrap,
+            repositories: planned_repositories,
+            skipped_repositories,
         };
         plan.validate()?;
         let key = plan.identity.key()?;
@@ -400,6 +421,13 @@ impl UserImageControl {
             .bind(&id).bind(revision).bind(&digest).bind(&plan.identity.architecture).bind(&plan.identity.base_release_id)
             .bind(&plan.identity.base_artifact_id).bind(&plan.identity.base_artifact_version).bind(&plan.identity.base_runtime_sha256)
             .bind(&key).bind(json!(plan)).bind(now).execute(&mut *tx).await;
+        if started.is_ok() && repositories_ready_tx(&mut tx).await? {
+            sqlx::query("UPDATE cloud_machine_images SET repositories_digest=$2,repositories=NULL WHERE image_id=$1")
+                .bind(&id)
+                .bind(&plan.identity.repositories_digest)
+                .execute(&mut *tx)
+                .await?;
+        }
         match started {
             Ok(_) => {}
             Err(error)
@@ -506,11 +534,48 @@ impl UserImageControl {
         } else {
             StepMode::Begin
         };
-        let outcome = tokio::time::timeout(
-            std::time::Duration::from_secs(90),
-            backend.step(&build, mode),
-        )
-        .await;
+        // The repository phase is the same for every backend: it only needs
+        // the running builder. Its record is written with the phase advance.
+        let mut baked: Option<super::repositories::ImageRepositories> = None;
+        let outcome = if state == "building" && phase == "repositories" {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(90),
+                self.repositories_step(&backend, &build),
+            )
+            .await
+            .map(|result| {
+                result.map(|step| match step {
+                    super::repositories::RepoStep::Pending => {
+                        Step::Pending(build.resources["provider"].clone())
+                    }
+                    super::repositories::RepoStep::Done(record) => {
+                        baked = Some(record);
+                        Step::Advance {
+                            phase: "sanitize".into(),
+                            resources: build.resources["provider"].clone(),
+                        }
+                    }
+                })
+            })
+        } else {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(90),
+                backend.step(&build, mode),
+            )
+            .await
+        };
+        // A backend that knows nothing of repositories advances setup straight
+        // to sanitize; the repository phase always runs in between.
+        let outcome = match outcome {
+            Ok(Ok(Step::Advance {
+                phase: next,
+                resources,
+            })) if phase == "setup" && next == "sanitize" => Ok(Ok(Step::Advance {
+                phase: "repositories".into(),
+                resources,
+            })),
+            other => other,
+        };
         let finished = elapsed(now);
         let outcome = match outcome {
             Ok(Ok(outcome)) => outcome,
@@ -629,6 +694,15 @@ impl UserImageControl {
                 ("complete".to_owned(), "ready".to_owned(), None, 0)
             }
         };
+        if let Some(record) = baked.filter(|_| next_phase == "sanitize")
+            && repositories_ready_tx(&mut tx).await?
+        {
+            sqlx::query("UPDATE cloud_machine_images SET repositories=$2 WHERE image_id=$1")
+                .bind(&id)
+                .bind(json!(record))
+                .execute(&mut *tx)
+                .await?;
+        }
         if let Some((artifact, version)) = set_artifact {
             sqlx::query("UPDATE cloud_machine_images SET artifact_id=$2,artifact_version=$3,built_at=$4 WHERE image_id=$1")
                 .bind(&id).bind(artifact).bind(version).bind(finished).execute(&mut *tx).await?;
@@ -655,6 +729,46 @@ pub(crate) fn publication_valid(plan: &BuildPlan, value: &Value, artifact_id: &s
         && !artifact_id.is_empty()
         && artifact_id != plan.identity.base_artifact_id
         && value["artifactId"] == artifact_id
+}
+
+/// Whether the repository columns (migration 0041) exist yet.
+pub(crate) async fn repositories_ready_tx(
+    tx: &mut Transaction<'_, Postgres>,
+) -> Result<bool, ApiError> {
+    Ok(sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='cloud_machine_images' AND column_name='repositories')").fetch_one(&mut **tx).await?)
+}
+
+impl UserImageControl {
+    async fn repositories_step(
+        &self,
+        backend: &Arc<dyn UserImageBackend>,
+        build: &Build,
+    ) -> Result<super::repositories::RepoStep, ApiError> {
+        let plan = &build.plan;
+        let source = self.repository_source.get().map(|s| s.as_ref());
+        let guest = backend.builder_guest(build);
+        match guest {
+            Some(guest) => super::repositories::step(guest.as_ref(), source, build).await,
+            None => {
+                // This provider cannot bake repositories: record why and go on.
+                let mut skipped = plan.skipped_repositories.clone();
+                skipped.extend(plan.repositories.iter().map(|r| {
+                    super::repositories::SkippedRepository {
+                        project_id: r.project_id.clone(),
+                        repository_identity: r.repository_identity.clone(),
+                        reason: "provider_unsupported".into(),
+                    }
+                }));
+                Ok(super::repositories::RepoStep::Done(
+                    super::repositories::ImageRepositories {
+                        version: 1,
+                        baked: vec![],
+                        skipped,
+                    },
+                ))
+            }
+        }
+    }
 }
 
 impl BuildPlan {
@@ -737,6 +851,23 @@ impl crate::runtime::RuntimeControl {
         if let Some(pin) = &self.staging_candidate {
             self.user_image_control.allow_staging_compute(pin.clone());
         }
+        Ok(true)
+    }
+    /// Bake the account's repositories into its user image, unless
+    /// `ZUSE_CLOUD_USER_IMAGE_REPOSITORIES=0`. Public repositories are fetched
+    /// anonymously; private ones with a token the API mints per repository.
+    pub fn configure_user_image_repositories(self: &Arc<Self>) -> Result<bool, ApiError> {
+        if std::env::var("ZUSE_CLOUD_USER_IMAGE_REPOSITORIES").as_deref() == Ok("0")
+            || !self.user_image_control.configured()
+        {
+            return Ok(false);
+        }
+        let credentials: Arc<dyn super::repository_source::RepositoryCredentials> = Arc::new(
+            crate::runtime::user_image_sources::WorkerImageAuthority::new(Arc::downgrade(self))?,
+        );
+        self.user_image_control.install_repository_source(Arc::new(
+            super::repository_source::GitRepositorySource::new(Some(credentials)),
+        ))?;
         Ok(true)
     }
     pub async fn work_user_images_once(&self, now: i64) -> Result<bool, ApiError> {

@@ -145,10 +145,13 @@ async fn ready_user_image(
             base_artifact_version: "1".into(),
             base_runtime_sha256: bootstrap.runtime_sha256.clone(),
             recipe_digest: image_digest(&recipe).unwrap(),
+            repositories_digest: None,
         },
         setup_script: recipe.setup_script.clone(),
         setup_timeout_seconds: recipe.setup_timeout_seconds,
         initial_runtime_bootstrap: Some(bootstrap),
+        repositories: vec![],
+        skipped_repositories: vec![],
     };
     sqlx::query("INSERT INTO cloud_machine_images(image_id,owner_id,provider,reason,state,phase,recipe_revision,recipe_digest,architecture,base_release_id,base_artifact_id,base_artifact_version,base_runtime_sha256,identity_key,plan,artifact_id,artifact_version,next_attempt_at,started_at,built_at,created_at,updated_at) VALUES($1,'user-test','boxd','recipe','ready','complete',1,$2,$3,$4,$5,'1',$6,$7,$8,$9,'1',0,$10,$10,$10,$10)")
         .bind(&id).bind(&plan.identity.recipe_digest).bind(&plan.identity.architecture).bind(&plan.identity.base_release_id)
@@ -221,6 +224,11 @@ async fn admission_case_with(
         include_str!("../../migrations/0031_machine_images.sql"),
         if user_image {
             crate::project_caches::user_images::MIGRATION
+        } else {
+            "SELECT 1"
+        },
+        if user_image {
+            crate::project_caches::user_images::REPOSITORIES_MIGRATION
         } else {
             "SELECT 1"
         },
@@ -520,6 +528,39 @@ async fn admission_case_with(
             next.branch = Some(branch.into());
             next
         };
+        // The image also holds the task's repository (baked at an older
+        // commit): the next computer starts its checkout from that copy and
+        // still fetches the requested branch.
+        {
+            use crate::project_caches::user_images::{BuildPlan, repositories};
+            let repository = repositories::PlannedRepository {
+                project_id: "project".into(),
+                repository_identity: "github.com/example/repo".into(),
+                repository_url: "https://github.com/example/repo.git".into(),
+                default_branch: "main".into(),
+                visibility: "public".into(),
+            };
+            let plan: Value =
+                sqlx::query_scalar("SELECT plan FROM cloud_machine_images WHERE image_id=$1")
+                    .bind(&image)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            let mut plan: BuildPlan = serde_json::from_value(plan).unwrap();
+            plan.identity.repositories_digest =
+                repositories::set_digest(std::slice::from_ref(&repository));
+            plan.repositories = vec![repository];
+            let baked = json!({"version":1,"baked":[{"projectId":"project","repositoryIdentity":"github.com/example/repo","branch":"main","commit":"a".repeat(40),"bytes":10,"path":repositories::path("github.com/example/repo")}],"skipped":[]});
+            sqlx::query("UPDATE cloud_machine_images SET plan=$2,identity_key=$3,repositories_digest=$4,repositories=$5 WHERE image_id=$1")
+                .bind(&image)
+                .bind(json!(plan))
+                .bind(plan.identity.key().unwrap())
+                .bind(&plan.identity.repositories_digest)
+                .bind(baked)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
         let (second, _) = control
             .create_workspace(&access, next("task-key-2", "task/two"), now + 20)
             .await
@@ -535,6 +576,18 @@ async fn admission_case_with(
         assert_eq!(
             second["request_config"]["rustMachineImage"]["imageId"],
             image
+        );
+        let checkout = &second["request_config"]["rustRepositoryCheckout"];
+        assert_eq!(second["request_config"]["repositoryCache"], "machine-image");
+        assert_eq!(
+            checkout["cachePath"],
+            crate::project_caches::user_images::repositories::path("github.com/example/repo")
+        );
+        assert_eq!(checkout["sourceCommit"], "a".repeat(40));
+        assert_eq!(checkout["fetchRemote"], true);
+        assert_eq!(
+            checkout["repositoryUrl"],
+            "https://github.com/example/repo.git"
         );
         // Its base retired: new computers fall back to the newest base.
         sqlx::query("UPDATE cloud_managed_bases SET state='retired' WHERE release_id=$1")

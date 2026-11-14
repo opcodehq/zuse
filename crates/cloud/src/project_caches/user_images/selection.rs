@@ -18,8 +18,15 @@ pub struct UserImageHit {
     pub base_artifact_id: String,
     pub recipe_digest: String,
     pub built_at: i64,
+    /// Repositories baked into the image, at the commits recorded at build.
+    pub repositories: super::repositories::ImageRepositories,
 }
 impl UserImageHit {
+    /// The image's copy of a repository, for a checkout that fetches only the
+    /// commits since. Only repositories the build planned and baked count.
+    pub fn repository(&self, identity: &str) -> Option<&super::repositories::BakedRepository> {
+        self.repositories.find(identity)
+    }
     /// Recorded as `request_config.rustMachineImage`. Retirement treats any
     /// non-deleted computer with this image ID as a reference.
     pub fn config(&self) -> Value {
@@ -69,9 +76,24 @@ fn usable(row: &Value, base: &Value, provider: ProviderId) -> Option<UserImageHi
         artifact_version: row["artifact_version"].as_str().map(str::to_owned),
         base_release_id: release.release_id,
         base_artifact_id: release.artifact_id,
-        recipe_digest: plan.identity.recipe_digest,
         built_at: row["built_at"].as_i64()?,
+        repositories: baked_repositories(row, &plan),
+        recipe_digest: plan.identity.recipe_digest,
     })
+}
+
+/// The recorded repositories of an image, limited to what its plan asked for.
+fn baked_repositories(row: &Value, plan: &BuildPlan) -> super::repositories::ImageRepositories {
+    let mut recorded: super::repositories::ImageRepositories =
+        serde_json::from_value(row["repositories"].clone()).unwrap_or_default();
+    recorded.baked.retain(|baked| {
+        plan.repositories.iter().any(|planned| {
+            planned.project_id == baked.project_id
+                && planned.repository_identity == baked.repository_identity
+                && planned.default_branch == baked.branch
+        })
+    });
+    recorded
 }
 
 /// For a new computer. `source` picks the managed-base build for a release

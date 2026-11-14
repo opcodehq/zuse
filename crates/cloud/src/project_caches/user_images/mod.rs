@@ -3,8 +3,10 @@
 //! script on a verified managed base. Like a project cache it keeps the base's
 //! pinned runtime files byte-identical, is checked by a second boot of the
 //! captured snapshot, and never replaces a ready image when a build fails.
-//! Unlike a project cache it holds no repository, commit or source bundle, so
-//! it is rebuilt only when the setup script or the base changes.
+//! It also carries the account's repositories as depth-1 snapshots of their
+//! default branches (see `repositories`), so a new computer fetches only what
+//! changed instead of cloning. It is rebuilt when the setup script, the base or
+//! the repository set changes, or when the baked commits grow old.
 //!
 //! Instructions, skills and dotfiles are delivered per chat and are not part
 //! of an image; only the setup script is.
@@ -18,12 +20,17 @@ use zuse_protocol::cloud_computers::{MachineRecipe, ProviderId};
 pub mod boat;
 pub mod boxd;
 pub mod prized;
+pub mod repositories;
+pub mod repository_source;
 pub mod schedule;
 
 pub mod selection;
 pub mod worker;
 
 pub const MIGRATION: &str = include_str!("../../../migrations/0037_user_images.sql");
+/// Which repositories an image holds, and which were left out.
+pub const REPOSITORIES_MIGRATION: &str =
+    include_str!("../../../migrations/0041_user_image_repositories.sql");
 /// Guest helper run as root on builder and verifier VMs.
 pub const GUEST_HELPER: &str = include_str!("../../../../../infra/cloud/user-image-guest.py");
 /// Guest helper run as the only user on Prized builders and verifiers.
@@ -105,7 +112,7 @@ pub(crate) fn provider_id(value: &str) -> Option<ProviderId> {
     ProviderId::ALL.into_iter().find(|p| p.as_str() == value)
 }
 
-fn hash(value: &str) -> bool {
+pub(crate) fn hash(value: &str) -> bool {
     value.len() == 64
         && value
             .bytes()
@@ -123,8 +130,9 @@ pub(crate) fn image_id_valid(value: &str) -> bool {
     })
 }
 
-/// What makes two images interchangeable. No repository, commit, credential
-/// or agent connection is an input.
+/// What makes two images interchangeable. The repository set is an input
+/// (which repositories, their default branches); commits, credentials and
+/// agent connections are not.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UserImageIdentity {
@@ -137,6 +145,10 @@ pub struct UserImageIdentity {
     pub base_artifact_version: String,
     pub base_runtime_sha256: String,
     pub recipe_digest: String,
+    /// `repositories::set_digest` of the account's repositories; absent for
+    /// an account without repositories (and for images built before them).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repositories_digest: Option<String>,
 }
 impl UserImageIdentity {
     pub fn validate(&self) -> Result<(), ApiError> {
@@ -148,6 +160,10 @@ impl UserImageIdentity {
             || !matches!(self.architecture.as_str(), "x86_64" | "aarch64")
             || !hash(&self.base_runtime_sha256)
             || !hash(&self.recipe_digest)
+            || self
+                .repositories_digest
+                .as_deref()
+                .is_some_and(|d| !hash(d))
         {
             return Err(ApiError::bad_request("user_image_identity_invalid"));
         }
@@ -177,6 +193,12 @@ pub struct BuildPlan {
     /// Required on root bases; absent on home-directory bases ([`home_base`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_runtime_bootstrap: Option<InitialRuntimeBootstrap>,
+    /// Repositories to bake, in order. Empty for images without repositories.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub repositories: Vec<repositories::PlannedRepository>,
+    /// Included repositories left out at planning time, with the reason.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skipped_repositories: Vec<repositories::SkippedRepository>,
 }
 impl BuildPlan {
     pub fn validate(&self) -> Result<(), ApiError> {
@@ -188,6 +210,8 @@ impl BuildPlan {
             || !(60..=3600).contains(&self.setup_timeout_seconds)
             || script_digest(&self.setup_script, self.setup_timeout_seconds).as_deref()
                 != Some(self.identity.recipe_digest.as_str())
+            || !repositories::validate_plan(&self.repositories, &self.skipped_repositories)
+            || (!self.repositories.is_empty() && self.identity.repositories_digest.is_none())
         {
             return Err(ApiError::bad_request("user_image_plan_invalid"));
         }
@@ -254,9 +278,13 @@ pub enum Step {
 }
 
 /// The ordered build phases. Cleanup and retirement are separate chains.
+/// `repositories` is run by the worker for every backend (see
+/// `UserImageBackend::builder_guest`); a backend's `setup` may advance
+/// straight to `sanitize` and the worker inserts it.
 pub const PHASES: &[&str] = &[
     "allocate",
     "setup",
+    "repositories",
     "sanitize",
     "capture",
     "retire-builder",
@@ -287,6 +315,14 @@ pub trait UserImageBackend: Send + Sync {
     /// Run or reconcile one phase. `Reconcile` inspects the original
     /// resources and never submits a second create, launch or capture.
     async fn step(&self, build: &Build, mode: StepMode) -> Result<Step, ApiError>;
+    /// The running builder, for the provider-neutral repository step. `None`
+    /// (the default) bakes no repositories; computers on such an image clone.
+    fn builder_guest(
+        &self,
+        _build: &Build,
+    ) -> Option<std::sync::Arc<dyn repositories::BuilderGuest>> {
+        None
+    }
 }
 
 /// Receipts carry only opaque IDs and booleans. Provider stdout, scripts and
@@ -412,6 +448,8 @@ fn redact_line(line: &str) -> String {
 mod boat_tests;
 #[cfg(test)]
 mod prized_tests;
+#[cfg(test)]
+mod repositories_tests;
 #[cfg(test)]
 mod schedule_tests;
 #[cfg(test)]
