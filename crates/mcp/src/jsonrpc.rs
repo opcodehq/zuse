@@ -48,7 +48,8 @@ If a chat is `awaitingInput`, answer it with `respond_to_input`.\n\
 When `show_ui` is available, use it unprompted for structured answers: a final answer with \
 several changes, checks, findings, or options gets one compact UI block (charts, tables, steps, \
 flows, key-value checks) as its main summary, shown below your reply. Simple answers stay text. \
-Use `show_visual` (a Luau script) only for custom drawing, 3D scenes, shaders, or live \
+Numbers and comparisons go in its built-in BarChart, LineChart or DonutChart, not tables of \
+figures. Use `show_visual` (a Luau script) only for custom drawing, 3D scenes, shaders, or live \
 simulations the components can't express. Never announce or restate what a visual shows.";
 
 const PARSE_ERROR: i64 = -32700;

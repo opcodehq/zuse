@@ -1198,8 +1198,43 @@ pub(crate) fn lightbox_with_size(
     on_close: impl Fn(&mut gpui::Window, &mut gpui::App) + 'static,
     cx: &mut gpui::App,
 ) -> AnyElement {
+    lightbox_gallery(window, preview, focus, natural_size, None, on_close, cx)
+}
+
+/// Where a lightbox sits in a set of images, and how it moves through them.
+#[derive(Clone)]
+pub(crate) struct LightboxNav {
+    pub index: usize,
+    pub count: usize,
+    /// One preview per image for the strip under the viewer; `None` while
+    /// an image is still being read.
+    pub thumbs: Vec<Option<Arc<Image>>>,
+    /// Survives image changes so one swipe moves one image.
+    pub swipe: std::rc::Rc<std::cell::Cell<crate::image_viewer::Swipe>>,
+    pub on_step: std::rc::Rc<dyn Fn(isize, &mut gpui::Window, &mut gpui::App)>,
+}
+
+/// [`lightbox_with_size`] that, given a `nav` over several images, steps
+/// through them with the arrow buttons, the Left/Right keys, or a horizontal
+/// swipe while the image is not panned.
+pub(crate) fn lightbox_gallery(
+    window: &mut gpui::Window,
+    preview: &PreviewImage,
+    focus: &gpui::FocusHandle,
+    natural_size: Option<Size<gpui::Pixels>>,
+    nav: Option<LightboxNav>,
+    on_close: impl Fn(&mut gpui::Window, &mut gpui::App) + 'static,
+    cx: &mut gpui::App,
+) -> AnyElement {
+    let nav = nav.filter(|nav| nav.count > 1);
     let viewport = window.viewport_size();
-    let max_h = px(f32::from(viewport.height) * 0.85);
+    // A gallery gives up room at the bottom for its preview strip.
+    let strip = if nav.is_some() {
+        GALLERY_STRIP_HEIGHT
+    } else {
+        0.0
+    };
+    let max_h = px(f32::from(viewport.height) * 0.85 - strip);
     let max_w = px(f32::from(viewport.width) * 0.9);
     let natural_size = natural_size.or_else(|| {
         preview
@@ -1232,6 +1267,7 @@ pub(crate) fn lightbox_with_size(
     let close_on_key = on_close.clone();
     let press_state = preview.viewer.clone();
     let click_state = preview.viewer.clone();
+    let (key_nav, wheel_nav) = (nav.clone(), nav.clone());
     gpui::deferred(
         gpui::anchored()
             .position(gpui::point(px(0.0), px(0.0)))
@@ -1249,9 +1285,17 @@ pub(crate) fn lightbox_with_size(
                     .justify_center()
                     .gap(px(12.0))
                     .on_key_down(move |event: &gpui::KeyDownEvent, window, cx| {
-                        if event.keystroke.key == "escape" {
-                            cx.stop_propagation();
-                            close_on_key(window, cx);
+                        match event.keystroke.key.as_str() {
+                            "escape" => {
+                                cx.stop_propagation();
+                                close_on_key(window, cx);
+                            }
+                            "left" | "right" if let Some(nav) = &key_nav => {
+                                cx.stop_propagation();
+                                let step = if event.keystroke.key == "left" { -1 } else { 1 };
+                                (nav.on_step)(step, window, cx);
+                            }
+                            _ => {}
                         }
                     })
                     .capture_any_mouse_down(move |event, _, _| {
@@ -1265,20 +1309,173 @@ pub(crate) fn lightbox_with_size(
                             on_close(window, cx);
                         }
                     })
-                    .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
-                    .child(div().w(max_w).h(max_h).child(content))
+                    .on_scroll_wheel(move |event, window, cx| {
+                        cx.stop_propagation();
+                        // The viewer consumes scrolling that pans a zoomed
+                        // image; what reaches here can turn the page.
+                        if let Some(nav) = &wheel_nav {
+                            let mut swipe = nav.swipe.get();
+                            let step = swipe.feed(event.delta, std::time::Instant::now());
+                            nav.swipe.set(swipe);
+                            if let Some(step) = step {
+                                (nav.on_step)(step, window, cx);
+                            }
+                        }
+                    })
+                    .child(
+                        div()
+                            .w(max_w)
+                            .h(max_h)
+                            .relative()
+                            .child(content)
+                            .children(nav.as_ref().map(|nav| {
+                                gallery_arrow(nav, -1, msg::chat::image_gallery_previous, cx)
+                            }))
+                            .children(nav.as_ref().map(|nav| {
+                                gallery_arrow(nav, 1, msg::chat::image_gallery_next, cx)
+                            })),
+                    )
                     .child(
                         div()
                             .max_w(max_w)
                             .overflow_hidden()
+                            .flex()
+                            .gap(px(8.0))
                             .text_size(crate::typography::text_xs())
                             .text_color(ink(0.45))
-                            .child(preview.name.clone()),
-                    ),
+                            .children(nav.as_ref().map(|nav| {
+                                div().flex_none().text_color(ink(0.7)).child(format!(
+                                    "{} / {}",
+                                    nav.index + 1,
+                                    nav.count
+                                ))
+                            }))
+                            .child(div().min_w_0().truncate().child(preview.name.clone())),
+                    )
+                    .children(nav.as_ref().map(|nav| gallery_strip(nav, max_w, cx))),
             ),
     )
     .priority(3)
     .into_any_element()
+}
+
+const GALLERY_THUMB_HEIGHT: f32 = 52.0;
+/// The strip and the gap above it.
+const GALLERY_STRIP_HEIGHT: f32 = GALLERY_THUMB_HEIGHT + 24.0;
+
+/// The previews under a gallery: the current image is outlined, a click on
+/// another jumps to it. Scrolls sideways when the set is wider than the view.
+fn gallery_strip(nav: &LightboxNav, max_w: gpui::Pixels, cx: &gpui::App) -> AnyElement {
+    let accent = crate::theme::Theme::of(cx).accent;
+    let thumbs = nav.thumbs.iter().enumerate().map(|(ix, thumb)| {
+        let current = ix == nav.index;
+        let on_step = nav.on_step.clone();
+        let step = ix as isize - nav.index as isize;
+        div()
+            .id(("lightbox-thumb", ix))
+            .flex_none()
+            .w(px(GALLERY_THUMB_HEIGHT * 4.0 / 3.0))
+            .h(px(GALLERY_THUMB_HEIGHT))
+            .rounded(px(6.0))
+            .overflow_hidden()
+            .border_2()
+            .border_color(if current {
+                accent
+            } else {
+                gpui::transparent_black()
+            })
+            .bg(ink(0.08))
+            .opacity(if current { 1.0 } else { 0.55 })
+            .hover(|style| style.opacity(1.0))
+            .cursor_pointer()
+            .role(gpui::Role::Button)
+            .aria_label(tr(cx, |l| {
+                msg::chat::image_gallery_thumbnail(l, ix + 1, "")
+            }))
+            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(move |_, window, cx| {
+                cx.stop_propagation();
+                if step != 0 {
+                    on_step(step, window, cx);
+                }
+            })
+            .children(thumb.clone().map(|image| {
+                gpui::img(image)
+                    .size_full()
+                    .object_fit(gpui::ObjectFit::Cover)
+            }))
+    });
+    div()
+        .id("lightbox-strip")
+        .occlude()
+        .max_w(max_w)
+        .h(px(GALLERY_THUMB_HEIGHT + 4.0))
+        .flex()
+        .flex_row()
+        .gap(px(6.0))
+        .overflow_x_scroll()
+        .on_click(|_, _, cx| cx.stop_propagation())
+        .children(thumbs)
+        .into_any_element()
+}
+
+/// A round previous/next button over the side of the image. It is hidden at
+/// the ends of the set rather than wrapping around.
+fn gallery_arrow(
+    nav: &LightboxNav,
+    step: isize,
+    label: fn(&zuse_i18n::Localizer) -> String,
+    cx: &gpui::App,
+) -> AnyElement {
+    let target = nav.index as isize + step;
+    if target < 0 || target >= nav.count as isize {
+        return div().into_any_element();
+    }
+    let on_step = nav.on_step.clone();
+    let glyph = if step < 0 {
+        crate::icons::ARROW_LEFT
+    } else {
+        crate::icons::ARROW_RIGHT
+    };
+    div()
+        .id(if step < 0 {
+            "lightbox-previous"
+        } else {
+            "lightbox-next"
+        })
+        .absolute()
+        .top_0()
+        .bottom_0()
+        .when(step < 0, |side| side.left(px(8.0)))
+        .when(step > 0, |side| side.right(px(8.0)))
+        .flex()
+        .items_center()
+        .child(
+            div()
+                .id("lightbox-arrow")
+                .occlude()
+                .size(px(40.0))
+                .rounded_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(crate::popover::scrim_alpha(0.55))
+                .hover(|style| style.bg(crate::popover::scrim_alpha(0.8)))
+                .cursor_pointer()
+                .role(gpui::Role::Button)
+                .aria_label(tr(cx, label))
+                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(move |_, window, cx| {
+                    cx.stop_propagation();
+                    on_step(step, window, cx);
+                })
+                .child(
+                    crate::icons::icon(glyph)
+                        .size(px(18.0))
+                        .text_color(ink(0.9)),
+                ),
+        )
+        .into_any_element()
 }
 
 #[cfg(test)]

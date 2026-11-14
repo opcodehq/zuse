@@ -58,6 +58,8 @@ fn seed_workspace(root: &Path) -> anyhow::Result<()> {
     }
     write_png(&root.join("charts/chart.png"), &chart)?;
     write_png(&root.join("user/attached.png"), &gradient(900, 600, 77))?;
+    write_png(&root.join("user/portrait.png"), &gradient(600, 900, 180))?;
+    write_png(&root.join("user/wide.png"), &gradient(1600, 700, 230))?;
     write_png(&root.join("generated/gen.png"), &gradient(1024, 1024, 150))?;
     std::fs::create_dir_all(root.join("photos"))?;
     image::DynamicImage::ImageRgba8(gradient(1920, 1080, 33))
@@ -295,12 +297,15 @@ fn main() -> anyhow::Result<()> {
         .skip_while(|arg| arg != "--capture")
         .nth(1)
         .map(std::path::PathBuf::from);
+    // `--gallery`: open the user's images in the lightbox and step through
+    // them on a timer, for screenshots of the gallery.
+    let gallery = std::env::args().any(|arg| arg == "--gallery");
     let chart = abs("charts/chart.png");
     let entries = json!([
         {"id": "u1", "role": "user", "createdAt": 1788900000000_i64, "deviceId": device,
          "parts": [{"id": "t", "kind": "text", "text": attachments::with_attachments(
             "Here is the mockup I attached. Render every image the tools touch.",
-            &[abs("user/attached.png")])}]},
+            &[abs("user/attached.png"), abs("user/portrait.png"), abs("user/wide.png")])}]},
         {"id": "a1", "role": "assistant", "createdAt": 1788900001000_i64, "deviceId": device, "status": "complete",
          "parts": [
             {"id": "p0", "kind": "text", "text": "Open a tool group, then expand a chip. Its image decodes only while the chip is open. Right-click any image for **Copy path** / **Copy image**."},
@@ -322,6 +327,21 @@ fn main() -> anyhow::Result<()> {
             .collect::<Vec<_>>()},
     ]);
 
+    // The gallery shots need the user's message on screen: keep it and a
+    // short reply.
+    let entries = if gallery {
+        let mut entries = entries;
+        let list = entries.as_array_mut().unwrap();
+        list.truncate(1);
+        list.push(
+            json!({"id": "a0", "role": "assistant", "createdAt": 1788900001000_i64,
+            "deviceId": device, "status": "complete",
+            "parts": [{"id": "p", "kind": "text", "text": "Got all three images."}]}),
+        );
+        entries
+    } else {
+        entries
+    };
     gpui_platform::application()
         .with_assets(icons::Assets)
         .run(move |cx| {
@@ -407,6 +427,34 @@ fn main() -> anyhow::Result<()> {
                     .unwrap();
                     cx.notify();
                 });
+                if gallery {
+                    let transcript = window
+                        .update(cx, |shell, _, _| shell.fixture_transcript())
+                        .unwrap();
+                    let handle = gpui::AnyWindowHandle::from(window);
+                    transcript.update(cx, |t, cx| t.fixture_appshots_start(cx));
+                    eprintln!("gallery: chat");
+                    pause(cx, 6000).await;
+                    for _ in 0..40 {
+                        pause(cx, 250).await;
+                        let opened = handle
+                            .update(cx, |_, w, cx| {
+                                transcript.update(cx, |t, cx| t.fixture_open_user_gallery(0, w, cx))
+                            })
+                            .unwrap_or(false);
+                        if opened {
+                            break;
+                        }
+                    }
+                    eprintln!("gallery: image 1");
+                    pause(cx, 6000).await;
+                    handle
+                        .update(cx, |_, w, cx| {
+                            transcript.update(cx, |t, cx| t.fixture_step_gallery(1, w, cx))
+                        })
+                        .ok();
+                    eprintln!("gallery: image 2");
+                }
                 if let Some(dir) = capture {
                     if let Err(error) = self_check(window, &dir, &chart, cx).await {
                         eprintln!("self-check failed: {error:#}");

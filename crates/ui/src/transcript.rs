@@ -3807,6 +3807,13 @@ pub struct Transcript {
     /// Focused while the lightbox is open so Escape reaches it.
     attachment_preview_focus: gpui::FocusHandle,
     attachment_preview_return_focus: Option<gpui::FocusHandle>,
+    /// The images the lightbox can step through (a message's attachments),
+    /// and which one it shows. Empty for a single-image preview.
+    attachment_gallery: Vec<GalleryEntry>,
+    attachment_gallery_index: usize,
+    gallery_swipe: Rc<std::cell::Cell<crate::image_viewer::Swipe>>,
+    /// A gallery was opened and waits for its first image to load.
+    gallery_opening: bool,
     /// Mermaid fences drawn as diagrams in settled Markdown blocks. Each
     /// row's media handler requests its fences while laying out, so only
     /// painted diagrams are rendered (see [`MermaidCache`]).
@@ -4179,6 +4186,10 @@ impl Transcript {
             attachment_preview: None,
             attachment_preview_focus: cx.focus_handle(),
             attachment_preview_return_focus: None,
+            attachment_gallery: Vec::new(),
+            attachment_gallery_index: 0,
+            gallery_swipe: Rc::default(),
+            gallery_opening: false,
             diagrams: Rc::default(),
             diagram_media: None,
             diagram_worker: None,
@@ -6608,6 +6619,118 @@ impl Transcript {
         }
     }
 
+    /// Open `items[index]` in the lightbox, able to step through the rest.
+    fn open_gallery(
+        &mut self,
+        items: Vec<crate::attachments::PreviewImage>,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let entries = items
+            .into_iter()
+            .map(|preview| GalleryEntry {
+                source: None,
+                preview: Some(preview),
+            })
+            .collect();
+        self.open_gallery_entries(entries, index, window, cx);
+    }
+
+    /// Open a gallery whose entries may still need their full image read.
+    /// The lightbox appears once the chosen entry has loaded.
+    fn open_gallery_entries(
+        &mut self,
+        entries: Vec<GalleryEntry>,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if index >= entries.len() {
+            return;
+        }
+        self.close_diagram_zoom(cx);
+        self.attachment_preview = None;
+        self.attachment_preview_return_focus = window.focused(cx);
+        self.attachment_gallery = entries;
+        self.attachment_gallery_index = index;
+        self.gallery_opening = true;
+        self.resolve_gallery(window, cx);
+        cx.notify();
+    }
+
+    /// Show the gallery's current entry once its image is available, reading
+    /// it if needed. Until then the lightbox keeps the previous image.
+    fn resolve_gallery(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // A preview opened from elsewhere (or a closed lightbox) ends the
+        // gallery, so a late load never replaces what the user looks at.
+        let foreign = match &self.attachment_preview {
+            Some(shown) => !self.attachment_gallery.iter().any(|entry| {
+                entry
+                    .preview
+                    .as_ref()
+                    .is_some_and(|item| Arc::ptr_eq(&item.image, &shown.image))
+            }),
+            None => !self.gallery_opening,
+        };
+        if foreign {
+            self.attachment_gallery.clear();
+            self.gallery_opening = false;
+            return;
+        }
+        let index = self.attachment_gallery_index;
+        let Some(entry) = self.attachment_gallery.get(index) else {
+            return;
+        };
+        let preview = match (&entry.preview, &entry.source) {
+            (Some(preview), _) => preview.clone(),
+            (None, Some((devices, path))) => {
+                let (devices, path) = (devices.clone(), path.clone());
+                match self.attachment_state(&devices, &path, None, cx) {
+                    crate::attachments::AttachmentSnapshot::Loaded(image) => {
+                        let preview =
+                            crate::attachments::PreviewImage::new(image.name, image.image);
+                        self.attachment_gallery[index].preview = Some(preview.clone());
+                        preview
+                    }
+                    crate::attachments::AttachmentSnapshot::Loading => return,
+                    // Nothing to show: an unopened gallery is dropped.
+                    crate::attachments::AttachmentSnapshot::Error { .. } => {
+                        if self.gallery_opening {
+                            self.gallery_opening = false;
+                            self.attachment_gallery.clear();
+                        }
+                        return;
+                    }
+                }
+            }
+            (None, None) => return,
+        };
+        let current = self
+            .attachment_preview
+            .as_ref()
+            .is_some_and(|shown| Arc::ptr_eq(&shown.image, &preview.image));
+        if !current {
+            preview.viewer.reset();
+            self.attachment_preview = Some(preview);
+            if std::mem::take(&mut self.gallery_opening) {
+                window.focus(&self.attachment_preview_focus, cx);
+            }
+            cx.notify();
+        }
+    }
+
+    /// Move the open gallery by `step` images, stopping at either end.
+    fn step_gallery(&mut self, step: isize, window: &mut Window, cx: &mut Context<Self>) {
+        let target = self.attachment_gallery_index as isize + step;
+        if target < 0 || target as usize >= self.attachment_gallery.len() {
+            return;
+        }
+        self.attachment_gallery_index = target as usize;
+        self.resolve_gallery(window, cx);
+        cx.notify();
+    }
+
     /// Whether an attachment ref is still crossing to the chat's host, and
     /// how far along it is. Two ref shapes mean "still crossing": the queued
     /// flow's `pending://` (bytes ship engine-side after the send; the host
@@ -6823,6 +6946,7 @@ impl Transcript {
     ) -> AnyElement {
         use crate::tool_images::Thumb;
         let devices: Rc<[String]> = self.image_host(cx).0.into_iter().collect();
+        let paths: Rc<[String]> = images.iter().map(|(path, _)| path.clone()).collect();
         let frames = images.into_iter().enumerate().map(|(ix, (path, thumb))| {
             let name = SharedString::from(file_badge_name(&path).to_owned());
             let width = match &thumb {
@@ -6832,6 +6956,9 @@ impl Transcript {
                 _ => TOOL_IMAGE_HEIGHT * 4.0 / 3.0,
             };
             let menu_devices = devices.clone();
+            let gallery_devices = devices.clone();
+            let gallery_paths = paths.clone();
+            let ready = matches!(thumb, Thumb::Ready { .. });
             let frame = div()
                 .id(SharedString::from(format!("{chip}-img{ix}")))
                 .w(px(width))
@@ -6846,6 +6973,22 @@ impl Transcript {
                 .border_color(crate::theme::hairline(0.07))
                 .bg(crate::theme::ink(0.035))
                 .aria_label(name.clone())
+                .when(ready, |frame| {
+                    frame
+                        .cursor_pointer()
+                        .role(gpui::Role::Button)
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            cx.stop_propagation();
+                            let entries = gallery_paths
+                                .iter()
+                                .map(|path| GalleryEntry {
+                                    source: Some((gallery_devices.to_vec(), path.clone())),
+                                    preview: None,
+                                })
+                                .collect();
+                            this.open_gallery_entries(entries, ix, window, cx);
+                        }))
+                })
                 .on_mouse_down(
                     gpui::MouseButton::Right,
                     cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
@@ -7970,6 +8113,20 @@ impl Transcript {
                     )),
             );
         }
+        // Every loaded image of this message, in order: the lightbox steps
+        // through them.
+        let gallery: Vec<crate::attachments::PreviewImage> = atts
+            .iter()
+            .filter(|att| crate::attachments::is_image_path(&att.path))
+            .filter_map(
+                |att| match self.attachment_state(&device_ids, &att.path, None, cx) {
+                    AttachmentSnapshot::Loaded(image) => Some(
+                        crate::attachments::PreviewImage::new(image.name, image.image),
+                    ),
+                    _ => None,
+                },
+            )
+            .collect();
         for (aix, att) in atts.iter().enumerate() {
             if !crate::attachments::is_image_path(&att.path) {
                 let (sending, progress) = self.upload_status(&att.path, cx);
@@ -8032,8 +8189,11 @@ impl Transcript {
                     .overflow_hidden();
                 card = match state {
                     AttachmentSnapshot::Loaded(image) => {
-                        let preview =
-                            crate::attachments::PreviewImage::new(image.name, image.image.clone());
+                        let items = gallery.clone();
+                        let index = gallery
+                            .iter()
+                            .position(|item| Arc::ptr_eq(&item.image, &image.image))
+                            .unwrap_or(0);
                         card.role(gpui::Role::Button)
                             .aria_label(format!(
                                 "Preview {} Appshot: {}",
@@ -8044,11 +8204,7 @@ impl Transcript {
                             .cursor_pointer()
                             .focus_visible(move |style| style.border_2().border_color(accent))
                             .on_click(cx.listener(move |this, _, window, cx| {
-                                this.attachment_preview_return_focus = window.focused(cx);
-                                preview.viewer.reset();
-                                this.attachment_preview = Some(preview.clone());
-                                window.focus(&this.attachment_preview_focus, cx);
-                                cx.notify();
+                                this.open_gallery(items.clone(), index, window, cx);
                             }))
                             .child(
                                 // Inherit the transcript's scroll fade. GPUI replaces
@@ -8163,10 +8319,11 @@ impl Transcript {
                     .tip(att.name.clone());
             let thumb: AnyElement = match state {
                 AttachmentSnapshot::Loaded(image) => {
-                    let preview = crate::attachments::PreviewImage::new(
-                        image.name.clone(),
-                        image.image.clone(),
-                    );
+                    let items = gallery.clone();
+                    let index = gallery
+                        .iter()
+                        .position(|item| Arc::ptr_eq(&item.image, &image.image))
+                        .unwrap_or(0);
                     let (menu_path, menu_devices) = (att.path.clone(), device_ids.clone());
                     chip = chip
                         .on_mouse_down(
@@ -8186,11 +8343,7 @@ impl Transcript {
                         .role(gpui::Role::Button)
                         .aria_label(format!("Preview {}", att.name))
                         .on_click(cx.listener(move |this, _, window, cx| {
-                            this.attachment_preview_return_focus = window.focused(cx);
-                            preview.viewer.reset();
-                            this.attachment_preview = Some(preview.clone());
-                            window.focus(&this.attachment_preview_focus, cx);
-                            cx.notify();
+                            this.open_gallery(items.clone(), index, window, cx);
                         }));
                     if sending {
                         // The in-flight send's progress stays on the chip.
@@ -10376,6 +10529,14 @@ fn user_file_pill(id: SharedString, name: &str, theme: &Theme) -> AnyElement {
 }
 
 /// The thumbnail inside an image chip above a user bubble.
+/// One image the lightbox can step to: shown from `preview` once known,
+/// otherwise read from `source` (candidate devices, path) on arrival.
+#[derive(Clone)]
+struct GalleryEntry {
+    source: Option<(Vec<String>, String)>,
+    preview: Option<crate::attachments::PreviewImage>,
+}
+
 const USER_CHIP_THUMB: f32 = 16.0;
 const USER_CHIP_NAME_MAX: usize = 28;
 
@@ -12059,6 +12220,9 @@ impl Render for Transcript {
         let root = root.children(self.render_image_menu(cx));
         // Full-size viewer for a clicked user-bubble thumbnail
         // (AttachmentPreviewDialog: bare lightbox, click closes).
+        if !self.attachment_gallery.is_empty() {
+            self.resolve_gallery(window, cx);
+        }
         if let Some(preview) = self.attachment_preview.clone() {
             let weak = cx.weak_entity();
             // A diagram's enlarged raster is framed by its natural size.
@@ -12066,15 +12230,42 @@ impl Render for Transcript {
                 .diagram_zoom
                 .as_ref()
                 .map(|source| size(px(source.width), px(source.height)));
-            return root.child(crate::attachments::lightbox_with_size(
+            // Only the gallery's current image steps; any other preview
+            // opened since stands alone.
+            let in_gallery = self.attachment_gallery.iter().any(|entry| {
+                entry
+                    .preview
+                    .as_ref()
+                    .is_some_and(|item| Arc::ptr_eq(&item.image, &preview.image))
+            });
+            let nav = in_gallery.then(|| {
+                let step = weak.clone();
+                crate::attachments::LightboxNav {
+                    index: self.attachment_gallery_index,
+                    count: self.attachment_gallery.len(),
+                    thumbs: self
+                        .attachment_gallery
+                        .iter()
+                        .map(|entry| entry.preview.as_ref().map(|item| item.image.clone()))
+                        .collect(),
+                    swipe: self.gallery_swipe.clone(),
+                    on_step: Rc::new(move |delta, window, cx| {
+                        step.update(cx, |this, cx| this.step_gallery(delta, window, cx))
+                            .ok();
+                    }),
+                }
+            });
+            return root.child(crate::attachments::lightbox_gallery(
                 window,
                 &preview,
                 &self.attachment_preview_focus,
                 natural_size,
+                nav,
                 move |window, cx| {
                     if let Ok(focus) = weak.update(cx, |this, cx| {
                         this.close_diagram_zoom(cx);
                         this.attachment_preview = None;
+                        this.attachment_gallery.clear();
                         cx.notify();
                         this.attachment_preview_return_focus.take()
                     }) && let Some(focus) = focus
@@ -13810,6 +14001,83 @@ mod tests {
         cx.simulate_keystrokes("escape");
         transcript.read_with(cx, |this, _| assert!(this.attachment_preview.is_none()));
         cx.update(|window, _| assert!(return_focus.is_focused(window)));
+    }
+
+    #[gpui::test]
+    fn gallery_steps_with_arrows_and_tool_images_open_once_loaded(cx: &mut gpui::TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        cx.update(|cx| {
+            gpui_base::init(cx);
+            cx.set_global(Theme::dark());
+            crate::settings::init(crate::settings::UiSettings::default(), dir.path(), cx);
+        });
+        let state = cx.new(|_| AppState::new());
+        let transcript = cx.new(|cx| Transcript::new(state, cx));
+        let png = |w, h| {
+            let mut bytes = std::io::Cursor::new(Vec::new());
+            image::DynamicImage::new_rgba8(w, h)
+                .write_to(&mut bytes, image::ImageFormat::Png)
+                .unwrap();
+            Arc::new(gpui::Image::from_bytes(
+                gpui::ImageFormat::Png,
+                bytes.into_inner(),
+            ))
+        };
+        let (first, second) = (png(64, 48), png(30, 60));
+        // The second image is a tool screenshot read from its device.
+        crate::attachments::store_loaded_for(
+            &crate::attachments::AttachmentKey::new("gallery-host", "/tmp/shot.png", None),
+            "shot.png".into(),
+            second.clone(),
+        );
+        let (_, cx) = cx.add_window_view(|_, _| PreviewFixture(transcript.clone()));
+        struct PreviewFixture(Entity<Transcript>);
+        impl Render for PreviewFixture {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                self.0.clone()
+            }
+        }
+        cx.update(|window, cx| {
+            transcript.update(cx, |this, cx| {
+                let entries = vec![
+                    GalleryEntry {
+                        source: None,
+                        preview: Some(crate::attachments::PreviewImage::new(
+                            "a.png",
+                            first.clone(),
+                        )),
+                    },
+                    GalleryEntry {
+                        source: Some((vec!["gallery-host".into()], "/tmp/shot.png".into())),
+                        preview: None,
+                    },
+                ];
+                this.open_gallery_entries(entries, 0, window, cx);
+            })
+        });
+        cx.run_until_parked();
+        let shown = |cx: &mut gpui::VisualTestContext| {
+            transcript.read_with(cx, |this, _| {
+                this.attachment_preview.as_ref().map(|p| p.image.clone())
+            })
+        };
+        assert!(shown(cx).is_some_and(|image| Arc::ptr_eq(&image, &first)));
+        cx.simulate_keystrokes("right");
+        cx.run_until_parked();
+        assert!(shown(cx).is_some_and(|image| Arc::ptr_eq(&image, &second)));
+        // The last image does not wrap around.
+        cx.simulate_keystrokes("right");
+        cx.run_until_parked();
+        assert!(shown(cx).is_some_and(|image| Arc::ptr_eq(&image, &second)));
+        cx.simulate_keystrokes("left");
+        cx.run_until_parked();
+        assert!(shown(cx).is_some_and(|image| Arc::ptr_eq(&image, &first)));
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        transcript.read_with(cx, |this, _| {
+            assert!(this.attachment_preview.is_none());
+            assert!(this.attachment_gallery.is_empty());
+        });
     }
 
     #[gpui::test]
@@ -18512,6 +18780,49 @@ impl Transcript {
         }
         self.list.remeasure();
         cx.notify();
+    }
+
+    /// Open the first user message's images in the lightbox at `index`, as a
+    /// thumbnail click would. False while they are still loading.
+    pub fn fixture_open_user_gallery(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(paths) = self.rows.iter().find_map(|row| match &row.kind {
+            RowKind::User { attachments, .. } if !attachments.is_empty() => Some(
+                attachments
+                    .iter()
+                    .map(|att| att.path.to_string())
+                    .collect::<Vec<_>>(),
+            ),
+            _ => None,
+        }) else {
+            return false;
+        };
+        let devices = self.attachment_device_ids(cx);
+        let mut items = Vec::new();
+        for path in paths {
+            match self.attachment_state(&devices, &path, None, cx) {
+                crate::attachments::AttachmentSnapshot::Loaded(image) => items.push(
+                    crate::attachments::PreviewImage::new(image.name, image.image),
+                ),
+                _ => return false,
+            }
+        }
+        self.open_gallery(items, index, window, cx);
+        true
+    }
+
+    /// Step the open gallery, as an arrow key or swipe would.
+    pub fn fixture_step_gallery(
+        &mut self,
+        step: isize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.step_gallery(step, window, cx);
     }
 
     /// `(previews resident, retained bytes)`.

@@ -3467,6 +3467,16 @@ async fn publish_visual_lands_in_the_live_turn() {
         text: "Uploads dominate.".into(),
     })
     .unwrap();
+    // A UI block in the same turn keeps its spec through the doc (it once
+    // lost it on write and read back as "UI block unavailable").
+    const SPEC: &str = r#"root = BarChart("Load", [{label: "A", value: 3}], "ms")"#;
+    client
+        .call(
+            zuse_rpc::methods::PUBLISH_UI_BLOCK,
+            serde_json::json!({ "chatId": CHAT, "spec": SPEC }),
+        )
+        .await
+        .expect("PublishUiBlock");
     tx.send(done(DoneStatus::Completed)).unwrap();
     wait_for(
         || {
@@ -3507,6 +3517,12 @@ async fn publish_visual_lands_in_the_live_turn() {
     );
     assert!(
         matches!(&parts[at + 1], MessagePart::Text { text, .. } if text == "Uploads dominate."),
+        "{parts:?}"
+    );
+    assert!(
+        parts
+            .iter()
+            .any(|p| matches!(p, MessagePart::UiBlock { spec, .. } if spec == SPEC)),
         "{parts:?}"
     );
     core.shutdown().await;

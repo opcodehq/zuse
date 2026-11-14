@@ -1072,6 +1072,9 @@ fn push_part(parts: &LoroList, part: &MessagePart) -> Result<(), DocError> {
     if let Some(message) = &doc_part.message {
         map.insert("message", message.as_str())?;
     }
+    if let Some(spec) = &doc_part.spec {
+        map.insert("spec", spec.as_str())?;
+    }
     for (key, value) in [
         ("sourceChatId", &doc_part.source_chat_id),
         ("sourceTitle", &doc_part.source_title),
@@ -1530,6 +1533,9 @@ fn update_part_fields(map: &LoroMap, part: &MessagePart) -> Result<(), DocError>
     if let Some(message) = &doc_part.message {
         map.insert("message", message.as_str())?;
     }
+    if let Some(spec) = &doc_part.spec {
+        map.insert("spec", spec.as_str())?;
+    }
     if let Some(output) = &doc_part.output {
         map.insert("output", output.as_str())?;
     }
@@ -1831,6 +1837,32 @@ mod tests {
                 Some(MessagePart::Error { .. })
             ));
         }
+    }
+
+    #[test]
+    fn ui_block_round_trips_through_the_doc_with_its_spec() {
+        let doc = SessionDoc::init("ui-blocks").unwrap();
+        let mut writer = SegmentWriter::begin(&doc, "a", "owner", 1).unwrap();
+        let mut parts = vec![];
+        let spec = r#"root = BarChart("Load", [{label: "A", value: 3}], "ms")"#;
+        fold_event_into_parts(
+            &mut parts,
+            &AgentEvent::UiBlock {
+                id: "ui:1".into(),
+                spec: spec.into(),
+            },
+        );
+        writer.sync(&parts).unwrap();
+        let imported = LoroDoc::new();
+        imported.import(&doc.export_snapshot().unwrap()).unwrap();
+        let loaded = SessionDoc::from_doc(imported);
+        assert_eq!(
+            loaded.read_entries().unwrap()[0].parts,
+            vec![MessagePart::UiBlock {
+                id: "ui:1".into(),
+                spec: spec.into(),
+            }]
+        );
     }
 
     #[test]

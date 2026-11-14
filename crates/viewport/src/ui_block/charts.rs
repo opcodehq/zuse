@@ -100,7 +100,10 @@ impl UiBlockView {
         let p = self.palette.clone();
         let values: Vec<f64> = points.iter().map(|point| point.value).collect();
         let (zero, spans) = bar_spans(&values);
+        // Negative bars take a second hue so direction reads at a glance
+        // without implying good or bad (a latency drop is an improvement).
         let green = DitherColor::Green.seed().fill;
+        let orange = DitherColor::Orange.seed().fill;
         let caches: Vec<_> = (0..points.len())
             .map(|index| self.raster_cache(format!("{path}#bar{index}")))
             .collect();
@@ -109,6 +112,7 @@ impl UiBlockView {
             .zip(spans)
             .zip(caches)
             .map(|((point, span), cache)| {
+                let fill = if point.value < 0.0 { orange } else { green };
                 let track = div()
                     .relative()
                     .h(px(16.))
@@ -132,7 +136,7 @@ impl UiBlockView {
                                     f32::from(bounds.size.width) as f64,
                                     f32::from(bounds.size.height) as f64,
                                 );
-                                let raster = bar_fill(cols, rows, span.start, span.fraction, green);
+                                let raster = bar_fill(cols, rows, span.start, span.fraction, fill);
                                 if raster.is_empty() {
                                     return;
                                 }

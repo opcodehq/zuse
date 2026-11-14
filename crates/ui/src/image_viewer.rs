@@ -180,6 +180,47 @@ impl ViewState {
     }
 }
 
+/// Turns horizontal trackpad swipes and wheel tilts into gallery steps. One
+/// gesture steps at most once: momentum and the rest of the swipe are ignored
+/// until input pauses, so a flick never skips several images.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Swipe {
+    travel: Point<f32>,
+    fired: bool,
+    last: Option<std::time::Instant>,
+}
+
+impl Swipe {
+    const PAUSE: std::time::Duration = std::time::Duration::from_millis(220);
+    const THRESHOLD: f32 = 60.0;
+
+    /// `Some(1)` for the next image, `Some(-1)` for the previous one.
+    pub(crate) fn feed(&mut self, delta: ScrollDelta, now: std::time::Instant) -> Option<isize> {
+        if self
+            .last
+            .is_none_or(|last| now.saturating_duration_since(last) > Self::PAUSE)
+        {
+            *self = Self::default();
+        }
+        self.last = Some(now);
+        if self.fired {
+            return None;
+        }
+        let delta = scroll_pixels(delta);
+        if !delta.x.is_finite() || !delta.y.is_finite() {
+            return None;
+        }
+        self.travel = self.travel + delta;
+        let (x, y) = (self.travel.x, self.travel.y);
+        if x.abs() < Self::THRESHOLD || x.abs() < y.abs() * 1.5 {
+            return None;
+        }
+        self.fired = true;
+        // Fingers moving left (negative delta) bring the next image in.
+        Some(if x < 0.0 { 1 } else { -1 })
+    }
+}
+
 pub(crate) type ImageClick = Rc<dyn Fn(&mut Window, &mut App)>;
 
 impl ImageView {
@@ -361,6 +402,24 @@ mod tests {
         g.resize(size(1000.0, 500.0), size(500.0, 300.0));
         g
     }
+    #[test]
+    fn a_horizontal_swipe_steps_once_per_gesture() {
+        let start = std::time::Instant::now();
+        let at = |ms| start + std::time::Duration::from_millis(ms);
+        let px = |x: f32, y: f32| ScrollDelta::Pixels(point(gpui::px(x), gpui::px(y)));
+        let mut swipe = Swipe::default();
+        assert_eq!(swipe.feed(px(-30.0, 2.0), at(0)), None);
+        assert_eq!(swipe.feed(px(-40.0, 1.0), at(10)), Some(1));
+        // The rest of the gesture and its momentum do not step again.
+        assert_eq!(swipe.feed(px(-200.0, 0.0), at(20)), None);
+        assert_eq!(swipe.feed(px(-90.0, 0.0), at(200)), None);
+        // After a pause, a swipe the other way goes back.
+        assert_eq!(swipe.feed(px(120.0, 0.0), at(600)), Some(-1));
+        // Mostly vertical scrolling never steps.
+        let mut swipe = Swipe::default();
+        assert_eq!(swipe.feed(px(-70.0, 90.0), at(0)), None);
+    }
+
     #[test]
     fn fit_preserves_aspect_ratio_and_never_upscales() {
         let mut g = geometry();
