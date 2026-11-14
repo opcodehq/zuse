@@ -222,8 +222,8 @@ impl Composer {
         popover::anchored_menu_above("composer-add-popup", menu.into_any_element(), None)
     }
 
-    /// The visible plan-mode state: a quiet neutral chip beside the access
-    /// control. Clicking it turns plan mode off.
+    /// The visible plan-mode state: a quiet accent chip beside the access
+    /// control while plan mode is on. Clicking it turns plan mode off.
     pub(super) fn render_plan_chip(
         &self,
         theme: &Theme,
@@ -242,21 +242,23 @@ impl Composer {
                 .aria_label(exit.clone())
                 .tab_index(0)
                 .h(px(28.))
-                .px(px(8.))
+                .pl(px(9.))
+                .pr(px(7.))
                 .flex()
                 .flex_none()
                 .items_center()
-                .gap(px(5.))
+                .gap(px(6.))
                 .rounded(px(7.))
                 .text_size(crate::typography::text_xs())
-                .text_color(theme.text)
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(theme.accent)
                 .cursor_pointer()
                 .bg(motion::hover_blend(
                     &hover_key,
-                    theme.muted_fill().opacity(0.0),
-                    theme.muted_fill().opacity(0.6),
+                    theme.accent.opacity(0.10),
+                    theme.accent.opacity(0.18),
                 ))
-                .on_hover(motion::hover_listener(hover_key.clone()))
+                .on_hover(motion::hover_listener(hover_key))
                 .tip(exit)
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(|this, _, _, cx| this.toggle_plan_mode(cx)))
@@ -266,12 +268,12 @@ impl Composer {
                         this.toggle_plan_mode(cx);
                     }
                 }))
+                .child(tr(cx, msg::native::composer_plan_chip))
                 .child(
-                    icons::icon(icons::CHECKLIST)
-                        .size(px(13.))
-                        .text_color(theme.text_muted),
-                )
-                .child(tr(cx, msg::native::composer_plan_chip)),
+                    icons::icon(icons::CLOSE)
+                        .size(px(11.))
+                        .text_color(theme.accent.opacity(0.7)),
+                ),
         )
     }
 }

@@ -44,13 +44,8 @@ impl Default for MenuState {
 }
 
 impl Pickers {
-    pub(super) fn settings_menu_height(&self, cx: &App) -> f32 {
-        let (_, body) = self.reference_items(cx);
-        let error = matches!(self.harnesses, Loadable::Error(_))
-            || self.scoped_model_refresh_error(cx).is_some();
-        (ui::SEARCH_HEIGHT + body + if error { 44. } else { 0. })
-            .max(44. + self.rail_descriptors(cx).len() as f32 * 36.)
-            .min(ui::MAX_HEIGHT)
+    pub(super) fn settings_menu_height(&self, _cx: &App) -> f32 {
+        ui::MAX_HEIGHT
     }
 
     /// A provider's discovery failure belongs to that provider's tab. The
@@ -364,7 +359,7 @@ impl Pickers {
                 .or_else(|| self.rail_descriptors(cx).first().map(|p| p.id));
         }
         let theme = Theme::of(cx).for_popup();
-        let (items, _body) = self.reference_items(cx);
+        let (items, _) = self.reference_items(cx);
         let empty = items.is_empty();
         let error = if self.cloud_models_active(cx) {
             self.cloud.model_error.clone()
@@ -446,42 +441,14 @@ impl Pickers {
             cx.processor(move |this, index, _, cx| this.reference_item(&items[index], cx)),
         )
         .size_full();
-        let back = self.loadout_browse.then(|| {
-            div()
-                .id("model-menu-back-to-loadout")
-                .role(gpui::Role::Button)
-                .aria_label("Back to loadout")
-                .size(px(24.))
-                .mr(px(6.))
-                .flex()
-                .flex_none()
-                .items_center()
-                .justify_center()
-                .rounded(px(6.))
-                .cursor_pointer()
-                .hover(|s| s.bg(theme.muted_fill().opacity(0.7)))
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.loadout_browse = false;
-                    this.active = this.current_loadout_index(cx).unwrap_or(0);
-                    this.focus_on_mount = true;
-                    cx.notify();
-                }))
-                .child(
-                    crate::icons::icon(crate::icons::ALT_ARROW_LEFT)
-                        .size(px(14.))
-                        .text_color(theme.text_muted),
-                )
-        });
         let search = div()
             .flex_none()
             .h(px(ui::SEARCH_HEIGHT))
-            .pl(px(if back.is_some() { 8. } else { 14. }))
-            .pr(px(14.))
+            .px(px(14.))
             .border_b_1()
             .border_color(theme.border.opacity(0.5))
             .flex()
             .items_center()
-            .children(back)
             .child(div().flex_1().min_w_0().child(self.search.clone()));
         let body = div()
             .flex()

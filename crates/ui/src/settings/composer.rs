@@ -40,42 +40,6 @@ pub struct FavoriteModel {
     pub model: String,
 }
 
-/// How many models the loadout holds: the picker lists them all at once.
-pub const LOADOUT_LIMIT: usize = 6;
-
-/// One model in the picker's loadout: a model run at a chosen effort and
-/// option set (fast mode, effort options), switched to in one pick. The same
-/// model may appear more than once at different efforts.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LoadoutEntry {
-    pub harness: HarnessId,
-    pub model: String,
-    /// Display name, so the row reads correctly before the catalog loads.
-    pub label: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reasoning: Option<ReasoningLevel>,
-    /// Option picks applied with the model (option id → choice id).
-    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
-    pub options: ModelOptions,
-    /// The effort's display label when it was saved ("High", "Extra high").
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub effort: Option<String>,
-    /// Whether the saved options run the model in fast mode.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub fast: bool,
-}
-
-impl LoadoutEntry {
-    /// Two entries that would run identically.
-    pub fn same_run(&self, other: &Self) -> bool {
-        self.harness == other.harness
-            && self.model == other.model
-            && self.reasoning == other.reasoning
-            && self.options == other.options
-    }
-}
-
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ComposerDefaults {
@@ -110,8 +74,6 @@ pub struct ComposerDefaults {
     pub workspace_by_project: HashMap<String, zuse_protocol::presentation::WorkspaceMode>,
     /// Starred models (the picker's favorites rail), in starring order.
     pub favorites: Vec<FavoriteModel>,
-    /// The picker's short list, in display order (at most [`LOADOUT_LIMIT`]).
-    pub loadout: Vec<LoadoutEntry>,
 }
 
 impl ComposerDefaults {
@@ -239,35 +201,6 @@ impl ComposerDefaults {
         }
     }
 
-    /// Add an entry to the loadout's end. Returns false when it is already
-    /// there or the loadout is full.
-    pub fn add_to_loadout(&mut self, entry: LoadoutEntry) -> bool {
-        if self.loadout.len() >= LOADOUT_LIMIT || self.loadout.iter().any(|e| e.same_run(&entry)) {
-            return false;
-        }
-        self.loadout.push(entry);
-        true
-    }
-
-    /// Remove the loadout entry at `index`, if any.
-    pub fn remove_from_loadout(&mut self, index: usize) -> Option<LoadoutEntry> {
-        (index < self.loadout.len()).then(|| self.loadout.remove(index))
-    }
-
-    /// Move the entry at `index` by `delta` places, clamped to the ends.
-    /// Returns its new index.
-    pub fn move_in_loadout(&mut self, index: usize, delta: isize) -> Option<usize> {
-        if index >= self.loadout.len() {
-            return None;
-        }
-        let target = index
-            .saturating_add_signed(delta)
-            .min(self.loadout.len() - 1);
-        let entry = self.loadout.remove(index);
-        self.loadout.insert(target, entry);
-        Some(target)
-    }
-
     /// Merge a loaded catalog into the label cache. Returns whether anything
     /// changed (callers only save when it did).
     pub fn remember_labels<'a>(
@@ -369,38 +302,6 @@ mod tests {
         assert!(!defaults.toggle_favorite(HarnessId::ClaudeCode, "claude-opus-5"));
         assert!(!defaults.is_favorite(HarnessId::ClaudeCode, "claude-opus-5"));
         assert!(defaults.is_favorite(HarnessId::Codex, "gpt-5.2-codex"));
-    }
-
-    #[test]
-    fn loadout_keeps_order_skips_duplicates_and_caps() {
-        let dir = tempfile::tempdir().unwrap();
-        let entry = |model: &str, reasoning| LoadoutEntry {
-            harness: HarnessId::Codex,
-            model: model.into(),
-            label: model.into(),
-            reasoning,
-            options: Default::default(),
-            effort: None,
-            fast: false,
-        };
-        let mut defaults = ComposerDefaults::default();
-        assert!(defaults.add_to_loadout(entry("a", Some(ReasoningLevel::High))));
-        // The same model at another effort is its own entry.
-        assert!(defaults.add_to_loadout(entry("a", Some(ReasoningLevel::Low))));
-        assert!(!defaults.add_to_loadout(entry("a", Some(ReasoningLevel::High))));
-        for model in ["b", "c", "d", "e"] {
-            assert!(defaults.add_to_loadout(entry(model, None)));
-        }
-        assert!(!defaults.add_to_loadout(entry("f", None)));
-        assert_eq!(defaults.move_in_loadout(5, -10), Some(0));
-        assert_eq!(defaults.loadout[0].model, "e");
-        assert_eq!(defaults.move_in_loadout(0, 1), Some(1));
-        assert_eq!(defaults.remove_from_loadout(1).unwrap().model, "e");
-        defaults.save(dir.path()).unwrap();
-        assert_eq!(ComposerDefaults::load(dir.path()), defaults);
-        // Older files without a loadout still load.
-        std::fs::write(ComposerDefaults::path(dir.path()), r#"{"favorites":[]}"#).unwrap();
-        assert!(ComposerDefaults::load(dir.path()).loadout.is_empty());
     }
 
     #[test]

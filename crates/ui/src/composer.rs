@@ -6272,8 +6272,6 @@ pub enum WorkspaceCommand {
     Plugins,
     /// Provider accounts (the tray's Switch account); not a slash command.
     Accounts,
-    /// Settings → Default models (the model picker's Edit loadout).
-    ModelSettings,
 }
 
 impl WorkspaceCommand {
@@ -6748,6 +6746,7 @@ pub struct Composer {
     dictation_blur: Option<Subscription>,
     dictation_focus: FocusHandle,
     /// The game above the card while an agent works.
+    runner: Entity<crate::arcade::Runner>,
     /// The last live frame of the voice pill, kept so it can settle away
     /// after the transcript lands instead of vanishing.
     voice_last: Option<VoiceFrame>,
@@ -7231,6 +7230,11 @@ impl Composer {
             input
         });
         let pickers = cx.new(|cx| Pickers::new(state.clone(), cx));
+        let runner = {
+            let owner = cx.weak_entity();
+            let input_focus = input.read(cx).focus_handle.clone();
+            cx.new(|cx| crate::arcade::Runner::new(owner, input_focus, cx))
+        };
         let account_usage = cx.new(|cx| crate::account_usage::AccountUsage::new(state.clone(), cx));
         // The footer toolbar (checkout kind + ref picker) is rendered INLINE
         // by the composer from picker state — a pickers-side notify (refs
@@ -7243,15 +7247,6 @@ impl Composer {
             this.on_input_edited(cx);
             cx.notify();
         });
-        cx.subscribe(
-            &pickers,
-            |_: &mut Self, _, _: &crate::pickers::EditLoadout, cx| {
-                cx.emit(ComposerEvent::WorkspaceCommand(
-                    WorkspaceCommand::ModelSettings,
-                ));
-            },
-        )
-        .detach();
         let picker_focus = cx.subscribe(
             &pickers,
             |this: &mut Self, _, event: &crate::pickers::ReturnComposerFocus, cx| {
@@ -7481,6 +7476,7 @@ impl Composer {
             dictation_activation: None,
             dictation_blur: None,
             dictation_focus: cx.focus_handle(),
+            runner,
             dictation_ready: Default::default(),
             dictation_ready_task: None,
             dictation_button_focus: cx.focus_handle(),
@@ -13327,6 +13323,10 @@ impl Render for Composer {
             self.reset_slash(None, cx);
         }
         let mode = self.button_mode(cx);
+        let agent_working = mode == SendButtonMode::Stop;
+        let runner_mounted = self
+            .runner
+            .update(cx, |runner, cx| runner.mounted(agent_working, window, cx));
         // Shape the current draft before sizing the pill. Waiting for the child
         // layout leaves the parent using the previous edit's height.
         self.input.update(cx, |input, cx| {
@@ -14079,6 +14079,18 @@ impl Render for Composer {
             .children(self.render_emoji_popup(&theme, cx))
             .children(self.render_composer_list(&theme, cx))
             .children(self.render_flash(&theme, cx))
+            // While the agent works, a little runner plays itself in the
+            // reserved status strip until the user clicks to take over.
+            .when(runner_mounted, |el| {
+                el.child(
+                    div()
+                        .absolute()
+                        .top(px(-crate::arcade::RUNNER_HEIGHT - 1.0))
+                        .left(px(surface_radius))
+                        .right(px(surface_radius))
+                        .child(crate::arcade::runner_strip(&self.runner)),
+                )
+            })
             .children(self.render_worktree_progress(&theme, cx));
         // The context tray: a tonal tab tucked behind the card's top edge,
         // one step narrower than the card (`w-14/15`), carrying the

@@ -332,32 +332,6 @@ pub fn popover_card(theme: &Theme) -> gpui::Div {
         .text_color(theme.text)
 }
 
-/// The darker card inside a two-tone menu frame: the menu's glass is the
-/// frame, this solid inset card holds its main list.
-pub fn inner_card(theme: &Theme) -> gpui::Div {
-    let dark = theme.appearance.is_dark();
-    div()
-        .rounded(px(CARD_RADIUS - CARD_INSET))
-        .border_1()
-        .border_color(if dark {
-            gpui::white().opacity(0.07)
-        } else {
-            gpui::black().opacity(0.08)
-        })
-        .bg(if dark {
-            gpui::hsla(240. / 360., 0.04, 0.065, 0.96)
-        } else {
-            gpui::white()
-        })
-        .shadow(vec![gpui::BoxShadow {
-            color: gpui::black().opacity(if dark { 0.35 } else { 0.06 }),
-            offset: gpui::point(px(0.), px(1.)),
-            blur_radius: px(3.),
-            spread_radius: px(0.),
-            inset: false,
-        }])
-}
-
 /// The shared glass material on `el`: fill, hairline ring and shadows. The
 /// mount helper ([`anchored_menu`] and friends, [`modal_glass`]) paints the
 /// matching backdrop blur; the caller supplies the rounding.
