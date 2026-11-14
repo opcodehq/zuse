@@ -16,6 +16,7 @@ use sha2::{Digest, Sha256};
 use zuse_protocol::cloud_computers::{MachineRecipe, ProviderId};
 
 pub mod boxd;
+pub mod prized;
 pub mod schedule;
 
 pub mod selection;
@@ -24,8 +25,18 @@ pub mod worker;
 pub const MIGRATION: &str = include_str!("../../../migrations/0037_user_images.sql");
 /// Guest helper run as root on builder and verifier VMs.
 pub const GUEST_HELPER: &str = include_str!("../../../../../infra/cloud/user-image-guest.py");
+/// Guest helper run as the only user on Prized builders and verifiers.
+pub const PRIZED_GUEST_HELPER: &str =
+    include_str!("../../../../../infra/cloud/prized-base/user-image-guest.py");
 /// Providers with a user image builder. Others start from the managed base.
-pub const PROVIDERS: &[ProviderId] = &[ProviderId::Boxd];
+pub const PROVIDERS: &[ProviderId] = &[ProviderId::Boxd, ProviderId::Prized];
+
+/// Prized bases live in the task user's home with no root, so they carry no
+/// fresh-boot pins; the base runtime comes from the manifest's admission
+/// receipt and the guest pins the rest of the managed tree itself.
+pub(crate) fn home_base(provider: ProviderId) -> bool {
+    provider == ProviderId::Prized
+}
 /// Longest log excerpt kept for the owner.
 pub const LOG_EXCERPT: usize = 4096;
 
@@ -130,7 +141,9 @@ pub struct BuildPlan {
     pub identity: UserImageIdentity,
     pub setup_script: String,
     pub setup_timeout_seconds: u32,
-    pub initial_runtime_bootstrap: InitialRuntimeBootstrap,
+    /// Required on root bases; absent on home-directory bases ([`home_base`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_runtime_bootstrap: Option<InitialRuntimeBootstrap>,
 }
 impl BuildPlan {
     pub fn validate(&self) -> Result<(), ApiError> {
@@ -145,10 +158,16 @@ impl BuildPlan {
         {
             return Err(ApiError::bad_request("user_image_plan_invalid"));
         }
-        let bootstrap = &self.initial_runtime_bootstrap;
-        if !bootstrap.valid(self.identity.provider)
-            || bootstrap.runtime_sha256 != self.identity.base_runtime_sha256
-        {
+        let provider = self.identity.provider;
+        let valid = match &self.initial_runtime_bootstrap {
+            None => home_base(provider),
+            Some(bootstrap) => {
+                !home_base(provider)
+                    && bootstrap.valid(provider)
+                    && bootstrap.runtime_sha256 == self.identity.base_runtime_sha256
+            }
+        };
+        if !valid {
             return Err(ApiError::conflict("user_image_initial_bootstrap_invalid"));
         }
         Ok(())
@@ -258,7 +277,7 @@ pub(crate) fn validate_resources(value: &Value) -> Result<(), ApiError> {
         );
         let text = matches!(
             key.as_str(),
-            "builderId" | "verifierId" | "artifactId" | "artifactVersion"
+            "builderId" | "verifierId" | "artifactId" | "artifactVersion" | "baseTreeSha256"
         );
         if flag {
             if !value.is_boolean() {
@@ -356,6 +375,8 @@ fn redact_line(line: &str) -> String {
         .join(" ")
 }
 
+#[cfg(test)]
+mod prized_tests;
 #[cfg(test)]
 mod schedule_tests;
 #[cfg(test)]

@@ -132,7 +132,7 @@ pub(crate) async fn run(control: &UserImageControl, mut now: i64, rounds: usize)
 
 async fn images(pool: &PgPool) -> Vec<Value> {
     sqlx::query_scalar(
-        "SELECT to_jsonb(i) FROM cloud_machine_images i ORDER BY created_at,image_id",
+        "SELECT to_jsonb(i) FROM cloud_machine_images i WHERE provider='boxd' ORDER BY created_at,image_id",
     )
     .fetch_all(pool)
     .await
@@ -173,6 +173,14 @@ async fn saved_setup_script_builds_one_verified_image_and_failures_keep_it() {
     assert_eq!(queued[0]["state"], "queued");
     assert_eq!(queued[0]["recipe_revision"], 3);
     assert_eq!(queued[0]["next_attempt_at"], 3_000 + SAVE_DEBOUNCE_MS);
+    // Every builder provider gets its own line; Prized waits without a backend.
+    let prized: Vec<String> = sqlx::query_scalar(
+        "SELECT state FROM cloud_machine_images WHERE provider='prized' AND recipe_revision=3",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(prized, ["queued"]);
     assert!(!control.work_once(4_000).await.unwrap(), "debounced");
     let now = run(&control, 3_000 + SAVE_DEBOUNCE_MS, 40).await;
     let built = images(&pool).await;
@@ -242,8 +250,9 @@ async fn builds_wait_for_capacity_and_a_base_and_reconcile_lost_replies() {
     let host = FakeHost::new();
     let control = control(&pool, &host);
     save(&pool, "user-alice", 0, "npm i -g pnpm", 1_000).await;
-    // No verified base yet: the build waits with a reason.
-    run(&control, 1_000 + SAVE_DEBOUNCE_MS, 1).await;
+    // No verified base yet: the build waits with a reason (the Prized line,
+    // which this worker has no builder for, is dropped in the other tick).
+    run(&control, 1_000 + SAVE_DEBOUNCE_MS, 2).await;
     let row = &images(&pool).await[0];
     assert_eq!(
         (row["state"].as_str(), row["error_code"].as_str()),

@@ -57,7 +57,7 @@ fn usable(row: &Value, base: &Value, provider: ProviderId) -> Option<UserImageHi
         || plan.identity.base_release_id != release.release_id
         || plan.identity.base_artifact_id != release.artifact_id
         || plan.identity.architecture != release.architecture
-        || Some(&plan.initial_runtime_bootstrap) != release.initial_runtime_bootstrap.as_ref()
+        || plan.initial_runtime_bootstrap.as_ref() != release.initial_runtime_bootstrap.as_ref()
         || row["identity_key"].as_str() != plan.identity.key().ok().as_deref()
         || artifact == release.artifact_id
     {

@@ -143,6 +143,67 @@ impl Prized {
             .extend(segments);
         Ok(url)
     }
+    /// Fork a running or paused sandbox into one child carrying `name` (user
+    /// image builders and verifiers). The name is also the idempotency key, so
+    /// a retried fork answers with the first child instead of making another.
+    pub async fn fork_named(
+        &self,
+        parent: &str,
+        name: &str,
+        max_runtime_min: u32,
+    ) -> Result<Machine, ProviderError> {
+        if !parent.starts_with("sbx_")
+            || name.is_empty()
+            || name.len() > 128
+            || !name.bytes().all(|b| b.is_ascii_graphic())
+            || !(1..=MAX_RUNTIME_MIN).contains(&max_runtime_min)
+        {
+            return Err(ProviderError::Rejected);
+        }
+        let value = self
+            .call(
+                Method::POST,
+                self.url(&["sandboxes", parent, "fork"], &[("wait", "running")])?,
+                Some(
+                    &json!({"count":1,"labels":{NAME_LABEL:name},"maxRuntimeMin":max_runtime_min}),
+                ),
+                Some(name),
+            )
+            .await?;
+        let child = &value["sandboxes"][0];
+        let machine = Self::machine(child).map_err(|_| ProviderError::OutcomeUnknown)?;
+        if machine.name != name {
+            return Err(ProviderError::OutcomeUnknown);
+        }
+        self.remember(child)
+            .map_err(|_| ProviderError::OutcomeUnknown)?;
+        Ok(machine)
+    }
+    /// When a sandbox was created, digits only (`20261112115107367`). A paused
+    /// parent never changes, so this is the version of a fork source. Reads
+    /// the control plane only, which never wakes a paused sandbox.
+    pub async fn created_at(&self, id: &str) -> Result<Option<String>, ProviderError> {
+        let value = match self
+            .call(Method::GET, self.url(&["sandboxes", id], &[])?, None, None)
+            .await
+        {
+            Ok(value) => value,
+            Err(ProviderError::NotFound) => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        let sandbox = &value["sandbox"];
+        if text(sandbox, "id")? != id {
+            return Err(ProviderError::InvalidResponse);
+        }
+        let digits: String = text(sandbox, "createdAt")?
+            .chars()
+            .filter(char::is_ascii_digit)
+            .collect();
+        if digits.len() < 14 || digits.len() > 20 {
+            return Err(ProviderError::InvalidResponse);
+        }
+        Ok(Some(digits))
+    }
     fn operation_receipt(id: &str, desired: DesiredState) -> ProviderOperation {
         ProviderOperation {
             resource_id: id.into(),

@@ -212,3 +212,20 @@ async fn only_a_paused_parent_or_a_template_is_a_valid_artifact() {
         "a running sandbox is not a quiet base"
     );
 }
+
+#[tokio::test]
+async fn named_forks_refuse_templates_bad_names_and_lifetimes_before_any_call() {
+    let provider = Prized::new("dcp_test".into()).unwrap();
+    for (parent, name, minutes) in [
+        ("prized-base-v1", "ui-b-1", 60),
+        ("sbx_parent", "", 60),
+        ("sbx_parent", "has space", 60),
+        ("sbx_parent", "ui-b-1", 0),
+        ("sbx_parent", "ui-b-1", MAX_RUNTIME_MIN + 1),
+    ] {
+        assert!(matches!(
+            provider.fork_named(parent, name, minutes).await,
+            Err(ProviderError::Rejected)
+        ));
+    }
+}

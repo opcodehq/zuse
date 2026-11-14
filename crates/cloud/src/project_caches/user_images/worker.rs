@@ -4,7 +4,7 @@
 //! inspecting the original resources on the next tick.
 use super::*;
 use crate::managed_bases::ManagedBaseRelease;
-use crate::providers::boxd::Boxd;
+use crate::providers::{boxd::Boxd, prized::Prized};
 use serde_json::json;
 use sqlx::{PgPool, Postgres, Transaction};
 use std::{
@@ -78,7 +78,8 @@ pub(crate) async fn enqueue_tx(
     Ok(true)
 }
 
-/// The newest verified base a builder may start from, with its fresh-boot pins.
+/// The newest verified base a builder may start from, with its fresh-boot pins
+/// (root bases) or its admitted runtime (home-directory bases).
 pub(crate) fn base_from_row(row: &Value, provider: ProviderId) -> Option<ManagedBaseRelease> {
     if row["state"] != "verified" || row["runtime_manifest"].is_null() {
         return None;
@@ -86,21 +87,41 @@ pub(crate) fn base_from_row(row: &Value, provider: ProviderId) -> Option<Managed
     let release: ManagedBaseRelease =
         serde_json::from_value(row["runtime_manifest"].clone()).ok()?;
     release.validate().ok()?;
-    let bootstrap = release.initial_runtime_bootstrap.as_ref()?;
-    if release.provider != provider
+    let admitted = release
+        .manifest
+        .command_admission
+        .as_ref()
+        .map(|c| c.runtime_sha256.as_str());
+    let pinned = match release.initial_runtime_bootstrap.as_ref() {
+        None => home_base(provider) && admitted.is_some(),
+        Some(bootstrap) => {
+            !home_base(provider)
+                && bootstrap.valid(provider)
+                && admitted.is_none_or(|sha| sha == bootstrap.runtime_sha256)
+        }
+    };
+    if !pinned
+        || release.provider != provider
         || row["release_id"] != release.release_id.as_str()
         || row["artifact_id"] != release.artifact_id.as_str()
         || row["architecture"] != release.architecture.as_str()
-        || !bootstrap.valid(provider)
-        || release
-            .manifest
-            .command_admission
-            .as_ref()
-            .is_some_and(|c| c.runtime_sha256 != bootstrap.runtime_sha256)
     {
         return None;
     }
     Some(release)
+}
+
+/// The runtime a base starts with: its fresh-boot pin, else (home-directory
+/// bases) the manifest's admission receipt.
+fn base_runtime_sha256(release: &ManagedBaseRelease) -> Option<String> {
+    match &release.initial_runtime_bootstrap {
+        Some(bootstrap) => Some(bootstrap.runtime_sha256.clone()),
+        None => release
+            .manifest
+            .command_admission
+            .as_ref()
+            .map(|c| c.runtime_sha256.clone()),
+    }
 }
 
 impl UserImageControl {
@@ -238,14 +259,10 @@ impl UserImageControl {
             return Ok(true);
         };
         let Some(backend) = self.backend(&provider_name).cloned() else {
-            Self::defer(
-                &mut tx,
-                &id,
-                "user_image_provider_unavailable",
-                now + RETRY_MS,
-                now,
-            )
-            .await?;
+            // This deployment has no builder (credentials) for the provider:
+            // drop the request rather than keep a build queued forever.
+            sqlx::query("UPDATE cloud_machine_images SET state='superseded',error_code='user_image_provider_unavailable',updated_at=$2 WHERE image_id=$1")
+                .bind(&id).bind(now).execute(&mut *tx).await?;
             tx.commit().await?;
             return Ok(true);
         };
@@ -305,9 +322,8 @@ impl UserImageControl {
                 return Ok(true);
             }
         };
-        let bootstrap = base
-            .initial_runtime_bootstrap
-            .clone()
+        let bootstrap = base.initial_runtime_bootstrap.clone();
+        let runtime = base_runtime_sha256(&base)
             .ok_or_else(|| ApiError::unavailable("user_image_managed_base_invalid"))?;
         let identity = UserImageIdentity {
             version: 1,
@@ -317,7 +333,7 @@ impl UserImageControl {
             base_release_id: base.release_id.clone(),
             base_artifact_id: base.artifact_id.clone(),
             base_artifact_version: version,
-            base_runtime_sha256: bootstrap.runtime_sha256.clone(),
+            base_runtime_sha256: runtime,
             recipe_digest: digest.clone(),
         };
         let plan = BuildPlan {
@@ -642,29 +658,40 @@ impl crate::runtime::RuntimeControl {
             }
         });
     }
-    /// Builders are on wherever the worker has Boxd credentials, unless
-    /// `ZUSE_CLOUD_USER_IMAGES=0`. Without them accounts use the managed base.
+    /// Builders are on for each provider the worker has credentials for
+    /// (Boxd, Prized), unless `ZUSE_CLOUD_USER_IMAGES=0`. Accounts on other
+    /// providers use the managed base.
     pub async fn configure_user_images_from_env(&self) -> Result<bool, ApiError> {
         if std::env::var("ZUSE_CLOUD_USER_IMAGES").as_deref() == Ok("0")
             || !self.user_image_control.available().await?
         {
             return Ok(false);
         }
-        let Ok(key) = std::env::var("BOXD_API_KEY") else {
-            return Ok(false);
-        };
-        let mut provider = Boxd::new(key, std::env::var("BOXD_ORG").ok())
-            .map_err(|_| ApiError::unavailable("user_image_provider_invalid"))?;
-        if let Ok(base) = std::env::var("BOXD_BASE_URL") {
-            provider = provider
-                .with_base_url(&base)
-                .map_err(|_| ApiError::unavailable("user_image_provider_invalid"))?;
-        }
         let mut backends: BTreeMap<ProviderId, Arc<dyn UserImageBackend>> = BTreeMap::new();
-        backends.insert(
-            ProviderId::Boxd,
-            Arc::new(super::boxd::BoxdUserImages::new(Arc::new(provider))),
-        );
+        if let Ok(key) = std::env::var("BOXD_API_KEY") {
+            let mut provider = Boxd::new(key, std::env::var("BOXD_ORG").ok())
+                .map_err(|_| ApiError::unavailable("user_image_provider_invalid"))?;
+            if let Ok(base) = std::env::var("BOXD_BASE_URL") {
+                provider = provider
+                    .with_base_url(&base)
+                    .map_err(|_| ApiError::unavailable("user_image_provider_invalid"))?;
+            }
+            backends.insert(
+                ProviderId::Boxd,
+                Arc::new(super::boxd::BoxdUserImages::new(Arc::new(provider))),
+            );
+        }
+        if let Ok(key) = std::env::var("PRIZED_API_KEY") {
+            let provider = Prized::new(key)
+                .map_err(|_| ApiError::unavailable("user_image_provider_invalid"))?;
+            backends.insert(
+                ProviderId::Prized,
+                Arc::new(super::prized::PrizedUserImages::new(Arc::new(provider))),
+            );
+        }
+        if backends.is_empty() {
+            return Ok(false);
+        }
         self.configure_user_images(backends)?;
         if let Some(pin) = &self.staging_candidate {
             self.user_image_control.allow_staging_compute(pin.clone());

@@ -148,7 +148,7 @@ async fn ready_user_image(
         },
         setup_script: recipe.setup_script.clone(),
         setup_timeout_seconds: recipe.setup_timeout_seconds,
-        initial_runtime_bootstrap: bootstrap,
+        initial_runtime_bootstrap: Some(bootstrap),
     };
     sqlx::query("INSERT INTO cloud_machine_images(image_id,owner_id,provider,reason,state,phase,recipe_revision,recipe_digest,architecture,base_release_id,base_artifact_id,base_artifact_version,base_runtime_sha256,identity_key,plan,artifact_id,artifact_version,next_attempt_at,started_at,built_at,created_at,updated_at) VALUES($1,'user-test','boxd','recipe','ready','complete',1,$2,$3,$4,$5,'1',$6,$7,$8,$9,'1',0,$10,$10,$10,$10)")
         .bind(&id).bind(&plan.identity.recipe_digest).bind(&plan.identity.architecture).bind(&plan.identity.base_release_id)

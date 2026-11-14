@@ -104,7 +104,7 @@ pub struct BoxdUserImages {
 /// Map a provider failure to a retryable outcome, logging which call failed and
 /// how (variant only; provider errors carry no bodies or credentials).
 #[track_caller]
-fn uncertain_here() -> impl FnOnce(ProviderError) -> ApiError {
+pub(super) fn uncertain_here() -> impl FnOnce(ProviderError) -> ApiError {
     let at = std::panic::Location::caller();
     move |error| {
         tracing::warn!(line = at.line(), error = ?error, "User image provider call failed");
@@ -177,8 +177,15 @@ impl BoxdUserImages {
         }
         Ok(value)
     }
+    fn bootstrap(build: &Build) -> Result<&InitialRuntimeBootstrap, ApiError> {
+        build
+            .plan
+            .initial_runtime_bootstrap
+            .as_ref()
+            .ok_or_else(|| ApiError::conflict("user_image_plan_invalid"))
+    }
     fn pins(build: &Build) -> Result<String, ApiError> {
-        serde_json::to_string(&build.plan.initial_runtime_bootstrap.pins())
+        serde_json::to_string(&Self::bootstrap(build)?.pins())
             .map_err(|_| ApiError::conflict("user_image_plan_invalid"))
     }
     /// Find the machine with this exact name, creating it only when no
@@ -527,7 +534,7 @@ impl UserImageBackend for BoxdUserImages {
                     generation: 1,
                     storage_incarnation_id: format!("user-image:{}", build.image_id),
                     source_machine_id: machine.id.clone(),
-                    image_pins: plan.initial_runtime_bootstrap.pins(),
+                    image_pins: Self::bootstrap(build)?.pins(),
                 };
                 let result = self
                     .host

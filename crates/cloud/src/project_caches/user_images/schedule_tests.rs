@@ -17,7 +17,7 @@ async fn workspace(pool: &PgPool, id: &str, owner: &str, active: i64, config: Va
 }
 
 async fn rows(pool: &PgPool, owner: &str) -> Vec<Value> {
-    sqlx::query_scalar("SELECT to_jsonb(i) FROM cloud_machine_images i WHERE owner_id=$1 ORDER BY created_at,image_id")
+    sqlx::query_scalar("SELECT to_jsonb(i) FROM cloud_machine_images i WHERE owner_id=$1 AND provider='boxd' ORDER BY created_at,image_id")
         .bind(owner)
         .fetch_all(pool)
         .await

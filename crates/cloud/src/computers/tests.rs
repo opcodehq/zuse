@@ -691,8 +691,14 @@ async fn machine_status_reports_build_progress_failure_log_and_last_good_image_a
     assert_eq!(saved.1["imageState"], "queued");
     assert_eq!(saved.1["image"]["reason"], "recipe");
     assert_eq!(saved.1["image"]["recipeRevision"], 2);
-    let current: String = sqlx::query_scalar("SELECT recipe_digest FROM cloud_machine_images")
-        .fetch_one(&pool)
+    let current: String =
+        sqlx::query_scalar("SELECT recipe_digest FROM cloud_machine_images WHERE provider='boxd'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    // This deployment has no Prized builder; its worker drops that line.
+    sqlx::query("UPDATE cloud_machine_images SET state='superseded' WHERE provider<>'boxd'")
+        .execute(&pool)
         .await
         .unwrap();
     // A ready image from an earlier build and a running build of this script.
@@ -722,7 +728,7 @@ async fn machine_status_reports_build_progress_failure_log_and_last_good_image_a
     assert_eq!(rebuilt.1["imageState"], "queued");
     assert_eq!(rebuilt.1["image"]["reason"], "manual");
     let queued: (String, String) = sqlx::query_as(
-        "SELECT reason,recipe_digest FROM cloud_machine_images WHERE state='queued'",
+        "SELECT reason,recipe_digest FROM cloud_machine_images WHERE state='queued' AND provider='boxd'",
     )
     .fetch_one(&pool)
     .await

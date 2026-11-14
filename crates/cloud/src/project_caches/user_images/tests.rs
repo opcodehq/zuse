@@ -47,7 +47,7 @@ pub(super) fn plan(script: &str) -> BuildPlan {
         },
         setup_script: script.into(),
         setup_timeout_seconds: recipe.setup_timeout_seconds,
-        initial_runtime_bootstrap: bootstrap(),
+        initial_runtime_bootstrap: Some(bootstrap()),
     }
 }
 
@@ -145,7 +145,11 @@ fn plan_binds_script_timeout_and_base_runtime() {
     tampered.setup_timeout_seconds = 3600;
     assert!(tampered.validate().is_err());
     let mut tampered = good.clone();
-    tampered.initial_runtime_bootstrap.runtime_sha256 = "f".repeat(64);
+    tampered
+        .initial_runtime_bootstrap
+        .as_mut()
+        .unwrap()
+        .runtime_sha256 = "f".repeat(64);
     assert!(tampered.validate().is_err());
     let mut tampered = good.clone();
     tampered.image_id = "uimg_../../x".into();

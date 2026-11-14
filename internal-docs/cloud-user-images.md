@@ -136,18 +136,60 @@ the unused `cloud_machine_images` placeholder from 0031).
   newer ready image on a verified base exists, its base is no longer
   verified, or the script was removed, and no non-deleted computer
   (archived included) references it.
-- **Providers**: Boxd only. Other providers start from the managed base.
+- **Providers**: Boxd and Prized (below). Others start from the managed base.
 - **Fresh boots never wait for an image.** With no ready image, the computer
   boots the managed base without the setup script's tools. Running the setup
   script on that computer as a fallback is a follow-up.
 
-Operations: the worker builds wherever it has `BOXD_API_KEY`
-(`ZUSE_CLOUD_USER_IMAGES=0` turns builds off). Each build briefly holds two
+Operations: the worker builds for each provider it has credentials for
+(`BOXD_API_KEY`, `PRIZED_API_KEY`; `ZUSE_CLOUD_USER_IMAGES=0` turns builds
+off). A queued build for a provider the worker has no builder for is dropped
+(`superseded`, `user_image_provider_unavailable`), not kept waiting. Each build briefly holds two
 VMs and one snapshot; each account keeps one or two ready snapshots plus any
 still referenced by computers. Builds require billing capacity like a
 computer. Not yet exercised against a live Boxd base: the detached setup run
 (`systemd-run` availability, upload ownership), memory-snapshot capture of a
 builder whose resident never started, and the verifier's fresh boot.
+
+### Prized (2026-11-14)
+
+Prized sandboxes have no disk snapshot or custom image. The documented way to
+make a template is to pause a set-up sandbox and fork it. A fork copies
+memory, disk and running processes. The managed base already works this way,
+and a user image does too: the paused builder **is** the image
+(`crates/cloud/src/project_caches/user_images/prized.rs`, guest helper
+`infra/cloud/prized-base/user-image-guest.py`, run as `prized`, no sudo).
+
+- `allocate` forks the paused base (`ui-b-…`, idempotency key = name). It
+  first checks that the base is still the sandbox the plan froze (its
+  `createdAt` is the base version). `baseline` then checks the runtime
+  against the manifest's admitted runtime SHA and records `baseTreeSha256`,
+  a digest of `~/.zuse` without its state folders and Python caches.
+- `setup` writes the script and helper to `~/.zuse-user-image` through exec,
+  then runs the script once, detached, under `timeout`, with
+  `PATH=~/.local/bin:…` (npm's global prefix is `~/.local`).
+- `sanitize` kills every leftover `prized` process, the idle supervisor
+  included. It then removes credentials, history, task data, runtime state
+  and the journal, re-checks the runtime and the tree, and restarts the idle
+  supervisor, so the image pauses exactly like the base.
+- `capture` pauses the builder; its sandbox ID becomes the artifact.
+  `retire-builder` does nothing.
+- `verify` forks the image (`ui-v-…`) and runs the read-only check on the
+  copy: runtime, tree, no leftovers, and the inherited supervisor answering
+  unbound. `retire-verifier` deletes the copy.
+- Computers fork the image through the normal allocation path; Prized
+  allocation already forks any paused `sbx_…` artifact. Retirement deletes
+  the paused image.
+- Plans for Prized carry no `initialRuntimeBootstrap`: the base has no root
+  fresh-boot pins. Root-base plans must still carry one.
+- The control plane never sends a command to a paused image. On Prized,
+  every command wakes the sandbox it is sent to.
+
+Limits of a paused-sandbox image: it lives on one Prized machine, so it is
+lost if that machine fails and becomes unforkable (`409 parent_not_forkable`)
+after a move that discards memory, exactly like the managed base. Forks land
+on the parent's machine (`409 fork_capacity` when full). A paused image
+still counts against the workspace's running CPU and memory quota.
 
 ## Retiring the repository-baking account image (2026-11-13)
 
