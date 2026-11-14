@@ -19,7 +19,7 @@ FILES = ("0000_application.sql", "0001_control_plane.sql", "0002_gateway_leases.
          "0010_managed_bases.sql", "0011_transcript_heads.sql", "0012_provider_receipts.sql",
          "0013_recovery_receipts.sql", "0014_restore_receipts.sql", "0015_github.sql",
          "0016_task_history.sql", "0017_account_events.sql", "0018_github_joining_jobs.sql", "0019_workload_secrets.sql",
-         "0020_staging_managed_base_candidates.sql", "0021_runtime_repairs.sql", "0023_managed_base_admission_lock.sql", "0024_credential_delivery_journal.sql", "0025_admission_read_batch.sql", "0026_task_command_admission.sql", "0027_computer_recreations.sql", "0031_machine_images.sql", "0033_prized_provider.sql", "0034_runtime_releases.sql", "0035_launch_asset_release.sql", "0036_harness_bundles.sql", "0037_user_images.sql")
+         "0020_staging_managed_base_candidates.sql", "0021_runtime_repairs.sql", "0023_managed_base_admission_lock.sql", "0024_credential_delivery_journal.sql", "0025_admission_read_batch.sql", "0026_task_command_admission.sql", "0027_computer_recreations.sql", "0031_machine_images.sql", "0033_prized_provider.sql", "0034_runtime_releases.sql", "0035_launch_asset_release.sql", "0036_harness_bundles.sql", "0037_user_images.sql", "0038_app_role_grants.sql")
 
 
 # Accepted only when separately installed by its explicit operator workflow.
