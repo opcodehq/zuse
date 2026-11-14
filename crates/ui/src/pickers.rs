@@ -1864,19 +1864,13 @@ impl Pickers {
             self.config.harness = None;
             self.model_rail = ModelRail::Harness;
         } else if kind == PickerKind::HarnessModel {
-            let locked = self.harness_locked(cx);
-            let effective = self.effective_harness(cx);
-            let has_favorites = self.defaults.favorites.iter().any(|favorite| {
-                !locked || (self.compact_model_picker(cx) && Some(favorite.harness) == effective)
-            });
-            self.model_rail = if has_favorites {
+            self.model_rail = if self.compact_model_picker(cx) {
+                ModelRail::Harness
+            } else if !self.harness_locked(cx) && !self.defaults.favorites.is_empty() {
                 ModelRail::Favorites
             } else {
                 ModelRail::Harness
             };
-            if self.compact_model_picker(cx) && self.model_rail == ModelRail::Favorites {
-                self.model_scope = None;
-            }
         }
         // The keyboard-nav highlight starts ON the selected row — row 0
         // otherwise reads as a second active row (user report).
@@ -9660,57 +9654,6 @@ mod tests {
             assert_eq!(picker.resolved(cx).model_options["contextWindow"], "1m");
             assert_eq!(picker.resolved(cx).model_options["serviceTier"], "fast");
         }).unwrap();
-    }
-
-    #[gpui::test]
-    fn compact_picker_opens_on_favorites_and_can_browse_providers(cx: &mut gpui::TestAppContext) {
-        let dir = tempfile::tempdir().unwrap();
-        cx.update(|cx| {
-            cx.set_global(Theme::dark());
-            let mut settings = crate::settings::UiSettings::default();
-            settings.compact_model_picker = true;
-            crate::settings::init(settings, dir.path(), cx);
-        });
-        let handle = cx.add_window(|_, cx| {
-            let state = cx.new(|_| AppState::new());
-            Pickers::new(state, cx)
-        });
-        handle
-            .update(cx, |picker, window, cx| {
-                picker.harnesses = Loadable::Ready(vec![
-                    descriptor(HarnessId::Codex, "Codex"),
-                    descriptor(HarnessId::ClaudeCode, "Claude"),
-                ]);
-                picker.models.insert(
-                    HarnessId::Codex,
-                    Loadable::Ready(vec![bare_model("gpt-a", "GPT A")]),
-                );
-                picker.models.insert(
-                    HarnessId::ClaudeCode,
-                    Loadable::Ready(vec![bare_model("opus", "Opus")]),
-                );
-                picker.config.harness = Some(HarnessId::Codex);
-
-                picker.toggle(PickerKind::HarnessModel, window, cx);
-                assert_eq!(picker.model_rail, ModelRail::Harness);
-                assert_eq!(picker.model_scope, Some(HarnessId::Codex));
-                picker.close(cx);
-
-                picker.toggle_model_favorite(HarnessId::ClaudeCode, "opus", cx);
-                picker.toggle(PickerKind::HarnessModel, window, cx);
-                assert_eq!(picker.model_rail, ModelRail::Favorites);
-                assert_eq!(picker.model_scope, None);
-                assert_eq!(picker.model_rows(cx)[0].model.id, "opus");
-
-                picker.model_rail = ModelRail::Harness;
-                picker.model_scope = Some(HarnessId::Codex);
-                assert_eq!(picker.model_rows(cx)[0].model.id, "gpt-a");
-                picker.close(cx);
-                picker.toggle(PickerKind::HarnessModel, window, cx);
-                assert_eq!(picker.model_rail, ModelRail::Favorites);
-                assert_eq!(picker.model_scope, None);
-            })
-            .unwrap();
     }
 
     #[gpui::test]

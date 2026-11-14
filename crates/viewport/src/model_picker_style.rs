@@ -11,7 +11,7 @@ pub const MAX_HEIGHT: f32 = 320.;
 pub const SEARCH_HEIGHT: f32 = 42.;
 pub const LABEL_HEIGHT: f32 = 29.5;
 pub const GROUP_HEADER_HEIGHT: f32 = 35.;
-pub const ROW_HEIGHT: f32 = 30.;
+pub const ROW_HEIGHT: f32 = 28.;
 pub const PROVIDER_ROW_HEIGHT: f32 = 45.16667;
 pub const LIST_INSET: f32 = 6.;
 const ACCENT: u32 = 0x89ca21;
@@ -246,17 +246,22 @@ pub fn model_row(
         .w_full()
         .border_1()
         .border_color(transparent_black())
-        .px(px(8.))
+        .px(px(6.))
         .py(px(0.))
-        .rounded(px(9.))
+        .rounded(px(7.))
         .flex()
         .items_center()
-        .gap(px(8.))
+        .gap(px(6.))
         .text_size(px(12.))
         .text_color(palette::rgb(TEXT))
-        .when(is_selected, |v| v.bg(s::frame_bg()))
         .when(!is_selected && active, |v| v.bg(s::frame_bg().opacity(0.6)))
-        .hover(|v| v.bg(s::frame_bg()))
+        .hover(|v| {
+            v.bg(if is_selected {
+                palette::rgb(ACCENT).opacity(0.12).into()
+            } else {
+                s::frame_bg().opacity(0.6)
+            })
+        })
         .child(div().size(px(16.)).flex_none().child(glyph))
         .child(
             div()
