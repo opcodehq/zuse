@@ -143,7 +143,7 @@ pub(crate) fn rpc_error(error: anyhow::Error) -> zuse_rpc::RpcError {
     }
 }
 
-pub const DEFAULT_API_URL: &str = crate::account::API_URL;
+pub const DEFAULT_API_URL: &str = crate::api_origins::DEFAULT_CLOUD_API_URL;
 
 /// Production cloud origins. Cloud computers stay off against these unless
 /// explicitly enabled.
@@ -1957,10 +1957,10 @@ mod beta_tests {
 mod tests {
     use super::*;
     #[test]
-    fn cloud_uses_the_account_api_origin() {
-        assert_eq!(DEFAULT_API_URL, "https://api.zuse.sh");
+    fn cloud_defaults_to_the_rust_cloud_origin() {
+        assert_eq!(DEFAULT_API_URL, "https://api-rust.zuse.sh");
         let api = CloudApi::new(DEFAULT_API_URL).unwrap();
-        assert_eq!(api.origin.as_str(), "https://api.zuse.sh/");
+        assert_eq!(api.origin.as_str(), "https://api-rust.zuse.sh/");
     }
     #[test]
     fn credentials_require_a_valid_secure_cloud_origin() {

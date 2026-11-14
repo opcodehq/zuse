@@ -1,6 +1,10 @@
-//! General account services and cloud tasks share an origin unless explicitly
-//! configured separately. Workspace/relay authentication keeps its own edge URL.
+//! General account services (sign-in, account, billing, models) and cloud tasks
+//! use separate default origins: accounts stay on the existing production API,
+//! cloud computers use the Rust cloud backend. One explicit override still
+//! scopes both, so staging and local development keep a single origin.
+//! Workspace/relay authentication keeps its own edge URL.
 pub(crate) const DEFAULT_API_URL: &str = "https://api.zuse.sh";
+pub(crate) const DEFAULT_CLOUD_API_URL: &str = "https://api-rust.zuse.sh";
 
 pub(crate) struct ApiOrigins {
     pub general: String,
@@ -15,11 +19,14 @@ pub(crate) fn from_env() -> ApiOrigins {
 }
 
 fn resolve(general: Option<String>, cloud: Option<String>) -> ApiOrigins {
+    let explicit_general = general.clone();
     let general = general
         .or_else(|| cloud.clone())
         .unwrap_or_else(|| DEFAULT_API_URL.into());
     ApiOrigins {
-        cloud: cloud.unwrap_or_else(|| general.clone()),
+        cloud: cloud
+            .or(explicit_general)
+            .unwrap_or_else(|| DEFAULT_CLOUD_API_URL.into()),
         general,
     }
 }
@@ -29,10 +36,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn no_override_keeps_the_existing_production_origin() {
+    fn no_override_keeps_accounts_on_the_existing_api_and_cloud_on_rust() {
         let value = resolve(None, None);
-        assert_eq!(value.general, DEFAULT_API_URL);
-        assert_eq!(value.cloud, DEFAULT_API_URL);
+        assert_eq!(value.general, "https://api.zuse.sh");
+        assert_eq!(value.cloud, "https://api-rust.zuse.sh");
+    }
+    #[test]
+    fn a_general_override_still_scopes_cloud_too() {
+        let value = resolve(Some("https://dev.example".into()), None);
+        assert_eq!(value.general, "https://dev.example");
+        assert_eq!(value.cloud, "https://dev.example");
     }
     #[test]
     fn cloud_only_staging_override_also_scopes_account_models_and_managed_access() {
