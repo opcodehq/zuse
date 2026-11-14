@@ -141,6 +141,35 @@ async fn forward(
     }
     Ok(response)
 }
+/// The CA file named by a database URL's `sslrootcert`, if it is a file path.
+fn sslrootcert(url: &str) -> Option<String> {
+    let parsed = reqwest::Url::parse(url).ok()?;
+    let ca = parsed
+        .query_pairs()
+        .find(|(k, _)| k == "sslrootcert")
+        .map(|(_, v)| v.into_owned())?;
+    (ca.starts_with('/') && ca != "system").then_some(ca)
+}
+#[cfg(test)]
+mod sslrootcert_tests {
+    #[test]
+    fn database_ca_is_passed_to_the_worker_only_for_file_paths() {
+        assert_eq!(
+            super::sslrootcert(
+                "postgresql://u:p@db.example:5432/postgres?sslmode=verify-full&sslrootcert=%2Fetc%2Fzuse%2Fca.crt"
+            ),
+            Some("/etc/zuse/ca.crt".into())
+        );
+        assert_eq!(
+            super::sslrootcert("postgresql://u@db.example/postgres?sslrootcert=system"),
+            None
+        );
+        assert_eq!(
+            super::sslrootcert("postgresql://u@127.0.0.1/postgres"),
+            None
+        );
+    }
+}
 impl Executor {
     async fn database_url(pool: &sqlx::PgPool) -> Result<String, ApiError> {
         let mut url = pool.connect_options().to_url_lossy();
@@ -187,7 +216,15 @@ impl Executor {
         command
             .arg(script)
             .env_clear()
-            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .env("PATH", std::env::var_os("PATH").unwrap_or_default());
+        // The SDK's own Postgres driver ignores `sslrootcert` in the URL and
+        // verifies against the system roots, so a private database CA (as on
+        // Supabase) fails with SELF_SIGNED_CERT_IN_CHAIN. Trust that CA file
+        // for the worker process instead.
+        if let Some(ca) = sslrootcert(url) {
+            command.env("NODE_EXTRA_CA_CERTS", ca);
+        }
+        command
             .env("ZUSE_EXECUTOR_DATABASE_URL", url)
             .env("ZUSE_EXECUTOR_ENCRYPTION_KEY", key.executor_key().as_str())
             .env("ZUSE_EXECUTOR_TOKEN", token)
