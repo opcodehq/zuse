@@ -33,12 +33,26 @@ pub(crate) async fn schema_ready_tx(tx: &mut Transaction<'_, Postgres>) -> Resul
     Ok(sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='cloud_machine_images' AND column_name='image_id')").fetch_one(&mut **tx).await?)
 }
 
-/// Queue a build of the account's current recipe on every supported provider.
-/// A waiting build is replaced, never duplicated: the newest recipe wins.
-/// With no setup script, waiting builds are superseded and nothing is queued.
+/// Queue a build of the account's current recipe on every provider the
+/// account uses ([`used_providers_tx`]): recipe saves and "Rebuild now".
 pub(crate) async fn enqueue_tx(
     tx: &mut Transaction<'_, Postgres>,
     owner: &str,
+    reason: &str,
+    not_before: i64,
+    now: i64,
+) -> Result<bool, ApiError> {
+    let providers = used_providers_tx(tx, owner, now).await?;
+    enqueue_on_tx(tx, owner, &providers, reason, not_before, now).await
+}
+
+/// Queue a build of the account's current recipe on these providers.
+/// A waiting build is replaced, never duplicated: the newest recipe wins.
+/// With no setup script, waiting builds are superseded and nothing is queued.
+pub(crate) async fn enqueue_on_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    owner: &str,
+    providers: &[ProviderId],
     reason: &str,
     not_before: i64,
     now: i64,
@@ -62,7 +76,7 @@ pub(crate) async fn enqueue_tx(
             .await?;
         return Ok(false);
     };
-    for provider in PROVIDERS {
+    for provider in providers.iter().filter(|p| PROVIDERS.contains(p)) {
         sqlx::query("INSERT INTO cloud_machine_images(image_id,owner_id,provider,reason,state,recipe_revision,recipe_digest,next_attempt_at,created_at,updated_at) VALUES($1,$2,$3,$4,'queued',$5,$6,$7,$8,$8) ON CONFLICT(owner_id,provider) WHERE state='queued' DO UPDATE SET recipe_revision=EXCLUDED.recipe_revision,recipe_digest=EXCLUDED.recipe_digest,reason=CASE WHEN cloud_machine_images.reason='manual' THEN 'manual' ELSE EXCLUDED.reason END,next_attempt_at=CASE WHEN EXCLUDED.reason='recipe' THEN EXCLUDED.next_attempt_at ELSE least(cloud_machine_images.next_attempt_at,EXCLUDED.next_attempt_at) END,error_code=NULL,updated_at=EXCLUDED.updated_at")
             .bind(format!("uimg_{}", uuid::Uuid::new_v4().simple()))
             .bind(owner)
@@ -258,6 +272,16 @@ impl UserImageControl {
             tx.commit().await?;
             return Ok(true);
         };
+        // The account stopped using this provider since the build was queued.
+        if !used_providers_tx(&mut tx, &owner, now)
+            .await?
+            .contains(&provider)
+        {
+            sqlx::query("UPDATE cloud_machine_images SET state='superseded',error_code='user_image_provider_unused',updated_at=$2 WHERE image_id=$1")
+                .bind(&id).bind(now).execute(&mut *tx).await?;
+            tx.commit().await?;
+            return Ok(true);
+        }
         let Some(backend) = self.backend(&provider_name).cloned() else {
             // This deployment has no builder (credentials) for the provider:
             // drop the request rather than keep a build queued forever.

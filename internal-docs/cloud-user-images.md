@@ -137,6 +137,14 @@ the unused `cloud_machine_images` placeholder from 0031).
   verified, or the script was removed, and no non-deleted computer
   (archived included) references it.
 - **Providers**: Boxd, Boat and Prized (below). Others start from the managed base.
+  An account gets an image only on providers it uses (`used_providers_tx`):
+  Boxd (the default) always, others once the account has a computer there
+  that is not deleted or was active in the last 14 days. Recipe saves,
+  "Rebuild now" and the hourly pass target only those providers; the first
+  computer on a new provider boots its base and queues that provider's image
+  on use. A queued build for a provider the account no longer uses is dropped
+  (`user_image_provider_unused`), and a ready image on such a provider
+  retires once no computer references it.
   On Boat an image is a *saved snapshot* named from the image ID; its
   `snapshotId` is the version (saving a name again gets a new one). Boat saves
   a running sandbox's disk in the background and may include later writes, so

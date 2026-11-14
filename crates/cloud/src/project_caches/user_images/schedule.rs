@@ -9,7 +9,7 @@
 //! `MAX_FAILED_ATTEMPTS` times for the same inputs. Images no computer
 //! references and no admission can select are retired and their provider
 //! snapshots deleted.
-use super::worker::{UserImageControl, enqueue_tx};
+use super::worker::{UserImageControl, enqueue_on_tx};
 use super::*;
 use serde_json::json;
 use sqlx::{Postgres, Transaction};
@@ -24,7 +24,10 @@ pub const MAX_FAILED_ATTEMPTS: i64 = 3;
 /// Accounts examined per pass.
 const PASS_LIMIT: i64 = 200;
 
-const NEWEST_BASE: &str = "SELECT release_id FROM cloud_managed_bases WHERE provider=$1 AND state='verified' AND runtime_manifest ? 'initialRuntimeBootstrap' ORDER BY created_at DESC,release_id DESC LIMIT 1";
+/// Verified bases a builder may start from, newest first; the first one
+/// [`super::worker::base_from_row`] accepts is the provider's newest base (root
+/// bases need fresh-boot pins, home-directory bases an admitted runtime).
+const VERIFIED_BASES: &str = "SELECT to_jsonb(b) FROM cloud_managed_bases b WHERE provider=$1 AND state='verified' AND runtime_manifest IS NOT NULL ORDER BY created_at DESC,release_id DESC LIMIT 8";
 
 /// Why the account's image should be rebuilt now, if at all: its newest
 /// ready image was built from different inputs than the current script and
@@ -37,10 +40,17 @@ pub(crate) async fn stale_reason_tx(
     digest: &str,
     now: i64,
 ) -> Result<Option<&'static str>, ApiError> {
-    let Some(newest): Option<String> = sqlx::query_scalar(NEWEST_BASE)
+    let Some(provider_id) = provider_id(provider) else {
+        return Ok(None);
+    };
+    let bases: Vec<Value> = sqlx::query_scalar(VERIFIED_BASES)
         .bind(provider)
-        .fetch_optional(&mut **tx)
-        .await?
+        .fetch_all(&mut **tx)
+        .await?;
+    let Some(newest) = bases
+        .iter()
+        .find_map(|row| super::worker::base_from_row(row, provider_id))
+        .map(|base| base.release_id)
     else {
         return Ok(None);
     };
@@ -81,7 +91,8 @@ pub(crate) async fn stale_reason_tx(
 }
 
 /// Lazy rebuild for an account starting a computer: same staleness rule as
-/// the hourly pass, which skips inactive accounts.
+/// the hourly pass, which skips inactive accounts. Queues only this computer's
+/// provider, so the first computer on a new provider starts that image.
 pub(crate) async fn rebuild_on_use_tx(
     tx: &mut Transaction<'_, Postgres>,
     owner: &str,
@@ -95,7 +106,10 @@ pub(crate) async fn rebuild_on_use_tx(
     {
         return Ok(false);
     }
-    enqueue_tx(tx, owner, "use", now, now).await
+    let Some(provider) = provider_id(provider) else {
+        return Ok(false);
+    };
+    enqueue_on_tx(tx, owner, &[provider], "use", now, now).await
 }
 
 impl UserImageControl {
@@ -122,13 +136,13 @@ impl UserImageControl {
                 tx.commit().await?;
                 continue;
             };
-            for provider in PROVIDERS {
+            // Only providers the account uses; each stale one gets its own build.
+            for provider in used_providers_tx(&mut tx, &owner, now).await? {
                 if let Some(reason) =
                     stale_reason_tx(&mut tx, &owner, provider.as_str(), &digest, now).await?
                 {
-                    enqueue_tx(&mut tx, &owner, reason, now, now).await?;
+                    enqueue_on_tx(&mut tx, &owner, &[provider], reason, now, now).await?;
                     queued += 1;
-                    break;
                 }
             }
             tx.commit().await?;
@@ -137,11 +151,18 @@ impl UserImageControl {
     }
 
     /// Start deleting one image nobody can use: a newer ready image on a
-    /// verified base replaced it, its base is no longer verified, or the
-    /// account's recipe no longer has a setup script. Never while any
-    /// non-deleted computer (including an archived one) references it.
+    /// verified base replaced it, its base is no longer verified, the
+    /// account's recipe no longer has a setup script, or the account no longer
+    /// uses that (non-default) provider. Never while any non-deleted computer
+    /// (including an archived one) references it.
     pub(crate) async fn retire_one(&self, now: i64) -> Result<bool, ApiError> {
-        let candidates: Vec<String> = sqlx::query_scalar("SELECT a.image_id FROM cloud_machine_images a WHERE a.state='ready' AND (EXISTS(SELECT 1 FROM cloud_machine_images n JOIN cloud_managed_bases b ON b.provider=n.provider AND b.release_id=n.base_release_id AND b.state='verified' WHERE n.owner_id=a.owner_id AND n.provider=a.provider AND n.state='ready' AND n.built_at>a.built_at) OR NOT EXISTS(SELECT 1 FROM cloud_managed_bases b WHERE b.provider=a.provider AND b.release_id=a.base_release_id AND b.state='verified' AND b.artifact_id=a.base_artifact_id) OR NOT coalesce((SELECT recipe->>'setupScript' FROM cloud_machine_versions v WHERE v.owner_id=a.owner_id ORDER BY revision DESC LIMIT 1) ~ '\\S',false)) AND NOT EXISTS(SELECT 1 FROM api_cloud_workspaces w WHERE w.state<>'deleted' AND w.request_config->'rustMachineImage'->>'imageId'=a.image_id) AND NOT EXISTS(SELECT 1 FROM cloud_machine_images o WHERE o.owner_id=a.owner_id AND o.state IN('building','cleaning','retiring')) ORDER BY a.built_at LIMIT 8")
+        let unused = USES_PROVIDER
+            .replace("$1", "a.owner_id")
+            .replace("$2", "a.provider")
+            .replace("$3", "$2");
+        let candidates: Vec<String> = sqlx::query_scalar(&format!("SELECT a.image_id FROM cloud_machine_images a WHERE a.state='ready' AND ((a.provider<>$1 AND NOT {unused}) OR EXISTS(SELECT 1 FROM cloud_machine_images n JOIN cloud_managed_bases b ON b.provider=n.provider AND b.release_id=n.base_release_id AND b.state='verified' WHERE n.owner_id=a.owner_id AND n.provider=a.provider AND n.state='ready' AND n.built_at>a.built_at) OR NOT EXISTS(SELECT 1 FROM cloud_managed_bases b WHERE b.provider=a.provider AND b.release_id=a.base_release_id AND b.state='verified' AND b.artifact_id=a.base_artifact_id) OR NOT coalesce((SELECT recipe->>'setupScript' FROM cloud_machine_versions v WHERE v.owner_id=a.owner_id ORDER BY revision DESC LIMIT 1) ~ '\\S',false)) AND NOT EXISTS(SELECT 1 FROM api_cloud_workspaces w WHERE w.state<>'deleted' AND w.request_config->'rustMachineImage'->>'imageId'=a.image_id) AND NOT EXISTS(SELECT 1 FROM cloud_machine_images o WHERE o.owner_id=a.owner_id AND o.state IN('building','cleaning','retiring')) ORDER BY a.built_at LIMIT 8"))
+            .bind(DEFAULT_PROVIDER.as_str())
+            .bind(now - ACTIVE_WINDOW_MS)
             .fetch_all(self.pool())
             .await?;
         for id in candidates {

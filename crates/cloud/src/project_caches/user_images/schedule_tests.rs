@@ -218,3 +218,92 @@ async fn hourly_staleness_rebuilds_changed_inputs_only_and_retires_unused_images
     );
     db.drop().await;
 }
+
+async fn queued(pool: &PgPool, owner: &str) -> Vec<String> {
+    sqlx::query_scalar("SELECT provider FROM cloud_machine_images WHERE owner_id=$1 AND state='queued' ORDER BY provider")
+        .bind(owner)
+        .fetch_all(pool)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+#[ignore = "requires explicit isolated localhost PostgreSQL"]
+async fn images_are_built_only_on_providers_the_account_uses() {
+    let db = Database::new("uimgp").await;
+    let pool = db.pool.clone();
+    let now = 400 * DAY;
+    sqlx::query("DELETE FROM api_cloud_workspaces")
+        .execute(&pool)
+        .await
+        .unwrap();
+    // No computer anywhere yet: only the default provider gets an image.
+    save(&pool, "user-carol", 0, "npm i -g bun", now).await;
+    assert_eq!(queued(&pool, "user-carol").await, ["boxd"]);
+    // Carol has a Prized computer: saving the script now targets both.
+    workspace(&pool, "carol-prized", "user-carol", now, json!({})).await;
+    sqlx::query(
+        "UPDATE api_cloud_workspaces SET provider='prized' WHERE workspace_id='carol-prized'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    save(&pool, "user-carol", 1, "npm i -g bun pnpm", now + 1).await;
+    assert_eq!(queued(&pool, "user-carol").await, ["boxd", "prized"]);
+    let mut tx = pool.begin().await.unwrap();
+    assert_eq!(
+        used_providers_tx(&mut tx, "user-carol", now + 2)
+            .await
+            .unwrap(),
+        [ProviderId::Boxd, ProviderId::Prized]
+    );
+    tx.rollback().await.unwrap();
+    // She deletes it and stays away past the activity window: the waiting
+    // Prized build is dropped instead of built.
+    sqlx::query(
+        "UPDATE api_cloud_workspaces SET state='deleted' WHERE workspace_id='carol-prized'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let later = now + ACTIVE_WINDOW_MS + DAY;
+    let host = FakeHost::new();
+    let control = control(&pool, &host);
+    sqlx::query("UPDATE cloud_machine_images SET next_attempt_at=0")
+        .execute(&pool)
+        .await
+        .unwrap();
+    run(&control, later, 2).await;
+    let dropped: (String, Option<String>) = sqlx::query_as(
+        "SELECT state,error_code FROM cloud_machine_images WHERE owner_id='user-carol' AND provider='prized'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        dropped,
+        (
+            "superseded".into(),
+            Some("user_image_provider_unused".into())
+        )
+    );
+    // A ready Prized image from when she used it retires; nothing references it.
+    let image = format!("uimg_{}", "c".repeat(32));
+    sqlx::query("INSERT INTO cloud_machine_images(image_id,owner_id,provider,reason,state,phase,recipe_revision,recipe_digest,base_release_id,identity_key,artifact_id,next_attempt_at,built_at,created_at,updated_at) VALUES($1,'user-carol','prized','recipe','ready','complete',1,$2,'prized-base',$2,'sbx_image',0,10,5,10)")
+        .bind(&image).bind("d".repeat(64)).execute(&pool).await.unwrap();
+    sqlx::query(
+        "UPDATE cloud_machine_images SET state='superseded' WHERE owner_id='user-carol' AND state='queued'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(control.retire_one(later).await.unwrap());
+    let state: String =
+        sqlx::query_scalar("SELECT state FROM cloud_machine_images WHERE image_id=$1")
+            .bind(&image)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(state, "retiring");
+    db.drop().await;
+}

@@ -31,6 +31,38 @@ pub const PRIZED_GUEST_HELPER: &str =
     include_str!("../../../../../infra/cloud/prized-base/user-image-guest.py");
 /// Providers with a user image builder. Others start from the managed base.
 pub const PROVIDERS: &[ProviderId] = &[ProviderId::Boxd, ProviderId::Boat, ProviderId::Prized];
+/// The provider every account with a setup script gets an image on. Other
+/// providers get one only once the account uses them ([`used_providers_tx`]).
+pub const DEFAULT_PROVIDER: ProviderId = ProviderId::Boxd;
+
+/// SQL: does account `$1` use provider `$2`, i.e. has a computer there that
+/// is not deleted or was active since `$3`? (`w` is free for the caller.)
+pub(crate) const USES_PROVIDER: &str = "EXISTS(SELECT 1 FROM api_cloud_workspaces w WHERE w.account_id=$1 AND w.provider=$2 AND (w.state<>'deleted' OR w.last_activity_at>$3))";
+
+/// The builder providers an account's image belongs on: the default provider,
+/// plus each other provider where the account has a computer that is not
+/// deleted or was active within the staleness window. A first computer on a
+/// new provider boots that provider's base and queues its image on use.
+pub(crate) async fn used_providers_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    owner: &str,
+    now: i64,
+) -> Result<Vec<ProviderId>, ApiError> {
+    let mut used = Vec::new();
+    for provider in PROVIDERS {
+        if *provider == DEFAULT_PROVIDER
+            || sqlx::query_scalar::<_, bool>(&format!("SELECT {USES_PROVIDER}"))
+                .bind(owner)
+                .bind(provider.as_str())
+                .bind(now - schedule::ACTIVE_WINDOW_MS)
+                .fetch_one(&mut **tx)
+                .await?
+        {
+            used.push(*provider);
+        }
+    }
+    Ok(used)
+}
 
 /// Prized bases live in the task user's home with no root, so they carry no
 /// fresh-boot pins; the base runtime comes from the manifest's admission

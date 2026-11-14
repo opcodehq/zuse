@@ -173,14 +173,14 @@ async fn saved_setup_script_builds_one_verified_image_and_failures_keep_it() {
     assert_eq!(queued[0]["state"], "queued");
     assert_eq!(queued[0]["recipe_revision"], 3);
     assert_eq!(queued[0]["next_attempt_at"], 3_000 + SAVE_DEBOUNCE_MS);
-    // Every builder provider gets its own line; Prized waits without a backend.
-    let prized: Vec<String> = sqlx::query_scalar(
-        "SELECT state FROM cloud_machine_images WHERE provider='prized' AND recipe_revision=3",
-    )
-    .fetch_all(&pool)
-    .await
-    .unwrap();
-    assert_eq!(prized, ["queued"]);
+    // Alice has no computer on another provider, so only the default one
+    // gets an image line.
+    let others: Vec<String> =
+        sqlx::query_scalar("SELECT provider FROM cloud_machine_images WHERE provider<>'boxd'")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert!(others.is_empty(), "{others:?}");
     assert!(!control.work_once(4_000).await.unwrap(), "debounced");
     let now = run(&control, 3_000 + SAVE_DEBOUNCE_MS, 40).await;
     let built = images(&pool).await;
@@ -250,10 +250,8 @@ async fn builds_wait_for_capacity_and_a_base_and_reconcile_lost_replies() {
     let host = FakeHost::new();
     let control = control(&pool, &host);
     save(&pool, "user-alice", 0, "npm i -g pnpm", 1_000).await;
-    // No verified base yet: the build waits with a reason (the Boat and
-    // Prized lines, which this worker has no builder for, are dropped in the
-    // other ticks).
-    run(&control, 1_000 + SAVE_DEBOUNCE_MS, 3).await;
+    // No verified base yet: the build waits with a reason.
+    run(&control, 1_000 + SAVE_DEBOUNCE_MS, 1).await;
     let row = &images(&pool).await[0];
     assert_eq!(
         (row["state"].as_str(), row["error_code"].as_str()),

@@ -696,11 +696,6 @@ async fn machine_status_reports_build_progress_failure_log_and_last_good_image_a
             .fetch_one(&pool)
             .await
             .unwrap();
-    // This deployment has no Prized builder; its worker drops that line.
-    sqlx::query("UPDATE cloud_machine_images SET state='superseded' WHERE provider<>'boxd'")
-        .execute(&pool)
-        .await
-        .unwrap();
     // A ready image from an earlier build and a running build of this script.
     sqlx::query("INSERT INTO cloud_machine_images(image_id,owner_id,provider,reason,state,phase,recipe_revision,recipe_digest,base_release_id,identity_key,artifact_id,next_attempt_at,built_at,created_at,updated_at) VALUES($1,'user-alice','boxd','recipe','ready','complete',1,$2,'base-v1',$2,'snap-old',0,10,5,10)")
         .bind(format!("uimg_{}", "a".repeat(32))).bind("b".repeat(64)).execute(&pool).await.unwrap();
