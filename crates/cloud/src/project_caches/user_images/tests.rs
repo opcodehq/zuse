@@ -346,6 +346,26 @@ impl ImageHost for FakeHost {
         assert!(state.machines.contains_key(machine));
         state.commands.push(command.chars().take(80).collect());
         let guest = state.guest.clone();
+        if command.contains("base64.b64decode(d)") {
+            // A file written as root through exec: record it like an upload.
+            use base64::Engine;
+            let mut parts = command.rsplitn(4, ' ');
+            let data = parts.next().unwrap().trim_matches('\'');
+            let mode = parts.next().unwrap();
+            let path = parts.next().unwrap().trim_matches('\'');
+            let data = base64::engine::general_purpose::STANDARD
+                .decode(data)
+                .unwrap();
+            assert!(!String::from_utf8_lossy(&data).contains("secret-value"));
+            if mode == "w" {
+                state.uploads.push(path.into());
+            }
+            return Ok(ExecResult {
+                stdout: vec![],
+                stderr: vec![],
+                exit_code: 0,
+            });
+        }
         let Some(args) = helper_args(command) else {
             if command.starts_with("sudo -n /usr/bin/python3 -I -B -c") {
                 // Fresh boot through the fixed-path loader: echo the request.
