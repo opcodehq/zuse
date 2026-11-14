@@ -283,3 +283,61 @@ Compared with Boxd: Boat creates in about the same time but wakes cold in
 ≈17 s to a running turn once the 10-minute warm window has passed, versus
 Boxd's memory-snapshot resume. Boat's warm window makes short pauses cheap and
 fast.
+
+## Prized (staging, 2026-11-14)
+
+These are the first Prized computers through the deployed staging API. Each row is a single sample on the owner account, using Prized `default` sandboxes (2 vCPU, 4 GiB, 20 GB, us-west-2) and Claude Sonnet. A computer is a fork of a paused managed-base sandbox, so it inherits the parent's memory and its idle supervisor.
+
+**Base.** The new base is `prized/zuse-prized-base-d4786e376e9b1b2754085a4b9b7d6af5`, a paused parent `sbx_88ce5c1fd2ea4e85`.
+- Runtime `0.26.0+g05af06ad7e0c`, helper scripts from main `05af06ad`, Node v24.22.3 LTS in `~/.zuse/libexec`, linked into `~/.local/bin`.
+- Build: uploading the 1.05 GB bundle took 44 s (10 s on an earlier run), the install took 22 s, and the whole build 70 s.
+- Certification passed all 14 checks: create 8.4 s, runtime answering 10.3 s after create, Codex initialize 0.8 s, sleep settled 0.7 s, runtime answering 0.9 s after resume, agent survived the sleep. The 8.4 s create is the first fork of a fresh parent; Prized documents that the first fork is slower.
+- The two older Prized bases stay verified.
+- Operator record: `/root/base-rebuild-prized-node-20261114/RESTORE.md` on the staging host.
+
+**Create.**
+
+| Phase | Base c25f6530, no Node (`workspace_1e4537d0…`, 11:18Z) | Base d4786e37 (`workspace_b0b8d660…`, 12:18Z) | User image (`workspace_3c08d64d…`, 13:17Z) |
+| --- | --- | --- | --- |
+| Request → sandbox allocated (fork) | 3.1 s | 2.7 s | 2.6 s |
+| Allocated → runtime enrolled | 1.5 s | 1.6 s | 1.4 s |
+| Repository sync + environment | 12.8 s | 20.7 s¹ | 18.1 s |
+| **Request → ready** | **17.3 s** | **25.0 s¹** | **22.1 s** |
+
+¹ A parallel staging deploy restarted the API during this sync.
+
+On the first run the first message failed. The workspace-preparation instruction named `/usr/local/bin/zuse-cloud-runtime`, which does not exist on the home-directory base, so the agent refused the task. PR #168 fixed this. On the new base the agent ran `workspace-wait` successfully and `node --version` printed `v24.22.3` for the task user (`prized`).
+
+**Pause and wake** (memory is kept; the runtime answers right after resume):
+
+| Computer | Pause → paused | Message → turn starts | Message → reply done |
+| --- | --- | --- | --- |
+| `workspace_1e4537d0…`, woken 20 s after pause | 7.5 s | 6.0 s | 14.3 s |
+| Same computer, woken 15 s after pause | 5.2 s | 3.8 s | 5.4 s |
+| `workspace_3c08d64d…` (user image), 10 s after pause | 7.2 s | 6.0 s | 7.6 s |
+
+Delete → `deleted` took 10–12 s, and the sandbox was gone from the provider's list afterwards.
+
+**Machine image** (owner recipe `npm i -g bun`, "Rebuild now" at 12:50:04Z, image `uimg_81c3a278…`):
+- Prized has no disk snapshots. The image is the paused builder sandbox `sbx_c31a02468b501289`.
+- The build went from fork to verified in about 45 s. It was then held at publish until PR #174, because the worker required the builder to be gone.
+- The steps from the first guest-level run (`npm i -g bun`, older base):
+
+| Step | Time |
+| --- | --- |
+| Fork | 1.8 s |
+| `baseline` (tree digest) | 6.5 s |
+| Setup | ≈4 s |
+| `sanitize` | 2.1 s |
+| Pause | 0.65 s |
+| Verifier fork from the paused image | 4.3 s |
+| `check` | 6.5 s |
+
+The computer created from the image recorded `request_config.rustMachineImage.imageId = uimg_81c3a278…` (artifact `sbx_c31a02468b501289`). On it, `~/.local/bin/bun -> ../lib/node_modules/bun/bin/bun.exe` exists and reports bun `1.4.4`. The image made no measurable difference to create time.
+
+Compared with Boxd and Boat: Prized allocates (forks) in under 3 s and enrols in 1.5 s, and wakes with memory in 4–6 s to a running turn. The repository sync dominates create.
+
+The costs of the fork model:
+- A paused base or image lives on one Prized machine. It is lost if that machine fails, and it cannot be forked after a move that discards memory (`409 parent_not_forkable`).
+- Forks land on the parent's machine (`409 fork_capacity` when that machine is full).
+- Every paused image still counts against the workspace's running CPU and memory quota.
