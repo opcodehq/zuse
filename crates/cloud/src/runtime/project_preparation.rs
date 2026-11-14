@@ -417,7 +417,7 @@ impl RuntimeControl {
         let owner = required(&record, "owner_id")?;
         let actor = required(&record, "actor_id")?;
         if record["environment_revision"] != claims["generation"]
-            || !self.creation_accounts.iter().any(|id| id == owner)
+            || !self.creation_accounts.contains(owner)
         {
             return Err(ApiError::forbidden("project_preparation_scope_denied"));
         }

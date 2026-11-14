@@ -526,7 +526,7 @@ impl RuntimeControl {
         if !exists {
             return Ok(false);
         }
-        let next: Option<(String,String)> = sqlx::query_as("SELECT account_id,workspace_id FROM zuse_rust_launch_staging s WHERE expires_at<=$1 AND account_id=ANY($2) AND NOT EXISTS(SELECT 1 FROM api_cloud_workspaces w WHERE w.workspace_id=s.workspace_id) ORDER BY expires_at LIMIT 1").bind(at).bind(&self.creation_accounts).fetch_optional(&mut *tx).await?;
+        let next: Option<(String,String)> = sqlx::query_as("SELECT account_id,workspace_id FROM zuse_rust_launch_staging s WHERE expires_at<=$1 AND ($2::text[] IS NULL OR account_id=ANY($2)) AND NOT EXISTS(SELECT 1 FROM api_cloud_workspaces w WHERE w.workspace_id=s.workspace_id) ORDER BY expires_at LIMIT 1").bind(at).bind(self.creation_accounts.filter()).fetch_optional(&mut *tx).await?;
         let Some((account, workspace)) = next else {
             return Ok(false);
         };

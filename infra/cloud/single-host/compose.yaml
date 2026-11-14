@@ -92,6 +92,29 @@ services:
       api:
         condition: service_healthy
 
+  # Settles provider usage into billing periods and exports overage meters.
+  # Selected with the entitled access policy (see PRODUCTION_SETTINGS.md).
+  billing-worker:
+    <<: *runtime
+    profiles: [billing]
+    command: [billing-worker]
+    env_file:
+      - path: ${ZUSE_CONFIG_DIR:?}/runtime.env
+        format: raw
+      # Boxd usage reads need the provider key.
+      - path: ${ZUSE_CONFIG_DIR:?}/worker.env
+        format: raw
+      # Stripe/Polar keys and meter IDs, shared with checkout and webhooks.
+      - path: ${ZUSE_CONFIG_DIR:?}/api.env
+        format: raw
+        required: false
+    cpus: ${BILLING_WORKER_CPUS:-0.25}
+    mem_limit: ${BILLING_WORKER_MEMORY:-128m}
+    networks: [edge]
+    depends_on:
+      api:
+        condition: service_healthy
+
 networks:
   edge:
     external: true

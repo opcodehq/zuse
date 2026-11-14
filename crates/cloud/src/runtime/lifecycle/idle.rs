@@ -41,7 +41,7 @@ impl RuntimeControl {
             .saturating_sub(self.idle_ms)
             .saturating_sub(crate::runtime::activity::COALESCE_MS);
         let candidate: Option<String> = sqlx::query_scalar(include_str!("idle_candidates.sql"))
-            .bind(&self.creation_accounts)
+            .bind(self.creation_accounts.filter())
             .bind(cutoff)
             .bind(now)
             .bind(zuse_protocol::cloud_task_commands::MODE)
@@ -53,10 +53,9 @@ impl RuntimeControl {
         let mut tx = self.pool.begin().await?;
         let (row, generation, _) = locking::workspace(&mut tx, &id, true).await?;
         if !eligible(&row)
-            || !self
-                .creation_accounts
-                .iter()
-                .any(|owner| row["account_id"] == *owner)
+            || !row["account_id"]
+                .as_str()
+                .is_some_and(|owner| self.creation_accounts.contains(owner))
             || row["last_activity_at"]
                 .as_i64()
                 .is_none_or(|at| at > cutoff)
@@ -81,7 +80,7 @@ impl RuntimeControl {
             return Ok(false);
         }
         let candidate: Option<String> = sqlx::query_scalar(include_str!("credit_candidates.sql"))
-            .bind(&self.creation_accounts)
+            .bind(self.creation_accounts.filter())
             .bind(now)
             .bind(now)
             .bind(zuse_protocol::cloud_task_commands::MODE)

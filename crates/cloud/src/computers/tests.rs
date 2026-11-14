@@ -80,6 +80,130 @@ impl Identity for TestIdentity {
         })
     }
 }
+/// The billing subset `require_capacity` reads.
+const BILLING: &str = "CREATE TABLE api_cloud_billing_periods(period_id text PRIMARY KEY,account_id text,status text,currency text,period_start bigint,period_end bigint,included_provider_cost_micros bigint,markup_basis_points bigint,overage_cap_micros bigint); CREATE TABLE api_cloud_billing_ledger(period_id text,kind text,amount_micros bigint); CREATE TABLE api_cloud_billing_reservations(period_id text,provider_cost_micros bigint,expires_at bigint);";
+
+async fn isolated_pool(prefix: &str) -> (PgPool, PgPool, String) {
+    let url = std::env::var("ZUSE_CLOUD_TEST_DATABASE_URL").expect("isolated PostgreSQL required");
+    assert!(url.contains("127.0.0.1") || url.contains("localhost"));
+    let admin = PgPool::connect(&url).await.unwrap();
+    let schema = format!("{prefix}_{}", uuid::Uuid::new_v4().simple());
+    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        .execute(&admin)
+        .await
+        .unwrap();
+    let copy = schema.clone();
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(6)
+        .after_connect(move |connection, _| {
+            let schema = copy.clone();
+            Box::pin(async move {
+                sqlx::query(&format!("SET search_path={schema}"))
+                    .execute(connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect(&url)
+        .await
+        .unwrap();
+    (admin, pool, schema)
+}
+
+#[tokio::test]
+#[ignore = "requires explicit isolated localhost PostgreSQL"]
+async fn entitled_policy_gates_machine_image_builds_on_entitlement_and_capacity() {
+    let (admin, pool, schema) = isolated_pool("machine_policy").await;
+    for sql in [
+        include_str!("../../tests/fixtures/legacy-catalog.sql"),
+        include_str!("../../tests/fixtures/projects.sql"),
+        include_str!("../../migrations/0009_computers.sql"),
+        include_str!("../../migrations/0031_machine_images.sql"),
+        include_str!("../../migrations/0037_user_images.sql"),
+        BILLING,
+    ] {
+        sqlx::raw_sql(sql).execute(&pool).await.unwrap();
+    }
+    let app = |accounts: crate::access_policy::Accounts| {
+        router(
+            AppState {
+                store: Store::from_pool(pool.clone())
+                    .with_computer_control(ComputerControl::from_pool(pool.clone(), accounts)),
+                identity: Arc::new(TestIdentity),
+                organizations_enabled: false,
+                organization_ids: Arc::new(vec![]),
+                runtime: None,
+                gateway: Arc::new(Hub::default()),
+            },
+            vec![],
+        )
+    };
+    let path = "/v1/cloud/machine";
+    let rebuild = "/v1/cloud/machine/rebuild";
+    let script = json!({"expectedRevision":0,"recipe":{"setupScript":"npm i -g pnpm"}});
+    // Allowlist (the default) is unchanged: an unlisted account cannot write.
+    let allowlist =
+        app(crate::access_policy::AccessPolicy::Allowlist.accounts(vec!["user-alice".to_owned()]));
+    let (status, body) = call(&allowlist, "PUT", path, "carol", false, script.clone()).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["error"], "cloud_environment_writes_disabled");
+    // Entitled: an unlisted account may save its recipe ...
+    let entitled = app(crate::access_policy::AccessPolicy::Entitled.accounts(Vec::new()));
+    let (status, body) = call(&entitled, "PUT", path, "carol", false, script).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    sqlx::query("UPDATE cloud_machine_images SET state='superseded' WHERE owner_id='user-carol'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let queued = || async {
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM cloud_machine_images WHERE owner_id='user-carol' AND state='queued'")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+    };
+    // ... but a build allocates billable machines: no entitlement, no build.
+    let (status, body) = call(&entitled, "POST", rebuild, "carol", false, json!({})).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["error"], "cloud_entitlement_required");
+    assert_eq!(queued().await, 0);
+    // Paid, but no billing period yet.
+    sqlx::query("INSERT INTO api_entitlements VALUES('ent-carol','user-carol','cloud-workspace','cloud-workspace-standard-v1','stripe','sub-carol','active',9999999999999,NULL,1,1)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (status, body) = call(&entitled, "POST", rebuild, "carol", false, json!({})).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["error"], "cloud_billing_period_missing");
+    assert_eq!(queued().await, 0);
+    // Over the overage cap.
+    sqlx::query("INSERT INTO api_cloud_billing_periods VALUES('period-carol','user-carol','active','USD',0,9999999999999,1000,0,0)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO api_cloud_billing_ledger VALUES('period-carol','provider-cost',2000)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (status, body) = call(&entitled, "POST", rebuild, "carol", false, json!({})).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["error"], "cloud_billing_hold");
+    assert_eq!(queued().await, 0);
+    // Within its allowance the build is queued.
+    sqlx::query("DELETE FROM api_cloud_billing_ledger")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (status, body) = call(&entitled, "POST", rebuild, "carol", false, json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["image"]["reason"], "manual");
+    assert_eq!(queued().await, 1);
+    pool.close().await;
+    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+        .execute(&admin)
+        .await
+        .unwrap();
+}
+
 async fn call(
     app: &axum::Router,
     method: &str,
@@ -649,6 +773,8 @@ async fn machine_status_reports_build_progress_failure_log_and_last_good_image_a
         include_str!("../../migrations/0009_computers.sql"),
         include_str!("../../migrations/0031_machine_images.sql"),
         include_str!("../../migrations/0037_user_images.sql"),
+        BILLING,
+        "INSERT INTO api_cloud_billing_periods VALUES('period-alice','user-alice','active','USD',0,9999999999999,35000000,500,25000000)",
     ] {
         sqlx::raw_sql(sql).execute(&pool).await.unwrap();
     }

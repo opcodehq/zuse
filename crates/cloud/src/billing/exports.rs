@@ -243,10 +243,10 @@ impl BillingControl {
             enabled: true,
             ..Default::default()
         };
-        let accounts: Vec<String> = self.accounts.iter().cloned().collect();
+        let accounts = self.accounts.filter();
         let limit = limit.clamp(1, 100);
         if config.financial {
-            let rows:Vec<(String,String)>=sqlx::query_as("SELECT outbox_id,account_id FROM api_cloud_billing_outbox o WHERE acknowledged_at IS NULL AND next_attempt_at<=$1 AND account_id=ANY($2) AND EXISTS(SELECT 1 FROM zuse_rust_control_owners WHERE resource_kind='billing' AND resource_id=o.account_id AND backend='rust') AND EXISTS(SELECT 1 FROM zuse_rust_control_owners WHERE resource_kind='billing-export' AND resource_id=o.account_id AND backend='rust') ORDER BY created_at,outbox_id LIMIT $3").bind(now).bind(&accounts).bind(limit).fetch_all(&self.pool).await?;
+            let rows:Vec<(String,String)>=sqlx::query_as("SELECT outbox_id,account_id FROM api_cloud_billing_outbox o WHERE acknowledged_at IS NULL AND next_attempt_at<=$1 AND ($2::text[] IS NULL OR account_id=ANY($2)) AND EXISTS(SELECT 1 FROM zuse_rust_control_owners WHERE resource_kind='billing' AND resource_id=o.account_id AND backend='rust') AND EXISTS(SELECT 1 FROM zuse_rust_control_owners WHERE resource_kind='billing-export' AND resource_id=o.account_id AND backend='rust') ORDER BY created_at,outbox_id LIMIT $3").bind(now).bind(&accounts).bind(limit).fetch_all(&self.pool).await?;
             for (id, owner) in rows {
                 match self.financial_export(&id, &owner, now).await {
                     Ok(true) => report.financial += 1,
@@ -256,7 +256,7 @@ impl BillingControl {
             }
         }
         if config.telemetry {
-            let rows:Vec<(String,String)>=sqlx::query_as("SELECT event_id,payload->>'accountId' FROM api_cloud_usage_outbox o WHERE acknowledged_at IS NULL AND next_attempt_at<=$1 AND payload->>'accountId'=ANY($2) AND EXISTS(SELECT 1 FROM zuse_rust_control_owners WHERE resource_kind='billing' AND resource_id=o.payload->>'accountId' AND backend='rust') AND EXISTS(SELECT 1 FROM zuse_rust_control_owners WHERE resource_kind='billing-export' AND resource_id=o.payload->>'accountId' AND backend='rust') ORDER BY next_attempt_at,event_id LIMIT $3").bind(now).bind(&accounts).bind(limit).fetch_all(&self.pool).await?;
+            let rows:Vec<(String,String)>=sqlx::query_as("SELECT event_id,payload->>'accountId' FROM api_cloud_usage_outbox o WHERE acknowledged_at IS NULL AND next_attempt_at<=$1 AND ($2::text[] IS NULL OR payload->>'accountId'=ANY($2)) AND EXISTS(SELECT 1 FROM zuse_rust_control_owners WHERE resource_kind='billing' AND resource_id=o.payload->>'accountId' AND backend='rust') AND EXISTS(SELECT 1 FROM zuse_rust_control_owners WHERE resource_kind='billing-export' AND resource_id=o.payload->>'accountId' AND backend='rust') ORDER BY next_attempt_at,event_id LIMIT $3").bind(now).bind(&accounts).bind(limit).fetch_all(&self.pool).await?;
             for (id, owner) in rows {
                 match self.telemetry_export(&id, &owner, now).await {
                     Ok(true) => report.telemetry += 1,
@@ -273,9 +273,9 @@ impl BillingControl {
         now: i64,
         limit: i64,
         config: &MeterExportConfig,
-        accounts: &[String],
+        accounts: &Option<Vec<String>>,
     ) -> Result<usize, ApiError> {
-        let pending=sqlx::query("SELECT p.period_id,p.account_id,o.provider,p.period_start,p.period_end,SUM(o.amount_cents)::bigint AS expected_units FROM api_cloud_billing_periods p JOIN api_cloud_billing_outbox o ON o.period_id=p.period_id AND o.acknowledged_at IS NOT NULL LEFT JOIN api_cloud_billing_meter_reconciliation_attempts a ON a.period_id=p.period_id AND a.provider=o.provider LEFT JOIN LATERAL(SELECT created_at,observed_units FROM api_cloud_billing_meter_reconciliations WHERE period_id=p.period_id AND provider=o.provider ORDER BY created_at DESC LIMIT 1) r ON TRUE WHERE p.account_id=ANY($2) AND EXISTS(SELECT 1 FROM zuse_rust_control_owners WHERE resource_kind='billing' AND resource_id=p.account_id AND backend='rust') AND EXISTS(SELECT 1 FROM zuse_rust_control_owners WHERE resource_kind='billing-export' AND resource_id=p.account_id AND backend='rust') AND COALESCE(a.attempted_at,0)<=$1-300000 AND o.acknowledged_at<=$1-300000 AND NOT EXISTS(SELECT 1 FROM api_cloud_billing_outbox pending WHERE pending.period_id=p.period_id AND pending.provider=o.provider AND(pending.acknowledged_at IS NULL OR pending.acknowledged_at>$1-300000)) GROUP BY p.period_id,p.account_id,o.provider,p.period_start,p.period_end HAVING COALESCE(MAX(r.created_at),0)<MAX(o.acknowledged_at) OR(MAX(r.observed_units) IS DISTINCT FROM SUM(o.amount_cents) AND COALESCE(MAX(r.created_at),0)<=$1-300000) ORDER BY COALESCE(MAX(a.attempted_at),MAX(r.created_at),0),MAX(o.acknowledged_at),p.period_id,o.provider LIMIT $3").bind(now).bind(accounts).bind(limit).fetch_all(&self.pool).await?;
+        let pending=sqlx::query("SELECT p.period_id,p.account_id,o.provider,p.period_start,p.period_end,SUM(o.amount_cents)::bigint AS expected_units FROM api_cloud_billing_periods p JOIN api_cloud_billing_outbox o ON o.period_id=p.period_id AND o.acknowledged_at IS NOT NULL LEFT JOIN api_cloud_billing_meter_reconciliation_attempts a ON a.period_id=p.period_id AND a.provider=o.provider LEFT JOIN LATERAL(SELECT created_at,observed_units FROM api_cloud_billing_meter_reconciliations WHERE period_id=p.period_id AND provider=o.provider ORDER BY created_at DESC LIMIT 1) r ON TRUE WHERE ($2::text[] IS NULL OR p.account_id=ANY($2)) AND EXISTS(SELECT 1 FROM zuse_rust_control_owners WHERE resource_kind='billing' AND resource_id=p.account_id AND backend='rust') AND EXISTS(SELECT 1 FROM zuse_rust_control_owners WHERE resource_kind='billing-export' AND resource_id=p.account_id AND backend='rust') AND COALESCE(a.attempted_at,0)<=$1-300000 AND o.acknowledged_at<=$1-300000 AND NOT EXISTS(SELECT 1 FROM api_cloud_billing_outbox pending WHERE pending.period_id=p.period_id AND pending.provider=o.provider AND(pending.acknowledged_at IS NULL OR pending.acknowledged_at>$1-300000)) GROUP BY p.period_id,p.account_id,o.provider,p.period_start,p.period_end HAVING COALESCE(MAX(r.created_at),0)<MAX(o.acknowledged_at) OR(MAX(r.observed_units) IS DISTINCT FROM SUM(o.amount_cents) AND COALESCE(MAX(r.created_at),0)<=$1-300000) ORDER BY COALESCE(MAX(a.attempted_at),MAX(r.created_at),0),MAX(o.acknowledged_at),p.period_id,o.provider LIMIT $3").bind(now).bind(accounts).bind(limit).fetch_all(&self.pool).await?;
         let mut count = 0;
         for row in pending {
             let owner: String = row.try_get("account_id")?;

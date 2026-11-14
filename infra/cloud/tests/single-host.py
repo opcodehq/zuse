@@ -156,6 +156,36 @@ class SingleHostTests(unittest.TestCase):
         command, _ = deploy.compose(self.root, "production")
         self.assertNotIn("--profile", command)
 
+    def test_entitled_policy_requires_github_and_authority_and_refuses_staging_pins(self):
+        path = self.root / "production" / "runtime.env"
+        self.assertIn("ZUSE_CLOUD_ACCESS_POLICY=allowlist\n", path.read_text())
+        command, _ = deploy.compose(self.root, "production")
+        self.assertNotIn("--profile", command)
+        path.write_text(path.read_text().replace("ZUSE_CLOUD_ACCESS_POLICY=allowlist\n",
+                                               "ZUSE_CLOUD_ACCESS_POLICY=open\n"))
+        with self.assertRaisesRegex(ValueError, "allowlist or entitled"):
+            deploy.compose(self.root, "production")
+        path.write_text(path.read_text().replace("ZUSE_CLOUD_ACCESS_POLICY=open\n",
+                                               "ZUSE_CLOUD_ACCESS_POLICY=entitled\n"))
+        # Every account may connect GitHub: the App configuration is mandatory.
+        with self.assertRaisesRegex(ValueError, "Native GitHub API configuration is incomplete"):
+            deploy.compose(self.root, "production")
+        api = self.root / "production" / "api.env"
+        api.write_text("GITHUB_APP_ID=123\nGITHUB_APP_SLUG=production\nGITHUB_APP_CLIENT_ID=client\nZUSE_CLOUD_GITHUB_ORIGIN=https://api.example.com\nGITHUB_APP_PRIVATE_KEY_FILE=/run/zuse/github/app.pem\nGITHUB_APP_CLIENT_SECRET_FILE=/run/zuse/github/oauth-client-secret\nGITHUB_WEBHOOK_SECRET_FILE=/run/zuse/github/webhook-secret\n")
+        directory = self.root / "production" / "github-api"; directory.mkdir()
+        for name in ("app.pem", "oauth-client-secret", "webhook-secret"):
+            secret = directory / name; secret.write_text("fixture"); secret.chmod(0o400)
+        with patch.object(deploy, "api_secret_is_readable", return_value=True):
+            command, _ = deploy.compose(self.root, "production")
+        self.assertIn(str(deploy.HERE / "github-api.yaml"), command)
+        self.assertEqual(command[-4:], ["--profile", "authority", "--profile", "billing"])
+        # Staging keeps its allowlists.
+        staging, _ = deploy.compose(self.root, "staging")
+        self.assertNotIn("--profile", staging)
+        path.write_text(path.read_text() + "ZUSE_CLOUD_STAGING_BASE_PIN={}\n")
+        with self.assertRaisesRegex(ValueError, "staging base pin"):
+            deploy.compose(self.root, "production")
+
     def test_optional_ssd_scratch_selects_stage_overlay_only_after_preflight(self):
         path = self.root / "staging" / "deploy.env"
         with path.open("a") as target:

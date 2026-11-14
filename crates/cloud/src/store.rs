@@ -722,7 +722,8 @@ impl Store {
         write_pool: Option<PgPool>,
     ) -> anyhow::Result<Self> {
         let enabled =
-            std::env::var("ZUSE_CLOUD_GITHUB_WRITE_ACCOUNTS").is_ok_and(|v| !v.trim().is_empty());
+            !crate::access_policy::Accounts::from_env("ZUSE_CLOUD_GITHUB_WRITE_ACCOUNTS")?
+                .is_empty();
         let pool = if enabled {
             write_pool.ok_or_else(|| {
                 anyhow::anyhow!("Standalone GitHub requires a writable authority pool")

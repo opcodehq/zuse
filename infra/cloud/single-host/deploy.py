@@ -82,6 +82,10 @@ def initialize(root, production, staging, image):
             "ZUSE_CLOUD_GATEWAY_QUEUED_BYTES=33554432\n"
             "# Configure keys only after schema and runtime/API protocol compatibility.\n"
             "# CLOUD_DATA_ENCRYPTION_KEY=\n# RELAY_MINT_PRIVATE_JWK=\n"
+            "# allowlist: each *_ACCOUNTS list below gates its feature (empty = off).\n"
+            "# entitled: every signed-in account with a paid cloud entitlement and billing\n"
+            "# capacity; requires the GitHub App, credential authority and billing settings.\n"
+            "ZUSE_CLOUD_ACCESS_POLICY=allowlist\n"
             "# Creation is disabled until an explicit test-account allowlist is configured.\n"
             "ZUSE_CLOUD_CREATE_ACCOUNTS=\n"
             "# Enable only with the computers migration and certified authority image.\n"
@@ -113,12 +117,26 @@ def api_secret_is_readable(metadata):
             or (metadata.st_uid == 0 and metadata.st_gid == 10001 and mode == 0o440))
 
 
+def entitled(runtime):
+    """ZUSE_CLOUD_ACCESS_POLICY: allowlist (default) or entitled; see crates/cloud/src/access_policy.rs."""
+    policy = runtime.get("ZUSE_CLOUD_ACCESS_POLICY", "").strip()
+    if policy not in ("", "allowlist", "entitled"):
+        raise ValueError("ZUSE_CLOUD_ACCESS_POLICY must be allowlist or entitled")
+    if policy == "entitled" and runtime.get("ZUSE_CLOUD_STAGING_BASE_PIN", "").strip():
+        raise ValueError("A staging base pin cannot run under the entitled access policy")
+    return policy == "entitled"
+
+
+def authority_enabled(runtime):
+    return entitled(runtime) or bool(runtime.get("ZUSE_CLOUD_AUTH_WRITE_ACCOUNTS", "").strip())
+
+
 def github_api(root, name, runtime):
     if runtime.get("ZUSE_CLOUD_GITHUB_WRITE_ACCOUNTS", "").strip():
         raise ValueError("Native GitHub rollout belongs in API-only api.env, not shared runtime.env")
     path = root / name / "api.env"
     settings = read_env(path) if path.exists() else {}
-    if not settings.get("ZUSE_CLOUD_GITHUB_WRITE_ACCOUNTS", "").strip():
+    if not entitled(runtime) and not settings.get("ZUSE_CLOUD_GITHUB_WRITE_ACCOUNTS", "").strip():
         return False
     required = ("GITHUB_APP_ID", "GITHUB_APP_SLUG", "GITHUB_APP_CLIENT_ID", "ZUSE_CLOUD_GITHUB_ORIGIN")
     if any(not settings.get(key, "").strip() for key in required):
@@ -206,8 +224,11 @@ def compose(root, name):
         command += ["--file", str(HERE / "github-api.yaml")]
     if name != "edge" and account_events(root, name, runtime):
         command += ["--file", str(HERE / "account-events.yaml")]
-    if name != "edge" and runtime.get("ZUSE_CLOUD_AUTH_WRITE_ACCOUNTS", "").strip():
+    if name != "edge" and authority_enabled(runtime):
         command += ["--profile", "authority"]
+    if name != "edge" and entitled(runtime):
+        # Paid usage must be settled and exported wherever every account may allocate.
+        command += ["--profile", "billing"]
     return command, process_env
 
 
@@ -252,7 +273,7 @@ def main():
             raise ValueError("Configure at least one worker provider key before starting services")
         # Preflight must never drain an allocation, deletion or credential operation.
         subprocess.run(command + ["run", "--rm", "--no-deps", "worker", "worker", "--check"], env=process_env, check=True)
-        if runtime.get("ZUSE_CLOUD_AUTH_WRITE_ACCOUNTS", "").strip():
+        if authority_enabled(runtime):
             subprocess.run(command + ["run", "--rm", "--no-deps", "auth-worker", "auth-worker", "--check"],
                            env=process_env, check=True)
     subprocess.run(command + operations[args.command], env=process_env, check=True)

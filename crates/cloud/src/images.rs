@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Postgres, Transaction};
-use std::{collections::HashSet, path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc};
 use zuse_cloud_runtime::image::{ImageManifest, ImagePlan, ImageRepository};
 use zuse_protocol::cloud_projects::{GithubCatalog, ImageBuildMode, ImageBuildRequest};
 pub(crate) mod deletion;
@@ -27,10 +27,15 @@ pub struct ImageConfig {
 }
 impl ImageConfig {
     pub fn from_env() -> anyhow::Result<Option<Self>> {
-        if std::env::var("ZUSE_CLOUD_IMAGE_WRITE_ACCOUNTS")
-            .unwrap_or_default()
-            .trim()
-            .is_empty()
+        let accounts = crate::access_policy::Accounts::from_env("ZUSE_CLOUD_IMAGE_WRITE_ACCOUNTS")?;
+        // The entitled policy opens this retired builder only where its base is
+        // still configured; otherwise it stays off as with an empty allowlist.
+        if accounts.is_empty()
+            || (accounts.is_open()
+                && std::env::var("ZUSE_CLOUD_RUST_IMAGE_BASE_SNAPSHOT")
+                    .unwrap_or_default()
+                    .trim()
+                    .is_empty())
         {
             return Ok(None);
         }
@@ -54,7 +59,7 @@ impl ImageConfig {
 #[derive(Clone)]
 pub struct ImageControl {
     pub(crate) pool: PgPool,
-    pub(crate) accounts: Arc<HashSet<String>>,
+    pub(crate) accounts: crate::access_policy::Accounts,
     pub(crate) config: ImageConfig,
 }
 #[derive(Clone, Serialize, Deserialize)]
@@ -98,16 +103,20 @@ fn now() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
 impl ImageControl {
-    pub fn from_pool(pool: PgPool, accounts: Vec<String>, config: ImageConfig) -> Self {
+    pub fn from_pool(
+        pool: PgPool,
+        accounts: impl Into<crate::access_policy::Accounts>,
+        config: ImageConfig,
+    ) -> Self {
         Self {
             pool,
-            accounts: Arc::new(accounts.into_iter().collect()),
+            accounts: accounts.into(),
             config,
         }
     }
     pub async fn connect(
         url: &str,
-        accounts: Vec<String>,
+        accounts: impl Into<crate::access_policy::Accounts>,
         config: ImageConfig,
     ) -> anyhow::Result<Self> {
         let pool = sqlx::postgres::PgPoolOptions::new()
@@ -133,6 +142,14 @@ impl ImageControl {
             return Err(ApiError::forbidden("cloud_image_writes_disabled"));
         }
         let mut tx = self.pool.begin().await?;
+        crate::access_policy::claim_rust_owner(
+            &mut tx,
+            &self.accounts,
+            account,
+            &["project-catalog", "image-catalog", "billing"],
+            now(),
+        )
+        .await?;
         for kind in ["project-catalog", "image-catalog"] {
             let backend:Option<String>=sqlx::query_scalar("SELECT backend FROM zuse_rust_control_owners WHERE resource_kind=$1 AND resource_id=$2 FOR SHARE").bind(kind).bind(account).fetch_optional(&mut *tx).await?;
             if backend.as_deref() != Some("rust") {

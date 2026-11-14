@@ -61,7 +61,7 @@ pub struct RuntimeConfig {
     signer: TicketSigner,
     command_admission_creation: bool,
     idle_ms: i64,
-    creation_accounts: Vec<String>,
+    creation_accounts: crate::access_policy::Accounts,
     legacy_auth_url: Option<String>,
     recovery_enabled: bool,
     recovery_workspaces: Vec<String>,
@@ -87,15 +87,11 @@ impl RuntimeConfig {
             (1000..=86400000).contains(&idle_ms),
             "Invalid cloud idle timeout"
         );
-        let creation_accounts: Vec<String> = env::var("ZUSE_CLOUD_CREATE_ACCOUNTS")
-            .unwrap_or_default()
-            .split(',')
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(str::to_owned)
-            .collect();
+        let policy = crate::access_policy::AccessPolicy::from_env()?;
+        let listed_creation = crate::access_policy::listed_from_env("ZUSE_CLOUD_CREATE_ACCOUNTS");
         let staging_candidate =
-            crate::managed_bases::candidate::StagingBasePin::from_environment(&creation_accounts)?;
+            crate::managed_bases::candidate::StagingBasePin::from_environment(&listed_creation)?;
+        let creation_accounts = policy.accounts(listed_creation);
         Ok(Some(Self {
             staging_candidate,
             legacy_auth_url: env::var("ZUSE_CLOUD_LEGACY_AUTH_URL").ok(),
@@ -138,11 +134,11 @@ pub struct RuntimeControl {
     task_command_schema_ready: tokio::sync::OnceCell<bool>,
     command_admission_creation: bool,
     recreation_schema_ready: tokio::sync::OnceCell<bool>,
-    fast_start_accounts: Vec<String>,
+    fast_start_accounts: crate::access_policy::Accounts,
     master: MasterKey,
     signer: TicketSigner,
     idle_ms: i64,
-    creation_accounts: Vec<String>,
+    creation_accounts: crate::access_policy::Accounts,
     grant_issuer: Option<Arc<dyn grants::GrantIssuer>>,
     authority: Option<Arc<crate::connections::ConnectionControl>>,
     transcript_objects: Option<Arc<dyn crate::objects::Objects>>,
@@ -229,8 +225,9 @@ impl RuntimeControl {
         let options = PgConnectOptions::from_str(url)
             .map_err(|_| anyhow::anyhow!("Invalid cloud PostgreSQL configuration"))?
             .application_name("zuse-cloud-runtime-control");
-        let fast_start = env::var("ZUSE_CLOUD_FAST_START_ACCOUNTS")
-            .is_ok_and(|accounts| !accounts.trim().is_empty());
+        let policy = crate::access_policy::AccessPolicy::from_env()?;
+        let fast_start_accounts = policy.accounts_from_env("ZUSE_CLOUD_FAST_START_ACCOUNTS");
+        let fast_start = !fast_start_accounts.is_empty();
         let pool = PgPoolOptions::new()
             .max_connections(if fast_start { 8 } else { 4 })
             .min_connections(if fast_start { 2 } else { 0 })
@@ -267,26 +264,17 @@ impl RuntimeControl {
         control.recovery_enabled = config.recovery_enabled;
         control.recovery_workspaces = config.recovery_workspaces;
         control.creation_accounts = config.creation_accounts;
-        control.fast_start_accounts = env::var("ZUSE_CLOUD_FAST_START_ACCOUNTS")
-            .unwrap_or_default()
-            .split(',')
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(str::to_owned)
-            .collect();
+        control.fast_start_accounts = fast_start_accounts;
+        // Under the allowlist policy fast start is a staging pilot; the entitled
+        // policy offers it to every paid account.
         anyhow::ensure!(
             control.fast_start_accounts.is_empty()
+                || policy == crate::access_policy::AccessPolicy::Entitled
                 || env::var("ZUSE_DEPLOYMENT_ENVIRONMENT").as_deref() == Ok("staging"),
             "Fast startup is restricted to staging"
         );
         control.staging_candidate = config.staging_candidate;
-        let auth_accounts = env::var("ZUSE_CLOUD_AUTH_WRITE_ACCOUNTS")
-            .unwrap_or_default()
-            .split(',')
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(str::to_owned)
-            .collect::<Vec<_>>();
+        let auth_accounts = policy.accounts_from_env("ZUSE_CLOUD_AUTH_WRITE_ACCOUNTS");
         if !auth_accounts.is_empty() {
             let encryption = env::var("CLOUD_DATA_ENCRYPTION_KEY")
                 .or_else(|_| env::var("CLOUD_CREDENTIAL_VAULT_KEY"))?;
@@ -332,14 +320,14 @@ impl RuntimeControl {
             startup_schema: tokio::sync::OnceCell::new(),
             task_command_schema_ready: tokio::sync::OnceCell::new(),
             command_admission_creation: false,
-            fast_start_accounts: vec![],
+            fast_start_accounts: Default::default(),
             pool,
             master,
             signer,
             idle_ms: 10 * 60 * 1000,
             recovery_enabled: false,
             recovery_workspaces: vec![],
-            creation_accounts: vec![],
+            creation_accounts: Default::default(),
             staging_candidate: None,
             grant_issuer: None,
             authority: None,
@@ -574,10 +562,7 @@ impl RuntimeControl {
                 json!(receipt.runtime_credential_expires_at_ms);
             config["runtimeBootstrapReceipt"] =
                 serde_json::to_value(&receipt).map_err(|_| rejected())?;
-            if self
-                .fast_start_accounts
-                .iter()
-                .any(|account| account == owner)
+            if self.fast_start_accounts.contains(owner)
                 && rpc_protocol == zuse_protocol::cloud_gateway::RUST_RPC
             {
                 startup_binding::prepare(&mut config, &row, generation, now)?;

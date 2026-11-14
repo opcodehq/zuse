@@ -781,10 +781,13 @@ mod database {
         let mut authority = Arc::new(NativeGithub {
             membership_epoch: std::sync::atomic::AtomicU64::new(0),
             observation_gates: Default::default(),
-            fast_start_accounts: BTreeSet::from(["organization:team".into(), "actor-one".into()]),
+            fast_start_accounts: crate::access_policy::Accounts::listed([
+                "organization:team".into(),
+                "actor-one".into(),
+            ]),
             pool: pool.clone(),
             master: MasterKey::parse(&URL_SAFE_NO_PAD.encode([73; 32])).unwrap(),
-            accounts: BTreeSet::from([
+            accounts: crate::access_policy::Accounts::listed([
                 "organization:team".into(),
                 "organization:other-team".into(),
                 "actor-one".into(),

@@ -3,7 +3,7 @@ use super::{invalid, number};
 use crate::{error::ApiError, store::Store};
 use serde_json::Value;
 use sqlx::{PgPool, Postgres, Row, Transaction};
-use std::{collections::HashSet, sync::Arc};
+use std::sync::Arc;
 use zuse_protocol::cloud_billing::*;
 const MAX_SAFE: i64 = 9_007_199_254_740_991;
 
@@ -13,22 +13,25 @@ pub struct BillingControl {
     pub(super) pool: PgPool,
     pub(super) effects_pool: PgPool,
     pub(super) meter_exports: Option<Arc<super::MeterExportConfig>>,
-    pub(super) accounts: Arc<HashSet<String>>,
+    pub(super) accounts: crate::access_policy::Accounts,
     pub(super) payments: Option<Arc<super::PaymentProviders>>,
     pub(super) native: Option<Arc<super::native::NativeBilling>>,
 }
 impl BillingControl {
-    pub fn from_pool(pool: PgPool, accounts: Vec<String>) -> Self {
+    pub fn from_pool(pool: PgPool, accounts: impl Into<crate::access_policy::Accounts>) -> Self {
         Self {
             effects_pool: pool.clone(),
             meter_exports: None,
             pool,
             payments: None,
             native: None,
-            accounts: Arc::new(accounts.into_iter().collect()),
+            accounts: accounts.into(),
         }
     }
-    pub async fn connect(url: &str, accounts: Vec<String>) -> anyhow::Result<Self> {
+    pub async fn connect(
+        url: &str,
+        accounts: impl Into<crate::access_policy::Accounts>,
+    ) -> anyhow::Result<Self> {
         let pool = sqlx::postgres::PgPoolOptions::new()
             .max_connections(4)
             .after_connect(|conn, _| {
@@ -76,6 +79,14 @@ impl BillingControl {
             return Err(ApiError::forbidden("cloud_billing_writes_disabled"));
         }
         let mut tx = self.pool.begin().await?;
+        crate::access_policy::claim_rust_owner(
+            &mut tx,
+            &self.accounts,
+            owner,
+            &["billing", "billing-export"],
+            chrono::Utc::now().timestamp_millis(),
+        )
+        .await?;
         // Independent from workspace lifecycle ownership. Handoff must take this row's exclusive lock.
         let backend:Option<String>=sqlx::query_scalar("SELECT backend FROM zuse_rust_control_owners WHERE resource_kind='billing' AND resource_id=$1 FOR SHARE").bind(owner).fetch_optional(&mut *tx).await?;
         if backend.as_deref() != Some("rust") {

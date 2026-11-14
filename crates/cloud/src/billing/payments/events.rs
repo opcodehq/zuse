@@ -420,6 +420,14 @@ impl BillingControl {
         if !self.accounts.contains(&sub.owner) {
             return Err(ApiError::forbidden("cloud_billing_writes_disabled"));
         }
+        crate::access_policy::claim_rust_owner(
+            &mut tx,
+            &self.accounts,
+            &sub.owner,
+            &["billing", "billing-export"],
+            now,
+        )
+        .await?;
         let backend:Option<String>=sqlx::query_scalar("SELECT backend FROM zuse_rust_control_owners WHERE resource_kind='billing' AND resource_id=$1 FOR SHARE").bind(&sub.owner).fetch_optional(&mut *tx).await?;
         if backend.as_deref() != Some("rust") {
             return Err(ApiError::conflict("cloud_billing_owner_not_rust"));

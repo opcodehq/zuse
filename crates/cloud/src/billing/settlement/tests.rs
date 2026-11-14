@@ -79,6 +79,8 @@ async fn rpc(
                 usage("manual-machine", 50_000_000, true),
                 usage("cap-machine", 100_000_000, true),
                 usage("legacy-machine", 1, true),
+                usage("image-builder", 4_000_000, true),
+                usage("image-verifier", 1_000_000, true),
             ],
         })
     } else {
@@ -108,6 +110,8 @@ async fn rpc(
             }
             "manual-machine" => 50_000_000,
             "cap-machine" => 100_000_000,
+            "image-builder" => 4_000_000,
+            "image-verifier" => 1_000_000,
             _ => panic!("Unowned/incomplete/finalized resource read"),
         };
         reply(wire::VmUsageResponse {
@@ -190,6 +194,7 @@ async fn boxd_reports_settle_periods_old_machines_manual_caps_and_atomic_retries
         include_str!("../../../tests/fixtures/legacy-catalog.sql"),
         include_str!("../../../tests/fixtures/settlement.sql"),
         crate::jobs::MIGRATION,
+        include_str!("../../../migrations/0037_user_images.sql"),
     ] {
         sqlx::raw_sql(sql).execute(&pool).await.unwrap();
     }
@@ -202,6 +207,7 @@ async fn boxd_reports_settle_periods_old_machines_manual_caps_and_atomic_retries
         ("p-second", "user-alice", middle, end, "active", 25_000_000),
         ("p-manual", "manual", start, end, "manual", 25_000_000),
         ("p-cap", "cap", start, end, "active", 10_000_000),
+        ("p-imager", "user-imager", start, end, "active", 25_000_000),
     ] {
         sqlx::query("INSERT INTO api_cloud_billing_periods(period_id,account_id,billing_provider,provider_subscription_id,status,period_start,period_end,base_price_micros,included_provider_cost_micros,markup_basis_points,overage_cap_micros,created_at,updated_at) VALUES($1,$2,'stripe','sub-preserved',$3,$4,$5,40000000,35000000,500,$6,$4,$4)").bind(id).bind(owner).bind(status).bind(begin).bind(finish).bind(cap as i64).execute(&pool).await.unwrap();
     }
@@ -210,8 +216,11 @@ async fn boxd_reports_settle_periods_old_machines_manual_caps_and_atomic_retries
         .execute(&pool)
         .await
         .unwrap();
-    sqlx::raw_sql("UPDATE api_cloud_workspaces SET request_config='{\"providerConnectionId\":\"customer-key\"}' WHERE workspace_id='ws-bob'; INSERT INTO zuse_rust_control_owners VALUES('billing','user-alice','rust',1,0),('billing','manual','rust',1,0),('billing','cap','rust',1,0); INSERT INTO api_cloud_billing_ledger VALUES('original-cost','p-first','user-alice','provider-cost',30000000,'original','{}',1,1)").execute(&pool).await.unwrap();
+    sqlx::raw_sql("UPDATE api_cloud_workspaces SET request_config='{\"providerConnectionId\":\"customer-key\"}' WHERE workspace_id='ws-bob'; INSERT INTO zuse_rust_control_owners VALUES('billing','user-alice','rust',1,0),('billing','manual','rust',1,0),('billing','cap','rust',1,0),('billing','user-imager','rust',1,0); INSERT INTO api_cloud_billing_ledger VALUES('original-cost','p-first','user-alice','provider-cost',30000000,'original','{}',1,1)").execute(&pool).await.unwrap();
     sqlx::query("INSERT INTO api_cloud_project_builds VALUES('build-alice','user-alice','boxd','build-machine','{}',$1),('manual-build','manual','boxd','manual-machine','{}',$1),('cap-build','cap','boxd','cap-machine','{}',$1)").bind(start+1000).execute(&pool).await.unwrap();
+    // An account machine image build: its builder and verifier machines.
+    sqlx::query("INSERT INTO cloud_machine_images(image_id,owner_id,provider,reason,state,phase,recipe_revision,recipe_digest,identity_key,plan,resources,next_attempt_at,created_at,updated_at) VALUES($1,'user-imager','boxd','recipe','building','verify',1,$2,$2,'{\"frozen\":true}','{\"provider\":{\"builderId\":\"image-builder\",\"verifierId\":\"image-verifier\"}}',0,$3,$3)")
+        .bind(format!("uimg_{}", "a".repeat(32))).bind("b".repeat(64)).bind(start + 1000).execute(&pool).await.unwrap();
     for machine in ["retired-machine", "legacy-machine"] {
         sqlx::query("INSERT INTO api_cloud_runtime_observations VALUES('boxd',$1,$2)").bind(machine).bind(json!({"accountId":"user-alice","resourceKind":"workspace","resourceId":"ws-alice"})).execute(&pool).await.unwrap();
     }
@@ -249,6 +258,7 @@ async fn boxd_reports_settle_periods_old_machines_manual_caps_and_atomic_retries
             "user-bob".into(),
             "manual".into(),
             "cap".into(),
+            "user-imager".into(),
         ],
     );
     let config = BoxdSettlementConfig {
@@ -258,7 +268,7 @@ async fn boxd_reports_settle_periods_old_machines_manual_caps_and_atomic_retries
         .settle_boxd_once(&provider, config, now)
         .await
         .unwrap();
-    assert_eq!((first.settled, first.deferred), (4, 1));
+    assert_eq!((first.settled, first.deferred), (6, 1));
     let partial: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM api_cloud_billing_usage WHERE resource_id='build-alice'",
     )
@@ -285,7 +295,7 @@ async fn boxd_reports_settle_periods_old_machines_manual_caps_and_atomic_retries
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(rows, 8);
+    assert_eq!(rows, 10);
     let reservations: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM api_cloud_billing_reservations")
             .fetch_one(&pool)
@@ -293,7 +303,19 @@ async fn boxd_reports_settle_periods_old_machines_manual_caps_and_atomic_retries
             .unwrap();
     assert_eq!(reservations, 0);
     let telemetry:i64=sqlx::query_scalar("SELECT COUNT(*) FROM api_cloud_usage_outbox WHERE payload->'metadata'->>'billable'='false'").fetch_one(&pool).await.unwrap();
-    assert_eq!(telemetry, 8);
+    assert_eq!(telemetry, 10);
+    let images: Vec<(String, String, i64)> = sqlx::query_as("SELECT resource_kind,resource_id,provider_cost_micros FROM api_cloud_billing_usage WHERE account_id='user-imager' ORDER BY provider_cost_micros")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    let image = format!("uimg_{}", "a".repeat(32));
+    assert_eq!(
+        images,
+        [
+            ("machine-image".to_owned(), image.clone(), 1_000_000),
+            ("machine-image".to_owned(), image, 4_000_000),
+        ]
+    );
     let calls = fixture.calls.lock().unwrap().len();
     let again = control
         .settle_boxd_once(&provider, config, now)

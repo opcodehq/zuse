@@ -3,7 +3,7 @@ use crate::{error::ApiError, store::Store};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
-use std::{collections::HashSet, sync::Arc};
+use std::sync::Arc;
 use zuse_protocol::cloud_computers::*;
 pub(crate) mod machine;
 #[cfg(test)]
@@ -12,10 +12,13 @@ mod tests;
 pub struct ComputerControl {
     pub(crate) pool: PgPool,
     pub(crate) cache_schema_ready: std::sync::OnceLock<bool>,
-    accounts: HashSet<String>,
+    pub(crate) accounts: crate::access_policy::Accounts,
 }
 impl ComputerControl {
-    pub async fn connect(url: &str, accounts: Vec<String>) -> anyhow::Result<Self> {
+    pub async fn connect(
+        url: &str,
+        accounts: impl Into<crate::access_policy::Accounts>,
+    ) -> anyhow::Result<Self> {
         let pool = sqlx::postgres::PgPoolOptions::new()
             .max_connections(4)
             .after_connect(|connection, _| {
@@ -34,11 +37,11 @@ impl ComputerControl {
             .map_err(|_| anyhow::anyhow!("Cannot connect computer setup database"))?;
         Ok(Self::from_pool(pool, accounts))
     }
-    pub fn from_pool(pool: PgPool, accounts: Vec<String>) -> Self {
+    pub fn from_pool(pool: PgPool, accounts: impl Into<crate::access_policy::Accounts>) -> Self {
         Self {
             pool,
             cache_schema_ready: std::sync::OnceLock::new(),
-            accounts: accounts.into_iter().collect(),
+            accounts: accounts.into(),
         }
     }
     pub async fn save_environment(

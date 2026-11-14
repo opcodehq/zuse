@@ -70,7 +70,7 @@ async fn connected_mode(pool: &PgPool, owner: &str, actor: &str, source: bool) -
         fast_start_accounts: Default::default(),
         pool: pool.clone(),
         master: MasterKey::parse(&URL_SAFE_NO_PAD.encode([73; 32])).unwrap(),
-        accounts: BTreeSet::from([owner.to_owned(), actor.to_owned()]),
+        accounts: crate::access_policy::Accounts::listed([owner.to_owned(), actor.to_owned()]),
         http: reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs(3))

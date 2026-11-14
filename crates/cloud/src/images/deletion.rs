@@ -40,8 +40,8 @@ impl ImageControl {
         Ok(())
     }
     pub(super) async fn delete_once(&self, provider: &dyn ImageProvider) -> Result<bool, ApiError> {
-        let allowed = self.accounts.iter().cloned().collect::<Vec<_>>();
-        let candidate:Option<(String,String)>=sqlx::query_as("SELECT s.account_id,s.snapshot_id FROM api_cloud_snapshots s JOIN zuse_rust_control_owners o ON o.resource_kind='image-catalog' AND o.resource_id=s.account_id AND o.backend='rust' WHERE EXISTS(SELECT 1 FROM zuse_rust_control_owners p WHERE p.resource_kind='project-catalog' AND p.resource_id=s.account_id AND p.backend='rust') AND s.provider='box' AND s.account_id=ANY($1) AND s.state='deleting' AND COALESCE((s.record->>'nextAttemptAtMs')::bigint,0)<=$2 ORDER BY s.created_at,s.snapshot_id LIMIT 1").bind(allowed).bind(now()).fetch_optional(&self.pool).await?;
+        let allowed = self.accounts.filter();
+        let candidate:Option<(String,String)>=sqlx::query_as("SELECT s.account_id,s.snapshot_id FROM api_cloud_snapshots s JOIN zuse_rust_control_owners o ON o.resource_kind='image-catalog' AND o.resource_id=s.account_id AND o.backend='rust' WHERE EXISTS(SELECT 1 FROM zuse_rust_control_owners p WHERE p.resource_kind='project-catalog' AND p.resource_id=s.account_id AND p.backend='rust') AND s.provider='box' AND ($1::text[] IS NULL OR s.account_id=ANY($1)) AND s.state='deleting' AND COALESCE((s.record->>'nextAttemptAtMs')::bigint,0)<=$2 ORDER BY s.created_at,s.snapshot_id LIMIT 1").bind(allowed).bind(now()).fetch_optional(&self.pool).await?;
         let Some((account, id)) = candidate else {
             return Ok(false);
         };

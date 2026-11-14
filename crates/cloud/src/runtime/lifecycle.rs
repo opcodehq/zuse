@@ -17,6 +17,8 @@ mod memory_recovery;
 pub mod scheduling;
 pub mod wakeup;
 pub(super) use memory_recovery::{memory_recovery_for, valid_memory_recovery};
+#[cfg(test)]
+mod resume_capacity_tests;
 mod task_wake;
 mod worker;
 

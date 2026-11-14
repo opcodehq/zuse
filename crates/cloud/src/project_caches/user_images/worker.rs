@@ -304,7 +304,9 @@ impl UserImageControl {
             return Ok(true);
         };
         if self.staging_compute(&owner, &provider_name, now) {
-        } else if let Err(error) = crate::billing::require_capacity(&mut tx, &owner, now).await {
+        } else if let Err(error) =
+            crate::billing::require_entitled_capacity(&mut tx, &owner, now).await
+        {
             Self::defer(&mut tx, &id, error.code, now + RETRY_MS, now).await?;
             tx.commit().await?;
             return Ok(true);
@@ -482,7 +484,8 @@ impl UserImageControl {
             if now >= deadline {
                 failure = Some("user_image_build_deadline");
             } else {
-                // A build allocates billable machines; budget withdrawal stops it
+                // A build allocates billable machines; a lapsed entitlement or budget
+                // withdrawal stops it
                 // and cleanup still deletes whatever it already created.
                 let capacity = if self.staging_compute(
                     &plan.identity.owner_id,
@@ -493,7 +496,8 @@ impl UserImageControl {
                 } else {
                     let mut tx = self.pool.begin().await?;
                     let capacity =
-                        crate::billing::require_capacity(&mut tx, &plan.owner(), now).await;
+                        crate::billing::require_entitled_capacity(&mut tx, &plan.owner(), now)
+                            .await;
                     tx.commit().await?;
                     capacity
                 };

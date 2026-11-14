@@ -6,6 +6,7 @@ mod aaa_sql_census;
 #[cfg(test)]
 pub(crate) static STAGING_SCHEMA_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 pub mod access;
+pub mod access_policy;
 #[cfg(test)]
 mod zzz_sql_census {
     #[test]

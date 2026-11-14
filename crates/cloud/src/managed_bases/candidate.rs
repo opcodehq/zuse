@@ -265,6 +265,13 @@ impl StagingBasePin {
         else {
             return Ok(None);
         };
+        // A staging pin grants unbilled compute to its owner cohort; it never
+        // applies when every signed-in account is admitted on entitlement.
+        anyhow::ensure!(
+            crate::access_policy::AccessPolicy::from_env()?
+                == crate::access_policy::AccessPolicy::Allowlist,
+            "Staging candidate pin requires the allowlist access policy"
+        );
         anyhow::ensure!(value.len() <= 16384, "Staging candidate pin too large");
         let pin: Self = serde_json::from_str(&value)
             .map_err(|_| anyhow::anyhow!("Invalid staging candidate pin"))?;

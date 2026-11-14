@@ -37,10 +37,10 @@ type ObservationGates = tokio::sync::Mutex<
 pub struct NativeGithub {
     membership_epoch: std::sync::atomic::AtomicU64,
     observation_gates: ObservationGates,
-    fast_start_accounts: BTreeSet<String>,
+    fast_start_accounts: crate::access_policy::Accounts,
     pool: PgPool,
     master: MasterKey,
-    accounts: BTreeSet<String>,
+    accounts: crate::access_policy::Accounts,
     config: Config,
     http: reqwest::Client,
 }
@@ -126,13 +126,8 @@ fn can_manage(access: &Access) -> bool {
 impl NativeGithub {
     /// Empty rollout is a no-op; credentials are not read until explicitly enabled.
     pub fn from_env(pool: PgPool) -> anyhow::Result<Option<Arc<Self>>> {
-        let accounts: BTreeSet<_> = std::env::var("ZUSE_CLOUD_GITHUB_WRITE_ACCOUNTS")
-            .unwrap_or_default()
-            .split(',')
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(str::to_owned)
-            .collect();
+        let policy = crate::access_policy::AccessPolicy::from_env()?;
+        let accounts = policy.accounts_from_env("ZUSE_CLOUD_GITHUB_WRITE_ACCOUNTS");
         if accounts.is_empty() {
             return Ok(None);
         }
@@ -188,18 +183,14 @@ impl NativeGithub {
         Ok(Some(Arc::new(Self {
             membership_epoch: std::sync::atomic::AtomicU64::new(0),
             observation_gates: Default::default(),
-            fast_start_accounts: if std::env::var("ZUSE_DEPLOYMENT_ENVIRONMENT").as_deref()
-                == Ok("staging")
+            // Fast start is a staging pilot under the allowlist policy; the
+            // entitled policy offers it to every account.
+            fast_start_accounts: if policy == crate::access_policy::AccessPolicy::Entitled
+                || std::env::var("ZUSE_DEPLOYMENT_ENVIRONMENT").as_deref() == Ok("staging")
             {
-                std::env::var("ZUSE_CLOUD_FAST_START_ACCOUNTS")
-                    .unwrap_or_default()
-                    .split(',')
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                    .map(str::to_owned)
-                    .collect()
+                policy.accounts_from_env("ZUSE_CLOUD_FAST_START_ACCOUNTS")
             } else {
-                BTreeSet::new()
+                Default::default()
             },
             pool,
             master,

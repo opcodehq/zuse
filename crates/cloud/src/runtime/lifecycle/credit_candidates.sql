@@ -4,7 +4,7 @@ JOIN zuse_rust_control_owners o
   ON o.resource_kind='workspace' AND o.resource_id=w.workspace_id
  AND o.backend='rust'
  AND o.generation=COALESCE((w.request_config->>'runtimeGeneration')::bigint,1)
-WHERE w.account_id=ANY($1)
+WHERE ($1::text[] IS NULL OR w.account_id=ANY($1))
   AND w.request_config->>'providerConnectionId' IS NULL
   AND w.state='ready' AND w.desired_state='ready' AND w.runtime_state='online'
   AND w.next_action_at<=$3

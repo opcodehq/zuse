@@ -100,13 +100,10 @@ impl NativeBilling {
             "live" => Environment::Live,
             _ => anyhow::bail!("BROKEBOY_ENVIRONMENT must be test or live"),
         };
-        let allowed: HashSet<String> = env_required("ZUSE_CLOUD_BILLING_WRITE_ACCOUNTS")?
-            .split(',')
-            .map(str::trim)
-            .map(str::to_owned)
-            .collect();
+        let allowed =
+            crate::access_policy::Accounts::from_env("ZUSE_CLOUD_BILLING_WRITE_ACCOUNTS")?;
         anyhow::ensure!(
-            accounts.is_subset(&allowed),
+            accounts.iter().all(|account| allowed.contains(account)),
             "Embedded billing accounts must have billing writer ownership"
         );
         for account in &accounts {
@@ -276,9 +273,9 @@ impl BillingControl {
                         .await?;
                 if exists {
                     let count: i64 = sqlx::query_scalar(
-                        "SELECT COUNT(*) FROM zuse_brokeboy_accounts WHERE account_id=ANY($1)",
+                        "SELECT COUNT(*) FROM zuse_brokeboy_accounts WHERE ($1::text[] IS NULL OR account_id=ANY($1))",
                     )
-                    .bind(self.accounts.iter().cloned().collect::<Vec<_>>())
+                    .bind(self.accounts.filter())
                     .fetch_one(&self.pool)
                     .await?;
                     anyhow::ensure!(

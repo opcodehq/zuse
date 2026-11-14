@@ -3,15 +3,12 @@ use crate::{error::ApiError, store::Store};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Postgres, Transaction};
-use std::{
-    collections::{BTreeMap, HashSet},
-    sync::Arc,
-};
+use std::{collections::BTreeMap, sync::Arc};
 use zuse_protocol::cloud_projects::*;
 #[derive(Clone)]
 pub struct ProjectControl {
     pool: PgPool,
-    accounts: Arc<HashSet<String>>,
+    accounts: crate::access_policy::Accounts,
 }
 fn invalid() -> ApiError {
     ApiError::bad_request("invalid_repository")
@@ -34,13 +31,16 @@ pub fn template_versions_from_env() -> anyhow::Result<BTreeMap<String, String>> 
     Ok(versions)
 }
 impl ProjectControl {
-    pub fn from_pool(pool: PgPool, accounts: Vec<String>) -> Self {
+    pub fn from_pool(pool: PgPool, accounts: impl Into<crate::access_policy::Accounts>) -> Self {
         Self {
             pool,
-            accounts: Arc::new(accounts.into_iter().collect()),
+            accounts: accounts.into(),
         }
     }
-    pub async fn connect(url: &str, accounts: Vec<String>) -> anyhow::Result<Self> {
+    pub async fn connect(
+        url: &str,
+        accounts: impl Into<crate::access_policy::Accounts>,
+    ) -> anyhow::Result<Self> {
         let pool = sqlx::postgres::PgPoolOptions::new()
             .max_connections(4)
             .after_connect(|conn, _| {
@@ -64,6 +64,14 @@ impl ProjectControl {
             return Err(ApiError::forbidden("cloud_project_writes_disabled"));
         }
         let mut tx = self.pool.begin().await?;
+        crate::access_policy::claim_rust_owner(
+            &mut tx,
+            &self.accounts,
+            owner,
+            &["project-catalog", "image-catalog", "billing"],
+            chrono::Utc::now().timestamp_millis(),
+        )
+        .await?;
         let backend:Option<String>=sqlx::query_scalar("SELECT backend FROM zuse_rust_control_owners WHERE resource_kind='project-catalog' AND resource_id=$1 FOR SHARE").bind(owner).fetch_optional(&mut *tx).await?;
         if backend.as_deref() != Some("rust") {
             return Err(ApiError::conflict("cloud_project_owner_not_rust"));

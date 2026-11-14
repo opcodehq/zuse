@@ -18,6 +18,27 @@ pub use payments::{
 use serde_json::Value;
 use sqlx::{Postgres, Transaction};
 
+/// The paid `cloud-workspace` entitlement every billable compute path requires.
+pub(crate) async fn require_entitlement(
+    tx: &mut Transaction<'_, Postgres>,
+    account: &str,
+    now: i64,
+) -> Result<(), ApiError> {
+    let entitled:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM api_entitlements WHERE account_id=$1 AND kind='cloud-workspace' AND (status IN ('active','grace') OR (status='ended' AND paid_through>$2)) AND (paid_through IS NULL OR paid_through>$2))").bind(account).bind(now).fetch_one(&mut **tx).await?;
+    if !entitled {
+        return Err(ApiError::forbidden("cloud_entitlement_required"));
+    }
+    Ok(())
+}
+/// Entitlement, then the period's included allowance and overage cap.
+pub(crate) async fn require_entitled_capacity(
+    tx: &mut Transaction<'_, Postgres>,
+    account: &str,
+    now: i64,
+) -> Result<(), ApiError> {
+    require_entitlement(tx, account, now).await?;
+    require_capacity(tx, account, now).await
+}
 pub(crate) async fn require_capacity(
     tx: &mut Transaction<'_, Postgres>,
     account: &str,

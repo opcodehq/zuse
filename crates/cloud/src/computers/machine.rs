@@ -300,6 +300,8 @@ impl Store {
             .bind(format!("machine:{}", access.owner_id))
             .execute(&mut *tx)
             .await?;
+        // A build allocates billable builder and verifier machines.
+        crate::billing::require_entitled_capacity(&mut tx, &access.owner_id, now).await?;
         if !crate::project_caches::user_images::worker::enqueue_tx(
             &mut tx,
             &access.owner_id,

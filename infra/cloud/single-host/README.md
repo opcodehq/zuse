@@ -27,8 +27,8 @@ The existing Zuse Node service and cloudflared tunnel remain separate.
 
 The optional `authority` Compose profile adds one auth-worker per enabled environment
 on the same host; it does not provision another server. It receives `runtime.env`
-without infrastructure keys. `ZUSE_CLOUD_AUTH_WRITE_ACCOUNTS` activates the profile
-only for that environment. Apply the computers migration and use the tested
+without infrastructure keys. `ZUSE_CLOUD_AUTH_WRITE_ACCOUNTS`, or
+`ZUSE_CLOUD_ACCESS_POLICY=entitled`, activates the profile only for that environment. Apply the computers migration and use the tested
 authority image before enabling it. The auth worker has its own CPU, memory, process
 and temporary-storage limits. The deployment preflight uses `auth-worker --check`,
 which validates tooling/schema without claiming a pending user login.
@@ -167,7 +167,10 @@ authority, GitHub app/scoped credentials, an attested Rust guest/harness base an
 provider preparation, account data/entitlement migration, transcript/object storage
 configuration, and real message/reconnect/pause/resume testing. Boat still lacks a
 full Rust provider adapter; its benchmark support does not make it deployable here.
-Image and billing workers are not enabled by the default Compose package.
+The legacy image worker is not part of this Compose package. The `billing-worker`
+runs only with the `billing` profile, which `ZUSE_CLOUD_ACCESS_POLICY=entitled`
+selects. See [production settings](../PRODUCTION_SETTINGS.md) for what production
+needs before it admits every paid account.
 
 For native testing after TLS verification, the current engine supports
 `ZUSE_CLOUD_API_URL=https://api-rust-stag.zuse.sh`. The default application origin

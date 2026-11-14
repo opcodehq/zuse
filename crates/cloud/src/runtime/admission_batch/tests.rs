@@ -300,7 +300,7 @@ async fn v2_initial_write_is_atomic_under_the_actual_restricted_role() {
     let mut rollback = std::sync::Arc::try_unwrap(control)
         .ok()
         .expect("fixture control has no outstanding dispatch");
-    rollback.creation_accounts.push("user-test".into());
+    rollback.creation_accounts = crate::access_policy::Accounts::listed(["user-test".to_owned()]);
     let control = std::sync::Arc::new(rollback.with_task_command_creation(false));
     assert!(!control.task_command_creation_available().await.unwrap());
     let request:super::super::creation::CreateWorkspace=serde_json::from_value(json!({"projectId":"project","providerId":"boxd","baseRef":"main","agent":"codex","model":"fixture","idempotencyKey":"new-after-creation-rollback","firstMessage":"Must not allocate","initialMessageDelivery":"server-admitted-v2"})).unwrap();

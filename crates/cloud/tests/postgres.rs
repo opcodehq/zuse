@@ -5561,6 +5561,105 @@ async fn authenticated_creation_is_atomic_idempotent_and_honors_existing_billing
     admin.close().await;
 }
 
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL"]
+async fn entitled_access_policy_admits_paid_unlisted_accounts_and_refuses_unpaid_ones() {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
+    use ed25519_dalek::SigningKey;
+    use zuse_cloud::{
+        access_policy::AccessPolicy, crypto::MasterKey, runtime::RuntimeControl,
+        tickets::TicketSigner,
+    };
+    let (admin, pool, schema) = fixture().await;
+    sqlx::raw_sql(include_str!("fixtures/creation.sql"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    let now = chrono::Utc::now().timestamp_millis();
+    sqlx::query("INSERT INTO api_cloud_billing_periods(period_id,account_id,status,period_start,period_end,included_provider_cost_micros,markup_basis_points,overage_cap_micros,provider_subscription_id) VALUES('bob-period','user-bob','active',$1,$2,35000000,500,25000000,'sub-bob')").bind(now-1000).bind(now+86_400_000).execute(&pool).await.unwrap();
+    let signing = SigningKey::from_bytes(&[26; 32]);
+    let jwk = json!({"kty":"OKP","crv":"Ed25519","d":B64.encode([26;32]),"x":B64.encode(signing.verifying_key().as_bytes())});
+    let key = B64.encode([27; 32]);
+    let app = |accounts: zuse_cloud::access_policy::Accounts| {
+        let control = Arc::new(
+            RuntimeControl::from_pool(
+                pool.clone(),
+                MasterKey::parse(&key).unwrap(),
+                TicketSigner::from_jwk(&jwk.to_string(), "https://api-rust.zuse.sh").unwrap(),
+            )
+            .with_creation_accounts(accounts),
+        );
+        router(
+            AppState {
+                store: Store::from_pool(pool.clone()),
+                identity: Arc::new(TestIdentity),
+                organizations_enabled: false,
+                organization_ids: Arc::new(vec![]),
+                runtime: Some(control),
+                gateway: Arc::new(zuse_cloud::gateway::Hub::default()),
+            },
+            vec![],
+        )
+    };
+    sqlx::query("UPDATE api_cloud_project_builds SET settings=settings||'{\"rustLaunchModelConfigVersion\":1}'::jsonb WHERE build_id='rust-build'").execute(&pool).await.unwrap();
+    let endpoint = "/v1/cloud/workspaces";
+    let body = |key: &str| json!({"projectId":"create-project","providerId":"boxd","baseRef":"main","branch":format!("cloud/{key}"),"agent":"codex","model":"fixture","firstMessage":"Policy prompt","idempotencyKey":key});
+    let effects = || async {
+        sqlx::query_as::<_, (i64, i64, i64)>("SELECT (SELECT COUNT(*) FROM api_cloud_workspaces WHERE account_id='user-bob'),(SELECT COUNT(*) FROM zuse_rust_allocations),(SELECT COUNT(*) FROM zuse_rust_jobs)")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+    };
+    let before = effects().await;
+    // Allowlist (the default): a paid account that is not listed cannot create.
+    let allowlist = app(AccessPolicy::Allowlist.accounts(vec!["user-alice".to_owned()]));
+    let (status, reply) = runtime_post(&allowlist, endpoint, "bob", &body("listed-only")).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(reply["error"], "cloud_workspace_creation_disabled");
+    assert_eq!(effects().await, before);
+    // Entitled: the same paid account creates without being listed anywhere.
+    let entitled = app(AccessPolicy::Entitled.accounts(Vec::new()));
+    let (status, reply) = runtime_post(&entitled, endpoint, "bob", &body("paid")).await;
+    assert_eq!(status, StatusCode::CREATED, "{reply}");
+    let after = effects().await;
+    assert_eq!(after, (before.0 + 1, before.1 + 1, before.2 + 1));
+    // Without a paid entitlement it is refused with no partial side effects.
+    sqlx::query(
+        "UPDATE api_entitlements SET status='ended',paid_through=$1 WHERE account_id='user-bob'",
+    )
+    .bind(now - 1)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let (status, reply) = runtime_post(&entitled, endpoint, "bob", &body("unpaid")).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(reply["error"], "cloud_entitlement_required");
+    assert_eq!(effects().await, after);
+    // Paid again, but the period's overage cap is exhausted.
+    sqlx::query(
+        "UPDATE api_entitlements SET status='active',paid_through=$1 WHERE account_id='user-bob'",
+    )
+    .bind(now + 86_400_000)
+    .execute(&pool)
+    .await
+    .unwrap();
+    // Settled usage beyond the included allowance has charged the full cap.
+    sqlx::query("INSERT INTO api_cloud_billing_ledger VALUES('bob-cost','bob-period','provider-cost',90000000),('bob-overage','bob-period','overage-charge',25000000)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (status, reply) = runtime_post(&entitled, endpoint, "bob", &body("over-cap")).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(reply["error"], "cloud_billing_hold");
+    assert_eq!(effects().await, after);
+    pool.close().await;
+    sqlx::raw_sql(&format!("DROP SCHEMA {schema} CASCADE"))
+        .execute(&admin)
+        .await
+        .unwrap();
+    admin.close().await;
+}
+
 #[derive(Default)]
 struct ProjectionObjects {
     bytes: std::sync::Mutex<std::collections::HashMap<String, Vec<u8>>>,

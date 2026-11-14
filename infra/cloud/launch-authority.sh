@@ -5,6 +5,7 @@ set -eu
 root="${ZUSE_HARNESS_ROOT:-/opt/zuse/harnesses}"
 if [ -n "${ZUSE_AUTH_CANDIDATE_RELEASE:-}" ]; then
   [ "${ZUSE_DEPLOYMENT_ENVIRONMENT:-}" = staging ] || { echo 'Candidate authority requires staging.' >&2; exit 1; }
+  [ "${ZUSE_CLOUD_ACCESS_POLICY:-allowlist}" != entitled ] || { echo 'Candidate authority requires the allowlist access policy.' >&2; exit 1; }
   candidate="$ZUSE_AUTH_CANDIDATE_RELEASE"
   [ "${#candidate}" -eq 64 ] || exit 1
   case "$candidate" in *[!0-9a-f]*) exit 1;; esac

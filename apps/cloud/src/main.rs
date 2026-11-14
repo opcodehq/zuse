@@ -240,13 +240,8 @@ async fn main() -> Result<()> {
         | Command::BillingOperation { .. }) => {
             let url = env::var("ZUSE_CLOUD_DATABASE_URL")
                 .context("ZUSE_CLOUD_DATABASE_URL is required")?;
-            let accounts = env::var("ZUSE_CLOUD_BILLING_WRITE_ACCOUNTS")
-                .unwrap_or_default()
-                .split(',')
-                .map(str::trim)
-                .filter(|v| !v.is_empty())
-                .map(str::to_owned)
-                .collect();
+            let accounts =
+                zuse_cloud::access_policy::Accounts::from_env("ZUSE_CLOUD_BILLING_WRITE_ACCOUNTS")?;
             let mut control = zuse_cloud::billing::BillingControl::connect(&url, accounts)
                 .await?
                 .connect_native_from_env(&url)
@@ -591,13 +586,8 @@ async fn main() -> Result<()> {
             check,
             driver,
         } => {
-            let accounts = env::var("ZUSE_CLOUD_AUTH_WRITE_ACCOUNTS")
-                .unwrap_or_default()
-                .split(',')
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(str::to_owned)
-                .collect::<Vec<_>>();
+            let accounts =
+                zuse_cloud::access_policy::Accounts::from_env("ZUSE_CLOUD_AUTH_WRITE_ACCOUNTS")?;
             anyhow::ensure!(
                 !accounts.is_empty(),
                 "Credential authority requires explicit account ownership"
@@ -683,12 +673,8 @@ async fn main() -> Result<()> {
                 println!("Image worker disabled");
                 return Ok(());
             };
-            let accounts = env::var("ZUSE_CLOUD_IMAGE_WRITE_ACCOUNTS")?
-                .split(',')
-                .map(str::trim)
-                .filter(|v| !v.is_empty())
-                .map(str::to_owned)
-                .collect();
+            let accounts =
+                zuse_cloud::access_policy::Accounts::from_env("ZUSE_CLOUD_IMAGE_WRITE_ACCOUNTS")?;
             let url = env::var("ZUSE_CLOUD_DATABASE_URL")
                 .context("Image worker requires ZUSE_CLOUD_DATABASE_URL")?;
             let control =
@@ -741,13 +727,8 @@ async fn main() -> Result<()> {
                 );
                 return Ok(());
             }
-            let accounts = env::var("ZUSE_CLOUD_BILLING_WRITE_ACCOUNTS")
-                .unwrap_or_default()
-                .split(',')
-                .map(str::trim)
-                .filter(|v| !v.is_empty())
-                .map(str::to_owned)
-                .collect::<Vec<_>>();
+            let accounts =
+                zuse_cloud::access_policy::Accounts::from_env("ZUSE_CLOUD_BILLING_WRITE_ACCOUNTS")?;
             anyhow::ensure!(
                 !accounts.is_empty(),
                 "Billing worker requires explicit billing account ownership configuration"
@@ -1212,13 +1193,8 @@ async fn main() -> Result<()> {
                 .await?
                 .configure_transcripts()?
                 .with_staging_base_pin(runtime.as_ref().and_then(|r| r.staging_base_pin()));
-            let auth_accounts = env::var("ZUSE_CLOUD_AUTH_WRITE_ACCOUNTS")
-                .unwrap_or_default()
-                .split(',')
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(str::to_owned)
-                .collect::<Vec<_>>();
+            let auth_accounts =
+                zuse_cloud::access_policy::Accounts::from_env("ZUSE_CLOUD_AUTH_WRITE_ACCOUNTS")?;
             if let Some(authority) = runtime
                 .as_ref()
                 .and_then(|runtime| runtime.credential_authority())
@@ -1248,13 +1224,8 @@ async fn main() -> Result<()> {
             store = store
                 .with_native_github_from_env(runtime.as_ref().map(|runtime| runtime.shared_pool()))?
                 .with_github_organization_authority(&config)?;
-            let project_accounts = env::var("ZUSE_CLOUD_PROJECT_WRITE_ACCOUNTS")
-                .unwrap_or_default()
-                .split(',')
-                .map(str::trim)
-                .filter(|v| !v.is_empty())
-                .map(str::to_owned)
-                .collect::<Vec<_>>();
+            let project_accounts =
+                zuse_cloud::access_policy::Accounts::from_env("ZUSE_CLOUD_PROJECT_WRITE_ACCOUNTS")?;
             if !project_accounts.is_empty() {
                 if let Some(runtime) = &runtime {
                     store = store
@@ -1284,12 +1255,9 @@ async fn main() -> Result<()> {
                 }
             }
             if let Some(settings) = zuse_cloud::images::ImageConfig::from_env()? {
-                let accounts = env::var("ZUSE_CLOUD_IMAGE_WRITE_ACCOUNTS")?
-                    .split(',')
-                    .map(str::trim)
-                    .filter(|v| !v.is_empty())
-                    .map(str::to_owned)
-                    .collect();
+                let accounts = zuse_cloud::access_policy::Accounts::from_env(
+                    "ZUSE_CLOUD_IMAGE_WRITE_ACCOUNTS",
+                )?;
                 if let Some(runtime) = &runtime {
                     store = store.with_image_control(zuse_cloud::images::ImageControl::from_pool(
                         runtime.shared_pool(),
@@ -1307,13 +1275,8 @@ async fn main() -> Result<()> {
                     );
                 }
             }
-            let billing_accounts = env::var("ZUSE_CLOUD_BILLING_WRITE_ACCOUNTS")
-                .unwrap_or_default()
-                .split(',')
-                .map(str::trim)
-                .filter(|v| !v.is_empty())
-                .map(str::to_owned)
-                .collect::<Vec<_>>();
+            let billing_accounts =
+                zuse_cloud::access_policy::Accounts::from_env("ZUSE_CLOUD_BILLING_WRITE_ACCOUNTS")?;
             if !billing_accounts.is_empty() {
                 let mut billing = if let Some(runtime) = &runtime {
                     zuse_cloud::billing::BillingControl::from_pool(

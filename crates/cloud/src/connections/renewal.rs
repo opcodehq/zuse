@@ -22,7 +22,7 @@ impl ConnectionControl {
         driver: &dyn AuthDriver,
     ) -> Result<RenewalReceipt, ApiError> {
         self.allowed(owner)?;
-        if self.accounts.len() != 1 {
+        if self.accounts.single() != Some(owner) {
             return Err(ApiError::forbidden(
                 "credential_renewal_exact_owner_required",
             ));

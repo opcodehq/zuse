@@ -2,7 +2,7 @@
 use crate::{crypto::MasterKey, error::ApiError, store::Store};
 use serde_json::{Value, json};
 use sqlx::PgPool;
-use std::{collections::HashSet, sync::Arc};
+use std::sync::Arc;
 use zeroize::Zeroizing;
 use zuse_protocol::cloud_connections::*;
 pub mod credentials;
@@ -15,7 +15,7 @@ pub mod worker;
 pub struct ConnectionControl {
     pub(crate) pool: PgPool,
     pub(crate) master: MasterKey,
-    accounts: HashSet<String>,
+    pub(crate) accounts: crate::access_policy::Accounts,
     refresh_gates: tokio::sync::Mutex<
         std::collections::HashMap<String, std::sync::Weak<tokio::sync::Mutex<()>>>,
     >,
@@ -49,7 +49,7 @@ impl ConnectionControl {
     pub async fn connect(
         url: &str,
         master: MasterKey,
-        accounts: Vec<String>,
+        accounts: impl Into<crate::access_policy::Accounts>,
     ) -> anyhow::Result<Self> {
         let pool = sqlx::postgres::PgPoolOptions::new()
             .max_connections(4)
@@ -66,11 +66,15 @@ impl ConnectionControl {
             .map_err(|_| anyhow::anyhow!("Cannot connect credential authority database"))?;
         Ok(Self::from_pool(pool, master, accounts))
     }
-    pub fn from_pool(pool: PgPool, master: MasterKey, accounts: Vec<String>) -> Self {
+    pub fn from_pool(
+        pool: PgPool,
+        master: MasterKey,
+        accounts: impl Into<crate::access_policy::Accounts>,
+    ) -> Self {
         Self {
             pool,
             master,
-            accounts: accounts.into_iter().collect(),
+            accounts: accounts.into(),
             refresh_gates: Default::default(),
         }
     }

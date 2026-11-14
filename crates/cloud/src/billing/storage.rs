@@ -61,8 +61,8 @@ impl BillingControl {
         if !(1..=MAX).contains(&config.cutover_at_ms) || !(1..=MAX).contains(&now) {
             return Err(invalid());
         }
-        let allowed = self.accounts.iter().cloned().collect::<Vec<_>>();
-        let accounts:Vec<String>=sqlx::query_scalar("SELECT DISTINCT account_id FROM api_cloud_snapshots WHERE provider='box' AND account_id=ANY($1) AND (state<>'deleted' OR ((record->>'retainedAtMs')::bigint IS NOT NULL AND COALESCE((record->>'checkpointAtMs')::bigint,(record->>'retainedAtMs')::bigint)<(record->>'stoppedAtMs')::bigint)) ORDER BY account_id").bind(allowed).fetch_all(&self.pool).await?;
+        let allowed = self.accounts.filter();
+        let accounts:Vec<String>=sqlx::query_scalar("SELECT DISTINCT account_id FROM api_cloud_snapshots WHERE provider='box' AND ($1::text[] IS NULL OR account_id=ANY($1)) AND (state<>'deleted' OR ((record->>'retainedAtMs')::bigint IS NOT NULL AND COALESCE((record->>'checkpointAtMs')::bigint,(record->>'retainedAtMs')::bigint)<(record->>'stoppedAtMs')::bigint)) ORDER BY account_id").bind(allowed).fetch_all(&self.pool).await?;
         let mut report = SnapshotSettlementReport::default();
         for account in accounts {
             report.accounts += 1;

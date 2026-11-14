@@ -83,7 +83,7 @@ async fn catalog_unlink_during_repository_io_does_not_become_unrestricted_sql_nu
         fast_start_accounts: Default::default(),
         pool: pool.clone(),
         master: MasterKey::parse(&URL_SAFE_NO_PAD.encode([73; 32])).unwrap(),
-        accounts: BTreeSet::from(["fixture-actor".into()]),
+        accounts: crate::access_policy::Accounts::listed(["fixture-actor".into()]),
         http: reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs(3))

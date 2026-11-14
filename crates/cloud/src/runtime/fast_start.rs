@@ -1,8 +1,11 @@
 //! Prepare the selected account concurrently; credentials still require guest enrollment.
 use super::*;
 impl RuntimeControl {
-    pub fn with_fast_start_accounts(mut self, accounts: Vec<String>) -> Self {
-        self.fast_start_accounts = accounts;
+    pub fn with_fast_start_accounts(
+        mut self,
+        accounts: impl Into<crate::access_policy::Accounts>,
+    ) -> Self {
+        self.fast_start_accounts = accounts.into();
         self
     }
     pub(super) async fn prepare_allocation_access(&self, job: &crate::jobs::Job) {

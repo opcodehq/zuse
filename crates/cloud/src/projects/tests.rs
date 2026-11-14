@@ -638,3 +638,116 @@ async fn conditional_create_is_atomic_and_never_reconnects_existing_or_removed_p
         .unwrap();
     admin.close().await;
 }
+
+#[tokio::test]
+#[ignore = "requires explicit isolated localhost PostgreSQL"]
+async fn entitled_policy_opens_repository_selection_to_unlisted_accounts() {
+    let url = std::env::var("ZUSE_CLOUD_TEST_DATABASE_URL").expect("isolated PostgreSQL required");
+    assert!(matches!(
+        reqwest::Url::parse(&url).unwrap().host_str(),
+        Some("127.0.0.1" | "localhost" | "::1")
+    ));
+    let admin = PgPool::connect(&url).await.unwrap();
+    let schema = format!("projects_policy_{}", uuid::Uuid::new_v4().simple());
+    sqlx::query(&format!("CREATE SCHEMA {schema}"))
+        .execute(&admin)
+        .await
+        .unwrap();
+    let copy = schema.clone();
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(4)
+        .after_connect(move |conn, _| {
+            let schema = copy.clone();
+            Box::pin(async move {
+                sqlx::query(&format!("SET search_path={schema}"))
+                    .execute(conn)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect(&url)
+        .await
+        .unwrap();
+    for sql in [
+        include_str!("../../tests/fixtures/legacy-catalog.sql"),
+        include_str!("../../tests/fixtures/projects.sql"),
+        crate::jobs::MIGRATION,
+    ] {
+        sqlx::raw_sql(sql).execute(&pool).await.unwrap();
+    }
+    // An account still owned by the original backend keeps its fence.
+    sqlx::raw_sql(
+        "INSERT INTO zuse_rust_control_owners VALUES('project-catalog','user-legacy','legacy',1,0)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let store = |accounts: crate::access_policy::Accounts| {
+        app(Store::from_pool(pool.clone())
+            .with_project_templates(BTreeMap::from([("boxd".into(), "current".into())]))
+            .with_project_control(ProjectControl::from_pool(pool.clone(), accounts)))
+    };
+    // Allowlist (the default) is unchanged: an unlisted account is refused.
+    let allowlist = store(
+        crate::access_policy::AccessPolicy::Allowlist.accounts(vec!["user-alice".to_owned()]),
+    );
+    let path = "/v1/cloud/projects";
+    let (status, body) = call(
+        &allowlist,
+        "POST",
+        path,
+        "carol",
+        None,
+        Some(&request("unlisted")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["error"], "cloud_project_writes_disabled");
+    // Entitled: any signed-in account may select repositories; its first write
+    // marks it Rust-owned.
+    let entitled = store(crate::access_policy::AccessPolicy::Entitled.accounts(Vec::new()));
+    let (status, body) = call(
+        &entitled,
+        "POST",
+        path,
+        "carol",
+        None,
+        Some(&request("first")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let owners: Vec<(String, String)> = sqlx::query_as("SELECT resource_kind,backend FROM zuse_rust_control_owners WHERE resource_id='user-carol' ORDER BY resource_kind")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        owners,
+        [
+            ("billing".to_owned(), "rust".to_owned()),
+            ("image-catalog".to_owned(), "rust".to_owned()),
+            ("project-catalog".to_owned(), "rust".to_owned()),
+        ]
+    );
+    let (status, body) = call(
+        &entitled,
+        "POST",
+        path,
+        "legacy",
+        None,
+        Some(&request("legacy")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["error"], "cloud_project_owner_not_rust");
+    let legacy: String = sqlx::query_scalar("SELECT backend FROM zuse_rust_control_owners WHERE resource_kind='project-catalog' AND resource_id='user-legacy'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(legacy, "legacy");
+    pool.close().await;
+    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+        .execute(&admin)
+        .await
+        .unwrap();
+    admin.close().await;
+}

@@ -121,17 +121,18 @@ pub fn valid_git_ref(value: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || b"._/#-".contains(&c))
 }
 impl RuntimeControl {
-    pub fn with_creation_accounts(mut self, accounts: Vec<String>) -> Self {
-        self.creation_accounts = accounts;
+    pub fn with_creation_accounts(
+        mut self,
+        accounts: impl Into<crate::access_policy::Accounts>,
+    ) -> Self {
+        self.creation_accounts = accounts.into();
         self
     }
     pub fn creation_enabled(&self) -> bool {
         !self.creation_accounts.is_empty()
     }
     pub fn creation_enabled_for(&self, owner: &str) -> bool {
-        self.creation_accounts
-            .iter()
-            .any(|account| account == owner)
+        self.creation_accounts.contains(owner)
     }
     #[tracing::instrument(name="cloud_runtime_request", skip_all, fields(owner=%access.owner_id, operation="create_workspace"))]
     pub async fn create_workspace(
@@ -176,10 +177,7 @@ impl RuntimeControl {
             .filter(|g| g.enabled(&access.owner_id));
         // The selected personal pilot admits compute locally. Repository access
         // remains gated by the fresh selected-user Git grant during preparation.
-        let deferred_repository_access = self
-            .fast_start_accounts
-            .iter()
-            .any(|owner| owner == &access.owner_id)
+        let deferred_repository_access = self.fast_start_accounts.contains(&access.owner_id)
             && access.membership.is_none()
             && self.authority.is_some()
             && body.provider_id == "boxd"
@@ -866,13 +864,7 @@ impl RuntimeControl {
             .create_transcript_key(owner, &id)
             .map_err(|_| ApiError::unavailable("cloud_transcript_key_unavailable"))?;
         let mut config = json!({"rustActorId":access.actor.account_id,"runtimeGeneration":1,"gatewayEpoch":1,"rustCreateRequestDigest":digest,"rustNativeTranscriptEnabled":self.transcript_objects.is_some(),"rustCommandMailboxEnabled":mailbox,"runtimeRpcProtocol":zuse_protocol::cloud_gateway::RUST_RPC,"title":title,"agent":body.agent,"initialTurnId":turn,"providerAuthMode":if brokered{"broker-v1"}else{"legacy-image"},"runtimeMode":intent["runtimeMode"],"permissions":intent["permissions"],"repositoryCache":"account-image","rustRepositoryCheckout":{"branch":branch,"baseRef":body.base_ref},"startupTimings":{"requestedAt":now}});
-        if managed
-            && brokered
-            && self
-                .fast_start_accounts
-                .iter()
-                .any(|account| account == owner)
-        {
+        if managed && brokered && self.fast_start_accounts.contains(owner) {
             config["rustFastStartVersion"] = json!(1);
         }
         if let Some(authority) = &cache_pilot {

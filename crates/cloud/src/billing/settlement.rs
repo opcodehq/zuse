@@ -6,6 +6,8 @@ use serde_json::{Value, json};
 use sqlx::{Postgres, Transaction};
 const DAY: i64 = 86_400_000;
 const MAX: i64 = 9_007_199_254_740_991;
+/// Settled resource kind for account machine image builder/verifier machines.
+pub(crate) const MACHINE_IMAGE: &str = "machine-image";
 
 #[derive(Clone, Copy)]
 pub struct BoxdSettlementConfig {
@@ -177,22 +179,23 @@ impl BillingControl {
             .execute(&mut *tx)
             .await?;
         // Resource identity/config and period terms cannot change between report reads and settlement.
-        let table = if resource["kind"] == "workspace" {
-            "api_cloud_workspaces"
-        } else {
-            "api_cloud_project_builds"
+        let (table, account_column, id_column, config_column) = match resource["kind"].as_str() {
+            Some("workspace") => (
+                "api_cloud_workspaces",
+                "account_id",
+                "workspace_id",
+                "request_config",
+            ),
+            Some("build") => (
+                "api_cloud_project_builds",
+                "account_id",
+                "build_id",
+                "settings",
+            ),
+            Some(MACHINE_IMAGE) => ("cloud_machine_images", "owner_id", "image_id", "plan"),
+            _ => return Err(invalid()),
         };
-        let id_column = if resource["kind"] == "workspace" {
-            "workspace_id"
-        } else {
-            "build_id"
-        };
-        let config_column = if resource["kind"] == "workspace" {
-            "request_config"
-        } else {
-            "settings"
-        };
-        let current:Option<(String,i64,Value)>=sqlx::query_as(&format!("SELECT account_id,created_at,{config_column} FROM {table} WHERE {id_column}=$1 FOR SHARE"))
+        let current:Option<(String,i64,Value)>=sqlx::query_as(&format!("SELECT {account_column},created_at,{config_column} FROM {table} WHERE {id_column}=$1 FOR SHARE"))
             .bind(resource["id"].as_str().ok_or_else(invalid)?).fetch_optional(&mut *tx).await?;
         if current != Some((owner.to_owned(), created, resource["config"].clone())) {
             return Err(pending());
@@ -273,6 +276,17 @@ async fn resource(pool: &sqlx::PgPool, machine: &str) -> Result<Option<Value>, A
     let direct:Option<Value>=sqlx::query_scalar("SELECT jsonb_build_object('accountId',account_id,'kind','workspace','id',workspace_id,'createdAt',created_at,'config',request_config) FROM api_cloud_workspaces WHERE provider='boxd' AND provider_sandbox_id=$1 UNION ALL SELECT jsonb_build_object('accountId',account_id,'kind','build','id',build_id,'createdAt',created_at,'config',settings) FROM api_cloud_project_builds WHERE provider='boxd' AND provider_sandbox_id=$1 LIMIT 1").bind(machine).fetch_optional(pool).await?;
     if direct.is_some() {
         return Ok(direct);
+    }
+    // Account machine image builder and verifier machines are billed to the
+    // image's owner like any other machine the account caused.
+    let image:Option<Value>=sqlx::query_scalar("SELECT jsonb_build_object('accountId',owner_id,'kind',$2::text,'id',image_id,'createdAt',created_at,'config',plan) FROM cloud_machine_images WHERE provider='boxd' AND plan IS NOT NULL AND (resources->'provider'->>'builderId'=$1 OR resources->'provider'->>'verifierId'=$1) LIMIT 1")
+        .bind(machine).bind(MACHINE_IMAGE).fetch_optional(pool).await.or_else(|e| match &e {
+            // Deployments that predate account machine images have no table.
+            sqlx::Error::Database(d) if d.code().as_deref() == Some("42P01") => Ok(None),
+            _ => Err(e),
+        })?;
+    if image.is_some() {
+        return Ok(image);
     }
     let observation:Option<Value>=sqlx::query_scalar("SELECT observation FROM api_cloud_runtime_observations WHERE provider='boxd' AND provider_sandbox_id=$1").bind(machine).fetch_optional(pool).await?;
     let Some(o) = observation else {
