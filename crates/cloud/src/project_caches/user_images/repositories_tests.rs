@@ -315,7 +315,7 @@ async fn the_total_size_cap_leaves_later_repositories_out() {
 }
 
 #[tokio::test]
-async fn git_snapshots_hold_a_depth_one_bare_repository_and_no_config() {
+async fn git_snapshots_hold_full_history_or_the_tip_and_no_config() {
     // A local upstream stands in for GitHub.
     let dir = tempfile::tempdir().unwrap();
     let upstream = dir.path().join("team").join("app.git");
@@ -348,11 +348,22 @@ async fn git_snapshots_hold_a_depth_one_bare_repository_and_no_config() {
     }
     let head = run(&["rev-parse", "HEAD"], &work);
     run(&["push", "-q", upstream.to_str().unwrap(), "main"], &work);
+    let list = |file: &std::path::Path| {
+        let listing = std::process::Command::new("tar")
+            .arg("-tf")
+            .arg(file)
+            .output()
+            .unwrap();
+        String::from_utf8(listing.stdout).unwrap()
+    };
+    let image = format!("uimg_{}", "2".repeat(32));
+    // A small history is baked whole: no shallow boundary, so the runtime's
+    // local clone of it is a file copy.
     let source = super::repository_source::GitRepositorySource::for_test(
         dir.path().join("cache"),
         format!("file://{}", dir.path().display()),
+        64 * 1024 * 1024,
     );
-    let image = format!("uimg_{}", "2".repeat(32));
     let made = source
         .snapshot(
             &image,
@@ -362,13 +373,8 @@ async fn git_snapshots_hold_a_depth_one_bare_repository_and_no_config() {
         .await
         .unwrap();
     assert_eq!(made.commit, head);
-    let listing = std::process::Command::new("tar")
-        .arg("-tf")
-        .arg(&made.file)
-        .output()
-        .unwrap();
-    let listing = String::from_utf8(listing.stdout).unwrap();
-    assert!(listing.lines().any(|l| l == "shallow"), "{listing}");
+    let listing = list(&made.file);
+    assert!(!listing.lines().any(|l| l == "shallow"), "{listing}");
     assert!(listing.lines().any(|l| l.ends_with(".pack")), "{listing}");
     assert!(
         !listing
@@ -387,4 +393,20 @@ async fn git_snapshots_hold_a_depth_one_bare_repository_and_no_config() {
     assert_eq!(again.sha256, made.sha256);
     source.discard(&image);
     assert!(!made.file.exists());
+    // Over the full-history limit: only the tip, with its shallow boundary.
+    let source = super::repository_source::GitRepositorySource::for_test(
+        dir.path().join("cache"),
+        format!("file://{}", dir.path().display()),
+        1,
+    );
+    let tip = source
+        .snapshot(
+            &image,
+            "user-alice",
+            &repository("p1", "team/app", "public"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(tip.commit, head);
+    assert!(list(&tip.file).lines().any(|l| l == "shallow"));
 }

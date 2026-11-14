@@ -9,8 +9,8 @@ older per-account repository image.
 ```
 managed base (operator, one per provider/region)
   └── user image (one per account: personal or organization)
-        built from the account's machine recipe, plus a depth-1 copy of
-        each of the account's repositories (see "Repositories" below)
+        built from the account's machine recipe, plus a copy of each of
+        the account's repositories (see "Repositories" below)
         └── task computer: fresh VM from the user image, checkout started
             from the baked copy and fetching only newer commits (a clone
             when the repository isn't baked), repository setup script, agent
@@ -248,17 +248,21 @@ commands `repos-*` in `infra/cloud/user-image-guest.py`, migration
   must not receive its source. Everything left out is listed with its reason
   in `cloud_machine_images.repositories.skipped` and in the machine status
   (`image.repositories`).
-- **Depth.** A depth-1 snapshot of the default branch. The runtime's checkout
-  fetch is `--depth=1 --filter=blob:none` and offers the baked tip as a
-  `have`, so older history in the image never makes the fetch smaller — it
-  only grows the image (measured on opcodehq/zuse: 126 MB at depth 1, 130 MB
-  full; repositories with long histories differ far more). The fetch then
-  transfers the new tip's trees and only the changed blobs.
+- **History.** The whole default branch while the fetched repository is at
+  most 384 MiB (`FULL_HISTORY_MAX_BYTES`), else a depth-1 snapshot of the tip.
+  The fetch delta is the same either way: the runtime's checkout fetch is
+  `--depth=1 --filter=blob:none` and offers the baked tip as a `have`, so it
+  transfers the new tip's trees and only the changed blobs. What differs is
+  the runtime's first step, a local `git clone` of the baked copy: Git copies
+  a complete repository's files but repacks a shallow one through
+  pack-objects. Measured on a 1-vCPU staging computer for opcodehq/zuse
+  (121 MB): 2.2 s from a depth-1 copy, ~70 ms from full history (125 MB, only
+  4 MB more). The first version (2026-11-14) baked depth 1 only.
 - **Build step.** Phase `repositories`, after `setup` and before `sanitize`,
   run by the worker for every backend that exposes its builder
   (`UserImageBackend::builder_guest`; Boxd does, others bake nothing and
   record `provider_unsupported`). Per repository: the worker fetches a
-  depth-1 bare repository into its own scratch (`$TMPDIR`), public ones
+  bare repository into its own scratch (`$TMPDIR`), public ones
   anonymously, private ones with a token the API mints for that single
   repository from the owner's GitHub connection
   (`POST /v1/cloud/machine/images/{image}/repositories/{project}/source-credential`,

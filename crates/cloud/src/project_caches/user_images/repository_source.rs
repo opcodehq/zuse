@@ -1,5 +1,6 @@
-//! Repository snapshots made on the worker: a depth-1 fetch of the default
-//! branch into a fresh bare repository, packed as a tar of `HEAD`, `shallow`,
+//! Repository snapshots made on the worker: a fetch of the default branch
+//! into a fresh bare repository — its full history when that stays under
+//! `FULL_HISTORY_MAX_BYTES`, else only the tip (depth 1) — packed as a tar of `HEAD`, `shallow`,
 //! `packed-refs`, `refs` and `objects` only — no config, remote, hook or
 //! credential. Private repositories are fetched with a short-lived,
 //! repository-scoped token the API mints for this build; it lives only in the
@@ -19,6 +20,12 @@ use zeroize::Zeroizing;
 
 /// Longest one snapshot fetch may run; a worker tick has to finish its lease.
 const FETCH_TIMEOUT: Duration = Duration::from_secs(70);
+/// Full history is baked while the fetched repository stays this small. Git
+/// clones a complete local repository by copying its files (~70 ms for
+/// opcodehq/zuse) but repacks a shallow one through pack-objects (~2 s on a
+/// 1-vCPU computer), and the runtime's checkout starts with that local clone.
+/// Larger histories fall back to a depth-1 snapshot of the tip.
+pub const FULL_HISTORY_MAX_BYTES: u64 = 384 * 1024 * 1024;
 /// Leftover snapshot directories older than this are removed.
 const STALE_SECS: u64 = 24 * 60 * 60;
 
@@ -32,6 +39,7 @@ pub struct GitRepositorySource {
     root: PathBuf,
     credentials: Option<Arc<dyn RepositoryCredentials>>,
     origin: String,
+    full_history_max: u64,
 }
 
 impl GitRepositorySource {
@@ -41,14 +49,16 @@ impl GitRepositorySource {
             root: std::env::temp_dir().join("zuse-user-image-repos"),
             credentials,
             origin: "https://github.com".into(),
+            full_history_max: FULL_HISTORY_MAX_BYTES,
         }
     }
     #[cfg(test)]
-    pub(crate) fn for_test(root: PathBuf, origin: String) -> Self {
+    pub(crate) fn for_test(root: PathBuf, origin: String, full_history_max: u64) -> Self {
         Self {
             root,
             credentials: None,
             origin,
+            full_history_max,
         }
     }
     fn reap(&self) {
@@ -97,7 +107,7 @@ async fn git(
     args: &[&str],
     header: Option<&str>,
     origin: &str,
-    watch: Option<&Path>,
+    watch: Option<(&Path, u64)>,
 ) -> Result<String, SourceError> {
     let mut command = tokio::process::Command::new("git");
     command
@@ -161,10 +171,10 @@ async fn git(
                     let _ = child.kill().await;
                     return Err(SourceError::Retry("repository_fetch_timeout"));
                 }
-                if let Some(path) = watch {
+                if let Some((path, limit)) = watch {
                     let path = path.to_path_buf();
                     let bytes = tokio::task::spawn_blocking(move || directory_bytes(&path)).await.unwrap_or(0);
-                    if bytes > MAX_REPOSITORY_BYTES {
+                    if bytes > limit {
                         let _ = child.kill().await;
                         return Err(SourceError::Skip("repository_too_large"));
                     }
@@ -265,22 +275,51 @@ impl RepositorySource for GitRepositorySource {
         .await?;
         let branch = &repository.default_branch;
         let refspec = format!("+refs/heads/{branch}:refs/heads/{branch}");
-        let fetched = git(
+        let header_text = header.as_deref().map(|h| h.as_str());
+        let mut full = git(
             &repo,
-            &[
-                "fetch",
-                "--quiet",
-                "--depth=1",
-                "--no-tags",
-                "--",
-                &url,
-                &refspec,
-            ],
-            header.as_deref().map(|h| h.as_str()),
+            &["fetch", "--quiet", "--no-tags", "--", &url, &refspec],
+            header_text,
             &self.origin,
-            Some(&repo),
+            Some((&repo, self.full_history_max)),
         )
         .await;
+        // The watchdog samples; a fetch that finished between samples is
+        // measured here.
+        if full.is_ok() && directory_bytes(&repo) > self.full_history_max {
+            full = Err(SourceError::Skip("repository_too_large"));
+        }
+        let fetched = match full {
+            Err(SourceError::Skip("repository_too_large")) => {
+                // A long history: bake only the tip.
+                let _ = std::fs::remove_dir_all(&repo);
+                git(
+                    &directory,
+                    &["init", "--quiet", "--bare", repo_text],
+                    None,
+                    &self.origin,
+                    None,
+                )
+                .await?;
+                git(
+                    &repo,
+                    &[
+                        "fetch",
+                        "--quiet",
+                        "--depth=1",
+                        "--no-tags",
+                        "--",
+                        &url,
+                        &refspec,
+                    ],
+                    header_text,
+                    &self.origin,
+                    Some((&repo, MAX_REPOSITORY_BYTES)),
+                )
+                .await
+            }
+            other => other,
+        };
         drop(header);
         fetched?;
         let commit = git(

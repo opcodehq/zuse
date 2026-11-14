@@ -1,14 +1,18 @@
 //! Repositories baked into a user image. Each of the account's included
-//! repositories is captured on the server as a depth-1 snapshot of its default
-//! branch (a bare repository, no remote, no credential), shipped into the
+//! repositories is captured on the server as a snapshot of its default branch
+//! (a bare repository, no remote, no credential), shipped into the
 //! builder in upload-sized chunks, and unpacked by the guest helper to
 //! `/opt/zuse/repos/<sha256(repository identity)>.git`, owned by `zuse`. A new
 //! computer whose image holds its repository starts the checkout from that
 //! path and fetches only what changed since.
 //!
-//! Depth 1 is deliberate: the runtime's checkout fetch is `--depth=1
-//! --filter=blob:none` and negotiates with the baked tip as a `have`, so older
-//! history in the image would never shrink the fetch, only grow the image.
+//! History: the whole default branch while it fits
+//! `repository_source::FULL_HISTORY_MAX_BYTES`, else only the tip. The fetch
+//! delta is the same either way (the runtime fetches `--depth=1
+//! --filter=blob:none` and offers the baked tip as a `have`), but the runtime
+//! starts by cloning the baked copy locally, and Git copies a complete
+//! repository's files while it repacks a shallow one (measured on a 1-vCPU
+//! computer for opcodehq/zuse: ~70 ms vs ~2.2 s).
 //!
 //! The step is provider-neutral: a backend only has to expose its builder
 //! through [`BuilderGuest`] (exec as a sudo-capable user, and file upload).
@@ -19,7 +23,7 @@ use std::{path::PathBuf, time::Duration};
 
 /// Repositories baked into one image; the rest start with a clone.
 pub const MAX_REPOSITORIES: usize = 8;
-/// Largest snapshot of one repository (a depth-1 bare repository, as a tar).
+/// Largest snapshot of one repository (a bare repository, as a tar).
 pub const MAX_REPOSITORY_BYTES: u64 = 1024 * 1024 * 1024;
 /// Largest total of all snapshots in one image.
 pub const MAX_TOTAL_BYTES: u64 = 2 * 1024 * 1024 * 1024;
