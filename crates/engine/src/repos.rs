@@ -1513,9 +1513,14 @@ impl Repos {
     /// The start point for a new worktree off `base`, fetched first so new
     /// chats begin on the remote's latest commits. `HEAD` means the remote's
     /// default branch (falling back to the current branch). The remote commit
-    /// wins only when the local branch is an ancestor of it, so unpushed local
-    /// commits are never dropped. Fetching is best effort: offline, a missing
-    /// remote, or auth failure falls back to the local ref without failing.
+    /// wins when the local branch is behind it. A local branch that is only
+    /// ahead (unpushed work on top of the remote) wins. When the two have
+    /// diverged, the remote wins for the remote's default branch: a stale
+    /// local trunk (never pulled, or left behind by an upstream history
+    /// rewrite) must not pin every new worktree to old code. A diverged
+    /// feature branch keeps the local commits (a local rebase not yet
+    /// force-pushed). Fetching is best effort: offline, a missing remote, or
+    /// auth failure falls back to the refs already on disk without failing.
     async fn fresh_worktree_base(
         &self,
         repo_path: &Path,
@@ -1559,16 +1564,28 @@ impl Repos {
         let upstream = self.commit_of(repo_path, &remote_ref).await;
         let start = match (local, upstream) {
             (Some(local), Some(upstream)) if local != upstream => {
-                let behind = self
-                    .git(
-                        &["merge-base", "--is-ancestor", &local, &upstream],
-                        Some(repo_path),
-                    )
-                    .await
-                    .is_ok();
+                let use_remote = if self.is_ancestor(repo_path, &local, &upstream).await {
+                    true
+                } else if self.is_ancestor(repo_path, &upstream, &local).await {
+                    false
+                } else {
+                    self.remote_default_branch(repo_path, &remote)
+                        .await
+                        .as_deref()
+                        == Some(branch.as_str())
+                };
+                if use_remote {
+                    tracing::info!(
+                        remote = %remote,
+                        branch = %branch,
+                        local = %local,
+                        upstream = %upstream,
+                        "worktree base: starting from the remote commit"
+                    );
+                }
                 // A bare commit keeps `worktree add -b` from tracking the
                 // remote branch (autoSetupMerge), matching a local base.
-                if behind { upstream } else { branch.clone() }
+                if use_remote { upstream } else { branch.clone() }
             }
             (Some(_), _) => branch.clone(),
             (None, Some(upstream)) => upstream,
@@ -1596,20 +1613,8 @@ impl Repos {
             let mut ordered: Vec<&String> = remotes.iter().collect();
             ordered.sort_by_key(|remote| *remote != "origin");
             for remote in ordered {
-                if let Ok(default) = self
-                    .git(
-                        &[
-                            "symbolic-ref",
-                            "--quiet",
-                            "--short",
-                            &format!("refs/remotes/{remote}/HEAD"),
-                        ],
-                        Some(repo_path),
-                    )
-                    .await
-                    && let Some(branch) = default.strip_prefix(&format!("{remote}/"))
-                {
-                    return Some((remote.clone(), branch.to_string()));
+                if let Some(branch) = self.remote_default_branch(repo_path, remote).await {
+                    return Some((remote.clone(), branch));
                 }
             }
             let current = self
@@ -1634,6 +1639,36 @@ impl Repos {
                 .filter(|branch| !branch.is_empty())
                 .map(|branch| (remote.clone(), branch.to_string()))
         })
+    }
+
+    async fn is_ancestor(&self, repo_path: &Path, ancestor: &str, descendant: &str) -> bool {
+        self.git(
+            &["merge-base", "--is-ancestor", ancestor, descendant],
+            Some(repo_path),
+        )
+        .await
+        .is_ok()
+    }
+
+    /// The branch `refs/remotes/<remote>/HEAD` points at (the remote's
+    /// default branch as of clone or `remote set-head`), if recorded.
+    async fn remote_default_branch(&self, repo_path: &Path, remote: &str) -> Option<String> {
+        let default = self
+            .git(
+                &[
+                    "symbolic-ref",
+                    "--quiet",
+                    "--short",
+                    &format!("refs/remotes/{remote}/HEAD"),
+                ],
+                Some(repo_path),
+            )
+            .await
+            .ok()?;
+        default
+            .strip_prefix(&format!("{remote}/"))
+            .filter(|branch| !branch.is_empty())
+            .map(str::to_string)
     }
 
     /// The remote a local branch follows: its configured upstream remote, or
