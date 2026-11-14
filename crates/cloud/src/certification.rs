@@ -359,7 +359,15 @@ async fn lifecycle(run: &mut Run<'_>, target: &Target, options: &Options, starte
     if run.layout == Layout::Root {
         run.check("taskUserExists", fresh["taskUser"] == true, json!({}));
         run.check("sudoWithoutPassword", fresh["sudo"] == true, json!({}));
+        // managed-base-install.sh ships Node.js LTS (node, npm, npx,
+        // corepack); machine setup scripts and agents rely on it.
+        run.check(
+            "nodeAvailable",
+            fresh["node"] == true,
+            json!({"version":fresh["nodeVersion"]}),
+        );
     }
+    run.trait_("nodeVersion", fresh["nodeVersion"].clone());
     run.trait_("sshAvailable", fresh["sshd"].clone());
     run.trait_("cpus", fresh["cpus"].clone());
     // A trait, not a check: bases without the in-place runtime update helper

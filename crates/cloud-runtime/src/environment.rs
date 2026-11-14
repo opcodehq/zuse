@@ -544,19 +544,14 @@ async fn run_command_with_environment(
 }
 
 fn environment_command(checkout: &Path, recipe: &EnvironmentRecipe) -> tokio::process::Command {
+    let home = PathBuf::from(std::env::var_os("HOME").unwrap_or_else(|| "/home/zuse".into()));
     let mut command = tokio::process::Command::new("/bin/bash");
     command
         .current_dir(checkout)
         .env_clear()
-        .env(
-            "PATH",
-            "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-        )
+        .env("PATH", environment_path(&home))
         .env("LANG", "C.UTF-8")
-        .env(
-            "HOME",
-            std::env::var_os("HOME").unwrap_or_else(|| "/home/zuse".into()),
-        )
+        .env("HOME", &home)
         .envs(&recipe.environment)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -567,9 +562,25 @@ fn environment_command(checkout: &Path, recipe: &EnvironmentRecipe) -> tokio::pr
     command
 }
 
+/// Repository scripts see what the machine's setup installed: the task user's
+/// `npm i -g` lands in ~/.local/bin (the base sets that npm prefix).
+fn environment_path(home: &Path) -> String {
+    format!(
+        "{}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        home.join(".local/bin").display()
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn repository_scripts_find_the_task_users_global_npm_tools() {
+        assert_eq!(
+            environment_path(Path::new("/home/zuse")),
+            "/home/zuse/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        );
+    }
     fn directories() -> (tempfile::TempDir, PathBuf, PathBuf) {
         let root = tempfile::tempdir().unwrap();
         let data = root.path().join("data");

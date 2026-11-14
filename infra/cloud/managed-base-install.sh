@@ -21,7 +21,46 @@ fi
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 # openssl (>= 3.0) verifies Ed25519 runtime release signatures in runtime-update.py.
-apt-get install -y -qq ca-certificates git gh openssh-client ripgrep python3 build-essential sudo util-linux zlib1g openssl
+apt-get install -y -qq ca-certificates git gh openssh-client ripgrep python3 build-essential sudo util-linux zlib1g openssl curl xz-utils
+# Node.js LTS from the official nodejs.org build, pinned to one version and its
+# SHA-256 from that release's signed SHASUMS256.txt. Distro nodejs is too old.
+# 24.x is the newest LTS line that still bundles corepack. Unpacked straight
+# into /usr/local so root's npm prefix is /usr/local: node, npm, npx and
+# corepack are on every PATH, and `sudo npm i -g X` lands in /usr/local/bin.
+node_version=24.22.3
+node_sha256=4f2b175a6d53a5c617a80dba2676238a0688cef28c6da4eba35c7d844e66fcfb
+[[ "$(uname -m)" == x86_64 ]] || { printf '%s\n' node_architecture_unsupported >&2; exit 1; }
+node_work="$(mktemp -d /var/tmp/zuse-node.XXXXXX)"
+curl -fsSL --retry 3 --proto '=https' -o "$node_work/node.tar.xz" \
+  "https://nodejs.org/dist/v$node_version/node-v$node_version-linux-x64.tar.xz"
+printf '%s  %s\n' "$node_sha256" "$node_work/node.tar.xz" | sha256sum -c --quiet - \
+  || { printf '%s\n' node_checksum_mismatch >&2; exit 1; }
+tar -xJf "$node_work/node.tar.xz" -C "$node_work" --no-same-owner
+node_tree="$node_work/node-v$node_version-linux-x64"
+chown -R -h root:root "$node_tree"
+chmod -R u+rwX,go+rX,go-w "$node_tree"
+# A provider image may already link these names elsewhere (Boxd's links node
+# into a private nvm tree the task user cannot read). Replace the entries
+# themselves; never write through an existing link.
+rm -rf -- /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
+  /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack /usr/local/include/node
+cp -a "$node_tree/bin/." /usr/local/bin/
+for part in include lib share; do
+  mkdir -p "/usr/local/$part"
+  cp -a "$node_tree/$part/." "/usr/local/$part/"
+done
+rm -rf -- "$node_work"
+[[ -f /usr/local/bin/node && ! -L /usr/local/bin/node && "$(/usr/local/bin/node --version)" == "v$node_version" ]]
+# The npm/npx/corepack entries are `#!/usr/bin/env node` scripts; probe them
+# with a throwaway HOME so no npm cache or log lands in /root.
+node_probe_home="$(mktemp -d /var/tmp/zuse-node-probe.XXXXXX)"
+for tool in npm npx corepack; do
+  env -i HOME="$node_probe_home" PATH=/usr/local/bin:/usr/bin:/bin "/usr/local/bin/$tool" --version >/dev/null \
+    || { printf '%s\n' "node_tool_missing_$tool" >&2; exit 1; }
+done
+[[ "$(env -i HOME="$node_probe_home" PATH=/usr/local/bin:/usr/bin:/bin /usr/local/bin/npm prefix -g)" == /usr/local ]] \
+  || { printf '%s\n' node_global_prefix_unexpected >&2; exit 1; }
+rm -rf -- "$node_probe_home"
 # SSH access starts its own loopback-only sshd on demand. Images without an SSH
 # server (Daytona's container base) get the binary, never a listening service,
 # and no shared host keys: each computer generates its own on first use.
@@ -121,6 +160,8 @@ cat > /usr/local/lib/zuse/launch-rust-runtime <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 export ZUSE_HARNESS_ROOT=/opt/zuse/harnesses ZUSE_HARNESS_CHANNEL=staging
+# Agents find what `npm i -g` installed as the task user (see ~/.npmrc).
+export PATH="/home/zuse/.local/bin:${PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}"
 exec /usr/local/lib/zuse/launch-rust-runtime-core "$@"
 EOF
 chmod 755 /usr/local/lib/zuse/launch-rust-runtime
@@ -128,6 +169,23 @@ printf 'zuse ALL=(ALL) NOPASSWD:ALL\n' > /etc/sudoers.d/zuse
 chmod 440 /etc/sudoers.d/zuse
 mkdir -p /home/zuse/.zuse-data /home/zuse/workspace /home/zuse/.zuse-image/cache /var/lib/zuse/workspace /var/lib/zuse/recovery /opt/zuse/preparation/secrets /opt/zuse/preparation/status
 chmod 0755 /var/lib/zuse
+# `npm i -g X` run as zuse (setup scripts, agents) installs under ~/.local:
+# no sudo needed, and ~/.local/bin is first on the setup PATH, the runtime PATH
+# and login shells. `sudo npm i -g X` keeps root's /usr/local prefix.
+mkdir -p /home/zuse/.local/bin
+printf 'prefix=/home/zuse/.local\n' > /home/zuse/.npmrc
+chmod 644 /home/zuse/.npmrc
+printf '%s\n' '# Global npm installs of the task user (prefix in ~/.npmrc).' \
+  'case ":${PATH:-}:" in' '  *":$HOME/.local/bin:"*) ;;' '  *) [ -n "${HOME:-}" ] && PATH="$HOME/.local/bin:${PATH:-/usr/bin:/bin}" ;;' 'esac' 'export PATH' \
+  > /etc/profile.d/zuse-user-bin.sh
+chmod 644 /etc/profile.d/zuse-user-bin.sh
+chown -R zuse:zuse /home/zuse/.local /home/zuse/.npmrc
+# The task user, not just root, must run Node with the setup script's PATH,
+# and its global installs must go to ~/.local.
+node_user_check="$(sudo -n -u zuse /usr/bin/env -i HOME=/home/zuse PATH=/home/zuse/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  /bin/bash --noprofile --norc -ec 'cd "$HOME"; node --version; npm --version >/dev/null; npx --version >/dev/null; corepack --version >/dev/null; npm prefix -g; rm -rf "$HOME/.npm"')" \
+  || { printf '%s\n' node_task_user_unavailable >&2; exit 1; }
+[[ "$node_user_check" == "v$node_version"$'\n'/home/zuse/.local ]] || { printf '%s\n' node_task_user_unexpected >&2; exit 1; }
 
 chown -R zuse:zuse /home/zuse /var/lib/zuse/workspace /var/lib/zuse/recovery /opt/zuse/preparation
 install -o zuse -g zuse -m 444 "$bundle_root/prepare-plan.json" /opt/zuse/preparation/plan.json

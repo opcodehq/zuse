@@ -13,6 +13,7 @@ struct Fake {
     installed_sha: String,
     agent_survives: bool,
     runtime_never_answers: bool,
+    no_node: bool,
     deleted: Mutex<bool>,
     log: Arc<Mutex<Vec<String>>>,
 }
@@ -89,8 +90,10 @@ impl Provider for Fake {
         }
         match command.rsplit(' ').next().unwrap_or_default() {
             "fresh" => output(&format!(
-                r#"{{"runtimeSha256":"{}","runtimeVersion":"zuse-cloud-runtime 0.26.0","claudeAnswers":true,"codexInitializeMs":180,"git":true,"sudo":true,"sshd":false,"taskUser":true,"cpus":2}}"#,
-                self.installed_sha
+                r#"{{"runtimeSha256":"{}","runtimeVersion":"zuse-cloud-runtime 0.26.0","claudeAnswers":true,"codexInitializeMs":180,"git":true,"node":{},"nodeVersion":"{}","sudo":true,"sshd":false,"taskUser":true,"cpus":2}}"#,
+                self.installed_sha,
+                !self.no_node,
+                if self.no_node { "" } else { "v24.22.3" }
             )),
             "before" => output(r#"{"agentRunning":true}"#),
             "resume" => output(&format!(
@@ -139,6 +142,7 @@ async fn a_working_base_passes_and_records_its_traits() {
     assert_eq!(report.traits["keepsAgentAcrossSleep"], true);
     assert_eq!(report.traits["sshAvailable"], false);
     assert_eq!(report.traits["codexColdStartMs"], 180);
+    assert_eq!(report.traits["nodeVersion"], "v24.22.3");
     assert_eq!(
         *fake.log.lock().unwrap(),
         ["allocate template-1", "sleep", "resume", "delete"]
@@ -169,6 +173,26 @@ async fn a_different_installed_runtime_fails() {
     };
     let report = certify(&fake, &target(true), &Options::default()).await;
     assert_eq!(failed(&report), ["runtimeMatchesManifest"]);
+}
+
+#[tokio::test]
+async fn a_root_base_without_node_fails() {
+    let fake = Fake {
+        installed_sha: RUNTIME_SHA.into(),
+        agent_survives: true,
+        no_node: true,
+        ..Fake::default()
+    };
+    let report = certify(&fake, &target(true), &Options::default()).await;
+    assert_eq!(failed(&report), ["nodeAvailable"]);
+}
+
+#[test]
+fn the_checks_script_reports_node_and_its_package_tools() {
+    assert!(
+        CHECKS.contains("node --version && npm --version && npx --version && corepack --version")
+    );
+    assert!(CHECKS.contains(r#""node":%s,"nodeVersion":"%s""#));
 }
 
 #[tokio::test]
