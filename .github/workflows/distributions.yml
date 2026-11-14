@@ -193,6 +193,9 @@ jobs:
       # This fresh runner only packages verified artifacts. It never executes
       # dependency build code while the Apple identity is loaded.
       - if: runner.os == 'macOS'
+        name: Install DMG layout dependencies
+        run: python -m pip install -r dist/macos/requirements.txt
+      - if: runner.os == 'macOS'
         name: Load the macOS signing identity
         env:
           CSC_LINK: ${{ secrets.CSC_LINK }}

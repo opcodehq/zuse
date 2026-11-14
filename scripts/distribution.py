@@ -141,6 +141,29 @@ def notarize(path):
     apple(['xcrun', 'stapler', 'validate', str(path)], check=True)
 
 
+def create_macos_dmg(app, image):
+    """Write a consistent Finder layout without launching Finder on the build host."""
+    import dmgbuild
+
+    dmgbuild.build_dmg(str(image), 'Zuse', settings={
+        'format': 'UDZO',
+        'files': [(str(app), 'Zuse.app')],
+        'symlinks': {'Applications': '/Applications'},
+        # dmgbuild combines the matching @2x artwork into a Retina TIFF.
+        'background': str(ROOT / 'dist/macos/dmg-background.png'),
+        'window_rect': ((200, 120), (640, 440)),
+        'default_view': 'icon-view',
+        'icon_size': 80,
+        'text_size': 13,
+        'icon_locations': {'Zuse.app': (180, 316), 'Applications': (460, 316)},
+        'show_status_bar': False,
+        'show_tab_view': False,
+        'show_toolbar': False,
+        'show_pathbar': False,
+        'show_sidebar': False,
+    })
+
+
 def macos(package, manifest, output, sign_app=False):
     app = package / 'Zuse.app'
     if sign_app:
@@ -157,12 +180,8 @@ def macos(package, manifest, output, sign_app=False):
         with tarfile.open(archive, 'w:gz') as bundle:
             bundle.add(package, arcname=package.name)
     with tempfile.TemporaryDirectory(prefix='zuse-dmg-') as temporary:
-        source = Path(temporary) / 'image'
-        source.mkdir()
-        subprocess.run(['ditto', str(app), str(source / 'Zuse.app')], check=True)
-        (source / 'Applications').symlink_to('/Applications')
         image = output / f'{package.name}.dmg'
-        subprocess.run(['hdiutil', 'create', '-volname', 'Zuse', '-srcfolder', str(source), '-format', 'UDZO', '-ov', str(image)], check=True)
+        create_macos_dmg(app, image)
         notarize(image)
         subprocess.run(['hdiutil', 'verify', str(image)], check=True)
         subprocess.run(['codesign', '--verify', '--strict', str(image)], check=True)
@@ -173,6 +192,8 @@ def macos(package, manifest, output, sign_app=False):
             mounted_app = mount / 'Zuse.app'
             if os.readlink(mount / 'Applications') != '/Applications':
                 raise ValueError('DMG is missing the Applications shortcut')
+            if not (mount / '.DS_Store').is_file() or not (mount / '.background.tiff').is_file():
+                raise ValueError('DMG is missing its Finder layout or background')
             subprocess.run(['codesign', '--verify', '--deep', '--strict', str(mounted_app)], check=True)
             retrying()(['xcrun', 'stapler', 'validate', str(mounted_app)], check=True)
             retrying()(['spctl', '--assess', '--type', 'execute', '--verbose=2', str(mounted_app)], check=True)
