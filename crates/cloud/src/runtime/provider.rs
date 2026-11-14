@@ -176,6 +176,12 @@ impl AllocationProvider for RuntimeProvider {
             .await?;
         self.startup_timings
             .measure("initialBootstrapProofValidation", async {
+                if crate::managed_bases::bootstrap::Request::loader_not_ready(
+                    result.exit_code,
+                    &result.stdout,
+                ) {
+                    return Ok(None);
+                }
                 if result.exit_code != 0 || result.stdout.len() > 65536 {
                     tracing::warn!(
                         provider = self.provider.id().as_str(),
@@ -346,6 +352,12 @@ impl RetainedProvider for RuntimeProvider {
             .provider
             .execute(&request.source_machine_id, &request.command()?)
             .await?;
+        if crate::managed_bases::bootstrap::Request::loader_not_ready(
+            result.exit_code,
+            &result.stdout,
+        ) {
+            return Ok(false);
+        }
         if result.exit_code != 0 || result.stdout.len() > 65536 {
             return Err(ProviderError::Rejected);
         }

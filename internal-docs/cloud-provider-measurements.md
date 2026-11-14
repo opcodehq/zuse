@@ -260,10 +260,14 @@ answers 1.6 s after resume, disk kept). Operator record:
 | Repository sync + environment | 19.7 s |
 | **Request → ready** | **31.4 s** |
 
-One allocation attempt was retried: the first post-hydration start on a disk
-still hydrating was rejected by the fresh-boot helper, and the next attempt
-2 s later passed (≈3.5 s lost). The worker now logs the helper's rejection
-code so the cause can be pinned down.
+One allocation attempt was retried (≈3.5 s lost). Cause, found with a probe
+sandbox: for about 10 s after a Boat create, `/usr/local` and `/usr/local/lib`
+show the provider's uid 1000, so the fresh-boot loader refuses its unsafe
+ancestor path; afterwards they are root-owned and the start passes. The loader
+now reports `fresh_boot_loader_path_unsafe` and the worker treats it as "not
+ready yet" instead of a rejected attempt. A second create
+(`workspace_28ddeaaa96f74d7d894cafbf655835ac`, 13:33Z, before that fix) hit
+it twice and took 58.6 s to ready (enrollment 18.0 s, repository 36.3 s).
 
 Node as the task user on that computer: `v24.22.3`; `~/.local/bin` empty (plain
 base, no user image).
@@ -278,6 +282,19 @@ base, no user image).
 "Reply done" includes the model's answer. A cold wake restores the disk
 lazily and restarts the runtime (expected; no RAM preservation). Delete →
 `deleted` took 12.9 s and the sandbox returned 404 afterwards.
+
+**Machine image on Boat** (owner recipe `npm i -g bun`, "Rebuild now" at
+13:11Z; it queued behind the account's Prized build, one build per account at
+a time). Build `uimg_ff8857c2a90847768f1b1f40b35d78e5`: started 13:35:40,
+ready 13:37:04 (**84 s**: builder, setup, sanitize, saved snapshot, hydrated
+verifier with the post-hydration first start, publish). Image
+`ui-s-ff8857c2a90847768f1b1f40b35d78e5`, version (Boat `snapshotId`)
+`a809c0a9-1a7b-4de6-93ac-1f43a0a6cb5f`. A new Boat computer
+(`workspace_08a87e12aefa48e18202312a804619e0`, 13:37:52Z) recorded
+`request_config.rustMachineImage.imageId` = that image and was ready in
+35.0 s (allocated 1.2 s, enrolled +13.6 s, repository +20.1 s). On it,
+`~/.local/bin/bun -> ../lib/node_modules/bun/bin/bun.exe`, `bun --version`
+1.4.4, node v24.22.3 (the plain base's `~/.local/bin` is empty).
 
 Compared with Boxd: Boat creates in about the same time but wakes cold in
 ≈17 s to a running turn once the 10-minute warm window has passed, versus

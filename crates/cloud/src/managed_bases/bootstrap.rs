@@ -217,6 +217,17 @@ impl Request {
             quote(&body)
         ))
     }
+    /// The loader refused because an ancestor of the helper is not yet
+    /// root-owned. A fresh Boat restore shows the provider's ownership on
+    /// /usr/local for a few seconds; the helper never ran, so this is "not
+    /// ready yet", bounded by the caller's own deadline, not a rejection.
+    pub fn loader_not_ready(exit_code: i32, stdout: &[u8]) -> bool {
+        exit_code == 1
+            && stdout.len() <= 256
+            && serde_json::from_slice::<Value>(stdout).is_ok_and(|v| {
+                v["status"] == "rejected" && v["code"] == "fresh_boot_loader_path_unsafe"
+            })
+    }
     /// None is a bounded pending observation, never authorization to upload a grant.
     pub fn response(&self, value: &Value) -> Result<Option<Value>, ProviderError> {
         if !self.valid() {
@@ -332,6 +343,21 @@ mod tests {
         let output = child.wait_with_output().unwrap();
         assert!(output.status.success());
         String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    }
+    #[test]
+    fn only_an_unsafe_ancestor_refusal_from_the_loader_means_not_ready() {
+        let unsafe_path =
+            br#"{"version": 1, "status": "rejected", "code": "fresh_boot_loader_path_unsafe"}"#;
+        assert!(Request::loader_not_ready(1, unsafe_path));
+        assert!(!Request::loader_not_ready(0, unsafe_path));
+        for other in [
+            &br#"{"version": 1, "status": "rejected", "code": "fresh_boot_loader_helper_digest_mismatch"}"#[..],
+            br#"{"version": 1, "status": "rejected", "code": "fresh_boot_request_invalid"}"#,
+            b"Traceback (most recent call last):",
+            b"",
+        ] {
+            assert!(!Request::loader_not_ready(1, other));
+        }
     }
     #[test]
     fn runtime_update_helper_pin_is_optional_and_unchanged_when_absent() {

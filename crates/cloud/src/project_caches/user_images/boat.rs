@@ -536,6 +536,9 @@ impl UserImageBackend for BoatUserImages {
                     .exec(&id, &request.command().map_err(uncertain_here())?)
                     .await
                     .map_err(uncertain_here())?;
+                if BootRequest::loader_not_ready(result.exit_code, &result.stdout) {
+                    return Ok(Step::Pending(resources));
+                }
                 if result.exit_code != 0 || result.stdout.len() > 65536 {
                     return Self::failed("user_image_fresh_boot_rejected", None, resources);
                 }
