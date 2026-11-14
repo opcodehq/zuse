@@ -1065,7 +1065,11 @@ impl Render for ShortcutsPage {
                                     .child(self.general_header(&theme, cx))
                                     .child(
                                         widgets::section_stack()
-                                            .child(self.general_account.clone())
+                                            // The Zuse account card is cloud-only;
+                                            // leave no empty slot in local-only builds.
+                                            .when(zuse_viewport::cloud_gate::enabled(), |stack| {
+                                                stack.child(self.general_account.clone())
+                                            })
                                             .child(
                                                 widgets::group(&theme, "Import", "").child(
                                                     widgets::section_card(&theme).mt_0().child(

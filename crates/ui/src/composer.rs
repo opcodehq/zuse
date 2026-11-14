@@ -14007,7 +14007,10 @@ impl Render for Composer {
                             .child(attach)
                             .child(permission)
                             .children(plan_chip)
-                            .when(!self.side_chat, |el| el.child(plugins))
+                            .when(
+                                !self.side_chat && zuse_viewport::cloud_gate::enabled(),
+                                |el| el.child(plugins),
+                            )
                             .children(voice_track),
                     )
                     .child(

@@ -30,6 +30,18 @@ impl Section {
         Self::Shortcuts,
         Self::Archived,
     ];
+    /// Tabs this build shows. Cloud and Plugins need the Zuse account and
+    /// Remote access pairs other devices; local-only builds hide all three.
+    fn nav() -> Vec<Self> {
+        Self::NAV.into_iter().filter(|s| s.visible()).collect()
+    }
+    fn visible(self) -> bool {
+        match self {
+            Self::Cloud | Self::Plugins => crate::cloud_gate::enabled(),
+            Self::Devices => crate::cloud_gate::remote_enabled(),
+            _ => true,
+        }
+    }
     fn title(self, cx: &App) -> String {
         match self {
             Self::Cloud => tr(cx, msg::native::cloud_workspaces),
@@ -76,6 +88,11 @@ impl Section {
 }
 impl WorkspaceView {
     pub(super) fn select_settings_section(&mut self, section: Section, cx: &mut Context<Self>) {
+        let section = if section.visible() {
+            section
+        } else {
+            Section::General
+        };
         self.settings_scroll.set_offset(point(px(0.), px(0.)));
         if section != Section::Archived && self.project_archive.global {
             self.close_project_archives();
@@ -111,20 +128,19 @@ impl WorkspaceView {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let nav = Section::nav();
         match event.keystroke.key.as_str() {
             "up" => {
-                self.settings_nav_active =
-                    (self.settings_nav_active + Section::NAV.len() - 1) % Section::NAV.len()
+                self.settings_nav_active = (self.settings_nav_active + nav.len() - 1) % nav.len()
             }
-            "down" => {
-                self.settings_nav_active = (self.settings_nav_active + 1) % Section::NAV.len()
-            }
+            "down" => self.settings_nav_active = (self.settings_nav_active + 1) % nav.len(),
             "home" => self.settings_nav_active = 0,
-            "end" => self.settings_nav_active = Section::NAV.len() - 1,
+            "end" => self.settings_nav_active = nav.len() - 1,
             "enter" | "space" if !event.is_held => {}
             _ => return,
         }
-        self.select_settings_section(Section::NAV[self.settings_nav_active], cx);
+        self.settings_nav_active = self.settings_nav_active.min(nav.len() - 1);
+        self.select_settings_section(nav[self.settings_nav_active], cx);
         cx.stop_propagation();
     }
     fn shortcuts_settings(&self) -> AnyElement {
@@ -214,7 +230,7 @@ impl WorkspaceView {
             .px(px(if compact { 6. } else { 10. }))
             .py_3()
             .gap(px(2.))
-            .children(Section::NAV.into_iter().enumerate().map(|(index, item)| {
+            .children(Section::nav().into_iter().enumerate().map(|(index, item)| {
                 row()
                     .id(("settings-section", index))
                     .role(Role::Tab)
@@ -250,7 +266,9 @@ impl WorkspaceView {
         let content = match section {
             Section::General => column()
                 .gap_4()
-                .child(self.account_settings(cx))
+                .when(crate::cloud_gate::enabled(), |view| {
+                    view.child(self.account_settings(cx))
+                })
                 .child(self.language_settings(cx))
                 .child(self.appearance_settings(cx))
                 .child(self.completion_sound_settings(cx))

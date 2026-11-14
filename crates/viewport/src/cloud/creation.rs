@@ -382,13 +382,15 @@ impl WorkspaceView {
                     None,
                 ));
             }
-            choices.push((
-                "Cloud setup…".into(),
-                "cloud-dither",
-                Pick::ConfigureCloud,
-                false,
-                None,
-            ));
+            if crate::cloud_gate::enabled() {
+                choices.push((
+                    "Cloud setup…".into(),
+                    "cloud-dither",
+                    Pick::ConfigureCloud,
+                    false,
+                    None,
+                ));
+            }
         }
         choices
     }

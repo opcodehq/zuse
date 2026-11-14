@@ -180,6 +180,9 @@ impl PluginsCard {
         card
     }
     fn attach(&mut self, cx: &mut Context<Self>) {
+        if !zuse_viewport::cloud_gate::enabled() {
+            return;
+        }
         let Some(engine) = self.state.read(cx).engine().cloned() else {
             return;
         };
@@ -1739,6 +1742,11 @@ impl PluginsCard {
 impl Render for PluginsCard {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx).for_settings_surface();
+        // The Zuse account card (General settings, onboarding) and hosted
+        // plugins are cloud features; local-only builds render nothing.
+        if !zuse_viewport::cloud_gate::enabled() {
+            return div().into_any_element();
+        }
         if self.account_only {
             return self.render_account(&theme, window, cx);
         }

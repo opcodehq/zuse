@@ -720,7 +720,9 @@ impl Render for Onboarding {
                     card = card.child(div().mt_2().text_color(theme.text_muted).child(tr(cx, msg::native::local_plugin_definitions_will_be_backed_up_command_based_electron_plugins_are_no_37441bc7)));
                 }
                 card = card.child(div().mt_2().text_color(theme.text_muted).child(tr(cx, msg::native::imported_settings_replace_matching_gpui_preferences_other_gpui_preferences_stay_3e190ea2)));
-                card = card.child(div().mt_4().child(self.account.clone()));
+                if zuse_viewport::cloud_gate::enabled() {
+                    card = card.child(div().mt_4().child(self.account.clone()));
+                }
             }
             if let Some(error) = &self.error {
                 card = card.child(div().mt_3().text_color(theme.text).child(error.clone()));

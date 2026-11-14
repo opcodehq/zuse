@@ -110,7 +110,8 @@ impl SidebarControls {
         }
         self.owner = owner;
         self.properties = properties;
-        if self.owner.is_some()
+        if crate::cloud_gate::enabled()
+            && self.owner.is_some()
             && self.properties.available
             && (account_changed || self.subscribed.is_none())
             && !self.pending("plan")
@@ -226,7 +227,8 @@ impl SidebarControls {
         cx.notify();
     }
     fn account_action(&mut self, cx: &mut Context<Self>) {
-        if !self.properties.available
+        if !crate::cloud_gate::enabled()
+            || !self.properties.available
             || self.properties.account.is_none()
             || self
                 .properties
@@ -745,7 +747,8 @@ impl Render for SidebarControls {
             .items_center()
             .gap(px(2.))
             .when(
-                !(signed_in && self.subscribed.is_none() && self.plan_error.is_none()),
+                crate::cloud_gate::enabled()
+                    && !(signed_in && self.subscribed.is_none() && self.plan_error.is_none()),
                 |v| v.child(account),
             )
             .child(div().flex_1())

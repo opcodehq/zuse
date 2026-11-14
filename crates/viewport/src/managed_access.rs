@@ -24,7 +24,8 @@ impl WorkspaceView {
         self.managed_access.error = Some(message.to_owned());
     }
     pub(super) fn refresh_managed_access(&mut self) {
-        if !self.connected || self.managed_access.action.is_some() {
+        if !crate::cloud_gate::enabled() || !self.connected || self.managed_access.action.is_some()
+        {
             return;
         }
         let mut reads = vec![(Read::Host, methods::WATCH_MANAGED_HOST)];

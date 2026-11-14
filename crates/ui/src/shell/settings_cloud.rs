@@ -38,6 +38,8 @@ impl Shell {
     }
 
     fn set_usage_settings_compute(&mut self, compute: bool, cx: &mut Context<Self>) {
+        // Local-only builds have no Cloud compute tab to switch to.
+        let compute = compute && zuse_viewport::cloud_gate::enabled();
         if self.usage_settings_compute == compute {
             return;
         }
@@ -102,7 +104,9 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = Theme::of(cx).for_settings_surface();
-        let compute = self.usage_settings_compute;
+        // Local-only builds show model usage alone: no Cloud compute tab.
+        let cloud = zuse_viewport::cloud_gate::enabled();
+        let compute = cloud && self.usage_settings_compute;
         let tabs = div()
             .id("usage-settings-tabs")
             .role(gpui::Role::TabList)
@@ -126,11 +130,13 @@ impl Shell {
                 "Usage",
                 if compute {
                     "What your cloud computers used this cycle, by computer and by chat."
-                } else {
+                } else if cloud {
                     "Tokens and cost by model, provider and chat, from the agents you run here and in Cloud."
+                } else {
+                    "Tokens and cost by model, provider and chat, from the agents you run on this computer."
                 },
             ))
-            .child(tabs);
+            .when(cloud, |header| header.child(tabs));
         let body = if compute {
             let page = self.ensure_cloud_page(window, cx);
             page.update(cx, |page, cx| page.set_view(CloudView::Compute, cx));

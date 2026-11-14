@@ -494,7 +494,7 @@ impl Render for DevicesPage {
                                 .child(
                                     div().mt(px(20.)).flex().flex_col().gap(px(10.)).p(px(12.))
                                         .child(zuse_viewport::remote_access_style::frame("Remote access to this computer", "Choose how other Zuse apps and browsers can reach this computer.", None)
-                                            .child(zuse_viewport::settings_style::card().child(account_method).child(pairing.method)))
+                                            .child(zuse_viewport::settings_style::card().children(account_method).child(pairing.method)))
                                         .child(pairing.connect)
                                         .child(computers)
                                         .child(pairing.devices)

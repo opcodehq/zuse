@@ -91,6 +91,11 @@ impl ManagedAccessCard {
         card
     }
     fn attach(&mut self, cx: &mut Context<Self>) {
+        // Account-linked computers need a Zuse account, which local-only
+        // builds never use.
+        if !zuse_viewport::cloud_gate::enabled() {
+            return;
+        }
         let Some(engine) = self.engine.clone() else {
             return;
         };
@@ -355,8 +360,12 @@ impl ManagedAccessCard {
         }
         true
     }
-    pub(super) fn method(&self, cx: &mut Context<Self>) -> AnyElement {
+    /// The account-backed "Zuse Serve" access row. Hidden in local-only builds.
+    pub(super) fn method(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         use zuse_viewport::remote_access_style as r;
+        if !zuse_viewport::cloud_gate::enabled() {
+            return None;
+        }
         let configured = self.host["configured"] == true;
         let online = self.host["tunnelRunning"] == true;
         let description = if configured && online {
@@ -400,6 +409,7 @@ impl ManagedAccessCard {
                 })),
             )
             .into_any_element()
+            .into()
     }
     pub(super) fn computers(&self, add: AnyElement, cx: &mut Context<Self>) -> AnyElement {
         use zuse_viewport::{remote_access_style as r, settings_style as s};

@@ -266,6 +266,11 @@ impl WorkspaceView {
             methods::WATCH_DEVICES,
             methods::LIST_REPOS,
         ] {
+            // Local-only builds never read the cloud account, so every cloud
+            // surface that keys off it stays signed out and hidden.
+            if method == methods::CLOUD_ACCOUNT_STATUS && !crate::cloud_gate::enabled() {
+                continue;
+            }
             self.call(
                 method,
                 if matches!(method, methods::WATCH_CHATS | methods::WATCH_SESSIONS) {
