@@ -254,7 +254,9 @@ impl Store {
         if !control.accounts.contains(&access.owner_id) {
             return Err(ApiError::forbidden("cloud_environment_writes_disabled"));
         }
-        let mut tx = self.pool.begin().await?;
+        // The store's pool is read-only; writes go through the computers pool,
+        // like saving the recipe does.
+        let mut tx = control.pool.begin().await?;
         if !crate::project_caches::user_images::worker::schema_ready_tx(&mut tx).await? {
             return Err(ApiError::unavailable("machine_image_builder_unavailable"));
         }

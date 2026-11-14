@@ -87,11 +87,21 @@ pub fn needs_wait(data: &Path, boot: &CloudRuntimeBootstrap) -> Result<bool> {
     );
     Ok(current.state != "ready")
 }
+/// The installed runtime path for the base this runtime runs from. A home
+/// directory base (Prized, no root) has no `/usr/local/bin` copy.
+fn runtime_binary(executable: Option<&Path>) -> &'static str {
+    if executable.is_some_and(|exe| exe.starts_with("/home/prized/.zuse/")) {
+        "/home/prized/.zuse/bin/zuse-cloud-runtime"
+    } else {
+        "/usr/local/bin/zuse-cloud-runtime"
+    }
+}
 pub fn instruction(data: &Path, boot: &CloudRuntimeBootstrap) -> Result<String> {
     let binding = status(boot, "pending")?;
     let quote = |s: &str| format!("'{}'", s.replace('\'', "'\\''"));
     Ok(format!(
-        "\n\n[Workspace preparation]\nYour project files, branch and required setup are still being prepared. You may reason from the user's request now. Before reading, searching, changing or running project files, run `/usr/local/bin/zuse-cloud-runtime --data-dir {} --workspace-id {} --generation {} --storage-incarnation-id {} workspace-wait`. Continue only if it succeeds, then read the applicable AGENTS.md and other project instructions. Missing files during preparation are not evidence that they should be created. If preparation fails, explain that failure and wait for recovery; do not retry the user's task independently.\n",
+        "\n\n[Workspace preparation]\nYour project files, branch and required setup are still being prepared. You may reason from the user's request now. Before reading, searching, changing or running project files, run `{} --data-dir {} --workspace-id {} --generation {} --storage-incarnation-id {} workspace-wait`. Continue only if it succeeds, then read the applicable AGENTS.md and other project instructions. Missing files during preparation are not evidence that they should be created. If preparation fails, explain that failure and wait for recovery; do not retry the user's task independently.\n",
+        runtime_binary(std::env::current_exe().ok().as_deref()),
         quote(&data.to_string_lossy()),
         quote(&binding.workspace),
         binding.generation,
@@ -168,5 +178,17 @@ mod tests {
             .contains("failed")
         );
         assert!(!instruction(root.path(), &boot).unwrap().contains("secret"));
+    }
+    #[test]
+    fn instruction_names_the_runtime_of_its_base() {
+        assert_eq!(
+            runtime_binary(Some(Path::new("/home/prized/.zuse/bin/zuse-cloud-runtime"))),
+            "/home/prized/.zuse/bin/zuse-cloud-runtime"
+        );
+        assert_eq!(
+            runtime_binary(Some(Path::new("/usr/local/bin/zuse-cloud-runtime"))),
+            "/usr/local/bin/zuse-cloud-runtime"
+        );
+        assert_eq!(runtime_binary(None), "/usr/local/bin/zuse-cloud-runtime");
     }
 }

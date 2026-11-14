@@ -458,11 +458,13 @@ impl RuntimeControl {
             None => return Err(ApiError::conflict("cloud_project_not_ready")),
         };
         // The account's user image (built from its setup script) replaces the
-        // managed base snapshot when one is ready on a still-verified base.
+        // managed base snapshot when one is ready on a still-verified base. A
+        // staging-pinned owner gets an image only when it was built on exactly
+        // the pinned base, so the pin still decides the base.
+        let pinned =
+            candidate_pin.is_some() || !build["settings"]["managedCandidateSha256"].is_null();
         let (build, user_image) = if self.authority.is_some()
-            && candidate_pin.is_none()
             && build["settings"]["managedReleaseId"].is_string()
-            && build["settings"]["managedCandidateSha256"].is_null()
             && self.user_image_control.available().await?
         {
             let size = body.size_id.as_deref().unwrap_or("default");
@@ -472,6 +474,7 @@ impl RuntimeControl {
                 owner,
                 &body.provider_id,
                 &build,
+                pinned,
                 |base| {
                     crate::managed_bases::source_from_locked_records(
                         std::slice::from_ref(base),
