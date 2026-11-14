@@ -188,6 +188,33 @@ Boat may take minutes to save a live source; the driver waits for the saved arti
 itself to become ready. Boxd snapshots capture running machines and also complete
 asynchronously. No task credentials are installed on either builder.
 
+## Base tools
+
+`managed-base-install.sh` gives every root-layout base (Boxd, Boat, Daytona, E2B)
+git, gh, ripgrep, python3, build-essential, curl and **Node.js LTS** (`node`,
+`npm`, `npx`, `corepack`). Node comes from the official nodejs.org Linux x64
+tarball, pinned by `node_version`/`node_sha256`; the digest is copied from that
+release's signed `SHASUMS256.txt` and checked before unpacking. To move to a new
+Node release, update both values together from the new `SHASUMS256.txt` (verify
+its signature with the [Node.js release keys](https://github.com/nodejs/release-keys)).
+The 24.x line is used because later lines no longer bundle corepack. Node is
+unpacked into `/usr/local`, so it is on every PATH and root's npm prefix is
+`/usr/local`.
+
+Global npm installs:
+
+- `npm i -g X` as `zuse` (machine setup scripts, agents) installs under
+  `~/.local`, set by `/home/zuse/.npmrc`. No sudo is needed. `~/.local/bin` is
+  first on the setup script PATH, the runtime's PATH (the `launch-rust-runtime`
+  wrapper), login shells (`/etc/profile.d/zuse-user-bin.sh`) and, from the runtime
+  release after this change, repository environment scripts.
+- `sudo npm i -g X` uses root's `/usr/local` prefix and lands in `/usr/local/bin`.
+  `corepack enable` writes next to `node`, so it needs sudo too.
+
+Certification requires `nodeAvailable` on root-layout bases: the task user must be
+able to run `node`, `npm`, `npx` and `corepack`. The report records `nodeVersion`
+as a trait. Prized home bases record the trait without requiring Node.
+
 
 ## Resident runtime supervision
 

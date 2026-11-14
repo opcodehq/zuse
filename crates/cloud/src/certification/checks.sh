@@ -56,9 +56,12 @@ fresh)
   # Reported, not required: bases built before the helper stay certifiable.
   runtime_update=$(ok test -f /usr/local/libexec/zuse/runtime-update.py -a -f /etc/systemd/system/zuse-runtime-update.path \
     -a -f /etc/systemd/system/zuse-runtime-update.service -a -s /usr/local/share/zuse/runtime-release-signing.pub)
-  printf '{"runtimeSha256":"%s","runtimeVersion":"%s","claudeAnswers":%s,"codexInitializeMs":%s,"git":%s,"sudo":%s,"sshd":%s,"taskUser":%s,"cpus":%s,"runtimeUpdateInstalled":%s}\n' \
+  # Node.js LTS with its package tools, as the task user sees them.
+  node_ok=$(ok as_task sh -c 'node --version && npm --version && npx --version && corepack --version')
+  node_version=$(as_task node --version 2>/dev/null | tr -cd 'v0-9.')
+  printf '{"runtimeSha256":"%s","runtimeVersion":"%s","claudeAnswers":%s,"codexInitializeMs":%s,"git":%s,"node":%s,"nodeVersion":"%s","sudo":%s,"sshd":%s,"taskUser":%s,"cpus":%s,"runtimeUpdateInstalled":%s}\n' \
     "$runtime_sha" "$runtime_version" "$claude_ok" "$codex_ms" \
-    "$(ok git --version)" "$(ok as_task sudo -n true)" "$(ok test -x /usr/sbin/sshd)" "$(ok id zuse)" "$(nproc)" "$runtime_update"
+    "$(ok git --version)" "$node_ok" "$node_version" "$(ok as_task sudo -n true)" "$(ok test -x /usr/sbin/sshd)" "$(ok id zuse)" "$(nproc)" "$runtime_update"
   ;;
 before)
   mkdir -p "$STATE"
