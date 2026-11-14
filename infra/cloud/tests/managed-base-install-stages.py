@@ -53,7 +53,12 @@ class NodeRuntime(unittest.TestCase):
   self.assertRegex(digest,r'^[0-9a-f]{64}$')
   self.assertIn('https://nodejs.org/dist/v$node_version/node-v$node_version-linux-x64.tar.xz',self.source)
   check=self.source.index('sha256sum -c');self.assertLess(check,self.source.index('tar -xJf'))
-  self.assertLess(self.source.index('tar -xJf'),self.source.index('cp -a "$node_tree/bin/." /usr/local/bin/'))
+  copy=self.source.index('cp -a "$node_tree/bin/." /usr/local/bin/')
+  self.assertLess(self.source.index('tar -xJf'),copy)
+  # Provider images may link node elsewhere; entries are replaced, never written through.
+  self.assertLess(self.source.index('rm -rf -- /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack'),copy)
+  self.assertIn('[[ -f /usr/local/bin/node && ! -L /usr/local/bin/node','\n'.join(self.source.splitlines()))
+  self.assertIn('npm prefix -g)" == /usr/local ]]',self.source)
   self.assertNotRegex(self.source,r'apt-get install[^\n]*\bnodejs\b')
   for tool in ('npm','npx','corepack'):self.assertIn(tool,self.source.split('for tool in ',1)[1].split(';',1)[0])
  def test_task_user_global_installs_need_no_sudo_and_are_on_path(self):
@@ -62,4 +67,8 @@ class NodeRuntime(unittest.TestCase):
   wrapper=self.source.split("cat > /usr/local/lib/zuse/launch-rust-runtime <<'EOF'\n",1)[1].split('\nEOF',1)[0]
   self.assertIn('export PATH="/home/zuse/.local/bin:',wrapper)
   self.assertIn('/etc/profile.d/zuse-user-bin.sh',self.source)
+  # The task user itself must run node with the setup PATH, not just root.
+  check=self.source.index('node_user_check="$(sudo -n -u zuse')
+  self.assertLess(self.source.index('/home/zuse/.npmrc'),check)
+  self.assertIn('== "v$node_version"$\'\\n\'/home/zuse/.local ]]',self.source)
 if __name__=='__main__':unittest.main()
