@@ -2475,24 +2475,36 @@ impl Render for PullRequestsPage {
                 "pr-filter-all-states",
             ),
         ];
-        let selected_filter = filters
-            .iter()
-            .position(|(filter, _, _)| *filter == self.filter)
-            .unwrap_or(0);
-        let tabs = catalog_ui::segmented_tabs(
-            &theme,
-            "pr-filter",
-            &filters.map(|(_, label, _)| (label, None)),
-            selected_filter,
-            |index, tab| {
-                let (filter, _, id) = filters[index];
-                tab.debug_selector(move || id.into())
+        let tabs = div()
+            .id("pr-filter-tray")
+            .role(gpui::Role::TabList)
+            .aria_label(tr(cx, msg::native::pull_requests_to_show))
+            .flex()
+            .items_center()
+            .gap(px(2.0))
+            .children(filters.into_iter().map(|(filter, label, id)| {
+                let selected = self.filter == filter;
+                crate::surface_chrome::workspace_tab(id, selected, &theme)
+                    .debug_selector(move || id.into())
+                    .role(gpui::Role::Tab)
+                    .aria_selected(selected)
+                    .tab_index(0)
+                    .h(px(24.0))
+                    .px(px(10.0))
+                    .flex()
+                    .items_center()
+                    .text_size(crate::typography::text_xs())
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .text_color(if selected {
+                        theme.text_strong
+                    } else {
+                        theme.text_muted
+                    })
+                    .cursor_pointer()
+                    .focus_visible(|style| style.border_2().border_color(theme.accent))
+                    .child(label)
                     .on_click(cx.listener(move |page, _, _, cx| page.select_filter(filter, cx)))
-            },
-        )
-        .id("pr-filter-tray")
-        .role(gpui::Role::TabList)
-        .aria_label(tr(cx, msg::native::pull_requests_to_show));
+            }));
         let search = catalog_ui::search_field(
             &theme,
             Some(PR_SEARCH_WIDTH),
@@ -4657,6 +4669,27 @@ mod tests {
         });
         cx.run_until_parked();
         assert_eq!(*calls.lock().unwrap(), [methods::LIST_CHANGE_REQUEST_PAGE]);
+    }
+
+    #[gpui::test]
+    fn pull_request_filter_tabs_switch_selection(cx: &mut gpui::TestAppContext) {
+        fixture::init(cx);
+        let (page, cx) = cx.add_window_view(|_, cx| {
+            let state = cx.new(|_| AppState::new());
+            PullRequestsPage::new(state, cx)
+        });
+        cx.simulate_resize(gpui::size(px(900.0), px(800.0)));
+        cx.run_until_parked();
+        for (selector, filter) in [
+            ("pr-filter-merged", ChangeRequestFilter::Merged),
+            ("pr-filter-all-states", ChangeRequestFilter::AllStates),
+            ("pr-filter-all", ChangeRequestFilter::All),
+        ] {
+            let bounds = cx.debug_bounds(selector).unwrap();
+            cx.simulate_click(bounds.center(), gpui::Modifiers::default());
+            cx.run_until_parked();
+            page.read_with(cx, |page, _| assert_eq!(page.filter, filter));
+        }
     }
 
     #[gpui::test]

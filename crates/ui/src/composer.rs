@@ -3319,6 +3319,10 @@ impl ComposerInput {
         }
     }
 
+    pub(crate) fn move_cursor_to_start(&mut self, cx: &mut Context<Self>) {
+        self.move_to(0, cx);
+    }
+
     fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {
         self.cancel_dictation();
         self.last_edit = None;

@@ -1003,7 +1003,8 @@ impl PullRequestDetailPage {
         let long = detail.body.len() > DESCRIPTION_LONG_BYTES
             || detail.body.lines().count() > DESCRIPTION_LONG_LINES;
         let clamped = long && !self.description_expanded;
-        let description = (!collapsed).then(|| {
+        let editing_description = self.edit_mode == Some(EditMode::Details);
+        let description = (!collapsed && !editing_description).then(|| {
             div()
                 .flex()
                 .flex_col()
@@ -1241,7 +1242,41 @@ impl PullRequestDetailPage {
             .child(header)
             .child(properties)
             .child(section_gap())
-            .child(description_toggle)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(description_toggle)
+                    .when(!editing_description, |el| {
+                        el.child(
+                            action("pr-edit-details", "Edit title and description", theme)
+                                .min_h(px(24.0))
+                                .mr(px(8.0))
+                                .on_click(cx.listener(|page, _, window, cx| {
+                                    if let Some(detail) = &page.detail {
+                                        let (title, body) =
+                                            (detail.title.clone(), detail.body.clone());
+                                        page.edit_title
+                                            .update(cx, |input, cx| input.set_text(&title, cx));
+                                        page.edit_body.update(cx, |input, cx| {
+                                            input.set_text(&body, cx);
+                                            input.move_cursor_to_start(cx);
+                                        });
+                                        page.edit_mode = Some(EditMode::Details);
+                                        page.description_collapsed = false;
+                                        page.update_notice = None;
+                                        window
+                                            .focus(&page.edit_title.read(cx).focus_handle(cx), cx);
+                                        cx.notify();
+                                    }
+                                })),
+                        )
+                    }),
+            )
+            .when(editing_description && !collapsed, |el| {
+                el.children(self.editor(theme, cx))
+            })
             .children(description)
             .child(div().h(px(24.0)).flex_none())
             .child(checks_toggle)

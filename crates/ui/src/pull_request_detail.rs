@@ -790,11 +790,16 @@ impl PullRequestDetailPage {
             more_open: false,
             edit_mode: None,
             edit_title: cx.new(|cx| {
-                crate::composer::ComposerInput::new("Pull request title", cx).with_tab_stop()
+                crate::composer::ComposerInput::new("Pull request title", cx)
+                    .with_text_metrics(13.0, 20.0)
+                    .with_single_line()
+                    .with_tab_stop()
             }),
             edit_body: cx.new(|cx| {
                 crate::composer::ComposerInput::new("Description", cx)
+                    .with_text_metrics(13.0, 20.0)
                     .with_viewport_height(160.0)
+                    .with_enter_newline()
                     .with_tab_stop()
             }),
             edit_reviewers: cx.new(|cx| {
@@ -1175,30 +1180,6 @@ impl PullRequestDetailPage {
                     .child(crate::popover::menu_separator())
                     .when(has_detail, |el| {
                         el.child(
-                            row(
-                                "pr-edit-details",
-                                crate::icons::DOCUMENT,
-                                "Edit title and description",
-                            )
-                            .on_click(cx.listener(
-                                |page, _, window, cx| {
-                                    if let Some(detail) = &page.detail {
-                                        let (title, body) =
-                                            (detail.title.clone(), detail.body.clone());
-                                        page.edit_title
-                                            .update(cx, |input, cx| input.set_text(&title, cx));
-                                        page.edit_body
-                                            .update(cx, |input, cx| input.set_text(&body, cx));
-                                        page.edit_mode = Some(EditMode::Details);
-                                        page.more_open = false;
-                                        page.select_tab(Tab::Summary, cx);
-                                        window
-                                            .focus(&page.edit_title.read(cx).focus_handle(cx), cx);
-                                    }
-                                },
-                            )),
-                        )
-                        .child(
                             row("pr-add-reviewers", crate::icons::EYE, "Add reviewers").on_click(
                                 cx.listener(|page, _, window, cx| {
                                     page.edit_reviewers
@@ -2141,7 +2122,7 @@ impl PullRequestDetailPage {
                     crate::surface_chrome::input()
                         .min_w_0()
                         .when(label == "Description", |el| {
-                            el.h(px(140.0)).items_start().py(px(8.0))
+                            el.h(px(176.0)).items_start().py(px(8.0))
                         })
                         .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
                             cx.stop_propagation();
@@ -2156,16 +2137,17 @@ impl PullRequestDetailPage {
                 .debug_selector(|| "pr-editor".into())
                 .mx(px(8.0))
                 .mb(px(16.0))
-                .p(px(12.0))
+                .p(px(14.0))
                 .rounded(px(8.0))
                 .border_1()
                 .border_color(theme.border)
                 .bg(theme.surface_raised)
                 .flex()
                 .flex_col()
-                .gap(px(12.0))
+                .gap(px(14.0))
                 .child(
                     div()
+                        .text_size(crate::typography::text_sm())
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .child(match mode {
                             EditMode::Details => "Edit pull request",
@@ -2191,22 +2173,30 @@ impl PullRequestDetailPage {
                             action("pr-edit-cancel", "Cancel", theme).on_click(cx.listener(
                                 |page, _, _, cx| {
                                     page.edit_mode = None;
+                                    page.update_notice = None;
                                     cx.notify();
                                 },
                             )),
                         )
                         .child(
-                            action(
-                                "pr-edit-save",
-                                if self.updating_pr {
+                            widgets::action_button(theme, widgets::ActionTone::Solid)
+                                .id("pr-edit-save")
+                                .debug_selector(|| "pr-edit-save".into())
+                                .role(gpui::Role::Button)
+                                .aria_label(if self.updating_pr {
                                     "Saving…"
                                 } else {
                                     "Save"
-                                },
-                                theme,
-                            )
-                            .on_click(cx.listener(
-                                move |page, _, _, cx| {
+                                })
+                                .tab_index(if self.updating_pr { -1 } else { 0 })
+                                .px(px(16.0))
+                                .when(self.updating_pr, |el| el.opacity(0.6).cursor_default())
+                                .child(if self.updating_pr {
+                                    "Saving…"
+                                } else {
+                                    "Save"
+                                })
+                                .on_click(cx.listener(move |page, _, _, cx| {
                                     if page.updating_pr {
                                         return;
                                     }
@@ -2247,8 +2237,7 @@ impl PullRequestDetailPage {
                                         }
                                     };
                                     page.update_pr(update, cx);
-                                },
-                            )),
+                                })),
                         ),
                 )
                 .into_any_element(),
@@ -2733,11 +2722,13 @@ fn action(id: &'static str, label: &'static str, theme: &Theme) -> gpui::Statefu
             | "pr-comment-add"
             | "pr-review-open"
             | "pr-comment-open"
+            | "pr-edit-details"
     );
     let glyph = match id {
         "pr-split" => Some(crate::icons::SPLIT_COLUMNS),
         "pr-fold-all" => Some(crate::icons::FOLD_VERTICAL),
         "pr-more" => Some(crate::icons::LIST),
+        "pr-edit-details" => Some(crate::icons::PEN),
         "pr-copy-patch" | "pr-copy-path" => Some(crate::icons::COPY),
         "pr-retry" | "pr-retry-diff" => Some(crate::icons::REFRESH),
         "pr-open-github" | "pr-review-open" | "pr-comment-open" => {
@@ -2935,7 +2926,9 @@ impl Render for PullRequestDetailPage {
                 });
                 match self.tab {
                     Tab::Summary => {
-                        column = column.children(self.editor(&theme, cx));
+                        if self.edit_mode == Some(EditMode::Reviewers) {
+                            column = column.children(self.editor(&theme, cx));
+                        }
                         column = column.child(self.summary_body(detail, &theme, window, cx));
                     }
                     Tab::Code => {
@@ -4787,14 +4780,41 @@ mod tests {
         click(cx, "pr-menu-timeline");
         page.read_with(cx, |page, _| assert!(page.tab == Tab::Timeline));
         assert!(cx.debug_bounds("pr-timeline").is_none());
-        click(cx, "pr-more");
+        page.update(cx, |page, cx| page.select_tab(Tab::Summary, cx));
+        cx.run_until_parked();
+        let heading = cx.debug_bounds("pr-description-toggle").unwrap();
+        let edit = cx.debug_bounds("pr-edit-details").unwrap();
+        let overview = cx.debug_bounds("pr-overview").unwrap();
+        assert!((f32::from(heading.center().y - edit.center().y)).abs() < 0.5);
+        assert!((f32::from(overview.right() - edit.right()) - 8.0).abs() < 0.5);
+        click(cx, "pr-description-toggle");
+        assert!(cx.debug_bounds("pr-description").is_none());
+        let long_description = (0..30)
+            .map(|index| format!("Description line {index}\n"))
+            .collect::<String>();
+        page.update(cx, |page, cx| {
+            page.detail.as_mut().unwrap().body = long_description.clone();
+            cx.notify();
+        });
+        cx.run_until_parked();
         click(cx, "pr-edit-details");
         assert!(cx.debug_bounds("pr-editor").is_some());
+        assert!(cx.debug_bounds("pr-description").is_none());
         page.read_with(cx, |page, cx| {
             assert!(page.tab == Tab::Summary);
-            assert_eq!(page.edit_body.read(cx).text(), "A description");
+            assert_eq!(page.edit_body.read(cx).text(), long_description);
+            assert_eq!(page.edit_body.read(cx).cursor_offset(), 0);
+            assert!(!page.description_collapsed);
+        });
+        click(cx, "pr-description-toggle");
+        assert!(cx.debug_bounds("pr-editor").is_none());
+        click(cx, "pr-description-toggle");
+        assert!(cx.debug_bounds("pr-editor").is_some());
+        page.read_with(cx, |page, cx| {
+            assert_eq!(page.edit_body.read(cx).text(), long_description);
         });
         click(cx, "pr-edit-cancel");
+        assert!(cx.debug_bounds("pr-description").is_some());
         click(cx, "pr-more");
         click(cx, "pr-add-reviewers");
         assert!(cx.debug_bounds("pr-editor").is_some());
