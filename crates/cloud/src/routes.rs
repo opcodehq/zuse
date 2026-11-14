@@ -302,6 +302,10 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
         )
         .route("/v1/cloud/machine/rebuild", post(rebuild_machine))
         .route(
+            "/v1/cloud/machine/images/{image}/repositories/{project}/source-credential",
+            post(user_image_source_credential),
+        )
+        .route(
             "/v1/cloud/projects/{id}/environment",
             get(project_environment)
                 .put(save_project_environment)
@@ -1297,6 +1301,34 @@ async fn project_preparation_source_credential(
         .project_preparation_source_credential(
             &id,
             &request,
+            proof,
+            chrono::Utc::now().timestamp_millis(),
+        )
+        .await?;
+    Ok((
+        [(axum::http::header::CACHE_CONTROL, "no-store")],
+        Json(grant),
+    ))
+}
+/// Worker-only: a fetch token for one private repository of a user image in
+/// its repository phase. The bearer is a short-lived worker proof, not a user.
+async fn user_image_source_credential(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((image, project)): Path<(String, String)>,
+) -> Result<impl IntoResponse, ApiError> {
+    let proof = headers
+        .get("authorization")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|h| h.strip_prefix("Bearer "))
+        .ok_or_else(|| ApiError::unauthorized("user_image_source_scope_denied"))?;
+    let grant = state
+        .runtime
+        .as_ref()
+        .ok_or_else(|| ApiError::unavailable("user_image_source_authority_unavailable"))?
+        .user_image_source_credential(
+            &image,
+            &project,
             proof,
             chrono::Utc::now().timestamp_millis(),
         )

@@ -1,9 +1,11 @@
 //! When to build and when to delete. Recipe saves and "Rebuild now" queue a
 //! build directly. Every hour a staleness pass compares, for each recently
 //! active account, the inputs of its current ready image (setup script
-//! digest, managed base release, provider) with the current ones and queues
-//! one rebuild when they differ; identical inputs never rebuild, so a quiet
-//! account builds nothing. Inactive accounts are rebuilt lazily when they
+//! digest, managed base release, provider, repository set) with the current
+//! ones and queues one rebuild when they differ; identical inputs never
+//! rebuild, so a quiet account builds nothing. New commits alone don't
+//! rebuild (a new computer fetches the delta), until the baked commits are
+//! older than `repositories::MAX_AGE_MS`. Inactive accounts are rebuilt lazily when they
 //! start their next computer. A failed build keeps the previous image
 //! serving and is retried on later passes with exponential backoff, at most
 //! `MAX_FAILED_ATTEMPTS` times for the same inputs. Images no computer
@@ -25,6 +27,10 @@ pub const MAX_FAILED_ATTEMPTS: i64 = 3;
 const PASS_LIMIT: i64 = 200;
 
 const NEWEST_BASE: &str = "SELECT release_id FROM cloud_managed_bases WHERE provider=$1 AND state='verified' AND runtime_manifest ? 'initialRuntimeBootstrap' ORDER BY created_at DESC,release_id DESC LIMIT 1";
+
+/// Base release, script digest, repository set digest, built at, planned
+/// repository count of the newest ready image.
+type ReadyInputs = (Option<String>, String, Value, Option<i64>, i32);
 
 /// Why the account's image should be rebuilt now, if at all: its newest
 /// ready image was built from different inputs than the current script and
@@ -52,16 +58,28 @@ pub(crate) async fn stale_reason_tx(
     if busy {
         return Ok(None);
     }
-    let ready: Option<(Option<String>, String)> = sqlx::query_as("SELECT base_release_id,recipe_digest FROM cloud_machine_images WHERE owner_id=$1 AND provider=$2 AND state='ready' ORDER BY built_at DESC,image_id DESC LIMIT 1")
+    let ready: Option<ReadyInputs> = sqlx::query_as("SELECT base_release_id,recipe_digest,coalesce(plan->'identity'->'repositoriesDigest','null'::jsonb),built_at,coalesce(jsonb_array_length(plan->'repositories'),0) FROM cloud_machine_images WHERE owner_id=$1 AND provider=$2 AND state='ready' ORDER BY built_at DESC,image_id DESC LIMIT 1")
         .bind(owner)
         .bind(provider)
         .fetch_optional(&mut **tx)
         .await?;
+    // The repository set (not its commits) is an image input. Baked commits
+    // that have grown old rebuild too, so the fetch delta stays small.
+    let repositories = super::repositories::account_repositories_tx(tx, owner).await?;
+    let current_repositories = super::repositories::set_digest(&repositories);
     let reason = match &ready {
-        Some((base, built)) if base.as_deref() == Some(newest.as_str()) && built == digest => {
-            return Ok(None);
+        Some((base, built, built_repositories, built_at, planned))
+            if base.as_deref() == Some(newest.as_str()) && built == digest =>
+        {
+            let same_set = built_repositories.as_str() == current_repositories.as_deref();
+            let aged = *planned > 0
+                && built_at.is_some_and(|at| at + super::repositories::MAX_AGE_MS < now);
+            if same_set && !aged {
+                return Ok(None);
+            }
+            "refresh"
         }
-        Some((_, built)) if built == digest => "base",
+        Some((_, built, _, _, _)) if built == digest => "base",
         _ => "recipe",
     };
     let (failures, last): (i64, Option<i64>) = sqlx::query_as("SELECT count(*),max(updated_at) FROM cloud_machine_images WHERE owner_id=$1 AND provider=$2 AND base_release_id=$3 AND recipe_digest=$4 AND state='failed' AND created_at>coalesce((SELECT max(created_at) FROM cloud_machine_images WHERE owner_id=$1 AND provider=$2 AND reason='manual' AND state<>'superseded'),0)")
@@ -89,13 +107,23 @@ pub(crate) async fn rebuild_on_use_tx(
     digest: &str,
     now: i64,
 ) -> Result<bool, ApiError> {
-    if stale_reason_tx(tx, owner, provider, digest, now)
-        .await?
-        .is_none()
-    {
+    let Some(reason) = stale_reason_tx(tx, owner, provider, digest, now).await? else {
         return Ok(false);
-    }
-    enqueue_tx(tx, owner, "use", now, now).await
+    };
+    // A refresh may have the same identity as the ready image; only that
+    // reason builds it anyway.
+    enqueue_tx(
+        tx,
+        owner,
+        if reason == "refresh" {
+            "refresh"
+        } else {
+            "use"
+        },
+        now,
+        now,
+    )
+    .await
 }
 
 impl UserImageControl {

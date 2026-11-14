@@ -44,10 +44,13 @@ pub(super) fn plan(script: &str) -> BuildPlan {
             base_artifact_version: "3".into(),
             base_runtime_sha256: "a".repeat(64),
             recipe_digest: image_digest(&recipe).unwrap(),
+            repositories_digest: None,
         },
         setup_script: script.into(),
         setup_timeout_seconds: recipe.setup_timeout_seconds,
         initial_runtime_bootstrap: Some(bootstrap()),
+        repositories: vec![],
+        skipped_repositories: vec![],
     }
 }
 
@@ -228,6 +231,10 @@ pub(super) struct HostState {
     /// Fail the next call whose name matches, after applying its effect.
     pub lose_reply: Option<&'static str>,
     pub guest: Guest,
+    /// The guest's repository state: `baked`, `staged`, `skipped` by key.
+    pub repos: Value,
+    /// Unpacks the guest refuses before accepting one, per key.
+    pub unpack_failures: usize,
 }
 
 #[derive(Clone, Default)]
@@ -383,6 +390,61 @@ pub(super) fn guest_exec(
                 json!({"version":1,"error":"user_image_not_clean"})
             }
         }
+        "repos-status" => {
+            let mut status = state.repos.clone();
+            for key in ["baked", "staged", "skipped"] {
+                if !status[key].is_object() {
+                    status[key] = json!({});
+                }
+            }
+            status["version"] = json!(1);
+            status
+        }
+        "repos-stage" => {
+            let key = args[1].clone();
+            let skip = state.repos["skipped"][&key].clone();
+            let staged = json!({"sha256":args[2],"bytes":args[3].parse::<u64>().unwrap(),"chunkCount":args[4].parse::<u64>().unwrap(),"chunks":{}});
+            state.repos["staged"][&key] = staged.clone();
+            if !skip.is_null() {
+                state.repos["skipped"][&key] = skip;
+            }
+            let mut reply = staged;
+            reply["version"] = json!(1);
+            reply
+        }
+        "repos-unpack" => {
+            let key = args[1].clone();
+            let staged = state.repos["staged"][&key].clone();
+            let complete = staged["chunkCount"]
+                .as_u64()
+                .is_some_and(|count| (0..count).all(|n| staged["chunks"][n.to_string()].is_u64()));
+            if !complete {
+                json!({"version":1,"error":"user_image_repository_incomplete"})
+            } else if state.unpack_failures > 0 {
+                state.unpack_failures -= 1;
+                json!({"version":1,"error":"user_image_repository_checksum_mismatch"})
+            } else {
+                let baked =
+                    json!({"baked":true,"commit":args[3],"branch":args[2],"bytes":staged["bytes"]});
+                state.repos["baked"][&key] = baked.clone();
+                state.repos["staged"].as_object_mut().unwrap().remove(&key);
+                let mut reply = baked;
+                reply["version"] = json!(1);
+                reply
+            }
+        }
+        "repos-skip" => {
+            let key = args[1].clone();
+            let attempts = state.repos["skipped"][&key]["attempts"]
+                .as_u64()
+                .unwrap_or(0)
+                + 1;
+            let record = json!({"reason":args[2],"attempts":attempts,"final":args[3] == "1"});
+            state.repos["skipped"][&key] = record.clone();
+            let mut reply = record;
+            reply["version"] = json!(1);
+            reply
+        }
         other => panic!("unexpected helper command {other}"),
     };
     ok(reply)
@@ -457,6 +519,18 @@ impl ImageHost for FakeHost {
         let mut state = self.0.lock().unwrap();
         assert!(state.machines.contains_key(machine));
         assert!(!String::from_utf8_lossy(data).contains("secret-value"));
+        if let Some(rest) = path.strip_prefix("/var/tmp/zuse-repo-stage/") {
+            let (key, chunk) = rest.split_once("/chunk.").unwrap();
+            assert!(
+                state.repos["staged"][key].is_object(),
+                "staged before upload"
+            );
+            state.repos["staged"][key]["chunks"][chunk] = json!(data.len());
+            if Self::lost(&mut state, "upload") {
+                return Err(ProviderError::OutcomeUnknown);
+            }
+            return Ok(());
+        }
         state.uploads.push(path.into());
         Ok(())
     }
@@ -568,7 +642,11 @@ pub(super) async fn drive(
                 resources: v,
             }) => {
                 validate_resources(&v).unwrap();
-                assert_eq!(next_phase(&phase), Some(next.as_str()));
+                // The worker runs the repository phase between these two.
+                assert!(
+                    next_phase(&phase) == Some(next.as_str())
+                        || (phase == "setup" && next == "sanitize")
+                );
                 resources["provider"] = v;
                 if next == "complete" || next == "retired" {
                     return (next, resources, None);

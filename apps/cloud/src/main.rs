@@ -887,6 +887,13 @@ async fn main() -> Result<()> {
                     tracing::warn!(code = error.code, "User image builder unavailable")
                 }
             }
+            match runtime.configure_user_image_repositories() {
+                Ok(true) => tracing::info!("User image repositories enabled"),
+                Ok(false) => {}
+                Err(error) => {
+                    tracing::warn!(code = error.code, "User image repositories unavailable")
+                }
+            }
 
             for (provider, code) in registry.configuration_errors() {
                 tracing::warn!(

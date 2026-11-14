@@ -980,6 +980,21 @@ impl RuntimeControl {
         if codex_brokered {
             config["codexAuthMode"] = json!("broker-v1");
         }
+        // The machine image already holds this repository at a recent commit:
+        // the checkout starts from that copy and fetches only what changed,
+        // through the same authenticated fetch a clone uses.
+        if let Some(hit) = &user_image
+            && managed
+            && layout.is_none()
+            && config["rustRepositoryCheckout"]["fetchRemote"] == true
+            && let Some(baked) = project["repository_identity"]
+                .as_str()
+                .and_then(|identity| hit.repository(identity))
+        {
+            config["repositoryCache"] = json!("machine-image");
+            config["rustRepositoryCheckout"]["cachePath"] = json!(baked.path);
+            config["rustRepositoryCheckout"]["sourceCommit"] = json!(baked.commit);
+        }
         if let Some(layout) = layout {
             config["rustRepositoryCheckout"]["cachePath"] = layout["cachePath"].clone();
             config["rustRepositoryCheckout"]["repositoryUrl"] = project["repository_url"].clone();

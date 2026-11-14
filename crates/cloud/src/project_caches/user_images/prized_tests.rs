@@ -278,7 +278,11 @@ async fn drive(
                 resources: v,
             }) => {
                 validate_resources(&v).unwrap();
-                assert_eq!(next_phase(&phase), Some(next.as_str()));
+                // The worker runs the repository phase between these two.
+                assert!(
+                    next_phase(&phase) == Some(next.as_str())
+                        || (phase == "setup" && next == "sanitize")
+                );
                 resources["provider"] = v;
                 if next == "complete" || next == "retired" {
                     return (next, resources, None);

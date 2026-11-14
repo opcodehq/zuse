@@ -101,6 +101,29 @@ pub struct BoxdUserImages {
     host: Arc<dyn ImageHost>,
 }
 
+/// The builder for the repository step. Boxd runs exec and uploads as the
+/// same unprivileged user (`boxd`), who can `sudo -n`; uploads only land in a
+/// directory that user owns.
+struct BoxdGuest {
+    host: Arc<dyn ImageHost>,
+    machine: String,
+}
+#[async_trait::async_trait]
+impl super::repositories::BuilderGuest for BoxdGuest {
+    async fn exec(&self, command: &str) -> Result<ExecResult, ApiError> {
+        self.host
+            .exec(&self.machine, command)
+            .await
+            .map_err(uncertain_here())
+    }
+    async fn upload(&self, path: &str, data: &[u8]) -> Result<(), ApiError> {
+        self.host
+            .upload(&self.machine, path, data)
+            .await
+            .map_err(uncertain_here())
+    }
+}
+
 /// Map a provider failure to a retryable outcome, logging which call failed and
 /// how (variant only; provider errors carry no bodies or credentials).
 #[track_caller]
@@ -269,6 +292,16 @@ impl UserImageBackend for BoxdUserImages {
         Ok(snapshot
             .filter(|s| s.id == artifact && s.state == SnapshotState::Ready && s.version > 0)
             .map(|s| s.version.to_string()))
+    }
+
+    fn builder_guest(&self, build: &Build) -> Option<Arc<dyn super::repositories::BuilderGuest>> {
+        let machine = build.resources["provider"]["builderId"]
+            .as_str()?
+            .to_owned();
+        Some(Arc::new(BoxdGuest {
+            host: self.host.clone(),
+            machine,
+        }))
     }
 
     async fn step(&self, build: &Build, mode: StepMode) -> Result<Step, ApiError> {
