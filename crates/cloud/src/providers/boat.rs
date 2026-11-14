@@ -16,6 +16,29 @@ pub(crate) const RUNTIME_ANSWERS: &str = "/usr/local/bin/zuse-cloud-runtime --ve
 pub struct Boat {
     pub(super) rest: Rest,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SavedSnapshotState {
+    Saving,
+    Ready,
+    Failed,
+}
+/// A named, reusable disk image saved from a sandbox (Boat "saved snapshot").
+#[derive(Clone, Debug)]
+pub struct SavedSnapshot {
+    pub name: String,
+    pub state: SavedSnapshotState,
+    /// Boat's `snapshotId`; a new save under the same name gets a new one.
+    pub version: Option<String>,
+    pub source_machine_id: Option<String>,
+}
+#[derive(Clone, Debug)]
+pub struct Sandbox {
+    pub machine: Machine,
+    /// Boat restores disks lazily; `true` once every block has arrived.
+    pub hydrated: bool,
+    /// The `zuse-source-artifact` label it was created with.
+    pub source_artifact: Option<String>,
+}
 impl Boat {
     pub fn new(api_key: String) -> Result<Self, ProviderError> {
         Ok(Self {
@@ -65,6 +88,99 @@ impl Boat {
         text(&value["snapshot"], "name")
             .map(str::to_owned)
             .map_err(|_| ProviderError::OutcomeUnknown)
+    }
+    /// A saved snapshot by name. `version` is Boat's `snapshotId`, which
+    /// changes when a name is saved again, so it pins the exact disk.
+    pub async fn saved_snapshot(&self, name: &str) -> Result<Option<SavedSnapshot>, ProviderError> {
+        let value = match self
+            .call(Method::GET, &["saved-snapshots", name], None)
+            .await
+        {
+            Ok(value) => value,
+            Err(ProviderError::NotFound) => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        let snapshot = &value["snapshot"];
+        if text(snapshot, "name")? != name {
+            return Err(ProviderError::InvalidResponse);
+        }
+        let state = match text(snapshot, "status")? {
+            "saving" => SavedSnapshotState::Saving,
+            "ready" => SavedSnapshotState::Ready,
+            "failed" => SavedSnapshotState::Failed,
+            _ => return Err(ProviderError::InvalidResponse),
+        };
+        Ok(Some(SavedSnapshot {
+            name: name.into(),
+            state,
+            version: text(snapshot, "snapshotId").ok().map(str::to_owned),
+            source_machine_id: text(snapshot, "sourceSandboxId").ok().map(str::to_owned),
+        }))
+    }
+    /// Delete a saved snapshot by name; an absent one is already deleted.
+    pub async fn delete_saved_snapshot(&self, name: &str) -> Result<(), ProviderError> {
+        match self
+            .call(Method::DELETE, &["saved-snapshots", name], None)
+            .await
+        {
+            Ok(_) | Err(ProviderError::NotFound) => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+    /// A sandbox with the provider facts an image builder checks: hydration
+    /// and the labels it was created with.
+    pub async fn sandbox(&self, id: &str) -> Result<Option<Sandbox>, ProviderError> {
+        let value = match self.call(Method::GET, &["sandboxes", id], None).await {
+            Ok(value) => value,
+            Err(ProviderError::NotFound) => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        let sandbox = Self::sandbox_view(&value["sandbox"])?;
+        if sandbox.machine.id != id {
+            return Err(ProviderError::InvalidResponse);
+        }
+        Ok(Some(sandbox))
+    }
+    /// The one sandbox with this exact name, if any.
+    pub async fn find_sandbox(&self, name: &str) -> Result<Option<Sandbox>, ProviderError> {
+        match self.find_allocation(name).await? {
+            Some(machine) => self.sandbox(&machine.id).await,
+            None => Ok(None),
+        }
+    }
+    /// Start a private, no-environment sandbox from a saved snapshot. The name
+    /// is the idempotency key, so a lost reply is found by name, not repeated.
+    pub async fn create_from_saved_snapshot(
+        &self,
+        snapshot: &str,
+        name: &str,
+        lifetime_seconds: u32,
+    ) -> Result<Sandbox, ProviderError> {
+        if !(60..=86400).contains(&lifetime_seconds) {
+            return Err(ProviderError::Rejected);
+        }
+        let value = self
+            .rest
+            .request(
+                Method::POST,
+                self.rest.route(&["sandboxes"])?,
+                Some(&json!({"name":name,"from":snapshot,"type":"small",
+                    "ttlSeconds":lifetime_seconds,"noEnv":true,"visibility":"private",
+                    "labels":{"zuse-source-artifact":snapshot,"zuse-allocation-name":name}})),
+                Some(name),
+                None,
+            )
+            .await?;
+        Self::sandbox_view(&value["sandbox"]).map_err(|_| ProviderError::OutcomeUnknown)
+    }
+    fn sandbox_view(value: &Value) -> Result<Sandbox, ProviderError> {
+        Ok(Sandbox {
+            machine: Self::machine(value)?,
+            hydrated: value["hydrated"].as_bool().unwrap_or(false),
+            source_artifact: value["labels"]["zuse-source-artifact"]
+                .as_str()
+                .map(str::to_owned),
+        })
     }
     pub async fn snapshot_state(&self, name: &str) -> Result<Option<String>, ProviderError> {
         match self

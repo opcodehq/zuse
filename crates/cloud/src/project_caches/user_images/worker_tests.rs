@@ -250,9 +250,10 @@ async fn builds_wait_for_capacity_and_a_base_and_reconcile_lost_replies() {
     let host = FakeHost::new();
     let control = control(&pool, &host);
     save(&pool, "user-alice", 0, "npm i -g pnpm", 1_000).await;
-    // No verified base yet: the build waits with a reason (the Prized line,
-    // which this worker has no builder for, is dropped in the other tick).
-    run(&control, 1_000 + SAVE_DEBOUNCE_MS, 2).await;
+    // No verified base yet: the build waits with a reason (the Boat and
+    // Prized lines, which this worker has no builder for, are dropped in the
+    // other ticks).
+    run(&control, 1_000 + SAVE_DEBOUNCE_MS, 3).await;
     let row = &images(&pool).await[0];
     assert_eq!(
         (row["state"].as_str(), row["error_code"].as_str()),

@@ -704,7 +704,7 @@ async fn machine_status_reports_build_progress_failure_log_and_last_good_image_a
     // A ready image from an earlier build and a running build of this script.
     sqlx::query("INSERT INTO cloud_machine_images(image_id,owner_id,provider,reason,state,phase,recipe_revision,recipe_digest,base_release_id,identity_key,artifact_id,next_attempt_at,built_at,created_at,updated_at) VALUES($1,'user-alice','boxd','recipe','ready','complete',1,$2,'base-v1',$2,'snap-old',0,10,5,10)")
         .bind(format!("uimg_{}", "a".repeat(32))).bind("b".repeat(64)).execute(&pool).await.unwrap();
-    sqlx::query("UPDATE cloud_machine_images SET state='building',phase='setup',identity_key=$1,base_release_id='base-v1' WHERE state='queued'")
+    sqlx::query("UPDATE cloud_machine_images SET state='building',phase='setup',identity_key=$1,base_release_id='base-v1' WHERE state='queued' AND provider='boxd'")
         .bind("c".repeat(64)).execute(&pool).await.unwrap();
     let status = call(&app, "GET", path, "alice", false, Value::Null).await.1;
     assert_eq!(status["imageState"], "building");

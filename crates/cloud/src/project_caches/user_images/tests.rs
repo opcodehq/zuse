@@ -245,7 +245,7 @@ impl FakeHost {
         );
         host
     }
-    fn lost(state: &mut HostState, name: &'static str) -> bool {
+    pub(super) fn lost(state: &mut HostState, name: &'static str) -> bool {
         if state.lose_reply == Some(name) {
             state.lose_reply = None;
             true
@@ -283,6 +283,109 @@ fn ok(value: Value) -> Result<ExecResult, ProviderError> {
         stderr: vec![],
         exit_code: 0,
     })
+}
+
+/// The guest helper, fresh boot loader and root file writes, as a fresh
+/// managed-base machine answers them. Shared by the Boxd and Boat fakes.
+pub(super) fn guest_exec(
+    state: &mut HostState,
+    command: &str,
+) -> Result<ExecResult, ProviderError> {
+    state.commands.push(command.chars().take(80).collect());
+    let guest = state.guest.clone();
+    if command.contains("base64.b64decode(d)") {
+        // A file written as root through exec: record it like an upload.
+        use base64::Engine;
+        let mut parts = command.rsplitn(4, ' ');
+        let data = parts.next().unwrap().trim_matches('\'');
+        let mode = parts.next().unwrap();
+        let path = parts.next().unwrap().trim_matches('\'');
+        let data = base64::engine::general_purpose::STANDARD
+            .decode(data)
+            .unwrap();
+        assert!(!String::from_utf8_lossy(&data).contains("secret-value"));
+        if mode == "w" {
+            state.uploads.push(path.into());
+        }
+        return Ok(ExecResult {
+            stdout: vec![],
+            stderr: vec![],
+            exit_code: 0,
+        });
+    }
+    let Some(args) = helper_args(command) else {
+        if command.starts_with("sudo -n /usr/bin/python3 -I -B -c") {
+            // Fresh boot through the fixed-path loader: echo the request.
+            use base64::Engine;
+            let body = command.rsplit(' ').next().unwrap().trim_matches('\'');
+            let request: Value = serde_json::from_slice(
+                &base64::engine::general_purpose::STANDARD
+                    .decode(body)
+                    .unwrap(),
+            )
+            .unwrap();
+            let parsed: crate::managed_bases::bootstrap::Request =
+                serde_json::from_value(request.clone()).unwrap();
+            if !guest.fresh_boot_ok {
+                return Ok(ExecResult {
+                    stdout: vec![],
+                    stderr: vec![],
+                    exit_code: 3,
+                });
+            }
+            let mut reply = request;
+            reply["status"] = json!("ready");
+            reply["requestSha256"] = json!(parsed.digest().unwrap());
+            reply["unitStartSubmitted"] = json!(true);
+            reply["resident"] = json!({"ipcVerified":true,"unbound":true,"childAlive":false,"recoveryAlive":false,"residentPid":42,"residentStartTicks":7,"bootNonceSha256":"f".repeat(64)});
+            return ok(reply);
+        }
+        return Ok(ExecResult {
+            stdout: vec![],
+            stderr: vec![],
+            exit_code: 0,
+        });
+    };
+    let reply = match args[0].as_str() {
+        "pins" => json!({"version":1,"pinsVerified":true}),
+        "setup-status" => {
+            if state.setup_launches == 0 {
+                json!({"version":1,"state":"not-started"})
+            } else {
+                state.setup_polls += 1;
+                if state.setup_polls > guest.setup_polls_before_exit {
+                    json!({"version":1,"state":"exited","exitCode":guest.setup_exit,"log":guest.setup_log})
+                } else {
+                    json!({"version":1,"state":"running"})
+                }
+            }
+        }
+        "setup-start" => {
+            assert_eq!(args[1], "1800");
+            if state.setup_launches == 0 {
+                state.setup_launches += 1;
+            }
+            if FakeHost::lost(state, "setup-start") {
+                return Err(ProviderError::OutcomeUnknown);
+            }
+            json!({"version":1,"state":"running"})
+        }
+        "sanitize" => match guest.sanitize_error {
+            Some(code) => json!({"version":1,"error":code}),
+            None => {
+                json!({"version":1,"sanitized":true,"pinsVerified":true,"runtimeStopped":true,"credentialsRemoved":true,"historyRemoved":true,"taskDataAbsent":true,"userProcessesStopped":true})
+            }
+        },
+        "check" => {
+            if guest.check_clean {
+                json!({"version":1,"clean":true,"pinsVerified":true})
+            } else {
+                json!({"version":1,"error":"user_image_not_clean"})
+            }
+        }
+        other => panic!("unexpected helper command {other}"),
+    };
+    ok(reply)
 }
 
 #[async_trait::async_trait]
@@ -348,101 +451,7 @@ impl ImageHost for FakeHost {
     async fn exec(&self, machine: &str, command: &str) -> Result<ExecResult, ProviderError> {
         let mut state = self.0.lock().unwrap();
         assert!(state.machines.contains_key(machine));
-        state.commands.push(command.chars().take(80).collect());
-        let guest = state.guest.clone();
-        if command.contains("base64.b64decode(d)") {
-            // A file written as root through exec: record it like an upload.
-            use base64::Engine;
-            let mut parts = command.rsplitn(4, ' ');
-            let data = parts.next().unwrap().trim_matches('\'');
-            let mode = parts.next().unwrap();
-            let path = parts.next().unwrap().trim_matches('\'');
-            let data = base64::engine::general_purpose::STANDARD
-                .decode(data)
-                .unwrap();
-            assert!(!String::from_utf8_lossy(&data).contains("secret-value"));
-            if mode == "w" {
-                state.uploads.push(path.into());
-            }
-            return Ok(ExecResult {
-                stdout: vec![],
-                stderr: vec![],
-                exit_code: 0,
-            });
-        }
-        let Some(args) = helper_args(command) else {
-            if command.starts_with("sudo -n /usr/bin/python3 -I -B -c") {
-                // Fresh boot through the fixed-path loader: echo the request.
-                use base64::Engine;
-                let body = command.rsplit(' ').next().unwrap().trim_matches('\'');
-                let request: Value = serde_json::from_slice(
-                    &base64::engine::general_purpose::STANDARD
-                        .decode(body)
-                        .unwrap(),
-                )
-                .unwrap();
-                let parsed: crate::managed_bases::bootstrap::Request =
-                    serde_json::from_value(request.clone()).unwrap();
-                if !guest.fresh_boot_ok {
-                    return Ok(ExecResult {
-                        stdout: vec![],
-                        stderr: vec![],
-                        exit_code: 3,
-                    });
-                }
-                let mut reply = request;
-                reply["status"] = json!("ready");
-                reply["requestSha256"] = json!(parsed.digest().unwrap());
-                reply["unitStartSubmitted"] = json!(true);
-                reply["resident"] = json!({"ipcVerified":true,"unbound":true,"childAlive":false,"recoveryAlive":false,"residentPid":42,"residentStartTicks":7,"bootNonceSha256":"f".repeat(64)});
-                return ok(reply);
-            }
-            return Ok(ExecResult {
-                stdout: vec![],
-                stderr: vec![],
-                exit_code: 0,
-            });
-        };
-        let reply = match args[0].as_str() {
-            "pins" => json!({"version":1,"pinsVerified":true}),
-            "setup-status" => {
-                if state.setup_launches == 0 {
-                    json!({"version":1,"state":"not-started"})
-                } else {
-                    state.setup_polls += 1;
-                    if state.setup_polls > guest.setup_polls_before_exit {
-                        json!({"version":1,"state":"exited","exitCode":guest.setup_exit,"log":guest.setup_log})
-                    } else {
-                        json!({"version":1,"state":"running"})
-                    }
-                }
-            }
-            "setup-start" => {
-                assert_eq!(args[1], "1800");
-                if state.setup_launches == 0 {
-                    state.setup_launches += 1;
-                }
-                if Self::lost(&mut state, "setup-start") {
-                    return Err(ProviderError::OutcomeUnknown);
-                }
-                json!({"version":1,"state":"running"})
-            }
-            "sanitize" => match guest.sanitize_error {
-                Some(code) => json!({"version":1,"error":code}),
-                None => {
-                    json!({"version":1,"sanitized":true,"pinsVerified":true,"runtimeStopped":true,"credentialsRemoved":true,"historyRemoved":true,"taskDataAbsent":true,"userProcessesStopped":true})
-                }
-            },
-            "check" => {
-                if guest.check_clean {
-                    json!({"version":1,"clean":true,"pinsVerified":true})
-                } else {
-                    json!({"version":1,"error":"user_image_not_clean"})
-                }
-            }
-            other => panic!("unexpected helper command {other}"),
-        };
-        ok(reply)
+        guest_exec(&mut state, command)
     }
     async fn upload(&self, machine: &str, path: &str, data: &[u8]) -> Result<(), ProviderError> {
         let mut state = self.0.lock().unwrap();
@@ -525,7 +534,7 @@ impl ImageHost for FakeHost {
 /// Drive the adapter alone the way the worker does: one phase at a time,
 /// receipts carried forward, Reconcile after a lost reply.
 pub(super) async fn drive(
-    backend: &BoxdUserImages,
+    backend: &dyn UserImageBackend,
     plan: &BuildPlan,
     mut phase: String,
 ) -> (String, Value, Option<&'static str>) {

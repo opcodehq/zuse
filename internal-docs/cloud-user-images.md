@@ -136,13 +136,20 @@ the unused `cloud_machine_images` placeholder from 0031).
   newer ready image on a verified base exists, its base is no longer
   verified, or the script was removed, and no non-deleted computer
   (archived included) references it.
-- **Providers**: Boxd and Prized (below). Others start from the managed base.
+- **Providers**: Boxd, Boat and Prized (below). Others start from the managed base.
+  On Boat an image is a *saved snapshot* named from the image ID; its
+  `snapshotId` is the version (saving a name again gets a new one). Boat saves
+  a running sandbox's disk in the background and may include later writes, so
+  nothing touches the builder after the save request and the builder is
+  deleted only once the save is `ready`. Builder and verifier count as up only
+  once Boat reports their disk hydrated, matching the post-hydration first
+  start of Boat bases (runtime unit disabled in the image).
 - **Fresh boots never wait for an image.** With no ready image, the computer
   boots the managed base without the setup script's tools. Running the setup
   script on that computer as a fallback is a follow-up.
 
 Operations: the worker builds for each provider it has credentials for
-(`BOXD_API_KEY`, `PRIZED_API_KEY`; `ZUSE_CLOUD_USER_IMAGES=0` turns builds
+(`BOXD_API_KEY`, `BOAT_API_KEY`, `PRIZED_API_KEY`; `ZUSE_CLOUD_USER_IMAGES=0` turns builds
 off). A queued build for a provider the worker has no builder for is dropped
 (`superseded`, `user_image_provider_unavailable`), not kept waiting. Each build briefly holds two
 VMs and one snapshot; each account keeps one or two ready snapshots plus any

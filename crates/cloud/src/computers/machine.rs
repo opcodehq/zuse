@@ -206,8 +206,12 @@ impl Store {
             tx.commit().await?;
             return Ok(version);
         }
+        // One image line per provider: take each provider's latest build and
+        // show the one in progress, else a failure, else the newest. A build waiting because
+        // its provider has no builder or no verified base here is not the
+        // account's image status.
         let rows: Vec<Value> = sqlx::query_scalar(
-            "(SELECT to_jsonb(i) FROM cloud_machine_images i WHERE owner_id=$1 AND state NOT IN('superseded','retiring','retired') ORDER BY created_at DESC,image_id DESC LIMIT 1) UNION ALL (SELECT to_jsonb(i) FROM cloud_machine_images i WHERE owner_id=$1 AND state='ready' ORDER BY built_at DESC,image_id DESC LIMIT 1)",
+            "(SELECT to_jsonb(i) FROM (SELECT DISTINCT ON (provider) * FROM cloud_machine_images WHERE owner_id=$1 AND state NOT IN('superseded','retiring','retired') AND NOT (state='queued' AND coalesce(error_code,'') IN('user_image_provider_unavailable','user_image_managed_base_unavailable','user_image_managed_base_invalid')) ORDER BY provider,created_at DESC,image_id DESC) i ORDER BY CASE WHEN i.state IN('building','cleaning') THEN 0 WHEN i.state='failed' THEN 1 ELSE 2 END,i.created_at DESC,i.image_id DESC LIMIT 1) UNION ALL (SELECT to_jsonb(i) FROM cloud_machine_images i WHERE owner_id=$1 AND state='ready' ORDER BY built_at DESC,image_id DESC LIMIT 1)",
         )
         .bind(owner)
         .fetch_all(&mut *tx)

@@ -400,5 +400,95 @@ async fn boat_runtime_adapter_uses_scoped_helper_for_fresh_and_owned_resume_only
     );
 }
 
+#[tokio::test]
+async fn boat_saved_snapshots_are_versioned_by_snapshot_id_and_sandboxes_start_labeled() {
+    use super::boat::SavedSnapshotState;
+    let deletes = Arc::new(AtomicUsize::new(0));
+    let counted = deletes.clone();
+    let app = Router::new()
+        .route(
+            "/api/v1/saved-snapshots/ui-s-one",
+            get(|headers: HeaderMap| async move {
+                auth(&headers);
+                Json(json!({"snapshot":{"name":"ui-s-one","status":"saving","sourceSandboxId":"bx_builder","snapshotId":"disk-7"}}))
+            })
+            .delete(move |headers: HeaderMap| {
+                let counted = counted.clone();
+                async move {
+                    auth(&headers);
+                    counted.fetch_add(1, Ordering::SeqCst);
+                    StatusCode::NO_CONTENT
+                }
+            }),
+        )
+        .route(
+            "/api/v1/saved-snapshots/renamed",
+            get(|| async { Json(json!({"snapshot":{"name":"other","status":"ready"}})) }),
+        )
+        .route(
+            "/api/v1/saved-snapshots/odd",
+            get(|| async { Json(json!({"snapshot":{"name":"odd","status":"archived"}})) }),
+        )
+        .route(
+            "/api/v1/sandboxes",
+            post(|headers: HeaderMap, Json(body): Json<Value>| async move {
+                auth(&headers);
+                assert_eq!(headers["idempotency-key"], "ui-v-one");
+                assert_eq!(body["from"], "ui-s-one");
+                assert_eq!(body["noEnv"], true);
+                assert_eq!(body["visibility"], "private");
+                assert_eq!(body["ttlSeconds"], 1800);
+                assert_eq!(
+                    body["labels"],
+                    json!({"zuse-source-artifact":"ui-s-one","zuse-allocation-name":"ui-v-one"})
+                );
+                Json(json!({"sandbox":{"id":"bx_verifier","name":"ui-v-one","state":"provisioning",
+                    "hydrated":false,"labels":body["labels"]}}))
+            }),
+        )
+        .route(
+            "/api/v1/sandboxes/bx_verifier",
+            get(|| async {
+                Json(json!({"sandbox":{"id":"bx_verifier","name":"ui-v-one","state":"idle","hydrated":true,
+                    "labels":{"zuse-source-artifact":"ui-s-one"}}}))
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut provider = Boat::new("test-private-key".into()).unwrap();
+    provider
+        .rest
+        .test_endpoint(format!("http://{}/api/v1", listener.local_addr().unwrap()));
+    let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    }));
+    let saved = provider.saved_snapshot("ui-s-one").await.unwrap().unwrap();
+    assert_eq!(saved.state, SavedSnapshotState::Saving);
+    assert_eq!(saved.version.as_deref(), Some("disk-7"));
+    assert_eq!(saved.source_machine_id.as_deref(), Some("bx_builder"));
+    assert!(provider.saved_snapshot("missing").await.unwrap().is_none());
+    assert!(provider.saved_snapshot("renamed").await.is_err());
+    assert!(provider.saved_snapshot("odd").await.is_err());
+    provider.delete_saved_snapshot("ui-s-one").await.unwrap();
+    provider.delete_saved_snapshot("missing").await.unwrap();
+    assert_eq!(deletes.load(Ordering::SeqCst), 1);
+    let created = provider
+        .create_from_saved_snapshot("ui-s-one", "ui-v-one", 1800)
+        .await
+        .unwrap();
+    assert_eq!(created.machine.id, "bx_verifier");
+    assert!(!created.hydrated);
+    assert_eq!(created.source_artifact.as_deref(), Some("ui-s-one"));
+    assert!(
+        provider
+            .create_from_saved_snapshot("ui-s-one", "ui-v-one", 30)
+            .await
+            .is_err()
+    );
+    let sandbox = provider.sandbox("bx_verifier").await.unwrap().unwrap();
+    assert!(sandbox.hydrated);
+    assert_eq!(sandbox.machine.state, super::MachineState::Running);
+    assert!(provider.sandbox("bx_missing").await.unwrap().is_none());
+}
+
 #[path = "boat_tests/failure_observations.rs"]
 mod failure_observations;

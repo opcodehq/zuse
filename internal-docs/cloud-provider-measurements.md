@@ -232,3 +232,54 @@ idle SQL queries, backlog recovery, API commit latency during signaling outage,
 hint coalescing under bursts, duplicate delivery, and worker restarts. Keep token
 streaming and transcript payloads out of the job-wakeup mechanism. None of these
 choices requires a warm pool or changes the no-warm-pool constraint.
+
+## Boat (staging, 2026-11-14)
+
+First verified Boat managed base on staging, and the first real Boat computer
+through the deployed API since the 2026-11-01 benchmarks. Single samples, owner
+account, Boat `small` (2 vCPU, 4 GiB, billed at 0.5×), Claude Sonnet.
+
+**Base.** `boat/zuse-base-403cb97b82f969acc8a3fea5c5d11741` (saved snapshot
+`zuse-base-build-ed529317fceb438fa9f56b10`), runtime `0.26.0+gce2ffb777a1c`,
+helper scripts from main `ce2ffb77` (Node v24.22.3 LTS). Built from a blank
+Boat sandbox with `probe-boat-supervisor.mjs`: upload of the 1.05 GB bundle
+342 s (≈3 MB/s through the 2 MiB file API), install 111 s, saved snapshot
+ready 23 s after the request; restore proof hydrated in 9 s. Certification
+passed all 17 checks including `nodeAvailable` (create 0.5 s, runtime answers
+2.9 s after create, Codex initialize 1.0 s, stop settled 15.3 s, runtime
+answers 1.6 s after resume, disk kept). Operator record:
+`/root/base-rebuild-boat-node-20261114/RESTORE.md` on the staging host.
+
+**Create** (`workspace_68c76c58ddd144c1b063fac1ec71b536`, requested
+2026-11-14T11:38:23Z):
+
+| Phase | Time |
+| --- | --- |
+| Request → provider sandbox allocated | 1.9 s |
+| Allocated → runtime enrolled | 9.8 s |
+| Repository sync + environment | 19.7 s |
+| **Request → ready** | **31.4 s** |
+
+One allocation attempt was retried: the first post-hydration start on a disk
+still hydrating was rejected by the fresh-boot helper, and the next attempt
+2 s later passed (≈3.5 s lost). The worker now logs the helper's rejection
+code so the cause can be pinned down.
+
+Node as the task user on that computer: `v24.22.3`; `~/.local/bin` empty (plain
+base, no user image).
+
+**Pause and wake.**
+
+| Cycle | Pause → paused | Message → turn starts | Message → reply done | Boot ID |
+| --- | --- | --- | --- | --- |
+| Warm (woken 15 s after pause, inside Boat's 10-minute window) | 10.3 s | 4.4 s | 10.4 s | unchanged |
+| Cold (stopped 19 min) | 13.3 s | 17.2 s | 25.1 s | changed |
+
+"Reply done" includes the model's answer. A cold wake restores the disk
+lazily and restarts the runtime (expected; no RAM preservation). Delete →
+`deleted` took 12.9 s and the sandbox returned 404 afterwards.
+
+Compared with Boxd: Boat creates in about the same time but wakes cold in
+≈17 s to a running turn once the 10-minute warm window has passed, versus
+Boxd's memory-snapshot resume. Boat's warm window makes short pauses cheap and
+fast.

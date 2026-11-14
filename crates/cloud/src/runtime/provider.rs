@@ -177,6 +177,12 @@ impl AllocationProvider for RuntimeProvider {
         self.startup_timings
             .measure("initialBootstrapProofValidation", async {
                 if result.exit_code != 0 || result.stdout.len() > 65536 {
+                    tracing::warn!(
+                        provider = self.provider.id().as_str(),
+                        exit_code = result.exit_code,
+                        code = %helper_rejection_code(&result.stdout),
+                        "Fresh boot helper rejected the start"
+                    );
                     return Err(ProviderError::Rejected);
                 }
                 request.response(
@@ -263,6 +269,24 @@ impl AllocationProvider for RuntimeProvider {
             return Err(ProviderError::Unavailable);
         }
         Ok(())
+    }
+}
+/// The fixed rejection code the fresh boot helper prints (`{"status":
+/// "rejected","code":"fresh_boot_..."}`); anything else is not logged.
+fn helper_rejection_code(stdout: &[u8]) -> String {
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(stdout) else {
+        return "unparsed".into();
+    };
+    match value["code"].as_str() {
+        Some(code)
+            if code.len() <= 80
+                && code
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_') =>
+        {
+            code.to_owned()
+        }
+        _ => "unknown".into(),
     }
 }
 pub(super) fn quote(s: &str) -> String {

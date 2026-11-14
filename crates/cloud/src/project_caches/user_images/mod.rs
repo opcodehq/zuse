@@ -15,6 +15,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use zuse_protocol::cloud_computers::{MachineRecipe, ProviderId};
 
+pub mod boat;
 pub mod boxd;
 pub mod prized;
 pub mod schedule;
@@ -29,7 +30,7 @@ pub const GUEST_HELPER: &str = include_str!("../../../../../infra/cloud/user-ima
 pub const PRIZED_GUEST_HELPER: &str =
     include_str!("../../../../../infra/cloud/prized-base/user-image-guest.py");
 /// Providers with a user image builder. Others start from the managed base.
-pub const PROVIDERS: &[ProviderId] = &[ProviderId::Boxd, ProviderId::Prized];
+pub const PROVIDERS: &[ProviderId] = &[ProviderId::Boxd, ProviderId::Boat, ProviderId::Prized];
 
 /// Prized bases live in the task user's home with no root, so they carry no
 /// fresh-boot pins; the base runtime comes from the manifest's admission
@@ -375,6 +376,8 @@ fn redact_line(line: &str) -> String {
         .join(" ")
 }
 
+#[cfg(test)]
+mod boat_tests;
 #[cfg(test)]
 mod prized_tests;
 #[cfg(test)]

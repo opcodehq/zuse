@@ -681,6 +681,14 @@ impl crate::runtime::RuntimeControl {
                 Arc::new(super::boxd::BoxdUserImages::new(Arc::new(provider))),
             );
         }
+        if let Ok(key) = std::env::var("BOAT_API_KEY") {
+            let provider = crate::providers::boat::Boat::new(key)
+                .map_err(|_| ApiError::unavailable("user_image_provider_invalid"))?;
+            backends.insert(
+                ProviderId::Boat,
+                Arc::new(super::boat::BoatUserImages::new(Arc::new(provider))),
+            );
+        }
         if let Ok(key) = std::env::var("PRIZED_API_KEY") {
             let provider = Prized::new(key)
                 .map_err(|_| ApiError::unavailable("user_image_provider_invalid"))?;
