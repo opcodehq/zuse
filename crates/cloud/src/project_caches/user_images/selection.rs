@@ -116,7 +116,12 @@ where
         let Some(hit) = usable(&row, &base, provider_id) else {
             continue;
         };
-        if build["settings"]["managedReleaseId"] == release {
+        // A staging pin launches its base under a candidate release id, while
+        // images record the verified registration of that same base; for a
+        // pinned build the exact base snapshot is what has to match.
+        let same_base = build["settings"]["managedReleaseId"] == release
+            || (pinned && build["snapshot_id"] == hit.base_artifact_id.as_str());
+        if same_base {
             if build["snapshot_id"] != hit.base_artifact_id.as_str() {
                 continue;
             }
