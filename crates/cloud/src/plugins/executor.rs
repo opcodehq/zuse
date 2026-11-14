@@ -153,6 +153,20 @@ fn sslrootcert(url: &str) -> Option<String> {
 #[cfg(test)]
 mod sslrootcert_tests {
     #[test]
+    fn sqlx_file_prefix_is_stripped_from_the_worker_url() {
+        let options: sqlx::postgres::PgConnectOptions =
+            "postgresql://u:p@db.example:5432/postgres?sslmode=verify-full&sslrootcert=/etc/zuse/ca.crt"
+                .parse()
+                .unwrap();
+        let lossy = sqlx::ConnectOptions::to_url_lossy(&options);
+        assert!(lossy.as_str().contains("sslrootcert=file"), "{lossy}");
+        let url = super::Executor::worker_url(lossy, "zuse_staging");
+        assert_eq!(super::sslrootcert(&url), Some("/etc/zuse/ca.crt".into()));
+        assert!(
+            url.contains("search_path%3Dzuse_staging") || url.contains("search_path=zuse_staging")
+        );
+    }
+    #[test]
     fn database_ca_is_passed_to_the_worker_only_for_file_paths() {
         assert_eq!(
             super::sslrootcert(
@@ -182,17 +196,24 @@ impl Executor {
         {
             return Err(ApiError::unavailable("executor_schema_invalid"));
         }
+        Ok(Self::worker_url(url, &schema))
+    }
+    /// The worker's database URL: no sqlx-only parameters, the schema pinned
+    /// via `options`, and a CA file as a bare path (sqlx writes "file: <path>").
+    fn worker_url(mut url: reqwest::Url, schema: &str) -> String {
         let local = matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "[::1]"));
         let pairs: Vec<_> = url
             .query_pairs()
             .filter(|(k, _)| k != "statement-cache-capacity" && k != "options")
             .map(|(k, v)| {
                 let v = if local && k == "sslmode" && v == "prefer" {
-                    "disable".into()
+                    "disable".to_owned()
+                } else if k == "sslrootcert" {
+                    v.strip_prefix("file: ").unwrap_or(&v).to_owned()
                 } else {
-                    v
+                    v.into_owned()
                 };
-                (k.into_owned(), v.into_owned())
+                (k.into_owned(), v)
             })
             .collect();
         url.set_query(None);
@@ -200,7 +221,7 @@ impl Executor {
             "options",
             &format!("-c search_path={schema} -c statement_timeout=15000 -c lock_timeout=5000"),
         );
-        Ok(url.into())
+        url.into()
     }
     fn command(url: &str, key: &MasterKey, token: &str, proxy: &str) -> tokio::process::Command {
         let script = std::env::var("ZUSE_CLOUD_EXECUTOR_SCRIPT").unwrap_or_else(|_| {
