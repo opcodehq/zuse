@@ -305,7 +305,7 @@ impl UserImageBackend for BoxdUserImages {
                     .host
                     .exec(
                         &id,
-                        &format!("sudo -n install -d -m 700 -o root -g root {JOURNAL}"),
+                        &format!("sudo -n install -d -m 700 -o zuse -g zuse {JOURNAL}"),
                     )
                     .await
                     .map_err(uncertain)?;
@@ -324,11 +324,12 @@ impl UserImageBackend for BoxdUserImages {
                     .upload(&id, &format!("{JOURNAL}/guest.py"), GUEST_HELPER.as_bytes())
                     .await
                     .map_err(uncertain)?;
-                // Uploads land with the provider's default owner; the journal
-                // is root-only and the script readable by `zuse` through sudo.
+                // Boxd uploads as `zuse`, so the journal is `zuse`-owned while
+                // uploading (like project caches); then it and both files become
+                // root-owned, with the script readable by `zuse` through sudo.
                 let fix = self
                     .host
-                    .exec(&id, &format!("sudo -n sh -c {}", quote(&format!("chown root:root {JOURNAL}/setup.sh {JOURNAL}/guest.py && chmod 644 {JOURNAL}/setup.sh && chmod 600 {JOURNAL}/guest.py && chmod 755 {JOURNAL}"))))
+                    .exec(&id, &format!("sudo -n sh -c {}", quote(&format!("chown root:root {JOURNAL} {JOURNAL}/setup.sh {JOURNAL}/guest.py && chmod 644 {JOURNAL}/setup.sh && chmod 600 {JOURNAL}/guest.py && chmod 755 {JOURNAL}"))))
                     .await
                     .map_err(uncertain)?;
                 if fix.exit_code != 0 {
