@@ -99,16 +99,13 @@ impl Render for DefaultsPage {
                     ))
                     .child(permission),
             );
-        let loadout = self
-            .picker
-            .update(cx, |picker, cx| picker.render_loadout_editor(cx));
         let content = widgets::settings_page_column(window)
             .child(widgets::section_title(
                 &theme,
                 &tr(cx, msg::settings::settings_page_default_models),
-                "Choose which models appear in the picker and how new chats start.",
+                &tr(cx, msg::native::choose_how_new_chats_start),
             ))
-            .child(widgets::section_stack().child(loadout).child(
+            .child(widgets::section_stack().child(
                 widgets::group(
                     &theme,
                     tr(cx, msg::settings::settings_page_chat_defaults),
@@ -127,14 +124,4 @@ impl Render for DefaultsPage {
 }
 fn details(theme: &Theme, title: &str, description: &str) -> Div {
     widgets::row_copy(theme, title, description)
-}
-
-#[cfg(feature = "browser-fixture")]
-impl DefaultsPage {
-    /// Review fixture: provider catalogs and a seeded loadout.
-    pub fn fixture_seed(&mut self, cx: &mut Context<Self>) {
-        self.picker
-            .update(cx, |picker, cx| picker.fixture_seed_loadout(cx));
-        cx.notify();
-    }
 }

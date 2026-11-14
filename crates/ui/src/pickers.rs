@@ -19,8 +19,6 @@ mod cloud_models;
 mod compact;
 mod creation_sources;
 mod import_chat;
-mod loadout;
-pub use loadout::{EditLoadout, slot_label as loadout_slot_label};
 mod model_menu;
 mod settings_models;
 mod workspace;
@@ -856,10 +854,6 @@ pub struct Pickers {
     model_scope: Option<HarnessId>,
     model_menu: model_menu::MenuState,
     effort_menu_open: bool,
-    /// The open model picker shows the full catalog instead of the loadout.
-    loadout_browse: bool,
-    /// When the settings loadout editor last read the shared defaults file.
-    loadout_read_at: Option<std::time::SystemTime>,
     effort_trigger_bounds: Option<gpui::Bounds<gpui::Pixels>>,
     setting_menu: Option<ModelSetting>,
     setting_active: usize,
@@ -1167,8 +1161,6 @@ impl Pickers {
             model_scope: None,
             model_menu: Default::default(),
             effort_menu_open: false,
-            loadout_browse: false,
-            loadout_read_at: None,
             effort_trigger_bounds: None,
             setting_menu: None,
             setting_active: 0,
@@ -1788,13 +1780,6 @@ impl Pickers {
         if self.open_kind() != Some(PickerKind::HarnessModel) {
             return false;
         }
-        if self.loadout_view(cx) {
-            if self.apply_loadout_entry(slot, cx) {
-                self.close(cx);
-            }
-            cx.notify();
-            return true;
-        }
         self.activate_model_index(slot, cx);
         cx.notify();
         true
@@ -1833,7 +1818,6 @@ impl Pickers {
         }
         if kind == PickerKind::HarnessModel {
             self.effort_menu_open = false;
-            self.loadout_browse = false;
             self.model_scope = self
                 .effective_harness(cx)
                 .or_else(|| self.rail_descriptors(cx).first().map(|p| p.id));
@@ -1902,9 +1886,6 @@ impl Pickers {
         };
         if kind == PickerKind::Checkout {
             self.workspace_keyboard = false;
-        }
-        if kind == PickerKind::HarnessModel && self.loadout_view(cx) {
-            self.active = self.current_loadout_index(cx).unwrap_or(0);
         }
         if kind == PickerKind::HarnessModel {
             // scroll_to_item below may land anywhere; the first note of the
@@ -3416,12 +3397,6 @@ impl Pickers {
                 _ => {}
             }
         }
-        if self.open_kind() == Some(PickerKind::HarnessModel) && self.loadout_view(cx) {
-            if self.loadout_key(event, cx) {
-                cx.stop_propagation();
-            }
-            return;
-        }
         if self.open_kind() == Some(PickerKind::HarnessModel) && self.compact_model_picker(cx) {
             // Escape only steps back a page or closes a submenu: it should
             // not light focus rings on the controls it returns to. The next
@@ -3473,14 +3448,7 @@ impl Pickers {
                 return;
             }
             if event.keystroke.key == "escape" {
-                if self.loadout_browse {
-                    // Back from the catalog to the loadout.
-                    self.loadout_browse = false;
-                    self.active = 0;
-                    cx.notify();
-                } else {
-                    self.close(cx);
-                }
+                self.close(cx);
                 cx.stop_propagation();
                 return;
             }
@@ -6501,9 +6469,7 @@ impl Render for Pickers {
             | Some(PickerKind::Space)
             | Some(PickerKind::Device) => None,
             Some(PickerKind::HarnessModel) => {
-                let menu = if self.loadout_view(cx) {
-                    self.render_loadout_menu(window, cx)
-                } else if self.compact_model_picker(cx) {
+                let menu = if self.compact_model_picker(cx) {
                     self.render_compact_menu(window, cx)
                 } else {
                     let content = self.render_harness_model_popover(cx);
@@ -6531,21 +6497,8 @@ impl Render for Pickers {
                     })
                 })
             });
-        // The pill names the effort too ("Sonnet 4.6 High"); the loadout
-        // card it opens changes it.
-        let effort_suffix: Option<SharedString> =
-            (!self.is_settings_model() && self.title.is_none() && !chip_label_loading)
-                .then(|| self.compact_effort(cx))
-                .flatten()
-                .and_then(|effort| effort.labels.get(effort.selected).cloned());
-        let chip_width = self.model_chip_width(
-            window,
-            &model_label,
-            effort_suffix.as_ref(),
-            chip_label_loading,
-            fast,
-            cx,
-        );
+        let chip_width =
+            self.model_chip_width(window, &model_label, None, chip_label_loading, fast, cx);
         let model_chip = self
             .trigger_chip(
                 PickerKind::HarnessModel,
@@ -6554,7 +6507,7 @@ impl Render for Pickers {
                 Some(harness_icon),
                 chip_icon_loading,
                 chip_label_loading,
-                effort_suffix.map(|suffix| (suffix, None)),
+                None,
                 &theme,
                 cx,
             )
@@ -6621,26 +6574,13 @@ impl Render for Pickers {
             && (self.live_groups(cx).iter().any(|group| {
                 Self::compact_option_visible(&group.id, &self.compact_hidden_options(cx))
             }) || self.compact_fast_choice(cx).is_some());
-        // Effort and fast mode live in the model pill's card; this chip only
-        // stays for the other model options (context window, modes).
-        let extra_options = self.model_configuration_available(cx)
-            && self.live_groups(cx).iter().any(|group| {
-                Self::compact_option_visible(&group.id, &self.compact_hidden_options(cx))
-            });
-        let effort_control = if !self.is_settings_model()
-            && (extra_options || (self.title.is_some() && (effort.is_some() || has_options)))
-        {
+        let effort_control = if !self.is_settings_model() && (effort.is_some() || has_options) {
             {
                 let label = effort
                     .as_ref()
                     .and_then(|e| e.labels.get(e.selected))
                     .cloned()
                     .unwrap_or_else(|| "Options".into());
-                let label: SharedString = if extra_options {
-                    "Options".into()
-                } else {
-                    label
-                };
                 let mut button = div()
                     .id("reasoning-trigger")
                     .relative()
@@ -9767,93 +9707,12 @@ mod tests {
                 assert_eq!(picker.model_rows(cx).len(), 1);
                 picker.search.update(cx, |input, cx| input.set_text("", cx));
                 picker.open.open(PickerKind::HarnessModel);
-                // The catalog sits behind the loadout's All models.
-                picker.loadout_browse = true;
                 assert!(picker.jump_model_slot(1, cx));
                 assert_eq!(picker.effective_harness(cx), Some(HarnessId::ClaudeCode));
                 assert_eq!(picker.effective_model_id(cx), Some("opus"));
                 picker.toggle_model_favorite(HarnessId::Codex, "gpt-b", cx);
                 assert_eq!(picker.model_rows(cx).len(), 1);
                 assert_eq!(picker.model_rows(cx)[0].model.id, "opus");
-            })
-            .unwrap();
-    }
-
-    #[gpui::test]
-    fn loadout_entries_switch_model_effort_and_options_in_one_pick(cx: &mut gpui::TestAppContext) {
-        let dir = tempfile::tempdir().unwrap();
-        cx.update(|cx| {
-            cx.set_global(Theme::dark());
-            let mut settings = crate::settings::UiSettings::default();
-            settings.compact_model_picker = true;
-            crate::settings::init(settings, dir.path(), cx);
-        });
-        let handle = cx.add_window(|_, cx| {
-            let state = cx.new(|_| AppState::new());
-            Pickers::new(state, cx)
-        });
-        handle
-            .update(cx, |picker, _, cx| {
-                let mut fast = bare_model("gpt-a", "GPT A");
-                fast.reasoning_levels = vec![
-                    ReasoningLevel::Low,
-                    ReasoningLevel::Medium,
-                    ReasoningLevel::High,
-                ];
-                fast.options = serde_json::from_value(serde_json::json!([
-                    {"id":"serviceTier","label":"Service tier","defaultChoice":"standard","choices":[
-                        {"id":"standard","label":"Standard"},{"id":"fast","label":"Fast"}]}
-                ]))
-                .unwrap();
-                picker.harnesses = Loadable::Ready(vec![
-                    descriptor(HarnessId::Codex, "Codex"),
-                    descriptor(HarnessId::ClaudeCode, "Claude"),
-                ]);
-                picker
-                    .models
-                    .insert(HarnessId::Codex, Loadable::Ready(vec![fast.clone()]));
-                picker.models.insert(
-                    HarnessId::ClaudeCode,
-                    Loadable::Ready(vec![bare_model("opus", "Opus")]),
-                );
-                picker.config.harness = Some(HarnessId::ClaudeCode);
-                picker.open.open(PickerKind::HarnessModel);
-                assert!(picker.loadout_view(cx));
-
-                // Settings adds the model at its remembered effort; fast mode
-                // and the effort are then set on the entry itself.
-                picker.toggle_loadout_model(HarnessId::Codex, &fast, cx);
-                picker.toggle_loadout_fast(0, cx);
-                picker.cycle_loadout_effort(0, cx);
-                let entry = picker.defaults.loadout[0].clone();
-                assert!(entry.fast);
-                assert_eq!(entry.reasoning, Some(ReasoningLevel::Low));
-                assert_eq!(entry.effort.as_deref(), Some("Low"));
-
-                assert!(picker.jump_model_slot(0, cx));
-                assert_eq!(picker.effective_harness(cx), Some(HarnessId::Codex));
-                assert_eq!(picker.effective_model_id(cx), Some("gpt-a"));
-                assert_eq!(picker.effective_reasoning(cx), Some(ReasoningLevel::Low));
-                assert!(picker.compact_fast_choice(cx).is_some_and(|(_, _, _, on)| on));
-                assert_eq!(picker.current_loadout_index(cx), Some(0));
-
-                // The loadout survives a reload from disk; adding the current
-                // pick again is a no-op.
-                picker.reload_defaults();
-                assert_eq!(picker.defaults.loadout.len(), 1);
-                picker.add_current_to_loadout(cx);
-                assert_eq!(picker.defaults.loadout.len(), 1);
-
-                // The same model at another effort is a second entry.
-                picker.pick_reasoning(ReasoningLevel::High, cx);
-                assert_eq!(picker.current_loadout_index(cx), None);
-                picker.add_current_to_loadout(cx);
-                assert_eq!(picker.defaults.loadout.len(), 2);
-                assert_eq!(picker.defaults.loadout[1].effort.as_deref(), Some("High"));
-                picker.move_loadout_entry(1, -1, cx);
-                assert_eq!(picker.defaults.loadout[0].effort.as_deref(), Some("High"));
-                picker.remove_loadout_entry(0, cx);
-                assert_eq!(picker.defaults.loadout.len(), 1);
             })
             .unwrap();
     }

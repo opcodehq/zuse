@@ -11,10 +11,10 @@ const THUMB_INSET: f32 = 12.0;
 pub(super) struct CompactEffort {
     pub labels: Vec<SharedString>,
     pub selected: usize,
-    pub(super) stops: EffortStops,
+    stops: EffortStops,
 }
 
-pub(super) enum EffortStops {
+enum EffortStops {
     Reasoning(Vec<ReasoningLevel>),
     Option {
         id: String,
