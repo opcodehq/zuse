@@ -123,7 +123,7 @@ impl RuntimeConfig {
 }
 
 pub struct RuntimeControl {
-    staging_candidate: Option<Arc<crate::managed_bases::candidate::StagingBasePin>>,
+    pub(crate) staging_candidate: Option<Arc<crate::managed_bases::candidate::StagingBasePin>>,
     scope_authority: std::sync::OnceLock<Arc<scope::ScopeAuthority>>,
     pool: PgPool,
     admission_batch_schema: tokio::sync::OnceCell<bool>,

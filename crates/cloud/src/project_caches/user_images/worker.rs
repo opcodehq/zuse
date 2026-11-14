@@ -24,6 +24,9 @@ pub struct UserImageControl {
     last_schedule: std::sync::atomic::AtomicI64,
     ready: OnceLock<bool>,
     backends: OnceLock<BTreeMap<ProviderId, Arc<dyn UserImageBackend>>>,
+    /// The staging owner pin that lets computers skip billing also lets that
+    /// owner's image builds skip it, so staging behaves the same for both.
+    staging_compute: OnceLock<Arc<crate::managed_bases::candidate::StagingBasePin>>,
 }
 
 pub(crate) async fn schema_ready_tx(tx: &mut Transaction<'_, Postgres>) -> Result<bool, ApiError> {
@@ -107,7 +110,23 @@ impl UserImageControl {
             last_schedule: std::sync::atomic::AtomicI64::new(0),
             ready: OnceLock::new(),
             backends: OnceLock::new(),
+            staging_compute: OnceLock::new(),
         }
+    }
+    /// Builds for this pin's owner on its provider skip the billing check, like
+    /// computer creation does under `allow_staging_compute`.
+    pub(crate) fn allow_staging_compute(
+        &self,
+        pin: Arc<crate::managed_bases::candidate::StagingBasePin>,
+    ) {
+        if pin.allow_staging_compute {
+            let _ = self.staging_compute.set(pin);
+        }
+    }
+    fn staging_compute(&self, owner: &str, provider: &str, now: i64) -> bool {
+        self.staging_compute
+            .get()
+            .is_some_and(|pin| pin.applies(owner, provider) && pin.expires_at > now)
     }
     pub fn install(
         &self,
@@ -230,7 +249,8 @@ impl UserImageControl {
             tx.commit().await?;
             return Ok(true);
         };
-        if let Err(error) = crate::billing::require_capacity(&mut tx, &owner, now).await {
+        if self.staging_compute(&owner, &provider_name, now) {
+        } else if let Err(error) = crate::billing::require_capacity(&mut tx, &owner, now).await {
             Self::defer(&mut tx, &id, error.code, now + RETRY_MS, now).await?;
             tx.commit().await?;
             return Ok(true);
@@ -396,9 +416,19 @@ impl UserImageControl {
             } else {
                 // A build allocates billable machines; budget withdrawal stops it
                 // and cleanup still deletes whatever it already created.
-                let mut tx = self.pool.begin().await?;
-                let capacity = crate::billing::require_capacity(&mut tx, &plan.owner(), now).await;
-                tx.commit().await?;
+                let capacity = if self.staging_compute(
+                    &plan.identity.owner_id,
+                    plan.identity.provider.as_str(),
+                    now,
+                ) {
+                    Ok(())
+                } else {
+                    let mut tx = self.pool.begin().await?;
+                    let capacity =
+                        crate::billing::require_capacity(&mut tx, &plan.owner(), now).await;
+                    tx.commit().await?;
+                    capacity
+                };
                 if let Err(error) = capacity {
                     failure = Some(error.code);
                 }
@@ -636,6 +666,9 @@ impl crate::runtime::RuntimeControl {
             Arc::new(super::boxd::BoxdUserImages::new(Arc::new(provider))),
         );
         self.configure_user_images(backends)?;
+        if let Some(pin) = &self.staging_candidate {
+            self.user_image_control.allow_staging_compute(pin.clone());
+        }
         Ok(true)
     }
     pub async fn work_user_images_once(&self, now: i64) -> Result<bool, ApiError> {
