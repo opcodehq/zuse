@@ -3990,13 +3990,16 @@ impl Pickers {
                 "project-popover",
                 closing,
             ))
-            .child(attach_creation_overlay(
-                device_chip,
-                &mut overlay,
-                PickerKind::Device,
-                "device-popover",
-                closing,
-            ))
+            // Without remote access there is only this computer to pick.
+            .when(zuse_viewport::cloud_gate::remote_enabled(), |row| {
+                row.child(attach_creation_overlay(
+                    device_chip,
+                    &mut overlay,
+                    PickerKind::Device,
+                    "device-popover",
+                    closing,
+                ))
+            })
             .children(self.render_creation_workspace(cx))
             .children(self.render_new_thread_git_selectors(cx))
             .children(self.render_import_chat(cx))

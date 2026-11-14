@@ -2053,7 +2053,13 @@ impl AppState {
         true
     }
 
+    /// The signed-in cloud account. Local-only builds treat every profile as
+    /// signed out, so cloud workspaces, plugins and cloud history stay hidden
+    /// even when an earlier build left an account signed in.
     pub fn cloud_user_id(&self) -> Option<&str> {
+        if !zuse_viewport::cloud_gate::enabled() {
+            return None;
+        }
         self.cloud_account.as_ref()?["user"]["id"].as_str()
     }
 

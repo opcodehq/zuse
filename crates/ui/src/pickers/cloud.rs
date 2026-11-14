@@ -410,7 +410,9 @@ impl Pickers {
         }
     }
     pub(super) fn ensure_cloud(&mut self, cx: &mut Context<Self>) {
-        if !crate::cloud_beta() {
+        // Local-only builds never load cloud destinations, so the device and
+        // project pickers list only this computer's projects.
+        if !crate::cloud_beta() || !zuse_viewport::cloud_gate::enabled() {
             return;
         }
         let state = self.state.read(cx);
@@ -840,44 +842,52 @@ impl Pickers {
                         ),
                     )
             })
-            .child(zuse_viewport::creation_style::separator())
-            .child(
-                zuse_viewport::creation_style::option(
-                    "add-computer",
-                    if self.cloud_destination(cx).is_none() {
-                        "Add project to Cloud…"
-                    } else {
-                        "Cloud setup…"
-                    },
-                    "cloud-dither",
-                    false,
-                )
-                .debug_selector(|| "connect-project-to-cloud".into())
-                .role(gpui::Role::Button)
-                .on_click(cx.listener(|this, _, window, cx| {
-                    let target = {
-                        let state = this.state.read(cx);
-                        state
-                            .engine()
-                            .map(|engine| engine.controller())
-                            .zip(state.cloud_user_id().map(str::to_owned))
-                            .map(|(engine, user)| {
-                                (
-                                    engine,
-                                    user,
-                                    state.cloud_organization_id().map(str::to_owned),
-                                )
-                            })
-                    };
-                    this.cloud.refresh();
-                    this.close(cx);
-                    if let Some((controller, subject, organization)) = target {
-                        crate::cloud_history::open_setup(controller, subject, organization, cx);
-                    } else {
-                        window.dispatch_action(Box::new(crate::shell::OpenDevices), cx);
-                    }
-                })),
-            )
+            // Cloud setup is a cloud feature; local-only builds leave it out.
+            .when(zuse_viewport::cloud_gate::enabled(), |view| {
+                view.child(zuse_viewport::creation_style::separator())
+                    .child(
+                        zuse_viewport::creation_style::option(
+                            "add-computer",
+                            if self.cloud_destination(cx).is_none() {
+                                "Add project to Cloud…"
+                            } else {
+                                "Cloud setup…"
+                            },
+                            "cloud-dither",
+                            false,
+                        )
+                        .debug_selector(|| "connect-project-to-cloud".into())
+                        .role(gpui::Role::Button)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            let target = {
+                                let state = this.state.read(cx);
+                                state
+                                    .engine()
+                                    .map(|engine| engine.controller())
+                                    .zip(state.cloud_user_id().map(str::to_owned))
+                                    .map(|(engine, user)| {
+                                        (
+                                            engine,
+                                            user,
+                                            state.cloud_organization_id().map(str::to_owned),
+                                        )
+                                    })
+                            };
+                            this.cloud.refresh();
+                            this.close(cx);
+                            if let Some((controller, subject, organization)) = target {
+                                crate::cloud_history::open_setup(
+                                    controller,
+                                    subject,
+                                    organization,
+                                    cx,
+                                );
+                            } else {
+                                window.dispatch_action(Box::new(crate::shell::OpenDevices), cx);
+                            }
+                        })),
+                    )
+            })
             .when_some(self.cloud_notice(), |view, error| {
                 view.child(
                     div()

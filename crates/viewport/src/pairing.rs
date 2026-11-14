@@ -466,7 +466,13 @@ impl WorkspaceView {
                     crate::localization::text("settings-access_methods_card_choose_how_other_zuse_apps_and_browsers_can_reach_this_computer", cx),
                     None,
                 )
-                .child(s::card().child(self.managed_access_method(cx)).child(local)),
+                .child(
+                    s::card()
+                        .when(crate::cloud_gate::enabled(), |card| {
+                            card.child(self.managed_access_method(cx))
+                        })
+                        .child(local),
+                ),
             )
             .child(connect)
             .child(self.managed_computers(add, cx))

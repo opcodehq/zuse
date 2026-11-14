@@ -18,6 +18,9 @@ use crate::theme::Theme;
 use zuse_viewport::cloud_archive_cards as cloud_cards;
 
 fn cloud_owner(state: &AppState) -> Option<String> {
+    if !zuse_viewport::cloud_gate::enabled() {
+        return None;
+    }
     state
         .cloud_account
         .as_ref()
@@ -604,6 +607,9 @@ impl ArchivedPage {
         cx.notify();
     }
     fn cloud_section(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !zuse_viewport::cloud_gate::enabled() {
+            return None;
+        }
         let account = self.state.read(cx).cloud_account.as_ref();
         let access = match account {
             None => cloud_cards::Access::Loading,
@@ -885,7 +891,7 @@ impl Render for ArchivedPage {
         if self.search.is_none() {
             let search = cx.new(|cx| {
                 zuse_viewport::input::TextInput::new(
-                    "Search saved chats or Cloud archives…",
+                    zuse_viewport::cloud_gate::archive_search_placeholder(),
                     window,
                     cx,
                 )

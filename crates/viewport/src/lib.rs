@@ -24,6 +24,7 @@ pub use cloud::preparation::{
 pub mod cloud_archive_cards;
 mod cloud_billing;
 pub mod cloud_billing_view;
+pub mod cloud_gate;
 mod cloud_history;
 pub mod cloud_queue;
 pub mod cloud_repositories;
@@ -429,8 +430,8 @@ impl WorkspaceView {
         cx.observe(&input, |_, _, cx| cx.notify()).detach();
         let project_input =
             cx.new(|cx| input::TextInput::new("Absolute project path on this machine", window, cx));
-        let archive_search =
-            cx.new(|cx| input::TextInput::new("Search saved chats or Cloud archives…", window, cx));
+        let archive_search = cx
+            .new(|cx| input::TextInput::new(cloud_gate::archive_search_placeholder(), window, cx));
         cx.observe(&archive_search, |_, _, cx| cx.notify()).detach();
         let plugin_installed_search = cx.new(|cx| input::TextInput::new("Search", window, cx));
         cx.observe(&plugin_installed_search, |_, _, cx| cx.notify())

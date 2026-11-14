@@ -323,6 +323,9 @@ impl WorkspaceView {
         }));
     }
     pub(super) fn refresh_cloud(&mut self) {
+        if !crate::cloud_gate::enabled() {
+            return;
+        }
         if self.cloud.context.is_none() {
             self.cloud.context = Some(self.call(methods::CLOUD_CONTEXT, json!({})));
         }

@@ -624,6 +624,11 @@ impl SettingsSection {
         self != Self::Agents
             && (self != Self::Appshots || crate::appshots::is_desktop())
             && (!self.cloud_computer() || crate::cloud_beta())
+            // Local-only builds (see `zuse_viewport::cloud_gate`) drop
+            // everything that needs the Zuse account or another device.
+            && (!(self.cloud_computer() || matches!(self, Self::Billing | Self::Plugins))
+                || zuse_viewport::cloud_gate::enabled())
+            && (self != Self::Devices || zuse_viewport::cloud_gate::remote_enabled())
     }
 
     /// The Cloud computer group, shown only while cloud computers are in beta
@@ -641,7 +646,8 @@ impl SettingsSection {
 
     /// Where a generic "open Settings" lands for a remembered section: legacy
     /// aliases resolve to their page, and a section this build does not show
-    /// (Appshots off macOS/Linux) falls back to General.
+    /// (Appshots off macOS/Linux; Cloud, Plugins and Remote access in a
+    /// local-only build) falls back to General.
     pub(crate) fn reopenable(self) -> Self {
         let section = self.canonical();
         if section.visible_in_nav() {
@@ -1957,7 +1963,10 @@ fn local_work_phrase(chats: usize, spaces: usize) -> Option<String> {
 fn account_menu_action(scope: Option<WorkspaceScope>, flow: SyncFlow) -> Option<AccountMenuAction> {
     match scope {
         Some(WorkspaceScope::Local) => match flow {
-            SyncFlow::Idle => Some(AccountMenuAction::EnableSync),
+            // Local-only builds never offer to start syncing.
+            SyncFlow::Idle => {
+                zuse_viewport::cloud_gate::enabled().then_some(AccountMenuAction::EnableSync)
+            }
             SyncFlow::Enabling | SyncFlow::Canceling => Some(AccountMenuAction::SyncInProgress),
             SyncFlow::SwitchOffer { .. } | SyncFlow::RestartPending { .. } => {
                 Some(AccountMenuAction::RestartPending)
@@ -6228,7 +6237,10 @@ impl Shell {
     }
 
     pub(crate) fn open_settings(&mut self, section: SettingsSection, cx: &mut Context<Self>) {
-        let section = section.canonical();
+        // A link to a section this build hides (Cloud, Plugins or Remote
+        // access in a local-only build) lands on General instead of an
+        // unreachable tab.
+        let section = section.reopenable();
         self.command_palette = None;
         // Re-probe installed providers on each visit while preserving active sign-ins.
         if section == SettingsSection::Harnesses {
@@ -6327,6 +6339,10 @@ impl Shell {
 
     /// The sidebar's Plugins entry: the plugin catalog in the main area.
     pub(crate) fn open_plugins_page(&mut self, cx: &mut Context<Self>) {
+        // Plugins run through the Zuse account, which local-only builds hide.
+        if !zuse_viewport::cloud_gate::enabled() {
+            return;
+        }
         self.command_palette = None;
         self.set_voice_stage_open(false, cx);
         self.set_route(Route::Plugins, cx);
@@ -10976,16 +10992,19 @@ impl Shell {
                 .aria_label(tr(cx, msg::projects::projects_sidebar_new_project))
                 .on_click(cx.listener(|this, _, _, cx| this.open_add_space(cx))),
             )
-            .child(
-                row(
-                    "sidebar-plugins-row",
-                    icons::DITHER_PLUG,
-                    "Plugins",
-                    plugins_open,
+            // Plugins need the Zuse account, which local-only builds hide.
+            .when(zuse_viewport::cloud_gate::enabled(), |view| {
+                view.child(
+                    row(
+                        "sidebar-plugins-row",
+                        icons::DITHER_PLUG,
+                        "Plugins",
+                        plugins_open,
+                    )
+                    .aria_label(tr(cx, msg::plugins::plugins_back))
+                    .on_click(cx.listener(|this, _, _, cx| this.open_plugins_page(cx))),
                 )
-                .aria_label(tr(cx, msg::plugins::plugins_back))
-                .on_click(cx.listener(|this, _, _, cx| this.open_plugins_page(cx))),
-            )
+            })
             // Pull requests span every chat, so the entry lives with the
             // other global destinations rather than in a chat's top bar.
             .child(
@@ -22044,7 +22063,7 @@ mod settings_modal_regressions {
                 let selected = shell.state.read(cx).selected_chat.clone();
                 for section in SettingsSection::ALL {
                     shell.open_settings(section, cx);
-                    assert_eq!(shell.route, Route::Settings(section.canonical()));
+                    assert_eq!(shell.route, Route::Settings(section.reopenable()));
                     assert_eq!(shell.nav.current().clone(), history);
                     assert_eq!(shell.state.read(cx).selected_chat, selected);
                     shell.toggle_settings(cx);
