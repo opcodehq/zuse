@@ -8,8 +8,12 @@ mod code;
 mod handoff;
 #[path = "pull_request_interactions.rs"]
 mod interactions;
+#[path = "pull_request_mermaid.rs"]
+mod mermaid;
 #[path = "pull_request_summary.rs"]
 mod summary;
+#[path = "pull_request_timeline.rs"]
+mod timeline;
 use crate::{
     settings::{self, PullRequestDestination, widgets},
     state::AppState,
@@ -363,7 +367,14 @@ pub fn open_on_device(url: &str, device: Option<String>, window: &mut Window, cx
 enum Tab {
     Summary,
     Code,
+    Timeline,
     Activity,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EditMode {
+    Details,
+    Reviewers,
 }
 
 /// Navigation segments in display order: (tab, label, element id, glyph).
@@ -394,7 +405,7 @@ const NAV_PADDING: f32 = 2.0;
 /// Each segment's fill sits this far inside its slot, so a hovered segment
 /// and the thumb beside it keep a gap instead of touching.
 const NAV_SEGMENT_INSET: f32 = 2.0;
-const NAV_SEGMENT_HEIGHT: f32 = 28.0;
+const NAV_SEGMENT_HEIGHT: f32 = 26.0;
 /// Room above the window edge for the floating section navigation: its 16px
 /// inset, its height, and 16px of air. The diff and the comment dock end here.
 const NAV_CLEARANCE: f32 = 16.0 + NAV_HEIGHT + 16.0;
@@ -405,12 +416,12 @@ const NAV_HEIGHT: f32 = NAV_SEGMENT_HEIGHT + 2.0 * (NAV_SEGMENT_INSET + NAV_PADD
 /// tightens its gutters.
 const NARROW_PAGE: f32 = 480.0;
 const DETAIL_COLUMN_MAX: f32 = 760.0;
-const DETAIL_PAD_X: f32 = 18.0;
+const DETAIL_PAD_X: f32 = 8.0;
 /// Below this page width the section navigation shows glyphs and counts
 /// only; the labels no longer fit three equal segments.
 const COMPACT_NAV_PAGE: f32 = 440.0;
 /// The content column's gutter on narrow pages.
-const NARROW_PAD_X: f32 = 12.0;
+const NARROW_PAD_X: f32 = 4.0;
 
 /// What a patch row stands for in the review stream.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -679,6 +690,10 @@ pub struct PullRequestDetailPage {
     task: Option<Task<()>>,
     diff_task: Option<Task<()>>,
     more_open: bool,
+    edit_mode: Option<EditMode>,
+    edit_title: Entity<crate::composer::ComposerInput>,
+    edit_body: Entity<crate::composer::ComposerInput>,
+    edit_reviewers: Entity<crate::composer::ComposerInput>,
     updating_pr: bool,
     _poll: Option<Task<()>>,
     watch_engine: Option<crate::state::EngineHandle>,
@@ -698,6 +713,7 @@ pub struct PullRequestDetailPage {
     diff: Option<Arc<ParsedDiff>>,
     review: CodeReview,
     diff_error: Option<String>,
+    selected_commit: Option<String>,
     /// Refresh invalidated the patch. Keep bypassing the engine cache until
     /// a diff load succeeds, including across errors and reopening.
     diff_refresh_owed: bool,
@@ -705,7 +721,7 @@ pub struct PullRequestDetailPage {
     checks_expanded: bool,
     description_collapsed: bool,
     tab_slide: crate::motion::IndicatorSlide,
-    tab_focus: [gpui::FocusHandle; 3],
+    tab_focus: [gpui::FocusHandle; 4],
     /// The file tree is one Tab stop; arrow keys move between files.
     tree_focus: gpui::FocusHandle,
     /// The narrow layout's file picker trigger, refocused when it closes.
@@ -772,6 +788,19 @@ impl PullRequestDetailPage {
             task: None,
             diff_task: None,
             more_open: false,
+            edit_mode: None,
+            edit_title: cx.new(|cx| {
+                crate::composer::ComposerInput::new("Pull request title", cx).with_tab_stop()
+            }),
+            edit_body: cx.new(|cx| {
+                crate::composer::ComposerInput::new("Description", cx)
+                    .with_viewport_height(160.0)
+                    .with_tab_stop()
+            }),
+            edit_reviewers: cx.new(|cx| {
+                crate::composer::ComposerInput::new("GitHub usernames, separated by commas", cx)
+                    .with_tab_stop()
+            }),
             updating_pr: false,
             _poll: None,
             watch_engine: None,
@@ -786,18 +815,15 @@ impl PullRequestDetailPage {
             update_notice: None,
             feedback_collapsed: false,
             diff: None,
-            // Open on the layout last chosen here or in the Changes pane.
-            review: CodeReview {
-                split: settings::current(cx).diff_split,
-                ..CodeReview::default()
-            },
+            review: CodeReview::default(),
             diff_error: None,
+            selected_commit: None,
             diff_refresh_owed: false,
             tab: Tab::Summary,
             checks_expanded: true,
             description_collapsed: false,
             tab_slide: crate::motion::IndicatorSlide::at(tab_slot(Tab::Summary), Instant::now()),
-            tab_focus: [cx.focus_handle(), cx.focus_handle(), cx.focus_handle()],
+            tab_focus: std::array::from_fn(|_| cx.focus_handle()),
             tree_focus: cx.focus_handle().tab_stop(true),
             files_focus: cx.focus_handle().tab_stop(true),
             return_focus: None,
@@ -966,6 +992,23 @@ impl PullRequestDetailPage {
         self.loading
     }
 
+    pub(crate) fn lifecycle_icon(&self, theme: &Theme) -> (&'static str, gpui::Hsla) {
+        if let Some(detail) = &self.detail {
+            let (glyph, color, _) = summary::state_style(&detail.state, detail.is_draft, theme);
+            return (glyph, color);
+        }
+        if let Some(preview) = &self.preview {
+            let state = match preview.state {
+                zuse_protocol::ChangeRequestState::Open => "OPEN",
+                zuse_protocol::ChangeRequestState::Merged => "MERGED",
+                zuse_protocol::ChangeRequestState::Closed => "CLOSED",
+            };
+            let (glyph, color, _) = summary::state_style(state, preview.is_draft, theme);
+            return (glyph, color);
+        }
+        (crate::icons::PULL_REQUEST, theme.text_muted)
+    }
+
     pub(crate) fn watch_in_chat(&mut self, chat_id: String, cx: &mut Context<Self>) {
         self.watch_control = Some(cx.new(|cx| {
             crate::pr_watch::PrWatchControl::new(
@@ -984,6 +1027,7 @@ impl PullRequestDetailPage {
     pub(crate) fn toolbar(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::of(cx).clone();
         let copy_url = self.url.clone();
+        let external_url = copy_url.clone();
         let (number, title) = self.identity();
         let state = self
             .detail
@@ -1041,8 +1085,12 @@ impl PullRequestDetailPage {
                             .child(format!("#{number}"))
                     })),
             )
+            .children(merge)
+            .child(
+                action("pr-open-github", "Open on GitHub", &theme)
+                    .on_click(move |_, _, cx| cx.open_url(&external_url)),
+            )
             .child(self.overflow_menu(star_url, copy_url, &theme, cx))
-            .children(merge.map(|merge| div().ml(px(6.0)).child(merge)))
             .into_any_element()
     }
 
@@ -1088,13 +1136,15 @@ impl PullRequestDetailPage {
                 .id(id)
                 .debug_selector(move || id.to_owned())
                 .role(gpui::Role::MenuItem)
+                .tab_index(0)
+                .text_size(crate::typography::text_sm())
                 .child(
                     crate::icons::icon(glyph)
                         .size(px(14.0))
                         .flex_none()
                         .text_color(theme.text_muted),
                 )
-                .child(label)
+                .child(div().flex_1().min_w_0().truncate().child(label))
         };
         let menu = self.more_open.then(|| {
             gpui::deferred(
@@ -1104,12 +1154,65 @@ impl PullRequestDetailPage {
                     .top_full()
                     .right_0()
                     .mt(px(4.0))
-                    .w(px(208.0))
+                    .w(px(220.0))
+                    .flex()
+                    .flex_col()
+                    .gap(px(1.0))
+                    .bg(crate::popover::surface_bg(theme))
                     .occlude()
                     .on_mouse_down_out(cx.listener(|page, _, _, cx| {
                         page.more_open = false;
                         cx.notify();
                     }))
+                    .child(
+                        row("pr-menu-timeline", crate::icons::HISTORY, "Timeline").on_click(
+                            cx.listener(|page, _, _, cx| {
+                                page.more_open = false;
+                                page.select_tab(Tab::Timeline, cx);
+                            }),
+                        ),
+                    )
+                    .child(crate::popover::menu_separator())
+                    .when(has_detail, |el| {
+                        el.child(
+                            row(
+                                "pr-edit-details",
+                                crate::icons::DOCUMENT,
+                                "Edit title and description",
+                            )
+                            .on_click(cx.listener(
+                                |page, _, window, cx| {
+                                    if let Some(detail) = &page.detail {
+                                        let (title, body) =
+                                            (detail.title.clone(), detail.body.clone());
+                                        page.edit_title
+                                            .update(cx, |input, cx| input.set_text(&title, cx));
+                                        page.edit_body
+                                            .update(cx, |input, cx| input.set_text(&body, cx));
+                                        page.edit_mode = Some(EditMode::Details);
+                                        page.more_open = false;
+                                        page.select_tab(Tab::Summary, cx);
+                                        window
+                                            .focus(&page.edit_title.read(cx).focus_handle(cx), cx);
+                                    }
+                                },
+                            )),
+                        )
+                        .child(
+                            row("pr-add-reviewers", crate::icons::EYE, "Add reviewers").on_click(
+                                cx.listener(|page, _, window, cx| {
+                                    page.edit_reviewers
+                                        .update(cx, |input, cx| input.set_text("", cx));
+                                    page.edit_mode = Some(EditMode::Reviewers);
+                                    page.more_open = false;
+                                    page.select_tab(Tab::Summary, cx);
+                                    window
+                                        .focus(&page.edit_reviewers.read(cx).focus_handle(cx), cx);
+                                }),
+                            ),
+                        )
+                        .child(crate::popover::menu_separator())
+                    })
                     .child(
                         row("pr-external", crate::icons::PR_GITHUB, "Open on GitHub").on_click(
                             cx.listener(move |page, _, _, cx| {
@@ -1514,11 +1617,19 @@ impl PullRequestDetailPage {
                 }) {
                     self.diff_task = None;
                     self.diff = None;
+                    self.selected_commit = None;
                     self.diff_refresh_owed = true;
                 }
                 self.discussion_loaded = snapshot.discussion_loaded;
                 self.fetched = Some(snapshot.fetched);
-                snapshot.diff = self.diff.clone();
+                if self.selected_commit.is_none() {
+                    snapshot.diff = self.diff.clone();
+                } else if let Some(cached) = self.cache.borrow_mut().get(&self.target, &self.url)
+                    && cached.detail.base_ref_oid == snapshot.detail.base_ref_oid
+                    && cached.detail.head_ref_oid == snapshot.detail.head_ref_oid
+                {
+                    snapshot.diff = cached.diff;
+                }
                 snapshot.diff_refresh_owed = self.diff_refresh_owed;
                 self.body = Some(snapshot.body.clone());
                 self.activity_bodies = snapshot.activity.clone();
@@ -1589,6 +1700,7 @@ impl PullRequestDetailPage {
                                     page.diff_task = None;
                                     page.detail = None;
                                     page.diff = None;
+                                    page.selected_commit = None;
                                     page.body = None;
                                     page.activity_bodies.clear();
                                     page.cache.borrow_mut().evict(&page.target, &page.url);
@@ -1741,7 +1853,11 @@ impl PullRequestDetailPage {
         };
         self.diff_error = None;
         let refresh = refresh || self.diff_refresh_owed;
-        let params = self.params(refresh);
+        let mut params = self.params(refresh);
+        let selected_commit = self.selected_commit.clone();
+        if let Some(oid) = &selected_commit {
+            params["commitOid"] = oid.clone().into();
+        }
         let detail = self.detail.as_ref().unwrap();
         let revisions = (detail.base_ref_oid.clone(), detail.head_ref_oid.clone());
         self.diff_task = Some(cx.spawn(async move |this, cx| {
@@ -1765,6 +1881,7 @@ impl PullRequestDetailPage {
                 // Cancellation is the first line of defense; the response
                 // must also belong to the revisions currently being shown.
                 if page.loading
+                    || page.selected_commit != selected_commit
                     || !page.detail.as_ref().is_some_and(|detail| {
                         (&detail.base_ref_oid, &detail.head_ref_oid) == (&revisions.0, &revisions.1)
                     })
@@ -1774,21 +1891,23 @@ impl PullRequestDetailPage {
                 page.diff_task = None;
                 match result {
                     Ok(diff) => {
-                        page.diff_refresh_owed = false;
-                        let cached = page.cache.borrow_mut().get(&page.target, &page.url);
-                        if let Some(mut snapshot) = cached
-                            && (
-                                snapshot.detail.base_ref_oid.as_str(),
-                                snapshot.detail.head_ref_oid.as_str(),
-                            ) == (revisions.0.as_str(), revisions.1.as_str())
-                        {
-                            snapshot.diff = Some(diff.clone());
-                            snapshot.diff_refresh_owed = false;
-                            page.cache.borrow_mut().put(
-                                page.target.clone(),
-                                page.url.clone(),
-                                snapshot,
-                            );
+                        if selected_commit.is_none() {
+                            page.diff_refresh_owed = false;
+                            let cached = page.cache.borrow_mut().get(&page.target, &page.url);
+                            if let Some(mut snapshot) = cached
+                                && (
+                                    snapshot.detail.base_ref_oid.as_str(),
+                                    snapshot.detail.head_ref_oid.as_str(),
+                                ) == (revisions.0.as_str(), revisions.1.as_str())
+                            {
+                                snapshot.diff = Some(diff.clone());
+                                snapshot.diff_refresh_owed = false;
+                                page.cache.borrow_mut().put(
+                                    page.target.clone(),
+                                    page.url.clone(),
+                                    snapshot,
+                                );
+                            }
                         }
                         page.install_diff(diff, cx);
                     }
@@ -1830,6 +1949,7 @@ impl PullRequestDetailPage {
         let compact = self
             .page_width
             .is_some_and(|width| width < COMPACT_NAV_PAGE);
+        let show_counts = compact || self.page_width.is_none_or(|width| width >= 560.0);
         let position = self.tab_slide.value_at(Instant::now());
         let thumb = div()
             .debug_selector(|| "pr-detail-nav-thumb".into())
@@ -1842,7 +1962,7 @@ impl PullRequestDetailPage {
             .child(
                 div()
                     .size_full()
-                    .rounded_full()
+                    .rounded(px(5.0))
                     .bg(theme.glass_hover())
                     .shadow(crate::theme::card_selected_shadows()),
             );
@@ -1858,7 +1978,11 @@ impl PullRequestDetailPage {
             .enumerate()
             .map(|(slot, (tab, label, id, glyph))| {
                 // 1 while the thumb sits on this slot, 0 once it is a slot away.
-                let covered = (1.0 - (position - slot as f32).abs()).clamp(0.0, 1.0);
+                let covered = if self.tab == Tab::Timeline {
+                    0.0
+                } else {
+                    (1.0 - (position - slot as f32).abs()).clamp(0.0, 1.0)
+                };
                 let hover_key = format!("pr-detail-{}-{id}", cx.entity_id());
                 let hover = crate::motion::hover_t(&hover_key);
                 let emphasis = covered.max(hover);
@@ -1884,8 +2008,8 @@ impl PullRequestDetailPage {
                     .child(
                         div()
                             .h(px(NAV_SEGMENT_HEIGHT))
-                            .px(px(if compact { 10.0 } else { 14.0 }))
-                            .rounded_full()
+                            .px(px(8.0))
+                            .rounded(px(5.0))
                             .flex()
                             .items_center()
                             .justify_center()
@@ -1918,7 +2042,7 @@ impl PullRequestDetailPage {
                                     .when(!compact, |el| {
                                         el.child(div().min_w_0().truncate().child(label))
                                     })
-                                    .children(count.map(|count| {
+                                    .children(count.filter(|_| show_counts).map(|count| {
                                         div()
                                             .flex_none()
                                             .text_size(crate::typography::text_xs())
@@ -1928,7 +2052,7 @@ impl PullRequestDetailPage {
                                     })),
                             ),
                     )
-                    .rounded_full()
+                    .rounded(px(5.0))
                     .when(compact, |el| el.tip(label))
                     .on_click(cx.listener(move |page, _, _, cx| page.select_tab(tab, cx)))
                     .on_key_down(cx.listener(
@@ -1955,12 +2079,15 @@ impl PullRequestDetailPage {
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_mouse_up(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .p(px(NAV_PADDING))
-            .rounded_full()
+            .rounded(px(7.0))
             // The composer's material, so the two floating controls read as
             // one family.
             .border_1()
-            .border_color(theme.composer_surface_border())
-            .bg(theme.composer_surface_bg())
+            .border_color(theme.border_strong)
+            .bg(theme
+                .panel_bg()
+                .blend(crate::theme::wash(0.07))
+                .opacity(0.96))
             .when(!theme.is_frost(), |el| el.shadow_lg())
             .flex_none()
             .child(
@@ -1968,11 +2095,11 @@ impl PullRequestDetailPage {
                     .relative()
                     .grid()
                     .grid_cols(TABS.len() as u16)
-                    .child(thumb)
+                    .when(self.tab != Tab::Timeline, |el| el.child(thumb))
                     .children(segments),
             );
         // Concentric: the pill radius is the segment radius plus the padding.
-        let radius = NAV_SEGMENT_HEIGHT / 2.0 + NAV_SEGMENT_INSET + NAV_PADDING + 1.0;
+        let radius = 7.0;
         div()
             .absolute()
             .bottom(px(16.0))
@@ -1981,11 +2108,13 @@ impl PullRequestDetailPage {
             .px(px(16.0))
             .flex()
             .justify_center()
-            .child(div().max_w_full().child(crate::frost::frosted(
-                radius,
-                crate::frost::MENU_BLUR,
-                tabs,
-            )))
+            .child(
+                div()
+                    .max_w_full()
+                    .child(crate::frost::layered(crate::frost::backdrop(
+                        radius, 8.0, tabs,
+                    ))),
+            )
             .into_any_element()
     }
 
@@ -1994,8 +2123,143 @@ impl PullRequestDetailPage {
         cx.notify();
     }
 
+    fn editor(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let mode = self.edit_mode?;
+        let field = |label: &'static str, input: Entity<crate::composer::ComposerInput>| {
+            let focus_input = input.clone();
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(6.0))
+                .child(
+                    div()
+                        .text_size(crate::typography::text_xs())
+                        .text_color(theme.text_muted)
+                        .child(label),
+                )
+                .child(
+                    crate::surface_chrome::input()
+                        .min_w_0()
+                        .when(label == "Description", |el| {
+                            el.h(px(140.0)).items_start().py(px(8.0))
+                        })
+                        .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
+                            cx.stop_propagation();
+                            window.focus(&focus_input.read(cx).focus_handle(cx), cx);
+                        })
+                        .child(div().w_full().child(input)),
+                )
+        };
+        Some(
+            div()
+                .id("pr-editor")
+                .debug_selector(|| "pr-editor".into())
+                .mx(px(8.0))
+                .mb(px(16.0))
+                .p(px(12.0))
+                .rounded(px(8.0))
+                .border_1()
+                .border_color(theme.border)
+                .bg(theme.surface_raised)
+                .flex()
+                .flex_col()
+                .gap(px(12.0))
+                .child(
+                    div()
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .child(match mode {
+                            EditMode::Details => "Edit pull request",
+                            EditMode::Reviewers => "Add reviewers",
+                        }),
+                )
+                .when(mode == EditMode::Details, |el| {
+                    el.child(field("Title", self.edit_title.clone()))
+                        .child(field("Description", self.edit_body.clone()))
+                })
+                .when(mode == EditMode::Reviewers, |el| {
+                    el.child(field(
+                        "GitHub usernames or team slugs",
+                        self.edit_reviewers.clone(),
+                    ))
+                })
+                .child(
+                    div()
+                        .flex()
+                        .justify_end()
+                        .gap(px(8.0))
+                        .child(
+                            action("pr-edit-cancel", "Cancel", theme).on_click(cx.listener(
+                                |page, _, _, cx| {
+                                    page.edit_mode = None;
+                                    cx.notify();
+                                },
+                            )),
+                        )
+                        .child(
+                            action(
+                                "pr-edit-save",
+                                if self.updating_pr {
+                                    "Saving…"
+                                } else {
+                                    "Save"
+                                },
+                                theme,
+                            )
+                            .on_click(cx.listener(
+                                move |page, _, _, cx| {
+                                    if page.updating_pr {
+                                        return;
+                                    }
+                                    let update = match mode {
+                                        EditMode::Details => {
+                                            let title =
+                                                page.edit_title.read(cx).text().trim().to_owned();
+                                            if title.is_empty() {
+                                                page.update_notice =
+                                                    Some("Enter a pull request title.".into());
+                                                cx.notify();
+                                                return;
+                                            }
+                                            zuse_protocol::ChangeRequestUpdate::Edit {
+                                                title,
+                                                body: page.edit_body.read(cx).text().to_owned(),
+                                            }
+                                        }
+                                        EditMode::Reviewers => {
+                                            let reviewers: Vec<String> = page
+                                                .edit_reviewers
+                                                .read(cx)
+                                                .text()
+                                                .split([',', '\n'])
+                                                .map(str::trim)
+                                                .filter(|entry| !entry.is_empty())
+                                                .map(str::to_owned)
+                                                .collect();
+                                            if reviewers.is_empty() {
+                                                page.update_notice =
+                                                    Some("Enter at least one reviewer.".into());
+                                                cx.notify();
+                                                return;
+                                            }
+                                            zuse_protocol::ChangeRequestUpdate::AddReviewers {
+                                                reviewers,
+                                            }
+                                        }
+                                    };
+                                    page.update_pr(update, cx);
+                                },
+                            )),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+
     fn select_tab(&mut self, tab: Tab, cx: &mut Context<Self>) {
+        self.more_open = false;
+        self.merge_menu = summary::MergeMenu::Closed;
         if self.tab == tab {
+            cx.notify();
             return;
         }
         self.tab_slide.retarget(
@@ -2014,6 +2278,21 @@ impl PullRequestDetailPage {
         }
         cx.notify();
     }
+
+    fn select_commit(&mut self, oid: Option<String>, cx: &mut Context<Self>) {
+        self.diff_task = None;
+        self.diff_error = None;
+        self.diff = None;
+        self.selected_commit = oid;
+        self.review = CodeReview::default();
+        crate::markdown::render::clear_selection_surface(&self.selection_prefix);
+        if self.tab == Tab::Code {
+            self.load_diff(false, cx);
+        } else {
+            self.select_tab(Tab::Code, cx);
+        }
+        cx.notify();
+    }
 }
 
 /// Seed `cache` with a synthetic pull request (details, description,
@@ -2027,6 +2306,7 @@ pub(crate) fn fixture_seed_cache(cache: &Rc<RefCell<PullRequestCache>>) -> Strin
     let url = "https://github.com/opcodehq/fieldnotes/pull/2942".to_owned();
     let actor = |login: &str| ChangeRequestActor {
         login: login.into(),
+        ..Default::default()
     };
     let file = |path: &str, header: &str, body: &str| {
         format!("diff --git a/{path} b/{path}\n{header}--- a/{path}\n+++ b/{path}\n{body}")
@@ -2092,6 +2372,35 @@ pub(crate) fn fixture_seed_cache(cache: &Rc<RefCell<PullRequestCache>>) -> Strin
         mergeable: "MERGEABLE".into(),
         additions: 29,
         deletions: 13,
+        commits: Some(vec![
+            zuse_protocol::ChangeRequestCommit {
+                oid: "7a2f9d3c4b5e6f708192a3b4c5d6e7f809123456".into(),
+                message_headline: "Extend the deadline for agreement preparation".into(),
+                committed_date: "2026-10-26T08:30:00Z".into(),
+                authors: vec![zuse_protocol::ChangeRequestCommitAuthor {
+                    login: Some("swarajbachu".into()), name: Some("Swaraj Bachu".into()),
+                }],
+                ..Default::default()
+            },
+            zuse_protocol::ChangeRequestCommit {
+                oid: "1f0c9a7e2b3d4c5e6f708192a3b4c5d6e7f80912".into(),
+                message_headline: "Keep funded applications on the resume path".into(),
+                committed_date: "2026-10-26T09:15:00Z".into(),
+                authors: vec![zuse_protocol::ChangeRequestCommitAuthor {
+                    login: Some("mira-chen".into()), name: Some("Mira Chen".into()),
+                }],
+                ..Default::default()
+            },
+            zuse_protocol::ChangeRequestCommit {
+                oid: "8e1d2c3b4a5968778695a4b3c2d1e0f9a8b7c6d5".into(),
+                message_headline: "Cover signing handoff and funded application regressions".into(),
+                committed_date: "2026-10-27T11:00:00Z".into(),
+                authors: vec![zuse_protocol::ChangeRequestCommitAuthor {
+                    login: Some("swarajbachu".into()), name: Some("Swaraj Bachu".into()),
+                }],
+                ..Default::default()
+            },
+        ]),
         files: [
             ("apps/mobile/lib/trpc-fetch.ts", 9, 0),
             ("apps/mobile/lib/deal-engagement.ts", 3, 1),
@@ -2176,9 +2485,12 @@ impl PullRequestDetailPage {
     /// `summary`, `code` (a file list), `code-open` (the first files
     /// unfolded, one viewed), or `activity`.
     pub fn fixture_review(&mut self, variant: &str, cx: &mut Context<Self>) {
+        self.more_open = false;
+        self.merge_menu = summary::MergeMenu::Closed;
         let tab = match variant {
             v if v.starts_with("code") => Tab::Code,
             "activity" => Tab::Activity,
+            "timeline" => Tab::Timeline,
             _ => Tab::Summary,
         };
         self.tab_slide = crate::motion::IndicatorSlide::at(tab_slot(tab), Instant::now());
@@ -2233,6 +2545,7 @@ impl PullRequestDetailPage {
 fn diagram_handler(
     cache: Rc<RefCell<crate::markdown::mermaid_cache::MermaidCache>>,
     owner: gpui::WeakEntity<PullRequestDetailPage>,
+    responsive: bool,
 ) -> Rc<dyn Fn(&str, SharedString, &Theme) -> crate::markdown::render::DiagramView> {
     use crate::markdown::{
         mermaid_cache::Lookup,
@@ -2245,8 +2558,45 @@ fn diagram_handler(
             Lookup::Failed(reason) => DiagramView::Failed(reason),
             Lookup::Ready(media) => {
                 let show_source = cache.borrow().source_visible(&id);
+                let alternate = if responsive
+                    && !show_source
+                    && mermaid::needs_vertical(media.width, cache.borrow().view_width())
+                {
+                    mermaid::vertical_source(code).and_then(|source| {
+                        match cache.borrow_mut().request(&source, &id) {
+                            Lookup::Ready(vertical) => Some(vertical),
+                            _ => None,
+                        }
+                    })
+                } else {
+                    None
+                };
                 let body = if show_source {
                     gpui::Empty.into_any_element()
+                } else if let Some(vertical) = alternate {
+                    let open = owner.clone();
+                    let source = vertical.clone();
+                    div()
+                        .id(format!("{id}-image"))
+                        .w_full()
+                        .max_w(px(vertical.width))
+                        .mx_auto()
+                        .aspect_ratio(vertical.width / vertical.height)
+                        .cursor_pointer()
+                        .role(gpui::Role::Button)
+                        .aria_label("Enlarge diagram")
+                        .on_click(move |_, window, cx| {
+                            cx.stop_propagation();
+                            let _ = open.update(cx, |page, cx| {
+                                page.open_diagram(source.clone(), window, cx)
+                            });
+                        })
+                        .child(
+                            gpui::img(vertical.image.clone())
+                                .size_full()
+                                .object_fit(gpui::ObjectFit::Contain),
+                        )
+                        .into_any_element()
                 } else {
                     let open = owner.clone();
                     let source = media.clone();
@@ -2284,8 +2634,9 @@ fn rich_text(
     window: &mut Window,
     diagrams: Rc<RefCell<crate::markdown::mermaid_cache::MermaidCache>>,
     owner: gpui::WeakEntity<PullRequestDetailPage>,
+    responsive_diagrams: bool,
 ) -> AnyElement {
-    let diagram = diagram_handler(diagrams, owner.clone());
+    let diagram = diagram_handler(diagrams, owner.clone(), responsive_diagrams);
     let options = crate::markdown::render::RenderOptions {
         tasks: None,
         media: Some(crate::markdown::render::MediaUi {
@@ -2314,7 +2665,11 @@ fn rich_text(
     div()
         .debug_selector(|| "pr-rich-text".into())
         .child(super::pull_request_media::render_description(
-            body, &options, theme, window,
+            body,
+            &options,
+            theme,
+            window,
+            responsive_diagrams,
         ))
         .into_any_element()
 }
@@ -2368,6 +2723,7 @@ fn action(id: &'static str, label: &'static str, theme: &Theme) -> gpui::Statefu
     let icon_only = matches!(
         id,
         "pr-more"
+            | "pr-open-github"
             | "pr-copy-patch"
             | "pr-copy-path"
             | "pr-files"
@@ -2381,10 +2737,12 @@ fn action(id: &'static str, label: &'static str, theme: &Theme) -> gpui::Statefu
     let glyph = match id {
         "pr-split" => Some(crate::icons::SPLIT_COLUMNS),
         "pr-fold-all" => Some(crate::icons::FOLD_VERTICAL),
-        "pr-more" => Some(crate::icons::MORE_HORIZONTAL),
+        "pr-more" => Some(crate::icons::LIST),
         "pr-copy-patch" | "pr-copy-path" => Some(crate::icons::COPY),
         "pr-retry" | "pr-retry-diff" => Some(crate::icons::REFRESH),
-        "pr-review-open" | "pr-comment-open" => Some(crate::icons::ARROW_UP_RIGHT),
+        "pr-open-github" | "pr-review-open" | "pr-comment-open" => {
+            Some(crate::icons::ARROW_UP_RIGHT)
+        }
         "pr-review-add" | "pr-comment-add" => Some(crate::icons::PR_ADD_TO_CHAT),
         "pr-files" => Some(crate::icons::MAGNIFER),
         _ => None,
@@ -2542,11 +2900,13 @@ impl Render for PullRequestDetailPage {
                 .pt(px(match self.tab {
                     Tab::Code => 0.0,
                     Tab::Activity => 8.0,
+                    Tab::Timeline => 8.0,
                     Tab::Summary => 2.0,
                 }))
                 .pb(px(match self.tab {
                     // The comment dock sits below the scroll, not over it.
                     Tab::Activity => 32.0,
+                    Tab::Timeline => NAV_CLEARANCE,
                     // The workspace reserves its own room for the navigation.
                     Tab::Code => 0.0,
                     Tab::Summary => 76.0,
@@ -2575,9 +2935,32 @@ impl Render for PullRequestDetailPage {
                 });
                 match self.tab {
                     Tab::Summary => {
+                        column = column.children(self.editor(&theme, cx));
                         column = column.child(self.summary_body(detail, &theme, window, cx));
                     }
                     Tab::Code => {
+                        if let Some(oid) = &self.selected_commit {
+                            let short_oid: String = oid.chars().take(7).collect();
+                            column = column.child(
+                                div()
+                                    .id("pr-selected-commit")
+                                    .debug_selector(|| "pr-selected-commit".into())
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(8.0))
+                                    .px(px(if narrow { NARROW_PAD_X } else { DETAIL_PAD_X } + 8.0))
+                                    .text_size(crate::typography::text_xs())
+                                    .text_color(theme.text_muted)
+                                    .child(format!("Commit {short_oid}"))
+                                    .child(
+                                        action("pr-all-changes", "All changes", &theme).on_click(
+                                            cx.listener(|page, _, _, cx| {
+                                                page.select_commit(None, cx)
+                                            }),
+                                        ),
+                                    ),
+                            );
+                        }
                         if let Some(error) = &self.diff_error {
                             column = column
                                 .child(widgets::error_strip(&theme, error.clone()))
@@ -2589,6 +2972,9 @@ impl Render for PullRequestDetailPage {
                             column = column.child(self.code_workspace(&theme, window, cx));
                         }
                     }
+                    Tab::Timeline => {
+                        column = column.child(self.timeline_body(detail, &theme, cx));
+                    }
                     Tab::Activity => {
                         let mut activity: Vec<_> = detail.activity_comments().enumerate().collect();
                         activity.sort_by_key(|(_, comment)| {
@@ -2598,8 +2984,7 @@ impl Render for PullRequestDetailPage {
                                 &comment.created_at
                             }
                         });
-                        // The thread starts 12px under the header's hairline.
-                        let mut thread = div().id("pr-activity-thread").debug_selector(|| "pr-activity-thread".into()).mt(px(12.0))
+                        let mut thread = div().id("pr-activity-thread").debug_selector(|| "pr-activity-thread".into()).mt(px(24.0))
                             // Authors line up with the title and metadata above;
                             // your own replies stay flush with the composer.
                             .pl(px(8.0))
@@ -2650,97 +3035,76 @@ impl Render for PullRequestDetailPage {
                                     ),
                             );
                         }
-                        let viewer_login = detail.viewer_login.as_deref().or_else(|| {
-                            detail
-                                .activity_comments()
-                                .find(|comment| {
-                                    comment.viewer_did_author && !comment.author.login.is_empty()
-                                })
-                                .map(|comment| comment.author.login.as_str())
-                        });
                         for (index, comment) in activity {
-                            let own = comment.viewer_did_author
-                                || viewer_login.is_some_and(|login| {
-                                    login.eq_ignore_ascii_case(&comment.author.login)
-                                });
                             thread = thread.child(
-                                div()
-                                    .w_full()
-                                    .flex()
-                                    .mb(px(14.0))
-                                    .when(own, |el| el.justify_end())
-                                    .child(
-                                        div()
-                                            .id(SharedString::from(format!("pr-message-{index}")))
-                                            .debug_selector(move || format!("pr-message-{index}"))
-                                            .min_w_0()
-                                            .w_full()
-                                            .when(own, |el| {
-                                                el.max_w(gpui::relative(0.8))
-                                                    .px(px(12.0))
-                                                    .py(px(8.0))
-                                                    .rounded(px(Theme::BUBBLE_RADIUS))
-                                                    .bg(crate::theme::user_bubble_bg())
-                                            })
-                                            .flex()
-                                            .flex_col()
-                                            .gap(px(6.0))
-                                            .child(
-                                                div()
-                                                    .flex()
-                                                    .items_center()
-                                                    .gap(px(8.0))
-                                                    .child(super::pull_request_media::avatar(
-                                                        &comment.author.login,
-                                                        format!("pr-actor-{index}").into(),
-                                                        20.0,
-                                                        &theme,
-                                                    ))
-                                                    .child(
-                                                        div()
-                                                            .min_w_0()
-                                                            .truncate()
-                                                            .font_weight(gpui::FontWeight::MEDIUM)
-                                                            .child(
-                                                                if comment.author.login.is_empty() {
-                                                                    "Deleted account".to_owned()
-                                                                } else {
-                                                                    comment.author.login.clone()
-                                                                },
-                                                            ),
-                                                    )
-                                                    .when(
-                                                        !comment.state.is_empty()
-                                                            && !comment
-                                                                .state
-                                                                .eq_ignore_ascii_case("COMMENTED"),
-                                                        |el| {
-                                                            el.child(status_chip(
-                                                                &comment.state,
-                                                                &theme,
-                                                            ))
-                                                        },
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .text_size(crate::typography::text_xs())
-                                                            .text_color(theme.text_muted)
-                                                            .child(activity_time(
-                                                                if comment.created_at.is_empty() {
-                                                                    &comment.submitted_at
-                                                                } else {
-                                                                    &comment.created_at
-                                                                },
-                                                            )),
-                                                    )
-                                                    .child(div().flex_1())
-                                                    .child({
-                                                        let id = comment.id.clone();
-                                                        action(
-                                                            "pr-comment-add",
-                                                            "Add to chat",
+                                div().w_full().flex().mb(px(14.0)).child(
+                                    div()
+                                        .id(SharedString::from(format!("pr-message-{index}")))
+                                        .debug_selector(move || format!("pr-message-{index}"))
+                                        .min_w_0()
+                                        .w_full()
+                                        .px(px(12.0))
+                                        .py(px(10.0))
+                                        .rounded(px(6.0))
+                                        .border_1()
+                                        .border_color(theme.border)
+                                        .bg(theme.panel_bg().blend(crate::theme::wash(0.025)))
+                                        .flex()
+                                        .flex_col()
+                                        .gap(px(6.0))
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .items_center()
+                                                .gap(px(8.0))
+                                                .child(super::pull_request_media::avatar_with_url(
+                                                    &comment.author.login,
+                                                    comment.author.avatar_url.as_deref(),
+                                                    format!("pr-actor-{index}").into(),
+                                                    20.0,
+                                                    &theme,
+                                                ))
+                                                .child(
+                                                    div()
+                                                        .min_w_0()
+                                                        .truncate()
+                                                        .font_weight(gpui::FontWeight::MEDIUM)
+                                                        .child(
+                                                            if comment.author.login.is_empty() {
+                                                                "Deleted account".to_owned()
+                                                            } else {
+                                                                comment.author.login.clone()
+                                                            },
+                                                        ),
+                                                )
+                                                .when(
+                                                    !comment.state.is_empty()
+                                                        && !comment
+                                                            .state
+                                                            .eq_ignore_ascii_case("COMMENTED"),
+                                                    |el| {
+                                                        el.child(status_chip(
+                                                            &comment.state,
                                                             &theme,
-                                                        )
+                                                        ))
+                                                    },
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_size(crate::typography::text_xs())
+                                                        .text_color(theme.text_muted)
+                                                        .child(activity_time(
+                                                            if comment.created_at.is_empty() {
+                                                                &comment.submitted_at
+                                                            } else {
+                                                                &comment.created_at
+                                                            },
+                                                        )),
+                                                )
+                                                .child(div().flex_1())
+                                                .child({
+                                                    let id = comment.id.clone();
+                                                    action("pr-comment-add", "Add to chat", &theme)
                                                         .on_click(cx.listener(
                                                             move |page, _, window, cx| {
                                                                 if let Some(context) = page
@@ -2757,43 +3121,40 @@ impl Render for PullRequestDetailPage {
                                                                 }
                                                             },
                                                         ))
-                                                    })
-                                                    .when(!comment.url.is_empty(), |el| {
-                                                        let link = comment.url.clone();
-                                                        el.child(
-                                                            action(
-                                                                "pr-comment-open",
-                                                                "Open on GitHub",
-                                                                &theme,
-                                                            )
-                                                            .on_click(move |_, _, cx| {
-                                                                cx.open_url(&link)
-                                                            }),
+                                                })
+                                                .when(!comment.url.is_empty(), |el| {
+                                                    let link = comment.url.clone();
+                                                    el.child(
+                                                        action(
+                                                            "pr-comment-open",
+                                                            "Open on GitHub",
+                                                            &theme,
                                                         )
-                                                    }),
-                                            )
-                                            .children(inline_thread(detail, index).map(|review| {
-                                                self.inline_context(
-                                                    review, comment, index, &theme, cx,
-                                                )
-                                            }))
-                                            .children(self.activity_bodies.get(index).map(
-                                                |body| {
-                                                    div().child(rich_text(
-                                                        body,
-                                                        format!(
-                                                            "{}activity-{index}",
-                                                            self.selection_prefix
-                                                        ),
-                                                        &self.url,
-                                                        &theme,
-                                                        window,
-                                                        self.diagrams.clone(),
-                                                        cx.weak_entity(),
-                                                    ))
-                                                },
-                                            )),
-                                    ),
+                                                        .on_click(move |_, _, cx| {
+                                                            cx.open_url(&link)
+                                                        }),
+                                                    )
+                                                }),
+                                        )
+                                        .children(inline_thread(detail, index).map(|review| {
+                                            self.inline_context(review, comment, index, &theme, cx)
+                                        }))
+                                        .children(self.activity_bodies.get(index).map(|body| {
+                                            div().child(rich_text(
+                                                body,
+                                                format!(
+                                                    "{}activity-{index}",
+                                                    self.selection_prefix
+                                                ),
+                                                &self.url,
+                                                &theme,
+                                                window,
+                                                self.diagrams.clone(),
+                                                cx.weak_entity(),
+                                                false,
+                                            ))
+                                        })),
+                                ),
                             );
                         }
                         column = column.child(thread);
@@ -2807,7 +3168,12 @@ impl Render for PullRequestDetailPage {
                         Some(preview) => summary::detail_header(
                             summary::HeaderFacts {
                                 title: preview.title.clone(),
+                                title_reserve: self.title_reserve(
+                                    &format!("{:?}", preview.state),
+                                    preview.is_draft,
+                                ),
                                 author: preview.author.login.clone(),
+                                author_avatar_url: preview.author.avatar_url.clone(),
                                 age: Some(format!(
                                     "updated {}",
                                     crate::pull_requests::relative_time(
@@ -2847,11 +3213,20 @@ impl Render for PullRequestDetailPage {
                             .into_any_element(),
                     });
                 }
-                column = column.child(crate::pull_request_skeleton::summary(
-                    cx.entity_id(),
-                    &theme,
-                    cx,
-                ));
+                column = column.child(match self.tab {
+                    Tab::Timeline => {
+                        crate::pull_request_skeleton::timeline(cx.entity_id(), &theme, cx)
+                    }
+                    Tab::Activity => {
+                        crate::pull_request_skeleton::activity(cx.entity_id(), &theme, cx)
+                    }
+                    Tab::Code => {
+                        crate::pull_request_skeleton::diff(false, cx.entity_id(), &theme, cx)
+                    }
+                    Tab::Summary => {
+                        crate::pull_request_skeleton::summary(cx.entity_id(), &theme, cx)
+                    }
+                });
             }
             let scroll = self.scroll.scroll.clone();
             let rail = crate::popover::rail(self, "pr-detail-scrollbar", &theme, cx);
@@ -2952,6 +3327,19 @@ impl Render for PullRequestDetailPage {
                     .min_h_0()
                     .child(content)
                     .children(composer)
+                    .child(
+                        div()
+                            .absolute()
+                            .bottom_0()
+                            .left_0()
+                            .right_0()
+                            .h(px(88.0))
+                            .bg(gpui::linear_gradient(
+                                180.0,
+                                gpui::linear_color_stop(theme.panel_bg().opacity(0.0), 0.0),
+                                gpui::linear_color_stop(theme.panel_bg(), 1.0),
+                            )),
+                    )
                     .child(navigation),
             );
         self.ensure_diagram_worker(cx);
@@ -3924,14 +4312,16 @@ mod tests {
     }
 
     #[gpui::test]
-    fn pull_request_code_opens_on_the_saved_split_preference(cx: &mut gpui::TestAppContext) {
+    fn pull_request_code_uses_unified_layout_despite_saved_split_preference(
+        cx: &mut gpui::TestAppContext,
+    ) {
         let mut saved = settings::UiSettings::default();
         saved.diff_split = true;
         let _settings = fixture::settings(cx, saved);
         let (host, cx) = cx.add_window_view(|window, cx| DetailHost::new(window, cx, true));
         let page = host.read_with(cx, |host, _| host.page.clone());
         page.update(cx, |page, cx| {
-            assert!(page.review.split);
+            assert!(!page.review.split);
             let patch =
                 "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1 +1 @@\n-old\n+new\n";
             page.install_diff(ParsedDiff::new(patch.into()), cx);
@@ -3940,8 +4330,8 @@ mod tests {
                 page.review
                     .stream
                     .iter()
-                    .any(|row| matches!(row, code::StreamRow::Pair(..))),
-                "the first visit renders split rows"
+                    .any(|row| matches!(row, code::StreamRow::Row(..))),
+                "the first visit renders unified rows"
             );
         });
     }
@@ -3988,8 +4378,14 @@ mod tests {
         };
         cx.simulate_resize(gpui::size(px(1200.0), px(850.0)));
         cx.run_until_parked();
+        assert!(cx.debug_bounds("pr-file-search").is_none());
         // The picker's search narrows the files it lists.
         click(cx, "pr-files");
+        let search = cx.debug_bounds("pr-file-search").unwrap();
+        let position = cx.debug_bounds("pr-file-position").unwrap();
+        let toolbar = cx.debug_bounds("pr-file-navigation").unwrap();
+        assert!(position.left() >= search.right());
+        assert!(search.top() >= toolbar.top() && search.bottom() <= toolbar.bottom());
         page.update(cx, |page, cx| {
             page.file_search
                 .update(cx, |input, cx| input.set_text("NESTED", cx));
@@ -4014,7 +4410,7 @@ mod tests {
             let toolbar = cx.debug_bounds("pr-file-navigation").unwrap();
             let nav = cx.debug_bounds("pr-detail-nav").unwrap();
             assert!(viewport.size.height >= px(60.0), "{viewport:?}");
-            assert!(viewport.bottom() <= nav.top());
+            assert!(viewport.bottom() >= nav.bottom());
             assert!(toolbar.bottom() <= viewport.top());
             assert_eq!(
                 toolbar.left(),
@@ -4030,6 +4426,8 @@ mod tests {
             assert_eq!(header.size.height, px(crate::changes::FILE_HEADER_HEIGHT));
             click(cx, "pr-files");
             let picker = cx.debug_bounds("pr-file-picker").unwrap();
+            let search = cx.debug_bounds("pr-file-search").unwrap();
+            assert!(search.size.width > px(30.0) && search.bottom() <= toolbar.bottom());
             assert!(picker.top() >= toolbar.bottom() && picker.right() <= px(width));
             click(cx, "pr-file-2");
             page.read_with(cx, |page, _| {
@@ -4037,20 +4435,13 @@ mod tests {
                 assert!(!page.files_expanded, "picking a file closes the picker");
                 assert!(!page.review.collapsed.contains(&2), "a picked file unfolds");
             });
-            click(cx, "pr-split");
             page.update(cx, |page, cx| page.select_code_file(0, cx));
             cx.run_until_parked();
-            page.read_with(cx, |page, _| assert!(page.review.split));
-            // Stream rows: header, hunk, then the first paired line.
-            let left = cx.debug_bounds("pr-split-cell-2-true").unwrap();
-            let right = cx.debug_bounds("pr-split-cell-2-false").unwrap();
-            assert!(left.left() >= viewport.left());
-            assert!(right.right() <= viewport.right());
-            assert!((left.size.width - right.size.width).abs() < px(1.0));
-            assert!(left.right() <= right.left());
-            click(cx, "pr-split");
-            page.read_with(cx, |page, _| assert!(!page.review.split));
-            for selector in ["pr-files", "pr-copy-patch", "pr-split", "pr-fold-all"] {
+            let row = cx.debug_bounds("pr-unified-row-3").unwrap();
+            assert!(row.left() >= viewport.left() && row.right() <= viewport.right());
+            let short_row = cx.debug_bounds("pr-unified-row-2").unwrap();
+            assert!(row.size.height > short_row.size.height);
+            for selector in ["pr-files", "pr-copy-patch", "pr-fold-all"] {
                 let control = cx.debug_bounds(selector).unwrap();
                 assert!(
                     control.left() >= px(0.0) && control.right() <= px(width),
@@ -4342,7 +4733,7 @@ mod tests {
                     });
                     page.detail.as_mut().unwrap().comments.push(zuse_protocol::ChangeRequestComment {
                         viewer_did_author: true, body: "My comment".into(),
-                        author: zuse_protocol::ChangeRequestActor { login: "viewer".into() }, ..Default::default()
+                        author: zuse_protocol::ChangeRequestActor { login: "viewer".into(), ..Default::default() }, ..Default::default()
                     });
                     page.activity_bodies = vec![
                         super::super::pull_request_media::parse_description("My comment"),
@@ -4381,11 +4772,89 @@ mod tests {
     }
 
     #[gpui::test]
+    fn pull_request_menu_opens_timeline_and_editors(cx: &mut gpui::TestAppContext) {
+        fixture::init(cx);
+        let (host, cx) = cx.add_window_view(|window, cx| DetailHost::new(window, cx, true));
+        let page = host.read_with(cx, |host, _| host.page.clone());
+        cx.simulate_resize(gpui::size(px(900.0), px(800.0)));
+        cx.run_until_parked();
+        let click = |cx: &mut gpui::VisualTestContext, id: &'static str| {
+            let bounds = cx.debug_bounds(id).unwrap();
+            cx.simulate_click(bounds.center(), gpui::Modifiers::default());
+            cx.run_until_parked();
+        };
+        click(cx, "pr-more");
+        click(cx, "pr-menu-timeline");
+        page.read_with(cx, |page, _| assert!(page.tab == Tab::Timeline));
+        assert!(cx.debug_bounds("pr-timeline").is_none());
+        click(cx, "pr-more");
+        click(cx, "pr-edit-details");
+        assert!(cx.debug_bounds("pr-editor").is_some());
+        page.read_with(cx, |page, cx| {
+            assert!(page.tab == Tab::Summary);
+            assert_eq!(page.edit_body.read(cx).text(), "A description");
+        });
+        click(cx, "pr-edit-cancel");
+        click(cx, "pr-more");
+        click(cx, "pr-add-reviewers");
+        assert!(cx.debug_bounds("pr-editor").is_some());
+        page.read_with(cx, |page, _| {
+            assert!(page.edit_mode == Some(EditMode::Reviewers))
+        });
+    }
+
+    #[gpui::test]
+    fn pull_request_loading_uses_tab_specific_skeletons(cx: &mut gpui::TestAppContext) {
+        fixture::init(cx);
+        let (host, cx) = cx.add_window_view(|window, cx| DetailHost::new(window, cx, false));
+        let page = host.read_with(cx, |host, _| host.page.clone());
+        for (tab, selector) in [
+            (Tab::Summary, "pr-detail-skeleton"),
+            (Tab::Timeline, "pr-timeline-skeleton"),
+            (Tab::Activity, "pr-activity-skeleton"),
+            (Tab::Code, "pr-code-skeleton"),
+        ] {
+            page.update(cx, |page, cx| {
+                page.loading = true;
+                page.detail = None;
+                page.tab = tab;
+                cx.notify();
+            });
+            cx.run_until_parked();
+            assert!(cx.debug_bounds(selector).is_some(), "missing {selector}");
+        }
+    }
+
+    #[gpui::test]
+    fn pull_request_title_stays_before_merge(cx: &mut gpui::TestAppContext) {
+        fixture::init(cx);
+        let (host, cx) = cx.add_window_view(|window, cx| DetailHost::new(window, cx, true));
+        let page = host.read_with(cx, |host, _| host.page.clone());
+        page.update(cx, |page, cx| {
+            page.detail.as_mut().unwrap().state = "OPEN".into();
+            cx.notify();
+        });
+        for width in [240.0, 320.0, 460.0, 640.0] {
+            cx.simulate_resize(gpui::size(px(width), px(800.0)));
+            for _ in 0..2 {
+                cx.run_until_parked();
+                cx.update(|window, cx| window.draw(cx).clear());
+            }
+            let title = cx.debug_bounds("pr-detail-title").unwrap();
+            let merge = cx.debug_bounds("pr-primary-merge").unwrap();
+            assert!(
+                title.right() <= merge.left(),
+                "{width}: {title:?} {merge:?}"
+            );
+        }
+    }
+
+    #[gpui::test]
     fn pull_request_detail_fits_a_side_pane(cx: &mut gpui::TestAppContext) {
         fixture::init(cx);
         let (host, cx) = cx.add_window_view(|window, cx| DetailHost::new(window, cx, true));
         let page = host.read_with(cx, |host, _| host.page.clone());
-        for (width, compact) in [(360.0, true), (460.0, false)] {
+        for (width, compact) in [(360.0, true), (460.0, false), (640.0, false)] {
             cx.simulate_resize(gpui::size(px(width), px(800.0)));
             // The page reads its width a frame late.
             for _ in 0..2 {
@@ -4400,8 +4869,13 @@ mod tests {
             );
             let column = cx.debug_bounds("pr-content-column").unwrap();
             let card = cx.debug_bounds("pr-detail-title").unwrap();
+            let padding = if width < NARROW_PAGE {
+                NARROW_PAD_X
+            } else {
+                DETAIL_PAD_X
+            };
             assert!(
-                card.left() - column.left() <= px(NARROW_PAD_X + 8.5),
+                card.left() - column.left() <= px(padding + 8.5),
                 "the column keeps a narrow gutter at {width}: {column:?} {card:?}"
             );
             page.read_with(cx, |page, _| {
@@ -4544,8 +5018,8 @@ mod tests {
             let nav = cx.debug_bounds("pr-detail-nav").unwrap();
             assert!(viewport.size.height > px(60.0), "{viewport:?}");
             assert!(
-                viewport.bottom() <= nav.top(),
-                "diff must clear floating navigation"
+                viewport.bottom() >= nav.bottom(),
+                "diff extends behind navigation"
             );
             assert_eq!(
                 viewport.size.width,
@@ -4587,7 +5061,7 @@ mod tests {
             )
         });
         page.read_with(cx, |page, _| {
-            assert!(page.review.horizontal.max_offset().x > px(0.0))
+            assert_eq!(page.review.horizontal.max_offset().x, px(0.0))
         });
         cx.simulate_resize(gpui::size(px(600.0), px(800.0)));
         cx.run_until_parked();
@@ -4623,12 +5097,12 @@ mod tests {
             let column = cx.debug_bounds("pr-content-column").unwrap();
             let composer = cx.debug_bounds("pr-comment-surface").unwrap();
             let nav = cx.debug_bounds("pr-detail-nav").unwrap();
-            let divider = cx.debug_bounds("pr-detail-divider").unwrap();
+            let metadata = cx.debug_bounds("pr-detail-meta").unwrap();
             let thread = cx.debug_bounds("pr-activity-thread").unwrap();
             assert_eq!(
-                thread.top() - divider.bottom(),
-                px(12.0),
-                "the thread starts under the header's hairline"
+                thread.top() - metadata.bottom(),
+                px(24.0),
+                "the thread has breathing room below the metadata"
             );
             let mine = cx.debug_bounds("pr-message-0").unwrap();
             let other = cx.debug_bounds("pr-message-1").unwrap();
@@ -4638,8 +5112,8 @@ mod tests {
             } else {
                 DETAIL_PAD_X
             });
-            assert_eq!(composer.left(), column.left() + gutter);
-            assert_eq!(composer.right(), column.right() - gutter);
+            assert_eq!(composer.left(), column.left() + gutter + px(8.0));
+            assert_eq!(composer.right(), column.right() - gutter - px(8.0));
             assert_eq!(nav.center().x, composer.center().x);
             assert_eq!(
                 nav.top() - composer.bottom(),
@@ -4652,21 +5126,15 @@ mod tests {
                 "the thread never scrolls behind it"
             );
             if width >= 900.0 {
-                assert_eq!(
-                    composer.size.height,
-                    px(crate::composer::COMPACT_TOTAL_HEIGHT),
-                    "one line matches the chat composer's compact pill"
-                );
+                assert!(composer.size.height >= px(72.0));
                 let send = cx.debug_bounds("pr-send-comment").unwrap();
-                assert_eq!(send.center().y, composer.center().y);
+                assert!(send.center().y > composer.center().y);
                 assert_eq!(composer.right() - send.right(), px(9.0));
             }
-            assert_eq!(mine.right(), composer.right());
-            assert_eq!(other.left(), composer.left() + px(8.0), "title's text edge");
-            assert!(mine.left() > other.left());
+            assert_eq!(mine.right(), composer.right() + px(8.0));
+            assert_eq!(other.left(), composer.left(), "title's text edge");
+            assert_eq!(mine.left(), other.left());
         }
-        // Yours even when GitHub marks none of your comments: the engine
-        // reports who you are, which covers reviews too.
         page.update(cx, |page, cx| {
             let detail = page.detail.as_mut().unwrap();
             detail.comments[0].viewer_did_author = false;
@@ -4676,7 +5144,7 @@ mod tests {
         cx.run_until_parked();
         assert_eq!(
             cx.debug_bounds("pr-message-0").unwrap().right(),
-            cx.debug_bounds("pr-comment-surface").unwrap().right()
+            cx.debug_bounds("pr-comment-surface").unwrap().right() + px(8.0)
         );
 
         cx.simulate_resize(gpui::size(px(900.0), px(400.0)));

@@ -259,24 +259,27 @@ impl gpui::Element for PreviewImage {
             .as_ref()
             .and_then(|result| result.as_ref().ok())
             .map(|image| gpui::size(px(image.width), px(image.height)));
-        let layout =
-            window.request_measured_layout(Default::default(), move |known, available, _, _| {
-                let width = known
-                    .width
-                    .or(match available.width {
-                        gpui::AvailableSpace::Definite(width) => Some(width),
-                        _ => None,
-                    })
-                    .unwrap_or(px(320.0));
-                if let Some(natural) = natural {
-                    let scale = (f32::from(width) / f32::from(natural.width).max(1.0))
-                        .min(420.0 / f32::from(natural.height).max(1.0))
-                        .min(1.0);
-                    gpui::size(natural.width * scale, natural.height * scale)
-                } else {
-                    gpui::size(width, px(80.0))
-                }
-            });
+        let mut style = gpui::Style::default();
+        style.size.width = gpui::relative(1.0).into();
+        style.min_size.width = px(0.0).into();
+        if let Some(natural) = natural {
+            style.max_size.width = natural.width.into();
+        }
+        let layout = window.request_measured_layout(style, move |known, available, _, _| {
+            let width = known
+                .width
+                .or(match available.width {
+                    gpui::AvailableSpace::Definite(width) => Some(width),
+                    _ => None,
+                })
+                .unwrap_or(px(320.0));
+            if let Some(natural) = natural {
+                let scale = (f32::from(width) / f32::from(natural.width).max(1.0)).min(1.0);
+                gpui::size(natural.width * scale, natural.height * scale)
+            } else {
+                gpui::size(width, px(80.0))
+            }
+        });
         (layout, data)
     }
 
@@ -365,7 +368,7 @@ pub(super) fn media(
                 .my(px(8.0))
                 .rounded(px(8.0))
                 .flex()
-                .justify_center()
+                .justify_start()
                 .overflow_hidden()
                 .role(gpui::Role::Button)
                 .tab_index(0)
@@ -419,6 +422,62 @@ fn image_renderer(
     Some(Rc::new(render))
 }
 
+fn image_only_table(rows: &[Vec<Vec<markdown::parser::InlineRun>>]) -> bool {
+    let mut has_image = false;
+    for run in rows.iter().flatten().flatten() {
+        if let Some(image) = &run.style.image {
+            if image.link.is_some() {
+                return false;
+            }
+            has_image = true;
+        } else if !run.text.trim().is_empty() {
+            return false;
+        }
+    }
+    has_image
+}
+
+fn compact_images(runs: &mut Vec<markdown::parser::InlineRun>) {
+    let has_text = runs
+        .iter()
+        .any(|run| run.style.image.is_none() && !run.text.trim().is_empty());
+    runs.retain_mut(|run| {
+        let Some(image) = run.style.image.take() else {
+            return true;
+        };
+        run.style.link = image.link;
+        if run.text.trim().is_empty() || (has_text && run.style.link.is_none()) {
+            if run.style.link.is_none() {
+                return false;
+            }
+            if run.text.trim().is_empty() {
+                run.text = "Image".into();
+            }
+        }
+        true
+    });
+}
+
+pub(super) fn feedback_preview(body: &BlockTree) -> BlockTree {
+    use markdown::parser::Block;
+    let mut preview = BlockTree {
+        blocks: body.blocks.iter().take(2).cloned().collect(),
+    };
+    for block in &mut preview.blocks {
+        match &mut std::sync::Arc::make_mut(block).block {
+            Block::Paragraph { runs } | Block::Heading { runs, .. } => compact_images(runs),
+            Block::Table { header, rows, .. } => {
+                rows.truncate(2);
+                for cell in header.iter_mut().chain(rows.iter_mut().flatten()) {
+                    compact_images(cell);
+                }
+            }
+            _ => {}
+        }
+    }
+    preview
+}
+
 /// Screenshot tables become wrapping media cards instead of tall table cells.
 /// Ordinary data tables retain their Markdown layout and reading order.
 pub(super) fn render_description(
@@ -426,45 +485,41 @@ pub(super) fn render_description(
     options: &markdown::render::RenderOptions,
     theme: &Theme,
     window: &mut gpui::Window,
+    prominent_headings: bool,
 ) -> AnyElement {
     use markdown::parser::{Block, InlineRun};
     let image_ui = options.media.as_ref().and_then(|media| media.image.clone());
     let mut output = div().w_full().min_w_0().flex().flex_col().gap(px(8.0));
     for (block_index, block) in body.blocks.iter().enumerate() {
+        if let Block::Paragraph { runs } = &block.block
+            && runs.iter().any(|run| run.style.image.is_some())
+            && runs
+                .iter()
+                .all(|run| run.style.image.is_some() || run.text.trim().is_empty())
+            && let Some(image_ui) = &image_ui
+        {
+            let images = div().w_full().min_w_0().flex().flex_col().children(
+                runs.iter().enumerate().filter_map(|(index, run)| {
+                    let image = run.style.image.as_ref()?;
+                    let id = format!("{}-image-{block_index}-{index}", options.row_key);
+                    Some(image_ui(image, id.into(), theme))
+                }),
+            );
+            output = output.child(images);
+            continue;
+        }
         let cells: Option<Vec<Vec<InlineRun>>> = match &block.block {
-            Block::Table { header, rows, .. }
-                if rows
-                    .iter()
-                    .flatten()
-                    .flatten()
-                    .any(|run| run.style.image.is_some()) =>
-            {
-                Some(
-                    rows.iter()
-                        .flat_map(|row| {
-                            row.iter().enumerate().map(|(column, cell)| {
-                                let mut runs = header.get(column).cloned().unwrap_or_default();
-                                runs.extend(cell.clone());
-                                runs
-                            })
+            Block::Table { header, rows, .. } if image_only_table(rows) => Some(
+                rows.iter()
+                    .flat_map(|row| {
+                        row.iter().enumerate().map(|(column, cell)| {
+                            let mut runs = header.get(column).cloned().unwrap_or_default();
+                            runs.extend(cell.clone());
+                            runs
                         })
-                        .collect(),
-                )
-            }
-            Block::Paragraph { runs }
-                if runs.iter().any(|run| run.style.image.is_some())
-                    && runs
-                        .iter()
-                        .all(|run| run.style.image.is_some() || run.text.trim().is_empty()) =>
-            {
-                Some(
-                    runs.iter()
-                        .filter(|run| run.style.image.is_some())
-                        .cloned()
-                        .map(|run| vec![run])
-                        .collect(),
-                )
-            }
+                    })
+                    .collect(),
+            ),
             _ => None,
         };
         if let (Some(cells), Some(image_ui)) = (cells, &image_ui) {
@@ -503,23 +558,68 @@ pub(super) fn render_description(
         } else {
             let mut scoped = options.clone();
             scoped.row_key = format!("{}-block-{block_index}", options.row_key).into();
-            output = output.child(markdown::render::render_tree(
+            if let Block::Heading { level, runs } = &block.block {
+                let metrics = match (prominent_headings, level) {
+                    (true, 1) => (20.0, 28.0),
+                    (true, 2) => (18.0, 26.0),
+                    (true, _) => (16.0, 24.0),
+                    (false, 1) => (16.0, 23.0),
+                    (false, 2) => (15.0, 22.0),
+                    (false, _) => (14.0, 21.0),
+                };
+                output = output.child(markdown::render::render_heading_with_metrics(
+                    runs, metrics, &scoped, theme,
+                ));
+                continue;
+            }
+            let mut rendered_block = block.clone();
+            if let Block::Table { header, rows, .. } =
+                &mut std::sync::Arc::make_mut(&mut rendered_block).block
+            {
+                for cell in header.iter_mut().chain(rows.iter_mut().flatten()) {
+                    compact_images(cell);
+                }
+            }
+            let is_table = matches!(&rendered_block.block, Block::Table { .. });
+            let rendered = markdown::render::render_tree(
                 &BlockTree {
-                    blocks: vec![block.clone()],
+                    blocks: vec![rendered_block],
                 },
                 &scoped,
                 theme,
                 window,
                 &|_| None,
-            ));
+            );
+            output = if is_table {
+                output.child(
+                    div()
+                        .w_full()
+                        .min_w_0()
+                        .rounded(px(8.0))
+                        .border_1()
+                        .border_color(theme.border)
+                        .overflow_hidden()
+                        .child(rendered),
+                )
+            } else {
+                output.child(rendered)
+            };
         }
     }
     output.into_any_element()
 }
 
-/// GitHub redirects this public profile image endpoint to its avatar CDN.
-/// Stable sizing lets repeated authors share GPUI's image cache.
 pub(super) fn avatar(login: &str, id: SharedString, size: f32, theme: &Theme) -> AnyElement {
+    avatar_with_url(login, None, id, size, theme)
+}
+
+pub(super) fn avatar_with_url(
+    login: &str,
+    avatar_url: Option<&str>,
+    id: SharedString,
+    size: f32,
+    theme: &Theme,
+) -> AnyElement {
     let initial = login
         .chars()
         .next()
@@ -539,14 +639,9 @@ pub(super) fn avatar(login: &str, id: SharedString, size: f32, theme: &Theme) ->
             .child(initial.clone())
             .into_any_element()
     };
-    if login.is_empty() {
+    let Some(url) = avatar_url.and_then(trusted_avatar_url) else {
         return fallback();
-    }
-    let mut url = url::Url::parse("https://github.com/").unwrap();
-    url.path_segments_mut()
-        .unwrap()
-        .push(&format!("{login}.png"));
-    url.set_query(Some("size=64"));
+    };
     div()
         .id(id.clone())
         .size(px(size))
@@ -565,10 +660,104 @@ pub(super) fn avatar(login: &str, id: SharedString, size: f32, theme: &Theme) ->
         .into_any_element()
 }
 
+fn trusted_avatar_url(value: &str) -> Option<String> {
+    let url = url::Url::parse(value).ok()?;
+    let host = url.host_str()?;
+    if url.scheme() != "https"
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.port().is_some()
+        || !(host == "avatars.githubusercontent.com"
+            || matches!(
+                host,
+                "avatars0.githubusercontent.com"
+                    | "avatars1.githubusercontent.com"
+                    | "avatars2.githubusercontent.com"
+                    | "avatars3.githubusercontent.com"
+            ))
+    {
+        return None;
+    }
+    Some(url.into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::pull_request_test_support as fixture;
+
+    #[test]
+    fn avatar_urls_only_allow_github_avatar_hosts() {
+        assert!(trusted_avatar_url("https://avatars.githubusercontent.com/u/123?v=4").is_some());
+        assert!(trusted_avatar_url("https://avatars1.githubusercontent.com/in/123").is_some());
+        for url in [
+            "https://github.com/app%2Fvorflux.png",
+            "https://avatars.githubusercontent.com.evil.test/u/1",
+            "http://avatars.githubusercontent.com/u/1",
+            "https://user@avatars.githubusercontent.com/u/1",
+            "https://avatars.githubusercontent.com:444/u/1",
+            "not a url",
+        ] {
+            assert!(trusted_avatar_url(url).is_none(), "{url}");
+        }
+    }
+
+    #[test]
+    fn mixed_image_tables_keep_cells_and_link_destinations() {
+        use markdown::parser::Block;
+        let body = parse_description(
+            "| Project | Deployment | Actions | Updated |\n| --- | --- | --- | --- |\n| ![](https://vercel.com/icon.png) [portfolio](https://example.com/project) | [![Ready](https://vercel.com/status.png)](https://example.com/deploy) | [Preview](https://example.com/preview) | Nov 13 |",
+        );
+        let Block::Table { rows, .. } = &body.blocks[0].block else {
+            panic!("expected table");
+        };
+        assert!(!image_only_table(rows));
+        let preview = feedback_preview(&body);
+        let Block::Table { rows, .. } = &preview.blocks[0].block else {
+            panic!("expected table");
+        };
+        let project = &rows[0][0];
+        assert!(project.iter().all(|run| run.style.image.is_none()));
+        assert!(project.iter().any(|run| run.text == "portfolio"
+            && run.style.link.as_deref() == Some("https://example.com/project")));
+        assert!(rows[0][1].iter().any(|run| run.text == "Ready"
+            && run.style.link.as_deref() == Some("https://example.com/deploy")));
+        assert!(
+            rows[0][2]
+                .iter()
+                .any(|run| run.style.link.as_deref() == Some("https://example.com/preview"))
+        );
+    }
+
+    #[test]
+    fn feedback_preview_limits_blocks_and_table_rows_without_clipping() {
+        use markdown::parser::Block;
+        let body = parse_description(
+            "Intro\n\n| Name |\n| --- |\n| one |\n| two |\n| three |\n\nMore details",
+        );
+        let preview = feedback_preview(&body);
+        assert_eq!(preview.blocks.len(), 2);
+        assert!(matches!(&preview.blocks[1].block, Block::Table { rows, .. } if rows.len() == 2));
+        assert!(matches!(&body.blocks[1].block, Block::Table { rows, .. } if rows.len() == 3));
+        assert_eq!(body.blocks.len(), 3);
+    }
+
+    #[test]
+    fn screenshot_gallery_excludes_linked_images() {
+        use markdown::parser::Block;
+        let screenshots = parse_description(
+            "| Before | After |\n| --- | --- |\n| ![before](https://example.com/a.png) | ![after](https://example.com/b.png) |",
+        );
+        assert!(
+            matches!(&screenshots.blocks[0].block, Block::Table { rows, .. } if image_only_table(rows))
+        );
+        let linked = parse_description(
+            "| Status |\n| --- |\n| [![Ready](https://example.com/icon.png)](https://example.com/deployment) |",
+        );
+        assert!(
+            matches!(&linked.blocks[0].block, Block::Table { rows, .. } if !image_only_table(rows))
+        );
+    }
 
     #[test]
     fn pull_request_html_images_handle_multiline_attributes_and_entities() {
@@ -661,6 +850,7 @@ mod tests {
                 &options,
                 Theme::of(cx),
                 window,
+                true,
             ))
         }
     }
@@ -771,9 +961,13 @@ mod tests {
             cx.run_until_parked();
             let image = cx.debug_bounds("pr-description-image").unwrap();
             let tile = cx
-                .debug_bounds("pr-image-tile-media-test-gallery-0-0-0")
+                .debug_bounds("pr-image-tile-media-test-image-0-0")
                 .unwrap();
-            assert!(image.size.height <= px(420.0), "{image:?}");
+            assert!(
+                (image.size.width - px(width - 48.0)).abs() < px(1.0),
+                "{image:?}"
+            );
+            assert!((image.left() - px(24.0)).abs() < px(1.0), "{image:?}");
             assert!(
                 (f32::from(image.size.width) / f32::from(image.size.height) - 1200.0 / 2600.0)
                     .abs()
@@ -810,7 +1004,7 @@ mod tests {
         assert_eq!(requests.load(Ordering::SeqCst), 3, "nothing is fetched");
         assert!(cx.debug_bounds("pr-description-image").is_none());
         assert!(
-            cx.debug_bounds("pr-image-tile-media-test-gallery-0-0-0")
+            cx.debug_bounds("pr-image-tile-media-test-image-0-0")
                 .is_some()
         );
     }

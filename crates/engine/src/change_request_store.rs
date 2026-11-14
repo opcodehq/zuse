@@ -336,6 +336,8 @@ fn filter_key(filter: ChangeRequestFilter) -> &'static str {
         ChangeRequestFilter::All => "all",
         ChangeRequestFilter::Authored => "authored",
         ChangeRequestFilter::Reviewing => "reviewing",
+        ChangeRequestFilter::Merged => "merged",
+        ChangeRequestFilter::AllStates => "all_states",
     }
 }
 

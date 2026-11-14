@@ -763,6 +763,15 @@ fn heading_metrics(level: u8) -> (f32, f32) {
     }
 }
 
+pub(crate) fn render_heading_with_metrics(
+    runs: &[super::parser::InlineRun],
+    metrics: (f32, f32),
+    opts: &RenderOptions,
+    theme: &Theme,
+) -> AnyElement {
+    text_element(runs, metrics.0, metrics.1, true, 0, 0, opts, theme)
+}
+
 /// Shared per-column table geometry (port of mugen `tableColumns`).
 pub struct TableColumns {
     /// Per-column max-content width, padding included.

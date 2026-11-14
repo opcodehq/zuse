@@ -1769,6 +1769,7 @@ mod tests {
             id: id.into(),
             author: zuse_protocol::ChangeRequestActor {
                 login: author.into(),
+                ..Default::default()
             },
             body: body.into(),
             created_at: at.into(),

@@ -3,8 +3,7 @@ use super::*;
 use serde_json::{Value, json};
 use zuse_protocol::{ChangeRequestComment, ChangeRequestReviewThread};
 
-const COMMENT_FIELDS: &str =
-    "id url body createdAt diffHunk author { login } viewerDidAuthor replyTo { id }";
+const COMMENT_FIELDS: &str = "id url body createdAt diffHunk author { login avatarUrl(size: 64) } viewerDidAuthor replyTo { id }";
 const PAGE_INFO: &str = "pageInfo { hasNextPage endCursor }";
 
 impl GitHubCli {

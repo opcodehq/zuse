@@ -14220,6 +14220,17 @@ impl Shell {
                 .into_any_element()
             } else if let Some(favicon) = browser_favicon {
                 gpui::img(favicon).size(px(12.0)).into_any_element()
+            } else if let RightSurface::PullRequest(id) = surface {
+                let (glyph, color) = self
+                    .chat_pull_requests
+                    .get(&id)
+                    .map(|tab| tab.page.read(cx).lifecycle_icon(&theme))
+                    .unwrap_or((icons::PULL_REQUEST, theme.text_muted));
+                icons::icon(glyph)
+                    .size(px(14.0))
+                    .flex_none()
+                    .text_color(color)
+                    .into_any_element()
             } else if matches!(surface, RightSurface::File(_)) {
                 crate::file_icons::icon(
                     crate::file_icons::FileIconIdentity::file(file_identity_path.as_ref()),
