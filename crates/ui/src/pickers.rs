@@ -6621,14 +6621,11 @@ impl Render for Pickers {
             && (self.live_groups(cx).iter().any(|group| {
                 Self::compact_option_visible(&group.id, &self.compact_hidden_options(cx))
             }) || self.compact_fast_choice(cx).is_some());
-        // Effort and fast mode live in the model pill's card; this chip only
-        // stays for the other model options (context window, modes).
-        let extra_options = self.model_configuration_available(cx)
-            && self.live_groups(cx).iter().any(|group| {
-                Self::compact_option_visible(&group.id, &self.compact_hidden_options(cx))
-            });
+        // Effort and fast mode live in the model pill's card, so the composer
+        // shows no separate options chip; only the thread-naming picker keeps it.
         let effort_control = if !self.is_settings_model()
-            && (extra_options || (self.title.is_some() && (effort.is_some() || has_options)))
+            && self.title.is_some()
+            && (effort.is_some() || has_options)
         {
             {
                 let label = effort
@@ -6636,11 +6633,6 @@ impl Render for Pickers {
                     .and_then(|e| e.labels.get(e.selected))
                     .cloned()
                     .unwrap_or_else(|| "Options".into());
-                let label: SharedString = if extra_options {
-                    "Options".into()
-                } else {
-                    label
-                };
                 let mut button = div()
                     .id("reasoning-trigger")
                     .relative()
