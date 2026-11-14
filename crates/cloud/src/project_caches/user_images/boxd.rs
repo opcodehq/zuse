@@ -101,8 +101,15 @@ pub struct BoxdUserImages {
     host: Arc<dyn ImageHost>,
 }
 
-fn uncertain(_: ProviderError) -> ApiError {
-    ApiError::unavailable("user_image_provider_outcome_uncertain")
+/// Map a provider failure to a retryable outcome, logging which call failed and
+/// how (variant only; provider errors carry no bodies or credentials).
+#[track_caller]
+fn uncertain_here() -> impl FnOnce(ProviderError) -> ApiError {
+    let at = std::panic::Location::caller();
+    move |error| {
+        tracing::warn!(line = at.line(), error = ?error, "User image provider call failed");
+        ApiError::unavailable("user_image_provider_outcome_uncertain")
+    }
 }
 pub(crate) fn quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
@@ -115,13 +122,51 @@ impl BoxdUserImages {
     }
     /// Run the guest helper as root, inline: the copy on the image is never
     /// trusted for a check, since the setup script could have changed it.
+    /// Write a file as root in exec-sized chunks (each command stays well under
+    /// the provider's 64 KiB limit). Decoding runs in the guest's python3.
+    async fn write_root_file(
+        &self,
+        machine: &str,
+        path: &str,
+        data: &[u8],
+    ) -> Result<(), ApiError> {
+        use base64::Engine as _;
+        const WRITE: &str = "import base64,sys\np,m,d=sys.argv[1:4]\nwith open(p,m+'b') as f: f.write(base64.b64decode(d))";
+        let chunks: Vec<&[u8]> = if data.is_empty() {
+            vec![&[]]
+        } else {
+            data.chunks(30_000).collect()
+        };
+        for (n, chunk) in chunks.into_iter().enumerate() {
+            let command = format!(
+                "sudo -n /usr/bin/python3 -I -B -c {} {} {} {}",
+                quote(WRITE),
+                quote(path),
+                if n == 0 { "w" } else { "a" },
+                quote(&base64::engine::general_purpose::STANDARD.encode(chunk))
+            );
+            let result = self
+                .host
+                .exec(machine, &command)
+                .await
+                .map_err(uncertain_here())?;
+            if result.exit_code != 0 {
+                return Err(ApiError::conflict("user_image_upload_failed"));
+            }
+        }
+        Ok(())
+    }
     async fn helper(&self, machine: &str, args: &[&str]) -> Result<Value, ApiError> {
         let command = format!(
             "sudo -n /usr/bin/python3 -I -B -c {} {}",
             quote(GUEST_HELPER),
             args.iter().map(|a| quote(a)).collect::<Vec<_>>().join(" ")
         );
-        let result = self.host.exec(machine, &command).await.map_err(uncertain)?;
+        let result = self
+            .host
+            .exec(machine, &command)
+            .await
+            .map_err(uncertain_here())?;
         if result.stdout.len() > 256 * 1024 {
             return Err(ApiError::conflict("user_image_guest_receipt_invalid"));
         }
@@ -151,14 +196,14 @@ impl BoxdUserImages {
             .host
             .inspect(resources[field].as_str().unwrap_or(name))
             .await
-            .map_err(uncertain)?;
+            .map_err(uncertain_here())?;
         let machine = match found {
             Some(machine) => machine,
             None if resources[field].is_null() => self
                 .host
                 .create_from_snapshot(snapshot, name)
                 .await
-                .map_err(uncertain)?,
+                .map_err(uncertain_here())?,
             None => return Ok(Err(())),
         };
         if machine.name != name || resources[field].as_str().is_some_and(|id| id != machine.id) {
@@ -172,19 +217,22 @@ impl BoxdUserImages {
             .host
             .inspect(id.unwrap_or(name))
             .await
-            .map_err(uncertain)?
+            .map_err(uncertain_here())?
         else {
             return Ok(true);
         };
         if machine.name != name || id.is_some_and(|id| id != machine.id) {
             return Err(ApiError::conflict("user_image_resource_identity_changed"));
         }
-        self.host.destroy(&machine.id).await.map_err(uncertain)?;
+        self.host
+            .destroy(&machine.id)
+            .await
+            .map_err(uncertain_here())?;
         Ok(self
             .host
             .inspect(&machine.id)
             .await
-            .map_err(uncertain)?
+            .map_err(uncertain_here())?
             .is_none())
     }
     fn failed(code: &'static str, log: Option<String>, resources: Value) -> Result<Step, ApiError> {
@@ -210,7 +258,7 @@ impl UserImageBackend for BoxdUserImages {
             .host
             .inspect_snapshot(artifact)
             .await
-            .map_err(uncertain)?;
+            .map_err(uncertain_here())?;
         Ok(snapshot
             .filter(|s| s.id == artifact && s.state == SnapshotState::Ready && s.version > 0)
             .map(|s| s.version.to_string()))
@@ -261,7 +309,7 @@ impl UserImageBackend for BoxdUserImages {
                         base_version,
                     )
                     .await
-                    .map_err(uncertain)?;
+                    .map_err(uncertain_here())?;
                 let pins = self
                     .helper(&machine.id, &["pins", &Self::pins(build)?])
                     .await?;
@@ -305,33 +353,29 @@ impl UserImageBackend for BoxdUserImages {
                     .host
                     .exec(
                         &id,
-                        &format!("sudo -n install -d -m 700 -o zuse -g zuse {JOURNAL}"),
+                        &format!("sudo -n install -d -m 700 -o root -g root {JOURNAL}"),
                     )
                     .await
-                    .map_err(uncertain)?;
+                    .map_err(uncertain_here())?;
                 if mkdir.exit_code != 0 {
                     return Err(ApiError::conflict("user_image_upload_failed"));
                 }
-                self.host
-                    .upload(
-                        &id,
-                        &format!("{JOURNAL}/setup.sh"),
-                        plan.setup_script.as_bytes(),
-                    )
-                    .await
-                    .map_err(uncertain)?;
-                self.host
-                    .upload(&id, &format!("{JOURNAL}/guest.py"), GUEST_HELPER.as_bytes())
-                    .await
-                    .map_err(uncertain)?;
-                // Boxd uploads as `zuse`, so the journal is `zuse`-owned while
-                // uploading (like project caches); then it and both files become
-                // root-owned, with the script readable by `zuse` through sudo.
+                self.write_root_file(
+                    &id,
+                    &format!("{JOURNAL}/setup.sh"),
+                    plan.setup_script.as_bytes(),
+                )
+                .await?;
+                self.write_root_file(&id, &format!("{JOURNAL}/guest.py"), GUEST_HELPER.as_bytes())
+                    .await?;
+                // Files are written as root through exec, not the provider's
+                // upload call (which failed on real Boxd builders); the script
+                // stays readable by `zuse` through sudo.
                 let fix = self
                     .host
                     .exec(&id, &format!("sudo -n sh -c {}", quote(&format!("chown root:root {JOURNAL} {JOURNAL}/setup.sh {JOURNAL}/guest.py && chmod 644 {JOURNAL}/setup.sh && chmod 600 {JOURNAL}/guest.py && chmod 755 {JOURNAL}"))))
                     .await
-                    .map_err(uncertain)?;
+                    .map_err(uncertain_here())?;
                 if fix.exit_code != 0 {
                     return Err(ApiError::conflict("user_image_upload_failed"));
                 }
@@ -390,7 +434,7 @@ impl UserImageBackend for BoxdUserImages {
                     .host
                     .inspect_snapshot(&snapshot_name)
                     .await
-                    .map_err(uncertain)?;
+                    .map_err(uncertain_here())?;
                 let snapshot = match snapshot {
                     Some(s) => s,
                     None if resources["artifactId"].is_null() => {
@@ -406,7 +450,7 @@ impl UserImageBackend for BoxdUserImages {
                             .host
                             .create_snapshot(&id, &snapshot_name)
                             .await
-                            .map_err(uncertain)?;
+                            .map_err(uncertain_here())?;
                         resources["artifactId"] = json!(capture.id);
                         resources["artifactVersion"] = json!(capture.version.to_string());
                         return Ok(Step::Pending(resources));
@@ -461,7 +505,7 @@ impl UserImageBackend for BoxdUserImages {
                 self.host
                     .verify_snapshot_source(&machine.id, &artifact, version)
                     .await
-                    .map_err(uncertain)?;
+                    .map_err(uncertain_here())?;
                 let pins = Self::pins(build)?;
                 // Clean before the resident starts: nothing leaked into the image.
                 let check = self.helper(&machine.id, &["check", &pins]).await?;
@@ -473,7 +517,7 @@ impl UserImageBackend for BoxdUserImages {
                 self.host
                     .verify_initial_snapshot_source(&machine.id, &artifact, &verifier_name)
                     .await
-                    .map_err(uncertain)?;
+                    .map_err(uncertain_here())?;
                 let request = BootRequest {
                     version: 1,
                     provider: ProviderId::Boxd,
@@ -487,9 +531,9 @@ impl UserImageBackend for BoxdUserImages {
                 };
                 let result = self
                     .host
-                    .exec(&machine.id, &request.command().map_err(uncertain)?)
+                    .exec(&machine.id, &request.command().map_err(uncertain_here())?)
                     .await
-                    .map_err(uncertain)?;
+                    .map_err(uncertain_here())?;
                 if result.exit_code != 0 || result.stdout.len() > 65536 {
                     return Self::failed("user_image_fresh_boot_rejected", None, resources);
                 }
@@ -520,7 +564,7 @@ impl UserImageBackend for BoxdUserImages {
                     .host
                     .inspect_snapshot(&artifact)
                     .await
-                    .map_err(uncertain)?;
+                    .map_err(uncertain_here())?;
                 if snapshot.as_ref().is_none_or(|s| {
                     s.state != SnapshotState::Ready
                         || s.name != snapshot_name
@@ -551,7 +595,9 @@ impl UserImageBackend for BoxdUserImages {
                     ),
                 ] {
                     if resources[field].is_null() {
-                        if let Some(machine) = self.host.inspect(name).await.map_err(uncertain)? {
+                        if let Some(machine) =
+                            self.host.inspect(name).await.map_err(uncertain_here())?
+                        {
                             if machine.name != *name {
                                 return Err(ApiError::conflict(
                                     "user_image_resource_identity_changed",
@@ -584,7 +630,7 @@ impl UserImageBackend for BoxdUserImages {
                     .host
                     .inspect_snapshot(&snapshot_name)
                     .await
-                    .map_err(uncertain)?
+                    .map_err(uncertain_here())?
                 {
                     if snapshot.name != snapshot_name
                         || snapshot.id == plan.identity.base_artifact_id
@@ -595,7 +641,7 @@ impl UserImageBackend for BoxdUserImages {
                     self.host
                         .delete_snapshot(&snapshot.id)
                         .await
-                        .map_err(uncertain)?;
+                        .map_err(uncertain_here())?;
                     return Ok(Step::Pending(resources));
                 }
                 resources["unpublishedArtifactAbsent"] = json!(true);
@@ -613,7 +659,7 @@ impl UserImageBackend for BoxdUserImages {
                     .host
                     .inspect_snapshot(&artifact)
                     .await
-                    .map_err(uncertain)?
+                    .map_err(uncertain_here())?
                 {
                     if snapshot.name != snapshot_name {
                         return Err(ApiError::conflict("user_image_artifact_identity_changed"));
@@ -621,7 +667,7 @@ impl UserImageBackend for BoxdUserImages {
                     self.host
                         .delete_snapshot(&snapshot.id)
                         .await
-                        .map_err(uncertain)?;
+                        .map_err(uncertain_here())?;
                     return Ok(Step::Pending(resources));
                 }
                 resources["artifactAbsent"] = json!(true);
