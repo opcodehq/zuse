@@ -596,11 +596,7 @@ impl UserImageControl {
             } => {
                 if phase != "publish"
                     || current_state != "building"
-                    || value["builderAbsent"] != true
-                    || value["verifierAbsent"] != true
-                    || artifact_id.is_empty()
-                    || artifact_id == plan.identity.base_artifact_id
-                    || value["artifactId"] != artifact_id.as_str()
+                    || !publication_valid(&plan, &value, &artifact_id)
                 {
                     return Err(ApiError::conflict("user_image_publication_invalid"));
                 }
@@ -622,6 +618,19 @@ impl UserImageControl {
         }
         Ok(true)
     }
+}
+
+/// A published image leaves no builder or verifier behind. On a home-directory
+/// base (Prized) the paused builder is the image itself, so it may remain only
+/// as the published artifact.
+pub(crate) fn publication_valid(plan: &BuildPlan, value: &Value, artifact_id: &str) -> bool {
+    let builder_gone = value["builderAbsent"] == true
+        || (home_base(plan.identity.provider) && value["builderId"] == artifact_id);
+    builder_gone
+        && value["verifierAbsent"] == true
+        && !artifact_id.is_empty()
+        && artifact_id != plan.identity.base_artifact_id
+        && value["artifactId"] == artifact_id
 }
 
 impl BuildPlan {

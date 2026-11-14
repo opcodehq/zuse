@@ -400,6 +400,21 @@ async fn prized_build_pauses_the_builder_as_the_image_and_verifies_a_fork_of_it(
     assert_eq!(state.machines.len(), 2, "base and image only");
     assert_eq!(resources["provider"]["verifierAbsent"], true);
     assert!(resources["provider"]["builderAbsent"].is_null());
+    // The worker publishes it: the only builder left is the image itself.
+    assert!(worker::publication_valid(
+        &plan,
+        &resources["provider"],
+        artifact
+    ));
+    let mut boxd = plan.clone();
+    boxd.identity.provider = ProviderId::Boxd;
+    assert!(
+        !worker::publication_valid(&boxd, &resources["provider"], artifact),
+        "a root-base builder must be gone"
+    );
+    let mut other = resources["provider"].clone();
+    other["builderId"] = json!("sbx_other");
+    assert!(!worker::publication_valid(&plan, &other, artifact));
     assert!(
         state
             .writes
