@@ -44,13 +44,8 @@ impl Default for MenuState {
 }
 
 impl Pickers {
-    pub(super) fn settings_menu_height(&self, cx: &App) -> f32 {
-        let (_, body) = self.reference_items(cx);
-        let error = matches!(self.harnesses, Loadable::Error(_))
-            || self.scoped_model_refresh_error(cx).is_some();
-        (ui::SEARCH_HEIGHT + body + if error { 44. } else { 0. })
-            .max(44. + self.rail_descriptors(cx).len() as f32 * 36.)
-            .min(ui::MAX_HEIGHT)
+    pub(super) fn settings_menu_height(&self, _cx: &App) -> f32 {
+        ui::MAX_HEIGHT
     }
 
     /// A provider's discovery failure belongs to that provider's tab. The
@@ -364,7 +359,7 @@ impl Pickers {
                 .or_else(|| self.rail_descriptors(cx).first().map(|p| p.id));
         }
         let theme = Theme::of(cx).for_popup();
-        let (items, _body) = self.reference_items(cx);
+        let (items, _) = self.reference_items(cx);
         let empty = items.is_empty();
         let error = if self.cloud_models_active(cx) {
             self.cloud.model_error.clone()

@@ -1852,9 +1852,8 @@ impl Pickers {
             }
         });
         // Prime the model picker's rail BEFORE anchoring the highlight (the
-        // visible rows depend on it): the favorites view when stars exist —
-        // the initial selection — else the effective
-        // harness. Locked chats stay on their own harness.
+        // visible rows depend on it): favorites when accessible stars exist,
+        // otherwise the effective harness. Locked chats keep their own harness.
         if kind == PickerKind::HarnessModel {
             // Favorites may have been starred from the other picker.
             self.reload_defaults();
@@ -1864,13 +1863,20 @@ impl Pickers {
             self.config.harness = None;
             self.model_rail = ModelRail::Harness;
         } else if kind == PickerKind::HarnessModel {
-            self.model_rail = if self.compact_model_picker(cx) {
-                ModelRail::Harness
-            } else if !self.harness_locked(cx) && !self.defaults.favorites.is_empty() {
+            let locked = self.harness_locked(cx);
+            let effective = self.effective_harness(cx);
+            let has_accessible_favorites = self.defaults.favorites.iter().any(|favorite| {
+                !locked || (self.compact_model_picker(cx) && Some(favorite.harness) == effective)
+            });
+            self.model_rail = if has_accessible_favorites {
                 ModelRail::Favorites
             } else {
                 ModelRail::Harness
             };
+            if self.compact_model_picker(cx) && self.model_rail == ModelRail::Favorites {
+                self.model_scope = None;
+                self.prefetch_models(false, cx);
+            }
         }
         // The keyboard-nav highlight starts ON the selected row — row 0
         // otherwise reads as a second active row (user report).
@@ -9654,6 +9660,56 @@ mod tests {
             assert_eq!(picker.resolved(cx).model_options["contextWindow"], "1m");
             assert_eq!(picker.resolved(cx).model_options["serviceTier"], "fast");
         }).unwrap();
+    }
+
+    #[gpui::test]
+    fn compact_picker_opens_favorites_or_current_provider(cx: &mut gpui::TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        cx.update(|cx| {
+            cx.set_global(Theme::dark());
+            let mut settings = crate::settings::UiSettings::default();
+            settings.compact_model_picker = true;
+            crate::settings::init(settings, dir.path(), cx);
+        });
+        let handle = cx.add_window(|_, cx| {
+            let state = cx.new(|_| AppState::new());
+            Pickers::new(state, cx)
+        });
+        handle
+            .update(cx, |picker, window, cx| {
+                picker.harnesses = Loadable::Ready(vec![
+                    descriptor(HarnessId::Codex, "Codex"),
+                    descriptor(HarnessId::ClaudeCode, "Claude"),
+                ]);
+                picker.models.insert(
+                    HarnessId::Codex,
+                    Loadable::Ready(vec![
+                        bare_model("gpt-a", "GPT A"),
+                        bare_model("gpt-b", "GPT B"),
+                    ]),
+                );
+                picker.models.insert(
+                    HarnessId::ClaudeCode,
+                    Loadable::Ready(vec![bare_model("opus", "Opus")]),
+                );
+                picker.config.harness = Some(HarnessId::Codex);
+                picker.config.model = Some("gpt-a".into());
+
+                picker.open_model_menu(window, cx);
+                assert_eq!(picker.model_rail, ModelRail::Harness);
+                assert_eq!(picker.model_scope, Some(HarnessId::Codex));
+                assert_eq!(picker.model_rows(cx).len(), 2);
+                picker.close(cx);
+
+                picker.toggle_model_favorite(HarnessId::ClaudeCode, "opus", cx);
+                picker.open_model_menu(window, cx);
+                assert_eq!(picker.model_rail, ModelRail::Favorites);
+                assert_eq!(picker.model_scope, None);
+                let rows = picker.model_rows(cx);
+                assert_eq!(rows.len(), 1);
+                assert_eq!(rows[0].model.id, "opus");
+            })
+            .unwrap();
     }
 
     #[gpui::test]
