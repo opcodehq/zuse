@@ -6589,6 +6589,8 @@ pub struct Composer {
     /// The file name each staged image arrived with, by attachment id: the
     /// upload is renamed `Image N`, but its chip shows the original.
     attachment_original_names: HashMap<String, SharedString>,
+    /// First-page PDF thumbnails, scoped to the currently visible draft.
+    document_thumbnails: HashMap<String, Option<std::sync::Arc<gpui::Image>>>,
     /// Rich window captures keyed exactly like drafts and ordinary staged
     /// attachments. Each owns one screenshot that joins the existing upload
     /// path only at send time.
@@ -7398,6 +7400,7 @@ impl Composer {
             attachments: HashMap::new(),
             attachment_drafts: HashMap::new(),
             attachment_original_names: HashMap::new(),
+            document_thumbnails: HashMap::new(),
             appshots: HashMap::new(),
             appshot_entrances: HashMap::new(),
             preview: None,
@@ -10491,6 +10494,16 @@ impl Composer {
             &appshots::with_appshots(&text, &staged_appshots, &echo_appshot_paths),
             &echo_paths,
         );
+        // Reuse the staged PDF page while the upload is being sent.
+        let sent_document_thumbnails: HashMap<_, _> = staged
+            .iter()
+            .filter_map(|att| {
+                self.document_thumbnails
+                    .get(&att.id)
+                    .and_then(|image| image.clone())
+                    .map(|image| (att.id.clone(), image))
+            })
+            .collect();
         // Queued flow also seeds the UPLOAD ALIAS: the host rewrites the
         // persisted ref to `{its uploads dir}/{id8}-{name}` — an absolute
         // path the sender can't predict, but whose id8 it minted. The alias
@@ -10499,19 +10512,41 @@ impl Composer {
         if queued_flow {
             for (upload_id, att) in upload_ids.iter().zip(&staged) {
                 attachments::seed_staged_alias(&device_id, upload_id, att);
+                if let Some(image) = sent_document_thumbnails.get(&att.id) {
+                    attachments::seed_attachment_alias(
+                        &device_id,
+                        upload_id,
+                        &att.name,
+                        image.clone(),
+                    );
+                }
                 if let Some(local) = local_device_id.as_deref()
                     && local != device_id
                 {
                     attachments::seed_staged_alias(local, upload_id, att);
+                    if let Some(image) = sent_document_thumbnails.get(&att.id) {
+                        attachments::seed_attachment_alias(
+                            local,
+                            upload_id,
+                            &att.name,
+                            image.clone(),
+                        );
+                    }
                 }
             }
         }
         for (path, att) in echo_paths.iter().zip(&staged) {
             attachments::seed_staged(&device_id, path, att);
+            if let Some(image) = sent_document_thumbnails.get(&att.id) {
+                attachments::seed_attachment(&device_id, path, &att.name, image.clone());
+            }
             if let Some(local) = local_device_id.as_deref()
                 && local != device_id
             {
                 attachments::seed_staged(local, path, att);
+                if let Some(image) = sent_document_thumbnails.get(&att.id) {
+                    attachments::seed_attachment(local, path, &att.name, image.clone());
+                }
             }
         }
 
@@ -10669,8 +10704,14 @@ impl Composer {
                     let seed_device = host_device_id.clone().unwrap_or_else(|| device_id.clone());
                     for (path, att) in attachment_paths.iter().zip(&staged) {
                         attachments::seed_staged(&seed_device, path, att);
+                        if let Some(image) = sent_document_thumbnails.get(&att.id) {
+                            attachments::seed_attachment(&seed_device, path, &att.name, image.clone());
+                        }
                         if seed_device != device_id {
                             attachments::seed_staged(&device_id, path, att);
+                            if let Some(image) = sent_document_thumbnails.get(&att.id) {
+                                attachments::seed_attachment(&device_id, path, &att.name, image.clone());
+                            }
                         }
                     }
                     let appshot_paths: HashMap<String, String> = staged

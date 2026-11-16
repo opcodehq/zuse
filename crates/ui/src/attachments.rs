@@ -107,6 +107,37 @@ pub fn unchipped_attachments<'a>(text: &str, paths: &'a [String]) -> Vec<&'a Str
         .collect()
 }
 
+/// A concise file type for attachment tiles. The complete name stays in the tooltip.
+pub(crate) fn file_type_label(name: &str) -> String {
+    let extension = Path::new(name).extension().and_then(|ext| ext.to_str());
+    match extension {
+        Some(ext)
+            if !ext.is_empty()
+                && ext.len() <= 8
+                && ext.bytes().all(|b| b.is_ascii_alphanumeric()) =>
+        {
+            ext.to_ascii_uppercase()
+        }
+        _ => "FILE".to_owned(),
+    }
+}
+
+/// High-contrast type label that remains legible over a document page.
+pub(crate) fn file_type_badge(name: &str) -> AnyElement {
+    div()
+        .absolute()
+        .left(px(3.0))
+        .bottom(px(3.0))
+        .rounded_full()
+        .px(px(5.0))
+        .py(px(1.0))
+        .bg(gpui::black().opacity(0.82))
+        .text_color(gpui::white())
+        .text_size(px(9.0))
+        .child(file_type_label(name))
+        .into_any_element()
+}
+
 /// How attachments ride the prompt (use-attachments.ts `withAttachments`):
 /// plain local paths appended to the text — the files are staged on the device
 /// that runs the agent, so the agent can open them with its own tools; the
@@ -1621,6 +1652,15 @@ fn gallery_arrow(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn file_type_labels_are_short_and_safe() {
+        assert_eq!(super::file_type_label("report.pdf"), "PDF");
+        assert_eq!(super::file_type_label("report.Docx"), "DOCX");
+        assert_eq!(super::file_type_label("notes.txt"), "TXT");
+        assert_eq!(super::file_type_label("README"), "FILE");
+        assert_eq!(super::file_type_label("bad.longextension"), "FILE");
+        assert_eq!(super::file_type_label("bad.pdf\n"), "FILE");
+    }
 
     #[test]
     fn computer_uploads_are_marked_for_the_computer_not_a_device() {

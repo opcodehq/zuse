@@ -787,11 +787,13 @@ impl Composer {
         let frame = div()
             .id(("tray-att-thumb", ix))
             .size(px(size))
+            .relative()
             .rounded(px(THUMB_RADIUS))
             .overflow_hidden()
             .border_1()
             .border_color(crate::theme::hairline(0.10))
             .tip(tile.name.clone());
+        let is_file = tile.image.is_none();
         let frame = match tile.image {
             Some(image) => {
                 let preview =
@@ -805,8 +807,6 @@ impl Composer {
                         cx.notify();
                     }))
                     .child(
-                        // Explicit dims: img honours the intrinsic aspect over
-                        // a percent height, which would overflow the frame.
                         img(image)
                             .w(px(size - 2.0))
                             .h(px(size - 2.0))
@@ -814,35 +814,36 @@ impl Composer {
                             .object_fit(ObjectFit::Cover),
                     )
             }
-            None => frame
-                .cursor_pointer()
-                .on_click({
-                    let id = tile.id.clone();
-                    cx.listener(move |this, _, _, cx| this.open_file_preview(&id, cx))
-                })
-                .flex()
-                .flex_col()
-                .items_center()
-                .justify_center()
-                .gap(px(3.0))
-                .bg(crate::theme::ink(0.04))
-                .child(
-                    crate::file_icons::icon(
-                        crate::file_icons::FileIconIdentity::file(&tile.name),
-                        theme.appearance,
-                    )
-                    .size(px(20.0)),
-                )
-                .child(
-                    div()
-                        .w_full()
-                        .px(px(3.0))
-                        .truncate()
-                        .text_size(px(9.0))
-                        .text_color(theme.text_muted)
-                        .child(tile.name.clone()),
-                ),
+            None => {
+                let id = tile.id.clone();
+                let frame = frame
+                    .cursor_pointer()
+                    .role(gpui::Role::Button)
+                    .aria_label(format!("Preview {}", tile.name))
+                    .on_click(cx.listener(move |this, _, _, cx| this.open_file_preview(&id, cx)))
+                    .bg(crate::theme::ink(0.04));
+                match tile.document_image {
+                    Some(image) => frame.child(
+                        img(image)
+                            .w(px(size - 2.0))
+                            .h(px(size - 2.0))
+                            .object_fit(ObjectFit::Contain),
+                    ),
+                    None => frame.flex().items_center().justify_center().child(
+                        crate::file_icons::icon(
+                            crate::file_icons::FileIconIdentity::file(&tile.name),
+                            theme.appearance,
+                        )
+                        .size(px(22.0)),
+                    ),
+                }
+            }
         };
+        let frame = frame.when(is_file, |frame| {
+            frame.child(crate::frost::layered(crate::attachments::file_type_badge(
+                &tile.name,
+            )))
+        });
         let remove_id = tile.id.clone();
         div()
             .group(group.clone())
@@ -885,10 +886,49 @@ impl Composer {
 
     /// Show staged images and files above the input.
     pub(super) fn render_image_strip(
-        &self,
+        &mut self,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
+        let pdfs: Vec<_> = self
+            .staged()
+            .iter()
+            .filter_map(|att| {
+                if !att.name.to_ascii_lowercase().ends_with(".pdf") {
+                    return None;
+                }
+                let crate::attachments::AttachmentContent::File(bytes) = &att.content else {
+                    return None;
+                };
+                Some((att.id.clone(), bytes.clone()))
+            })
+            .collect();
+        self.document_thumbnails
+            .retain(|id, _| pdfs.iter().any(|(held, _)| held == id));
+        for (id, bytes) in pdfs {
+            if self.document_thumbnails.contains_key(&id) {
+                continue;
+            }
+            self.document_thumbnails.insert(id.clone(), None);
+            cx.spawn(async move |this, cx| {
+                let rendered = cx
+                    .background_executor()
+                    .spawn(async move { crate::attachments::render_pdf_page(bytes, 0, 256.0) })
+                    .await;
+                let _ = this.update(cx, |this, cx| {
+                    if !this.staged().iter().any(|att| att.id == id) {
+                        this.document_thumbnails.remove(&id);
+                        return;
+                    }
+                    let image = rendered.map(|(png, _)| {
+                        std::sync::Arc::new(gpui::Image::from_bytes(gpui::ImageFormat::Png, png))
+                    });
+                    this.document_thumbnails.insert(id, image);
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
         let tiles: Vec<_> = self
             .staged()
             .iter()
@@ -900,6 +940,7 @@ impl Composer {
                     .map(|name| name.to_string())
                     .unwrap_or_else(|| att.name.clone()),
                 image: att.image().cloned(),
+                document_image: self.document_thumbnails.get(&att.id).and_then(Clone::clone),
             })
             .collect();
         if tiles.is_empty() {
@@ -1995,6 +2036,7 @@ struct StagedTile {
     id: String,
     name: String,
     image: Option<std::sync::Arc<gpui::Image>>,
+    document_image: Option<std::sync::Arc<gpui::Image>>,
 }
 
 /// The annotation's anchor: file glyph, name and line in a quiet chip.

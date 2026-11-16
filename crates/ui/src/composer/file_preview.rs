@@ -299,6 +299,47 @@ pub(crate) mod tests {
     }
 
     #[gpui::test]
+    fn staged_pdf_thumbnail_loads_and_is_removed_with_attachment(cx: &mut gpui::TestAppContext) {
+        let (_dir, handle) = super::super::tests::composer_focus_window(cx);
+        let id = handle
+            .update(cx, |composer, _, cx| {
+                let key = composer.current_key.clone();
+                composer.adopt_staged_attachments(
+                    key,
+                    vec![attachments::StagedAttachment::from_file(
+                        "test.pdf",
+                        two_page_pdf(),
+                    )],
+                    cx,
+                );
+                let id = composer.staged()[0].id.clone();
+                let theme = Theme::of(cx).clone();
+                composer.render_image_strip(&theme, cx);
+                id
+            })
+            .unwrap();
+        cx.run_until_parked();
+        handle
+            .read_with(cx, |composer, _| {
+                assert!(
+                    composer
+                        .document_thumbnails
+                        .get(&id)
+                        .is_some_and(Option::is_some)
+                );
+            })
+            .unwrap();
+        handle
+            .update(cx, |composer, _, cx| {
+                composer.remove_attachment(&id, cx);
+                let theme = Theme::of(cx).clone();
+                composer.render_image_strip(&theme, cx);
+                assert!(!composer.document_thumbnails.contains_key(&id));
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
     fn pdf_preview_opens_and_navigates_pages(cx: &mut gpui::TestAppContext) {
         let (_dir, handle) = super::super::tests::composer_focus_window(cx);
         handle
