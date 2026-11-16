@@ -3804,6 +3804,9 @@ pub struct Transcript {
     copied_message_clear: Option<Task<()>>,
     /// Transcript attachment being viewed full-size (click a user thumbnail).
     attachment_preview: Option<crate::attachments::PreviewImage>,
+    sent_pdf: Option<SentPdfPreview>,
+    sent_pdf_generation: u64,
+    sent_pdf_opening: bool,
     /// Focused while the lightbox is open so Escape reaches it.
     attachment_preview_focus: gpui::FocusHandle,
     attachment_preview_return_focus: Option<gpui::FocusHandle>,
@@ -4184,6 +4187,9 @@ impl Transcript {
             copied_message: None,
             copied_message_clear: None,
             attachment_preview: None,
+            sent_pdf: None,
+            sent_pdf_generation: 0,
+            sent_pdf_opening: false,
             attachment_preview_focus: cx.focus_handle(),
             attachment_preview_return_focus: None,
             attachment_gallery: Vec::new(),
@@ -6552,16 +6558,46 @@ impl Transcript {
         let task_key = key.clone();
         let task = cx.spawn(async move |this, cx| {
             let _claim = claim;
-            match read_attachment_image(
-                &engine,
-                cx.background_executor(),
-                target.as_deref(),
-                &path,
-                expected_raster_mime.as_deref(),
-            )
-            .await
-            {
-                Some(loaded) => store_loaded_for(&task_key, loaded.name.into(), loaded.image),
+            let loaded =
+                if path.to_ascii_lowercase().ends_with(".pdf") && expected_raster_mime.is_none() {
+                    match crate::attachments::read_attachment_bytes(
+                        &engine,
+                        cx.background_executor(),
+                        target.as_deref(),
+                        &path,
+                        None,
+                    )
+                    .await
+                    {
+                        Some((name, _, bytes)) => {
+                            let page = cx
+                                .background_executor()
+                                .spawn(async move {
+                                    crate::attachments::render_pdf_page(Arc::new(bytes), 0, 256.0)
+                                })
+                                .await;
+                            page.map(|(png, _)| {
+                                (
+                                    name,
+                                    Arc::new(gpui::Image::from_bytes(gpui::ImageFormat::Png, png)),
+                                )
+                            })
+                        }
+                        None => None,
+                    }
+                } else {
+                    read_attachment_image(
+                        &engine,
+                        cx.background_executor(),
+                        target.as_deref(),
+                        &path,
+                        expected_raster_mime.as_deref(),
+                    )
+                    .await
+                    .map(|loaded| (loaded.name, loaded.image))
+                };
+            match loaded {
+                Some((name, image)) => store_loaded_for(&task_key, name.into(), image),
                 None => store_error_for(&task_key),
             }
             this.update(cx, |transcript, cx| {
@@ -6598,6 +6634,12 @@ impl Transcript {
         self.attachment_retries.insert(key, task);
     }
 
+    fn dismiss_sent_pdf(&mut self) {
+        self.sent_pdf = None;
+        self.sent_pdf_opening = false;
+        self.sent_pdf_generation = self.sent_pdf_generation.wrapping_add(1);
+    }
+
     /// Open a sent image chip's upload full size, as its thumbnail did. An
     /// image still loading opens on a later click.
     fn open_chip_image(
@@ -6611,6 +6653,7 @@ impl Transcript {
             self.attachment_state(&device_ids, path, None, cx)
         {
             let preview = crate::attachments::PreviewImage::new(image.name, image.image.clone());
+            self.dismiss_sent_pdf();
             self.attachment_preview_return_focus = window.focused(cx);
             preview.viewer.reset();
             self.attachment_preview = Some(preview);
@@ -6650,6 +6693,7 @@ impl Transcript {
             return;
         }
         self.close_diagram_zoom(cx);
+        self.dismiss_sent_pdf();
         self.attachment_preview = None;
         self.attachment_preview_return_focus = window.focused(cx);
         self.attachment_gallery = entries;
@@ -6718,6 +6762,119 @@ impl Transcript {
             }
             cx.notify();
         }
+    }
+
+    fn open_sent_pdf(
+        &mut self,
+        path: String,
+        thumbnail: crate::attachments::PreviewImage,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            return;
+        };
+        let devices = self.attachment_device_ids(cx);
+        let local = self.state.read(cx).local_device_id.clone();
+        let chat = self.chat_id.clone();
+        self.close_diagram_zoom(cx);
+        self.sent_pdf_generation = self.sent_pdf_generation.wrapping_add(1);
+        let generation = self.sent_pdf_generation;
+        self.sent_pdf = None;
+        self.sent_pdf_opening = true;
+        self.attachment_gallery.clear();
+        self.attachment_preview_return_focus = window.focused(cx);
+        self.attachment_preview = Some(thumbnail);
+        window.focus(&self.attachment_preview_focus, cx);
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            for device in devices {
+                let target = (local.as_deref() != Some(device.as_str())).then_some(device.as_str());
+                if let Some((name, _, bytes)) = crate::attachments::read_attachment_bytes(
+                    &engine,
+                    cx.background_executor(),
+                    target,
+                    &path,
+                    None,
+                )
+                .await
+                {
+                    let name = crate::attachments::attachment_display_name(&name).to_owned();
+                    let bytes = Arc::new(bytes);
+                    let render_bytes = bytes.clone();
+                    let rendered = cx
+                        .background_executor()
+                        .spawn(async move {
+                            crate::attachments::render_pdf_page(render_bytes, 0, 1600.0)
+                        })
+                        .await;
+                    if let Some((png, pages)) = rendered {
+                        let _ = this.update(cx, |this, cx| {
+                            if this.sent_pdf_generation != generation || this.chat_id != chat {
+                                return;
+                            }
+                            let image = gpui::Image::from_bytes(gpui::ImageFormat::Png, png);
+                            this.attachment_preview = Some(crate::attachments::PreviewImage::new(
+                                name.clone(),
+                                Arc::new(image),
+                            ));
+                            this.sent_pdf = Some(SentPdfPreview {
+                                name,
+                                bytes,
+                                index: 0,
+                                pages,
+                            });
+                            this.sent_pdf_opening = false;
+                            cx.notify();
+                        });
+                        return;
+                    }
+                }
+            }
+            let _ = this.update(cx, |this, cx| {
+                if this.sent_pdf_generation == generation && this.chat_id == chat {
+                    crate::toast::show(
+                        cx,
+                        crate::toast::ToastKind::Error,
+                        "Couldn't load the full PDF. Showing the thumbnail instead.",
+                    );
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn step_sent_pdf(&mut self, step: isize, cx: &mut Context<Self>) {
+        let Some(pdf) = self.sent_pdf.as_mut() else {
+            return;
+        };
+        let index = pdf.index as isize + step;
+        if index < 0 || index >= pdf.pages as isize {
+            return;
+        }
+        pdf.index = index as usize;
+        let (name, bytes, index) = (pdf.name.clone(), pdf.bytes.clone(), pdf.index);
+        self.sent_pdf_generation = self.sent_pdf_generation.wrapping_add(1);
+        let generation = self.sent_pdf_generation;
+        cx.spawn(async move |this, cx| {
+            let rendered = cx
+                .background_executor()
+                .spawn(async move { crate::attachments::render_pdf_page(bytes, index, 1600.0) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.sent_pdf_generation != generation || this.sent_pdf.is_none() {
+                    return;
+                }
+                if let Some((png, _)) = rendered {
+                    let image = gpui::Image::from_bytes(gpui::ImageFormat::Png, png);
+                    this.attachment_preview =
+                        Some(crate::attachments::PreviewImage::new(name, Arc::new(image)));
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+        cx.notify();
     }
 
     /// Move the open gallery by `step` images, stopping at either end.
@@ -7783,6 +7940,7 @@ impl Transcript {
         cx: &mut Context<Self>,
     ) {
         self.close_diagram_zoom(cx);
+        self.dismiss_sent_pdf();
         let viewport = window.viewport_size();
         let available = mermaid_cache::MAX_RETAINED_BYTES
             .saturating_sub(self.diagrams.borrow().retained_bytes());
@@ -7875,6 +8033,7 @@ impl Transcript {
                     .cursor_pointer()
                     .focus_visible(move |style| style.border_2().border_color(theme.accent))
                     .on_click(cx.listener(move |this, _, window, cx| {
+                        this.dismiss_sent_pdf();
                         this.attachment_preview_return_focus = window.focused(cx);
                         preview.viewer.reset();
                         this.attachment_preview = Some(preview.clone());
@@ -8130,29 +8289,90 @@ impl Transcript {
         for (aix, att) in atts.iter().enumerate() {
             if !crate::attachments::is_image_path(&att.path) {
                 let (sending, progress) = self.upload_status(&att.path, cx);
-                let mut file = div()
-                    .flex()
-                    .items_center()
-                    .gap(px(4.0))
-                    .child(user_file_pill(
-                        SharedString::from(format!("{row_id}#file{aix}")),
-                        &att.name,
-                        Theme::of(cx),
-                    ));
-                if sending {
-                    file = file.child(match progress {
-                        Some(percent) => crate::loaders::upload_progress_ring(percent, 16.0),
-                        None => crate::loaders::mini_glyph_spinner(
-                            format!("file-sending-{row_id}-{aix}"),
-                            2.0,
-                            glyph,
-                            cx.entity_id(),
-                            cx,
+                let theme = Theme::of(cx).clone();
+                let name = crate::attachments::attachment_display_name(&att.name).to_string();
+                let pdf = name.to_ascii_lowercase().ends_with(".pdf");
+                let state = (pdf && !sending)
+                    .then(|| self.attachment_state(&device_ids, &att.path, None, cx));
+                let mut tile = div()
+                    .id(SharedString::from(format!("{row_id}#file{aix}")))
+                    .size(px(crate::composer::STRIP_THUMB))
+                    .flex_none()
+                    .relative()
+                    .rounded(px(8.0))
+                    .overflow_hidden()
+                    .border_1()
+                    .border_color(crate::theme::hairline(0.10))
+                    .bg(crate::theme::ink(0.04))
+                    .tip(name.clone());
+                if let Some(AttachmentSnapshot::Loaded(image)) = state {
+                    let path = att.path.clone();
+                    let preview =
+                        crate::attachments::PreviewImage::new(name.clone(), image.image.clone());
+                    let accent = theme.accent;
+                    tile = tile
+                        .cursor_pointer()
+                        .role(gpui::Role::Button)
+                        .aria_label(format!("Preview {name}"))
+                        .tab_index(0)
+                        .focus_visible(move |style| style.border_2().border_color(accent))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.open_sent_pdf(path.clone(), preview.clone(), window, cx);
+                        }))
+                        .child(
+                            img(image.image)
+                                .size(px(crate::composer::STRIP_THUMB - 2.0))
+                                .object_fit(ObjectFit::Contain),
+                        );
+                } else {
+                    tile = tile
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .justify_center()
+                        .gap(px(3.0))
+                        .child(
+                            crate::file_icons::icon(
+                                crate::file_icons::FileIconIdentity::file(&name),
+                                theme.appearance,
+                            )
+                            .size(px(20.0)),
                         )
-                        .into_any_element(),
-                    });
+                        .child(
+                            div()
+                                .w_full()
+                                .px(px(3.0))
+                                .truncate()
+                                .text_size(px(9.0))
+                                .text_color(theme.text_muted)
+                                .child(name),
+                        );
                 }
-                strip = strip.child(file);
+                if sending {
+                    tile = tile.child(
+                        div()
+                            .absolute()
+                            .inset_0()
+                            .bg(crate::popover::scrim_alpha(0.5))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(match progress {
+                                Some(percent) => {
+                                    crate::loaders::upload_progress_ring(percent, 20.0)
+                                }
+                                None => crate::loaders::mini_glyph_spinner(
+                                    format!("file-sending-{row_id}-{aix}"),
+                                    2.0,
+                                    glyph,
+                                    cx.entity_id(),
+                                    cx,
+                                )
+                                .into_any_element(),
+                            }),
+                    );
+                }
+                strip = strip.child(tile);
                 continue;
             }
             let state = self.attachment_state(&device_ids, &att.path, None, cx);
@@ -10521,6 +10741,13 @@ fn user_file_pill(id: SharedString, name: &str, theme: &Theme) -> AnyElement {
         .into_any_element()
 }
 
+struct SentPdfPreview {
+    name: String,
+    bytes: Arc<Vec<u8>>,
+    index: usize,
+    pages: usize,
+}
+
 /// One image the lightbox can step to: shown from `preview` once known,
 /// otherwise read from `source` (candidate devices, path) on arrival.
 #[derive(Clone)]
@@ -12229,34 +12456,48 @@ impl Render for Transcript {
                     .as_ref()
                     .is_some_and(|item| Arc::ptr_eq(&item.image, &preview.image))
             });
-            let nav = in_gallery.then(|| {
+            let nav = if let Some(pdf) = &self.sent_pdf {
                 let step = weak.clone();
-                crate::attachments::LightboxNav {
-                    index: self.attachment_gallery_index,
-                    count: self.attachment_gallery.len(),
-                    thumbs: self
-                        .attachment_gallery
-                        .iter()
-                        .map(|entry| entry.preview.as_ref().map(|item| item.image.clone()))
-                        .collect(),
+                Some(crate::attachments::LightboxNav {
+                    index: pdf.index,
+                    count: pdf.pages,
+                    thumbs: Vec::new(),
                     swipe: self.gallery_swipe.clone(),
-                    on_step: Rc::new(move |delta, window, cx| {
-                        step.update(cx, |this, cx| this.step_gallery(delta, window, cx))
-                            .ok();
+                    on_step: Rc::new(move |delta, _, cx| {
+                        let _ = step.update(cx, |this, cx| this.step_sent_pdf(delta, cx));
                     }),
-                }
-            });
+                })
+            } else {
+                in_gallery.then(|| {
+                    let step = weak.clone();
+                    crate::attachments::LightboxNav {
+                        index: self.attachment_gallery_index,
+                        count: self.attachment_gallery.len(),
+                        thumbs: self
+                            .attachment_gallery
+                            .iter()
+                            .map(|entry| entry.preview.as_ref().map(|item| item.image.clone()))
+                            .collect(),
+                        swipe: self.gallery_swipe.clone(),
+                        on_step: Rc::new(move |delta, window, cx| {
+                            step.update(cx, |this, cx| this.step_gallery(delta, window, cx))
+                                .ok();
+                        }),
+                    }
+                })
+            };
             return root.child(crate::attachments::lightbox_gallery(
                 window,
                 &preview,
                 &self.attachment_preview_focus,
                 natural_size,
                 nav,
-                false,
+                self.sent_pdf.is_some() || self.sent_pdf_opening,
                 move |window, cx| {
                     if let Ok(focus) = weak.update(cx, |this, cx| {
                         this.close_diagram_zoom(cx);
                         this.attachment_preview = None;
+                        this.dismiss_sent_pdf();
                         this.attachment_gallery.clear();
                         cx.notify();
                         this.attachment_preview_return_focus.take()
@@ -17631,6 +17872,54 @@ mod tests {
 
     /// Every sent attachment renders above the bubble, including references
     /// that were inserted inline while composing.
+    #[gpui::test]
+    fn sent_pdf_navigates_pages_and_ignores_a_closed_preview(cx: &mut gpui::TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        cx.update(|cx| {
+            gpui_base::init(cx);
+            cx.set_global(Theme::dark());
+            crate::settings::init(crate::settings::UiSettings::default(), dir.path(), cx);
+        });
+        let state = cx.new(|_| AppState::new());
+        let window = cx.add_window(|_, cx| Transcript::new(state, cx));
+        let pdf = Arc::new(crate::composer::file_preview::tests::two_page_pdf());
+        window
+            .update(cx, |this, _, cx| {
+                let (png, pages) =
+                    crate::attachments::render_pdf_page(pdf.clone(), 0, 1600.0).unwrap();
+                let image = Arc::new(gpui::Image::from_bytes(gpui::ImageFormat::Png, png));
+                this.attachment_preview =
+                    Some(crate::attachments::PreviewImage::new("test.pdf", image));
+                this.sent_pdf = Some(SentPdfPreview {
+                    name: "test.pdf".into(),
+                    bytes: pdf,
+                    index: 0,
+                    pages,
+                });
+                this.step_sent_pdf(1, cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .read_with(cx, |this, _| {
+                assert_eq!(this.sent_pdf.as_ref().unwrap().index, 1);
+                assert!(this.attachment_preview.is_some());
+            })
+            .unwrap();
+        window
+            .update(cx, |this, _, cx| {
+                this.step_sent_pdf(-1, cx);
+                this.sent_pdf = None;
+                this.attachment_preview = None;
+                this.sent_pdf_generation = this.sent_pdf_generation.wrapping_add(1);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .read_with(cx, |this, _| assert!(this.attachment_preview.is_none()))
+            .unwrap();
+    }
+
     #[test]
     fn sent_attachment_references_move_above_the_message() {
         use zuse_protocol::attachment_mentions::attachment_mention_link;

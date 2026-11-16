@@ -707,6 +707,34 @@ pub(crate) async fn read_attachment_bytes(
     Some((name, mime, bytes))
 }
 
+/// Render a PDF page off the UI thread, bounded to the requested size.
+pub(crate) fn render_pdf_page(
+    bytes: Arc<Vec<u8>>,
+    index: usize,
+    max_dimension: f32,
+) -> Option<(Vec<u8>, usize)> {
+    let pdf = hayro::hayro_syntax::Pdf::new(bytes).ok()?;
+    let pages = pdf.pages();
+    let page = pages.get(index)?;
+    let (width, height) = page.render_dimensions();
+    if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
+        return None;
+    }
+    let scale = (max_dimension / width.max(height)).min(2.0);
+    let pixmap = hayro::render(
+        page,
+        &hayro::RenderCache::new(),
+        &Default::default(),
+        &Default::default(),
+        &hayro::PixmapSettings {
+            x_scale: scale,
+            y_scale: scale,
+            bg_color: hayro::vello_cpu::color::palette::css::WHITE,
+        },
+    );
+    Some((pixmap.into_png().ok()?, pages.len()))
+}
+
 /// Read back a staged file of any type (a queued message restored for editing).
 pub async fn read_attachment_file(
     engine: &EngineHandle,

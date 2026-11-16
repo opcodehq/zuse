@@ -13,7 +13,7 @@ use crate::tooltip::TooltipExt as _;
 use zuse_i18n::messages as msg;
 mod add_menu;
 mod archive;
-mod file_preview;
+pub(crate) mod file_preview;
 mod permission_inspector;
 mod permission_prompt;
 mod permissions;

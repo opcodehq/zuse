@@ -28,28 +28,7 @@ enum PreviewResult {
 
 fn preview_contents(name: &str, bytes: &Arc<Vec<u8>>, index: usize) -> PreviewResult {
     if name.to_ascii_lowercase().ends_with(".pdf") {
-        let result = (|| {
-            let pdf = hayro::hayro_syntax::Pdf::new(bytes.clone()).ok()?;
-            let pages = pdf.pages();
-            let page = pages.get(index)?;
-            let (width, height) = page.render_dimensions();
-            if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
-                return None;
-            }
-            let scale = (1600.0 / width.max(height)).min(2.0);
-            let pixmap = hayro::render(
-                page,
-                &hayro::RenderCache::new(),
-                &Default::default(),
-                &Default::default(),
-                &hayro::PixmapSettings {
-                    x_scale: scale,
-                    y_scale: scale,
-                    bg_color: hayro::vello_cpu::color::palette::css::WHITE,
-                },
-            );
-            Some((pixmap.into_png().ok()?, pages.len()))
-        })();
+        let result = attachments::render_pdf_page(bytes.clone(), index, 1600.0);
         return match result {
             Some((png, pages)) => PreviewResult::Pdf { png, pages },
             None => PreviewResult::Text("This PDF could not be previewed.".into()),
@@ -286,10 +265,10 @@ impl Composer {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
-    fn two_page_pdf() -> Vec<u8> {
+    pub(crate) fn two_page_pdf() -> Vec<u8> {
         let objects = [
             "<< /Type /Catalog /Pages 2 0 R >>",
             "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>",
@@ -372,6 +351,16 @@ mod tests {
             preview_contents("bad.pdf", &Arc::new(b"not a pdf".to_vec()), 0),
             PreviewResult::Text(_)
         ));
+    }
+
+    #[test]
+    fn pdf_thumbnail_renders_the_complete_page_within_its_pixel_budget() {
+        let pdf = Arc::new(two_page_pdf());
+        let (png, pages) = attachments::render_pdf_page(pdf.clone(), 0, 256.0).unwrap();
+        let (width, height) = crate::appshots::png_dimensions(&png).unwrap();
+        assert_eq!(pages, 2);
+        assert!(width > 0 && height > 0 && width.max(height) <= 256);
+        assert!(attachments::render_pdf_page(pdf, 2, 256.0).is_none());
     }
 
     #[test]
