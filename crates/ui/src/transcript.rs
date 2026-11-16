@@ -6886,8 +6886,7 @@ impl Transcript {
         if index < 0 || index >= pdf.pages as isize {
             return;
         }
-        pdf.index = index as usize;
-        let (name, bytes, index) = (pdf.name.clone(), pdf.bytes.clone(), pdf.index);
+        let (name, bytes, index) = (pdf.name.clone(), pdf.bytes.clone(), index as usize);
         self.sent_pdf_generation = self.sent_pdf_generation.wrapping_add(1);
         let generation = self.sent_pdf_generation;
         cx.spawn(async move |this, cx| {
@@ -6900,6 +6899,7 @@ impl Transcript {
                     return;
                 }
                 if let Some((png, _)) = rendered {
+                    this.sent_pdf.as_mut().unwrap().index = index;
                     let image = gpui::Image::from_bytes(gpui::ImageFormat::Png, png);
                     this.attachment_preview =
                         Some(crate::attachments::PreviewImage::new(name, Arc::new(image)));
@@ -17978,6 +17978,19 @@ mod tests {
                     pages,
                 });
                 this.step_sent_pdf(1, cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .read_with(cx, |this, _| {
+                assert_eq!(this.sent_pdf.as_ref().unwrap().index, 1);
+                assert!(this.attachment_preview.is_some());
+            })
+            .unwrap();
+        window
+            .update(cx, |this, _, cx| {
+                this.sent_pdf.as_mut().unwrap().bytes = Arc::new(Vec::new());
+                this.step_sent_pdf(-1, cx);
             })
             .unwrap();
         cx.run_until_parked();

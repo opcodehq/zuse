@@ -10511,42 +10511,22 @@ impl Composer {
         // rewrite instead of blanking into a reload skeleton.
         if queued_flow {
             for (upload_id, att) in upload_ids.iter().zip(&staged) {
-                attachments::seed_staged_alias(&device_id, upload_id, att);
-                if let Some(image) = sent_document_thumbnails.get(&att.id) {
-                    attachments::seed_attachment_alias(
-                        &device_id,
-                        upload_id,
-                        &att.name,
-                        image.clone(),
-                    );
-                }
+                let thumbnail = sent_document_thumbnails.get(&att.id);
+                attachments::seed_staged_alias(&device_id, upload_id, att, thumbnail);
                 if let Some(local) = local_device_id.as_deref()
                     && local != device_id
                 {
-                    attachments::seed_staged_alias(local, upload_id, att);
-                    if let Some(image) = sent_document_thumbnails.get(&att.id) {
-                        attachments::seed_attachment_alias(
-                            local,
-                            upload_id,
-                            &att.name,
-                            image.clone(),
-                        );
-                    }
+                    attachments::seed_staged_alias(local, upload_id, att, thumbnail);
                 }
             }
         }
         for (path, att) in echo_paths.iter().zip(&staged) {
-            attachments::seed_staged(&device_id, path, att);
-            if let Some(image) = sent_document_thumbnails.get(&att.id) {
-                attachments::seed_attachment(&device_id, path, &att.name, image.clone());
-            }
+            let thumbnail = sent_document_thumbnails.get(&att.id);
+            attachments::seed_staged_with_thumbnail(&device_id, path, att, thumbnail);
             if let Some(local) = local_device_id.as_deref()
                 && local != device_id
             {
-                attachments::seed_staged(local, path, att);
-                if let Some(image) = sent_document_thumbnails.get(&att.id) {
-                    attachments::seed_attachment(local, path, &att.name, image.clone());
-                }
+                attachments::seed_staged_with_thumbnail(local, path, att, thumbnail);
             }
         }
 
@@ -10703,15 +10683,10 @@ impl Composer {
                     // Attachment in the original send path).
                     let seed_device = host_device_id.clone().unwrap_or_else(|| device_id.clone());
                     for (path, att) in attachment_paths.iter().zip(&staged) {
-                        attachments::seed_staged(&seed_device, path, att);
-                        if let Some(image) = sent_document_thumbnails.get(&att.id) {
-                            attachments::seed_attachment(&seed_device, path, &att.name, image.clone());
-                        }
+                        let thumbnail = sent_document_thumbnails.get(&att.id);
+                        attachments::seed_staged_with_thumbnail(&seed_device, path, att, thumbnail);
                         if seed_device != device_id {
-                            attachments::seed_staged(&device_id, path, att);
-                            if let Some(image) = sent_document_thumbnails.get(&att.id) {
-                                attachments::seed_attachment(&device_id, path, &att.name, image.clone());
-                            }
+                            attachments::seed_staged_with_thumbnail(&device_id, path, att, thumbnail);
                         }
                     }
                     let appshot_paths: HashMap<String, String> = staged

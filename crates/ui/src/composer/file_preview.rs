@@ -123,8 +123,7 @@ impl Composer {
         if index < 0 || index >= pdf.pages as isize {
             return;
         }
-        pdf.index = index as usize;
-        let (name, bytes, index) = (pdf.name.clone(), pdf.bytes.clone(), pdf.index);
+        let (name, bytes, index) = (pdf.name.clone(), pdf.bytes.clone(), index as usize);
         self.file_preview_generation = self.file_preview_generation.wrapping_add(1);
         let generation = self.file_preview_generation;
         cx.spawn(async move |this, cx| {
@@ -141,6 +140,7 @@ impl Composer {
                     return;
                 }
                 if let PreviewResult::Pdf { png, .. } = result {
+                    this.pdf_preview.as_mut().unwrap().index = index;
                     let image = gpui::Image::from_bytes(gpui::ImageFormat::Png, png);
                     this.preview = Some(attachments::PreviewImage::new(name, Arc::new(image)));
                 }
@@ -372,6 +372,19 @@ pub(crate) mod tests {
             .read_with(cx, |composer, _| {
                 assert!(composer.preview.is_some());
                 assert_eq!(composer.pdf_preview.as_ref().unwrap().index, 1);
+            })
+            .unwrap();
+        handle
+            .update(cx, |composer, _, cx| {
+                composer.pdf_preview.as_mut().unwrap().bytes = Arc::new(Vec::new());
+                composer.step_pdf_preview(-1, cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        handle
+            .read_with(cx, |composer, _| {
+                assert_eq!(composer.pdf_preview.as_ref().unwrap().index, 1);
+                assert!(composer.preview.is_some());
             })
             .unwrap();
     }

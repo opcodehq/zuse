@@ -1191,17 +1191,29 @@ pub fn seed_attachment(device_id: &str, path: &str, name: &str, image: Arc<Image
     store_loaded(device_id, path, name.to_string().into(), image);
 }
 
-/// [`seed_attachment`] for a staged attachment; a file that is not an image
-/// has no thumbnail to seed.
+/// Seed a staged image or its rendered document thumbnail.
 pub fn seed_staged(device_id: &str, path: &str, att: &StagedAttachment) {
-    if let Some(image) = att.image() {
+    seed_staged_with_thumbnail(device_id, path, att, None);
+}
+
+pub(crate) fn seed_staged_with_thumbnail(
+    device_id: &str,
+    path: &str,
+    att: &StagedAttachment,
+    thumbnail: Option<&Arc<Image>>,
+) {
+    if let Some(image) = att.image().or(thumbnail) {
         seed_attachment(device_id, path, &att.name, image.clone());
     }
 }
 
-/// [`seed_attachment_alias`] for a staged attachment.
-pub fn seed_staged_alias(device_id: &str, upload_id: &str, att: &StagedAttachment) {
-    if let Some(image) = att.image() {
+pub(crate) fn seed_staged_alias(
+    device_id: &str,
+    upload_id: &str,
+    att: &StagedAttachment,
+    thumbnail: Option<&Arc<Image>>,
+) {
+    if let Some(image) = att.image().or(thumbnail) {
         seed_attachment_alias(device_id, upload_id, &att.name, image.clone());
     }
 }
