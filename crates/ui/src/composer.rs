@@ -442,6 +442,8 @@ pub enum SendButtonMode {
 struct AttachmentDraft {
     /// The highest number handed out so far.
     next: u32,
+    /// References observed in the editor, for undo and deletion tracking.
+    referenced: HashSet<u32>,
     /// Attachments whose last chip or tile was removed. Undo that brings their
     /// chip back restages the attachment from here.
     unstaged: Vec<StagedAttachment>,
@@ -7557,22 +7559,10 @@ impl Composer {
             .unwrap_or(&[])
     }
 
-    /// Staged attachments that get a tile above the input. One the draft
-    /// mentions as a chip is already on screen there (hover previews it,
-    /// deleting it unstages it), so only attachments without a chip are tiled.
-    fn tiled_attachments<'a>(&'a self, cx: &App) -> Vec<&'a StagedAttachment> {
-        let chipped: Vec<u32> = self
-            .input
-            .read(cx)
-            .projection
-            .mentions
-            .iter()
-            .filter_map(|(link, _)| link.attachment)
-            .collect();
-        self.staged()
-            .iter()
-            .filter(|att| att.mention.is_none_or(|index| !chipped.contains(&index)))
-            .collect()
+    /// Staged attachments shown in the attachment tray.
+    #[cfg(test)]
+    fn tiled_attachments<'a>(&'a self, _cx: &App) -> Vec<&'a StagedAttachment> {
+        self.staged().iter().collect()
     }
 
     pub(crate) fn queue_preview_limit(&self) -> usize {
@@ -7888,10 +7878,8 @@ impl Composer {
         draft.next
     }
 
-    /// Add newly staged files to a draft. Each is numbered and mentioned at the
-    /// caret as one edit: images read "Image 1", "Image 2", ...; other files
-    /// keep their name. A file the editor cannot take a chip for, or that was
-    /// staged for a draft the user has since left, stays a plain attachment.
+    /// Stage files without inserting an automatic reference into the prompt.
+    /// The assigned numbers still allow the user to mention them with `@`.
     fn adopt_staged_attachments(
         &mut self,
         key: String,
@@ -7906,38 +7894,17 @@ impl Composer {
             return;
         }
         let text = self.input.read(cx).text().to_string();
-        let mut links = Vec::with_capacity(staged.len());
-        let mut indices = Vec::with_capacity(staged.len());
         for att in &mut staged {
             let index = self.next_attachment_index(&key, &text);
-            let file_name = match att.image() {
-                Some(image) => {
-                    // The chip keeps showing the name it arrived with.
-                    self.attachment_original_names
-                        .insert(att.id.clone(), SharedString::from(att.name.clone()));
-                    att.name = attachments::ensure_extension(
-                        &zuse_protocol::attachment_mentions::image_label(index),
-                        image.format,
-                    );
-                    None
-                }
-                None => Some(att.name.as_str()),
-            };
-            links.push(zuse_protocol::attachment_mentions::attachment_mention_link(
-                index, file_name,
-            ));
-            indices.push(index);
-        }
-        // Chips are inserted before the attachments join the draft, so a
-        // draft that cannot take them (read-only, composing) keeps the files
-        // and their original names.
-        let mentioned = self
-            .input
-            .update(cx, |input, cx| input.insert_reference(&links.join(" "), cx));
-        if mentioned {
-            for (att, index) in staged.iter_mut().zip(indices) {
-                att.mention = Some(index);
+            if let Some(image) = att.image() {
+                self.attachment_original_names
+                    .insert(att.id.clone(), SharedString::from(att.name.clone()));
+                att.name = attachments::ensure_extension(
+                    &zuse_protocol::attachment_mentions::image_label(index),
+                    image.format,
+                );
             }
+            att.mention = Some(index);
         }
         self.attachments.entry(key).or_default().extend(staged);
         self.sync_attachment_chips(cx);
@@ -7972,10 +7939,14 @@ impl Composer {
             let mentioned = zuse_protocol::attachment_mentions::attachment_mention_indices(
                 self.input.read(cx).text(),
             );
-            let is_mentioned =
-                |att: &StagedAttachment| att.mention.is_none_or(|index| mentioned.contains(&index));
             let key = self.current_key.clone();
             let draft = self.attachment_drafts.entry(key.clone()).or_default();
+            draft.referenced.extend(mentioned.iter().copied());
+            let is_mentioned = |att: &StagedAttachment| {
+                att.mention.is_none_or(|index| {
+                    !draft.referenced.contains(&index) || mentioned.contains(&index)
+                })
+            };
             let (restored, mut stash): (Vec<_>, Vec<_>) = std::mem::take(&mut draft.unstaged)
                 .into_iter()
                 .partition(is_mentioned);

@@ -41,7 +41,6 @@ const ICON_SLOT: f32 = 16.0;
 const GLYPH: f32 = 14.0;
 pub(crate) const ICON_ACTION: f32 = 24.0;
 const TEXT_ACTION_HEIGHT: f32 = 28.0;
-const THUMB: f32 = 40.0;
 const THUMB_RADIUS: f32 = 7.0;
 
 fn is_configuration_notice(
@@ -724,7 +723,7 @@ impl Composer {
 
     // ---- attachments and annotations ----
 
-    /// Annotation previews and attachments without an inline draft chip.
+    /// Annotation and context previews.
     fn attachment_row(
         &mut self,
         theme: &Theme,
@@ -742,16 +741,6 @@ impl Composer {
                 .filter(|item| item.browser_annotation.is_some())
                 .map(StagedAnnotation::Browser),
         );
-        let tiles: Vec<StagedTile> = self
-            .tiled_attachments(cx)
-            .into_iter()
-            .filter(|att| att.image().is_none())
-            .map(|att| StagedTile {
-                id: att.id.clone(),
-                name: att.name.clone(),
-                image: att.image().cloned(),
-            })
-            .collect();
         if comments.is_empty() {
             self.tray.annotations = AnnotationPreview::default();
         }
@@ -760,7 +749,7 @@ impl Composer {
             .into_iter()
             .filter(|context| context.browser_annotation.is_none())
             .collect();
-        if comments.is_empty() && tiles.is_empty() && contexts.is_empty() {
+        if comments.is_empty() && contexts.is_empty() {
             return None;
         }
         let context_pills: Vec<AnyElement> = contexts
@@ -780,12 +769,6 @@ impl Composer {
                 .py(px(6.0))
                 .children(context_pills)
                 .children(pill)
-                .children(
-                    tiles
-                        .into_iter()
-                        .enumerate()
-                        .map(|(ix, tile)| self.attachment_thumb(ix, tile, THUMB, theme, cx)),
-                )
                 .into_any_element(),
         )
     }
@@ -884,7 +867,7 @@ impl Composer {
             .into_any_element()
     }
 
-    /// Image attachments stay visible even when their inline chip is present.
+    /// Show staged images and files above the input.
     pub(super) fn render_image_strip(
         &self,
         theme: &Theme,
@@ -893,12 +876,14 @@ impl Composer {
         let tiles: Vec<_> = self
             .staged()
             .iter()
-            .filter_map(|att| {
-                Some(StagedTile {
-                    id: att.id.clone(),
-                    name: att.name.clone(),
-                    image: Some(att.image()?.clone()),
-                })
+            .map(|att| StagedTile {
+                id: att.id.clone(),
+                name: self
+                    .attachment_original_names
+                    .get(&att.id)
+                    .map(|name| name.to_string())
+                    .unwrap_or_else(|| att.name.clone()),
+                image: att.image().cloned(),
             })
             .collect();
         if tiles.is_empty() {

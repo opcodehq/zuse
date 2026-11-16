@@ -10,7 +10,7 @@ fn png() -> gpui::Image {
     gpui::Image::from_bytes(gpui::ImageFormat::Png, bytes.into_inner())
 }
 
-fn paste_images(
+fn stage_images(
     handle: &gpui::WindowHandle<Composer>,
     cx: &mut gpui::TestAppContext,
     count: usize,
@@ -22,6 +22,28 @@ fn paste_images(
                     (0..count).map(|_| png()).collect(),
                 ))
             });
+        })
+        .unwrap();
+    cx.run_until_parked();
+}
+
+// Most tests below exercise explicit attachment mentions after staging.
+fn paste_images(
+    handle: &gpui::WindowHandle<Composer>,
+    cx: &mut gpui::TestAppContext,
+    count: usize,
+) {
+    let before = staged_names(handle, cx).len();
+    stage_images(handle, cx, count);
+    handle
+        .update(cx, |composer, _, cx| {
+            let links: Vec<_> = composer.staged()[before..]
+                .iter()
+                .map(|att| attachment_mention_link(att.mention.unwrap(), None))
+                .collect();
+            composer
+                .input
+                .update(cx, |input, cx| input.insert_reference(&links.join(" "), cx));
         })
         .unwrap();
     cx.run_until_parked();
@@ -78,7 +100,7 @@ fn staged_names(
 }
 
 #[gpui::test]
-fn pasting_images_numbers_them_and_mentions_each_at_the_caret(cx: &mut gpui::TestAppContext) {
+fn pasting_images_stages_previews_without_changing_the_prompt(cx: &mut gpui::TestAppContext) {
     let (_dir, handle) = composer_focus_window(cx);
     handle
         .update(cx, |composer, _, cx| {
@@ -87,29 +109,10 @@ fn pasting_images_numbers_them_and_mentions_each_at_the_caret(cx: &mut gpui::Tes
                 .update(cx, |input, cx| input.set_text("compare ", cx));
         })
         .unwrap();
-    paste_images(&handle, cx, 2);
+    stage_images(&handle, cx, 2);
     assert_eq!(staged_names(&handle, cx), ["Image 1.png", "Image 2.png"]);
-    assert_eq!(
-        text(&handle, cx),
-        format!(
-            "compare {} {} ",
-            attachment_mention_link(1, None),
-            attachment_mention_link(2, None)
-        )
-    );
-    handle
-        .read_with(cx, |composer, cx| {
-            // The prompt says `Image N`; the chips show the name each
-            // picture arrived with (a pasted one is `image.png`).
-            let display = &composer.input.read(cx).projection.display;
-            assert!(
-                display.contains(&format!("{CHIP_ICON_SLOT}image.png")),
-                "{display:?}"
-            );
-            assert!(!display.contains("Image\u{a0}1"), "{display:?}");
-            assert_eq!(composer.input.read(cx).projection.mentions.len(), 2);
-        })
-        .unwrap();
+    assert_eq!(text(&handle, cx), "compare ");
+    assert_eq!(tiled_names(&handle, cx).len(), 2);
 }
 
 #[gpui::test]
@@ -257,12 +260,12 @@ fn tiled_names(
 }
 
 #[gpui::test]
-fn only_attachments_without_a_chip_get_a_tile(cx: &mut gpui::TestAppContext) {
+fn attachments_with_and_without_chips_get_tiles(cx: &mut gpui::TestAppContext) {
     let (_dir, handle) = composer_focus_window(cx);
     paste_images(&handle, cx, 2);
     // The chips stand in for the staged images: no tile repeats them.
     assert_eq!(staged_names(&handle, cx).len(), 2);
-    assert!(tiled_names(&handle, cx).is_empty());
+    assert_eq!(tiled_names(&handle, cx).len(), 2);
     handle
         .update(cx, |composer, _, _| {
             let key = composer.current_key.clone();
@@ -275,7 +278,7 @@ fn only_attachments_without_a_chip_get_a_tile(cx: &mut gpui::TestAppContext) {
         .unwrap();
     cx.run_until_parked();
     // One with no chip keeps its tile, the only handle it has.
-    assert_eq!(tiled_names(&handle, cx), ["image.png"]);
+    assert_eq!(tiled_names(&handle, cx).len(), 3);
 }
 
 #[gpui::test]
@@ -302,13 +305,31 @@ fn undoing_a_thumbnail_removal_restores_image_and_chip(cx: &mut gpui::TestAppCon
     assert_eq!(attachment_mention_indices(&text(&handle, cx)), vec![1]);
 }
 
-fn add_file(
+fn stage_file(
     handle: &gpui::WindowHandle<Composer>,
     cx: &mut gpui::TestAppContext,
     path: std::path::PathBuf,
 ) {
     handle
         .update(cx, |composer, _, cx| composer.add_paths(vec![path], cx))
+        .unwrap();
+    cx.run_until_parked();
+}
+
+fn add_file(
+    handle: &gpui::WindowHandle<Composer>,
+    cx: &mut gpui::TestAppContext,
+    path: std::path::PathBuf,
+) {
+    stage_file(handle, cx, path);
+    handle
+        .update(cx, |composer, _, cx| {
+            let att = composer.staged().last().unwrap();
+            let link = attachment_mention_link(att.mention.unwrap(), Some(&att.name));
+            composer
+                .input
+                .update(cx, |input, cx| input.insert_reference(&link, cx));
+        })
         .unwrap();
     cx.run_until_parked();
 }
@@ -320,21 +341,15 @@ fn write_file(dir: &tempfile::TempDir, name: &str) -> std::path::PathBuf {
 }
 
 #[gpui::test]
-fn a_file_attachment_is_staged_with_a_chip_named_after_it(cx: &mut gpui::TestAppContext) {
+fn a_file_attachment_is_staged_without_changing_the_prompt(cx: &mut gpui::TestAppContext) {
     let (dir, handle) = composer_focus_window(cx);
-    add_file(&handle, cx, write_file(&dir, "notes.md"));
+    stage_file(&handle, cx, write_file(&dir, "notes.md"));
     assert_eq!(staged_names(&handle, cx), ["notes.md"]);
-    assert_eq!(
-        text(&handle, cx),
-        format!("{} ", attachment_mention_link(1, Some("notes.md")))
-    );
+    assert_eq!(text(&handle, cx), "");
+    assert_eq!(tiled_names(&handle, cx), ["notes.md"]);
     handle
-        .read_with(cx, |composer, cx| {
-            let input = composer.input.read(cx);
-            assert_eq!(input.projection.mentions.len(), 1);
-            assert_eq!(input.projection.mentions[0].0.kind, ChipKind::File);
-            assert!(input.projection.display.contains("notes.md"));
-            assert_eq!(composer.staged()[0].bytes(), b"# notes");
+        .read_with(cx, |composer, _| {
+            assert_eq!(composer.staged()[0].bytes(), b"# notes")
         })
         .unwrap();
 }
@@ -414,7 +429,7 @@ fn at_completion_offers_staged_files_by_name(cx: &mut gpui::TestAppContext) {
 #[gpui::test]
 fn a_folder_is_refused_without_staging(cx: &mut gpui::TestAppContext) {
     let (dir, handle) = composer_focus_window(cx);
-    add_file(&handle, cx, dir.path().to_path_buf());
+    stage_file(&handle, cx, dir.path().to_path_buf());
     assert!(staged_names(&handle, cx).is_empty());
     assert_eq!(text(&handle, cx), "");
     handle
