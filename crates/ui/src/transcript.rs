@@ -8305,19 +8305,18 @@ impl Transcript {
                 strip = strip.child(card);
                 continue;
             }
-            // A chip: a small rounded thumbnail and the file name. Click opens
-            // the full image; right-click offers the image menu.
+            // Show sent images as the same compact tiles used in the composer.
             let theme = Theme::of(cx).clone();
-            let thumb_frame = div()
-                .size(px(USER_CHIP_THUMB))
+            let mut tile = div()
+                .id(SharedString::from(format!("{row_id}#att{aix}")))
+                .size(px(crate::composer::STRIP_THUMB))
                 .flex_none()
-                .rounded(px(4.0))
-                .overflow_hidden();
-            let mut chip =
-                crate::badges::pill(SharedString::from(format!("{row_id}#att{aix}")), &theme)
-                    .pl(px(6.0))
-                    .tip(att.name.clone());
-            let thumb: AnyElement = match state {
+                .relative()
+                .rounded(px(8.0))
+                .overflow_hidden()
+                .bg(crate::theme::ink(0.08))
+                .tip(att.name.clone());
+            tile = match state {
                 AttachmentSnapshot::Loaded(image) => {
                     let items = gallery.clone();
                     let index = gallery
@@ -8325,84 +8324,78 @@ impl Transcript {
                         .position(|item| Arc::ptr_eq(&item.image, &image.image))
                         .unwrap_or(0);
                     let (menu_path, menu_devices) = (att.path.clone(), device_ids.clone());
-                    chip = chip
-                        .on_mouse_down(
-                            gpui::MouseButton::Right,
-                            cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
-                                cx.stop_propagation();
-                                this.open_image_menu(
-                                    menu_path.clone(),
-                                    menu_devices.clone(),
-                                    event.position,
-                                    window,
-                                    cx,
-                                );
-                            }),
-                        )
-                        .cursor_pointer()
-                        .role(gpui::Role::Button)
-                        .aria_label(format!("Preview {}", att.name))
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.open_gallery(items.clone(), index, window, cx);
-                        }));
-                    if sending {
-                        // The in-flight send's progress stays on the chip.
-                        thumb_frame
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .child(match uploading {
-                                Some(pct) => crate::loaders::upload_progress_ring(pct, 16.0),
-                                None => crate::loaders::mini_glyph_spinner(
-                                    format!("att-sending-{row_id}-{aix}"),
-                                    2.0,
-                                    glyph,
-                                    cx.entity_id(),
-                                    cx,
-                                )
-                                .into_any_element(),
-                            })
-                            .into_any_element()
-                    } else {
-                        thumb_frame
-                            .child(
-                                // Explicit dims: img honours the intrinsic
-                                // aspect over a percent height.
-                                img(image.image.clone())
-                                    .size(px(USER_CHIP_THUMB))
-                                    .rounded(px(4.0))
-                                    .object_fit(ObjectFit::Cover),
-                            )
-                            .into_any_element()
-                    }
+                    tile.on_mouse_down(
+                        gpui::MouseButton::Right,
+                        cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
+                            cx.stop_propagation();
+                            this.open_image_menu(
+                                menu_path.clone(),
+                                menu_devices.clone(),
+                                event.position,
+                                window,
+                                cx,
+                            );
+                        }),
+                    )
+                    .cursor_pointer()
+                    .role(gpui::Role::Button)
+                    .aria_label(format!("Preview {}", att.name))
+                    .tab_index(0)
+                    .focus_visible(move |style| style.border_2().border_color(theme.accent))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.open_gallery(items.clone(), index, window, cx);
+                    }))
+                    .child(
+                        img(image.image)
+                            .size(px(crate::composer::STRIP_THUMB))
+                            .object_fit(ObjectFit::Cover),
+                    )
                 }
-                AttachmentSnapshot::Error { .. } => thumb_frame
+                AttachmentSnapshot::Error { .. } if !sending => tile
                     .border_1()
                     .border_dashed()
                     .border_color(crate::theme::hairline(0.14))
-                    .into_any_element(),
-                AttachmentSnapshot::Loading => thumb_frame
-                    .bg(crate::theme::ink(0.08))
-                    .opacity(
-                        0.35 + 0.4
-                            * motion::pulse_wave(motion::pulse_delta(
-                                &motion::ZUSE_PULSE,
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        crate::icons::icon(crate::icons::FILE_IMAGE)
+                            .size(px(20.0))
+                            .text_color(theme.text_muted),
+                    ),
+                AttachmentSnapshot::Loading if !sending => tile.opacity(
+                    0.35 + 0.4
+                        * motion::pulse_wave(motion::pulse_delta(
+                            &motion::ZUSE_PULSE,
+                            cx.entity_id(),
+                            cx,
+                        )),
+                ),
+                _ => tile,
+            };
+            if sending {
+                tile = tile.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .bg(crate::popover::scrim_alpha(0.5))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(match uploading {
+                            Some(pct) => crate::loaders::upload_progress_ring(pct, 20.0),
+                            None => crate::loaders::mini_glyph_spinner(
+                                format!("att-sending-{row_id}-{aix}"),
+                                2.0,
+                                glyph,
                                 cx.entity_id(),
                                 cx,
-                            )),
-                    )
-                    .into_any_element(),
-            };
-            let thumb = chip
-                .child(thumb)
-                .child(
-                    div()
-                        .min_w_0()
-                        .truncate()
-                        .child(SharedString::from(user_chip_name(&att.name))),
-                )
-                .into_any_element();
-            strip = strip.child(thumb);
+                            )
+                            .into_any_element(),
+                        }),
+                );
+            }
+            strip = strip.child(tile);
         }
         strip.into_any_element()
     }
@@ -10528,7 +10521,6 @@ fn user_file_pill(id: SharedString, name: &str, theme: &Theme) -> AnyElement {
         .into_any_element()
 }
 
-/// The thumbnail inside an image chip above a user bubble.
 /// One image the lightbox can step to: shown from `preview` once known,
 /// otherwise read from `source` (candidate devices, path) on arrival.
 #[derive(Clone)]
@@ -10537,7 +10529,6 @@ struct GalleryEntry {
     preview: Option<crate::attachments::PreviewImage>,
 }
 
-const USER_CHIP_THUMB: f32 = 16.0;
 const USER_CHIP_NAME_MAX: usize = 28;
 
 /// A chip's file name: at most 28 characters, long names cut to their first
