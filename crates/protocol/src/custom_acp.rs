@@ -203,6 +203,7 @@ impl From<HarnessId> for String {
             HarnessId::Grok => "grok",
             HarnessId::Hermes => "hermes",
             HarnessId::Pi => "pi",
+            HarnessId::OhMyPi => "omp",
             HarnessId::Opencode => "opencode",
             HarnessId::Antigravity => "antigravity",
             HarnessId::Muse => "muse",
@@ -226,6 +227,7 @@ impl TryFrom<String> for HarnessId {
             "grok" => Self::Grok,
             "hermes" => Self::Hermes,
             "pi" => Self::Pi,
+            "omp" => Self::OhMyPi,
             "opencode" => Self::Opencode,
             "antigravity" => Self::Antigravity,
             "muse" => Self::Muse,
@@ -237,6 +239,14 @@ impl TryFrom<String> for HarnessId {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn oh_my_pi_identity_round_trips() {
+        // Persisted chat ids outlive the engine: "omp" must never be parsed as
+        // a custom ACP id (which requires an `acp-` prefix).
+        let id = HarnessId::try_from("omp".to_string()).expect("omp is a built-in harness");
+        assert_eq!(String::from(id), "omp");
+        assert_eq!(id, HarnessId::OhMyPi);
+    }
     #[test]
     fn settings_fields_preserve_literal_arguments_and_reject_ambiguous_environment() {
         let agent = CustomAcpAgent::from_fields(

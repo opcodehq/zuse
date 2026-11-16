@@ -157,6 +157,13 @@ fn vendor_models_are_scoped_and_custom_identifiers_are_redacted() {
         .unwrap();
         assert_eq!(redacted["model"], "custom");
     }
+    let omp = sanitize_with_models(
+        "turn started",
+        json!({"provider": "omp", "model": "default"}),
+        &models,
+    )
+    .unwrap();
+    assert_eq!(omp["provider"], "omp");
     let invalid = sanitize_with_models("turn completed", json!({"provider": "codex", "model": "company-private-model",
         "actual_model": "https://private/model", "reasoning_effort": "secret setting", "prompt": "private prompt"}), &models).unwrap();
     assert_eq!(invalid["model"], "custom");

@@ -840,6 +840,31 @@ pub fn default_registry() -> HarnessRegistry {
         Box::new(|| zuse_providers::PiHarness::new().installed()),
         Box::new(|| Ok(Arc::new(zuse_providers::PiHarness::new()) as Arc<dyn Harness>)),
     );
+    // Oh My Pi over ACP (`omp acp`), same lazy pattern: the static descriptor
+    // mirrors AcpHarness::omp() exactly (name, mid-turn steering, the
+    // `thinking` ladder it advertises). Models come from the session's model
+    // config option, so none are listed here.
+    registry.register_lazy(
+        HarnessDescriptor {
+            id: HarnessId::OhMyPi,
+            name: "Oh My Pi".into(),
+            supports_steering: true,
+            steering_mode: SteeringMode::StepBoundary,
+            reasoning_levels: vec![
+                ReasoningLevel::Minimal,
+                ReasoningLevel::Low,
+                ReasoningLevel::Medium,
+                ReasoningLevel::High,
+                ReasoningLevel::XHigh,
+            ],
+            installed: true,
+            can_install: false,
+            enabled: None,
+            signed_in: None,
+        },
+        Box::new(|| zuse_providers::AcpHarness::omp().installed()),
+        Box::new(|| Ok(Arc::new(zuse_providers::AcpHarness::omp()) as Arc<dyn Harness>)),
+    );
     // Muse Code over its native session protocol (`muse serve`). Efforts
     // are per model (`model/list` variants); steers ride `turn/steer`.
     registry.register_lazy(
@@ -1006,6 +1031,7 @@ mod tests {
                 HarnessId::Grok,
                 HarnessId::Hermes,
                 HarnessId::Pi,
+                HarnessId::OhMyPi,
                 HarnessId::Muse,
                 HarnessId::Opencode,
                 HarnessId::Antigravity,
@@ -1072,6 +1098,20 @@ mod tests {
         assert_eq!(pi.display_name(), "Pi");
         assert_eq!(pi.steering_mode(), SteeringMode::StepBoundary);
         assert!(pi.reasoning_levels().is_empty());
+        let omp = registry.resolve(HarnessId::OhMyPi).unwrap();
+        assert_eq!(omp.id(), HarnessId::OhMyPi);
+        assert_eq!(omp.display_name(), "Oh My Pi");
+        assert_eq!(omp.steering_mode(), SteeringMode::StepBoundary);
+        assert_eq!(
+            omp.reasoning_levels(),
+            &[
+                ReasoningLevel::Minimal,
+                ReasoningLevel::Low,
+                ReasoningLevel::Medium,
+                ReasoningLevel::High,
+                ReasoningLevel::XHigh,
+            ]
+        );
         let muse = registry.resolve(HarnessId::Muse).unwrap();
         assert_eq!(muse.id(), HarnessId::Muse);
         assert_eq!(muse.display_name(), "Muse Code");

@@ -22,6 +22,8 @@ pub enum HarnessId {
     Hermes,
     /// The Pi coding agent (pi.dev), driven over its native JSONL RPC protocol.
     Pi,
+    /// Oh My Pi (omp.sh), driven over its ACP server (`omp acp`).
+    OhMyPi,
     /// SST's opencode agent, driven natively over its own HTTP/SSE server
     /// protocol (`opencode serve` — the same wire the opencode desktop app
     /// speaks).

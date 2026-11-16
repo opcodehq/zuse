@@ -422,6 +422,7 @@ fn sanitize_with_models(
                     "cursor",
                     "opencode",
                     "pi",
+                    "omp",
                     "acp",
                     "native",
                     "gemini",

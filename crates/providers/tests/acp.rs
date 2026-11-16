@@ -2724,3 +2724,27 @@ async fn access_mode_rejection_stops_before_sending_the_prompt() {
         "{events:?}"
     );
 }
+
+#[test]
+fn oh_my_pi_detects_its_own_binary_and_mirrors_its_spec() {
+    let omp = AcpHarness::omp();
+    assert_eq!(omp.id(), HarnessId::OhMyPi);
+    assert_eq!(omp.display_name(), "Oh My Pi");
+    assert_eq!(omp.steering_mode(), SteeringMode::StepBoundary);
+    assert_eq!(
+        omp.reasoning_levels(),
+        &[
+            ReasoningLevel::Minimal,
+            ReasoningLevel::Low,
+            ReasoningLevel::Medium,
+            ReasoningLevel::High,
+            ReasoningLevel::XHigh,
+        ]
+    );
+    assert!(omp.with_executable(fixture_path()).installed());
+    assert!(
+        !AcpHarness::omp()
+            .with_executable("/does/not/exist/omp")
+            .installed()
+    );
+}

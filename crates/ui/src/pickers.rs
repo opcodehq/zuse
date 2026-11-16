@@ -6077,6 +6077,7 @@ pub(crate) fn harness_display_name(harness: HarnessId) -> &'static str {
         HarnessId::Grok => "Grok",
         HarnessId::Hermes => "Hermes",
         HarnessId::Pi => "Pi",
+        HarnessId::OhMyPi => "Oh My Pi",
         HarnessId::Muse => "Muse Code",
         HarnessId::Opencode => "OpenCode",
         HarnessId::Antigravity => "Antigravity",
@@ -6110,6 +6111,8 @@ pub(crate) fn harness_brand_icon(harness: HarnessId) -> (&'static str, Option<gp
         // Nous Research's mark (the Hermes product icon), monochrome.
         HarnessId::Hermes => (crate::icons::HERMES_MARK, None),
         HarnessId::Pi => (crate::icons::PI_MARK, None),
+        // omp's own gradient pi mark (brand colours baked into the asset).
+        HarnessId::OhMyPi => (crate::icons::OMP_MARK, None),
         // The Meta symbol Muse Code ships under, monochrome.
         HarnessId::Muse => (crate::icons::MUSE_MARK, None),
         // The pixel-"o" from opencode's wordmark (their favicon), monochrome.

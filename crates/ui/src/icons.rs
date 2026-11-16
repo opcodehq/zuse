@@ -235,6 +235,7 @@ icon_assets![
     (KIRO_MARK, "kiro-mark"),
     (HERMES_MARK, "hermes-mark"),
     (PI_MARK, "pi-mark"),
+    (OMP_MARK, "omp-mark"),
     (MUSE_MARK, "muse-mark"),
     (OPENCODE_MARK, "opencode-mark"),
     (ANTIGRAVITY_MARK, "antigravity-mark"),
@@ -329,10 +330,28 @@ fn codex_brand_image() -> &'static Arc<gpui::Image> {
     })
 }
 
+/// omp's mark is a gradient (`#ed4abf → #9b4dff → #5ad8e6`), and gpui's SVG
+/// element paints every fill with the parent's text colour, so it renders as
+/// an image like the Codex mark does.
+fn omp_brand_image() -> &'static Arc<gpui::Image> {
+    static IMAGE: OnceLock<Arc<gpui::Image>> = OnceLock::new();
+    IMAGE.get_or_init(|| {
+        Arc::new(gpui::Image::from_bytes(
+            gpui::ImageFormat::Svg,
+            include_bytes!("../assets/icons/omp-mark.svg").to_vec(),
+        ))
+    })
+}
+
 pub fn brand_icon(path: &'static str, size: f32, color: Hsla) -> gpui::AnyElement {
     use gpui::IntoElement as _;
-    if path == CODEX_MARK {
-        gpui::img(codex_brand_image().clone())
+    let image = match path {
+        CODEX_MARK => Some(codex_brand_image()),
+        OMP_MARK => Some(omp_brand_image()),
+        _ => None,
+    };
+    if let Some(image) = image {
+        gpui::img(image.clone())
             .size(px(size))
             .flex_none()
             .into_any_element()
@@ -347,6 +366,25 @@ pub fn brand_icon(path: &'static str, size: f32, color: Hsla) -> gpui::AnyElemen
 #[cfg(test)]
 mod brand_tests {
     use super::*;
+
+    #[test]
+    fn omp_brand_keeps_its_gradient() {
+        let raster = omp_brand_image()
+            .to_image_data(gpui::SvgRenderer::new(Arc::new(Assets)))
+            .unwrap();
+        let size = raster.size(0);
+        let width: usize = i32::from(size.width) as usize;
+        let height: usize = i32::from(size.height) as usize;
+        let bytes = raster.as_bytes(0).unwrap();
+        let pixel = |x: usize, y: usize| &bytes[(y * width + x) * 4..][..4];
+        assert_eq!(pixel(0, 0)[3], 0);
+        // gpui's raster is BGRA: red is `[2]`, blue is `[0]`.
+        let top = pixel(width / 4, height / 4);
+        let bottom = pixel(width * 9 / 16, height * 13 / 16);
+        assert!(top[3] > 200 && bottom[3] > 200);
+        assert!(top[2] > bottom[2], "top {top:?} bottom {bottom:?}");
+        assert!(bottom[0] > top[0], "top {top:?} bottom {bottom:?}");
+    }
 
     #[test]
     fn codex_brand_retains_transparency_and_gradient() {

@@ -70,6 +70,10 @@ const DEFAULT_MODEL_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(10);
 // The one-file server unpacks on launch. A local cold probe took 1.903s, but
 // slower disks need substantially more headroom than the generic 10s budget.
 const ANTIGRAVITY_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(90);
+// omp builds its provider catalog before answering `session/new`: a cold first
+// session took 13.5s on this machine, past the generic 10s budget, and a
+// timeout there leaves the picker with no models at all.
+const OMP_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(60);
 /// Per-agent configuration: which binary to spawn and what to tell the picker.
 struct AcpAgentSpec {
     id: HarnessId,
@@ -443,6 +447,70 @@ fn hermes_spec() -> AcpAgentSpec {
         prompt_stall: None,
         stall_hint: "The agent process is likely wedged.",
         effort_in_model_id: false,
+        auth_method: None,
+        skill_dirs: Vec::new,
+        hidden_commands: &[],
+        drops_unstarted_cancelled_prompt: false,
+    }
+}
+
+/// Oh My Pi's installer drops the binary in `~/.local/bin`; mise (the common
+/// install on developer machines) exposes it through a shims symlink that
+/// survives upgrades. Neither is guaranteed on a GUI app's PATH, and the
+/// generic version-manager scan knows fnm/nvm/volta but not mise.
+fn omp_install_paths() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(home) = crate::executable::home_dir() {
+        dirs.push(home.join(".local/share/mise/shims/omp"));
+        dirs.push(home.join(".local/share/mise/installs/oh-my-pi/latest/omp"));
+        dirs.push(home.join(".local/bin/omp"));
+    }
+    dirs.push(PathBuf::from("/opt/homebrew/bin/omp"));
+    dirs.push(PathBuf::from("/usr/local/bin/omp"));
+    dirs
+}
+
+fn omp_spec() -> AcpAgentSpec {
+    AcpAgentSpec {
+        id: HarnessId::OhMyPi,
+        display_name: "Oh My Pi",
+        executable: "omp",
+        env_override: "OMP_EXECUTABLE",
+        args: &["acp"],
+        // Standalone binary from omp.sh — no npm or archive fallback.
+        npm_package: None,
+        archive: None,
+        extra_paths: omp_install_paths,
+        cli_executable: "omp",
+        cli_extra_paths: omp_install_paths,
+        install_hint: "omp (searched PATH, the login shell's PATH, ~/.local/bin, the \
+             mise shims, /opt/homebrew/bin, /usr/local/bin, and fnm/nvm/volta/pnpm/bun \
+             install dirs; install with `curl -fsSL https://omp.sh/install | sh`; \
+             set OMP_EXECUTABLE to override)",
+        // Discovery reads the session's `model` config option (487 options on a
+        // live 18.20.2 install), so no static fallback is needed.
+        models: Vec::new,
+        // Verified live (18.20.2): `initialize._meta.steering.supported` is
+        // true, so a steer is injected mid-turn via `_session/steering`.
+        steering_mode: SteeringMode::StepBoundary,
+        // The session advertises a `thinking` thought_level option with
+        // off/auto/minimal/low/medium/high/xhigh (no max).
+        reasoning_levels: &[
+            ReasoningLevel::Minimal,
+            ReasoningLevel::Low,
+            ReasoningLevel::Medium,
+            ReasoningLevel::High,
+            ReasoningLevel::XHigh,
+        ],
+        prompt_transform: identity_transform,
+        effort_values: default_effort_values,
+        ladder_extras: &[],
+        prompt_complete_extension: false,
+        prompt_stall: None,
+        stall_hint: "The agent process is likely wedged.",
+        effort_in_model_id: false,
+        // Credentials come from `omp login` / ~/.omp; `session/new` works
+        // without an advertised auth method being selected.
         auth_method: None,
         skill_dirs: Vec::new,
         hidden_commands: &[],
@@ -1373,6 +1441,11 @@ impl AcpHarness {
     /// Hermes Agent (`hermes acp`) — Nous Research's native ACP server.
     pub fn hermes() -> Self {
         Self::with_spec(hermes_spec())
+    }
+
+    /// Oh My Pi (`omp acp`) — omp.sh's native ACP server.
+    pub fn omp() -> Self {
+        Self::with_spec(omp_spec()).with_model_discovery_timeout(OMP_DISCOVERY_TIMEOUT)
     }
 
     /// google antigravity over its acp server (`agy_acp_server`).

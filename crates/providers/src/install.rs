@@ -53,7 +53,8 @@ fn methods(id: HarnessId, platform: Platform) -> Vec<Method> {
     use Method::*;
     let windows = platform == Platform::Windows;
     match id {
-        Zuse | Mock | Kiro | CustomAcp(_) => vec![],
+        // omp installs through omp.sh's shell script, which zuse does not drive.
+        Zuse | Mock | Kiro | OhMyPi | CustomAcp(_) => vec![],
         Gemini => vec![Npm("@google/gemini-cli", false)],
         Antigravity => vec![Archive],
         ClaudeCode if windows => vec![PowerShell("irm https://claude.ai/install.ps1 | iex")],
@@ -164,6 +165,7 @@ fn cli_and_dir(id: HarnessId) -> (&'static str, &'static str) {
         Cursor => ("cursor-agent", "~/.local/bin or ~/.cursor/bin"),
         Opencode => ("opencode", "~/.opencode/bin or the npm global bin"),
         Pi => ("pi", "the npm global bin"),
+        OhMyPi => ("omp", "~/.local/bin or the mise shims"),
         Grok => ("grok", "~/.grok/bin or the npm global bin"),
         Hermes => ("hermes", "~/.local/bin or ~/.hermes/bin"),
         Devin => ("devin", "~/.local/bin"),
@@ -185,6 +187,7 @@ pub fn installed(id: HarnessId) -> bool {
         Cursor => crate::CursorHarness::new().installed(),
         Opencode => crate::OpencodeHarness::new().installed(),
         Pi => crate::PiHarness::new().installed(),
+        OhMyPi => crate::AcpHarness::omp().installed(),
         Grok => crate::AcpHarness::grok().installed(),
         Hermes => crate::AcpHarness::hermes().installed(),
         Devin => crate::AcpHarness::devin().installed(),
@@ -394,12 +397,13 @@ async fn run(
 mod tests {
     use super::*;
 
-    const IDS: [HarnessId; 11] = [
+    const IDS: [HarnessId; 12] = [
         HarnessId::ClaudeCode,
         HarnessId::Codex,
         HarnessId::Cursor,
         HarnessId::Opencode,
         HarnessId::Pi,
+        HarnessId::OhMyPi,
         HarnessId::Grok,
         HarnessId::Hermes,
         HarnessId::Devin,
@@ -413,7 +417,12 @@ mod tests {
         for platform in [Platform::Unix, Platform::Mac, Platform::Windows] {
             for id in IDS {
                 let list = methods(id, platform);
-                assert_eq!(list.is_empty(), id == HarnessId::Mock);
+                // omp installs through omp.sh's POSIX script, which zuse does
+                // not drive; the settings row carries the manual command.
+                assert_eq!(
+                    list.is_empty(),
+                    matches!(id, HarnessId::Mock | HarnessId::OhMyPi)
+                );
                 for method in list {
                     assert!(available(method, platform, &|_| true, true));
                     assert!(!available(method, platform, &|_| false, false));

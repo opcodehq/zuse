@@ -65,6 +65,7 @@ pub(super) fn provider_icon(id: &str) -> &'static str {
         "cursor" => "cursor-mark",
         "opencode" => "opencode-mark",
         "pi" => "pi-mark",
+        "omp" => "omp-mark",
         "muse" => "muse-mark",
         "devin" => "devin-mark",
         "grok" => "grok-mark",

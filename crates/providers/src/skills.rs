@@ -123,6 +123,9 @@ fn project_dirs(harness: HarnessId) -> &'static [&'static str] {
         HarnessId::Grok => &[".agents/skills", ".claude/skills", ".grok/skills"],
         HarnessId::Hermes => &[".agents/skills"],
         HarnessId::Pi => &[".agents/skills", ".pi/skills"],
+        // omp.sh reads the shared Agent Skills folder (verified against the
+        // 18.20.2 binary); it has no private project skill directory.
+        HarnessId::OhMyPi => &[".agents/skills"],
         HarnessId::Devin => &[".agents/skills"],
         HarnessId::Antigravity => &[".agents/skills", ".gemini/skills"],
         HarnessId::Codex => &[".agents/skills", ".codex/skills"],

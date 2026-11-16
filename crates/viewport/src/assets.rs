@@ -51,6 +51,7 @@ assets!(
     "cursor-mark",
     "opencode-mark",
     "pi-mark",
+    "omp-mark",
     "muse-mark",
     "devin-mark",
     "grok-mark",

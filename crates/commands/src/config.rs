@@ -48,6 +48,7 @@ fn harness_from_env() -> HarnessId {
         Ok("grok") => HarnessId::Grok,
         Ok("hermes") => HarnessId::Hermes,
         Ok("pi") => HarnessId::Pi,
+        Ok("omp") => HarnessId::OhMyPi,
         Ok("muse") => HarnessId::Muse,
         Ok("antigravity") => HarnessId::Antigravity,
         _ => HarnessId::ClaudeCode,

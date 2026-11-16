@@ -16,6 +16,7 @@ const MARKS: Record<string, string> = {
   muse: "muse-mark",
   opencode: "opencode-mark",
   pi: "pi-mark",
+  omp: "omp-mark",
   antigravity: "antigravity-mark",
 };
 

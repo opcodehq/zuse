@@ -8,6 +8,7 @@ pub fn manual_command(id: HarnessId) -> Option<&'static str> {
         Cursor => "curl https://cursor.com/install -fsS | bash",
         Opencode => "npm install -g @opencode/cli",
         Pi => "npm install -g --ignore-scripts @earendil-works/pi-coding-agent",
+        OhMyPi => "curl -fsSL https://omp.sh/install | sh",
         Grok => "npm install -g @xai-official/grok",
         Hermes => "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash",
         Devin => "curl -fsSL https://cli.devin.ai/install.sh | bash",

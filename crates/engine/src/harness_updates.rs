@@ -281,6 +281,14 @@ fn provider(id: HarnessId) -> ProviderSpec {
             update_args: Some(&["update", "--self"]),
             manual_command: "pi update --self",
         },
+        HarnessId::OhMyPi => ProviderSpec {
+            version_args: &["--version"],
+            // omp.sh ships a standalone binary with its own updater and no
+            // machine-readable release feed.
+            latest: LatestSource::Manual,
+            update_args: Some(&["update"]),
+            manual_command: "omp update",
+        },
         HarnessId::Opencode => ProviderSpec {
             version_args: &["--version"],
             latest: LatestSource::Opencode,

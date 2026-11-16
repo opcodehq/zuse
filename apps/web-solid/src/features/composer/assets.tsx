@@ -30,7 +30,7 @@ export function Glyph(props: { name: string; size?: number; class?: string; styl
 
 const BRANDS: Record<string, string> = {
   "claude-code": "claude-mark", mock: "claude-mark", codex: "codex-mark", cursor: "cursor-mark", devin: "devin-mark",
-  grok: "grok-mark", hermes: "hermes-mark", pi: "pi-mark", muse: "muse-mark", opencode: "opencode-mark",
+  grok: "grok-mark", hermes: "hermes-mark", pi: "pi-mark", omp: "omp-mark", muse: "muse-mark", opencode: "opencode-mark",
   antigravity: "antigravity-mark", zuse: "zuse-logo", kiro: "kiro-mark", gemini: "gemini-mark", "acp-gemini": "gemini-mark",
 };
 export const brandIcon = (harness: string | undefined) => (harness ? BRANDS[harness] ?? "terminal" : "terminal");

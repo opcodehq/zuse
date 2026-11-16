@@ -52,6 +52,7 @@ pub fn login_command(harness: HarnessId) -> Option<&'static str> {
         HarnessId::Devin => "devin auth login",
         HarnessId::Opencode => "opencode auth login",
         HarnessId::Pi => "pi",
+        HarnessId::OhMyPi => "omp login",
         HarnessId::Hermes => "hermes auth add",
         HarnessId::Kiro => "kiro-cli login",
         HarnessId::Muse => "muse login",
