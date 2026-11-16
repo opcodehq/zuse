@@ -125,7 +125,7 @@ impl Composer {
             let (icon, label, checked, enabled) = match item {
                 AddMenuItem::AttachImages => (
                     icons::PLUS,
-                    tr(cx, msg::native::composer_attach_images),
+                    tr(cx, msg::native::attach_images_or_files),
                     false,
                     true,
                 ),

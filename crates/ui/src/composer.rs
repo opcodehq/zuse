@@ -7949,7 +7949,7 @@ impl Composer {
             };
             let (restored, mut stash): (Vec<_>, Vec<_>) = std::mem::take(&mut draft.unstaged)
                 .into_iter()
-                .partition(is_mentioned);
+                .partition(|att| att.mention.is_some_and(|index| mentioned.contains(&index)));
             let (mut kept, dropped): (Vec<_>, Vec<_>) = self
                 .attachments
                 .remove(&key)

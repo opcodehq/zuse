@@ -116,6 +116,26 @@ fn pasting_images_stages_previews_without_changing_the_prompt(cx: &mut gpui::Tes
 }
 
 #[gpui::test]
+fn removing_unmentioned_attachments_stays_removed_after_draft_changes(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (dir, handle) = composer_focus_window(cx);
+    stage_images(&handle, cx, 1);
+    stage_file(&handle, cx, write_file(&dir, "notes.md"));
+    handle
+        .update(cx, |composer, _, cx| {
+            let ids: Vec<_> = composer.staged().iter().map(|att| att.id.clone()).collect();
+            for id in ids {
+                composer.remove_attachment(&id, cx);
+            }
+            composer.reconcile_attachment_mentions(cx);
+        })
+        .unwrap();
+    append(&handle, cx, "hello");
+    assert!(staged_names(&handle, cx).is_empty());
+}
+
+#[gpui::test]
 fn one_undo_removes_a_paste_and_redo_restores_it(cx: &mut gpui::TestAppContext) {
     let (_dir, handle) = composer_focus_window(cx);
     paste_images(&handle, cx, 2);
