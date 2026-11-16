@@ -89,6 +89,7 @@ name = "compact-picker-fixture"
 required-features = ["compact-picker-fixture"]
 
 [dependencies]
+hayro = "0.9"
 zuse-analytics.workspace = true
 zuse-i18n.workspace = true
 zuse-model.workspace = true

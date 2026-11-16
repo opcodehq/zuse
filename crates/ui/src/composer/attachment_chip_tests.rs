@@ -116,6 +116,29 @@ fn pasting_images_stages_previews_without_changing_the_prompt(cx: &mut gpui::Tes
 }
 
 #[gpui::test]
+fn file_tiles_reserve_composer_height(cx: &mut gpui::TestAppContext) {
+    let (dir, handle) = composer_focus_window(cx);
+    handle
+        .update(cx, |composer, window, cx| {
+            composer.set_available_width(700.0, cx);
+            window.resize(gpui::size(px(700.0), px(800.0)));
+        })
+        .unwrap();
+    cx.update_window(handle.into(), |_, window, cx| window.draw(cx).clear())
+        .unwrap();
+    let before = handle
+        .read_with(cx, |composer, _| composer.last_target_height)
+        .unwrap();
+    stage_file(&handle, cx, write_file(&dir, "notes.md"));
+    cx.update_window(handle.into(), |_, window, cx| window.draw(cx).clear())
+        .unwrap();
+    let after = handle
+        .read_with(cx, |composer, _| composer.last_target_height)
+        .unwrap();
+    assert!((after - before - attachment_strip_height(1, 700.0)).abs() < 1.0);
+}
+
+#[gpui::test]
 fn removing_unmentioned_attachments_stays_removed_after_draft_changes(
     cx: &mut gpui::TestAppContext,
 ) {

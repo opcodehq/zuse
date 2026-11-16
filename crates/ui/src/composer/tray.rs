@@ -815,9 +815,16 @@ impl Composer {
                     )
             }
             None => frame
+                .cursor_pointer()
+                .on_click({
+                    let id = tile.id.clone();
+                    cx.listener(move |this, _, _, cx| this.open_file_preview(&id, cx))
+                })
                 .flex()
+                .flex_col()
                 .items_center()
                 .justify_center()
+                .gap(px(3.0))
                 .bg(crate::theme::ink(0.04))
                 .child(
                     crate::file_icons::icon(
@@ -825,6 +832,15 @@ impl Composer {
                         theme.appearance,
                     )
                     .size(px(20.0)),
+                )
+                .child(
+                    div()
+                        .w_full()
+                        .px(px(3.0))
+                        .truncate()
+                        .text_size(px(9.0))
+                        .text_color(theme.text_muted)
+                        .child(tile.name.clone()),
                 ),
         };
         let remove_id = tile.id.clone();

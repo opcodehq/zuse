@@ -1265,6 +1265,7 @@ pub(crate) fn lightbox_gallery(
     };
     let on_close = std::rc::Rc::new(on_close);
     let close_on_key = on_close.clone();
+    let close_on_button = on_close.clone();
     let press_state = preview.viewer.clone();
     let click_state = preview.viewer.clone();
     let (key_nav, wheel_nav) = (nav.clone(), nav.clone());
@@ -1322,6 +1323,29 @@ pub(crate) fn lightbox_gallery(
                             }
                         }
                     })
+                    .child(
+                        div()
+                            .id("attachment-preview-close")
+                            .absolute()
+                            .top(px(18.0))
+                            .right(px(18.0))
+                            .size(px(32.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .role(gpui::Role::Button)
+                            .aria_label("Close preview")
+                            .on_click(move |_, window, cx| {
+                                cx.stop_propagation();
+                                close_on_button(window, cx);
+                            })
+                            .child(
+                                crate::icons::icon(crate::icons::CLOSE)
+                                    .size(px(20.0))
+                                    .text_color(ink(0.8)),
+                            ),
+                    )
                     .child(
                         div()
                             .w(max_w)

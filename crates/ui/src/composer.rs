@@ -13,6 +13,7 @@ use crate::tooltip::TooltipExt as _;
 use zuse_i18n::messages as msg;
 mod add_menu;
 mod archive;
+mod file_preview;
 mod permission_inspector;
 mod permission_prompt;
 mod permissions;
@@ -6595,6 +6596,9 @@ pub struct Composer {
     appshot_entrances: HashMap<String, Instant>,
     /// The staged attachment being viewed full-size (click a thumbnail).
     preview: Option<attachments::PreviewImage>,
+    file_preview: Option<file_preview::FilePreview>,
+    pdf_preview: Option<file_preview::PdfPreview>,
+    file_preview_generation: u64,
     /// Focused while the lightbox is open so Escape reaches it; the input
     /// gets focus back on close.
     preview_focus: FocusHandle,
@@ -7397,6 +7401,9 @@ impl Composer {
             appshots: HashMap::new(),
             appshot_entrances: HashMap::new(),
             preview: None,
+            file_preview: None,
+            pdf_preview: None,
+            file_preview_generation: 0,
             preview_focus: cx.focus_handle(),
             preview_focus_pending: false,
             picker_task: None,
@@ -13460,11 +13467,7 @@ impl Render for Composer {
             - 2.0 * COMPOSER_OUTER_PAD
             - 2.0;
         let appshot_count = self.staged_appshots().len();
-        let image_count = self
-            .staged()
-            .iter()
-            .filter(|att| att.image().is_some())
-            .count();
+        let image_count = self.staged().len();
         let image_strip_height = attachment_strip_height(image_count, strip_width_hint);
         let base_height = if self.dock_frame.is_some() {
             dock_layout.height(dock_amount)
@@ -14113,21 +14116,33 @@ impl Render for Composer {
                 .children(dictation_status),
         );
 
+        if let Some(preview) = self.file_preview.clone() {
+            if std::mem::take(&mut self.preview_focus_pending) {
+                window.focus(&self.preview_focus, cx);
+            }
+            return container.child(self.render_file_preview(preview, window, cx));
+        }
+
         // Full-size preview of a staged thumbnail (AttachmentPreviewDialog).
         if let Some(preview) = self.preview.clone() {
             if std::mem::take(&mut self.preview_focus_pending) {
                 window.focus(&self.preview_focus, cx);
             }
             let weak = cx.weak_entity();
-            return container.child(attachments::lightbox(
+            let nav = self.pdf_gallery(cx);
+            return container.child(attachments::lightbox_gallery(
                 window,
                 &preview,
                 &self.preview_focus,
+                None,
+                nav,
                 move |window, cx| {
                     // Hand focus back to the input so typing (and the next
                     // Escape) lands where it did before the lightbox opened.
                     if let Ok(input_focus) = weak.update(cx, |this, cx| {
                         this.preview = None;
+                        this.pdf_preview = None;
+                        this.file_preview_generation = this.file_preview_generation.wrapping_add(1);
                         cx.notify();
                         this.input.read(cx).focus_handle.clone()
                     }) {
@@ -14319,9 +14334,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn staged_images_live_in_the_tray_so_a_rewrap_never_moves_the_card(
-        cx: &mut gpui::TestAppContext,
-    ) {
+    fn staged_images_keep_clearance_during_dock_reflow(cx: &mut gpui::TestAppContext) {
         let (_dir, handle) = composer_focus_window(cx);
         let png = base64::Engine::decode(&base64::engine::general_purpose::STANDARD,
             "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aF1cAAAAASUVORK5CYII=").unwrap();
@@ -14355,8 +14368,8 @@ mod tests {
         let before = handle
             .read_with(cx, |composer, _| composer.last_rendered_height)
             .unwrap();
-        // Staged images sit in the tray above the card, so a width that
-        // would have rewrapped the old in-card strip leaves the card alone.
+        // A width change during a dock transition keeps the card continuous
+        // and reserves room for the attachment strip.
         cx.update(|cx| {
             handle
                 .update(cx, |composer, _, cx| {
@@ -14380,12 +14393,15 @@ mod tests {
                     assert!(composer.height_morph.is_none());
                     let thread =
                         thread_composer_height(composer.input.read(cx).measured_content_height());
+                    let strip_width = 697.0 - 2.0 * COMPOSER_OUTER_PAD - 2.0;
+                    let strip = attachment_strip_height(composer.staged().len(), strip_width);
                     assert!(
                         (composer.last_rendered_height + composer.dock_clearance_correction
-                            - thread)
+                            - thread
+                            - strip)
                             .abs()
                             < 0.1,
-                        "transcript clearance reserves only the card"
+                        "transcript clearance includes the attachment strip"
                     );
                     assert_eq!(composer.input.read(cx).text(), "Hi");
                 })
@@ -14600,15 +14616,8 @@ mod tests {
             cx.update_window(handle.into(), |_, window, cx| {
                 window.draw(cx).clear();
                 assert!(input.read(cx).focus_handle.is_focused(window));
-                // An attached image is mentioned at the caret.
-                assert_eq!(
-                    input.read(cx).text(),
-                    if accepted {
-                        "Keep this draft [Image 1](zuse-image:1) "
-                    } else {
-                        "Keep this draft"
-                    }
-                );
+                // Attaching an image leaves the draft text untouched.
+                assert_eq!(input.read(cx).text(), "Keep this draft");
             })
             .unwrap();
             assert_eq!(
