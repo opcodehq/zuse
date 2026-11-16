@@ -67,6 +67,26 @@ async fn run_to_end(omp: &AcpHarness, request: RunRequest) -> Vec<AgentEvent> {
     events
 }
 
+fn done_status(events: &[AgentEvent]) -> DoneStatus {
+    events
+        .iter()
+        .find_map(|event| match event {
+            AgentEvent::Done { status, .. } => Some(*status),
+            _ => None,
+        })
+        .expect("the turn settles")
+}
+
+fn reply_text(events: &[AgentEvent]) -> String {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            AgentEvent::TextDelta { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
 fn request(prompt: &str, resume: Option<String>) -> RunRequest {
     RunRequest {
         plan: false,
@@ -127,13 +147,7 @@ async fn omp_acp_runs_a_turn_and_resumes() {
             eprintln!("omp error: {message}");
         }
     }
-    let done = events
-        .iter()
-        .find_map(|event| match event {
-            AgentEvent::Done { status, .. } => Some(*status),
-            _ => None,
-        })
-        .expect("the turn settles");
+    let done = done_status(&events);
     assert_eq!(done, DoneStatus::Completed, "{events:?}");
     assert!(
         events
@@ -166,4 +180,14 @@ async fn omp_acp_runs_a_turn_and_resumes() {
         event,
         AgentEvent::SessionStarted { session_id, .. } if *session_id == resumed
     )));
+    let resumed_status = done_status(&replay);
+    assert_eq!(
+        resumed_status,
+        DoneStatus::Completed,
+        "the resumed turn must complete, not just start: {replay:?}"
+    );
+    assert!(
+        reply_text(&replay).contains("OMP-OK"),
+        "a resumed session recalls its history: {replay:?}"
+    );
 }
