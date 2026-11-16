@@ -26,10 +26,10 @@ enum PreviewResult {
     Text(String),
 }
 
-fn preview_contents(name: &str, bytes: &[u8], index: usize) -> PreviewResult {
+fn preview_contents(name: &str, bytes: &Arc<Vec<u8>>, index: usize) -> PreviewResult {
     if name.to_ascii_lowercase().ends_with(".pdf") {
         let result = (|| {
-            let pdf = hayro::hayro_syntax::Pdf::new(bytes.to_vec()).ok()?;
+            let pdf = hayro::hayro_syntax::Pdf::new(bytes.clone()).ok()?;
             let pages = pdf.pages();
             let page = pages.get(index)?;
             let (width, height) = page.render_dimensions();
@@ -358,7 +358,7 @@ mod tests {
 
     #[test]
     fn previews_each_pdf_page_and_handles_invalid_documents() {
-        let pdf = two_page_pdf();
+        let pdf = Arc::new(two_page_pdf());
         for page in 0..2 {
             match preview_contents("test.pdf", &pdf, page) {
                 PreviewResult::Pdf { png, pages } => {
@@ -369,7 +369,7 @@ mod tests {
             }
         }
         assert!(matches!(
-            preview_contents("bad.pdf", b"not a pdf", 0),
+            preview_contents("bad.pdf", &Arc::new(b"not a pdf".to_vec()), 0),
             PreviewResult::Text(_)
         ));
     }
@@ -377,10 +377,10 @@ mod tests {
     #[test]
     fn previews_text_and_handles_binary_files() {
         assert!(
-            matches!(preview_contents("notes.txt", "hello ✓".as_bytes(), 0), PreviewResult::Text(text) if text == "hello ✓")
+            matches!(preview_contents("notes.txt", &Arc::new("hello ✓".as_bytes().to_vec()), 0), PreviewResult::Text(text) if text == "hello ✓")
         );
         assert!(
-            matches!(preview_contents("file.bin", b"\0\xff", 0), PreviewResult::Text(text) if text.contains("not available"))
+            matches!(preview_contents("file.bin", &Arc::new(b"\0\xff".to_vec()), 0), PreviewResult::Text(text) if text.contains("not available"))
         );
     }
 }

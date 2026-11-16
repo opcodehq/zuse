@@ -1198,7 +1198,16 @@ pub(crate) fn lightbox_with_size(
     on_close: impl Fn(&mut gpui::Window, &mut gpui::App) + 'static,
     cx: &mut gpui::App,
 ) -> AnyElement {
-    lightbox_gallery(window, preview, focus, natural_size, None, on_close, cx)
+    lightbox_gallery(
+        window,
+        preview,
+        focus,
+        natural_size,
+        None,
+        false,
+        on_close,
+        cx,
+    )
 }
 
 /// Where a lightbox sits in a set of images, and how it moves through them.
@@ -1223,19 +1232,33 @@ pub(crate) fn lightbox_gallery(
     focus: &gpui::FocusHandle,
     natural_size: Option<Size<gpui::Pixels>>,
     nav: Option<LightboxNav>,
+    document: bool,
     on_close: impl Fn(&mut gpui::Window, &mut gpui::App) + 'static,
     cx: &mut gpui::App,
 ) -> AnyElement {
+    let page_count = nav.as_ref().map(|nav| nav.count);
     let nav = nav.filter(|nav| nav.count > 1);
     let viewport = window.viewport_size();
-    // A gallery gives up room at the bottom for its preview strip.
-    let strip = if nav.is_some() {
+    let view_width = f32::from(viewport.width);
+    let view_height = f32::from(viewport.height);
+    let card_width = (view_width * 0.9).min(560.0);
+    let card_height = (view_height * 0.82).min(640.0);
+    let strip = if nav.as_ref().is_some_and(|nav| !nav.thumbs.is_empty()) {
         GALLERY_STRIP_HEIGHT
     } else {
         0.0
     };
-    let max_h = px(f32::from(viewport.height) * 0.85 - strip);
-    let max_w = px(f32::from(viewport.width) * 0.9);
+    let (max_w, max_h) = if document {
+        (
+            px((card_width - 32.0).max(0.0)),
+            px((card_height - 120.0).max(0.0)),
+        )
+    } else {
+        (
+            px(view_width * 0.75),
+            px((view_height * 0.75 - strip).max(0.0)),
+        )
+    };
     let natural_size = natural_size.or_else(|| {
         preview
             .image
@@ -1263,12 +1286,108 @@ pub(crate) fn lightbox_gallery(
             .child(tr(cx, msg::chat::image_gallery_loading))
             .into_any_element(),
     };
-    let on_close = std::rc::Rc::new(on_close);
+    let on_close: std::rc::Rc<dyn Fn(&mut gpui::Window, &mut gpui::App)> =
+        std::rc::Rc::new(on_close);
     let close_on_key = on_close.clone();
-    let close_on_button = on_close.clone();
     let press_state = preview.viewer.clone();
     let click_state = preview.viewer.clone();
     let (key_nav, wheel_nav) = (nav.clone(), nav.clone());
+    let viewer = div()
+        .w(max_w)
+        .h(max_h)
+        .relative()
+        .child(content)
+        .children(
+            nav.as_ref()
+                .map(|nav| gallery_arrow(nav, -1, msg::chat::image_gallery_previous, cx)),
+        )
+        .children(
+            nav.as_ref()
+                .map(|nav| gallery_arrow(nav, 1, msg::chat::image_gallery_next, cx)),
+        );
+    let body = if document {
+        let theme = crate::theme::Theme::of(cx);
+        div()
+            .id("document-preview-card")
+            .w(px(card_width))
+            .h(px(card_height))
+            .rounded(px(12.0))
+            .border_1()
+            .border_color(theme.border)
+            .bg(theme.bg)
+            .flex()
+            .flex_col()
+            .items_center()
+            .overflow_hidden()
+            .on_click(|_, _, cx| cx.stop_propagation())
+            .child(
+                div()
+                    .w_full()
+                    .h(px(56.0))
+                    .px(px(16.0))
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_color(theme.text)
+                            .child(preview.name.clone()),
+                    )
+                    .child(preview_close_button(on_close.clone())),
+            )
+            .child(viewer)
+            .child(
+                div()
+                    .h(px(64.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_color(theme.text_muted)
+                    .child(page_count.map_or_else(String::new, |count| {
+                        format!("{count} {}", if count == 1 { "page" } else { "pages" })
+                    })),
+            )
+            .into_any_element()
+    } else {
+        div()
+            .flex()
+            .flex_col()
+            .items_center()
+            .gap(px(12.0))
+            .child(
+                div()
+                    .absolute()
+                    .top(px(18.0))
+                    .right(px(18.0))
+                    .child(preview_close_button(on_close.clone())),
+            )
+            .child(viewer)
+            .child(
+                div()
+                    .max_w(max_w)
+                    .overflow_hidden()
+                    .flex()
+                    .gap(px(8.0))
+                    .text_size(crate::typography::text_xs())
+                    .text_color(ink(0.45))
+                    .children(nav.as_ref().map(|nav| {
+                        div().flex_none().text_color(ink(0.7)).child(format!(
+                            "{} / {}",
+                            nav.index + 1,
+                            nav.count
+                        ))
+                    }))
+                    .child(div().min_w_0().truncate().child(preview.name.clone())),
+            )
+            .children(
+                nav.as_ref()
+                    .filter(|nav| !nav.thumbs.is_empty())
+                    .map(|nav| gallery_strip(nav, max_w, cx)),
+            )
+            .into_any_element()
+    };
     gpui::deferred(
         gpui::anchored()
             .position(gpui::point(px(0.0), px(0.0)))
@@ -1281,10 +1400,8 @@ pub(crate) fn lightbox_gallery(
                     .h(viewport.height)
                     .bg(crate::popover::scrim_alpha(0.7))
                     .flex()
-                    .flex_col()
                     .items_center()
                     .justify_center()
-                    .gap(px(12.0))
                     .on_key_down(move |event: &gpui::KeyDownEvent, window, cx| {
                         match event.keystroke.key.as_str() {
                             "escape" => {
@@ -1293,8 +1410,11 @@ pub(crate) fn lightbox_gallery(
                             }
                             "left" | "right" if let Some(nav) = &key_nav => {
                                 cx.stop_propagation();
-                                let step = if event.keystroke.key == "left" { -1 } else { 1 };
-                                (nav.on_step)(step, window, cx);
+                                (nav.on_step)(
+                                    if event.keystroke.key == "left" { -1 } else { 1 },
+                                    window,
+                                    cx,
+                                );
                             }
                             _ => {}
                         }
@@ -1312,8 +1432,6 @@ pub(crate) fn lightbox_gallery(
                     })
                     .on_scroll_wheel(move |event, window, cx| {
                         cx.stop_propagation();
-                        // The viewer consumes scrolling that pans a zoomed
-                        // image; what reaches here can turn the page.
                         if let Some(nav) = &wheel_nav {
                             let mut swipe = nav.swipe.get();
                             let step = swipe.feed(event.delta, std::time::Instant::now());
@@ -1323,64 +1441,35 @@ pub(crate) fn lightbox_gallery(
                             }
                         }
                     })
-                    .child(
-                        div()
-                            .id("attachment-preview-close")
-                            .absolute()
-                            .top(px(18.0))
-                            .right(px(18.0))
-                            .size(px(32.0))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .cursor_pointer()
-                            .role(gpui::Role::Button)
-                            .aria_label("Close preview")
-                            .on_click(move |_, window, cx| {
-                                cx.stop_propagation();
-                                close_on_button(window, cx);
-                            })
-                            .child(
-                                crate::icons::icon(crate::icons::CLOSE)
-                                    .size(px(20.0))
-                                    .text_color(ink(0.8)),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .w(max_w)
-                            .h(max_h)
-                            .relative()
-                            .child(content)
-                            .children(nav.as_ref().map(|nav| {
-                                gallery_arrow(nav, -1, msg::chat::image_gallery_previous, cx)
-                            }))
-                            .children(nav.as_ref().map(|nav| {
-                                gallery_arrow(nav, 1, msg::chat::image_gallery_next, cx)
-                            })),
-                    )
-                    .child(
-                        div()
-                            .max_w(max_w)
-                            .overflow_hidden()
-                            .flex()
-                            .gap(px(8.0))
-                            .text_size(crate::typography::text_xs())
-                            .text_color(ink(0.45))
-                            .children(nav.as_ref().map(|nav| {
-                                div().flex_none().text_color(ink(0.7)).child(format!(
-                                    "{} / {}",
-                                    nav.index + 1,
-                                    nav.count
-                                ))
-                            }))
-                            .child(div().min_w_0().truncate().child(preview.name.clone())),
-                    )
-                    .children(nav.as_ref().map(|nav| gallery_strip(nav, max_w, cx))),
+                    .child(body),
             ),
     )
     .priority(3)
     .into_any_element()
+}
+
+fn preview_close_button(
+    on_close: std::rc::Rc<dyn Fn(&mut gpui::Window, &mut gpui::App)>,
+) -> AnyElement {
+    div()
+        .id("attachment-preview-close")
+        .size(px(32.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .cursor_pointer()
+        .role(gpui::Role::Button)
+        .aria_label("Close preview")
+        .on_click(move |_, window, cx| {
+            cx.stop_propagation();
+            on_close(window, cx);
+        })
+        .child(
+            crate::icons::icon(crate::icons::CLOSE)
+                .size(px(20.0))
+                .text_color(ink(0.8)),
+        )
+        .into_any_element()
 }
 
 const GALLERY_THUMB_HEIGHT: f32 = 52.0;

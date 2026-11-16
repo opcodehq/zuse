@@ -12261,6 +12261,7 @@ impl Render for Transcript {
                 &self.attachment_preview_focus,
                 natural_size,
                 nav,
+                false,
                 move |window, cx| {
                     if let Ok(focus) = weak.update(cx, |this, cx| {
                         this.close_diagram_zoom(cx);

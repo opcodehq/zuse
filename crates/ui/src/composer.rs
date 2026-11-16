@@ -14136,6 +14136,7 @@ impl Render for Composer {
                 &self.preview_focus,
                 None,
                 nav,
+                self.pdf_preview.is_some(),
                 move |window, cx| {
                     // Hand focus back to the input so typing (and the next
                     // Escape) lands where it did before the lightbox opened.
