@@ -141,7 +141,13 @@ impl Shell {
         if let Some(id) = self.review_surface(cx) {
             self.set_right_active(RightSurface::Diff(id), cx);
         } else {
-            let changes = cx.new(|cx| Changes::for_sidebar_review(self.conversation_state(cx), cx));
+            let changes = cx.new(|cx| {
+                Changes::for_sidebar_review(
+                    self.conversation_state(cx),
+                    self.active_chat.clone(),
+                    cx,
+                )
+            });
             self.register_diff_surface(changes, window, cx);
         }
         self.set_surfaces_open(true, cx);
