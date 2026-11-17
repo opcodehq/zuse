@@ -4,8 +4,34 @@
 
 ### Added
 
-- Choose Stable or Preview updates in General settings, with a saved preference, full preview version detection, and safe cancellation of updates from the previous track.
 - Add opt-in Slack cloud tasks with threaded status/results, sender/channel attribution, and a workspace/repository connection flow in Cloud settings. Server credentials stay encrypted; enablement requires the Slack migration and a rebuilt compatible runtime image.
+
+### Changed
+
+- Render Markdown tables with compact rows, rounded borders, clearer headers, and better wrapping.
+
+## 0.26.1 - 2026-11-15
+
+### Added
+
+- Choose Stable or Preview updates in General settings. Your selection is saved, preview versions are detected correctly, and switching tracks cancels stale downloads safely.
+- First-run setup for agents, sign-in, MCP servers, and importing chats from previous Zuse and supported agent apps.
+- Saved browser page zoom controls and keyboard shortcuts.
+- A terminal-friendly standalone `zuse` command alongside desktop downloads.
+
+### Changed
+
+- Refined composer, model picker, attachment previews, file drops, and workspace menus.
+- Improved pull request layout, review controls, and commit navigation, with automatic follow-up on failing checks and review feedback.
+- A redesigned drag-to-Applications macOS installer.
+
+### Fixed
+
+- Correct browser page sizing on high-DPI Linux desktops.
+- Avoid idle redraw loops when chat timestamps are ahead of the system clock.
+- Preserve source context for imported and moved chats.
+
+Includes the features and fixes from the earlier 0.26.0 previews.
 
 ## 0.26.0-preview.5 - 2026-11-11
 

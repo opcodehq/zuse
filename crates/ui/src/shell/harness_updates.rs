@@ -137,23 +137,6 @@ fn bulk_targets(rows: &[UpdateRow]) -> Vec<(String, HarnessId)> {
         .collect()
 }
 
-/// Nothing is mid-install, so a restart won't cut an agent CLI update short.
-/// Failed, manual and idle-waiting updates are skipped, not waited for.
-fn updates_settled(devices: &std::collections::BTreeMap<String, DeviceUpdates>) -> bool {
-    devices
-        .values()
-        .filter(|updates| updates.online && updates.connected)
-        .all(|updates| {
-            updates.statuses.iter().all(|status| match status.phase {
-                Phase::Preparing | Phase::Downloading | Phase::Installing | Phase::Verifying => {
-                    false
-                }
-                Phase::Available => !updates.applying.contains(&status.harness),
-                _ => true,
-            })
-        })
-}
-
 fn right_inset(has_button: bool) -> f32 {
     if has_button { 5.0 } else { 12.0 }
 }
@@ -1011,21 +994,6 @@ impl Shell {
         }
     }
 
-    pub(super) fn agent_update_count(&self) -> usize {
-        bulk_targets(&visible_rows(&self.harness_update_devices, str::to_owned)).len()
-    }
-
-    pub(super) fn agent_updates_settled(&self) -> bool {
-        updates_settled(&self.harness_update_devices)
-    }
-
-    pub(super) fn update_all_harnesses(&mut self, cx: &mut Context<Self>) {
-        let rows = visible_rows(&self.harness_update_devices, str::to_owned);
-        for (device, harness) in bulk_targets(&rows) {
-            self.run_harness_update_action(device, methods::APPLY_HARNESS_UPDATE, harness, cx);
-        }
-    }
-
     fn run_harness_update_action(
         &mut self,
         device: String,
@@ -1072,10 +1040,20 @@ impl Shell {
                     && !matches!(&error, zuse_rpc::RpcError::Failed(message)
                         if method == methods::APPLY_HARNESS_UPDATE && message == "update cancelled")
                 {
-                    shell.show_notice(
-                        crate::toast::ToastKind::Error,
-                        format!("Agent update ({device}): {error}"),
+                    tracing::warn!(%device, ?harness, %error, "agent update action failed");
+                    let name = crate::pickers::harness_display_name(harness);
+                    let message = format!("{name} update failed. Retry from Local agents.");
+                    shell.sidebar_notice = Some(message.clone().into());
+                    let details = format!("Agent update ({device}, {name}): {error}");
+                    crate::toast::error_with_action(
                         cx,
+                        message,
+                        format!("agent-update:{device}:{harness:?}"),
+                        "Copy details",
+                        move |_, cx| {
+                            cx.write_to_clipboard(ClipboardItem::new_string(details.clone()));
+                            crate::toast::success(cx, "Update error copied");
+                        },
                     );
                 }
                 cx.notify();
@@ -1136,42 +1114,6 @@ mod tests {
             dismissal_key("host", &available),
             dismissal_key("host", &installing)
         );
-    }
-
-    #[test]
-    fn restart_only_waits_for_updates_actually_installing() {
-        let settled =
-            |phase| updates_settled(&BTreeMap::from([("host".to_owned(), device(phase))]));
-        for phase in [
-            Phase::Preparing,
-            Phase::Downloading,
-            Phase::Installing,
-            Phase::Verifying,
-        ] {
-            assert!(!settled(phase), "{phase:?}");
-        }
-        for phase in [
-            Phase::Available,
-            Phase::WaitingForIdle,
-            Phase::Updated,
-            Phase::Failed,
-            Phase::ManualActionRequired,
-        ] {
-            assert!(settled(phase), "{phase:?}");
-        }
-        let mut requested = device(Phase::Available);
-        requested.applying.insert(HarnessId::Codex);
-        assert!(!updates_settled(&BTreeMap::from([(
-            "host".to_owned(),
-            requested
-        )])));
-        // An offline machine can't hold the restart.
-        let mut offline = device(Phase::Installing);
-        offline.connected = false;
-        assert!(updates_settled(&BTreeMap::from([(
-            "host".to_owned(),
-            offline
-        )])));
     }
 
     #[test]

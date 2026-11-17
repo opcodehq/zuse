@@ -79,6 +79,8 @@ pub struct RepositoryPanel {
     github_connection_state: String,
     github_disconnect_confirm: bool,
     github_poll: Option<Task<()>>,
+    /// Code from the OAuth browser that confirms a fresh GitHub identity.
+    github_code: Entity<TextInput>,
     error: Option<String>,
     notice: Option<String>,
     picker: bool,
@@ -113,6 +115,8 @@ impl RepositoryPanel {
         ]);
         let search = cx.new(|cx| TextInput::new("Search repositories…", window, cx));
         cx.observe(&search, |_, _, cx| cx.notify()).detach();
+        let github_code = cx.new(|cx| TextInput::new("Code from your browser", window, cx));
+        cx.observe(&github_code, |_, _, cx| cx.notify()).detach();
         Self {
             agents: agents::AgentView::new(window, cx),
             environment: environment::EnvironmentView::new(window, cx),
@@ -131,6 +135,7 @@ impl RepositoryPanel {
             github_connection_state: String::new(),
             github_disconnect_confirm: false,
             github_poll: None,
+            github_code,
             error: None,
             notice: None,
             picker: false,
@@ -189,6 +194,9 @@ impl RepositoryPanel {
         self.queue.clear();
         self.keys.clear();
         self.search
+            .update(cx, |s, cx| s.set_value(String::new(), cx));
+        // A code typed for one account's GitHub operation never carries over.
+        self.github_code
             .update(cx, |s, cx| s.set_value(String::new(), cx));
         cx.notify();
     }
@@ -308,11 +316,13 @@ impl RepositoryPanel {
         match pending.kind {
             "github-install" => self.github_started(data, cx),
             "github-status" => self.github_status(data, cx),
-            "github-select" | "github-cancel" | "github-disconnect" => {
+            "github-select" | "github-confirm" | "github-cancel" | "github-disconnect" => {
                 self.github_operation = None;
                 self.github_poll = None;
+                self.github_code
+                    .update(cx, |input, cx| input.set_value(String::new(), cx));
                 self.notice = Some(
-                    if pending.kind == "github-select" {
+                    if matches!(pending.kind, "github-select" | "github-confirm") {
                         "GitHub connected. Choose your repositories below."
                     } else if pending.kind == "github-disconnect" {
                         "GitHub disconnected."
@@ -396,6 +406,7 @@ impl RepositoryPanel {
                     | "github"
                     | "github-install"
                     | "github-select"
+                    | "github-confirm"
                     | "github-cancel"
                     | "github-disconnect"
                     | "connect"
@@ -423,5 +434,25 @@ impl RepositoryPanel {
             .or_insert_with(|| uuid::Uuid::new_v4().to_string())
             .clone();
         self.call("connect",methods::CLOUD_PROJECT_CONNECT,json!({"repositoryUrl":repo.https_url,"defaultBranch":repo.default_branch,"visibility":if repo.is_private{"private"}else{"public"},"idempotencyKey":key}),cx);
+    }
+}
+#[cfg(test)]
+mod owner_reset_tests {
+    use super::*;
+    use std::prelude::v1::test;
+    #[gpui::test]
+    fn switching_owner_clears_a_typed_github_confirmation_code(cx: &mut TestAppContext) {
+        cx.update(crate::initialize);
+        let window = cx.add_window(RepositoryPanel::new);
+        window
+            .update(cx, |panel, _, cx| {
+                panel.bind_owner(Some(("account-a".into(), None)), cx);
+                panel
+                    .github_code
+                    .update(cx, |input, cx| input.set_value("ABCD-EFGH".into(), cx));
+                panel.bind_owner(Some(("account-b".into(), None)), cx);
+                assert!(panel.github_code.read(cx).value(cx).is_empty());
+            })
+            .unwrap();
     }
 }

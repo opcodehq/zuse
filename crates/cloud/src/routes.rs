@@ -1,6 +1,7 @@
 mod account_events;
 #[cfg(test)]
 mod account_events_test;
+pub(crate) mod body_deadline;
 #[cfg(test)]
 mod github_browser_policy_test;
 mod github_organizations;
@@ -183,7 +184,7 @@ mod gateway_listener_tests {
 }
 
 pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
-    let github_webhook_gate = Arc::new(tokio::sync::Semaphore::new(1));
+    let github_webhook_gate = body_deadline::webhook_gate();
     let origins = Arc::new(origins);
     let gateway_origins = origins.clone();
     let event_origins = origins.clone();
@@ -352,6 +353,10 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
         )
         .route("/v1/cloud/github/status", get(github_status))
         .route(
+            "/v1/cloud/github/confirm",
+            post(github_confirm).layer(DefaultBodyLimit::max(4096)),
+        )
+        .route(
             "/v1/cloud/github/select",
             post(github_select).layer(DefaultBodyLimit::max(4096)),
         )
@@ -378,10 +383,11 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
                 .layer(DefaultBodyLimit::max(
                     crate::github::native::GITHUB_WEBHOOK_BODY_LIMIT,
                 ))
-                // This outer layer acquires the permit before Bytes extraction.
+                // This outer layer admits a bounded number of deliveries and
+                // puts a total deadline on reading each body.
                 .layer(middleware::from_fn_with_state(
                     github_webhook_gate,
-                    github_webhook_admission,
+                    body_deadline::github_webhook_admission,
                 )),
         )
         .route("/v1/cloud/image", get(image_status))
@@ -667,29 +673,31 @@ pub fn router(state: AppState, origins: Vec<HeaderValue>) -> Router {
             );
     }
     // Plugin routes stay outside the account-event wake: tool calls are POSTs
-    // but change no account state other clients render.
-    app.layer(middleware::from_fn(
-        move |request: axum::extract::Request, next: middleware::Next| {
-            let events = account_events.clone();
-            async move {
-                let changed = matches!(
-                    *request.method(),
-                    Method::POST | Method::PUT | Method::DELETE | Method::PATCH
-                );
-                let response = next.run(request).await;
-                if changed && response.status().is_success() {
-                    if let Some(events) = events {
-                        events.wake();
+    // but change no account state other clients render. They also keep their
+    // own streaming bodies, so the body deadline applies only to this router.
+    app.layer(middleware::from_fn(body_deadline::body_deadline))
+        .layer(middleware::from_fn(
+            move |request: axum::extract::Request, next: middleware::Next| {
+                let events = account_events.clone();
+                async move {
+                    let changed = matches!(
+                        *request.method(),
+                        Method::POST | Method::PUT | Method::DELETE | Method::PATCH
+                    );
+                    let response = next.run(request).await;
+                    if changed && response.status().is_success() {
+                        if let Some(events) = events {
+                            events.wake();
+                        }
                     }
+                    response
                 }
-                response
-            }
-        },
-    ))
-    .merge(crate::plugins::routes::router(origins.clone()))
-    .layer(middleware::map_response(private_response))
-    .layer(cors)
-    .with_state(state)
+            },
+        ))
+        .merge(crate::plugins::routes::router(origins.clone()))
+        .layer(middleware::map_response(private_response))
+        .layer(cors)
+        .with_state(state)
 }
 
 async fn private_response(mut response: Response) -> Response {
@@ -2869,10 +2877,37 @@ async fn github_callback(
         .callback(&query, github_browser(&headers))
         .await?;
     Ok(github_browser_response(
-        native_github(&state)?
-            .browser_page(&query.state, github_browser(&headers))
-            .await?,
+        github_page(&state, &query.state, &headers).await?,
     ))
+}
+/// Every browser page names the initiating Zuse account, so a visitor who
+/// opened someone else's link can see whose account it would connect to.
+async fn github_page(
+    state: &AppState,
+    query_state: &str,
+    headers: &HeaderMap,
+) -> Result<String, ApiError> {
+    let github = native_github(state)?;
+    let browser = github_browser(headers);
+    let account = github_account_label(state, github, query_state, browser).await;
+    github
+        .browser_page(query_state, browser, account.as_deref())
+        .await
+}
+async fn github_account_label(
+    state: &AppState,
+    github: &crate::github::native::NativeGithub,
+    query_state: &str,
+    browser: Option<&str>,
+) -> Option<String> {
+    let actor = github.browser_actor(query_state, browser).await.ok()?;
+    match state.identity.account_label(&actor).await {
+        Ok(label) => label,
+        Err(error) => {
+            tracing::warn!(code = error.code, "Zuse account label unavailable");
+            None
+        }
+    }
 }
 fn github_browser_response(html: String) -> Response {
     let mut response = axum::response::Html(html).into_response();
@@ -2897,9 +2932,7 @@ async fn github_browser_page(
     Query(query): Query<GithubStateQuery>,
 ) -> Result<Response, ApiError> {
     Ok(github_browser_response(
-        native_github(&state)?
-            .browser_page(&query.state, github_browser(&headers))
-            .await?,
+        github_page(&state, &query.state, &headers).await?,
     ))
 }
 async fn github_browser_access(
@@ -2965,6 +2998,13 @@ async fn github_browser_select(
     let transaction = github
         .confirm_browser(&selection, github_browser(&headers))
         .await?;
+    if transaction.confirmation {
+        // A fresh GitHub identity links only after the initiating app enters
+        // the code this page shows; this browser cannot finish it alone.
+        return Ok(github_browser_response(
+            github_page(&state, &selection.state, &headers).await?,
+        ));
+    }
     let operation_id = transaction.operation_id.clone();
     let access = github_browser_access(&state, transaction).await?;
     if let Err(error) = github
@@ -2986,9 +3026,7 @@ async fn github_browser_select(
         joining.notify_dispatch();
     }
     Ok(github_browser_response(
-        github
-            .browser_page(&selection.state, github_browser(&headers))
-            .await?,
+        github_page(&state, &selection.state, &headers).await?,
     ))
 }
 async fn github_status(
@@ -3002,6 +3040,20 @@ async fn github_status(
             .operation(&access, &query.operation_id)
             .await?,
     ))
+}
+async fn github_confirm(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<crate::github::native::AppConfirmation>,
+) -> Result<StatusCode, ApiError> {
+    let access = state.setup_access(&headers, AccessKind::Content).await?;
+    native_github(&state)?
+        .confirm_app(&access, &request)
+        .await?;
+    if let Some(joining) = state.store.github_organization_authority() {
+        joining.notify_dispatch();
+    }
+    Ok(StatusCode::NO_CONTENT)
 }
 async fn github_select(
     State(state): State<AppState>,
@@ -3051,19 +3103,6 @@ async fn github_disconnect(
     native_github(&state)?.disconnect(&access).await?;
     Ok(StatusCode::NO_CONTENT)
 }
-async fn github_webhook_admission(
-    State(gate): State<Arc<tokio::sync::Semaphore>>,
-    request: axum::extract::Request,
-    next: middleware::Next,
-) -> Response {
-    // A busy receiver rejects without queueing or polling another request body.
-    // Hold the single buffer permit through signature validation and handling.
-    let Ok(_permit) = gate.try_acquire_owned() else {
-        return ApiError::new(StatusCode::TOO_MANY_REQUESTS, "github_webhook_busy").into_response();
-    };
-    next.run(request).await
-}
-
 async fn github_webhook(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -3267,6 +3306,11 @@ async fn github_browser_identity(
     let transaction = github
         .confirm_identity_browser(&query.state, github_browser(&headers))
         .await?;
+    if transaction.confirmation {
+        return Ok(github_browser_response(
+            github_page(&state, &query.state, &headers).await?,
+        ));
+    }
     let operation = transaction.operation_id.clone();
     let access = github_browser_access(&state, transaction).await?;
     github.finalize_identity(&access, &operation).await?;
@@ -3274,9 +3318,7 @@ async fn github_browser_identity(
         joining.notify_dispatch();
     }
     Ok(github_browser_response(
-        github
-            .browser_page(&query.state, github_browser(&headers))
-            .await?,
+        github_page(&state, &query.state, &headers).await?,
     ))
 }
 
@@ -3313,7 +3355,16 @@ async fn github_setup(
     }
     Ok(github_browser_response(
         if let Some(github) = &state.store.github_native {
-            github.setup_result(&query, github_browser(&headers)).await
+            let browser = github_browser(&headers);
+            let account = match query.state.as_deref().filter(|s| s.len() == 64) {
+                Some(query_state) => {
+                    github_account_label(&state, github, query_state, browser).await
+                }
+                None => None,
+            };
+            github
+                .setup_result(&query, browser, account.as_deref())
+                .await
         } else {
             crate::github::native::organizations::setup_notice()
         },

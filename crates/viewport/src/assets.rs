@@ -34,6 +34,7 @@ assets!(
     "folder",
     "file-code",
     "git-branch",
+    "git-lane-branch",
     "terminal",
     "arrow-up",
     "arrow-right",

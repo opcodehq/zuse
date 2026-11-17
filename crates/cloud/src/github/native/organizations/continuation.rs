@@ -60,6 +60,8 @@ impl NativeGithub {
             credentials,
             profile,
             browser_installation: Some(installation),
+            reused: true,
+            confirmation: None,
         };
         let sealed = self.seal(&format!("github-pending:{id}"), &pending)?;
         let mut tx = self.pool.begin().await?;

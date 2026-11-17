@@ -86,7 +86,9 @@ def install(source, data, bin_dir):
         applications = staged / "share/applications"
         applications.mkdir(parents=True, exist_ok=True)
         (applications / "sh.zuse.app.desktop").write_text(desktop_entry(destination))
-        (staged / ".installed-by-zuse").write_text("1\n")
+        (staged / ".installed-by-zuse").write_text(json.dumps({
+            "format": 2, "data_home": str(data.resolve()), "bin_home": str(bin_dir.resolve()),
+        }) + "\n")
         os.rename(staged, destination)
     for link, relative in links:
         link.parent.mkdir(parents=True, exist_ok=True)
@@ -114,13 +116,17 @@ def uninstall(data, bin_dir):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--uninstall", action="store_true", help="Remove only Zuse-owned launch/desktop links")
+    parser.add_argument("--package", type=Path, help=argparse.SUPPRESS)
+    parser.add_argument("--verify-only", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
     data = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share")).expanduser().resolve()
     bin_dir = Path(os.environ.get("ZUSE_BIN_HOME", Path.home() / ".local/bin")).expanduser().resolve()
-    if args.uninstall:
+    if args.verify_only:
+        verify(args.package)
+    elif args.uninstall:
         uninstall(data, bin_dir)
     else:
-        install(Path(__file__).resolve().parent, data, bin_dir)
+        install(args.package if args.package else Path(__file__).resolve().parent, data, bin_dir)
 
 
 if __name__ == "__main__":

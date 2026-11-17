@@ -10,13 +10,17 @@ use std::{
 use tokio::sync::{Mutex, Notify, Semaphore, watch};
 
 pub const PROTOCOL: &str = "zuse.account-events.v1";
+/// Global outstanding tickets and live sockets on this process.
+pub(crate) const GLOBAL_CAPACITY: usize = 4096;
+/// One account cannot consume more than this share of either global pool.
+pub(crate) const PER_ACTOR_CAPACITY: usize = 16;
 pub struct Hub {
     pub(crate) events: EventStore,
     pub(crate) cursors: Cursors,
     pub(crate) tickets: Tickets,
     pub(crate) capacity: Arc<Semaphore>,
     rooms: Mutex<HashMap<String, Weak<Room>>>,
-    devices: Mutex<HashMap<(String, uuid::Uuid), (uuid::Uuid, watch::Sender<bool>)>>,
+    pub(crate) devices: DeviceLeases,
     dispatch: Notify,
 }
 pub(crate) struct Room {
@@ -33,10 +37,10 @@ impl Hub {
         let hub = Arc::new(Self {
             events,
             cursors: Cursors::new(key, issuer),
-            tickets: Tickets::new(4096),
-            capacity: Arc::new(Semaphore::new(4096)),
+            tickets: Tickets::new(GLOBAL_CAPACITY, PER_ACTOR_CAPACITY),
+            capacity: Arc::new(Semaphore::new(GLOBAL_CAPACITY)),
             rooms: Mutex::new(HashMap::new()),
-            devices: Mutex::new(HashMap::new()),
+            devices: DeviceLeases::new(PER_ACTOR_CAPACITY),
             dispatch: Notify::new(),
         });
         let signal = match std::env::var_os("ZUSE_CLOUD_EVENT_SIGNAL_DIRECTORY") {
@@ -117,30 +121,142 @@ impl Hub {
         rooms.insert(owner.to_owned(), Arc::downgrade(&room));
         room
     }
-    pub(crate) async fn claim_device(
-        &self,
-        actor: &str,
-        device: uuid::Uuid,
-    ) -> (uuid::Uuid, watch::Receiver<bool>) {
+}
+
+#[derive(Default)]
+struct Live {
+    /// The current lease for each (actor, device).
+    devices: HashMap<(String, uuid::Uuid), (uuid::Uuid, watch::Sender<bool>)>,
+    /// Every lease not yet dropped, per actor, including replaced sockets that
+    /// are still shutting down and so still hold a shared socket permit.
+    outstanding: HashMap<String, usize>,
+}
+/// Live account-event sockets keyed by actor and device. A device reconnect
+/// replaces its previous socket. Each actor's undropped leases are capped, so
+/// rapid same-device reconnects cannot pile up sockets in the shared pool.
+pub(crate) struct DeviceLeases {
+    live: Arc<std::sync::Mutex<Live>>,
+    per_actor: usize,
+}
+/// Releases its slot when dropped, including when an upgrade never completes.
+pub(crate) struct DeviceLease {
+    live: Arc<std::sync::Mutex<Live>>,
+    key: (String, uuid::Uuid),
+    id: uuid::Uuid,
+    pub(crate) replaced: watch::Receiver<bool>,
+}
+impl DeviceLeases {
+    pub(crate) fn new(per_actor: usize) -> Self {
+        Self {
+            live: Arc::new(std::sync::Mutex::new(Live::default())),
+            per_actor,
+        }
+    }
+    pub(crate) fn claim(&self, actor: &str, device: uuid::Uuid) -> Result<DeviceLease, ApiError> {
+        let key = (actor.to_owned(), device);
+        let mut live = self.live.lock().unwrap_or_else(|e| e.into_inner());
+        let outstanding = live.outstanding.get(actor).copied().unwrap_or(0);
+        if outstanding >= self.per_actor {
+            // Ask this device's previous socket to leave so a retry can succeed
+            // once it has released its permit; never admit beyond the share.
+            if let Some((_, old)) = live.devices.get(&key) {
+                old.send_replace(true);
+            }
+            return Err(ApiError::new(
+                axum::http::StatusCode::TOO_MANY_REQUESTS,
+                "account_event_actor_capacity",
+            ));
+        }
         let id = uuid::Uuid::new_v4();
-        let (sender, receiver) = watch::channel(false);
-        if let Some((_, old)) = self
-            .devices
-            .lock()
-            .await
-            .insert((actor.to_owned(), device), (id, sender))
-        {
+        let (sender, replaced) = watch::channel(false);
+        if let Some((_, old)) = live.devices.insert(key.clone(), (id, sender)) {
             old.send_replace(true);
         }
-        (id, receiver)
+        *live.outstanding.entry(actor.to_owned()).or_default() += 1;
+        Ok(DeviceLease {
+            live: self.live.clone(),
+            key,
+            id,
+            replaced,
+        })
     }
-    pub(crate) async fn release_device(&self, actor: &str, device: uuid::Uuid, id: uuid::Uuid) {
-        let mut devices = self.devices.lock().await;
-        if devices
-            .get(&(actor.to_owned(), device))
-            .is_some_and(|(current, _)| *current == id)
+    #[cfg(test)]
+    pub(crate) fn live(&self) -> usize {
+        self.live.lock().unwrap().devices.len()
+    }
+    #[cfg(test)]
+    pub(crate) fn outstanding(&self, actor: &str) -> usize {
+        let live = self.live.lock().unwrap();
+        live.outstanding.get(actor).copied().unwrap_or(0)
+    }
+}
+impl Drop for DeviceLease {
+    fn drop(&mut self) {
+        let mut live = self.live.lock().unwrap_or_else(|e| e.into_inner());
+        if live
+            .devices
+            .get(&self.key)
+            .is_some_and(|(id, _)| *id == self.id)
         {
-            devices.remove(&(actor.to_owned(), device));
+            live.devices.remove(&self.key);
         }
+        if let Some(count) = live.outstanding.get_mut(&self.key.0) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                live.outstanding.remove(&self.key.0);
+            }
+        }
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn device_leases_cap_distinct_devices_per_actor_and_release_on_drop() {
+        let leases = DeviceLeases::new(2);
+        let (a, b, c) = (
+            uuid::Uuid::new_v4(),
+            uuid::Uuid::new_v4(),
+            uuid::Uuid::new_v4(),
+        );
+        let first = leases.claim("actor", a).unwrap();
+        let second = leases.claim("actor", b).unwrap();
+        let error = leases.claim("actor", c).err().unwrap();
+        assert_eq!(error.status, axum::http::StatusCode::TOO_MANY_REQUESTS);
+        // Another account is unaffected by this actor's usage.
+        let other = leases.claim("other", c).unwrap();
+        drop(second);
+        let third = leases.claim("actor", c).unwrap();
+        drop((first, third, other));
+        assert_eq!(leases.live(), 0);
+        assert_eq!(leases.outstanding("actor"), 0);
+    }
+    #[test]
+    fn replaced_sockets_count_against_the_actor_until_they_drop() {
+        let leases = DeviceLeases::new(2);
+        let device = uuid::Uuid::new_v4();
+        let first = leases.claim("actor", device).unwrap();
+        // A reconnect replaces the previous socket, which is told to leave.
+        let second = leases.claim("actor", device).unwrap();
+        assert!(*first.replaced.borrow());
+        assert_eq!(leases.outstanding("actor"), 2);
+        // The replaced socket still holds its permit, so a third rapid
+        // reconnect is refused rather than exceeding the actor's share.
+        let error = leases.claim("actor", device).err().unwrap();
+        assert_eq!(error.code, "account_event_actor_capacity");
+        assert!(
+            *second.replaced.borrow(),
+            "the current socket is asked to leave so a retry can succeed"
+        );
+        drop(first);
+        assert_eq!(
+            leases.live(),
+            1,
+            "a replaced lease must not release its successor"
+        );
+        let third = leases.claim("actor", device).unwrap();
+        drop((second, third));
+        assert_eq!(leases.outstanding("actor"), 0);
+        assert_eq!(leases.live(), 0);
     }
 }

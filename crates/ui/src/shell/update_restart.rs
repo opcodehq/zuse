@@ -1,8 +1,7 @@
-//! Sequencing an update restart: wait for agents if asked, update the agent
-//! CLIs, then restart. An agent CLI that is missing or fails is skipped; only
-//! the app's own install can stop the restart.
+//! Restart the app once active turns have finished, if requested. Agent CLI
+//! updates are a separate action and never run as part of an app restart.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use gpui::{App, Context};
 
@@ -12,30 +11,15 @@ const TICK: Duration = Duration::from_secs(1);
 /// Idle ticks before trusting that agents finished: one agent's turn can end
 /// a moment before its next one starts.
 const IDLE_TICKS: u32 = 3;
-/// Settled ticks before restarting, covering the gap between an update's
-/// request and its first status.
-const SETTLED_TICKS: u32 = 2;
-/// A stuck agent update must not hold the app's update hostage.
-const AGENT_UPDATE_LIMIT: Duration = Duration::from_secs(180);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum RestartStage {
-    WaitingForAgents,
-    UpdatingAgents,
-}
-
 #[derive(Debug, PartialEq, Eq)]
 enum Step {
     Wait,
-    UpdateAgents,
     Restart,
 }
 
 #[derive(Debug)]
 pub(super) struct RestartPlan {
     wait_for_agents: bool,
-    idle_confirmed: bool,
-    agent_updates_started: Option<Instant>,
     quiet_ticks: u32,
 }
 
@@ -43,56 +27,22 @@ impl RestartPlan {
     fn new(wait_for_agents: bool) -> Self {
         Self {
             wait_for_agents,
-            idle_confirmed: false,
-            agent_updates_started: None,
             quiet_ticks: 0,
         }
     }
 
-    pub(super) fn stage(&self) -> RestartStage {
-        if self.wait_for_agents && !self.idle_confirmed {
-            RestartStage::WaitingForAgents
-        } else {
-            RestartStage::UpdatingAgents
-        }
-    }
-
-    fn tick(&mut self, blockers: usize, targets: usize, settled: bool, now: Instant) -> Step {
+    fn tick(&mut self, blockers: usize) -> Step {
         if self.wait_for_agents {
             if blockers > 0 {
-                self.idle_confirmed = false;
                 self.quiet_ticks = 0;
                 return Step::Wait;
             }
-            if !self.idle_confirmed {
-                self.quiet_ticks += 1;
-                if self.quiet_ticks < IDLE_TICKS {
-                    return Step::Wait;
-                }
-                self.idle_confirmed = true;
-                self.quiet_ticks = 0;
+            self.quiet_ticks += 1;
+            if self.quiet_ticks < IDLE_TICKS {
+                return Step::Wait;
             }
         }
-        let Some(started) = self.agent_updates_started else {
-            if targets == 0 {
-                return Step::Restart;
-            }
-            self.agent_updates_started = Some(now);
-            return Step::UpdateAgents;
-        };
-        if now.saturating_duration_since(started) >= AGENT_UPDATE_LIMIT {
-            return Step::Restart;
-        }
-        if !settled {
-            self.quiet_ticks = 0;
-            return Step::Wait;
-        }
-        self.quiet_ticks += 1;
-        if self.quiet_ticks >= SETTLED_TICKS {
-            Step::Restart
-        } else {
-            Step::Wait
-        }
+        Step::Restart
     }
 }
 
@@ -150,18 +100,11 @@ impl Shell {
         // An unsaved file would stop the restart to ask about it, which a
         // restart the user isn't watching must not do.
         let blockers = self.restart_blockers(cx) + usize::from(!self.all_file_edits_flushed(cx));
-        let targets = self.agent_update_count();
-        let settled = self.agent_updates_settled();
         let Some(plan) = self.update_restart.as_mut() else {
             return false;
         };
-        match plan.tick(blockers, targets, settled, Instant::now()) {
+        match plan.tick(blockers) {
             Step::Wait => {
-                cx.notify();
-                true
-            }
-            Step::UpdateAgents => {
-                self.update_all_harnesses(cx);
                 cx.notify();
                 true
             }
@@ -187,55 +130,34 @@ mod tests {
     #[test]
     fn restart_now_skips_straight_to_the_restart_with_nothing_to_update() {
         let mut plan = RestartPlan::new(false);
-        assert_eq!(plan.tick(2, 0, true, Instant::now()), Step::Restart);
+        assert_eq!(plan.tick(2), Step::Restart);
     }
 
     #[test]
     fn waits_for_agents_and_starts_over_when_one_begins_again() {
-        let now = Instant::now();
         let mut plan = RestartPlan::new(true);
-        assert_eq!(plan.stage(), RestartStage::WaitingForAgents);
-        assert_eq!(plan.tick(1, 0, true, now), Step::Wait);
-        assert_eq!(plan.tick(0, 0, true, now), Step::Wait);
-        assert_eq!(plan.tick(0, 0, true, now), Step::Wait);
+        assert_eq!(plan.tick(1), Step::Wait);
+        assert_eq!(plan.tick(0), Step::Wait);
+        assert_eq!(plan.tick(0), Step::Wait);
         // A follow-up turn started: the two quiet ticks no longer count.
-        assert_eq!(plan.tick(1, 0, true, now), Step::Wait);
-        assert_eq!(plan.tick(0, 0, true, now), Step::Wait);
-        assert_eq!(plan.tick(0, 0, true, now), Step::Wait);
-        assert_eq!(plan.tick(0, 0, true, now), Step::Restart);
+        assert_eq!(plan.tick(1), Step::Wait);
+        assert_eq!(plan.tick(0), Step::Wait);
+        assert_eq!(plan.tick(0), Step::Wait);
+        assert_eq!(plan.tick(0), Step::Restart);
     }
 
     #[test]
-    fn agent_updates_run_once_then_restart_when_settled() {
-        let now = Instant::now();
+    fn restart_now_does_not_wait_for_idle_ticks_or_agent_updates() {
         let mut plan = RestartPlan::new(false);
-        assert_eq!(plan.tick(0, 2, false, now), Step::UpdateAgents);
-        assert_eq!(plan.stage(), RestartStage::UpdatingAgents);
-        assert_eq!(plan.tick(0, 0, false, now), Step::Wait);
-        assert_eq!(plan.tick(0, 0, true, now), Step::Wait);
-        assert_eq!(plan.tick(0, 0, true, now), Step::Restart);
+        assert_eq!(plan.tick(0), Step::Restart);
     }
 
     #[test]
-    fn a_stuck_agent_update_cannot_block_the_restart() {
-        let now = Instant::now();
-        let mut plan = RestartPlan::new(false);
-        assert_eq!(plan.tick(0, 1, false, now), Step::UpdateAgents);
-        assert_eq!(
-            plan.tick(0, 0, false, now + AGENT_UPDATE_LIMIT),
-            Step::Restart
-        );
-    }
-
-    #[test]
-    fn an_agent_starting_during_agent_updates_holds_a_waiting_restart() {
-        let now = Instant::now();
+    fn restart_when_idle_only_waits_for_consecutive_idle_ticks() {
         let mut plan = RestartPlan::new(true);
         for _ in 0..2 {
-            assert_eq!(plan.tick(0, 1, false, now), Step::Wait);
+            assert_eq!(plan.tick(0), Step::Wait);
         }
-        assert_eq!(plan.tick(0, 1, false, now), Step::UpdateAgents);
-        assert_eq!(plan.tick(1, 0, true, now), Step::Wait);
-        assert_eq!(plan.stage(), RestartStage::WaitingForAgents);
+        assert_eq!(plan.tick(0), Step::Restart);
     }
 }

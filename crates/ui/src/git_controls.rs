@@ -172,6 +172,9 @@ impl Render for GitPanel {
             .as_ref()
             .map(|(target, _)| target.clone())
             .or(target);
+        // No checkout means no Git actions: render nothing rather than a
+        // header whose only content is "No Git checkout for this thread".
+        let has_target = target.is_some();
         panel.update(cx, |panel, cx| {
             panel.colors = colors;
             panel.set_target(target, cx);
@@ -185,6 +188,6 @@ impl Render for GitPanel {
         {
             panel.update(cx, |panel, cx| panel.observe(frame, cx));
         }
-        div().child(panel)
+        div().when(has_target, |el| el.child(panel))
     }
 }

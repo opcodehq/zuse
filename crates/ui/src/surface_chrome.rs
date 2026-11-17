@@ -121,17 +121,114 @@ pub(crate) fn workspace_tab(
 ) -> gpui::Stateful<Div> {
     let hover = theme.glass_hover();
     let hover_text = theme.text;
+    let (fill, ring) = workspace_tab_selected_paint(theme);
     div()
         .id(id)
         .rounded(px(7.0))
-        .bg(if selected {
-            crate::theme::glass_selected_bg()
-        } else {
-            hover.opacity(0.0)
-        })
+        .bg(if selected { fill } else { hover.opacity(0.0) })
+        .when(selected, |tab| tab.shadow(ring))
         .when(!selected, |tab| {
             tab.hover(move |style| style.bg(hover).text_color(hover_text))
         })
+}
+
+/// The selected workspace tab's plate: a crisp raised card in light mode
+/// (opaque surface, hairline ring, soft drop), a quiet wash with a faint ring
+/// in dark mode. One flat plate either way, so the strip reads as calm text
+/// with a single lifted tab rather than a row of grey pills.
+pub(crate) fn workspace_tab_selected_paint(theme: &Theme) -> (gpui::Hsla, Vec<gpui::BoxShadow>) {
+    let ring = |color: gpui::Hsla| gpui::BoxShadow {
+        color,
+        offset: gpui::point(px(0.0), px(0.0)),
+        blur_radius: px(0.0),
+        spread_radius: px(1.0),
+        inset: true,
+    };
+    if theme.appearance.is_dark() {
+        (
+            crate::theme::wash(0.09),
+            vec![ring(crate::theme::hairline(0.07))],
+        )
+    } else {
+        (
+            theme.surface_raised,
+            vec![
+                ring(gpui::hsla(0.0, 0.0, 0.0, 0.08)),
+                gpui::BoxShadow::new(px(0.0), px(1.0), gpui::hsla(0.0, 0.0, 0.0, 0.06))
+                    .blur_radius(px(2.0)),
+            ],
+        )
+    }
+}
+
+/// Height of a [`control_group`] capsule; its buttons are two pixels shorter
+/// on each side.
+pub(crate) const GROUP_HEIGHT: f32 = 28.0;
+pub(crate) const GROUP_BUTTON: f32 = 24.0;
+
+/// A grouped-control capsule: one quiet plate (faint fill, hairline ring)
+/// holding related toolbar buttons, so a toolbar reads as a few calm
+/// clusters instead of a row of loose glyphs.
+pub(crate) fn control_group(theme: &Theme) -> Div {
+    let (fill, ring) = if theme.appearance.is_dark() {
+        (crate::theme::wash(0.035), crate::theme::hairline(0.07))
+    } else {
+        (
+            gpui::hsla(0.0, 0.0, 0.0, 0.025),
+            gpui::hsla(0.0, 0.0, 0.0, 0.07),
+        )
+    };
+    div()
+        .flex_none()
+        .h(px(GROUP_HEIGHT))
+        .p(px(2.0))
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(1.0))
+        .rounded(px(8.0))
+        .bg(fill)
+        .shadow(vec![gpui::BoxShadow {
+            color: ring,
+            offset: gpui::point(px(0.0), px(0.0)),
+            blur_radius: px(0.0),
+            spread_radius: px(1.0),
+            inset: true,
+        }])
+}
+
+/// One icon button inside a [`control_group`]. `active` latches it on the
+/// group's raised plate (a segment or toggle that is on); otherwise it is
+/// bare until hovered.
+pub(crate) fn group_button(
+    id: impl Into<gpui::ElementId>,
+    icon: &'static str,
+    active: bool,
+    theme: &Theme,
+) -> gpui::Stateful<Div> {
+    let (fill, ring) = workspace_tab_selected_paint(theme);
+    let hover = theme.glass_hover();
+    div()
+        .id(id)
+        .size(px(GROUP_BUTTON))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(6.0))
+        .cursor_pointer()
+        .role(gpui::Role::Button)
+        .when(active, |el| el.bg(fill).shadow(ring))
+        .when(!active, |el| el.hover(move |s| s.bg(hover)))
+        .child(
+            crate::icons::icon(icon)
+                .size(px(14.0))
+                .text_color(if active {
+                    theme.text
+                } else {
+                    theme.text_muted.opacity(0.85)
+                }),
+        )
 }
 
 /// Fixed pane tab width. Drag reordering (drop-index quantisation and slide
@@ -233,6 +330,9 @@ pub(crate) fn tab_chip(
                 .ml(px(2.0))
                 .truncate()
                 .text_size(crate::typography::text_xs())
+                .when(active && workspace_style, |label| {
+                    label.font_weight(gpui::FontWeight::MEDIUM)
+                })
                 .child(title),
         )
         .child(
@@ -290,11 +390,16 @@ pub(crate) fn tab_chip(
         )
 }
 
-/// A chip's leading glyph: 14px at 80% of the label's colour.
+/// A chip's leading glyph: 13px, the label's tone when active and a quieter
+/// step below it otherwise, so inactive tabs recede to their titles.
 pub(crate) fn tab_chip_icon(path: &'static str, active: bool, theme: &Theme) -> gpui::AnyElement {
     crate::icons::icon(path)
-        .size(px(14.0))
-        .text_color(if active { theme.text } else { theme.text_muted }.opacity(0.8))
+        .size(px(13.0))
+        .text_color(if active {
+            theme.text.opacity(0.85)
+        } else {
+            theme.text_muted.opacity(0.7)
+        })
         .into_any_element()
 }
 

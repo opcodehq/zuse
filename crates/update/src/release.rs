@@ -74,13 +74,19 @@ pub fn save_channel(data_dir: &Path, channel: ReleaseChannel) -> anyhow::Result<
 }
 
 /// Packagers can reuse compiled binaries across preview tags. This small file
-/// travels beside every executable (and inside the signed macOS app bundle).
+/// travels beside executables, or in Resources inside a signed macOS app bundle.
 pub(super) fn packaged_version(exe: &Path, compiled: &str) -> Option<String> {
     #[derive(Deserialize)]
     struct Identity {
         version: String,
     }
-    let bytes = std::fs::read(exe.parent()?.join("release.json")).ok()?;
+    let directory = exe.parent()?;
+    let identity = if directory.ends_with("Contents/MacOS") {
+        directory.parent()?.join("Resources/release.json")
+    } else {
+        directory.join("release.json")
+    };
+    let bytes = std::fs::read(identity).ok()?;
     if bytes.len() > 1024 {
         return None;
     }
@@ -237,6 +243,27 @@ mod tests {
         assert!(packaged_version(&exe, "0.27.0").is_none());
         std::fs::write(&identity, r#"{"version":"../../elsewhere"}"#).unwrap();
         assert!(packaged_version(&exe, "0.26.0").is_none());
+    }
+
+    #[test]
+    fn macos_package_identity_reads_the_bundle_resource() {
+        let dir = tempfile::tempdir().unwrap();
+        let contents = dir.path().join("Zuse.app/Contents");
+        std::fs::create_dir_all(contents.join("MacOS")).unwrap();
+        std::fs::create_dir_all(contents.join("Resources")).unwrap();
+        std::fs::write(
+            contents.join("Resources/release.json"),
+            r#"{"version":"0.26.1-preview.2"}"#,
+        )
+        .unwrap();
+        for name in ["zuse", "zuse-server", "zuse-relay"] {
+            let exe = contents.join("MacOS").join(name);
+            assert_eq!(
+                packaged_version(&exe, "0.26.1").as_deref(),
+                Some("0.26.1-preview.2")
+            );
+            assert!(packaged_version(&exe, "0.26.2").is_none());
+        }
     }
 
     #[test]

@@ -61,10 +61,15 @@ pub fn legacy_setup_forward(
     Ok(Some(url))
 }
 impl NativeGithub {
-    pub async fn setup_result(&self, query: &SetupCallback, browser: Option<&str>) -> String {
+    pub async fn setup_result(
+        &self,
+        query: &SetupCallback,
+        browser: Option<&str>,
+        account: Option<&str>,
+    ) -> String {
         if let Some(state) = &query.state {
             if state.len() == 64 {
-                if let Ok(html) = self.browser_page(state, browser).await {
+                if let Ok(html) = self.browser_page(state, browser, account).await {
                     return html;
                 }
             }

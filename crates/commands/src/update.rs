@@ -29,6 +29,14 @@ pub async fn update(edge_url: &str, check_only: bool) -> anyhow::Result<()> {
         bail!("{blocker}");
     }
     match install {
+        install @ InstallKind::LinuxPackage { .. } => {
+            let staged = install
+                .stage_desktop(edge_url, &manifest, &crate::paths::data_dir())
+                .await?;
+            install.apply_desktop(&staged, false)?;
+            println!("updated to {} — relaunch Zuse to finish.", manifest.version);
+            Ok(())
+        }
         InstallKind::Managed { app_root } => {
             println!(
                 "downloading {}…",

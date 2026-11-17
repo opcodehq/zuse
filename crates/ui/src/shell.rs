@@ -1217,6 +1217,9 @@ const SIDEBAR_LIST_PAD_TOP: f32 = 4.0;
 
 /// Active and archived sessions share harness/title geometry.
 const SIDEBAR_ACTIVE_HARNESS_ICON_SIZE: f32 = 13.0;
+/// The working chat's pixel loader in a sidebar row: smaller than the
+/// 13px status slot so the motion stays a quiet accent beside the label.
+const SIDEBAR_WORKING_LOADER: f32 = 10.0;
 /// Compact-row time slot while a text jump hint ("Ctrl+9") stands in for the
 /// time: wide enough for the widest of them at 11px on one line. In
 /// default-size pixels; scaled with the UI font via `ui_rems`.
@@ -9425,8 +9428,12 @@ impl Shell {
         let working = status == zuse_protocol::ChatIndicator::Working && !queued && !undelivered;
         let compact_status = sidebar.then(|| {
             let glyph = if working {
-                loaders::retro_loader(format!("{row_id}-working"), 13.0, theme.loader_glyph())
-                    .into_any_element()
+                loaders::retro_loader(
+                    format!("{row_id}-working"),
+                    SIDEBAR_WORKING_LOADER,
+                    theme.loader_glyph(),
+                )
+                .into_any_element()
             } else if status == zuse_protocol::ChatIndicator::Completed && !queued && !undelivered {
                 icon(icons::CHECK)
                     .size(px(11.0))
@@ -9528,7 +9535,7 @@ impl Shell {
                     } else if working {
                         loaders::retro_loader(
                             format!("{row_id}-working"),
-                            13.0,
+                            SIDEBAR_WORKING_LOADER,
                             theme.loader_glyph(),
                         )
                         .into_any_element()
@@ -11189,13 +11196,13 @@ impl Shell {
         cx.notify();
     }
 
-    /// App update pill: sits in the footer beside the running-agent count
+    /// App update pill: sits above the footer controls
     /// whenever this app's release checker ([`crate::app_update`]) has found a
     /// newer version. Self-updating installs (macOS bundles, Windows installs,
     /// Linux managed installs) go Update → Updating → Restart; installs that
     /// can't replace themselves explain why; advisory installs point at
     /// `zuse update` or the GitHub releases page and dismiss per version. The
-    /// full status line lives in the tooltip so the footer stays one row.
+    /// full status line lives in the tooltip.
     fn render_update_pill(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
         use crate::app_update::{Flow, StripAction};
         let update = crate::app_update::AppUpdate::global(cx)?;
@@ -11255,24 +11262,16 @@ impl Shell {
                 (_, StripAction::None) => (None, "Updating", Tone::Quiet, status),
                 _ => (Some(icons::ARROW_DOWN), "Update", Tone::Accent, status),
             };
-        let (glyph, label, tone, tip, action) =
-            match self.update_restart.as_ref().map(|plan| plan.stage()) {
-                Some(update_restart::RestartStage::WaitingForAgents) => (
-                    None,
-                    "Waiting",
-                    Tone::Quiet,
-                    SharedString::from("Restarts when your agents finish. Click for options."),
-                    StripAction::Restart,
-                ),
-                Some(update_restart::RestartStage::UpdatingAgents) => (
-                    None,
-                    "Updating",
-                    Tone::Quiet,
-                    SharedString::from("Updating agents, then restarting."),
-                    StripAction::None,
-                ),
-                None => (glyph, label, tone, tip, action),
-            };
+        let (glyph, label, tone, tip, action) = match self.update_restart.as_ref() {
+            Some(_) => (
+                None,
+                "Waiting",
+                Tone::Quiet,
+                SharedString::from("Restarts when your agents finish. Click for options."),
+                StripAction::Restart,
+            ),
+            None => (glyph, label, tone, tip, action),
+        };
         let (bg, bg_hover, fg) = match tone {
             Tone::Quiet => (theme.glass_hover(), theme.glass_hover(), theme.text_muted),
             Tone::Accent => (theme.accent_wash, theme.accent.opacity(0.18), theme.accent),
@@ -11433,15 +11432,7 @@ impl Shell {
         let theme = Theme::of(cx).for_popup();
         let current = zuse_update::current_version();
         let working = self.restart_blockers(cx);
-        let waiting_for_agents = self
-            .update_restart
-            .as_ref()
-            .is_some_and(|plan| plan.stage() == update_restart::RestartStage::WaitingForAgents);
-        let agent_updates = match self.agent_update_count() {
-            0 => String::new(),
-            1 => " 1 agent update is included.".to_owned(),
-            n => format!(" {n} agent updates are included."),
-        };
+        let waiting_for_agents = self.update_restart.as_ref().is_some();
         let (title, body, buttons): (SharedString, SharedString, Vec<UpdatePromptButton>) = {
             let update = update.read(cx);
             match update.prompt()? {
@@ -11508,7 +11499,7 @@ impl Shell {
                                 Flow::Ready { version, .. } if working > 0 => (
                                     format!("Zuse {version} is ready").into(),
                                     format!(
-                                        "{}. Restart when {} done, or restart now and {} pick up where {} left off. Background tasks stop either way.{agent_updates}",
+                                        "{}. Restart when {} done, or restart now and {} pick up where {} left off. Background tasks stop either way.",
                                         if working == 1 { "1 agent is active".to_owned() } else { format!("{working} agents are active") },
                                         if working == 1 { "it's" } else { "they're" },
                                         if working == 1 { "it will" } else { "they'll" },
@@ -11523,7 +11514,7 @@ impl Shell {
                                 ),
                                 Flow::Ready { version, .. } => (
                                     format!("Zuse {version} is ready").into(),
-                                    format!("Restart to finish updating — it only takes a moment.{agent_updates}").into(),
+                                    "Restart to finish updating — it only takes a moment.".into(),
                                     vec![
                                         UpdatePromptButton::Close("Later"),
                                         UpdatePromptButton::Restart,
@@ -11531,7 +11522,7 @@ impl Shell {
                                 ),
                                 Flow::Failed { message, .. } => (
                                     title,
-                                    format!("The download failed: {message}").into(),
+                                    format!("The update failed: {message}").into(),
                                     vec![
                                         UpdatePromptButton::Close("Later"),
                                         UpdatePromptButton::Download,
@@ -11661,26 +11652,43 @@ impl Shell {
             .into_any_element()
     }
 
-    /// General-account plan, provider limits and the running-agent count,
-    /// then the app update pill (beside that count, so "restart" reads
-    /// against how many agents it would pause) and Settings.
+    /// Keep update status above the account and settings controls so it cannot
+    /// squeeze their contents out of the sidebar at narrow widths.
     fn render_sidebar_footer(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         self.update_sidebar_controls(cx);
         let update = self.render_update_pill(theme, cx);
         let settings = self.render_settings_trigger(theme, cx);
+        self.sidebar_footer_layout(update, settings)
+    }
+
+    fn sidebar_footer_layout(
+        &self,
+        update: Option<AnyElement>,
+        settings: AnyElement,
+    ) -> AnyElement {
         div()
             .w_full()
             .flex()
-            .items_center()
-            .gap(px(2.))
+            .flex_col()
+            .gap(px(6.))
+            .when_some(update, |el, update| {
+                el.child(div().w_full().flex().justify_end().child(update))
+            })
             .child(
                 div()
-                    .flex_1()
+                    .w_full()
                     .min_w_0()
-                    .child(self.sidebar_controls.clone()),
+                    .flex()
+                    .items_center()
+                    .gap(px(2.))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(self.sidebar_controls.clone()),
+                    )
+                    .child(settings),
             )
-            .when_some(update, |el, update| el.child(update))
-            .child(settings)
             .into_any_element()
     }
 
@@ -18597,6 +18605,114 @@ mod exit_regressions {
                 assert_eq!(shell.settings.sidebar_width, SIDEBAR_MAX);
             })
             .unwrap();
+    }
+
+    #[gpui::test]
+    fn sidebar_footer_update_status_does_not_overlap_controls(cx: &mut TestAppContext) {
+        struct FooterHost {
+            shell: Entity<Shell>,
+            width: f32,
+            status: Option<&'static str>,
+        }
+        impl Render for FooterHost {
+            fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                self.shell.update(cx, |shell, cx| {
+                    let update = self.status.map(|label| {
+                        div()
+                            .id("fixture-update")
+                            .debug_selector(|| "fixture-update".into())
+                            .h(px(22.))
+                            .px(px(8.))
+                            .flex_none()
+                            .child(label)
+                            .into_any_element()
+                    });
+                    let settings = shell.render_settings_trigger(&Theme::default(), cx);
+                    div()
+                        .id("fixture-footer")
+                        .debug_selector(|| "fixture-footer".into())
+                        .w(px(self.width))
+                        .child(shell.sidebar_footer_layout(update, settings))
+                })
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        cx.update(|cx| {
+            gpui_base::init(cx);
+            cx.set_global(Theme::default());
+            crate::app_menus::init(cx);
+            settings::init(settings::UiSettings::default(), dir.path(), cx);
+        });
+        let (host, cx) = cx.add_window_view(|_, cx| FooterHost {
+            shell: cx.new(|cx| {
+                let state = cx.new(|_| AppState::new());
+                Shell::new(
+                    state,
+                    EngineBootConfig {
+                        target: None,
+                        data_dir: dir.path().into(),
+                        ipc_port: 0,
+                        edge_url: "http://127.0.0.1:1".into(),
+                        edge_token: None,
+                        org_id: None,
+                        workos_client_id: None,
+                        default_harness: zuse_protocol::HarnessId::Mock,
+                    },
+                    cx,
+                )
+            }),
+            width: 256.,
+            status: None,
+        });
+        let shell = host.read_with(cx, |host, _| host.shell.clone());
+        // Exercise both the long unavailable label and a three-digit count.
+        for available in [false, true] {
+            shell.update(cx, |shell, cx| {
+                shell.sidebar_controls.update(cx, |controls, cx| {
+                    controls.set_properties(
+                        zuse_viewport::sidebar_controls::Properties {
+                            account: Some(serde_json::json!({})),
+                            available,
+                            target: None,
+                            working: 123,
+                        },
+                        cx,
+                    );
+                });
+            });
+            for width in [SIDEBAR_MIN - 2. * Theme::SPACE_SM, 256., SIDEBAR_MAX] {
+                for status in [
+                    None,
+                    Some("Updating"),
+                    Some("Waiting"),
+                    Some("Restart"),
+                    Some("Restarting"),
+                ] {
+                    host.update(cx, |host, cx| {
+                        host.width = width;
+                        host.status = status;
+                        cx.notify();
+                    });
+                    cx.update(|window, cx| window.draw(cx).clear());
+                    let footer = cx.debug_bounds("fixture-footer").unwrap();
+                    let usage = cx.debug_bounds("sidebar-usage").unwrap();
+                    let agents = cx.debug_bounds("sidebar-working-agents").unwrap();
+                    let settings = cx.debug_bounds("settings-trigger").unwrap();
+                    assert!(usage.right() <= agents.left());
+                    assert!(agents.right() <= settings.left());
+                    assert!(settings.right() <= footer.right());
+                    if let Some(account) = cx.debug_bounds("sidebar-account") {
+                        assert!(account.right() <= usage.left());
+                    }
+                    if status.is_some() {
+                        let update = cx.debug_bounds("fixture-update").unwrap();
+                        assert!(update.bottom() <= agents.top());
+                        assert!(update.left() >= footer.left());
+                        assert!(update.right() <= footer.right());
+                    }
+                }
+            }
+        }
     }
 
     #[gpui::test]

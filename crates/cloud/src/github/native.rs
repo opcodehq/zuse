@@ -17,11 +17,13 @@ use zuse_protocol::cloud_projects::{
 pub(crate) const GITHUB_WEBHOOK_BODY_LIMIT: usize = 25 * 1024 * 1024;
 
 mod browser;
+mod confirmation;
 mod enrollment;
 mod installations;
 mod oauth;
 pub mod organizations;
 pub use browser::{BrowserSelection, BrowserTransaction};
+pub use confirmation::AppConfirmation;
 pub use oauth::{Callback, Selection};
 #[cfg(test)]
 pub(crate) mod admission_fixture;
@@ -77,6 +79,14 @@ struct Pending {
     profile: Value,
     #[serde(default)]
     browser_installation: Option<i64>,
+    /// True when the identity was already connected to the initiating account.
+    /// A fresh OAuth identity (false) came from whichever browser opened the link.
+    #[serde(default)]
+    reused: bool,
+    /// Code shown only in the OAuth browser. The initiating app must submit it
+    /// before a fresh GitHub identity is linked to the initiating account.
+    #[serde(default)]
+    confirmation: Option<confirmation::Confirmation>,
 }
 /// Plaintext is deliberately neither Debug nor Serialize. Runtime callers must
 /// seal the token to their generation-bound recipient before returning it.

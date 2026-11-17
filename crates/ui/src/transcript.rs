@@ -8601,7 +8601,7 @@ impl Transcript {
             .text_size(crate::typography::text_xs())
             .child(crate::loaders::retro_loader(
                 format!("working-mark-{}", cx.entity_id()),
-                14.0,
+                11.0,
                 theme.loader_glyph(),
             ))
             .child(

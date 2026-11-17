@@ -644,6 +644,8 @@ impl Render for SidebarControls {
             .unwrap_or_else(|| label.to_owned());
         let account = footer_button("sidebar-account", label.clone())
             .debug_selector(|| "sidebar-account".into())
+            .min_w_0()
+            .flex_shrink_1()
             .aria_description(tip.clone())
             .tip(tip.clone())
             .track_focus(&self.account_focus.clone().tab_stop(!disabled))
@@ -663,11 +665,13 @@ impl Render for SidebarControls {
                     .px(px(10.))
                     .text_size(px(11.))
             })
-            .when(!signed_in, |v| v.child(icon("login").size(px(16.))))
+            .when(!signed_in, |v| {
+                v.child(icon("login").size(px(16.)).flex_none())
+            })
             .when(label == "Cloud", |v| {
                 v.child(icon("cloud-dither").size(px(14.)))
             })
-            .child(div().relative().child(label))
+            .child(div().relative().min_w_0().truncate().child(label))
             .on_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
                 if matches!(e.keystroke.key.as_str(), "enter" | "space") {
                     this.account_action(cx);
@@ -753,13 +757,14 @@ impl Render for SidebarControls {
             )
             .child(div().flex_1())
             .child(usage)
-            // Last, so the host's update pill lands right beside the count.
             .child(
                 div()
                     .id("sidebar-working-agents")
+                    .debug_selector(|| "sidebar-working-agents".into())
                     .role(Role::Status)
                     .aria_label(format!("{} agents working", self.properties.working))
                     .h(px(28.))
+                    .flex_none()
                     .min_w(px(28.))
                     .px(px(6.))
                     .flex()

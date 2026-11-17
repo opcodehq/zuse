@@ -9,6 +9,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 import zipfile
 from unittest.mock import patch
@@ -104,6 +105,41 @@ class PackagingTests(unittest.TestCase):
         self.assertEqual(invoke(moved / "bin/zuse-relay", "--assets=elsewhere"), ["--assets=elsewhere"])
         with patch.dict("os.environ", {"ZUSE_WEB_ASSETS": "/custom assets"}):
             self.assertEqual(invoke(alias), ["--assets", "/custom assets"])
+
+    def test_update_installer_embedded_entrypoint_preserves_install_locations(self):
+        self.assemble()
+        data, bin_dir = self.root / "custom data", self.root / "custom bin"
+        profile = self.root / "profile"
+        profile.mkdir()
+        (profile / "keep").write_text("profile")
+        environment = dict(os.environ, XDG_DATA_HOME=str(data), ZUSE_BIN_HOME=str(bin_dir))
+        # Exercise the updater's embedded installer entrypoint on either host;
+        # this simulates platform detection and does not execute ELF fixtures.
+        embedded = ("import platform\nplatform.system = lambda: 'Linux'\n"
+                    "platform.machine = lambda: 'x86_64'\n"
+                    + Path(installer.__file__).read_text())
+        command = [sys.executable, "-c", embedded, "--package", str(self.destination)]
+        subprocess.run(command, env=environment, check=True, capture_output=True)
+        first = (bin_dir / "zuse").resolve()
+        owner = first.parent.parent
+        marker = json.loads((owner / ".installed-by-zuse").read_text())
+        self.assertEqual(marker, {"format": 2, "data_home": str(data.resolve()),
+                                  "bin_home": str(bin_dir.resolve())})
+        self.destination = self.root / "next package"
+        self.assemble()
+        command[-1] = str(self.destination)
+        subprocess.run(command + ["--verify-only"], env=environment, check=True, capture_output=True)
+        self.assertEqual((bin_dir / "zuse").resolve(), first)
+        subprocess.run(command, env=environment, check=True, capture_output=True)
+        active = (bin_dir / "zuse").resolve()
+        self.assertNotEqual(active, first)
+        self.assertTrue(first.is_file())
+        self.assertEqual((profile / "keep").read_text(), "profile")
+        (self.destination / "libexec/web/app.js").write_text("tampered")
+        failed = subprocess.run(command, env=environment, capture_output=True, text=True)
+        self.assertNotEqual(failed.returncode, 0)
+        self.assertIn("checksum mismatch", failed.stderr)
+        self.assertEqual((bin_dir / "zuse").resolve(), active)
 
     def test_install_upgrade_and_uninstall_preserve_profiles_and_unrelated_files(self):
         self.assemble()
@@ -254,7 +290,8 @@ class PackagingTests(unittest.TestCase):
             binary.write_bytes(b"MZ" + bytes(0x3A) + struct.pack("<I", 0x40)
                                + b"PE\0\0" + struct.pack("<H", 0x8664) + bytes(18))
             binary.rename(binary.with_suffix(".exe"))
-        version = "0.26.0-preview.1"
+        workspace = tomllib.loads((package.ROOT / "Cargo.toml").read_text())
+        version = workspace["workspace"]["package"]["version"] + "-preview.1"
         output = self.root / "archives"
         argv = ["package.py", "--platform", "windows", "--arch", "x86_64",
                 "--binaries", str(self.source), "--assets", str(self.assets),
@@ -357,13 +394,35 @@ class PackagingTests(unittest.TestCase):
         package.assemble(self.destination, self.binaries, self.assets, "macos", "x86_64",
                          "0.26.0-preview.1", {"inputs": "test fixture"})
         info = plistlib.loads((self.destination / "Zuse.app/Contents/Info.plist").read_bytes())
-        self.assertEqual(json.loads((self.destination / "Zuse.app/Contents/MacOS/release.json").read_text())["version"], "0.26.0-preview.1")
+        self.assertEqual(json.loads((self.destination / "Zuse.app/Contents/Resources/release.json").read_text())["version"], "0.26.0-preview.1")
+        self.assertFalse((self.destination / "Zuse.app/Contents/MacOS/release.json").exists())
         manifest = json.loads((self.destination / "manifest.json").read_text())
-        self.assertIn("Zuse.app/Contents/MacOS/release.json", manifest["files"])
+        self.assertIn("Zuse.app/Contents/Resources/release.json", manifest["files"])
         self.assertEqual(info["CFBundleVersion"], "0.26.0")
         self.assertEqual(info["CFBundleShortVersionString"], "0.26.0")
         self.assertEqual(json.loads((self.destination / "manifest.json").read_text())["version"],
                          "0.26.0-preview.1")
+
+    @unittest.skipUnless(sys.platform == "darwin", "requires macOS code signing tools")
+    def test_macos_package_identity_allows_bundle_signing(self):
+        subprocess.run(["clang", "-x", "c", "-", "-o", str(self.binaries[0])],
+                       input="int main(void) { return 0; }\n", text=True, check=True, timeout=30)
+        for binary in self.binaries[1:]:
+            binary.write_bytes(self.binaries[0].read_bytes())
+        _, arch = package.binary_target(self.binaries[0])
+        package.assemble(self.destination, self.binaries, self.assets, "macos", arch,
+                         "0.26.1-preview.1", {"inputs": "signing fixture"})
+        app = self.destination / "Zuse.app"
+        for name in package.BINS:
+            if name != "zuse":
+                subprocess.run(["codesign", "--force", "--sign", "-",
+                                str(app / "Contents/MacOS" / name)],
+                               check=True, capture_output=True, timeout=30)
+        result = subprocess.run(["codesign", "--force", "--sign", "-", str(app)],
+                                text=True, capture_output=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        subprocess.run(["codesign", "--verify", "--deep", "--strict", str(app)],
+                       check=True, capture_output=True, timeout=30)
 
 
 if __name__ == "__main__":

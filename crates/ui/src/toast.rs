@@ -224,8 +224,8 @@ pub fn error(cx: &mut App, message: impl Into<SharedString>) {
     push(cx, ToastKind::Error, message.into());
 }
 
-/// An error with a recovery action below its message. The action opens a
-/// confirmation; it must never perform a destructive operation immediately.
+/// An error with a recovery or diagnostic action below its message. Destructive
+/// actions must open a confirmation instead of performing the operation immediately.
 /// The key must identify the action target. Matching messages and keys are merged.
 pub fn error_with_action(
     cx: &mut App,

@@ -21,6 +21,7 @@ use gpui::{
     Render, SharedString, StyledText, TextRun, UnderlineStyle, Window, canvas, div, font, point,
     prelude::*, px, quad, size,
 };
+use gpui_base::{Table, TableBody, TableCell, TableHead, TableHeader, TableRow};
 use zuse_syntax::{HighlightKind, HighlightSpan, HighlightedDocument};
 
 use crate::theme::Theme;
@@ -45,20 +46,16 @@ const CODE_HEADER_HEIGHT: f32 = 28.0;
 const CODE_ACTION_SIZE: f32 = 22.0;
 const CODE_SCROLLBAR_HIT_HEIGHT: f32 = 10.0;
 
-// Table metrics — a port of mugen-markdown 0.6.2's `TableBlock` under zuse's
-// resolved md theme. The design is frameless ("flat hairline"): 1px horizontal
-// rules under the header and between rows are the only chrome — no outer box,
-// no header fill, no corner radius (theme: headerBackground transparent,
-// radius 0). Cells use the body scale (14/22) with a uniform 12px padding;
-// the header row is weight-700 per `table.headerWeight`.
-/// Uniform cell padding in px (zuse `table.cellPadding`).
+// Shared table metrics. Markdown cells keep the transcript's body type scale.
+/// Horizontal cell padding in px.
 pub const TABLE_CELL_PADDING: f32 = 12.0;
-/// Hairline between rows in px (zuse `table.gap`).
-pub const TABLE_DIVIDER: f32 = 1.0;
-/// Header row font weight (zuse `table.headerWeight` = 700).
-pub const TABLE_HEADER_WEIGHT: FontWeight = FontWeight::BOLD;
+/// Vertical cell padding in px.
+const TABLE_CELL_PADDING_Y: f32 = 8.0;
+const TABLE_CORNER_RADIUS: f32 = 10.0;
+/// Header row font weight.
+pub const TABLE_HEADER_WEIGHT: FontWeight = FontWeight::SEMIBOLD;
 /// Floor for a column's max-content share, so a short column ("1k") beside a
-/// prose column keeps a readable width (mugen `MIN_COLUMN_CONTENT`).
+/// prose column keeps a readable width.
 pub const TABLE_MIN_COLUMN_CONTENT: f32 = 48.0;
 /// Minimum rendered column width in px, padding included (zuse
 /// `table.minColumnWidth`). Naturally narrower columns keep their content
@@ -772,7 +769,7 @@ pub(crate) fn render_heading_with_metrics(
     text_element(runs, metrics.0, metrics.1, true, 0, 0, opts, theme)
 }
 
-/// Shared per-column table geometry (port of mugen `tableColumns`).
+/// Shared per-column table geometry.
 pub struct TableColumns {
     /// Per-column max-content width, padding included.
     pub naturals: Vec<f32>,
@@ -783,7 +780,7 @@ pub struct TableColumns {
 }
 
 /// Resolve column geometry from measured per-column max-content widths
-/// (content only — padding is added here, as the source adds `2 * cellPadding`).
+/// (content only; horizontal padding is added here).
 pub fn table_columns(content_widths: &[f32]) -> TableColumns {
     let naturals: Vec<f32> = content_widths
         .iter()
@@ -806,17 +803,21 @@ fn table_cell_ix(ix: usize, r: usize, c: usize) -> usize {
     ix * 100_000 + r * 100 + c
 }
 
-/// A GFM table — a port of mugen-markdown's `TableBlock` under zuse's md
-/// theme (see the `TABLE_*` constants).
-///
-/// Column widths resolve exactly the way the source's CSS does: each cell is
-/// `flex: <max-content> <max-content> 0; min-width: min(max-content, 96px)`,
-/// so widths are content-proportional with a readable per-column floor.
-/// Naturals come from shaping each cell's runs unwrapped (gpui's line-layout
-/// cache makes repeat frames cheap); the flex resolution itself is Taffy's —
-/// the same algorithm as the web's. When even the floors no longer fit, the
-/// rows overflow the viewport and the table scrolls horizontally instead of
-/// crushing every column into per-character wrapping.
+/// Apply identical geometry to semantic header and data cells. All rows use
+/// the same measured column proportions and minimum widths.
+fn style_table_cell<E: Styled>(cell: E, natural: f32, minimum: f32) -> E {
+    cell.flex_grow(natural)
+        .flex_shrink(natural)
+        .flex_basis(px(0.0))
+        .min_w(px(minimum))
+        .px(px(TABLE_CELL_PADDING))
+        .py(px(TABLE_CELL_PADDING_Y))
+        .text_size(crate::typography::ui_rems(MD_TEXT_SIZE))
+        .line_height(crate::typography::ui_rems(MD_LINE_HEIGHT))
+}
+
+/// A GFM table built from zkit's semantic table components. Measured columns
+/// wrap to a readable floor, then scroll horizontally on narrow surfaces.
 #[allow(clippy::too_many_arguments)]
 fn render_table(
     header: &[Vec<InlineRun>],
@@ -828,7 +829,7 @@ fn render_table(
     theme: &Theme,
     window: &Window,
 ) -> AnyElement {
-    // Header row first, mirroring the source's `rows` shape (rows may be ragged).
+    // Header row first; pad ragged rows to the shared column count.
     let all: Vec<&[Vec<InlineRun>]> = std::iter::once(header)
         .filter(|h| !h.is_empty())
         .map(|h| h as &[Vec<InlineRun>])
@@ -842,6 +843,7 @@ fn render_table(
 
     // Flatten every cell (cache-aware) and take per-column max-content widths.
     let text_system = window.text_system();
+    let font_size = crate::typography::ui_rems(MD_TEXT_SIZE).to_pixels(window.rem_size());
     let mut flats: Vec<Vec<Option<Rc<FlatText>>>> = Vec::with_capacity(all.len());
     let mut content = vec![0.0f32; cols];
     for (r, row) in all.iter().enumerate() {
@@ -865,13 +867,7 @@ fn render_table(
                     .as_ref()
                     .filter(|ui| ui.source_session.is_some())
                     .map(|_| {
-                        super::link_presentation::present(
-                            &flat,
-                            px(560.),
-                            px(MD_TEXT_SIZE),
-                            window,
-                            opts,
-                        )
+                        super::link_presentation::present(&flat, px(560.), font_size, window, opts)
                     });
                 let flat = measured.as_ref().unwrap_or(&flat);
                 // Cell sources are single-line; guard anyway (same byte count,
@@ -883,12 +879,12 @@ fn render_table(
                 };
                 let width = f32::from(
                     text_system
-                        .shape_line(line, px(MD_TEXT_SIZE), &flat.runs, None)
+                        .shape_line(line, font_size, &flat.runs, None)
                         .width(),
                 );
-                if width > *natural {
-                    *natural = width;
-                }
+                // Leave a pixel for glyph rounding so a fitted word does not
+                // wrap its final character at a column's natural width.
+                *natural = natural.max(width.ceil() + 1.0);
             }
             out.push(Some(flat));
         }
@@ -896,30 +892,33 @@ fn render_table(
     }
     let geo = table_columns(&content);
 
-    // Frameless flat-hairline chrome: 1px rules under the header and between
-    // rows are the only paint (`table.gap` = 1, borderColor white@10%); the
-    // theme's headerBackground is transparent and its radius 0, so there is no
-    // header fill, outer box, or rounding.
-    let hairline = table_hairline();
-    let mut inner = div()
+    let table_id: SharedString = format!("{}-table{ix}", opts.row_key).into();
+    let part_id = |part: &str| -> SharedString { format!("{table_id}-{part}").into() };
+    let mut inner = Table::new(part_id("content"))
+        .row_count(all.len())
+        .column_count(cols)
         .flex()
         .flex_col()
         .w_full()
-        .min_w(px(geo.min_table_width));
+        .min_w(px(geo.min_table_width + 2.0))
+        .border_1()
+        .border_color(theme.border)
+        .rounded(px(TABLE_CORNER_RADIUS))
+        .overflow_hidden();
+    let mut body = TableBody::new(part_id("body")).flex().flex_col();
     for (r, row) in flats.iter().enumerate() {
-        if r > 0 {
-            inner = inner.child(div().flex_none().h(px(TABLE_DIVIDER)).w_full().bg(hairline));
-        }
-        let mut row_el = div().flex().flex_row();
+        let is_header = has_header && r == 0;
+        let mut row_el = TableRow::new(part_id(&format!("row-{r}")), r + 1)
+            .flex()
+            .flex_row()
+            .items_start()
+            .when(r > 0, |row| row.border_t_1().border_color(theme.border))
+            .when(is_header, |row| {
+                row.bg(theme.glass_hover())
+                    .rounded_t(px(TABLE_CORNER_RADIUS - 1.0))
+            });
         for (c, cell_flat) in row.iter().enumerate() {
-            let mut cell = div()
-                .flex_grow(geo.naturals[c])
-                .flex_shrink(geo.naturals[c])
-                .flex_basis(px(0.0))
-                .min_w(px(geo.minimums[c]))
-                .p(px(TABLE_CELL_PADDING))
-                .text_size(crate::typography::ui_rems(MD_TEXT_SIZE))
-                .line_height(crate::typography::ui_rems(MD_LINE_HEIGHT));
+            let mut cell = div().w_full().min_w_0();
             cell = match align.get(c).copied().unwrap_or_default() {
                 TableAlign::Left => cell,
                 TableAlign::Center => cell.text_center(),
@@ -951,19 +950,35 @@ fn render_table(
                     theme,
                 ));
             }
-            row_el = row_el.child(cell);
+            let cell_id = part_id(&format!("cell-{r}-{c}"));
+            row_el = if is_header {
+                row_el.child(style_table_cell(
+                    TableHead::new(cell_id, c + 1).child(cell),
+                    geo.naturals[c],
+                    geo.minimums[c],
+                ))
+            } else {
+                row_el.child(style_table_cell(
+                    TableCell::new(cell_id, c + 1).child(cell),
+                    geo.naturals[c],
+                    geo.minimums[c],
+                ))
+            };
         }
-        inner = inner.child(row_el);
+        if is_header {
+            inner = inner.child(TableHeader::new(part_id("header")).child(row_el));
+        } else {
+            body = body.child(row_el);
+        }
     }
 
     // The horizontal scroller — when the floors exceed the viewport the inner
     // block keeps `min_table_width` and this viewport scrolls it.
-    let scroll_id: SharedString = format!("{}-table{ix}", opts.row_key).into();
     div()
-        .id(scroll_id)
+        .id(table_id)
         .w_full()
         .overflow_x_scroll()
-        .child(inner)
+        .child(inner.child(body))
         .into_any_element()
 }
 
@@ -3809,15 +3824,15 @@ mod tests {
     }
 
     #[test]
-    fn table_header_flattens_at_weight_700() {
+    fn table_header_preserves_semibold_weight() {
         let theme = Theme::dark();
         let runs = vec![InlineRun {
             text: "Header".into(),
             style: InlineStyle::default(),
         }];
         let flat = flatten_runs_weighted(&runs, &theme, TABLE_HEADER_WEIGHT);
-        assert_eq!(flat.runs[0].font.weight, FontWeight::BOLD);
-        // Strong runs inside a 700 header stay 700 (never drop to semibold).
+        assert_eq!(flat.runs[0].font.weight, FontWeight::SEMIBOLD);
+        // Strong runs retain the same header weight.
         let bold_runs = vec![InlineRun {
             text: "Strong".into(),
             style: InlineStyle {
@@ -3826,7 +3841,7 @@ mod tests {
             },
         }];
         let flat = flatten_runs_weighted(&bold_runs, &theme, TABLE_HEADER_WEIGHT);
-        assert_eq!(flat.runs[0].font.weight, FontWeight::BOLD);
+        assert_eq!(flat.runs[0].font.weight, FontWeight::SEMIBOLD);
     }
 
     #[test]

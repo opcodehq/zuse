@@ -119,6 +119,20 @@ async fn pump(
         let _ = output.write_all(&tail[..keep]).await;
     }
 }
+/// `stop_previous` waits for the group leader only; the process that owns the
+/// port (a server under the startup shell) can outlive it by a moment. Give the
+/// stopped service time to let go before treating the port as taken.
+async fn port_released(port: u16) -> bool {
+    let deadline = tokio::time::Instant::now() + PORT_RELEASE_WAIT;
+    while port_ready(port).await {
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    true
+}
+const PORT_RELEASE_WAIT: Duration = Duration::from_secs(5);
 async fn port_ready(port: u16) -> bool {
     matches!(
         tokio::time::timeout(
@@ -172,7 +186,7 @@ pub async fn start_services_with_protection(
         let receipt_path = data.join(format!("startup-{}.json", service.name));
         stop_previous(&receipt_path, prepared, &boot_id).await?;
         if let Some(port) = service.port {
-            ensure!(!port_ready(port).await, "environment_service_port_in_use");
+            ensure!(port_released(port).await, "environment_service_port_in_use");
         }
         let mut command = environment_command(&prepared.checkout, &prepared.recipe);
         command.envs(secrets.iter().map(|(name, value)| (name, value.as_str())));

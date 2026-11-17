@@ -325,12 +325,26 @@ for a in ('claude','codex','grok'):shutil.copyfile('/usr/bin/true',d/a);(d/a).ch
         .spawn()
         .unwrap();
     let mut processes = Processes(server, None);
-    let deadline = Instant::now() + Duration::from_secs(3);
+    let deadline = Instant::now() + Duration::from_secs(10);
     let socket = data.join(".runtime-supervision/control.sock");
-    while !socket.exists() && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    let mut stream = UnixStream::connect(&socket).unwrap();
+    // The socket file appears at bind(), before the supervisor listens: retry
+    // until it accepts rather than connecting once on a loaded runner.
+    let mut stream = loop {
+        match UnixStream::connect(&socket) {
+            Ok(stream) => break stream,
+            Err(error) if Instant::now() < deadline => {
+                assert!(
+                    matches!(
+                        error.kind(),
+                        std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+                    ),
+                    "control socket: {error}"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => panic!("supervisor control socket never accepted: {error}"),
+        }
+    };
     stream
         .set_read_timeout(Some(Duration::from_secs(3)))
         .unwrap();

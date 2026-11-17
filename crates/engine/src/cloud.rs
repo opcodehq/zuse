@@ -707,6 +707,12 @@ impl CloudApi {
                             "Repository management is not enabled for this account yet.",
                         Some("cloud_github_unavailable") =>
                             "GitHub is unavailable. Refresh and try again.",
+                        Some("github_confirmation_invalid") =>
+                            "That code does not match. Check the code shown in your browser and try again.",
+                        Some("github_confirmation_locked") =>
+                            "Too many incorrect codes. Start the GitHub connection again.",
+                        Some("github_app_confirmation_required") =>
+                            "Enter the code shown in your browser to finish connecting GitHub.",
                         Some("workspace_access_denied") =>
                             "An administrator role is required to manage repositories.",
                         Some("cloud_project_not_found") =>
@@ -752,6 +758,10 @@ impl CloudApi {
                 }
             }
             return Err(CloudHttpFailure(status).into());
+        }
+        // 204 No Content (GitHub select/confirm/cancel/disconnect) has no body.
+        if bytes.is_empty() {
+            return Ok(Value::Null);
         }
         Ok(serde_json::from_slice(&bytes)?)
     }
@@ -1332,7 +1342,7 @@ impl CloudApi {
                         let action = input["action"].as_str().unwrap_or("start");
                         let (operation, body, query) = match action {
                             "start" => ("install", Some(json!({})), vec![]),
-                            "status" | "cancel" | "select" => {
+                            "status" | "cancel" | "select" | "confirm" => {
                                 let id = input["operationId"]
                                     .as_str()
                                     .filter(|id| uuid::Uuid::parse_str(id).is_ok())
@@ -1343,6 +1353,21 @@ impl CloudApi {
                                     })?;
                                 if action == "status" {
                                     ("status", None, vec![("operationId".into(), id.to_owned())])
+                                } else if action == "confirm" {
+                                    // The code shown in the OAuth browser; the
+                                    // server normalizes case and separators.
+                                    let code = input["confirmationCode"]
+                                        .as_str()
+                                        .map(str::trim)
+                                        .filter(|code| !code.is_empty() && code.len() <= 64)
+                                        .ok_or_else(|| {
+                                            anyhow::anyhow!("Enter the code shown in your browser.")
+                                        })?;
+                                    (
+                                        "confirm",
+                                        Some(json!({"operationId":id,"confirmationCode":code})),
+                                        vec![],
+                                    )
                                 } else if action == "select" {
                                     let installation = input["installationId"]
                                         .as_i64()
@@ -2051,6 +2076,83 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("Sign in")
+        );
+    }
+    #[tokio::test]
+    async fn github_confirmation_code_is_posted_to_the_confirm_endpoint() {
+        use tokio::{
+            io::{AsyncReadExt, AsyncWriteExt},
+            net::TcpListener,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let account = crate::account::Account::fixture_signed_in(
+            dir.path(),
+            crate::account::API_URL.into(),
+            "general-account",
+        );
+        let identity = Auth::new(crate::auth::AuthConfig::new(
+            "http://127.0.0.1:1",
+            dir.path(),
+        ))
+        .with_account(Some(account));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let api = CloudApi::new(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+        let operation = uuid::Uuid::new_v4().to_string();
+        let expected = operation.clone();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut bytes = Vec::new();
+            loop {
+                let mut buf = [0; 1024];
+                let n = socket.read(&mut buf).await.unwrap();
+                assert!(n > 0);
+                bytes.extend_from_slice(&buf[..n]);
+                let text = String::from_utf8_lossy(&bytes);
+                if let Some((head, body)) = text.split_once("\r\n\r\n") {
+                    let length = head
+                        .lines()
+                        .find_map(|l| {
+                            l.to_ascii_lowercase()
+                                .strip_prefix("content-length: ")
+                                .map(|v| v.trim().parse::<usize>().unwrap())
+                        })
+                        .unwrap_or(0);
+                    if body.len() >= length {
+                        break;
+                    }
+                }
+            }
+            let text = String::from_utf8(bytes).unwrap();
+            assert!(text.starts_with("POST /v1/cloud/github/confirm "));
+            let body: Value = serde_json::from_str(text.split_once("\r\n\r\n").unwrap().1).unwrap();
+            assert_eq!(
+                body,
+                json!({"operationId":expected,"confirmationCode":"ABCD-EFGH"})
+            );
+            socket
+                .write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
+                .await
+                .unwrap();
+        });
+        api.handle(
+            &identity,
+            zuse_protocol::methods::CLOUD_GITHUB_INSTALL,
+            json!({"expectedAccountId":"general-account","action":"confirm","operationId":operation,"confirmationCode":" ABCD-EFGH "}),
+        )
+        .await
+        .unwrap();
+        server.await.unwrap();
+        // An empty code never reaches the server.
+        assert!(
+            api.handle(
+                &identity,
+                zuse_protocol::methods::CLOUD_GITHUB_INSTALL,
+                json!({"expectedAccountId":"general-account","action":"confirm","operationId":uuid::Uuid::new_v4().to_string(),"confirmationCode":"  "}),
+            )
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("code shown in your browser")
         );
     }
     #[tokio::test]

@@ -4,7 +4,7 @@ use super::*;
 use crate::{
     access::Scope,
     events::{
-        hub::{Hub as EventHub, PROTOCOL},
+        hub::{DeviceLease, Hub as EventHub, PROTOCOL},
         tickets::Pending,
     },
 };
@@ -86,11 +86,6 @@ pub(super) async fn upgrade(
         .events
         .clone()
         .ok_or_else(|| ApiError::unavailable("account_events_disabled"))?;
-    let permit = hub
-        .capacity
-        .clone()
-        .try_acquire_owned()
-        .map_err(|_| ApiError::unavailable("account_event_capacity"))?;
     let pending = hub
         .tickets
         .take(
@@ -102,11 +97,20 @@ pub(super) async fn upgrade(
     // Consume and recheck before switching protocols, including membership and
     // native GitHub enrollment. A ticket is not a durable authorization grant.
     authorize(&state, &pending).await?;
+    // Capacity is spent only by an authenticated ticket holder. Take the shared
+    // permit before claiming the device, so a full pool never closes this
+    // device's existing socket; the per-account cap then bounds its share.
+    let permit = hub
+        .capacity
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| ApiError::unavailable("account_event_capacity"))?;
+    let lease = hub.devices.claim(&pending.actor, pending.device_id)?;
     Ok(ws
         .protocols([PROTOCOL])
         .max_message_size(4096)
         .max_frame_size(4096)
-        .on_upgrade(move |socket| serve(state, hub, pending, socket, permit)))
+        .on_upgrade(move |socket| serve(state, hub, pending, socket, (lease, permit))))
 }
 fn now() -> i64 {
     chrono::Utc::now().timestamp_millis()
@@ -257,9 +261,12 @@ async fn serve(
     hub: Arc<EventHub>,
     p: Pending,
     mut socket: WebSocket,
-    _permit: OwnedSemaphorePermit,
+    (mut lease, _permit): (DeviceLease, OwnedSemaphorePermit),
 ) {
-    let (device_lease, mut replaced) = hub.claim_device(&p.actor, p.device_id).await;
+    // A replaced socket leaves promptly, even while waiting for an ack, so it
+    // releases its shared permit instead of holding it for the ack timeout.
+    let mut superseded = lease.replaced.clone();
+    let replaced = &mut lease.replaced;
     let room = hub.room(&p.owner).await;
     let mut changed = room.changed.subscribe();
     let personal_room = if p.owner != p.actor {
@@ -268,59 +275,119 @@ async fn serve(
         None
     };
     let mut personal_changed = personal_room.as_ref().map(|room| room.changed.subscribe());
-    let result:Result<(),ApiError>=async{
-        let access=authorize(&state,&p).await?;
-        let (latest,personal_latest,mut known)=baseline(&state,&access,&p).await?;
-        let (mut position,mut personal)=match &p.cursor{
-            Some(c)=>{let (position,prior)=hub.cursors.decode_pair(&p.actor,&p.owner,c,now())?;(position,personal_latest.map(|latest|prior.unwrap_or(latest)))},
-            None=>(latest,personal_latest),
+    let work = async {
+        let access = authorize(&state, &p).await?;
+        let (latest, personal_latest, mut known) = baseline(&state, &access, &p).await?;
+        let (mut position, mut personal) = match &p.cursor {
+            Some(c) => {
+                let (position, prior) = hub.cursors.decode_pair(&p.actor, &p.owner, c, now())?;
+                (
+                    position,
+                    personal_latest.map(|latest| prior.unwrap_or(latest)),
+                )
+            }
+            None => (latest, personal_latest),
         };
-        let cursor=checkpoint(&hub,&p,position,personal)?;
-        send(&mut socket,json!({"type":"ready","cursor":cursor,"revalidate":true})).await?;acknowledge(&mut socket,&cursor).await?;
-        let mut recheck=tokio::time::interval(Duration::from_secs(10));recheck.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let cursor = checkpoint(&hub, &p, position, personal)?;
+        send(
+            &mut socket,
+            json!({"type":"ready","cursor":cursor,"revalidate":true}),
+        )
+        .await?;
+        acknowledge(&mut socket, &cursor).await?;
+        let mut recheck = tokio::time::interval(Duration::from_secs(10));
+        recheck.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         hub.wake();
-        loop{
-            let _=*changed.borrow_and_update();if let Some(changed)=&mut personal_changed{let _=*changed.borrow_and_update();}
-            let (replay,personal_replay)=tokio::try_join!(hub.events.replay_limit(&p.owner,position,64),async{
-                match personal{
-                    Some(position)=>hub.events.replay_limit(&p.actor,position,64).await,
-                    None=>Ok(crate::events::store::Replay{events:vec![],latest:0,reset_required:false}),
-                }
-            })?;
-            if replay.reset_required||personal_replay.reset_required{
-                let access=authorize(&state,&p).await?;
-                let (latest,personal_latest,baseline)=baseline(&state,&access,&p).await?;
-                let cursor=checkpoint(&hub,&p,latest,personal_latest)?;
-                send(&mut socket,json!({"type":"reset","cursor":cursor,"cacheRevoked":true})).await?;acknowledge(&mut socket,&cursor).await?;
-                position=latest;personal=personal_latest;known=baseline;
-            }else if !replay.events.is_empty()||!personal_replay.events.is_empty(){
-                let access=authorize(&state,&p).await?;
-                let ids:Vec<String>=replay.events.iter().filter_map(|e|e.workspace_id.clone()).collect();
-                let allowed=visible(&state,&access,&ids).await?;
-                let mut events=Vec::new();let mut revoked=Vec::new();
-                for (source,owner) in [(&replay.events,&p.owner),(&personal_replay.events,&p.actor)]{
-                    for event in source{
+        loop {
+            let _ = *changed.borrow_and_update();
+            if let Some(changed) = &mut personal_changed {
+                let _ = *changed.borrow_and_update();
+            }
+            let (replay, personal_replay) =
+                tokio::try_join!(hub.events.replay_limit(&p.owner, position, 64), async {
+                    match personal {
+                        Some(position) => hub.events.replay_limit(&p.actor, position, 64).await,
+                        None => Ok(crate::events::store::Replay {
+                            events: vec![],
+                            latest: 0,
+                            reset_required: false,
+                        }),
+                    }
+                })?;
+            if replay.reset_required || personal_replay.reset_required {
+                let access = authorize(&state, &p).await?;
+                let (latest, personal_latest, baseline) = baseline(&state, &access, &p).await?;
+                let cursor = checkpoint(&hub, &p, latest, personal_latest)?;
+                send(
+                    &mut socket,
+                    json!({"type":"reset","cursor":cursor,"cacheRevoked":true}),
+                )
+                .await?;
+                acknowledge(&mut socket, &cursor).await?;
+                position = latest;
+                personal = personal_latest;
+                known = baseline;
+            } else if !replay.events.is_empty() || !personal_replay.events.is_empty() {
+                let access = authorize(&state, &p).await?;
+                let ids: Vec<String> = replay
+                    .events
+                    .iter()
+                    .filter_map(|e| e.workspace_id.clone())
+                    .collect();
+                let allowed = visible(&state, &access, &ids).await?;
+                let mut events = Vec::new();
+                let mut revoked = Vec::new();
+                for (source, owner) in [
+                    (&replay.events, &p.owner),
+                    (&personal_replay.events, &p.actor),
+                ] {
+                    for event in source {
                         // Organization context may use an explicitly selected personal
                         // connection. Its private tasks/history never enter this feed.
-                        if owner!=&p.owner&&!matches!(event.kind.as_str(),"connection"|"authentication"|"github"){continue;}
-                        if event.payload["actorId"].as_str().is_some_and(|actor|actor!=p.actor){continue;}
-                        if let Some(id)=&event.workspace_id{
-                            if !allowed.contains(id){if known.remove(id){revoked.push(id.clone());}continue;}
+                        if owner != &p.owner
+                            && !matches!(
+                                event.kind.as_str(),
+                                "connection" | "authentication" | "github"
+                            )
+                        {
+                            continue;
+                        }
+                        if event.payload["actorId"]
+                            .as_str()
+                            .is_some_and(|actor| actor != p.actor)
+                        {
+                            continue;
+                        }
+                        if let Some(id) = &event.workspace_id {
+                            if !allowed.contains(id) {
+                                if known.remove(id) {
+                                    revoked.push(id.clone());
+                                }
+                                continue;
+                            }
                             known.insert(id.clone());
                         }
                         events.push(json!({"kind":event.kind,"ownerId":owner,"resourceId":event.resource_id,"workspaceId":event.workspace_id,"payload":event.payload,"createdAt":event.created_at}));
                     }
                 }
-                let next=replay.events.last().map_or(position,|e|e.sequence);
-                let personal_next=personal.map(|prior|personal_replay.events.last().map_or(prior,|e|e.sequence));
-                let has_more=next<replay.latest||personal_next.is_some_and(|n|n<personal_replay.latest);
-                let cursor=checkpoint(&hub,&p,next,personal_next)?;
+                let next = replay.events.last().map_or(position, |e| e.sequence);
+                let personal_next = personal
+                    .map(|prior| personal_replay.events.last().map_or(prior, |e| e.sequence));
+                let has_more = next < replay.latest
+                    || personal_next.is_some_and(|n| n < personal_replay.latest);
+                let cursor = checkpoint(&hub, &p, next, personal_next)?;
                 send(&mut socket,json!({"type":"events","events":events,"revokedWorkspaceIds":revoked,"cursor":cursor,"hasMore":has_more})).await?;
-                acknowledge(&mut socket,&cursor).await?;position=next;personal=personal_next;
-                if known.len()>4096{return Err(ApiError::conflict("account_event_scope_resync_required"));}
-                if has_more{continue;}
+                acknowledge(&mut socket, &cursor).await?;
+                position = next;
+                personal = personal_next;
+                if known.len() > 4096 {
+                    return Err(ApiError::conflict("account_event_scope_resync_required"));
+                }
+                if has_more {
+                    continue;
+                }
             }
-            tokio::select!{
+            tokio::select! {
                 _=changed.changed()=>{},
                 _=async{if let Some(changed)=&mut personal_changed{let _=changed.changed().await;}else{std::future::pending::<()>().await;}}=>{},
                 _=replaced.changed()=>return Err(ApiError::conflict("account_event_device_replaced")),
@@ -336,7 +403,13 @@ async fn serve(
                 incoming=socket.recv()=>match incoming{Some(Ok(Message::Ping(_)|Message::Pong(_)))=>{},_=>return Err(ApiError::unavailable("account_event_disconnected")),}
             }
         }
-    }.await;
+    };
+    let result: Result<(), ApiError> = tokio::select! {
+        result = work => result,
+        _ = superseded.wait_for(|replaced| *replaced) => {
+            Err(ApiError::conflict("account_event_device_replaced"))
+        }
+    };
     if let Err(error) = result {
         let clear = error.status == StatusCode::FORBIDDEN
             || error.status == StatusCode::UNAUTHORIZED
@@ -344,6 +417,5 @@ async fn serve(
         let _=send(&mut socket,json!({"type":"error","code":error.code,"status":error.status.as_u16(),"cacheRevoked":clear})).await;
     }
     let _ = tokio::time::timeout(Duration::from_secs(1), socket.close()).await;
-    hub.release_device(&p.actor, p.device_id, device_lease)
-        .await;
+    drop(lease);
 }

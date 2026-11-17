@@ -217,7 +217,7 @@ def assemble(destination, binaries, assets, system, arch, version, provenance):
     # beside the executable, or ../Resources/web inside the macOS bundle.
     copy_tree(assets, resources / "web" if macos else destination / "web" if windows else executable_dir / "web")
     identity = json.dumps({"version": version}) + "\n"
-    (executable_dir / "release.json").write_text(identity)
+    (resources / "release.json" if macos else executable_dir / "release.json").write_text(identity)
     if windows:
         (destination / "release.json").write_text(identity)
     if macos:

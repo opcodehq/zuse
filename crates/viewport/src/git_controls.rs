@@ -747,7 +747,7 @@ impl Render for GitControls {
                     )
                     .child(
                         svg()
-                            .path("icons/git-branch.svg")
+                            .path("icons/git-lane-branch.svg")
                             .flex_none()
                             .size(px(13.))
                             .text_color(colors.muted),

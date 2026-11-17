@@ -19,18 +19,32 @@ impl NativeGithub {
             return Err(ApiError::conflict("github_browser_choice_changed"));
         }
         pending.browser_installation = Some(0);
+        let confirmation = self.require_confirmation(&mut pending);
         let next = self.seal(&format!("github-pending:{id}"), &pending)?;
         let changed=sqlx::query("UPDATE zuse_rust_github_operations SET sealed_pending=$3 WHERE operation_id=$1 AND phase='choosing' AND sealed_pending=$2 AND expires_at>$4").bind(&id).bind(&sealed).bind(next).bind(now()).execute(&self.pool).await?;
         if changed.rows_affected() != 1 {
             return Err(ApiError::conflict("github_operation_unavailable"));
         }
-        Ok(BrowserTransaction {
+        let transaction = BrowserTransaction {
             actor: row.try_get("actor_id")?,
             owner: row.try_get("owner_id")?,
             operation_id: id,
-        })
+            confirmation,
+        };
+        if confirmation {
+            self.announce_confirmation(&transaction).await;
+        }
+        Ok(transaction)
     }
     pub async fn finalize_identity(&self, access: &Access, id: &str) -> Result<(), ApiError> {
+        self.finalize_identity_checked(access, id, false).await
+    }
+    pub(in crate::github::native) async fn finalize_identity_checked(
+        &self,
+        access: &Access,
+        id: &str,
+        confirmed: bool,
+    ) -> Result<(), ApiError> {
         self.require(access)?;
         let row=sqlx::query("SELECT actor_epoch,scope_epoch,sealed_pending FROM zuse_rust_github_operations WHERE operation_id=$1 AND actor_id=$2 AND owner_id=$3 AND phase='choosing' AND expires_at>$4").bind(id).bind(&access.actor.account_id).bind(&access.owner_id).bind(now()).fetch_optional(&self.pool).await?.ok_or_else(||ApiError::conflict("github_operation_unavailable"))?;
         let pending: Pending = self.open(
@@ -39,6 +53,9 @@ impl NativeGithub {
         )?;
         if pending.browser_installation != Some(0) {
             return Err(ApiError::forbidden("github_browser_confirmation_required"));
+        }
+        if pending.confirmation.is_some() && !confirmed {
+            return Err(ApiError::forbidden("github_app_confirmation_required"));
         }
         let verified = self.get("/user", &pending.credentials.access_token).await?;
         if verified["id"] != pending.profile["id"] {
@@ -103,6 +120,8 @@ impl NativeGithub {
                 credentials,
                 profile,
                 browser_installation: None,
+                reused: true,
+                confirmation: None,
             },
             epoch,
             version,

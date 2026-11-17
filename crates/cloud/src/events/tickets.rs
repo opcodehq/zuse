@@ -22,12 +22,14 @@ pub struct Pending {
 pub struct Tickets {
     pending: Mutex<HashMap<[u8; 32], Pending>>,
     limit: usize,
+    per_actor: usize,
 }
 impl Tickets {
-    pub fn new(limit: usize) -> Self {
+    pub fn new(limit: usize, per_actor: usize) -> Self {
         Self {
             pending: Mutex::new(HashMap::new()),
             limit,
+            per_actor,
         }
     }
     #[allow(clippy::too_many_arguments)]
@@ -53,6 +55,13 @@ impl Tickets {
         let now = Instant::now();
         // A scope switch cannot leave a previous unused ticket for this device.
         pending.retain(|_, p| p.until > now && !(p.actor == actor && p.device_id == device_id));
+        // One account cannot fill the shared pool by rotating device ids.
+        if pending.values().filter(|p| p.actor == actor).count() >= self.per_actor {
+            return Err(ApiError::new(
+                StatusCode::TOO_MANY_REQUESTS,
+                "account_event_actor_capacity",
+            ));
+        }
         if pending.len() >= self.limit {
             return Err(ApiError::new(
                 StatusCode::TOO_MANY_REQUESTS,
@@ -102,7 +111,7 @@ mod tests {
     use super::*;
     #[tokio::test]
     async fn ticket_is_one_use_capacity_bounded_and_invalidates_prior_device_scope() {
-        let store = Tickets::new(2);
+        let store = Tickets::new(2, 16);
         let device = uuid::Uuid::new_v4();
         let first = store
             .issue(
@@ -161,5 +170,31 @@ mod tests {
             .err()
             .unwrap();
         assert_eq!(error.status, StatusCode::TOO_MANY_REQUESTS);
+    }
+    #[tokio::test]
+    async fn one_actor_cannot_exhaust_the_shared_ticket_pool() {
+        let store = Tickets::new(8, 3);
+        let issue = |actor: &'static str| {
+            store.issue(
+                "secret".into(),
+                actor.into(),
+                actor.into(),
+                None,
+                uuid::Uuid::new_v4(),
+                None,
+            )
+        };
+        let mut held = Vec::new();
+        for _ in 0..3 {
+            held.push(issue("attacker").await.unwrap());
+        }
+        let error = issue("attacker").await.err().unwrap();
+        assert_eq!(error.status, StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(error.code, "account_event_actor_capacity");
+        // Other accounts still get tickets while the first is at its cap.
+        issue("member").await.unwrap();
+        // Redeeming a ticket frees that actor's slot.
+        store.take(&held.pop().unwrap()).await.unwrap();
+        issue("attacker").await.unwrap();
     }
 }

@@ -82,7 +82,7 @@ pub const GUTTER_WIDTH: f32 = 36.0;
 /// The +/−/· marker column between the gutters and the code.
 pub const MARKER_WIDTH: f32 = 28.0;
 /// Width of the coloured accent bar on the left edge of +/− rows.
-pub const ACCENT_BAR_WIDTH: f32 = 3.0;
+pub const ACCENT_BAR_WIDTH: f32 = 2.0;
 /// The marker column in split mode: each half pays for its own, so it is
 /// narrower than [`MARKER_WIDTH`] to leave the code the room.
 pub const SPLIT_MARKER_WIDTH: f32 = 18.0;
@@ -914,6 +914,17 @@ impl DiffScope {
             Self::History => "history",
             Self::Commit => "commit",
         }
+    }
+}
+
+/// The glyph a diff scope wears in the toolbar capsule and its menu.
+fn scope_icon(scope: DiffScope) -> &'static str {
+    match scope {
+        DiffScope::WorkingTree => crate::icons::DIFF_PLUS_MINUS,
+        DiffScope::Branch => crate::icons::GIT_BRANCH,
+        DiffScope::LatestTurn => crate::icons::DIFF_TURN,
+        DiffScope::History => crate::icons::HISTORY,
+        DiffScope::Commit => crate::icons::GIT_BRANCH,
     }
 }
 
@@ -3729,24 +3740,54 @@ impl Changes {
                 .flex_none()
                 .into_any_element()
             })
-            .child(
+            .child(if self.sidebar_review {
                 div()
                     .flex_1()
                     .min_w_0()
                     .overflow_hidden()
                     .whitespace_nowrap()
                     .text_ellipsis_start()
-                    .when(!self.sidebar_review, |el| {
-                        el.font_family(theme.font_mono.clone())
-                    })
                     .text_size(px(12.0))
-                    .text_color(if self.sidebar_review && !reviewed {
+                    .text_color(if !reviewed {
                         theme.text
                     } else {
                         theme.text_dim
                     })
-                    .child(SharedString::from(file.path.clone())),
-            )
+                    .child(SharedString::from(file.path.clone()))
+                    .into_any_element()
+            } else {
+                let (dir, name) = match file.path.rsplit_once('/') {
+                    Some((dir, name)) => (format!("{dir}/"), name.to_string()),
+                    None => (String::new(), file.path.clone()),
+                };
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_row()
+                    .items_baseline()
+                    .overflow_hidden()
+                    .text_size(px(12.0))
+                    .child(
+                        div()
+                            .flex_none()
+                            .whitespace_nowrap()
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(theme.text_strong)
+                            .child(SharedString::from(name)),
+                    )
+                    .when(!dir.is_empty(), |el| {
+                        el.child(
+                            div()
+                                .min_w_0()
+                                .ml(px(6.0))
+                                .truncate()
+                                .text_color(theme.text_faint)
+                                .child(SharedString::from(dir)),
+                        )
+                    })
+                    .into_any_element()
+            })
             .when(file.binary, |el| {
                 el.child(
                     div()
@@ -3889,29 +3930,8 @@ impl Changes {
         active: bool,
         theme: &Theme,
     ) -> gpui::Stateful<gpui::Div> {
-        div()
-            .id(id)
-            .size(px(crate::surface_chrome::CONTROL_SIZE))
-            .flex_none()
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded(px(crate::surface_chrome::CONTROL_RADIUS))
-            .cursor_pointer()
-            // Latched: the blend is neither read nor driven, and its listener
-            // would dirty the whole window on every enter/leave for nothing.
-            .map(|el| {
-                if active {
-                    el.bg(crate::theme::wash(0.14))
-                } else {
-                    el.bg(motion::hover_blend(
-                        id,
-                        crate::theme::wash(0.0),
-                        crate::theme::wash(0.14),
-                    ))
-                    .on_hover(motion::hover_listener(id))
-                }
-            })
+        crate::surface_chrome::group_button(id, icon_path, active, theme)
+            .aria_label(label)
             .occlude()
             .on_mouse_down(gpui::MouseButton::Left, |_, window, _| {
                 window.prevent_default()
@@ -3920,38 +3940,64 @@ impl Changes {
                 cx.new(|_| DiffHeaderTooltip(label)).into()
             })
             .tooltip_show_delay(Duration::from_millis(350))
-            .child(
-                crate::icons::icon(icon_path)
-                    .size(px(crate::surface_chrome::ICON_SIZE))
-                    .text_color(if active {
-                        theme.text
-                    } else {
-                        theme.text_muted.opacity(0.7)
-                    }),
-            )
+    }
+
+    /// A hairline between clusters inside a toolbar group.
+    fn group_divider(theme: &Theme) -> gpui::Div {
+        div()
+            .flex_none()
+            .w(px(1.0))
+            .h(px(14.0))
+            .mx(px(3.0))
+            .bg(theme.hairline(0.1))
     }
 
     /// The unified ⇄ split layout toggle (both the scoped and the
     /// commit-pinned toolbars carry it).
     fn split_toggle(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
-        Self::header_toggle(
-            "changes-split",
-            crate::icons::SPLIT_COLUMNS,
-            "Split view",
-            self.mode.is_split(),
-            theme,
-        )
-        .on_click(cx.listener(|this, _, _, cx| {
-            cx.stop_propagation();
-            this.toggle_mode(cx);
-        }))
-        .into_any_element()
+        let split = self.mode.is_split();
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(1.0))
+            .child(
+                Self::header_toggle(
+                    "changes-stacked",
+                    crate::icons::DIFF_STACKED,
+                    "Stacked view",
+                    !split,
+                    theme,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    cx.stop_propagation();
+                    if split {
+                        this.toggle_mode(cx);
+                    }
+                })),
+            )
+            .child(
+                Self::header_toggle(
+                    "changes-split",
+                    crate::icons::DIFF_SPLIT,
+                    "Split view",
+                    split,
+                    theme,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    cx.stop_propagation();
+                    if !split {
+                        this.toggle_mode(cx);
+                    }
+                })),
+            )
+            .into_any_element()
     }
 
     fn wrap_toggle(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         Self::header_toggle(
             "changes-wrap",
-            crate::icons::WRAP_TEXT,
+            crate::icons::DIFF_WRAP,
             "Wrap long lines",
             self.wrap_lines,
             theme,
@@ -4005,19 +4051,27 @@ impl Changes {
                         .text_color(theme.text)
                         .child(SharedString::from(commit.subject.clone())),
                 )
-                .child(self.split_toggle(&theme, cx))
-                .child(self.wrap_toggle(&theme, cx))
                 .child(
-                    Self::header_button(
-                        "changes-fold-all",
-                        crate::icons::FOLD_VERTICAL,
-                        self.fold_all_label(),
-                        &theme,
-                    )
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        cx.stop_propagation();
-                        this.toggle_collapse_all(cx);
-                    })),
+                    crate::surface_chrome::control_group(&theme)
+                        .child(self.split_toggle(&theme, cx))
+                        .child(Self::group_divider(&theme))
+                        .child(self.wrap_toggle(&theme, cx))
+                        .child(
+                            Self::header_button(
+                                "changes-fold-all",
+                                if self.all_collapsed() {
+                                    crate::icons::DIFF_EXPAND_ALL
+                                } else {
+                                    crate::icons::DIFF_COLLAPSE_ALL
+                                },
+                                self.fold_all_label(),
+                                &theme,
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.toggle_collapse_all(cx);
+                            })),
+                        ),
                 )
                 .into_any_element();
         }
@@ -4036,23 +4090,17 @@ impl Changes {
             (scope == DiffScope::History).then(|| self.history_fetch_button(cx));
         let history_view_button =
             (scope == DiffScope::History).then(|| self.history_view_button(cx));
-        let scope_trigger = div()
+        let stats = self
+            .parsed
+            .as_ref()
+            .map(|parsed| (parsed.file_count, parsed.additions, parsed.deletions));
+        let scope_trigger = crate::surface_chrome::control_group(&theme)
             .id("changes-scope-trigger")
-            .h(px(crate::surface_chrome::CONTROL_SIZE))
-            .px(px(8.0))
-            .flex_none()
-            .flex()
-            .flex_row()
-            .items_center()
+            .pl(px(8.0))
+            .pr(px(6.0))
             .gap(px(6.0))
-            .rounded(px(crate::surface_chrome::CONTROL_RADIUS))
             .cursor_pointer()
-            .bg(motion::hover_blend(
-                "changes-scope-trigger",
-                crate::theme::wash(0.05),
-                crate::theme::wash(0.14),
-            ))
-            .on_hover(motion::hover_listener("changes-scope-trigger"))
+            .hover(|s| s.bg(theme.glass_hover()))
             .occlude()
             .on_mouse_down(
                 gpui::MouseButton::Left,
@@ -4071,12 +4119,49 @@ impl Changes {
                 cx.notify();
             }))
             .child(
+                crate::icons::icon(scope_icon(scope))
+                    .size(px(14.0))
+                    .text_color(theme.text_muted),
+            )
+            .child(
                 div()
                     .text_size(px(12.0))
-                    .line_height(px(14.0))
+                    .font_weight(gpui::FontWeight::MEDIUM)
                     .text_color(theme.text)
                     .child(SharedString::from(scope.label())),
             )
+            .when_some(stats, |el, (files, adds, dels)| {
+                el.child(
+                    div()
+                        .px(px(5.0))
+                        .h(px(16.0))
+                        .flex()
+                        .items_center()
+                        .rounded_full()
+                        .bg(theme.ink(0.07))
+                        .text_size(px(10.5))
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(theme.text_muted)
+                        .child(SharedString::from(files.to_string())),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .gap(px(4.0))
+                        .text_size(px(11.0))
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .child(
+                            div()
+                                .text_color(add_color(&theme))
+                                .child(format!("+{adds}")),
+                        )
+                        .child(
+                            div()
+                                .text_color(del_color(&theme))
+                                .child(format!("−{dels}")),
+                        ),
+                )
+            })
             .child(
                 crate::icons::icon(crate::icons::ALT_ARROW_DOWN)
                     .size(px(12.0))
@@ -4148,7 +4233,7 @@ impl Changes {
                 .unwrap_or_default();
             let copy = Self::header_button(
                 "changes-copy-patch",
-                crate::icons::COPY,
+                crate::icons::DIFF_COPY,
                 "Copy all patches",
                 &theme,
             )
@@ -4156,11 +4241,7 @@ impl Changes {
                 cx.stop_propagation();
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(patch.clone()));
             });
-            div()
-                .flex_none()
-                .flex()
-                .items_center()
-                .gap(px(crate::surface_chrome::CONTROL_GAP))
+            crate::surface_chrome::control_group(&theme)
                 .when(self.sidebar_review, |el| {
                     el.child(
                         Self::header_toggle(
@@ -4177,13 +4258,18 @@ impl Changes {
                         })),
                     )
                 })
-                .child(copy)
                 .child(self.split_toggle(&theme, cx))
+                .child(Self::group_divider(&theme))
                 .child(self.wrap_toggle(&theme, cx))
+                .child(copy)
                 .child(
                     Self::header_button(
                         "changes-fold-all",
-                        crate::icons::FOLD_VERTICAL,
+                        if self.all_collapsed() {
+                            crate::icons::DIFF_EXPAND_ALL
+                        } else {
+                            crate::icons::DIFF_COLLAPSE_ALL
+                        },
                         self.fold_all_label(),
                         &theme,
                     )
@@ -4217,28 +4303,11 @@ impl Changes {
                         ))
                     })
                     .count();
-                element.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(6.))
-                        .text_size(px(11.))
-                        .child(
-                            div()
-                                .text_color(add_color(&theme))
-                                .child(format!("+{}", parsed.additions)),
-                        )
-                        .child(
-                            div()
-                                .text_color(del_color(&theme))
-                                .child(format!("−{}", parsed.deletions)),
-                        )
-                        .child(
-                            div()
-                                .text_color(theme.text_muted)
-                                .child(format!("{reviewed}/{} reviewed", parsed.file_count)),
-                        ),
-                )
+                element.child(div().text_size(px(11.)).child(review_progress(
+                    reviewed,
+                    parsed.file_count,
+                    &theme,
+                )))
             })
             .when_some(history_count, |element, count| {
                 element.child(
@@ -4264,17 +4333,10 @@ impl Changes {
         let theme = &theme.for_popup();
         let current = self.scope;
         popover::popover_card(theme)
-            .w(px(174.0))
+            .w(px(200.0))
             .on_mouse_down_out(cx.listener(|this, _, _, cx| this.close_scope_menu(cx)))
             .child(div().flex().flex_col().gap(px(1.0)).children(
                 DiffScope::ALL.into_iter().enumerate().map(|(ix, scope)| {
-                    let glyph = match scope {
-                        DiffScope::WorkingTree => crate::icons::WORKTREE,
-                        DiffScope::Branch => crate::icons::GIT_COMPARE,
-                        DiffScope::LatestTurn => crate::icons::CLOCK_CIRCLE,
-                        DiffScope::History => crate::icons::HISTORY,
-                        DiffScope::Commit => crate::icons::GIT_BRANCH,
-                    };
                     popover::menu_row(theme, scope == current, format!("changes-scope-row-{ix}"))
                         .id(("changes-scope-row", ix))
                         .debug_selector(move || format!("changes-scope-row-{ix}"))
@@ -4289,12 +4351,20 @@ impl Changes {
                             this.close_scope_menu(cx);
                         }))
                         .child(
-                            crate::icons::icon(glyph)
+                            crate::icons::icon(scope_icon(scope))
                                 .size(px(14.0))
                                 .flex_none()
                                 .text_color(theme.text_muted),
                         )
                         .child(div().flex_1().min_w_0().truncate().child(scope.label()))
+                        .when(scope == current, |row| {
+                            row.child(
+                                crate::icons::icon(crate::icons::CHECK)
+                                    .size(px(13.0))
+                                    .flex_none()
+                                    .text_color(theme.text_muted),
+                            )
+                        })
                 }),
             ))
             .into_any_element()
@@ -4560,6 +4630,52 @@ pub(crate) fn del_color(theme: &Theme) -> gpui::Hsla {
     theme.diff_del // red-400
 }
 
+/// The toolbar's review meter: a short track filling as files are marked
+/// viewed, then the count. Turns the success tone once every file is done.
+fn review_progress(reviewed: usize, total: usize, theme: &Theme) -> AnyElement {
+    const TRACK: f32 = 44.0;
+    let done = total > 0 && reviewed >= total;
+    let fraction = if total == 0 {
+        0.0
+    } else {
+        (reviewed as f32 / total as f32).clamp(0.0, 1.0)
+    };
+    let fill = if done {
+        theme.success
+    } else {
+        theme.text_muted
+    };
+    div()
+        .flex()
+        .items_center()
+        .gap(px(6.0))
+        .ml(px(4.0))
+        .child(
+            div()
+                .w(px(TRACK))
+                .h(px(4.0))
+                .rounded_full()
+                .bg(theme.ink(0.08))
+                .child(
+                    div()
+                        .h_full()
+                        .w(px(TRACK * fraction))
+                        .rounded_full()
+                        .bg(fill),
+                ),
+        )
+        .child(
+            div()
+                .text_color(if done {
+                    theme.success
+                } else {
+                    theme.text_muted
+                })
+                .child(format!("{reviewed}/{total} viewed")),
+        )
+        .into_any_element()
+}
+
 /// One notice row ("New file", "Binary file — contents not shown", …).
 pub(crate) fn notice_row(notice: String, theme: &Theme) -> AnyElement {
     div()
@@ -4575,21 +4691,55 @@ pub(crate) fn notice_row(notice: String, theme: &Theme) -> AnyElement {
         .into_any_element()
 }
 
-/// One `@@ … @@` hunk-header row on the bluish-grey wash.
+/// One `@@ … @@` hunk-header row: a faint neutral band between hairlines.
+/// The line range stays quiet; the enclosing-scope text git appends after
+/// the second `@@` reads one step stronger, since that is what orients you.
 pub(crate) fn hunk_header_row(header: &str, theme: &Theme) -> AnyElement {
+    let (range, context) = split_hunk_header(header);
     div()
         .h(px(HUNK_HEADER_HEIGHT))
         .w_full()
         .flex_none()
         .flex()
         .items_center()
+        .gap(px(8.0))
         .px(px(Theme::SPACE_LG))
-        .bg(theme.diff_hunk_bg)
+        .bg(theme.ink(0.018))
+        .border_y_1()
+        .border_color(theme.hairline(0.035))
         .font_family(theme.font_mono.clone())
         .text_size(px(11.0))
-        .text_color(theme.text_faint)
-        .child(SharedString::from(header.to_string()))
+        .child(
+            div()
+                .flex_none()
+                .text_color(theme.text_faint.opacity(0.75))
+                .child(SharedString::from(range.to_string())),
+        )
+        .when(!context.is_empty(), |el| {
+            el.child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(theme.text_muted)
+                    .child(SharedString::from(context.to_string())),
+            )
+        })
         .into_any_element()
+}
+
+/// `@@ -1,9 +1,14 @@ impl Cache {` → (`@@ -1,9 +1,14 @@`, `impl Cache {`).
+fn split_hunk_header(header: &str) -> (&str, &str) {
+    let header = header.trim_end();
+    match header
+        .strip_prefix("@@")
+        .and_then(|rest| rest.find("@@").map(|end| end + 4))
+    {
+        Some(end) if end <= header.len() => {
+            let (range, context) = header.split_at(end);
+            (range, context.trim())
+        }
+        _ => (header, ""),
+    }
 }
 
 /// The only part of a diff row allowed to exceed its viewport. The outer
@@ -4772,18 +4922,18 @@ fn diff_line_row(
             "+",
             add_color(theme),
             Some(add_bg),
-            Some(add_color(theme).opacity(0.55)),
+            Some(add_color(theme).opacity(0.45)),
             add_color(theme).opacity(0.9),
         ),
         LineKind::Del => (
             "−",
             del_color(theme),
             Some(del_bg),
-            Some(del_color(theme).opacity(0.55)),
+            Some(del_color(theme).opacity(0.45)),
             del_color(theme).opacity(0.9),
         ),
         _ => (
-            "·",
+            "",
             theme.text_faint.opacity(0.5),
             None,
             None,
@@ -4942,18 +5092,18 @@ fn split_line_cell(
             "+",
             add_color(theme),
             Some(add_bg),
-            Some(add_color(theme).opacity(0.55)),
+            Some(add_color(theme).opacity(0.45)),
             add_color(theme).opacity(0.9),
         ),
         LineKind::Del => (
             "−",
             del_color(theme),
             Some(del_bg),
-            Some(del_color(theme).opacity(0.55)),
+            Some(del_color(theme).opacity(0.45)),
             del_color(theme).opacity(0.9),
         ),
         _ => (
-            "·",
+            "",
             theme.text_faint.opacity(0.5),
             None,
             None,
@@ -5676,6 +5826,19 @@ rename to new_name.rs
         let (old, new) = parse_git_paths("\"a/with space.rs\" \"b/with space.rs\"");
         assert_eq!(old, "with space.rs");
         assert_eq!(new, "with space.rs");
+    }
+
+    #[test]
+    fn hunk_header_splits_range_from_scope_context() {
+        assert_eq!(
+            split_hunk_header("@@ -1,9 +1,14 @@ impl Cache {"),
+            ("@@ -1,9 +1,14 @@", "impl Cache {")
+        );
+        assert_eq!(
+            split_hunk_header("@@ -3,4 +3,5 @@"),
+            ("@@ -3,4 +3,5 @@", "")
+        );
+        assert_eq!(split_hunk_header("not a hunk"), ("not a hunk", ""));
     }
 
     #[test]

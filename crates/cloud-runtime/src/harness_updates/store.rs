@@ -540,18 +540,32 @@ pub fn extract(tar: &Path, tree: &Path, bundle: &SignedHarnessBundle) -> Result<
 pub fn probe(executable: &Path, version: &str) -> Result<()> {
     let home = tempfile_dir(executable)?;
     let result = (|| {
-        let mut child = std::process::Command::new(executable)
-            .arg("--version")
-            .env_clear()
-            .env("PATH", "/usr/bin:/bin")
-            .env("HOME", &home)
-            .env("DISABLE_AUTOUPDATER", "1")
-            .env("DISABLE_UPDATES", "1")
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .map_err(|_| anyhow!(PROBE_FAILED))?;
+        let spawn = || {
+            std::process::Command::new(executable)
+                .arg("--version")
+                .env_clear()
+                .env("PATH", "/usr/bin:/bin")
+                .env("HOME", &home)
+                .env("DISABLE_AUTOUPDATER", "1")
+                .env("DISABLE_UPDATES", "1")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+        };
+        // A freshly written executable can briefly fail to exec with ETXTBSY
+        // while another thread's fork still holds a write descriptor to it.
+        let mut attempts = 0;
+        let mut child = loop {
+            match spawn() {
+                Ok(child) => break child,
+                Err(error) if error.raw_os_error() == Some(libc::ETXTBSY) && attempts < 50 => {
+                    attempts += 1;
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                Err(_) => return Err(anyhow!(PROBE_FAILED)),
+            }
+        };
         let deadline = Instant::now() + PROBE_TIMEOUT;
         loop {
             match child.try_wait()? {

@@ -27,7 +27,8 @@ async fn android_client_through_real_gateway_and_guest() {
         workspace: "workspace".into(),
         token: "fixture-lease".into(),
         fence: (1, 1),
-        lease_valid_until: Mutex::new(Instant::now() + Duration::from_secs(180)),
+        // Room for a cold Gradle build before the client connects.
+        lease_valid_until: Mutex::new(Instant::now() + Duration::from_secs(900)),
         state: Mutex::new(State {
             peers: HashMap::new(),
             runtime: None,
@@ -37,7 +38,9 @@ async fn android_client_through_real_gateway_and_guest() {
         control: None,
         activity: tokio::sync::Mutex::new(None),
     })));
-    let expires = now() + 120_000;
+    // A cold Gradle build alone takes about two minutes on CI; a two-minute
+    // credential could expire before the client connected.
+    let expires = now() + 600_000;
     let app = Router::new().route(
         "/v1/cloud/workspaces/workspace/gateway",
         get({

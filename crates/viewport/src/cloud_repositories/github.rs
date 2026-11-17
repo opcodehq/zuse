@@ -70,6 +70,35 @@ impl RepositoryPanel {
         );
         cx.notify();
     }
+    /// Sends the code the OAuth browser displayed. Only this app's session can
+    /// finish linking a GitHub identity that a browser signed in to.
+    fn github_confirm(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self
+            .github_operation
+            .as_ref()
+            .and_then(|op| op["operationId"].as_str())
+            .map(str::to_owned)
+        else {
+            return;
+        };
+        if self.pending.values().any(|p| p.kind == "github-confirm") {
+            return;
+        }
+        let code = self.github_code.read(cx).value(cx).trim().to_owned();
+        if code.is_empty() {
+            self.error = Some("Enter the code shown in your browser.".into());
+            cx.notify();
+            return;
+        }
+        self.error = None;
+        self.call(
+            "github-confirm",
+            methods::CLOUD_GITHUB_INSTALL,
+            json!({"action":"confirm","operationId":id,"confirmationCode":code}),
+            cx,
+        );
+        cx.notify();
+    }
     fn schedule_github_poll(&mut self, cx: &mut Context<Self>) {
         if self.account_feed_live {
             return;
@@ -197,15 +226,23 @@ impl RepositoryPanel {
         let busy = self
             .pending
             .values()
-            .any(|p| matches!(p.kind, "github-select" | "github-cancel"));
+            .any(|p| matches!(p.kind, "github-select" | "github-confirm" | "github-cancel"));
         let title = match state {
             "choosing" => "Choose a GitHub installation",
+            "confirming" => "Confirm the GitHub connection",
             "expired" => "GitHub sign-in expired",
             "cancelled" => "GitHub sign-in cancelled",
             "failed" => "GitHub connection needs attention",
             _ => "Finish signing in with GitHub",
         };
-        let description = if state == "choosing" {
+        let description = if state == "confirming" {
+            let login = operation["user"]["login"]
+                .as_str()
+                .unwrap_or("a GitHub account");
+            format!(
+                "Your browser signed in as {login}. Enter the code shown there to connect it to this account. If you did not just sign in to GitHub yourself, cancel."
+            )
+        } else if state == "choosing" {
             operation["user"]["login"]
                 .as_str()
                 .map(|login| {
@@ -217,6 +254,27 @@ impl RepositoryPanel {
                 .into()
         };
         let mut body = column().child(cs::setting_row(true, title, description, None));
+        if state == "confirming" {
+            let ready = !self.github_code.read(cx).value(cx).trim().is_empty();
+            body = body.child(cs::setting_row_content(
+                false,
+                "Confirmation code",
+                "Shown in the browser tab where you signed in to GitHub.",
+                None,
+                row()
+                    .gap(px(8.))
+                    .child(
+                        s::field()
+                            .h(px(28.))
+                            .w(px(160.))
+                            .child(self.github_code.clone()),
+                    )
+                    .child(
+                        cs::button("github-confirm-code", "Confirm", true, busy || !ready, busy)
+                            .on_click(cx.listener(|this, _, _, cx| this.github_confirm(cx))),
+                    ),
+            ));
+        }
         if state == "choosing" {
             if let Some(installations) = operation["installations"].as_array() {
                 for installation in installations {

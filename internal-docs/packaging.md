@@ -39,8 +39,8 @@ launcher, it keeps that command's old interface.
   set -e
   installer=$(mktemp)
   trap 'rm -f "$installer"' EXIT
-  curl -fsSL https://github.com/opcodehq/zuse/releases/download/v0.26.0-preview.5/install.sh -o "$installer"
-  sh "$installer" --version 0.26.0-preview.5
+  curl -fsSL https://github.com/opcodehq/zuse/releases/download/v0.26.1/install.sh -o "$installer"
+  sh "$installer" --version 0.26.1
 )
 ```
 
@@ -81,7 +81,7 @@ terminal open until the command completes. The output directory must not already
 contain archives with those names. `python3 scripts/verify-cli-archive.py
 ARCHIVE` checks the standalone archive's inventory and, on its own platform,
 starts `zuse serve` from a fresh profile and fetches the packaged page. `--profile dev` selects a development native build.
-For a preview of the workspace version, use `--version 0.26.0-preview.5`.
+For a preview of the workspace version, use `--version 0.26.1-preview.1`.
 The archive and manifest retain that suffix; macOS bundle versions remain numeric.
 
 To assemble executables already built on the target, use:
@@ -249,10 +249,11 @@ Changing tracks cancels the old check/download and discards its staged update.
 
 Keep publishing stable tags as `vX.Y.Z` with `--latest` and preview tags as
 `vX.Y.Z-preview.N` with `--prerelease`, as `release.yml` already does. Both tracks
-use the same application identity and profile. After publishing `v0.26.0`, bump
+use the same application identity and profile. After publishing `v0.26.1`, bump
 the workspace to `0.27.0` before publishing `v0.27.0-preview.1`; further
-`0.26.0-preview.N` builds are older than the stable `0.26.0` release.
-Package assembly writes the full version to `release.json` beside each executable before signing and checksumming;
+`0.26.0-preview.N` builds are older than the stable `0.26.1` release.
+Package assembly writes the full version to `release.json` beside each executable
+(in `Contents/Resources` for macOS apps) before signing and checksumming;
 `zuse --version` and the updater read it, allowing exact-commit prebuilt binaries
 to be reused for preview tags. Source builds use their workspace version.
 

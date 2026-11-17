@@ -11,6 +11,8 @@ pub struct BrowserTransaction {
     pub actor: String,
     pub owner: String,
     pub operation_id: String,
+    /// The initiating app must enter the browser's code before anything links.
+    pub confirmation: bool,
 }
 use zuse_browser_page::{Action, Card, Row as PageRow, Tone};
 impl NativeGithub {
@@ -36,10 +38,23 @@ impl NativeGithub {
         }
         Ok(row)
     }
+    /// The initiating Zuse account, so a page opened from someone else's link
+    /// can say whose account it would connect to.
+    pub async fn browser_actor(
+        &self,
+        state: &str,
+        browser: Option<&str>,
+    ) -> Result<String, ApiError> {
+        Ok(self
+            .browser_row(state, browser)
+            .await?
+            .try_get("actor_id")?)
+    }
     pub async fn browser_page(
         &self,
         state: &str,
         browser: Option<&str>,
+        account: Option<&str>,
     ) -> Result<String, ApiError> {
         let row = self.browser_row(state, browser).await?;
         let id: String = row.try_get("operation_id")?;
@@ -66,6 +81,23 @@ impl NativeGithub {
             &row.try_get::<String, _>("sealed_pending")?,
         )?;
         let user = public_user(&pending.profile)?;
+        let owner: String = row.try_get("owner_id")?;
+        let workspace = match owner.strip_prefix("organization:") {
+            Some(organization) => format!("Organization {organization}"),
+            None => "Personal".into(),
+        };
+        let account = account
+            .map(str::to_owned)
+            .unwrap_or_else(|| "Unavailable".into());
+        if let Some(confirmation) = &pending.confirmation {
+            return Ok(confirmation::page(
+                &confirmation.code,
+                &user.login,
+                &account,
+                &workspace,
+                pending.browser_installation.filter(|id| *id > 0),
+            ));
+        }
         let mut installations: Vec<(i64, String, bool)> = Vec::new();
         for page_number in 1..=100 {
             let response = self
@@ -106,11 +138,6 @@ impl NativeGithub {
                 return Err(ApiError::unavailable("github_pagination_limit"));
             }
         }
-        let owner: String = row.try_get("owner_id")?;
-        let workspace = match owner.strip_prefix("organization:") {
-            Some(organization) => format!("Organization {organization}"),
-            None => "Personal".into(),
-        };
         let ids: Vec<String> = installations
             .iter()
             .map(|(id, ..)| id.to_string())
@@ -162,6 +189,7 @@ impl NativeGithub {
             description: "Pick the installation whose repositories Zuse should use.",
             facts: vec![
                 ("GitHub account", user.login.clone()),
+                ("Zuse account", account),
                 ("Zuse workspace", workspace),
             ],
             rows,
@@ -169,7 +197,9 @@ impl NativeGithub {
                 "No installations are available. An organization administrator may need to install the App or approve its access.",
             ),
             actions,
-            hint: Some("Continue only if you started this connection from your own Zuse app."),
+            hint: Some(
+                "Continue only if you started this connection from your own Zuse app and the Zuse account above is yours.",
+            ),
         }))
     }
     pub fn browser_failure_page(&self, state: &str, code: &str) -> String {
@@ -226,16 +256,22 @@ impl NativeGithub {
             return Err(ApiError::conflict("github_browser_choice_changed"));
         }
         pending.browser_installation = Some(selection.installation_id);
+        let confirmation = self.require_confirmation(&mut pending);
         let next = self.seal(&format!("github-pending:{id}"), &pending)?;
         let updated=sqlx::query("UPDATE zuse_rust_github_operations SET sealed_pending=$3 WHERE operation_id=$1 AND phase='choosing' AND sealed_pending=$2 AND expires_at>$4")
             .bind(&id).bind(sealed).bind(next).bind(now()).execute(&self.pool).await?;
         if updated.rows_affected() != 1 {
             return Err(ApiError::conflict("github_operation_unavailable"));
         }
-        Ok(BrowserTransaction {
+        let transaction = BrowserTransaction {
             actor: row.try_get("actor_id")?,
             owner: row.try_get("owner_id")?,
             operation_id: id,
-        })
+            confirmation,
+        };
+        if confirmation {
+            self.announce_confirmation(&transaction).await;
+        }
+        Ok(transaction)
     }
 }

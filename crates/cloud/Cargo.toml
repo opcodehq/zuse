@@ -63,4 +63,5 @@ zuse-doc.workspace = true
 rusqlite.workspace = true
 tokio-tungstenite.workspace = true
 tower = { version = "0.5", features = ["util"] }
+tokio = { workspace = true, features = ["test-util"] }
 rand = "0.8"

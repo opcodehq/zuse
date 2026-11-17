@@ -168,6 +168,8 @@ impl NativeGithub {
                     credentials,
                     profile,
                     browser_installation: None,
+                    reused: false,
+                    confirmation: None,
                 },
             )
         }
@@ -203,6 +205,11 @@ impl NativeGithub {
                 result["state"] = json!("authorizing");
                 return Ok(result);
             };
+            if pending.confirmation.is_some() {
+                // The OAuth browser chose; this app must enter the code it shows.
+                result["state"] = json!("confirming");
+                result["identityOnly"] = json!(browser_installation == 0);
+            }
             let mut installs = vec![];
             for page in 1..=100 {
                 let response = self
@@ -250,6 +257,16 @@ impl NativeGithub {
         Ok(result)
     }
     pub async fn select(&self, access: &Access, selection: &Selection) -> Result<(), ApiError> {
+        self.select_checked(access, selection, false).await
+    }
+    /// `confirmed` is true only after the initiating app submitted the code
+    /// shown in the OAuth browser (see `confirm_app`).
+    pub(in crate::github::native) async fn select_checked(
+        &self,
+        access: &Access,
+        selection: &Selection,
+        confirmed: bool,
+    ) -> Result<(), ApiError> {
         self.require(access)?;
         if selection.installation_id <= 0 {
             return Err(ApiError::bad_request("invalid_github_installation"));
@@ -262,6 +279,9 @@ impl NativeGithub {
         )?;
         if pending.browser_installation != Some(selection.installation_id) {
             return Err(ApiError::forbidden("github_browser_confirmation_required"));
+        }
+        if pending.confirmation.is_some() && !confirmed {
+            return Err(ApiError::forbidden("github_app_confirmation_required"));
         }
         let metadata = self
             .installation(selection.installation_id)

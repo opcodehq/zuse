@@ -797,10 +797,10 @@ impl TerminalColors {
 }
 
 impl Theme {
-    /// The golden three-tone palette of the retro pixel loader that marks
+    /// The green three-tone palette of the retro pixel loader that marks
     /// work in progress (actions, working chats), whatever the accent.
     pub fn loader_glyph(&self) -> GlyphPalette {
-        AccentColor::Amber.tokens(self.appearance).glyph
+        AccentColor::Green.tokens(self.appearance).glyph
     }
     // ---- numbers drive layout (px) ----
     /// Frost translucency over the blurred window background (macOS vibrancy

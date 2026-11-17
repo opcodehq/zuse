@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Zuse vs T3 Code — desktop performance benchmarks</title>
+<style>
+  :root {
+    color-scheme: light;
+    --surface-0: #f4f4f2; --surface-1: #fcfcfb; --surface-2: #f0efec;
+    --ink-1: #1d1d1b; --ink-2: #55554f; --ink-3: #8a8a83; --rule: #e2e1dc; --grid: #ecebe7;
+    --zuse: #2a78d6; --t3: #eb6834; --before: #a3a29c;
+    --good: #0ca30c; --critical: #d03b3b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --surface-0: #121211; --surface-1: #1a1a19; --surface-2: #262624;
+      --ink-1: #ecebe6; --ink-2: #b4b3ac; --ink-3: #85847e; --rule: #33332f; --grid: #2a2a27;
+      --zuse: #3987e5; --t3: #d95926; --before: #6f6e68;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--surface-0); color: var(--ink-1); font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif; }
+  main { max-width: 1080px; margin: 0 auto; padding: 48px 24px 96px; }
+  h1 { font-size: 30px; line-height: 1.2; margin: 0 0 8px; letter-spacing: -0.01em; }
+  h2 { font-size: 20px; margin: 56px 0 6px; }
+  h3 { font-size: 15px; margin: 0 0 2px; }
+  p, li { color: var(--ink-2); }
+  .lede { font-size: 17px; color: var(--ink-2); max-width: 760px; margin: 0; }
+  .meta { color: var(--ink-3); font-size: 13px; margin-top: 12px; }
+  .card { background: var(--surface-1); border: 1px solid var(--rule); border-radius: 12px; padding: 20px 22px; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-top: 28px; }
+  .tile .label { font-size: 13px; color: var(--ink-2); }
+  .tile .value { font-size: 30px; font-weight: 650; letter-spacing: -0.02em; margin: 2px 0; font-variant-numeric: tabular-nums; }
+  .tile .vs { font-size: 13px; color: var(--ink-3); }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(460px, 1fr)); gap: 12px; margin-top: 16px; }
+  .legend { display: flex; gap: 18px; align-items: center; font-size: 13px; color: var(--ink-2); margin: 16px 0 0; flex-wrap: wrap; }
+  .key { display: inline-flex; align-items: center; gap: 6px; }
+  .swatch { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+  .chart-sub { font-size: 13px; color: var(--ink-3); margin: 0 0 10px; }
+  svg text { font: 12px -apple-system, BlinkMacSystemFont, "Inter", sans-serif; fill: var(--ink-2); }
+  svg .val { fill: var(--ink-1); font-variant-numeric: tabular-nums; }
+  svg .mark { cursor: default; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+  th, td { text-align: right; padding: 7px 8px; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--ink-2); font-weight: 600; }
+  td.who { color: var(--ink-2); }
+  .win { font-weight: 650; color: var(--ink-1); }
+  .scroll { overflow-x: auto; }
+  details summary { cursor: pointer; color: var(--ink-2); font-weight: 600; margin: 8px 0; }
+  .callout { border-left: 3px solid var(--critical); padding: 4px 0 4px 14px; margin: 14px 0; }
+  .callout.good { border-color: var(--good); }
+  code { font: 12.5px ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--surface-2); padding: 1px 5px; border-radius: 4px; color: var(--ink-1); }
+  .tooltip { position: fixed; pointer-events: none; background: var(--surface-1); border: 1px solid var(--rule); border-radius: 8px; padding: 8px 10px; font-size: 12.5px; box-shadow: 0 6px 20px rgb(0 0 0 / .12); opacity: 0; transition: opacity .08s; max-width: 280px; z-index: 10; }
+  .tooltip b { color: var(--ink-1); }
+  .tooltip div { color: var(--ink-2); }
+  ul { padding-left: 20px; }
+  .twocol { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Zuse vs T3 Code — desktop performance</h1>
+  <p class="lede">Both desktop apps, the same Mac, the same seeded chat history and the same measuring tool. On the desktop, Zuse opens about twice as fast and uses well under half the memory; T3 Code types slightly faster. Over a 3G connection T3 Code loads first and pages older history faster, while Zuse reloads, replies and reconnects faster. The benchmark also found an idle-CPU bug in Zuse with many chats, now fixed.</p>
+  <p class="meta" id="meta"></p>
+
+  <div class="tiles" id="tiles"></div>
+
+  <h2>Head to head</h2>
+  <p>Median of 5 launches per app per data set; in-app tests on 3 of them. Zuse values are the release build of <code>main</code>; its idle CPU on the 20-chat sets is shown after the fix (PR #188).</p>
+  <div class="legend" aria-hidden="true">
+    <span class="key"><span class="swatch" style="background:var(--zuse)"></span>Zuse</span>
+    <span class="key"><span class="swatch" style="background:var(--t3)"></span>T3 Code 0.1.9</span>
+    <span>· rows are chats × messages per chat · lower is better on every chart</span>
+  </div>
+  <div class="grid2" id="charts"></div>
+
+  <h2>All metrics</h2>
+  <div class="card scroll"><table id="table"></table></div>
+
+  <h2>Network over 3G (earlier benchmark)</h2>
+  <p>From <code>internal-docs/t3-network-benchmark.md</code>, not rerun in this session: the <b>browser UI</b> of each app (not the desktop apps above), <b>T3 Code 0.1.7</b> against an earlier Zuse build, Chrome for Testing 151, 400 ms latency, 400 kbps down / 200 kbps up, medians of 3 samples. The chat tests use a matched 1,500-message history and the same local fake provider.</p>
+  <div class="callout" style="border-color:var(--t3)"><b>Where T3 Code is better on 3G.</b> First (cold) load: <b>64.3 s vs 76.9 s</b>, with fewer bytes (2.89 MB vs 3.72 MB). Loading older history: 0.47 s vs 0.74 s. Stop reaches the agent faster: 0.38 s vs 0.84 s. Zuse's first-load download has since grown: current <code>main</code> ships 8.35 MB (Brotli) of browser assets, about 167 s of transfer at this speed before any rendering, so this gap is wider today.</div>
+  <div class="callout good"><b>Where Zuse is better on 3G.</b> Fully cached reload: 4.7 s vs 23.1 s (immutable asset caching). First history: 0.52 s vs 1.10 s. First reply text: 0.79 s vs 1.64 s. Live text back after a disconnect: 2.46 s vs 5.20 s. Fewer bytes for every chat action.</div>
+  <div class="legend" aria-hidden="true">
+    <span class="key"><span class="swatch" style="background:var(--zuse)"></span>Zuse (earlier build)</span>
+    <span class="key"><span class="swatch" style="background:var(--t3)"></span>T3 Code 0.1.7</span>
+    <span>· lower is better on every chart</span>
+  </div>
+  <div class="grid2" id="net-charts"></div>
+  <div class="card scroll" style="margin-top:12px"><table id="net-table"></table></div>
+
+  <h2>The idle-CPU bug Zuse had with 20 chats</h2>
+  <div class="card">
+    <div class="callout"><b>Symptom.</b> With 20 chats, Zuse burned ~29% of a CPU core while idle and frontmost — against ~1% with one chat, and ~6% for T3 Code.</div>
+    <p><b>Cause.</b> While the window is active, the shell marks the selected chat "seen" during render by stamping <code>last_seen_at = now</code>. A chat counts as unseen while <code>last_message_at &gt; last_seen_at</code>. When the last message is dated ahead of this clock (another device's clock skew, imported history), it stayed unseen after every mark, so it was re-marked on every frame: each mark notified app state and rebuilt the whole window, ~64 times a second, and sent a <code>markChatSeen</code> request to the engine. In the seeded data, chats C07–C19 were dated after today, and C19 opens at launch.</p>
+    <p><b>Fix (PR #188).</b> Seeing a chat covers its latest message, so the seen stamp never lands before <code>last_message_at</code> — clamped in the shared document layer (every client) and stamped the same way by the desktop, which sends it to the engine.</p>
+    <div class="callout good"><b>Result.</b> Idle CPU with 20 chats: <b>~29% → ~1%</b>. Re-renders: ~64/s → ~2/s.</div>
+    <div class="scroll"><table>
+      <tr><th>20 chats, idle, frontmost</th><th>Re-renders / s</th><th>App-state notifications / s</th><th>CPU</th></tr>
+      <tr><td>Before fix — messages dated in the future</td><td>62–70</td><td>62–70</td><td>28.9–29.6%</td></tr>
+      <tr><td>Before fix — same chats, dated in the past</td><td>2</td><td>0</td><td>—</td></tr>
+      <tr><td>Before fix — engine alone (<code>zuse headless</code>)</td><td>—</td><td>—</td><td>0.3%</td></tr>
+      <tr><td class="win">After fix — messages dated in the future</td><td class="win">~2</td><td class="win">0</td><td class="win" id="fixed-cpu">0.8–1.1% (one 3.6% sample during a load spike)</td></tr>
+    </table></div>
+    <p class="chart-sub" style="margin-top:12px">Render and notification rates come from temporary instrumentation in a diagnostic build (not shipped). CPU from 20-second samples of every app process.</p>
+  </div>
+
+  <h2>Zuse engine and fresh-profile baselines</h2>
+  <div class="twocol">
+    <div class="card">
+      <h3>Fresh profile, no chats (our <code>benchmark-native.py</code>)</h3>
+      <table>
+        <tr><th></th><th>Headless engine</th><th>Desktop app</th></tr>
+        <tr><td>Median memory (RSS)</td><td>48.3 MiB</td><td>163.3 MiB</td></tr>
+        <tr><td>Peak sampled memory</td><td>48.4 MiB</td><td>186.3 MiB</td></tr>
+        <tr><td>Idle CPU</td><td>0.03%</td><td>1.5%</td></tr>
+        <tr><td>Control socket ready</td><td>3.1–8.3 s*</td><td>0.54 s</td></tr>
+      </table>
+      <p class="chart-sub">* Two noisy runs on a loaded machine (load average 7–15); worth re-measuring idle. The previous Linux baseline (69.2 / 250.7 MiB) is not directly comparable: macOS reports no PSS.</p>
+    </div>
+    <div class="card">
+      <h3>Engine alone with seeded history (<code>zuse headless</code>)</h3>
+      <table>
+        <tr><th></th><th>Idle CPU</th></tr>
+        <tr><td>1 chat × 10,000 msgs</td><td>0.2%</td></tr>
+        <tr><td>20 chats × 5,000 msgs</td><td>0.3%</td></tr>
+      </table>
+      <p class="chart-sub">The engine stays quiet regardless of history size; the 20-chat CPU was entirely the desktop UI loop above.</p>
+    </div>
+  </div>
+
+  <h2>How this was measured</h2>
+  <div class="card">
+    <ul>
+      <li><b>Machine.</b> Apple M4 Pro (14 cores, 48 GB), macOS. Other apps stayed open in the background; treat numbers as same-machine relative comparisons.</li>
+      <li><b>Builds.</b> Zuse release build of <code>main</code> at <code>9398cf44</code> (includes the local-only release change, PR #167); the fix is PR #188 (<code>bfd8e2b2</code>). T3 Code 0.1.9 desktop (Apple Silicon), notarized "T3 Tools, Inc.", SHA-512 verified against its update manifest.</li>
+      <li><b>Isolation.</b> Each app ran from throwaway profiles with its home folder redirected; real profiles untouched (checked by timestamps). Same 1600×1000 window, minimal PATH (no real agent CLIs), T3 Code telemetry off, a local fake Claude provider.</li>
+      <li><b>Data.</b> Identical text, roles and timestamps in both apps: Zuse through its own transcript importer, T3 Code through its server plus its database. Verified by reading every message back.</li>
+      <li><b>Open app → ready to type.</b> From process start until a typed probe character appears in the composer, read off the screen (ScreenCaptureKit + Vision), on the system uptime clock.</li>
+      <li><b>Memory and CPU.</b> Physical footprint and CPU time of every process belonging to the app (Zuse: 1 process; T3 Code: 6), sampled at 2 Hz for 20 s after settling.</li>
+      <li><b>Typing lag.</b> 40 keystrokes, time until each appears on screen. <b>Open / switch chat.</b> Click a sidebar row, time until that chat's unique last message is on screen. <b>Scroll.</b> 120 wheel steps at 60 Hz; frames slower than 33 ms and the longest gap.</li>
+      <li><b>Tool.</b> <code>ademark-native</code>, the measuring helper from the ADEMark benchmark, built from source and run with its own Accessibility and Screen Recording grants.</li>
+    </ul>
+  </div>
+
+  <h2>Caveats and corrections</h2>
+  <div class="card">
+    <ul>
+      <li><b>Correction:</b> early T3 Code runs were slowed by a macOS "Keychain Not Found" dialog that the isolated home folder triggered (4.4 s launches, a stuck splash screen with big chats). Those results were discarded; T3 Code now launches with <code>--use-mock-keychain</code> and all its numbers come from clean reruns.</li>
+      <li>History was imported, not produced by real agent turns; real chats can behave differently.</li>
+      <li>One T3 Code run (20 × 5,000, run 3) lost its window after launch, so it has no in-app tests; its launch counts. Its first switching run was slower (~410–500 ms vs ~185 ms later) and is in the median.</li>
+      <li>The measuring tool's typing-lag probe left a draft "ademarkqz…" chat in T3 Code's benchmark profile (not a real one).</li>
+      <li>Post-fix Zuse runs on 20 × 1,500 ran under heavy machine load (load average 18–30); their launch and lag figures are noisy and not used, only their idle CPU.</li>
+      <li>The 3G section is the earlier browser-UI benchmark (T3 Code 0.1.7, an earlier Zuse build), included for completeness, not rerun here. Not run at all: the ADEMark suite itself (needs a dedicated macOS account), battery and GPU.</li>
+    </ul>
+  </div>
+
+  <h2>Every run</h2>
+  <details class="card"><summary>Show all individual runs</summary><div class="scroll"><table id="raw"></table></div></details>
+</main>
+<div class="tooltip" id="tip" role="status"></div>
+<script>
+const DATA = {"generated":"2026-11-15T17:06:52.169Z","rows":[{"id":"smoke","label":"2 chats × 20 msgs","short":"2 × 20","zuse":{"n":5,"launch":600.868666,"launchMin":545.921479,"launchMax":638.724833,"memory":374.5960388183594,"cpu":1.1254371202466302,"lagP50":35.05,"lagP95":50.756,"open":null,"switch":null,"scrollSlow":null,"scrollMax":null},"zuseFixedCpu":null,"zuseFixedRuns":null,"t3":{"n":5,"launch":1151.619104,"launchMin":1144.937416,"launchMax":1172.625979,"memory":964.0547027587891,"cpu":8.27775369781321,"lagP50":24.503,"lagP95":36.792,"open":null,"switch":null,"scrollSlow":null,"scrollMax":null}},{"id":"mid1500","label":"1 chat × 1,500 msgs","short":"1 × 1,500","zuse":{"n":5,"launch":602.006917,"launchMin":545.723751,"launchMax":635.149916,"memory":384.22110748291016,"cpu":1.3420399804327563,"lagP50":33.406,"lagP95":43.561,"open":128.6,"switch":null,"scrollSlow":18,"scrollMax":150},"zuseFixedCpu":null,"zuseFixedRuns":null,"t3":{"n":5,"launch":1143.75825,"launchMin":1136.506979,"launchMax":1155.963146,"memory":956.5154800415039,"cpu":6.7821224745862665,"lagP50":23.589,"lagP95":33.822,"open":181.274,"switch":null,"scrollSlow":11,"scrollMax":499.991}},{"id":"big","label":"1 chat × 10,000 msgs","short":"1 × 10,000","zuse":{"n":5,"launch":609.642479,"launchMin":542.33152,"launchMax":611.896208,"memory":419.36168670654297,"cpu":1.1777131116277253,"lagP50":34.263,"lagP95":41.296,"open":131.939,"switch":null,"scrollSlow":21,"scrollMax":133.333},"zuseFixedCpu":null,"zuseFixedRuns":null,"t3":{"n":5,"launch":1148.196105,"launchMin":1138.363417,"launchMax":1184.481625,"memory":958.9373550415039,"cpu":6.887484531477245,"lagP50":26.197,"lagP95":34.176,"open":184.339,"switch":null,"scrollSlow":11,"scrollMax":483.329}},{"id":"many1500","label":"20 chats × 1,500 msgs","short":"20 × 1,500","zuse":{"n":5,"launch":603.363125,"launchMin":574.371021,"launchMax":626.561605,"memory":387.84608459472656,"cpu":29.6,"lagP50":41.972,"lagP95":79.113,"open":null,"switch":68.813,"scrollSlow":14,"scrollMax":158.333},"zuseFixedCpu":1.0553201034018325,"zuseFixedRuns":{"n":3,"launch":946.843709,"launchMin":854.000458,"launchMax":3816.003625,"memory":388.29925537109375,"cpu":1.0553201034018325,"lagP50":45.977,"lagP95":61.515,"open":null,"switch":90.448,"scrollSlow":null,"scrollMax":null},"t3":{"n":5,"launch":1173.077271,"launchMin":1152.289583,"launchMax":1177.68502,"memory":992.2265090942383,"cpu":6.703859955794751,"lagP50":25.365,"lagP95":34.024,"open":null,"switch":181.131,"scrollSlow":11,"scrollMax":499.987}},{"id":"many","label":"20 chats × 5,000 msgs (100k)","short":"20 × 5,000","zuse":{"n":5,"launch":591.142291,"launchMin":549.910145,"launchMax":625.728667,"memory":406.50238037109375,"cpu":28.9,"lagP50":38.63,"lagP95":62.449,"open":null,"switch":73.387,"scrollSlow":15,"scrollMax":133.333},"zuseFixedCpu":0.9302231787605699,"zuseFixedRuns":{"n":3,"launch":695.619249,"launchMin":611.454124,"launchMax":713.081958,"memory":403.48673248291016,"cpu":0.9302231787605699,"lagP50":35.438,"lagP95":48.209,"open":null,"switch":79.814,"scrollSlow":null,"scrollMax":null},"t3":{"n":5,"launch":1161.960833,"launchMin":1157.827126,"launchMax":1181.836896,"memory":990.9609298706055,"cpu":5.640961913712171,"lagP50":26.213,"lagP95":36.2275,"open":null,"switch":298.4525,"scrollSlow":10,"scrollMax":487.495}}],"raw":[{"build":"Zuse main 9398cf44 (before fix)","set":"1 chat × 10,000 msgs","run":1,"launch":609.642479,"launchError":null,"memory":416.95543670654297,"cpu":1.0697822067669105,"lagP50":32.43,"lagP95":41.296,"open":134.142,"switch":null,"load":"2.64 2.83 3.28"},{"build":"Zuse main 9398cf44 (before fix)","set":"1 chat × 10,000 msgs","run":2,"launch":610.061708,"launchError":null,"memory":419.36168670654297,"cpu":1.1777131116277253,"lagP50":34.263,"lagP95":40.883,"open":131.851,"switch":null,"load":"2.49 2.77 3.23"},{"build":"Zuse main 9398cf44 (before fix)","set":"1 chat × 10,000 msgs","run":3,"launch":611.896208,"launchError":null,"memory":421.95548248291016,"cpu":1.204080128950429,"lagP50":34.441,"lagP95":47.022,"open":131.939,"switch":null,"load":"8.45 4.55 3.87"},{"build":"Zuse main 9398cf44 (before fix)","set":"1 chat × 10,000 msgs","run":4,"launch":596.213146,"launchError":null,"memory":null,"cpu":null,"lagP50":null,"lagP95":null,"open":null,"switch":null,"load":"5.54 4.30 3.82"},{"build":"Zuse main 9398cf44 (before fix)","set":"1 chat × 10,000 msgs","run":5,"launch":542.33152,"launchError":null,"memory":null,"cpu":null,"lagP50":null,"lagP95":null,"open":null,"switch":null,"load":"5.17 4.25 3.80"},{"build":"Zuse main 9398cf44 (before fix)","set":"20 chats × 5,000 msgs (100k)","run":1,"launch":591.142291,"launchError":null,"memory":406.50238037109375,"cpu":0.9302231787605699,"lagP50":37.437,"lagP95":60.18,"open":null,"switch":70.491,"load":"4.01 4.01 3.79"},{"build":"Zuse main 9398cf44 (before fix)","set":"20 chats × 5,000 msgs (100k)","run":2,"launch":568.036395,"launchError":null,"memory":406.00238037109375,"cpu":null,"lagP50":38.63,"lagP95":62.449,"open":null,"switch":126.461,"load":"3.44 3.84 3.74"},{"build":"Zuse main 9398cf44 (before fix)","set":"20 chats × 5,000 msgs (100k)","run":3,"launch":625.728667,"launchError":null,"memory":408.90079498291016,"cpu":null,"lagP50":47.458,"lagP95":66.507,"open":null,"switch":72.962,"load":"4.04 3.87 3.75"},{"build":"Zuse main 9398cf44 (before fix)","set":"20 chats × 5,000 msgs (100k)","run":4,"launch":609.86452,"launchError":null,"memory":null,"cpu":null,"lagP50":null,"lagP95":null,"open":null,"switch":null,"load":"3.22 3.65 3.67"},{"build":"Zuse main 9398cf44 (before fix)","set":"20 chats × 5,000 msgs (100k)","run":5,"launch":549.910145,"launchError":null,"memory":null,"cpu":null,"lagP50":null,"lagP95":null,"open":null,"switch":null,"load":"3.28 3.65 3.68"},{"build":"Zuse main 9398cf44 (before fix)","set":"20 chats × 1,500 msgs","run":1,"launch":597.045353,"launchError":null,"memory":387.64293670654297,"cpu":0.752069667182566,"lagP50":43.663,"lagP95":70.314,"open":null,"switch":66.664,"load":"4.84 4.21 3.79"},{"build":"Zuse main 9398cf44 (before fix)","set":"20 chats × 1,500 msgs","run":2,"launch":626.561605,"launchError":null,"memory":391.88514709472656,"cpu":3.561139107382278,"lagP50":38.758,"lagP95":83.071,"open":null,"switch":68.51,"load":"4.84 4.27 3.84"},{"build":"Zuse main 9398cf44 (before fix)","set":"20 chats × 1,500 msgs","run":3,"launch":603.363125,"launchError":null,"memory":387.84608459472656,"cpu":1.0553201034018325,"lagP50":41.972,"lagP95":79.113,"open":null,"switch":74.279,"load":"4.04 4.12 3.81"},{"build":"Zuse main 9398cf44 (before fix)","set":"20 chats × 1,500 msgs","run":4,"launch":574.371021,"launchError":null,"memory":null,"cpu":null,"lagP50":null,"lagP95":null,"open":null,"switch":null,"load":"3.39 3.89 3.74"},{"build":"Zuse main 9398cf44 (before fix)","set":"20 chats × 1,500 msgs","run":5,"launch":605.58325,"launchError":null,"memory":null,"cpu":null,"lagP50":null,"lagP95":null,"open":null,"switch":null,"load":"3.68 3.94 3.76"},{"build":"Zuse main 9398cf44 (before fix)","set":"1 chat × 1,500 msgs","run":1,"launch":564.679958,"launchError":null,"memory":384.22110748291016,"cpu":null,"lagP50":33.406,"lagP95":43.455,"open":128.6,"switch":null,"load":"3.31 3.27 3.52"},{"build":"Zuse main 9398cf44 (before fix)","set":"1 chat × 1,500 msgs","run":2,"launch":635.149916,"launchError":null,"memory":386.54920959472656,"cpu":null,"lagP50":33.559,"lagP95":43.794,"open":123.811,"switch":null,"load":"2.44 3.04 3.42"},{"build":"Zuse main 9398cf44 (before fix)","set":"1 chat × 1,500 msgs","run":3,"launch":623.105625,"launchError":null,"memory":381.56481170654297,"cpu":1.3420399804327563,"lagP50":33.29,"lagP95":43.561,"open":129.302,"switch":null,"load":"1.94 2.82 3.31"},{"build":"Zuse main 9398cf44 (before fix)","set":"1 chat × 1,500 msgs","run":4,"launch":602.006917,"launchError":null,"memory":null,"cpu":null,"lagP50":null,"lagP95":null,"open":null,"switch":null,"load":"2.45 2.80 3.28"},{"build":"Zuse main 9398cf44 (before fix)","set":"1 chat × 1,500 msgs","run":5,"launch":545.723751,"launchError":null,"memory":null,"cpu":null,"lagP50":null,"lagP95":null,"open":null,"switch":null,"load":"2.52 2.81 3.27"},{"build":"Zuse main 9398cf44 (before fix)","set":"2 chats × 20 msgs","run":1,"launch":638.724833,"launchError":null,"memory":375.5960159301758,"cpu":null,"lagP50":35.896,"lagP95":52.405,"open":null,"switch":null,"load":"3.46 3.51 3.64"},{"build":"Zuse main 9398cf44 (before fix)","set":"2 chats × 20 msgs","run":2,"launch":588.629125,"launchError":null,"memory":373.73668670654297,"cpu":null,"lagP50":35.05,"lagP95":50.756,"open":null,"switch":null,"load":"3.57 3.56 3.65"},{"build":"Zuse main 9398cf44 (before fix)","set":"2 chats × 20 msgs","run":3,"launch":600.868666,"launchError":null,"memory":374.5960388183594,"cpu":1.1254371202466302,"lagP50":34.528,"lagP95":42.185,"open":null,"switch":null,"load":"2.32 3.24 3.53"},{"build":"Zuse main 9398cf44 (before fix)","set":"2 chats × 20 msgs","run":4,"launch":625.387625,"launchError":null,"memory":null,"cpu":null,"lagP50":null,"lagP95":null,"open":null,"switch":null,"load":"2.11 3.06 3.45"},{"build":"Zuse main 9398cf44 (before fix)","set":"2 chats × 20 msgs","run":5,"launch":545.921479,"launchError":null,"memory":null,"cpu":null,"lagP50":null,"lagP95":null,"open":null,"switch":null,"load":"2.47 3.11 3.46"},{"build":"Zuse with fix (PR #188)","set":"20 chats × 5,000 msgs (100k)","run":1,"launch":611.454124,"launchError":null,"memory":401.5335388183594,"cpu":0.9302231787605699,"lagP50":33.847,"lagP95":46.625,"open":null,"switch":73.849,"load":"7.31 23.38 26.26"},{"build":"Zuse with fix (PR #188)","set":"20 chats × 5,000 msgs (100k)","run":2,"launch":713.081958,"launchError":null,"memory":403.48673248291016,"cpu":null,"lagP50":35.438,"lagP95":51.255,"open":null,"switch":71.223,"load":"5.97 20.30 24.93"},{"build":"Zuse with fix (PR #188)","set":"20 chats × 5,000 msgs (100k)","run":3,"launch":695.619249,"launchError":null,"memory":404.17420959472656,"cpu":null,"lagP50":36.435,"lagP95":48.209,"open":null,"switch":176.243,"load":"5.53 17.72 23.68"},{"build":"Zuse with fix (PR #188)","set":"20 chats × 1,500 msgs","run":1,"launch":3816.003625,"launchError":null,"memory":384.45545959472656,"cpu":0.752069667182566,"lagP50":35.065,"lagP95":50.332,"open":null,"switch":93.328,"load":"24.30 19.15 23.65"},{"build":"Zuse with fix (PR #188)","set":"20 chats × 1,500 msgs","run":2,"launch":946.843709,"launchError":null,"memory":388.29925537109375,"cpu":3.561139107382278,"lagP50":48.316,"lagP95":172.131,"open":null,"switch":95.857,"load":"18.02 18.85 23.29"},{"build":"Zuse with fix (PR #188)","set":"20 chats × 1,500 msgs","run":3,"launch":854.000458,"launchError":null,"memory":390.20550537109375,"cpu":1.0553201034018325,"lagP50":45.977,"lagP95":61.515,"open":null,"switch":90.263,"load":"29.54 23.20 24.57"},{"build":"T3 Code 0.1.9","set":"1 chat × 10,000 msgs","run":1,"launch":1152.863479,"launchError":null,"memory":982.7580795288086,"cpu":6.549397905182051,"lagP50":26.711,"lagP95":34.176,"open":454.987,"switch":null,"load":"2.35 2.80 3.06"},{"build":"T3 Code 0.1.9","set":"1 chat × 10,000 msgs","run":2,"launch":1184.481625,"launchError":null,"memory":958.9373550415039,"cpu":null,"lagP50":26.197,"lagP95":33.697,"open":170.621,"switch":null,"load":"5.09 3.46 3.29"},{"build":"T3 Code 0.1.9","set":"1 chat × 10,000 msgs","run":3,"launch":1148.196105,"launchError":null,"memory":956.0076904296875,"cpu":7.22557115777244,"lagP50":24.47,"lagP95":36.827,"open":184.339,"switch":null,"load":"2.94 3.10 3.16"},{"build":"T3 Code 0.1.9","set":"1 chat × 10,000 msgs","run":4,"launch":1145.460916,"launchError":null,"memory":null,"cpu":null,"lagP50":null,"lagP95":null,"open":null,"switch":null,"load":"6.06 3.71 3.37"},{"build":"T3 Code 0.1.9","set":"1 chat × 10,000 msgs","run":5,"launch":1138.363417,"launchError":null,"memory":null,"cpu":null,"lagP50":null,"lagP95":null,"open":null,"switch":null,"load":"5.65 3.66 3.36"},{"build":"T3 Code 0.1.9","set":"20 chats × 5,000 msgs (100k)","run":1,"launch":1181.836896,"launchError":null,"memory":1012.1176147460938,"cpu":6.023784548954541,"lagP50":26.9,"lagP95":34.04,"open":null,"switch":415.373,"load":"5.08 3.61 3.34"},{"build":"T3 Code 0.1.9","set":"20 chats × 5,000 msgs (100k)","run":2,"launch":1168.431625,"launchError":null,"memory":990.9609298706055,"cpu":5.2581392784698,"lagP50":25.526,"lagP95":38.415,"open":null,"switch":182.756,"load":"2.99 3.27 3.23"},{"build":"T3 Code 0.1.9","set":"20 chats × 5,000 msgs (100k)","run":3,"launch":1157.827126,"launchError":null,"memory":753.3046569824219,"cpu":null,"lagP50":null,"lagP95":null,"open":null,"switch":null,"load":"3.39 3.31 3.25"},{"build":"T3 Code 0.1.9","set":"20 chats × 5,000 msgs (100k)","run":4,"launch":1160.921645,"launchError":null,"memory":null,"cpu":null,"lagP50":null,"lagP95":null,"open":null,"switch":null,"load":"4.40 3.48 3.30"},{"build":"T3 Code 0.1.9","set":"20 chats × 5,000 msgs (100k)","run":5,"launch":1161.960833,"launchError":null,"memory":null,"cpu":null,"lagP50":null,"lagP95":null,"open":null,"switch":null,"load":"4.13 3.44 3.29"},{"build":"T3 Code 0.1.9","set":"20 chats × 1,500 msgs","run":1,"launch":1152.289583,"launchError":null,"memory":992.2265090942383,"cpu":6.571383097312468,"lagP50":24.984,"lagP95":34.024,"open":null,"switch":189.19,"load":"3.25 3.33 3.29"},{"build":"T3 Code 0.1.9","set":"20 chats × 1,500 msgs","run":2,"launch":1152.896041,"launchError":null,"memory":995.5390777587891,"cpu":null,"lagP50":25.83,"lagP95":33.584,"open":null,"switch":174.598,"load":"2.04 2.99 3.16"},{"build":"T3 Code 0.1.9","set":"20 chats × 1,500 msgs","run":3,"launch":1173.077271,"launchError":null,"memory":992.1952819824219,"cpu":6.836336814277034,"lagP50":25.365,"lagP95":37.127,"open":null,"switch":181.131,"load":"2.35 2.93 3.13"},{"build":"T3 Code 0.1.9","set":"20 chats × 1,500 msgs","run":4,"launch":1174.56752,"launchError":null,"memory":null,"cpu":null,"lagP50":null,"lagP95":null,"open":null,"switch":null,"load":"2.24 2.80 3.07"},{"build":"T3 Code 0.1.9","set":"20 chats × 1,500 msgs","run":5,"launch":1177.68502,"launchError":null,"memory":null,"cpu":null,"lagP50":null,"lagP95":null,"open":null,"switch":null,"load":"2.22 2.79 3.06"},{"build":"T3 Code 0.1.9","set":"1 chat × 1,500 msgs","run":1,"launch":1143.75825,"launchError":null,"memory":956.5154800415039,"cpu":6.359343283114502,"lagP50":25.881,"lagP95":41.659,"open":169.607,"switch":null,"load":"3.99 3.27 3.30"},{"build":"T3 Code 0.1.9","set":"1 chat × 1,500 msgs","run":2,"launch":1155.963146,"launchError":null,"memory":962.0860443115234,"cpu":null,"lagP50":22.071,"lagP95":33.822,"open":null,"switch":null,"load":"2.93 3.10 3.24"},{"build":"T3 Code 0.1.9","set":"1 chat × 1,500 msgs","run":3,"launch":1142.969125,"launchError":null,"memory":955.8983383178711,"cpu":7.204901666058032,"lagP50":23.589,"lagP95":30.914,"open":192.941,"switch":null,"load":"2.56 3.06 3.21"},{"build":"T3 Code 0.1.9","set":"1 chat × 1,500 msgs","run":4,"launch":1154.993207,"launchError":null,"memory":null,"cpu":null,"lagP50":null,"lagP95":null,"open":null,"switch":null,"load":"3.25 3.17 3.25"},{"build":"T3 Code 0.1.9","set":"1 chat × 1,500 msgs","run":5,"launch":1136.506979,"launchError":null,"memory":null,"cpu":null,"lagP50":null,"lagP95":null,"open":null,"switch":null,"load":"3.47 3.22 3.26"},{"build":"T3 Code 0.1.9","set":"2 chats × 20 msgs","run":1,"launch":1151.619104,"launchError":null,"memory":965.8515892028809,"cpu":9.223699679375901,"lagP50":23.066,"lagP95":38.549,"open":null,"switch":null,"load":"2.88 3.02 3.25"},{"build":"T3 Code 0.1.9","set":"2 chats × 20 msgs","run":2,"launch":1172.625979,"launchError":null,"memory":964.0547027587891,"cpu":null,"lagP50":24.503,"lagP95":36.792,"open":null,"switch":null,"load":"3.14 3.04 3.24"},{"build":"T3 Code 0.1.9","set":"2 chats × 20 msgs","run":3,"launch":1146.599103,"launchError":null,"memory":961.3123321533203,"cpu":7.3318077162505215,"lagP50":26.267,"lagP95":34.511,"open":null,"switch":null,"load":"4.43 3.32 3.33"},{"build":"T3 Code 0.1.9","set":"2 chats × 20 msgs","run":4,"launch":1144.937416,"launchError":null,"memory":null,"cpu":null,"lagP50":null,"lagP95":null,"open":null,"switch":null,"load":"2.60 2.99 3.21"},{"build":"T3 Code 0.1.9","set":"2 chats × 20 msgs","run":5,"launch":1153.075729,"launchError":null,"memory":null,"cpu":null,"lagP50":null,"lagP95":null,"open":null,"switch":null,"load":"2.72 3.01 3.21"}]};
+const $ = id => document.getElementById(id);
+const fmt = (v, d = 0) => v == null || !Number.isFinite(v) ? '—' : v.toLocaleString('en-US', {minimumFractionDigits: d, maximumFractionDigits: d});
+const secs = v => v == null ? '—' : (v / 1000).toFixed(2) + ' s';
+const rows = DATA.rows;
+$('meta').textContent = `Generated ${new Date(DATA.generated).toLocaleString()} · ${DATA.raw.length} runs`;
+
+// Headline tiles.
+const small = rows[0];
+const fixedVals = rows.filter(r => r.zuseFixedCpu != null).map(r => r.zuseFixedCpu);
+const tiles = [
+  {label: 'Open app → ready to type', value: secs(small.zuse.launch), vs: `T3 Code ${secs(small.t3.launch)} · ${(small.t3.launch / small.zuse.launch).toFixed(1)}× faster`},
+  {label: 'Memory at rest', value: fmt(small.zuse.memory) + ' MB', vs: `T3 Code ${fmt(small.t3.memory)} MB · ${(small.t3.memory / small.zuse.memory).toFixed(1)}× less`},
+  {label: 'Switch between 5,000-msg chats', value: fmt(rows[4].zuse.switch) + ' ms', vs: `T3 Code ${fmt(rows[4].t3.switch)} ms`},
+  {label: 'Idle CPU with 20 chats (fixed)', value: `~${fmt(Math.max(...fixedVals), 1)}%`, vs: `was ~29% · T3 Code ${fmt(rows[3].t3.cpu, 1)}%`},
+];
+$('tiles').innerHTML = tiles.map(t => `<div class="card tile"><div class="label">${t.label}</div><div class="value">${t.value}</div><div class="vs">${t.vs}</div></div>`).join('');
+
+// Grouped horizontal bars, one small multiple per metric. One axis each.
+const tip = $('tip');
+function showTip(e, html) { tip.innerHTML = html; tip.style.opacity = 1; const x = Math.min(e.clientX + 14, innerWidth - 300); tip.style.left = x + 'px'; tip.style.top = (e.clientY + 14) + 'px'; }
+function hideTip() { tip.style.opacity = 0; }
+function chart({title, sub, get, unit, digits = 0, only}) {
+  const items = rows.filter(r => (only ? only.includes(r.id) : true) && (get(r, 'zuse') != null || get(r, 't3') != null))
+    .map(r => ({short: r.short, label: r.label, zuse: get(r, 'zuse'), t3: get(r, 't3')}));
+  return barChart({title, sub, unit, digits, items, t3Name: 'T3 Code 0.1.9'});
+}
+function barChart({title, sub, unit, digits = 0, items, t3Name, labelW = 128}) {
+  const get = (r, k) => r[k];
+  const sets = items;
+  const W = 460, rowH = 44, barH = 14, top = 6;
+  const H = top + sets.length * rowH + 22;
+  const peak = Math.max(...sets.flatMap(r => [get(r, 'zuse') ?? 0, get(r, 't3') ?? 0]));
+  // Round tick step (1, 2, 2.5 or 5 × 10^n), three ticks, axis ends just past the last.
+  const raw = peak / 2, mag = 10 ** Math.floor(Math.log10(raw)), step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(v => v >= raw);
+  const max = step * 2 * 1.12;
+  const x = v => labelW + (v / max) * (W - labelW - 40);
+  let s = `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="${title}">`;
+  for (const t of [0, 1, 2]) { const gx = x(step * t); s += `<line x1="${gx}" x2="${gx}" y1="${top}" y2="${H - 20}" stroke="var(--grid)"/>`; s += `<text x="${gx}" y="${H - 6}" text-anchor="middle">${fmt(step * t, step < 1 ? 1 : 0)}</text>`; }
+  sets.forEach((r, i) => {
+    const y = top + i * rowH + 6;
+    s += `<text x="0" y="${y + barH + 3}">${r.short}</text>`;
+    [['zuse', 'Zuse', 0], ['t3', t3Name, barH + 2]].forEach(([k, name, dy]) => {
+      const v = get(r, k); if (v == null) return;
+      const w = Math.max(x(v) - labelW, 2), by = y + dy;
+      // Rounded data-end, square at the baseline.
+      s += `<path class="mark" fill="var(--${k})" d="M${labelW},${by} h${w - 4} a4,4 0 0 1 4,4 v${barH - 8} a4,4 0 0 1 -4,4 h${-(w - 4)} z" data-tip="<b>${name}</b><div>${r.label}</div><div>${title}: <b>${fmt(v, digits)} ${unit}</b></div>"/>`;
+      s += `<text class="val" x="${labelW + w + 6}" y="${by + barH - 3}">${fmt(v, digits)}</text>`;
+    });
+  });
+  s += '</svg>';
+  return `<div class="card"><h3>${title}</h3><p class="chart-sub">${sub}</p>${s}</div>`;
+}
+const zuseCpu = (r, k) => k === 'zuse' ? (r.zuseFixedCpu ?? r.zuse?.cpu) : r.t3?.cpu;
+$('charts').innerHTML = [
+  chart({title: 'Open app → ready to type', sub: 'milliseconds, median of 5 launches', unit: 'ms', get: (r, k) => r[k]?.launch}),
+  chart({title: 'Memory at rest', sub: 'MB, all app processes', unit: 'MB', get: (r, k) => r[k]?.memory}),
+  chart({title: 'Idle CPU', sub: '% of one core, 20 s at rest (Zuse 20-chat sets after the fix)', unit: '%', digits: 1, get: zuseCpu}),
+  chart({title: 'Typing lag (median)', sub: 'ms from keystroke to character on screen', unit: 'ms', digits: 1, get: (r, k) => r[k]?.lagP50}),
+  chart({title: 'Open / switch chat', sub: 'ms from sidebar click to the chat\'s last message on screen', unit: 'ms', get: (r, k) => r[k]?.open ?? r[k]?.switch, only: ['mid1500', 'big', 'many1500', 'many']}),
+  chart({title: 'Longest scroll stall', sub: 'ms, worst frame gap while scrolling 120 steps', unit: 'ms', get: (r, k) => r[k]?.scrollMax, only: ['mid1500', 'big', 'many1500', 'many']}),
+].join('');
+
+// Earlier 3G benchmark (browser UI), values from internal-docs/t3-network-benchmark.md.
+const NET = {
+  load: [{short: 'Cold first load', label: 'Cold usable UI', zuse: 76.9, t3: 64.3}, {short: 'Cached reload', label: 'Fully cached reload', zuse: 4.7, t3: 23.1}],
+  chat: [
+    {short: 'First history', label: 'Initial chat history received', zuse: 0.521, t3: 1.095},
+    {short: 'Older history', label: 'Older history received', zuse: 0.736, t3: 0.469},
+    {short: 'First reply text', label: 'Send to first text received', zuse: 0.792, t3: 1.641},
+    {short: 'Stop', label: 'Stop to provider interruption', zuse: 0.839, t3: 0.379},
+    {short: 'Resume after drop', label: 'Live text resumes after disconnect', zuse: 2.460, t3: 5.195},
+  ],
+  bytes: [
+    {short: 'Open chat', label: 'Chat opening, encoded download', zuse: 1.561, t3: 2.675},
+    {short: 'Older history', label: 'Older history, encoded download', zuse: 1.380, t3: 1.510},
+    {short: 'Text reply', label: 'Text response, encoded socket download', zuse: 4.968, t3: 7.613},
+    {short: 'Tool trace', label: 'Tool trace, encoded socket download', zuse: 3.980, t3: 8.869},
+    {short: 'Reconnect', label: 'Reconnect, encoded socket download', zuse: 9.092, t3: 16.526},
+  ],
+};
+$('net-charts').innerHTML = [
+  barChart({title: 'Page load over 3G', sub: 'seconds until usable · cold = first visit, cached = warm reload', unit: 's', digits: 1, items: NET.load, t3Name: 'T3 Code 0.1.7', labelW: 128}),
+  barChart({title: 'Chat actions over 3G', sub: 'seconds, 1,500-message chat', unit: 's', digits: 2, items: NET.chat, t3Name: 'T3 Code 0.1.7', labelW: 128}),
+  barChart({title: 'Data per chat action', sub: 'kilobytes actually sent over the wire (encoded)', unit: 'KB', digits: 1, items: NET.bytes, t3Name: 'T3 Code 0.1.7', labelW: 128}),
+].join('');
+const netRows = [
+  ['Cold usable UI', '76.9 s', '64.3 s', 't3'], ['Fully cached reload', '4.7 s', '23.1 s', 'zuse'],
+  ['Cold HTTP transferred', '3.72 MB', '2.89 MB', 't3'], ['Cached reload transferred', '1.3 KB', '85.8 KB', 'zuse'], ['Cold same-origin responses', '10', '290', 'zuse'],
+  ...NET.chat.map(r => [r.label, r.zuse.toFixed(3) + ' s', r.t3.toFixed(3) + ' s', r.zuse < r.t3 ? 'zuse' : 't3']),
+  ...NET.bytes.map(r => [r.label, Math.round(r.zuse * 1000).toLocaleString('en-US') + ' B', Math.round(r.t3 * 1000).toLocaleString('en-US') + ' B', r.zuse < r.t3 ? 'zuse' : 't3']),
+];
+$('net-table').innerHTML = '<tr><th>3G metric (median of 3)</th><th>Zuse (earlier build)</th><th>T3 Code 0.1.7</th><th>Better</th></tr>' +
+  netRows.map(([m, z, t, w]) => `<tr><td>${m}</td><td class="${w === 'zuse' ? 'win' : ''}">${z}</td><td class="${w === 't3' ? 'win' : ''}">${t}</td><td>${w === 'zuse' ? 'Zuse' : 'T3 Code'}</td></tr>`).join('');
+
+// Full table, better value in bold.
+const metrics = [
+  ['Open app → ready (ms)', (r, k) => r[k]?.launch, 0],
+  ['Memory (MB)', (r, k) => r[k]?.memory, 0],
+  ['Idle CPU (%)', zuseCpu, 1],
+  ['Typing lag p50 (ms)', (r, k) => r[k]?.lagP50, 1],
+  ['Typing lag p95 (ms)', (r, k) => r[k]?.lagP95, 1],
+  ['Open big chat (ms)', (r, k) => r[k]?.open, 0],
+  ['Switch chat (ms)', (r, k) => r[k]?.switch, 0],
+  ['Slow scroll frames (>33 ms)', (r, k) => r[k]?.scrollSlow, 0],
+  ['Longest scroll stall (ms)', (r, k) => r[k]?.scrollMax, 0],
+];
+let t = '<tr><th>Data set</th><th>App</th>' + metrics.map(m => `<th>${m[0]}</th>`).join('') + '</tr>';
+for (const r of rows) for (const [k, name] of [['zuse', 'Zuse'], ['t3', 'T3 Code']]) {
+  t += `<tr><td>${k === 'zuse' ? r.label : ''}</td><td class="who">${name}</td>` + metrics.map(([, g, d]) => {
+    const v = g(r, k), o = g(r, k === 'zuse' ? 't3' : 'zuse');
+    const win = v != null && o != null && v < o;
+    return `<td class="${win ? 'win' : ''}">${fmt(v, d)}</td>`;
+  }).join('') + '</tr>';
+}
+$('table').innerHTML = t;
+
+document.querySelectorAll('[data-tip]').forEach(m => { m.addEventListener('mousemove', e => showTip(e, m.dataset.tip)); m.addEventListener('mouseleave', hideTip); });
+
+const rawCols = [['build', 'Build'], ['set', 'Data set'], ['run', 'Run'], ['launch', 'Ready (ms)', 0], ['memory', 'Memory (MB)', 0], ['cpu', 'Idle CPU (%)', 1], ['lagP50', 'Lag p50', 1], ['lagP95', 'Lag p95', 1], ['open', 'Open (ms)', 0], ['switch', 'Switch (ms)', 0], ['load', 'Load avg']];
+$('raw').innerHTML = '<tr>' + rawCols.map(c => `<th>${c[1]}</th>`).join('') + '</tr>' + DATA.raw.sort((a, b) => a.build.localeCompare(b.build) || a.set.localeCompare(b.set) || a.run - b.run)
+  .map(r => '<tr>' + rawCols.map(([k, , d]) => `<td>${d == null ? (r[k] ?? '—') : (k === 'launch' && r.launchError ? 'failed' : fmt(r[k], d))}</td>`).join('') + '</tr>').join('');
+</script>
+</body>
+</html>

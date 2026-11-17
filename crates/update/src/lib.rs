@@ -42,6 +42,7 @@ use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt as _;
 use tokio::sync::watch;
 
+mod linux;
 mod release;
 pub use release::{ReleaseChannel, initialize_channel, load_channel, save_channel};
 
@@ -523,6 +524,12 @@ fn release_file_url(edge_url: &str, version: &str, file: &str) -> anyhow::Result
 /// How this binary was installed — decides the update path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InstallKind {
+    /// A per-user Linux package installed with the bundled install.py.
+    LinuxPackage {
+        package: PathBuf,
+        data_home: PathBuf,
+        bin_home: PathBuf,
+    },
     /// `~/.zuse/app/<ver>/zuse` behind the `current` symlink
     /// (curl|sh installer, the Linux tarball's `install.sh`, or a previous
     /// `zuse update`).
@@ -569,6 +576,7 @@ impl InstallKind {
     /// Whether the desktop app downloads and installs updates itself.
     pub fn supports_desktop_update(&self) -> bool {
         match self {
+            Self::LinuxPackage { .. } => cfg!(target_os = "linux"),
             Self::MacApp { .. } => true,
             // The desktop path relaunches a GUI binary; on Linux that binary
             // is the managed install itself.
@@ -584,6 +592,14 @@ impl InstallKind {
     /// after a wasted download with a raw rename error.
     pub fn desktop_update_blocker(&self) -> Option<UpdateBlocker> {
         match self {
+            Self::LinuxPackage {
+                data_home,
+                bin_home,
+                ..
+            } => [data_home.join("zuse/packages"), bin_home.clone()]
+                .into_iter()
+                .find(|path| !dir_writable(path))
+                .map(UpdateBlocker::NotWritable),
             Self::MacApp { bundle } => mac_bundle_blocker(bundle, dir_writable),
             Self::Managed { app_root } => {
                 (!dir_writable(app_root)).then(|| UpdateBlocker::NotWritable(app_root.clone()))
@@ -603,6 +619,7 @@ impl InstallKind {
         data_dir: &Path,
     ) -> anyhow::Result<PathBuf> {
         match self {
+            Self::LinuxPackage { .. } => linux::stage(edge_url, manifest, data_dir).await,
             Self::MacApp { .. } => stage_mac_app(edge_url, manifest, data_dir).await,
             Self::Managed { app_root } if self.supports_desktop_update() => {
                 stage_headless(edge_url, manifest, app_root).await
@@ -621,6 +638,17 @@ impl InstallKind {
     /// must quit after this succeeds.
     pub fn apply_desktop(&self, staged: &Path, relaunch: bool) -> anyhow::Result<()> {
         match self {
+            Self::LinuxPackage {
+                data_home,
+                bin_home,
+                ..
+            } => {
+                linux::apply(staged, data_home, bin_home)?;
+                if relaunch {
+                    relaunch_after_exit(&bin_home.join("zuse"), Path::new(""));
+                }
+                Ok(())
+            }
             Self::MacApp { bundle } => {
                 apply_mac_app(staged, bundle)?;
                 // The swap copied the staged bundle; the cache is spent.
@@ -704,6 +732,11 @@ fn detect_install_from(exe: &Path, home: Option<&Path>) -> InstallKind {
 }
 
 fn detect_install_from_for_os(exe: &Path, home: Option<&Path>, os: &str) -> InstallKind {
+    if os == "linux"
+        && let Some(install) = linux::detect(exe, home)
+    {
+        return install;
+    }
     #[cfg(windows)]
     if os == "windows" && windows::is_managed(exe) {
         return InstallKind::WindowsPortable {
@@ -740,6 +773,13 @@ fn detect_install_from_for_os(exe: &Path, home: Option<&Path>, os: &str) -> Inst
 /// has already replaced its binary.
 pub fn installed_version(kind: &InstallKind) -> Option<String> {
     let version = match kind {
+        InstallKind::LinuxPackage { bin_home, .. } => {
+            let launcher = std::fs::canonicalize(bin_home.join("zuse")).ok()?;
+            let package = launcher.parent()?.parent()?;
+            let identity: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(package.join("release.json")).ok()?).ok()?;
+            identity["version"].as_str()?.to_owned()
+        }
         InstallKind::Managed { app_root } => std::fs::read_link(app_root.join("current"))
             .ok()?
             .file_name()?
@@ -912,6 +952,15 @@ pub async fn stage_headless(
                 "--strip-components=1",
             ],
         )?;
+        // Current archives keep the native binary and assets under libexec,
+        // with relocatable launchers under bin. Preserve the legacy entrypoint.
+        #[cfg(unix)]
+        if !unpacked.join("zuse").is_file()
+            && unpacked.join("libexec/zuse").is_file()
+            && unpacked.join("bin/zuse").is_file()
+        {
+            std::os::unix::fs::symlink("bin/zuse", unpacked.join("zuse"))?;
+        }
         if !unpacked.join("zuse").is_file() {
             bail!("tarball {file} did not contain a zuse binary");
         }
@@ -2236,8 +2285,9 @@ mod tests {
         );
         let mac = tmp.path().join("Zuse.app");
         std::fs::create_dir_all(mac.join("Contents/MacOS")).unwrap();
+        std::fs::create_dir_all(mac.join("Contents/Resources")).unwrap();
         std::fs::write(
-            mac.join("Contents/MacOS/release.json"),
+            mac.join("Contents/Resources/release.json"),
             r#"{"version":"0.4.1-preview.12"}"#,
         )
         .unwrap();
@@ -2445,6 +2495,56 @@ mod tests {
         server.abort();
         assert_eq!(staged, app_root.join("9.9.9"));
         assert!(staged.join("zuse").is_file());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn legacy_managed_installs_accept_the_current_package_layout() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("package");
+        std::fs::create_dir_all(root.join("libexec/web")).unwrap();
+        std::fs::create_dir_all(root.join("bin")).unwrap();
+        std::fs::write(root.join("libexec/zuse"), "#!/bin/sh\necho 'zuse 9.9.9'\n").unwrap();
+        std::fs::write(root.join("bin/zuse"), "#!/bin/sh\nscript=$0\nwhile [ -L \"$script\" ]; do script=$(dirname \"$script\")/$(readlink \"$script\"); done\nexec \"$(dirname \"$script\")/../libexec/zuse\" \"$@\"\n").unwrap();
+        for binary in ["libexec/zuse", "bin/zuse"] {
+            std::fs::set_permissions(root.join(binary), std::fs::Permissions::from_mode(0o755))
+                .unwrap();
+        }
+        std::fs::write(root.join("libexec/web/index.html"), "assets").unwrap();
+        let archive = tmp.path().join("package.tar.gz");
+        assert!(
+            std::process::Command::new("tar")
+                .env("COPYFILE_DISABLE", "1")
+                .arg("-czf")
+                .arg(&archive)
+                .arg("-C")
+                .arg(tmp.path())
+                .arg("package")
+                .status()
+                .unwrap()
+                .success()
+        );
+        let bytes = std::fs::read(archive).unwrap();
+        let manifest = Manifest {
+            version: "9.9.9".into(),
+            files: [(
+                headless_artifact("9.9.9"),
+                FileMeta {
+                    sha256: Some(format!("{:x}", Sha256::digest(&bytes))),
+                },
+            )]
+            .into(),
+        };
+        let (base, server) = serve_forever(bytes).await;
+        let app = tmp.path().join("app");
+        let staged = stage_headless(&base, &manifest, &app).await.unwrap();
+        server.abort();
+        apply_headless(&app, "9.9.9").unwrap();
+        verify_staged_binary(&app.join("current/zuse"), "9.9.9")
+            .await
+            .unwrap();
+        assert!(staged.join("libexec/web/index.html").is_file());
     }
 
     #[tokio::test]
