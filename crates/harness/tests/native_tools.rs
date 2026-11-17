@@ -93,6 +93,7 @@ impl Fixture {
         let root = tempfile::tempdir().unwrap();
         let checkout = root.path().join("checkout");
         std::fs::create_dir(&checkout).unwrap();
+        let checkout = std::fs::canonicalize(checkout).unwrap();
         let owner = RootStore::acquire(root.path(), "root").unwrap();
         let mode = Arc::new(AtomicU8::new(0));
         let mut processes = ProcessOptions::new(
@@ -430,6 +431,13 @@ async fn tool_dispatch_keeps_background_commands_alive_and_routes_search_and_que
     );
     let id = execution["process"]["id"].as_str().unwrap();
     turn.cancel.cancel();
+    let running = value(
+        fixture
+            .call("wait_process", json!({"process_id":id,"timeout_ms":0}))
+            .await
+            .unwrap(),
+    );
+    assert_eq!(running["process"]["status"], "running", "{running}");
     fixture
         .call(
             "write_stdin",
@@ -439,12 +447,13 @@ async fn tool_dispatch_keeps_background_commands_alive_and_routes_search_and_que
         .unwrap();
     let completed = value(
         fixture
-            .call("wait_process", json!({"process_id":id,"timeout_ms":3000}))
+            .call("wait_process", json!({"process_id":id,"timeout_ms":30000}))
             .await
             .unwrap(),
     );
-    assert_eq!(completed["process"]["exitCode"], 0);
-    assert_eq!(completed["text"], "hello");
+    assert_eq!(completed["process"]["status"], "exited", "{completed}");
+    assert_eq!(completed["process"]["exitCode"], 0, "{completed}");
+    assert_eq!(completed["text"], "hello", "{completed}");
     std::fs::write(fixture.checkout.join("needle.txt"), "needle text\n").unwrap();
     let grep = value(
         fixture

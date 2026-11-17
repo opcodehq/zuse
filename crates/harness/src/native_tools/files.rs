@@ -466,7 +466,7 @@ mod creation_tests {
     fn existing_file_rejects_creation_before_constructing_replacement() {
         let directory = tempfile::tempdir().unwrap();
         let files = CheckoutFiles::open(directory.path(), directory.path().join("locks")).unwrap();
-        let path = directory.path().join("existing.txt");
+        let path = files.root().join("existing.txt");
         std::fs::write(&path, "original").unwrap();
         let result = files.change(
             &path,
@@ -484,7 +484,7 @@ mod creation_tests {
     fn creation_race_preserves_the_other_writers_content() {
         let directory = tempfile::tempdir().unwrap();
         let files = CheckoutFiles::open(directory.path(), directory.path().join("locks")).unwrap();
-        let path = directory.path().join("racing.txt");
+        let path = files.root().join("racing.txt");
         let result = files.change(
             &path,
             None,
