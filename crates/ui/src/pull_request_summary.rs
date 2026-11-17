@@ -784,11 +784,44 @@ impl PullRequestDetailPage {
             .flex()
             .flex_col()
             .gap(px(8.0))
-            .child(page_title(
-                detail.title.clone(),
-                self.title_reserve(&detail.state, detail.is_draft),
-                theme,
-            ))
+            .when(self.edit_mode == Some(EditMode::Title), |el| {
+                el.children(self.editor(theme, cx))
+            })
+            .when(self.edit_mode != Some(EditMode::Title), |el| {
+                el.child(
+                    div()
+                        .flex()
+                        .items_start()
+                        .child(
+                            page_title(
+                                detail.title.clone(),
+                                self.title_reserve(&detail.state, detail.is_draft),
+                                theme,
+                            )
+                            .flex_1(),
+                        )
+                        .when(self.edit_mode.is_none() && !self.updating_pr, |el| {
+                            el.child(
+                                action("pr-edit-title", "Edit title", theme)
+                                    .min_h(px(24.0))
+                                    .on_click(cx.listener(|page, _, window, cx| {
+                                        if let Some(detail) = &page.detail {
+                                            let title = detail.title.clone();
+                                            page.edit_title
+                                                .update(cx, |input, cx| input.set_text(&title, cx));
+                                            page.edit_mode = Some(EditMode::Title);
+                                            page.update_notice = None;
+                                            window.focus(
+                                                &page.edit_title.read(cx).focus_handle(cx),
+                                                cx,
+                                            );
+                                            cx.notify();
+                                        }
+                                    })),
+                            )
+                        }),
+                )
+            })
             .child(
                 div()
                     .id("pr-detail-meta")
@@ -1003,7 +1036,7 @@ impl PullRequestDetailPage {
         let long = detail.body.len() > DESCRIPTION_LONG_BYTES
             || detail.body.lines().count() > DESCRIPTION_LONG_LINES;
         let clamped = long && !self.description_expanded;
-        let editing_description = self.edit_mode == Some(EditMode::Details);
+        let editing_description = self.edit_mode == Some(EditMode::Description);
         let description = (!collapsed && !editing_description).then(|| {
             div()
                 .flex()
@@ -1248,26 +1281,22 @@ impl PullRequestDetailPage {
                     .items_center()
                     .justify_between()
                     .child(description_toggle)
-                    .when(!editing_description, |el| {
+                    .when(self.edit_mode.is_none() && !self.updating_pr, |el| {
                         el.child(
-                            action("pr-edit-details", "Edit title and description", theme)
+                            action("pr-edit-details", "Edit description", theme)
                                 .min_h(px(24.0))
                                 .mr(px(8.0))
                                 .on_click(cx.listener(|page, _, window, cx| {
                                     if let Some(detail) = &page.detail {
-                                        let (title, body) =
-                                            (detail.title.clone(), detail.body.clone());
-                                        page.edit_title
-                                            .update(cx, |input, cx| input.set_text(&title, cx));
+                                        let body = detail.body.clone();
                                         page.edit_body.update(cx, |input, cx| {
                                             input.set_text(&body, cx);
                                             input.move_cursor_to_start(cx);
                                         });
-                                        page.edit_mode = Some(EditMode::Details);
+                                        page.edit_mode = Some(EditMode::Description);
                                         page.description_collapsed = false;
                                         page.update_notice = None;
-                                        window
-                                            .focus(&page.edit_title.read(cx).focus_handle(cx), cx);
+                                        window.focus(&page.edit_body.read(cx).focus_handle(cx), cx);
                                         cx.notify();
                                     }
                                 })),
@@ -1275,7 +1304,12 @@ impl PullRequestDetailPage {
                     }),
             )
             .when(editing_description && !collapsed, |el| {
-                el.children(self.editor(theme, cx))
+                el.child(
+                    div()
+                        .px(px(8.0))
+                        .pt(px(8.0))
+                        .children(self.editor(theme, cx)),
+                )
             })
             .children(description)
             .child(div().h(px(24.0)).flex_none())

@@ -373,7 +373,8 @@ enum Tab {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum EditMode {
-    Details,
+    Title,
+    Description,
     Reviewers,
 }
 
@@ -791,14 +792,14 @@ impl PullRequestDetailPage {
             edit_mode: None,
             edit_title: cx.new(|cx| {
                 crate::composer::ComposerInput::new("Pull request title", cx)
-                    .with_text_metrics(13.0, 20.0)
+                    .with_text_metrics(18.0, 28.0)
                     .with_single_line()
                     .with_tab_stop()
             }),
             edit_body: cx.new(|cx| {
                 crate::composer::ComposerInput::new("Description", cx)
                     .with_text_metrics(13.0, 20.0)
-                    .with_viewport_height(160.0)
+                    .with_viewport_height(120.0)
                     .with_enter_newline()
                     .with_tab_stop()
             }),
@@ -1182,6 +1183,9 @@ impl PullRequestDetailPage {
                         el.child(
                             row("pr-add-reviewers", crate::icons::EYE, "Add reviewers").on_click(
                                 cx.listener(|page, _, window, cx| {
+                                    if page.edit_mode.is_some() || page.updating_pr {
+                                        return;
+                                    }
                                     page.edit_reviewers
                                         .update(cx, |input, cx| input.set_text("", cx));
                                     page.edit_mode = Some(EditMode::Reviewers);
@@ -2112,18 +2116,21 @@ impl PullRequestDetailPage {
                 .flex()
                 .flex_col()
                 .gap(px(6.0))
-                .child(
-                    div()
-                        .text_size(crate::typography::text_xs())
-                        .text_color(theme.text_muted)
-                        .child(label),
-                )
+                .when(mode == EditMode::Reviewers, |el| {
+                    el.child(
+                        div()
+                            .text_size(crate::typography::text_xs())
+                            .text_color(theme.text_muted)
+                            .child(label),
+                    )
+                })
                 .child(
                     crate::surface_chrome::input()
                         .min_w_0()
                         .when(label == "Description", |el| {
-                            el.h(px(176.0)).items_start().py(px(8.0))
+                            el.h(px(136.0)).items_start().py(px(8.0))
                         })
+                        .when(mode == EditMode::Title, |el| el.h(px(36.0)))
                         .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
                             cx.stop_propagation();
                             window.focus(&focus_input.read(cx).focus_handle(cx), cx);
@@ -2135,28 +2142,30 @@ impl PullRequestDetailPage {
             div()
                 .id("pr-editor")
                 .debug_selector(|| "pr-editor".into())
-                .mx(px(8.0))
-                .mb(px(16.0))
-                .p(px(14.0))
-                .rounded(px(8.0))
-                .border_1()
-                .border_color(theme.border)
-                .bg(theme.surface_raised)
                 .flex()
                 .flex_col()
-                .gap(px(14.0))
-                .child(
-                    div()
-                        .text_size(crate::typography::text_sm())
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .child(match mode {
-                            EditMode::Details => "Edit pull request",
-                            EditMode::Reviewers => "Add reviewers",
-                        }),
-                )
-                .when(mode == EditMode::Details, |el| {
+                .gap(px(6.0))
+                .when(mode == EditMode::Reviewers, |el| {
+                    el.mx(px(8.0))
+                        .mb(px(16.0))
+                        .p(px(14.0))
+                        .rounded(px(8.0))
+                        .border_1()
+                        .border_color(theme.border)
+                        .bg(theme.surface_raised)
+                        .gap(px(14.0))
+                        .child(
+                            div()
+                                .text_size(crate::typography::text_sm())
+                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .child("Add reviewers"),
+                        )
+                })
+                .when(mode == EditMode::Title, |el| {
                     el.child(field("Title", self.edit_title.clone()))
-                        .child(field("Description", self.edit_body.clone()))
+                })
+                .when(mode == EditMode::Description, |el| {
+                    el.child(field("Description", self.edit_body.clone()))
                 })
                 .when(mode == EditMode::Reviewers, |el| {
                     el.child(field(
@@ -2172,6 +2181,9 @@ impl PullRequestDetailPage {
                         .child(
                             action("pr-edit-cancel", "Cancel", theme).on_click(cx.listener(
                                 |page, _, _, cx| {
+                                    if page.updating_pr {
+                                        return;
+                                    }
                                     page.edit_mode = None;
                                     page.update_notice = None;
                                     cx.notify();
@@ -2201,9 +2213,13 @@ impl PullRequestDetailPage {
                                         return;
                                     }
                                     let update = match mode {
-                                        EditMode::Details => {
-                                            let title =
-                                                page.edit_title.read(cx).text().trim().to_owned();
+                                        EditMode::Title | EditMode::Description => {
+                                            let Some(detail) = &page.detail else { return };
+                                            let title = if mode == EditMode::Title {
+                                                page.edit_title.read(cx).text().trim().to_owned()
+                                            } else {
+                                                detail.title.clone()
+                                            };
                                             if title.is_empty() {
                                                 page.update_notice =
                                                     Some("Enter a pull request title.".into());
@@ -2212,7 +2228,11 @@ impl PullRequestDetailPage {
                                             }
                                             zuse_protocol::ChangeRequestUpdate::Edit {
                                                 title,
-                                                body: page.edit_body.read(cx).text().to_owned(),
+                                                body: if mode == EditMode::Description {
+                                                    page.edit_body.read(cx).text().to_owned()
+                                                } else {
+                                                    detail.body.clone()
+                                                },
                                             }
                                         }
                                         EditMode::Reviewers => {
@@ -2723,12 +2743,13 @@ fn action(id: &'static str, label: &'static str, theme: &Theme) -> gpui::Statefu
             | "pr-review-open"
             | "pr-comment-open"
             | "pr-edit-details"
+            | "pr-edit-title"
     );
     let glyph = match id {
         "pr-split" => Some(crate::icons::SPLIT_COLUMNS),
         "pr-fold-all" => Some(crate::icons::FOLD_VERTICAL),
         "pr-more" => Some(crate::icons::LIST),
-        "pr-edit-details" => Some(crate::icons::PEN),
+        "pr-edit-details" | "pr-edit-title" => Some(crate::icons::PEN),
         "pr-copy-patch" | "pr-copy-path" => Some(crate::icons::COPY),
         "pr-retry" | "pr-retry-diff" => Some(crate::icons::REFRESH),
         "pr-open-github" | "pr-review-open" | "pr-comment-open" => {
@@ -4782,6 +4803,18 @@ mod tests {
         assert!(cx.debug_bounds("pr-timeline").is_none());
         page.update(cx, |page, cx| page.select_tab(Tab::Summary, cx));
         cx.run_until_parked();
+        click(cx, "pr-edit-title");
+        assert!(cx.debug_bounds("pr-detail-title").is_none());
+        assert!(cx.debug_bounds("pr-description").is_some());
+        page.read_with(cx, |page, cx| {
+            assert!(page.edit_mode == Some(EditMode::Title));
+            assert_eq!(
+                page.edit_title.read(cx).text(),
+                page.detail.as_ref().unwrap().title
+            );
+        });
+        click(cx, "pr-edit-cancel");
+        assert!(cx.debug_bounds("pr-detail-title").is_some());
         let heading = cx.debug_bounds("pr-description-toggle").unwrap();
         let edit = cx.debug_bounds("pr-edit-details").unwrap();
         let overview = cx.debug_bounds("pr-overview").unwrap();
@@ -4802,10 +4835,12 @@ mod tests {
         assert!(cx.debug_bounds("pr-description").is_none());
         page.read_with(cx, |page, cx| {
             assert!(page.tab == Tab::Summary);
+            assert!(page.edit_mode == Some(EditMode::Description));
             assert_eq!(page.edit_body.read(cx).text(), long_description);
             assert_eq!(page.edit_body.read(cx).cursor_offset(), 0);
             assert!(!page.description_collapsed);
         });
+        assert!(cx.debug_bounds("pr-detail-title").is_some());
         click(cx, "pr-description-toggle");
         assert!(cx.debug_bounds("pr-editor").is_none());
         click(cx, "pr-description-toggle");
