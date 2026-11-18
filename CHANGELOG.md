@@ -15,6 +15,7 @@
 
 ### Fixed
 
+- Wait for OpenCode 2.x's command catalog on a run only when the composer sent one of its native commands; an ordinary prompt keeps the single fast snapshot.
 - OpenCode 2.x answers its command catalog only after its config and plugins load; Zuse now waits for that list instead of reporting no commands, so commands like `/goal` appear in the composer.
 - On Linux, an agent whose builds exhaust memory no longer takes the whole app down: each agent runs in its own systemd scope, and Zuse stops the agent using the most memory (with a notice in its chat) before the system's OOM handling kills the app.
 - Keep the Settings Back to app button clickable on Windows by excluding it from the window-drag region.

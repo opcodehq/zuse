@@ -1770,10 +1770,12 @@ async fn run_session(session: Session) {
     }
 
     // Advertise slash commands (composer popup); a warm cache skips the call.
+    // Only an explicitly selected native command waits out 2.x's boot window:
+    // an ordinary prompt takes the single snapshot so it starts at once.
     let commands = match known_commands {
         Some(commands) => commands,
         None => server
-            .commands_wire(dir, false)
+            .commands_wire(dir, initial_native_command_selected)
             .await
             .map(|v| commands_from_wire(&v))
             .unwrap_or_default(),
