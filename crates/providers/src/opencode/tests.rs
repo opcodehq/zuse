@@ -1573,6 +1573,95 @@ async fn commands_for_waits_out_the_boot_window() {
     task.abort();
 }
 
+/// A 2.x server whose `/api/command` answers empty for the first
+/// `empty_reads` reads (config and plugins still loading), then the catalog.
+async fn booting_command_server(
+    empty_reads: usize,
+) -> (
+    Server,
+    Arc<std::sync::atomic::AtomicUsize>,
+    tokio::task::JoinHandle<()>,
+) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let reads = Arc::new(AtomicUsize::new(0));
+    let recorded = reads.clone();
+    let task = tokio::spawn(async move {
+        loop {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut bytes = [0; 4096];
+            let n = socket.read(&mut bytes).await.unwrap();
+            let request = String::from_utf8_lossy(&bytes[..n]);
+            let path = request.split_whitespace().nth(1).unwrap().to_owned();
+            let body = match path.as_str() {
+                "/api/info" => json!({"version": "2.3.0"}),
+                "/api/command" => {
+                    if recorded.fetch_add(1, Ordering::SeqCst) < empty_reads {
+                        json!({"data": []})
+                    } else {
+                        json!({"data": [
+                            {"name": "init", "description": "Create AGENTS.md"},
+                            {"name": "goal", "description": "Keep working until an objective is met"}
+                        ]})
+                    }
+                }
+                _ => json!({"data": []}),
+            }
+            .to_string();
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+        }
+    });
+    (Server::attached(base), reads, task)
+}
+
+/// A run that started during boot holds an empty snapshot. A selected
+/// command must wait for the catalog instead of being rejected as "no longer
+/// available in this project".
+#[tokio::test]
+async fn selected_command_waits_for_the_catalog_a_cold_run_missed() {
+    use std::sync::atomic::Ordering;
+    let (server, reads, task) = booting_command_server(1).await;
+    let mut commands = Vec::new();
+    refresh_missing_command(&server, None, &mut commands, "/goal ship it", true).await;
+    assert_eq!(
+        native_command_request("/goal ship it", &commands, true).unwrap(),
+        Some(("goal", "ship it"))
+    );
+    assert_eq!(reads.load(Ordering::SeqCst), 2);
+    task.abort();
+}
+
+/// Ordinary prompts, raw slash text, and commands the snapshot already holds
+/// keep the single snapshot: no extra catalog read.
+#[tokio::test]
+async fn only_a_missing_selected_command_rereads_the_catalog() {
+    use std::sync::atomic::Ordering;
+    let (server, reads, task) = booting_command_server(usize::MAX).await;
+    let known = vec![SlashCommand {
+        name: "init".into(),
+        description: String::new(),
+        input_hint: None,
+    }];
+    let mut commands = known.clone();
+    refresh_missing_command(&server, None, &mut commands, "/goal ship it", false).await;
+    refresh_missing_command(&server, None, &mut commands, "plain prompt", true).await;
+    refresh_missing_command(&server, None, &mut commands, "/init", true).await;
+    assert_eq!(commands, known);
+    assert_eq!(reads.load(Ordering::SeqCst), 0);
+    task.abort();
+}
+
 #[test]
 fn stall_env_and_startup_env_parse() {
     // Defaults (no env in test runner): bounded stall, 300s startup.

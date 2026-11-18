@@ -1770,10 +1770,13 @@ async fn run_session(session: Session) {
     }
 
     // Advertise slash commands (composer popup); a warm cache skips the call.
-    let commands = match known_commands {
+    // A selected native command needs the complete catalog: on a cold 2.x
+    // start the first read is empty, and `native_command_request` would
+    // reject the selection. Ordinary prompts keep the single snapshot.
+    let mut commands = match known_commands {
         Some(commands) => commands,
         None => server
-            .commands_wire(dir, false)
+            .commands_wire(dir, initial_native_command_selected)
             .await
             .map(|v| commands_from_wire(&v))
             .unwrap_or_default(),
@@ -1829,7 +1832,7 @@ async fn run_session(session: Session) {
         &bus_tx,
         &session_id,
         dir,
-        &commands,
+        &mut commands,
         &request.prompt,
         initial_native_command_selected,
         turn_generation,
@@ -1968,7 +1971,7 @@ async fn run_session(session: Session) {
                         &bus_tx,
                         &session_id,
                         dir,
-                        &commands,
+                        &mut commands,
                         &steer,
                         native_command_selected,
                         turn_generation,
@@ -2224,7 +2227,7 @@ async fn run_session(session: Session) {
                                     &bus_tx,
                                     &session_id,
                                     dir,
-                                    &commands,
+                                    &mut commands,
                                     &prompt,
                                     native_command_selected,
                                     turn_generation,
@@ -2812,7 +2815,7 @@ async fn post_prompt(
     bus_tx: &mpsc::Sender<BusMsg>,
     session_id: &str,
     dir: Option<&str>,
-    commands: &[SlashCommand],
+    commands: &mut Vec<SlashCommand>,
     prompt: &str,
     native_command_selected: bool,
     turn_generation: u64,
@@ -2825,6 +2828,7 @@ async fn post_prompt(
         attachments,
     } = spec;
     let protocol = server.protocol().await;
+    refresh_missing_command(server, dir, commands, prompt, native_command_selected).await;
     if let Some((name, arguments)) =
         native_command_request(prompt, commands, native_command_selected)?
     {
@@ -2920,6 +2924,35 @@ async fn post_prompt(
         }
     });
     Ok(())
+}
+
+/// The run's catalog is a snapshot. A selected command missing from it may
+/// only mean the snapshot predates the 2.x catalog load (the run began on a
+/// plain prompt during boot) or the project gained the command since, so
+/// re-read once before `native_command_request` reports it gone. Raw slash
+/// text and commands already in the snapshot cost no request.
+async fn refresh_missing_command(
+    server: &Server,
+    dir: Option<&str>,
+    commands: &mut Vec<SlashCommand>,
+    prompt: &str,
+    selected: bool,
+) {
+    if !selected {
+        return;
+    }
+    let Some((name, _)) = zuse_protocol::invocation::leading_command(prompt) else {
+        return;
+    };
+    if commands.iter().any(|command| command.name == name) {
+        return;
+    }
+    if let Ok(live) = server.commands_wire(dir, true).await {
+        let live = commands_from_wire(&live);
+        if !live.is_empty() {
+            *commands = live;
+        }
+    }
 }
 
 /// Resolve a delivered leading slash command against the run's live,
