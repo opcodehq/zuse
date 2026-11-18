@@ -853,6 +853,15 @@ impl WindowGeometry {
 pub struct SkillCompletionSettings {
     pub dollar: bool,
     pub separate_from_slash: bool,
+    /// Show the provider's own `/` commands in the composer. Settings saved
+    /// before this preference existed keep the behavior they had: visible.
+    #[serde(default = "yes")]
+    pub provider_commands: bool,
+}
+
+/// Serde default for [`SkillCompletionSettings::provider_commands`].
+fn yes() -> bool {
+    true
 }
 
 impl SkillCompletionSettings {
@@ -862,6 +871,7 @@ impl SkillCompletionSettings {
         Self {
             dollar: true,
             separate_from_slash: true,
+            provider_commands: true,
         }
     }
 }
@@ -2347,12 +2357,14 @@ mod tests {
             let preferences = settings.skill_completion(harness);
             assert!(preferences.dollar);
             assert!(preferences.separate_from_slash);
+            assert!(preferences.provider_commands);
         }
         settings.skill_completion_by_harness.insert(
             HarnessId::ClaudeCode,
             SkillCompletionSettings {
                 dollar: false,
                 separate_from_slash: true,
+                provider_commands: true,
             },
         );
         settings.skill_completion_by_harness.insert(
@@ -2360,6 +2372,7 @@ mod tests {
             SkillCompletionSettings {
                 dollar: true,
                 separate_from_slash: false,
+                provider_commands: false,
             },
         );
         settings.save(dir.path()).unwrap();
@@ -2370,6 +2383,20 @@ mod tests {
         );
         assert!(!loaded.skill_completion(HarnessId::ClaudeCode).dollar);
         assert!(loaded.skill_completion(HarnessId::Cursor).dollar);
+        assert!(
+            !loaded
+                .skill_completion(HarnessId::Opencode)
+                .provider_commands
+        );
+        assert!(
+            loaded
+                .skill_completion(HarnessId::ClaudeCode)
+                .provider_commands
+        );
+        // Saved before the preference existed: provider commands stay visible.
+        let older: SkillCompletionSettings =
+            serde_json::from_str(r#"{"dollar":false,"separateFromSlash":true}"#).unwrap();
+        assert!(older.provider_commands);
         let legacy: UiSettings = serde_json::from_str(r#"{"skillsInSlashMenu":true}"#).unwrap();
         assert!(
             !legacy

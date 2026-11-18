@@ -4,14 +4,17 @@
 
 ### Added
 
+- Show each agent's own `/` commands in the composer, with a per-agent **Provider commands** switch under Settings → Providers → Settings → Completion.
 - Add opt-in Slack cloud tasks with threaded status/results, sender/channel attribution, and a workspace/repository connection flow in Cloud settings. Server credentials stay encrypted; enablement requires the Slack migration and a rebuilt compatible runtime image.
 
 ### Changed
 
+- Name the chat's agent in the composer's empty `/` menu, so a command that only exists in another agent reads as that agent's catalog instead of a missing feature.
 - Render Markdown tables with compact rows, rounded borders, clearer headers, and better wrapping.
 
 ### Fixed
 
+- OpenCode 2.x answers its command catalog only after its config and plugins load; Zuse now waits for that list instead of reporting no commands, so commands like `/goal` appear in the composer.
 - On Linux, an agent whose builds exhaust memory no longer takes the whole app down: each agent runs in its own systemd scope, and Zuse stops the agent using the most memory (with a notice in its chat) before the system's OOM handling kills the app.
 - Keep the Settings Back to app button clickable on Windows by excluding it from the window-drag region.
 

@@ -6260,6 +6260,53 @@ fn completion_trigger(
     (token, skill, include_skills, commands_allowed)
 }
 
+/// Whether this token may fetch the agent's own `/` commands. Zuse's commands
+/// do not depend on it: the switch only hides the provider catalog.
+fn provider_commands_requested(
+    preferences: crate::settings::SkillCompletionSettings,
+    skill: bool,
+    commands_allowed: bool,
+) -> bool {
+    commands_allowed && !skill && preferences.provider_commands
+}
+
+/// Empty text for the `/` menu. Naming the chat's agent keeps an unmatched
+/// provider catalog from reading as a Zuse bug.
+fn empty_slash_message(
+    skill: bool,
+    supported: bool,
+    preferences: crate::settings::SkillCompletionSettings,
+    agent: Option<&'static str>,
+    catalog_empty: bool,
+) -> String {
+    if skill {
+        return if !catalog_empty {
+            "No matching skills".to_string()
+        } else if supported {
+            "No skills available for this project".to_string()
+        } else {
+            "This agent does not advertise skills".to_string()
+        };
+    }
+    if !preferences.separate_from_slash {
+        return if catalog_empty {
+            "No commands or skills available".to_string()
+        } else {
+            "No matching commands or skills".to_string()
+        };
+    }
+    if !preferences.provider_commands {
+        // A missing row is the switch, not an empty catalog.
+        return "No matching commands. Provider commands are off for this agent.".to_string();
+    }
+    match (agent, catalog_empty) {
+        (Some(agent), true) => format!("{agent} exposes no slash commands"),
+        (Some(agent), false) => format!("No matching commands. This chat runs {agent}."),
+        (None, true) => "No slash commands available in this integration".to_string(),
+        (None, false) => "No matching commands".to_string(),
+    }
+}
+
 /// Commands implemented by Zuse, independently of the provider protocol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkspaceCommand {
@@ -6469,10 +6516,15 @@ fn invocation_candidates(
         .iter()
         .filter_map(|skill| skill.command.as_ref().map(|command| command.name.as_str()))
         .collect();
+    let mut seen = std::collections::HashSet::new();
     let commands: Vec<_> = commands
         .into_iter()
         .filter(|command| {
-            valid_invocation_name(&command.name) && !skill_commands.contains(command.name.as_str())
+            valid_invocation_name(&command.name)
+                && !skill_commands.contains(command.name.as_str())
+                // A provider that lists the same command twice must not show
+                // two identical rows; the first description wins.
+                && seen.insert(command.name.clone())
         })
         .collect();
     commands
@@ -9213,6 +9265,8 @@ impl Composer {
             crate::settings::current(cx).skill_completion(harness.unwrap_or(HarnessId::Codex));
         let (token, skill, include_skills, commands_allowed) =
             completion_trigger(text, cursor, preferences);
+        // Zuse's own commands always answer `/`; the agent's are opt-out.
+        let provider_commands = provider_commands_requested(preferences, skill, commands_allowed);
         if token.is_none() {
             // Leaving a token must not replace the catalog identity with the
             // idle (commands_allowed=false) context and evict the warm cache.
@@ -9309,7 +9363,7 @@ impl Composer {
         self.slash_task = Some(cx.spawn(async move |this, cx| {
             let result = async {
                 let commands = async {
-                    if skill || !commands_allowed {
+                    if skill || !provider_commands {
                         return Ok(Vec::new());
                     }
                     let value = engine
@@ -9584,39 +9638,21 @@ impl Composer {
                 cx,
             ));
         } else if self.slash.filtered.is_empty() && self.slash.error.is_none() {
+            let preferences = crate::settings::current(cx)
+                .skill_completion(self.slash.harness.unwrap_or(HarnessId::Codex));
             card = card.child(
                 div()
                     .px(px(12.0))
                     .py(px(10.0))
                     .text_size(crate::typography::text_xs())
                     .text_color(theme.text_muted)
-                    .child(if commands.is_empty() {
-                        if self.slash.skill {
-                            if self.slash.supported {
-                                "No skills available for this project"
-                            } else {
-                                "This agent does not advertise skills"
-                            }
-                        } else if !crate::settings::current(cx)
-                            .skill_completion(self.slash.harness.unwrap_or(HarnessId::Codex))
-                            .separate_from_slash
-                        {
-                            "No commands or skills available"
-                        } else {
-                            "No slash commands available in this integration"
-                        }
-                    } else {
-                        if self.slash.skill {
-                            "No matching skills"
-                        } else if !crate::settings::current(cx)
-                            .skill_completion(self.slash.harness.unwrap_or(HarnessId::Codex))
-                            .separate_from_slash
-                        {
-                            "No matching commands or skills"
-                        } else {
-                            "No matching commands"
-                        }
-                    }),
+                    .child(empty_slash_message(
+                        self.slash.skill,
+                        self.slash.supported,
+                        preferences,
+                        self.slash.harness.map(crate::pickers::harness_display_name),
+                        commands.is_empty(),
+                    )),
             );
         } else {
             let mut rows: Vec<gpui::AnyElement> = Vec::with_capacity(self.slash.filtered.len() + 2);
@@ -17217,6 +17253,7 @@ mod tests {
                     crate::settings::SkillCompletionSettings {
                         dollar: true,
                         separate_from_slash: true,
+                        provider_commands: true,
                     },
                 );
             });
@@ -17849,6 +17886,7 @@ mod tests {
                     let preferences = SkillCompletionSettings {
                         dollar,
                         separate_from_slash,
+                        provider_commands: true,
                     };
                     let (token, skill, include, _) = completion_trigger("$review", 7, preferences);
                     assert_eq!(token.is_some(), dollar, "{harness:?}");
@@ -17864,6 +17902,124 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn provider_command_switch_only_gates_the_agent_catalog() {
+        use crate::settings::SkillCompletionSettings;
+        for (harness, _) in crate::settings::SKILL_COMPLETION_HARNESSES {
+            for provider_commands in [false, true] {
+                let preferences = SkillCompletionSettings {
+                    dollar: true,
+                    separate_from_slash: true,
+                    provider_commands,
+                };
+                // Zuse's own rows answer `/` either way.
+                let (token, skill, _, commands) = completion_trigger("/model", 6, preferences);
+                assert!(token.is_some() && !skill && commands, "{harness:?}");
+                assert_eq!(
+                    provider_commands_requested(preferences, skill, commands),
+                    provider_commands,
+                    "{harness:?}"
+                );
+                // A `$` skill token never asks for the agent's commands.
+                let (_, skill, _, commands) = completion_trigger("$review", 7, preferences);
+                assert!(skill && !commands);
+                assert!(!provider_commands_requested(preferences, skill, commands));
+            }
+        }
+    }
+
+    #[test]
+    fn empty_slash_menu_names_the_chat_agent() {
+        use crate::settings::SkillCompletionSettings;
+        let on = SkillCompletionSettings {
+            dollar: true,
+            separate_from_slash: true,
+            provider_commands: true,
+        };
+        // The reported codex case: a matched-nothing `/goal` must say whose
+        // catalog was searched instead of looking like a Zuse bug.
+        assert_eq!(
+            empty_slash_message(false, true, on, Some("Codex"), false),
+            "No matching commands. This chat runs Codex."
+        );
+        assert_eq!(
+            empty_slash_message(false, true, on, Some("Codex"), true),
+            "Codex exposes no slash commands"
+        );
+        assert_eq!(
+            empty_slash_message(
+                false,
+                true,
+                SkillCompletionSettings {
+                    provider_commands: false,
+                    ..on
+                },
+                Some("Codex"),
+                false
+            ),
+            "No matching commands. Provider commands are off for this agent."
+        );
+        // Combined menu: naming the agent would misattribute a missing skill.
+        assert_eq!(
+            empty_slash_message(
+                false,
+                true,
+                SkillCompletionSettings {
+                    separate_from_slash: false,
+                    ..on
+                },
+                Some("Codex"),
+                false
+            ),
+            "No matching commands or skills"
+        );
+        assert_eq!(
+            empty_slash_message(false, true, on, None, true),
+            "No slash commands available in this integration"
+        );
+        assert_eq!(
+            empty_slash_message(false, true, on, None, false),
+            "No matching commands"
+        );
+        assert_eq!(
+            empty_slash_message(true, false, on, Some("Codex"), true),
+            "This agent does not advertise skills"
+        );
+        assert_eq!(
+            empty_slash_message(true, true, on, Some("Codex"), false),
+            "No matching skills"
+        );
+    }
+
+    #[test]
+    fn provider_duplicate_commands_collapse_to_one_row() {
+        use zuse_protocol::SlashCommand;
+        let rows = invocation_candidates(
+            vec![
+                SlashCommand {
+                    name: "goal".into(),
+                    description: "first".into(),
+                    input_hint: None,
+                },
+                SlashCommand {
+                    name: "goal".into(),
+                    description: "second".into(),
+                    input_hint: None,
+                },
+                SlashCommand {
+                    name: "init".into(),
+                    description: "init".into(),
+                    input_hint: None,
+                },
+            ],
+            vec![],
+        );
+        let goals: Vec<_> = rows.iter().filter(|row| row.name == "goal").collect();
+        assert_eq!(goals.len(), 1);
+        assert_eq!(goals[0].description, "first");
+        assert_eq!(rows.len(), 2);
     }
 
     #[test]

@@ -220,7 +220,8 @@ impl TurnWire {
                         match path.as_str() {
                             "/api/health" => ("200 OK", health.as_str()),
                             "/api/session" => ("200 OK", r#"{"data":{"id":"fixture"}}"#),
-                            "/api/command" => ("200 OK", r#"{"data":[]}"#),
+                            // Non-empty: the catalog-sync retry loop must not stall tests.
+                            "/api/command" => ("200 OK", r#"{"data":[{"name":"init","description":"Create AGENTS.md"},{"name":"goal","description":"Keep working until an objective is met"}]}"#),
                             // Non-empty: the catalog-sync retry loop must not stall tests.
                             "/api/model" => ("200 OK", r#"{"data":[{"providerID":"opencode","id":"muse","name":"Muse","limit":{"context":1000},"variants":[{"id":"low"}],"enabled":true},{"providerID":"opencode","id":"long-context","name":"Long Context","limit":{"context":2000},"enabled":true}]}"#),
                             _ => ("200 OK", "{}"),
@@ -1510,6 +1511,66 @@ fn canonical_command_removed_after_discovery_is_not_downgraded_to_prompt_text() 
             .unwrap()
             .is_none()
     );
+}
+
+/// Live 2.3.0 answers `/api/command` with an empty list while its config and
+/// plugins load (observed: up to ~9s after health). Discovery must wait for
+/// the catalog instead of reporting "no commands" — the reported bug was
+/// `/goal` never appearing in the composer.
+#[tokio::test]
+async fn commands_for_waits_out_the_boot_window() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let harness =
+        OpencodeHarness::new().with_base_url(format!("http://{}", listener.local_addr().unwrap()));
+    let polls = Arc::new(AtomicUsize::new(0));
+    let recorded = polls.clone();
+    let task = tokio::spawn(async move {
+        loop {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut bytes = [0; 4096];
+            let n = socket.read(&mut bytes).await.unwrap();
+            let request = String::from_utf8_lossy(&bytes[..n]);
+            let path = request.split_whitespace().nth(1).unwrap().to_owned();
+            let body = match path.as_str() {
+                "/api/info" => json!({"version": "2.3.0"}),
+                "/api/command" => {
+                    if recorded.fetch_add(1, Ordering::SeqCst) < 2 {
+                        json!({"location": {"directory": "/tmp"}, "data": []})
+                    } else {
+                        json!({"location": {"directory": "/tmp"}, "data": [
+                            {"name": "init", "description": "Create AGENTS.md"},
+                            {"name": "goal", "description": "Keep working until an objective is met"}
+                        ]})
+                    }
+                }
+                _ => json!({"data": []}),
+            }
+            .to_string();
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+        }
+    });
+
+    let commands = harness
+        .commands_for(std::path::Path::new("/tmp"))
+        .await
+        .unwrap();
+    assert!(
+        commands.iter().any(|command| command.name == "goal"),
+        "{commands:?}"
+    );
+    assert_eq!(polls.load(Ordering::SeqCst), 3);
+    task.abort();
 }
 
 #[test]

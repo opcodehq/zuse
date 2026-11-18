@@ -18251,6 +18251,7 @@ mod exit_regressions {
                             settings::SkillCompletionSettings {
                                 dollar: open_links_in_zuse,
                                 separate_from_slash: true,
+                                provider_commands: true,
                             },
                         );
                     });
