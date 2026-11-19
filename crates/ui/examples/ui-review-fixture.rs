@@ -23,8 +23,14 @@ fn main() -> anyhow::Result<()> {
             .unwrap_or_else(|| "/tmp/zuse-review".into()),
     );
     std::fs::create_dir_all(&output)?;
-    let capture_width = std::env::var("ZUSE_REVIEW_WIDTH").ok().and_then(|v| v.parse().ok()).unwrap_or(1100.);
-    let capture_height = std::env::var("ZUSE_REVIEW_HEIGHT").ok().and_then(|v| v.parse().ok()).unwrap_or(800.);
+    let capture_width = std::env::var("ZUSE_REVIEW_WIDTH")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1100.);
+    let capture_height = std::env::var("ZUSE_REVIEW_HEIGHT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(800.);
     gpui_platform::application().with_assets(icons::Assets).with_http_client(fixture_http_client(runtime.handle().clone())).run(move |cx| {
         gpui_tokio::init(cx); gpui_base::init(cx);
         let mut settings = settings::UiSettings::default();
