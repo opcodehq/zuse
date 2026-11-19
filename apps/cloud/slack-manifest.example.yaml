@@ -22,12 +22,17 @@ oauth_config:
       - channels:history
       - groups:read
       - groups:history
+      - channels:join
+      - chat:write.public
+      - chat:write.customize
 settings:
   event_subscriptions:
     request_url: https://api.example.com/slack/events
     bot_events:
       - app_mention
       - message.im
+      - message.channels
+      - message.groups
       - app_uninstalled
   org_deploy_enabled: false
   socket_mode_enabled: false

@@ -27,6 +27,9 @@ pub(super) struct ZotUi {
     archiving: std::collections::HashMap<String, std::time::Instant>,
     /// Right-click menu of a sidebar Zapper row: its id and where it opened.
     pub(super) menu: popover::Popup<(String, Point<Pixels>)>,
+    /// The menu's Slack submenu (linking the coordinator chat) is open.
+    pub(super) slack_open: bool,
+    pub(super) submenu: super::slack_link::Submenu,
     /// The Zapper waiting on "Delete Zapper?" confirmation.
     pub(super) delete_confirm: Option<String>,
     pub(super) loaded: Option<(String, u32, u32)>,
@@ -404,6 +407,11 @@ impl Shell {
                     .on_mouse_down(MouseButton::Right, {
                         let zot_id = zot.id.clone();
                         cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                            if this.zot_ui.menu.is_open() {
+                                this.slack_links.menu_closed();
+                            }
+                            this.zot_ui.slack_open = false;
+                            this.zot_ui.submenu.reset();
                             this.zot_ui.menu.open((zot_id.clone(), event.position));
                             cx.stop_propagation();
                             cx.notify();
@@ -528,7 +536,11 @@ impl Shell {
             .cloned()
     }
 
-    fn close_zot_menu(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn close_zot_menu(&mut self, cx: &mut Context<Self>) {
+        self.zot_ui.submenu.reset();
+        if self.zot_ui.menu.is_open() {
+            self.slack_links.menu_closed();
+        }
         if self.zot_ui.menu.begin_close() {
             popover::reap_popup(cx, |shell: &mut Self| &mut shell.zot_ui.menu);
             cx.notify();
@@ -630,16 +642,42 @@ impl Shell {
                             this.zot_ui.delete_confirm = Some(z.id.clone());
                             cx.notify();
                         }));
+                    use super::slack_link::{SubmenuHost, ZOT_MENU_ROW_SLACK};
+                    let slack = self.render_slack_trigger(
+                        SubmenuHost::Zot,
+                        &zot.coordinator_chat_id,
+                        self.zot_ui.slack_open,
+                        &theme,
+                        cx,
+                    );
+                    let host = SubmenuHost::Zot;
+                    let new_thread = self.submenu_hover_row(host, 0, new_thread, cx);
+                    let settings = self.submenu_hover_row(host, 1, settings, cx);
+                    let archive = self.submenu_hover_row(host, 2, archive, cx);
+                    let slack = self.submenu_hover_row(host, ZOT_MENU_ROW_SLACK, slack, cx);
+                    let delete = self.submenu_hover_row(host, 4, delete, cx);
                     let menu = popover::popover_card(&theme)
                         .w(px(216.0))
                         .flex()
                         .flex_col()
-                        .on_mouse_down_out(cx.listener(|this, _, _, cx| this.close_zot_menu(cx)))
+                        .on_mouse_down_out(cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                            // The Slack submenu floats outside this card.
+                            if this
+                                .zot_ui
+                                .submenu
+                                .bounds
+                                .is_some_and(|bounds| bounds.contains(&event.position))
+                            {
+                                return;
+                            }
+                            this.close_zot_menu(cx)
+                        }))
                         .child(new_thread)
                         .child(settings)
                         .when(zot.status != ZotStatus::Archived, |menu| {
                             menu.child(archive)
                         })
+                        .child(slack)
                         .child(popover::menu_separator())
                         .child(delete)
                         .into_any_element();

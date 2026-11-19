@@ -746,6 +746,7 @@ pub struct EngineRpc {
     relay_access: Option<crate::relay_access::RelayAccess>,
     direct_access: Option<crate::direct_access::DirectAccess>,
     zots: Option<crate::zots::Zots>,
+    slack_links: Option<crate::slack_links::SlackLinks>,
     model_connections: Option<crate::model_connections::ModelConnections>,
     account: Option<crate::account::Account>,
     managed_access: Option<crate::managed_access::AccountClient>,
@@ -814,6 +815,7 @@ impl EngineRpc {
             relay_access: None,
             direct_access: None,
             zots: None,
+            slack_links: None,
             model_connections: None,
             account: None,
             managed_access: None,
@@ -953,6 +955,19 @@ impl EngineRpc {
     /// Attach the release checker (UpdateStatus stream + ApplyUpdate).
     pub fn with_updater(mut self, updater: zuse_update::Updater) -> Self {
         self.updater = Some(updater);
+        self
+    }
+
+    /// Starts the Slack mirror for this engine's account as soon as the
+    /// service exists, so linked chats keep syncing with no window open.
+    pub fn with_slack_links(mut self, links: crate::slack_links::SlackLinks) -> Self {
+        if let Some(auth) = &self.auth {
+            links.attach(
+                crate::cloud::identity::CloudIdentity::workspace(auth.clone())
+                    .with_account(self.account.clone()),
+            );
+        }
+        self.slack_links = Some(links);
         self
     }
 
@@ -3025,6 +3040,19 @@ impl EngineRpc {
         }
         if voice_remote::handles(method) {
             return self.voice_remote(method, params).await;
+        }
+        if crate::slack_links::handles(method) {
+            let links = self
+                .slack_links
+                .as_ref()
+                .ok_or_else(|| RpcError::Failed("Slack links are unavailable here.".into()))?;
+            let identity = crate::cloud::identity::CloudIdentity::workspace(self.auth()?.clone())
+                .with_account(self.account.clone());
+            let value = links
+                .handle(&identity, method, params)
+                .await
+                .map_err(crate::cloud::rpc_error)?;
+            return RpcReply::value(&value);
         }
         if AuthRpc::handles(method) {
             return AuthRpc::new(self.auth()?.clone())

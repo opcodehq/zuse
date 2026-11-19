@@ -55,11 +55,61 @@ the existing cloud catalog. Selecting a model
 does not connect its provider credentials. Tasks use the runtime's automatic
 review posture; questions and approvals that need a person still require Zuse.
 
+## Linked chats
+
+A Zuse chat on a desktop engine can be linked to a Slack channel. Linking posts
+a parent message ("{title} · Started from Zuse by {member}") and the chat's
+finished replies are posted into that thread, optionally under a persona (a
+display name plus a pixel-art avatar rendered by the cloud, used for Zappers).
+Replies the linked Slack member writes in that thread wait in an inbox the
+engine polls and acknowledges. Nothing runs in the cloud runtime; the existing
+installation token and member links are reused.
+
+- Only a Slack user with a member link to the caller's account and actor may
+  talk to the chat. Other people's replies in a linked thread are dropped and
+  never start a Slack task. A mention plus its `message` event queue once
+  (deduplicated by message timestamp and by event ID). The bot mention is
+  stripped; attachments are not forwarded. Unlinked threads, DMs and
+  top-level mentions keep the behavior above. Turning sync off stops posting
+  and queueing; thread mentions then fall back to the normal task flow.
+- The events endpoint does one extra indexed lookup for channel thread replies
+  and no network call before acknowledging. Names are resolved when the inbox
+  is read.
+- Thread replies only arrive as events in channels the bot belongs to, so
+  linking joins a public channel (`channels:join`) and requires an invitation
+  to a private one (`slack_channel_access_unavailable`). Titles, names and
+  replies are escaped, so they cannot produce `<!channel>`-style mentions.
+- Mirrored posts are idempotent per (link, message ID): the first post's
+  timestamp is returned on retries. A claim is taken before posting; a
+  concurrent retry gets `slack_post_in_progress` (409) and a claim older than
+  a minute without a timestamp is taken over (a crash between posting and
+  recording can duplicate one reply, as with progress replies).
+- Inbox payloads are AES-GCM sealed with AAD bound to the link and message
+  timestamp. Unread replies are swept after seven days; removing a link or
+  uninstalling the app deletes its receipts and queued replies.
+
+Authenticated routes (scoped to the caller's account and actor): `GET
+/v1/cloud/slack/channels`, `GET /v1/cloud/slack/links?chatKey=`, `POST
+/v1/cloud/slack/links`, `POST /v1/cloud/slack/links/{update,remove,post}`,
+`GET /v1/cloud/slack/inbox` (oldest first, 50 at a time) and `POST
+/v1/cloud/slack/inbox/ack` (at most 100 sequences). Error codes:
+`slack_member_required`, `slack_chat_already_linked`, `slack_chat_link_not_found`,
+`slack_channel_access_unavailable`, `slack_persona_invalid`, `slack_post_empty`,
+`slack_post_in_progress`, `slack_rate_limited`. Public: `GET
+/slack/avatars/{mascot}/{color}.png` renders a 512×512 PNG (cached a day).
+
+Linked chats add the bot scopes `channels:join`, `chat:write.public` and
+`chat:write.customize` and the events `message.channels` and `message.groups`.
+Update the app from the manifest; existing installations must be re-authorized
+(connect Slack again from Settings) before linking or personas work.
+
 ## Deployment
 
-1. Apply `crates/cloud/migrations/0009_slack.sql` to the existing cloud database
-   through the normal migration process. It creates only `zuse_rust_slack_*`
-   tables and does not adopt existing TypeScript installations.
+1. Apply `crates/cloud/migrations/0009_slack.sql`, then
+   `crates/cloud/migrations/0010_slack_links.sql`, to the existing cloud database
+   through the normal migration process. They create only `zuse_rust_slack_*`
+   tables and do not adopt existing TypeScript installations. Startup fails
+   with a message naming the missing file if either is absent.
 2. Configure `ZUSE_SLACK_ENABLED=true`, `SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET`,
    `SLACK_SIGNING_SECRET`, and `ZUSE_SLACK_REDIRECT_URI` (an HTTPS URL ending in
    `/slack/oauth/callback`). These belong only to the cloud service.

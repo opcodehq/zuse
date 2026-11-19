@@ -88,6 +88,114 @@ pub struct Connection {
     pub model: String,
 }
 
+/// Who a mirrored message is posted as. Slack shows `name` and an avatar the
+/// cloud renders from `avatar`, still marked as coming from the Zuse app.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Persona {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar: Option<crate::zots::ZotAvatar>,
+}
+impl Persona {
+    /// Slack caps display names at 80 characters; avatar ids are short slugs.
+    pub fn is_valid(&self) -> bool {
+        let name = self.name.trim();
+        !name.is_empty()
+            && name.chars().count() <= 80
+            && !name.chars().any(char::is_control)
+            && self
+                .avatar
+                .as_ref()
+                .is_none_or(|a| avatar_id_ok(&a.mascot) && avatar_id_ok(&a.color))
+    }
+}
+pub fn avatar_id_ok(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 32
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_')
+}
+
+/// A channel a chat can be linked to.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Channel {
+    pub team_id: String,
+    pub team_name: String,
+    pub channel_id: String,
+    pub name: String,
+    #[serde(default)]
+    pub private: bool,
+}
+
+/// The Slack thread a chat mirrors into.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatLink {
+    pub team_id: String,
+    pub team_name: String,
+    pub channel_id: String,
+    pub channel_name: String,
+    pub thread_ts: String,
+    /// Off keeps the link but stops posting replies and accepting thread replies.
+    pub sync: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permalink: Option<String>,
+}
+
+/// Cloud request: start a thread for `chat_key` in a channel.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LinkRequest {
+    pub chat_key: String,
+    pub team_id: String,
+    pub channel_id: String,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub persona: Option<Persona>,
+}
+
+/// Cloud request: post one finished reply into a linked thread. `message_id`
+/// makes the post idempotent across retries.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PostRequest {
+    pub chat_key: String,
+    pub message_id: String,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub persona: Option<Persona>,
+}
+
+/// A reply someone wrote in a linked Slack thread, waiting for its chat's engine.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InboxMessage {
+    pub sequence: i64,
+    pub chat_key: String,
+    pub event_id: String,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<String>,
+}
+
+/// Slack's per-message text limit is 40k; keep mirrored replies readable.
+pub fn mirror_text(text: &str) -> String {
+    let limit = 12_000;
+    if text.len() <= limit {
+        return text.to_owned();
+    }
+    let mut end = limit;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text[..end].to_owned() + "\n\n… Open Zuse for the full reply."
+}
+
 /// Runtime-owned completion for a specific Slack request, carried in encrypted projections.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

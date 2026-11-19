@@ -363,6 +363,8 @@ pub fn retryable_read(method: &str, params: &serde_json::Value) -> bool {
         | CLOUD_CONTEXT
         | CLOUD_EVENTS
         | SLACK_CONNECTIONS
+        | SLACK_CHANNELS
+        | SLACK_CHAT_LINK
         | CLOUD_PROJECTS
         | CLOUD_GITHUB
         | CLOUD_CAPABILITIES
@@ -593,3 +595,13 @@ pub const SLACK_CONNECT: &str = "SlackConnect";
 pub const SLACK_DISCONNECT: &str = "SlackDisconnect";
 /// Accept or decline a Slack sign-in that is waiting for confirmation in Zuse.
 pub const SLACK_CONFIRM: &str = "SlackConfirm";
+/// Slack channels the connected Slack workspaces offer for linking a chat.
+pub const SLACK_CHANNELS: &str = "SlackChannels";
+/// The Slack thread a chat is linked to, if any (`{chatId}`).
+pub const SLACK_CHAT_LINK: &str = "SlackChatLink";
+/// Link a chat to a new thread in a Slack channel (`{chatId, teamId, channelId}`).
+pub const SLACK_CHAT_LINK_CREATE: &str = "SlackChatLinkCreate";
+/// Turn mirroring of a linked chat on or off (`{chatId, sync}`).
+pub const SLACK_CHAT_LINK_UPDATE: &str = "SlackChatLinkUpdate";
+/// Unlink a chat from its Slack thread (`{chatId}`).
+pub const SLACK_CHAT_LINK_REMOVE: &str = "SlackChatLinkRemove";

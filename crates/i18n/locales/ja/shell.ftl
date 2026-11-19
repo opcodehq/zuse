@@ -184,3 +184,38 @@ shell-hosted_restore_chat = { $title }{ " " }を復元
 shell-hosted_sign_in_failed = サインインできませんでした。接続を確認して、もう一度お試しください。
 
 shell-cloud_image_leave_warning = Your cloud image has unbuilt changes. Leave Settings? You can return to Cloud Workspace settings to finish building.
+
+
+shell-slack_link_row = Slack
+
+shell-slack_link_status_on = オン
+
+shell-slack_link_status_off = オフ
+
+shell-slack_link_status_not_linked = 未リンク
+
+shell-slack_link_loading = 読み込み中…
+
+shell-slack_link_sync = Slack と同期
+
+shell-slack_link_open_thread = Slack スレッドを開く
+
+shell-slack_link_unlink = Slack とのリンクを解除
+
+shell-slack_link_settings = Slack 設定
+
+shell-slack_link_heading = Slack にリンク
+
+shell-slack_link_linked_heading = { $team } の #{ $channel }
+
+shell-slack_link_search_placeholder = チャンネルを検索…
+
+shell-slack_link_no_channels = リンクできるチャンネルがありません
+
+shell-slack_link_no_matching_channels = 一致するチャンネルがありません
+
+shell-slack_link_private = 非公開
+
+shell-slack_link_connect = 設定で Slack を接続
+
+shell-slack_link_unavailable = アカウント接続を利用できません。

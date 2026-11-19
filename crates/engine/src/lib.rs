@@ -95,6 +95,7 @@ pub mod rpc;
 pub mod run_journal;
 mod secret_broker;
 pub mod sessions;
+pub mod slack_links;
 pub mod source_control;
 mod source_control_refresh;
 pub mod spaces;
@@ -203,6 +204,7 @@ pub struct EngineCore {
     pub zots: zots::Zots,
     _zot_supervisor: Option<zots::ZotSupervisor>,
     _memory_watchdog: Option<memory_watchdog::MemoryWatchdog>,
+    slack_links: slack_links::SlackLinks,
     pub account: account::Account,
     pub managed_access: managed_access::AccountClient,
     pub managed_host: managed_access::host::Owner,
@@ -557,6 +559,13 @@ impl EngineCore {
             workspace.clone(),
             doc_host.clone(),
         );
+        let slack_links = slack_links::SlackLinks::new(
+            profile.store_root(),
+            zots.clone(),
+            workspace.clone(),
+            doc_host.clone(),
+            sessions.clone(),
+        );
         Ok(Self {
             analytics,
             pr_watches,
@@ -567,6 +576,7 @@ impl EngineCore {
             pairings,
             _zot_supervisor: zot_supervisor,
             _memory_watchdog: memory_watchdog,
+            slack_links,
             zots,
             harness_models,
             model_connections,
@@ -771,6 +781,7 @@ impl EngineCore {
         .with_managed_access(self.managed_access.clone())
         .with_managed_host(self.managed_host.control())
         .with_auth(self.auth())
+        .with_slack_links(self.slack_links.clone())
         .with_previews(self.previews.clone())
         .with_harness_updates(self.harness_updates.clone());
         if let Some(links) = self.links() {

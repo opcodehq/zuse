@@ -184,3 +184,38 @@ shell-hosted_restore_chat = 恢復{ " " }{ $title }
 shell-hosted_sign_in_failed = 無法登入。請檢查網路連線，然後重試。
 
 shell-cloud_image_leave_warning = 雲端映像還有尚未建置的更改。要離開設定嗎？您可以稍後回到雲工作區設定繼續建置。
+
+
+shell-slack_link_row = Slack
+
+shell-slack_link_status_on = 開
+
+shell-slack_link_status_off = 關
+
+shell-slack_link_status_not_linked = 未連結
+
+shell-slack_link_loading = 正在載入…
+
+shell-slack_link_sync = 同步到 Slack
+
+shell-slack_link_open_thread = 開啟 Slack 討論串
+
+shell-slack_link_unlink = 取消連結 Slack
+
+shell-slack_link_settings = Slack 設定
+
+shell-slack_link_heading = 連結到 Slack
+
+shell-slack_link_linked_heading = { $team } 中的 #{ $channel }
+
+shell-slack_link_search_placeholder = 搜尋頻道…
+
+shell-slack_link_no_channels = 沒有可連結的頻道
+
+shell-slack_link_no_matching_channels = 沒有符合的頻道
+
+shell-slack_link_private = 私人
+
+shell-slack_link_connect = 在設定中連接 Slack
+
+shell-slack_link_unavailable = 帳號連線無法使用。

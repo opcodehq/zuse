@@ -136,6 +136,10 @@ pub(super) async fn events(
     let Some((generation, bot)) = installation else {
         return Ok(Json(json!({})));
     };
+    // Replies in a linked chat's thread go to that chat, not a new Slack task.
+    if s.intercept_linked_reply(&value, &bot).await? {
+        return Ok(Json(json!({})));
+    }
     if let Some(mut event) = event(&value, &bot) {
         event.generation = generation;
         event.revision = sqlx::query_scalar(
@@ -173,7 +177,7 @@ fn cookie(value: &str) -> Result<HeaderValue, ApiError> {
     ))
     .map_err(|_| invalid())
 }
-fn public_base(s: &Slack) -> String {
+pub(super) fn public_base(s: &Slack) -> String {
     s.config
         .redirect_uri
         .trim_end_matches("/slack/oauth/callback")
@@ -377,7 +381,7 @@ pub(super) async fn authorize(
     }
     let mut url =
         reqwest::Url::parse("https://slack.com/oauth/v2/authorize").map_err(|_| invalid())?;
-    url.query_pairs_mut().append_pair("client_id",&s.config.client_id).append_pair("redirect_uri",&s.config.redirect_uri).append_pair("state",&q.state).append_pair("scope","app_mentions:read,chat:write,im:history,im:read,users:read,channels:read,channels:history,groups:read,groups:history");
+    url.query_pairs_mut().append_pair("client_id",&s.config.client_id).append_pair("redirect_uri",&s.config.redirect_uri).append_pair("state",&q.state).append_pair("scope","app_mentions:read,chat:write,im:history,im:read,users:read,channels:read,channels:history,groups:read,groups:history,channels:join,chat:write.public,chat:write.customize");
     Ok(Redirect::to(url.as_str()).into_response())
 }
 pub(super) async fn callback(

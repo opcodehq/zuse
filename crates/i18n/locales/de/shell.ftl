@@ -184,3 +184,38 @@ shell-hosted_restore_chat = { $title }{ " " }wiederherstellen
 shell-hosted_sign_in_failed = Anmeldung fehlgeschlagen. Prüfe deine Verbindung und versuche es erneut.
 
 shell-cloud_image_leave_warning = Your cloud image has unbuilt changes. Leave Settings? You can return to Cloud Workspace settings to finish building.
+
+
+shell-slack_link_row = Slack
+
+shell-slack_link_status_on = An
+
+shell-slack_link_status_off = Aus
+
+shell-slack_link_status_not_linked = Nicht verknüpft
+
+shell-slack_link_loading = Wird geladen…
+
+shell-slack_link_sync = Mit Slack synchronisieren
+
+shell-slack_link_open_thread = Slack-Thread öffnen
+
+shell-slack_link_unlink = Verknüpfung mit Slack aufheben
+
+shell-slack_link_settings = Slack-Einstellungen
+
+shell-slack_link_heading = Mit Slack verknüpfen
+
+shell-slack_link_linked_heading = #{ $channel } in { $team }
+
+shell-slack_link_search_placeholder = Kanäle suchen…
+
+shell-slack_link_no_channels = Keine Kanäle zum Verknüpfen
+
+shell-slack_link_no_matching_channels = Keine passenden Kanäle
+
+shell-slack_link_private = privat
+
+shell-slack_link_connect = Slack in den Einstellungen verbinden
+
+shell-slack_link_unavailable = Kontoverbindung nicht verfügbar.

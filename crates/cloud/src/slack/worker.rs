@@ -40,6 +40,10 @@ impl Slack {
             .bind(now())
             .execute(&self.pool)
             .await?;
+        sqlx::query("DELETE FROM zuse_rust_slack_inbox WHERE ctid IN (SELECT ctid FROM zuse_rust_slack_inbox WHERE created_at<$1 LIMIT 100)")
+            .bind(now() - super::links::INBOX_TTL_MS)
+            .execute(&self.pool)
+            .await?;
         sqlx::query(
             "DELETE FROM zuse_rust_slack_jobs WHERE ctid IN (SELECT ctid FROM zuse_rust_slack_jobs WHERE phase IN ('done','dead') AND created_at<$1 LIMIT 100)",
         )

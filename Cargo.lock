@@ -14752,6 +14752,7 @@ dependencies = [
  "libc",
  "p256",
  "percent-encoding",
+ "png 0.18.1",
  "prost",
  "quick-xml",
  "rand 0.8.7",

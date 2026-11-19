@@ -279,3 +279,38 @@ shell-hosted_sign_in_failed = Could not sign in. Check your connection and try a
 
 # Source key: shell:cloud_image_leave_warning
 shell-cloud_image_leave_warning = Your cloud image has unbuilt changes. Leave Settings? You can return to Cloud Workspace settings to finish building.
+
+
+shell-slack_link_row = Slack
+
+shell-slack_link_status_on = On
+
+shell-slack_link_status_off = Off
+
+shell-slack_link_status_not_linked = Not linked
+
+shell-slack_link_loading = Loading…
+
+shell-slack_link_sync = Sync to Slack
+
+shell-slack_link_open_thread = Open Slack thread
+
+shell-slack_link_unlink = Unlink from Slack
+
+shell-slack_link_settings = Slack settings
+
+shell-slack_link_heading = Link to Slack
+
+shell-slack_link_linked_heading = #{ $channel } in { $team }
+
+shell-slack_link_search_placeholder = Search channels…
+
+shell-slack_link_no_channels = No channels to link
+
+shell-slack_link_no_matching_channels = No matching channels
+
+shell-slack_link_private = private
+
+shell-slack_link_connect = Connect Slack in Settings
+
+shell-slack_link_unavailable = Account connection unavailable.

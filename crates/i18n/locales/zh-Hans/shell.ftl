@@ -184,3 +184,38 @@ shell-hosted_restore_chat = 恢复{ " " }{ $title }
 shell-hosted_sign_in_failed = 无法登录。请检查网络连接，然后重试。
 
 shell-cloud_image_leave_warning = 云端镜像还有尚未构建的更改。要离开设置吗？你可以稍后回到云工作区设置继续构建。
+
+
+shell-slack_link_row = Slack
+
+shell-slack_link_status_on = 开
+
+shell-slack_link_status_off = 关
+
+shell-slack_link_status_not_linked = 未关联
+
+shell-slack_link_loading = 正在加载…
+
+shell-slack_link_sync = 同步到 Slack
+
+shell-slack_link_open_thread = 打开 Slack 话题
+
+shell-slack_link_unlink = 取消关联 Slack
+
+shell-slack_link_settings = Slack 设置
+
+shell-slack_link_heading = 关联到 Slack
+
+shell-slack_link_linked_heading = { $team } 中的 #{ $channel }
+
+shell-slack_link_search_placeholder = 搜索频道…
+
+shell-slack_link_no_channels = 没有可关联的频道
+
+shell-slack_link_no_matching_channels = 没有匹配的频道
+
+shell-slack_link_private = 私密
+
+shell-slack_link_connect = 在设置中连接 Slack
+
+shell-slack_link_unavailable = 账户连接不可用。

@@ -107,6 +107,7 @@ mod side_chats;
 mod sidebar_controls;
 mod sidebar_pins;
 mod sidebar_sections;
+mod slack_link;
 pub(crate) mod spaces;
 mod summary_pull_request;
 mod thread_search;
@@ -231,24 +232,27 @@ fn move_settings_focus(
     }
 }
 
-/// Whether the chat menu's Copy submenu is open beside it.
+/// Which of the chat menu's submenus (Copy or Slack) is open beside it.
 #[derive(Clone, Copy, PartialEq)]
 enum ChatMenuPage {
     Root,
     Copy,
+    Slack,
 }
 
-/// Hover-intent keys for the chat menu's rows; only Copy owns a submenu.
 /// Height of the new-thread arcade band under the titlebar.
 const NEW_THREAD_ARCADE_HEIGHT: f32 = 200.0;
 /// Shorter windows have no empty space above the heading for the band.
 const NEW_THREAD_ARCADE_MIN_WINDOW: f32 = 640.0;
+/// Hover-intent keys for the chat menu's rows; Copy and Slack own submenus.
 const CHAT_MENU_ROW_RENAME: u8 = 0;
 const CHAT_MENU_ROW_PIN: u8 = 1;
 const CHAT_MENU_ROW_ARCHIVE: u8 = 2;
 const CHAT_MENU_ROW_COPY: u8 = 3;
 const CHAT_MENU_ROW_DELETE: u8 = 4;
 const CHAT_MENU_ROW_TAB: u8 = 5;
+/// Past the tab rows (`CHAT_MENU_ROW_TAB + 0..4`).
+const CHAT_MENU_ROW_SLACK: u8 = 20;
 
 #[derive(Clone, Copy)]
 enum TabCloseAction {
@@ -2358,11 +2362,11 @@ pub struct Shell {
     appearance_settings_sub: Option<Subscription>,
     /// Session-row context menu, including the Copy submenu.
     chat_menu: popover::Popup<ChatMenuState>,
-    /// The Copy submenu's hover grace, its painted bounds, and which side
-    /// of the menu it opens on (the sidebar options menu's recipe).
-    chat_copy_intent: popover::HoverIntent<u8>,
-    chat_copy_bounds: Option<gpui::Bounds<Pixels>>,
-    chat_copy_left: bool,
+    /// The open submenu's (Copy or Slack) hover grace, painted bounds, and
+    /// which side of the menu it opens on (the sidebar options menu's recipe).
+    chat_submenu: slack_link::Submenu,
+    /// Slack links of chats and Zappers, fetched as their menus open.
+    slack_links: slack_link::SlackLinks,
     /// The chat title being edited in place on its row.
     chat_rename: Option<ChatRename>,
     /// Chat id awaiting delete confirmation.
@@ -3025,9 +3029,8 @@ impl Shell {
             files_settings_sub: None,
             appearance_settings_sub: None,
             chat_menu: popover::Popup::default(),
-            chat_copy_intent: Default::default(),
-            chat_copy_bounds: None,
-            chat_copy_left: false,
+            chat_submenu: Default::default(),
+            slack_links: Default::default(),
             chat_rename: None,
             delete_confirm: None,
             deleting_chat: false,
@@ -5983,7 +5986,10 @@ impl Shell {
     }
 
     fn close_chat_menu(&mut self, cx: &mut Context<Self>) {
-        self.chat_copy_intent.reset();
+        self.chat_submenu.reset();
+        if self.chat_menu.is_open() {
+            self.slack_links.menu_closed();
+        }
         if self.chat_menu.begin_close() {
             popover::reap_popup(cx, |shell: &mut Self| &mut shell.chat_menu);
             cx.notify();
@@ -6027,175 +6033,6 @@ impl Shell {
                 });
             },
         );
-    }
-
-    fn set_chat_copy_open(&mut self, open: bool, cx: &mut Context<Self>) {
-        let page = if open {
-            ChatMenuPage::Copy
-        } else {
-            ChatMenuPage::Root
-        };
-        if let Some(menu) = self.chat_menu.open_mut()
-            && menu.page != page
-        {
-            menu.page = page;
-            if !open {
-                self.chat_copy_bounds = None;
-            }
-            cx.notify();
-        }
-    }
-
-    /// Pointer intent over a chat-menu row: hovering Copy opens its submenu,
-    /// any other row closes it — after a grace while the pointer is heading
-    /// into the open submenu.
-    fn hover_chat_menu_row(
-        &mut self,
-        key: u8,
-        pointer: Point<Pixels>,
-        moved: bool,
-        cx: &mut Context<Self>,
-    ) {
-        let current = self
-            .chat_menu
-            .as_open()
-            .filter(|menu| menu.page == ChatMenuPage::Copy)
-            .map(|_| CHAT_MENU_ROW_COPY);
-        let (bounds, left) = (self.chat_copy_bounds, self.chat_copy_left);
-        let action = if moved {
-            self.chat_copy_intent
-                .moved(current.as_ref(), &key, pointer, bounds, left)
-        } else {
-            self.chat_copy_intent
-                .enter(current.as_ref(), &key, pointer, bounds, left)
-        };
-        match action {
-            popover::HoverAction::None => {}
-            popover::HoverAction::Open => {
-                self.set_chat_copy_open(key == CHAT_MENU_ROW_COPY, cx);
-                self.chat_copy_intent.record_origin(pointer);
-            }
-            popover::HoverAction::Defer => {
-                self.chat_copy_intent.defer(cx, move |this, cx| {
-                    if this.chat_menu.is_open() && this.chat_copy_intent.pending() == Some(&key) {
-                        this.chat_copy_intent.cancel();
-                        this.set_chat_copy_open(key == CHAT_MENU_ROW_COPY, cx);
-                        this.chat_copy_intent.record_origin(pointer);
-                    }
-                });
-            }
-        }
-    }
-
-    /// Wrap a chat-menu row in the hover surface that feeds
-    /// [`Self::hover_chat_menu_row`]. The row keeps its own hover fade.
-    fn chat_menu_hover_row(
-        &self,
-        key: u8,
-        row: impl IntoElement,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        div()
-            .id(("chat-menu-hover", key as usize))
-            .on_hover(cx.listener(move |this, hovered: &bool, window, cx| {
-                if *hovered {
-                    this.hover_chat_menu_row(key, window.mouse_position(), false, cx);
-                } else {
-                    this.chat_copy_intent.leave(&key);
-                }
-            }))
-            .on_mouse_move(
-                cx.listener(move |this, event: &gpui::MouseMoveEvent, _, cx| {
-                    this.hover_chat_menu_row(key, event.position, true, cx);
-                }),
-            )
-            .child(row)
-            .into_any_element()
-    }
-
-    /// The chat menu's Copy row: opens its submenu beside the menu on hover
-    /// (or click), on whichever side has room.
-    fn render_chat_copy_trigger(
-        &mut self,
-        chat_id: &str,
-        open: bool,
-        theme: &Theme,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let entity = cx.entity().downgrade();
-        let exit_entity = entity.clone();
-        let mut row =
-            popover::menu_row_nav(theme, open, false, format!("chat-menu-copy-{chat_id}"))
-                .id("chat-menu-copy")
-                .relative()
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.chat_copy_intent.reset();
-                    this.set_chat_copy_open(true, cx);
-                    cx.stop_propagation();
-                }))
-                .child(
-                    icon(icons::COPY)
-                        .size(px(16.0))
-                        .text_color(theme.text_muted),
-                )
-                .child(div().flex_1().child(SharedString::from("Copy")))
-                .child(
-                    icon(icons::ALT_ARROW_RIGHT)
-                        .size(px(14.0))
-                        .text_color(theme.text_muted),
-                )
-                .child(
-                    gpui::canvas(
-                        move |bounds, window, cx| {
-                            let left = bounds.right() + px(244.0) > window.viewport_size().width;
-                            let _ = entity.update(cx, |this, cx| {
-                                if this.chat_copy_left != left {
-                                    this.chat_copy_left = left;
-                                    cx.notify();
-                                }
-                            });
-                        },
-                        move |trigger, _, window, _| {
-                            if !open {
-                                return;
-                            }
-                            // Leaving the trigger anywhere but toward the submenu
-                            // closes it, as in the sidebar options menu.
-                            window.on_mouse_event(
-                                move |event: &gpui::MouseMoveEvent, phase, _, cx| {
-                                    if phase != gpui::DispatchPhase::Bubble {
-                                        return;
-                                    }
-                                    let _ = exit_entity.update(cx, |this, cx| {
-                                        let (bounds, left) =
-                                            (this.chat_copy_bounds, this.chat_copy_left);
-                                        if this.chat_copy_intent.contains_pointer(
-                                            trigger,
-                                            bounds,
-                                            event.position,
-                                            left,
-                                        ) {
-                                            return;
-                                        }
-                                        this.chat_copy_intent.reset();
-                                        this.set_chat_copy_open(false, cx);
-                                    });
-                                },
-                            );
-                        },
-                    )
-                    .absolute()
-                    .inset_0(),
-                );
-        if open {
-            let submenu = self.render_chat_copy_submenu(chat_id, theme, cx);
-            row = row.child(popover::nested_menu(
-                format!("chat-copy-submenu-{chat_id}"),
-                submenu,
-                self.chat_copy_left,
-            ));
-        }
-        row.into_any_element()
     }
 
     /// The Copy submenu's card: what can be copied for this chat.
@@ -6269,7 +6106,8 @@ impl Shell {
             .child(
                 gpui::canvas(
                     move |bounds, _, cx| {
-                        let _ = entity.update(cx, |this, _| this.chat_copy_bounds = Some(bounds));
+                        let _ =
+                            entity.update(cx, |this, _| this.chat_submenu.bounds = Some(bounds));
                     },
                     |_, _, _, _| {},
                 )
@@ -12780,10 +12618,11 @@ impl Shell {
             let menu = popover::popover_card(&theme)
                 .w(px(216.0))
                 .on_mouse_down_out(cx.listener(|this, event: &MouseDownEvent, _, cx| {
-                    // The Copy submenu floats outside this card: a press on
-                    // it is inside the menu.
+                    // The Copy and Slack submenus float outside this card: a
+                    // press on one is inside the menu.
                     if this
-                        .chat_copy_bounds
+                        .chat_submenu
+                        .bounds
                         .is_some_and(|bounds| bounds.contains(&event.position))
                     {
                         return;
@@ -12793,6 +12632,7 @@ impl Shell {
                 .flex()
                 .flex_col();
             let copy_open = menu_state.page == ChatMenuPage::Copy;
+            let slack_open = menu_state.page == ChatMenuPage::Slack;
             let menu = if chat_id.is_empty() {
                 menu
             } else if chat_id.starts_with(CLOUD_ROW_PREFIX) {
@@ -12851,6 +12691,13 @@ impl Shell {
                             )
                             .child(SharedString::from("Archive"));
                     let copy = self.render_chat_copy_trigger(&chat_id, copy_open, &theme, cx);
+                    let slack = self.render_slack_trigger(
+                        slack_link::SubmenuHost::Chat,
+                        &chat_id,
+                        slack_open,
+                        &theme,
+                        cx,
+                    );
                     let menu = if thread_zot.is_some() {
                         menu
                     } else {
@@ -12858,6 +12705,7 @@ impl Shell {
                     };
                     menu.child(self.chat_menu_hover_row(CHAT_MENU_ROW_ARCHIVE, archive, cx))
                         .child(self.chat_menu_hover_row(CHAT_MENU_ROW_COPY, copy, cx))
+                        .child(self.chat_menu_hover_row(CHAT_MENU_ROW_SLACK, slack, cx))
                 };
                 let delete =
                     popover::menu_row(&theme, false, format!("chat-menu-delete-{chat_id}"))

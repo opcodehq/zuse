@@ -534,6 +534,16 @@ impl CloudApi {
                             "Choose an available cloud model for Slack.",
                         Some("slack_workspace_mismatch") =>
                             "Your workspace changed. Refresh Slack settings.",
+                        Some("slack_chat_already_linked") =>
+                            "This chat is already linked to another Slack channel. Unlink it first.",
+                        Some("slack_chat_link_not_found") =>
+                            "This chat is no longer linked to Slack.",
+                        Some("slack_channel_access_unavailable") =>
+                            "Zuse can't post in that channel. Invite the Zuse app to it in Slack, then try again.",
+                        Some("slack_member_required") =>
+                            "Connect your Slack account in Settings → Cloud → Slack first.",
+                        Some("slack_rate_limited") =>
+                            "Slack is limiting requests. Try again in a minute.",
                         _ if status.as_u16() == 404 =>
                             "Slack is not enabled on this cloud service.",
                         _ => "Slack settings are unavailable. Refresh and try again.",
@@ -1895,6 +1905,26 @@ impl CloudApi {
         }
         Ok(result)
     }
+}
+/// Account-level Slack link calls the engine makes for its own chats. Links
+/// belong to the personal account, like the Slack member link they rely on.
+pub(crate) async fn slack_link_request(
+    auth: &Auth,
+    verb: reqwest::Method,
+    path: &[&str],
+    body: Option<Value>,
+    query: &[(String, String)],
+) -> Result<Value> {
+    let api = CloudApi::shared()?;
+    ensure!(
+        (auth.workos_enabled() || api.loopback) && auth.user_id().is_some(),
+        "Sign in to Zuse Cloud to use Slack."
+    );
+    let token = auth.access_token().await.map_err(|_| {
+        anyhow::anyhow!("Could not refresh your Cloud session. Check your connection or reconnect in Settings → General.")
+    })?;
+    api.request_scoped_verb(&token, path, body, None, query, verb)
+        .await
 }
 pub async fn handle(auth: &Auth, method: &str, params: Value) -> Result<Value> {
     let api = CloudApi::shared()?;

@@ -184,3 +184,38 @@ shell-hosted_restore_chat = { $title }{ " " }복원
 shell-hosted_sign_in_failed = 로그인할 수 없습니다. 연결을 확인하고 다시 시도하세요.
 
 shell-cloud_image_leave_warning = Your cloud image has unbuilt changes. Leave Settings? You can return to Cloud Workspace settings to finish building.
+
+
+shell-slack_link_row = Slack
+
+shell-slack_link_status_on = 켜짐
+
+shell-slack_link_status_off = 꺼짐
+
+shell-slack_link_status_not_linked = 연결 안 됨
+
+shell-slack_link_loading = 불러오는 중…
+
+shell-slack_link_sync = Slack과 동기화
+
+shell-slack_link_open_thread = Slack 스레드 열기
+
+shell-slack_link_unlink = Slack 연결 해제
+
+shell-slack_link_settings = Slack 설정
+
+shell-slack_link_heading = Slack에 연결
+
+shell-slack_link_linked_heading = { $team }의 #{ $channel }
+
+shell-slack_link_search_placeholder = 채널 검색…
+
+shell-slack_link_no_channels = 연결할 채널이 없습니다
+
+shell-slack_link_no_matching_channels = 일치하는 채널이 없습니다
+
+shell-slack_link_private = 비공개
+
+shell-slack_link_connect = 설정에서 Slack 연결
+
+shell-slack_link_unavailable = 계정 연결을 사용할 수 없습니다.

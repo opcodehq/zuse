@@ -1,6 +1,7 @@
 //! First-party Slack ingress and durable delivery alongside the cloud API.
 //! This module owns bot credentials; public settings contain identifiers only.
 mod http;
+mod links;
 #[cfg(test)]
 mod tests;
 mod worker;
@@ -24,6 +25,9 @@ use std::{sync::Arc, time::Duration};
 use zuse_protocol::slack::ConnectRequest;
 
 pub const MIGRATION: &str = include_str!("../../migrations/0009_slack.sql");
+/// Chats linked to Slack threads: links, mirrored-reply receipts and the
+/// thread-reply inbox. Applied after [`MIGRATION`].
+pub const LINKS_MIGRATION: &str = include_str!("../../migrations/0010_slack_links.sql");
 pub struct Config {
     signing_secret: String,
     client_id: String,
@@ -85,6 +89,11 @@ impl Slack {
                 .fetch_one(&pool)
                 .await?;
         anyhow::ensure!(exists, "Apply 0009_slack.sql before enabling Slack");
+        let links: bool =
+            sqlx::query_scalar("SELECT to_regclass('zuse_rust_slack_links') IS NOT NULL AND to_regclass('zuse_rust_slack_link_posts') IS NOT NULL AND to_regclass('zuse_rust_slack_inbox') IS NOT NULL")
+                .fetch_one(&pool)
+                .await?;
+        anyhow::ensure!(links, "Apply 0010_slack_links.sql before enabling Slack");
         let master = MasterKey::parse(
             &std::env::var("CLOUD_DATA_ENCRYPTION_KEY")
                 .or_else(|_| std::env::var("CLOUD_CREDENTIAL_VAULT_KEY"))?,
@@ -113,6 +122,17 @@ impl Slack {
             .route("/v1/cloud/slack/connect", post(http::connect))
             .route("/v1/cloud/slack/disconnect", post(http::disconnect))
             .route("/v1/cloud/slack/confirm", post(http::confirm))
+            .route("/v1/cloud/slack/channels", get(links::channels))
+            .route(
+                "/v1/cloud/slack/links",
+                get(links::get_link).post(links::create),
+            )
+            .route("/v1/cloud/slack/links/update", post(links::update))
+            .route("/v1/cloud/slack/links/remove", post(links::remove))
+            .route("/v1/cloud/slack/links/post", post(links::post))
+            .route("/v1/cloud/slack/inbox", get(links::inbox))
+            .route("/v1/cloud/slack/inbox/ack", post(links::ack))
+            .route("/slack/avatars/{mascot}/{file}", get(links::avatar))
             .layer(DefaultBodyLimit::max(256 * 1024))
             .with_state(self)
     }
@@ -195,8 +215,30 @@ impl Slack {
         serde_json::from_slice(&bytes).map_err(|_| unavailable())
     }
     async fn api(&self, token: &str, method: &str, body: Value) -> Result<Value, ApiError> {
+        self.call(token, method, body)
+            .await?
+            .map_err(|error| match error.as_str() {
+                "message_not_found" | "cant_update_message" => {
+                    ApiError::bad_request("slack_progress_reply_unavailable")
+                }
+                "missing_scope" | "not_in_channel" | "channel_not_found" => {
+                    ApiError::forbidden("slack_channel_access_unavailable")
+                }
+                _ => unavailable(),
+            })
+    }
+    /// One Web API call. The inner error is Slack's own error code, for callers
+    /// that recover from specific failures (e.g. joining after `not_in_channel`).
+    async fn call(
+        &self,
+        token: &str,
+        method: &str,
+        body: Value,
+    ) -> Result<Result<Value, String>, ApiError> {
         let url = format!("{}/{method}", self.api_origin);
-        let request = if method.starts_with("chat.") {
+        let request = if (method.starts_with("chat.") && method != "chat.getPermalink")
+            || method == "conversations.join"
+        {
             self.http.post(url).json(&body)
         } else {
             self.http.get(url).query(&body)
@@ -224,17 +266,9 @@ impl Slack {
         let bytes = crate::auth::bounded_body(response).await?;
         let value: Value = serde_json::from_slice(&bytes).map_err(|_| unavailable())?;
         if value["ok"] != true {
-            return Err(match value["error"].as_str() {
-                Some("message_not_found" | "cant_update_message") => {
-                    ApiError::bad_request("slack_progress_reply_unavailable")
-                }
-                Some("missing_scope" | "not_in_channel" | "channel_not_found") => {
-                    ApiError::forbidden("slack_channel_access_unavailable")
-                }
-                _ => unavailable(),
-            });
+            return Ok(Err(value["error"].as_str().unwrap_or("").to_owned()));
         }
-        Ok(value)
+        Ok(Ok(value))
     }
 }
 #[derive(Serialize, Deserialize)]

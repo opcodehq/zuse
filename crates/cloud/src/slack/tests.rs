@@ -156,6 +156,7 @@ async fn fixture() -> (
         crate::runtime::allocation::MIGRATION,
         include_str!("../../tests/fixtures/creation.sql"),
         MIGRATION,
+        LINKS_MIGRATION,
     ] {
         sqlx::raw_sql(sql).execute(&pool).await.unwrap();
     }
@@ -211,7 +212,15 @@ async fn fixture() -> (
 async fn mock_get(axum::extract::Path(method): axum::extract::Path<String>) -> axum::Json<Value> {
     axum::Json(match method.as_str() {
         "users.info" => json!({"ok":true,"user":{"profile":{"display_name":"Ada Lovelace"}}}),
-        "conversations.info" => json!({"ok":true,"channel":{"name":"engineering"}}),
+        "conversations.info" => {
+            json!({"ok":true,"channel":{"name":"engineering","is_member":true,"is_private":false}})
+        }
+        "conversations.list" => {
+            json!({"ok":true,"channels":[{"id":"C_RANDOM","name":"random","is_private":false},{"id":"C_SECRET","name":"secret","is_private":true,"is_member":false},{"id":"C_ENGINEERING","name":"engineering","is_private":false}],"response_metadata":{"next_cursor":""}})
+        }
+        "chat.getPermalink" => {
+            json!({"ok":true,"permalink":"https://example.slack.com/archives/C_ENGINEERING/p1"})
+        }
         _ => json!({"ok":true}),
     })
 }
@@ -1078,4 +1087,442 @@ fn slack_official_signature_example_matches_without_using_the_test_signer() {
         )
         .is_ok()
     );
+}
+
+fn channel_reply(user: &str, text: &str, ts: &str, kind: &str, event_id: &str) -> Value {
+    let mut event = json!({"type":kind,"user":user,"text":text,"ts":ts,"thread_ts":"1793296801.000001","channel":"C_ENGINEERING","event_ts":ts});
+    if kind == "message" {
+        event["channel_type"] = json!("channel");
+    }
+    json!({"team_id":"T_WORKSPACE","api_app_id":"A_ZUSE","event":event,"type":"event_callback","event_id":event_id,"event_time":1793296900})
+}
+#[test]
+fn linked_thread_replies_route_only_for_the_linked_member() {
+    let reply = links::linked_reply(
+        &channel_reply(
+            "U_ADA",
+            "<@U_ZUSE> Ship it",
+            "1793296900.1",
+            "message",
+            "Ev1",
+        ),
+        "U_ZUSE",
+    )
+    .unwrap();
+    assert_eq!(reply.text, "Ship it");
+    assert_eq!(reply.thread, "1793296801.000001");
+    assert_eq!(links::route(&reply, None), links::Route::Default);
+    assert_eq!(links::route(&reply, Some(false)), links::Route::Ignore);
+    assert_eq!(links::route(&reply, Some(true)), links::Route::Inbox);
+    let mention = links::linked_reply(
+        &channel_reply(
+            "U_ADA",
+            "<@U_ZUSE> Ship it",
+            "1793296900.1",
+            "app_mention",
+            "Ev2",
+        ),
+        "U_ZUSE",
+    )
+    .unwrap();
+    assert_eq!(
+        (mention.ts.as_str(), mention.text.as_str()),
+        ("1793296900.1", "Ship it")
+    );
+    // A file-only reply in a linked thread is consumed but never queued.
+    let empty = links::linked_reply(
+        &channel_reply("U_ADA", "<@U_ZUSE>", "1793296900.2", "message", "Ev3"),
+        "U_ZUSE",
+    )
+    .unwrap();
+    assert_eq!(links::route(&empty, Some(true)), links::Route::Ignore);
+    // Top-level messages, bot posts, edits, DMs and the bot itself are not thread replies.
+    let mut top = channel_reply("U_ADA", "hi", "1793296801.000001", "message", "Ev4");
+    assert!(links::linked_reply(&top, "U_ZUSE").is_none());
+    top["event"].as_object_mut().unwrap().remove("thread_ts");
+    assert!(links::linked_reply(&top, "U_ZUSE").is_none());
+    let mut bot = channel_reply("U_ADA", "hi", "1793296900.3", "message", "Ev5");
+    bot["event"]["bot_id"] = json!("B_ZUSE");
+    assert!(links::linked_reply(&bot, "U_ZUSE").is_none());
+    let mut edit = channel_reply("U_ADA", "hi", "1793296900.3", "message", "Ev6");
+    edit["event"]["subtype"] = json!("message_changed");
+    assert!(links::linked_reply(&edit, "U_ZUSE").is_none());
+    let mut dm = channel_reply("U_ADA", "hi", "1793296900.3", "message", "Ev7");
+    dm["event"]["channel_type"] = json!("im");
+    assert!(links::linked_reply(&dm, "U_ZUSE").is_none());
+    assert!(
+        links::linked_reply(
+            &channel_reply("U_ZUSE", "hi", "1793296900.3", "message", "Ev8"),
+            "U_ZUSE"
+        )
+        .is_none()
+    );
+    let mut files = channel_reply("U_ADA", "see attached", "1793296900.4", "message", "Ev9");
+    files["event"]["subtype"] = json!("file_share");
+    files["event"]["files"] = json!([{"id":"F1"}]);
+    assert!(
+        links::linked_reply(&files, "U_ZUSE")
+            .unwrap()
+            .text
+            .starts_with("see attached\n\n")
+    );
+}
+#[test]
+fn personas_titles_and_text_are_bounded_and_cannot_mention_everyone() {
+    use zuse_protocol::{slack::Persona, zots::ZotAvatar};
+    let avatar = ZotAvatar {
+        mascot: "robot".into(),
+        color: "teal".into(),
+    };
+    assert!(
+        Persona {
+            name: "Zapper Ada".into(),
+            avatar: Some(avatar.clone())
+        }
+        .is_valid()
+    );
+    for name in ["", "   ", &"x".repeat(81), "bad\nname"] {
+        assert!(
+            !Persona {
+                name: name.into(),
+                avatar: None
+            }
+            .is_valid()
+        );
+    }
+    assert!(
+        !Persona {
+            name: "Ada".into(),
+            avatar: Some(ZotAvatar {
+                mascot: "../etc".into(),
+                color: "teal".into()
+            })
+        }
+        .is_valid()
+    );
+    assert_eq!(
+        links::avatar_url("https://api.example.com", &avatar),
+        "https://api.example.com/slack/avatars/robot/teal.png"
+    );
+    assert_eq!(links::title("  "), "Zuse chat");
+    assert_eq!(links::title(&"é".repeat(300)).chars().count(), 200);
+    assert_eq!(
+        links::escape("<!channel> & <@U1>"),
+        "&lt;!channel&gt; &amp; &lt;@U1&gt;"
+    );
+}
+#[test]
+fn avatars_render_as_square_pngs() {
+    let bytes = links::render_avatar(&zuse_protocol::zots::ZotAvatar {
+        mascot: "unknown-falls-back".into(),
+        color: "unknown".into(),
+    })
+    .unwrap();
+    assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n");
+    assert_eq!(&bytes[12..16], b"IHDR");
+    assert_eq!(u32::from_be_bytes(bytes[16..20].try_into().unwrap()), 512);
+    assert_eq!(u32::from_be_bytes(bytes[20..24].try_into().unwrap()), 512);
+}
+#[tokio::test]
+async fn avatar_route_validates_ids_and_is_cacheable() {
+    let response = Router::new()
+        .route(
+            "/slack/avatars/{mascot}/{file}",
+            axum::routing::get(links::avatar),
+        )
+        .oneshot(
+            Request::get("/slack/avatars/robot/teal.png")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["content-type"], "image/png");
+    assert_eq!(response.headers()["cache-control"], "public, max-age=86400");
+    for path in [
+        "/slack/avatars/Robot/teal.png",
+        "/slack/avatars/robot/teal.gif",
+        "/slack/avatars/robot/.png",
+    ] {
+        let response = Router::new()
+            .route(
+                "/slack/avatars/{mascot}/{file}",
+                axum::routing::get(links::avatar),
+            )
+            .oneshot(Request::get(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires explicit isolated localhost PostgreSQL"]
+async fn slack_linked_chat_mirrors_replies_and_queues_only_the_members_thread_replies() {
+    let (admin, pool, schema, slack, calls) = fixture().await;
+    let app = slack.clone().router();
+    let request_body = json!({"chatKey":"chat:one","teamId":"T_WORKSPACE","channelId":"C_ENGINEERING","title":"Fix <!channel> login","persona":{"name":"Zapper Ada","avatar":{"mascot":"robot","color":"teal"}}});
+    let (status, body) = request(&app, "/v1/cloud/slack/links?chatKey=chat:one", None).await;
+    assert_eq!(
+        (status, body),
+        (StatusCode::OK, json!({"link":null,"connected":false}))
+    );
+    let (status, body) = request(&app, "/v1/cloud/slack/links", Some(request_body.clone())).await;
+    assert_eq!(
+        (status, body["error"].as_str()),
+        (StatusCode::FORBIDDEN, Some("slack_member_required"))
+    );
+    link(&slack).await;
+    let (status, body) = request(&app, "/v1/cloud/slack/channels", None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let names: Vec<_> = body["channels"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["engineering", "random"]);
+    let (status, body) = request(&app, "/v1/cloud/slack/links", Some(request_body.clone())).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["link"]["threadTs"], "1793296801.000001");
+    assert_eq!(body["link"]["channelName"], "engineering");
+    assert_eq!(body["link"]["sync"], true);
+    assert!(
+        body["link"]["permalink"]
+            .as_str()
+            .unwrap()
+            .starts_with("https://")
+    );
+    let parent = calls
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(m, _)| m == "chat.postMessage")
+        .unwrap()
+        .1
+        .clone();
+    assert_eq!(
+        parent["text"],
+        "Fix &lt;!channel&gt; login · Started from Zuse by Ada Lovelace"
+    );
+    assert_eq!(parent["username"], "Zapper Ada");
+    assert_eq!(
+        parent["icon_url"],
+        "https://api-rust.zuse.sh/slack/avatars/robot/teal.png"
+    );
+    // Idempotent for the same channel; a different channel conflicts.
+    let (status, again) = request(&app, "/v1/cloud/slack/links", Some(request_body.clone())).await;
+    assert_eq!((status, &again["link"]), (StatusCode::OK, &body["link"]));
+    let mut other = request_body.clone();
+    other["channelId"] = json!("C_RANDOM");
+    let (status, body) = request(&app, "/v1/cloud/slack/links", Some(other)).await;
+    assert_eq!(
+        (status, body["error"].as_str()),
+        (StatusCode::CONFLICT, Some("slack_chat_already_linked"))
+    );
+    let mut bad = request_body.clone();
+    bad["persona"]["name"] = json!("");
+    assert_eq!(
+        request(&app, "/v1/cloud/slack/links", Some(bad)).await.0,
+        StatusCode::BAD_REQUEST
+    );
+
+    // Mirrored replies post once per message ID.
+    let post = json!({"chatKey":"chat:one","messageId":"m1","text":"Done.","persona":{"name":"Zapper Ada"}});
+    for _ in 0..2 {
+        let (status, body) = request(&app, "/v1/cloud/slack/links/post", Some(post.clone())).await;
+        assert_eq!(
+            (status, body),
+            (
+                StatusCode::OK,
+                json!({"posted":true,"ts":"1793296801.000001"})
+            )
+        );
+    }
+    let posts: Vec<Value> = calls
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(m, _)| m == "chat.postMessage")
+        .map(|(_, b)| b.clone())
+        .collect();
+    assert_eq!(posts.len(), 2);
+    assert_eq!(posts[1]["thread_ts"], "1793296801.000001");
+    assert_eq!(posts[1]["mrkdwn"], true);
+    assert_eq!(posts[1]["username"], "Zapper Ada");
+    assert!(posts[1].get("icon_url").is_none());
+    let mut missing = post.clone();
+    missing["chatKey"] = json!("chat:none");
+    let (status, body) = request(&app, "/v1/cloud/slack/links/post", Some(missing)).await;
+    assert_eq!(
+        (status, body["error"].as_str()),
+        (StatusCode::NOT_FOUND, Some("slack_chat_link_not_found"))
+    );
+
+    // The member's reply arrives once despite app_mention + message; others are ignored.
+    ingress(
+        &slack,
+        &channel_reply(
+            "U_ADA",
+            "<@U_ZUSE> Also fix logout",
+            "1793296900.1",
+            "app_mention",
+            "EvA",
+        )
+        .to_string(),
+    )
+    .await;
+    ingress(
+        &slack,
+        &channel_reply(
+            "U_ADA",
+            "<@U_ZUSE> Also fix logout",
+            "1793296900.1",
+            "message",
+            "EvB",
+        )
+        .to_string(),
+    )
+    .await;
+    ingress(
+        &slack,
+        &channel_reply(
+            "U_EVE",
+            "<@U_ZUSE> Delete everything",
+            "1793296900.2",
+            "app_mention",
+            "EvC",
+        )
+        .to_string(),
+    )
+    .await;
+    ingress(
+        &slack,
+        &channel_reply("U_EVE", "chatter", "1793296900.3", "message", "EvD").to_string(),
+    )
+    .await;
+    let counts: (i64, i64) = sqlx::query_as("SELECT (SELECT COUNT(*) FROM zuse_rust_slack_inbox),(SELECT COUNT(*) FROM zuse_rust_slack_jobs)").fetch_one(&pool).await.unwrap();
+    assert_eq!(counts, (1, 0));
+    let sealed: String = sqlx::query_scalar("SELECT payload FROM zuse_rust_slack_inbox")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(!sealed.contains("logout"));
+    // An unlinked thread keeps today's behavior.
+    ingress(&slack, THREAD).await;
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM zuse_rust_slack_jobs")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        1
+    );
+
+    let (status, body) = request(&app, "/v1/cloud/slack/inbox", None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let messages = body["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0]["chatKey"], "chat:one");
+    assert_eq!(messages[0]["eventId"], "EvA");
+    assert_eq!(messages[0]["text"], "Also fix logout");
+    assert_eq!(messages[0]["author"], "Ada Lovelace");
+    assert_eq!(messages[0]["channel"], "engineering");
+    let sequence = messages[0]["sequence"].as_i64().unwrap();
+    assert_eq!(
+        request(
+            &app,
+            "/v1/cloud/slack/inbox/ack",
+            Some(json!({"sequences":(0..101).collect::<Vec<i64>>()}))
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    let (status, body) = request(
+        &app,
+        "/v1/cloud/slack/inbox/ack",
+        Some(json!({"sequences":[sequence]})),
+    )
+    .await;
+    assert_eq!((status, body), (StatusCode::OK, json!({"acked":1})));
+
+    // Sync off: replies are not posted and thread replies fall back to today's handling.
+    let (status, body) = request(
+        &app,
+        "/v1/cloud/slack/links/update",
+        Some(json!({"chatKey":"chat:one","sync":false})),
+    )
+    .await;
+    assert_eq!(
+        (status, body["link"]["sync"].as_bool()),
+        (StatusCode::OK, Some(false))
+    );
+    let mut later = post.clone();
+    later["messageId"] = json!("m2");
+    let (status, body) = request(&app, "/v1/cloud/slack/links/post", Some(later)).await;
+    assert_eq!(
+        (status, body),
+        (StatusCode::OK, json!({"posted":false,"ts":null}))
+    );
+    ingress(
+        &slack,
+        &channel_reply("U_ADA", "quiet", "1793296900.5", "message", "EvE").to_string(),
+    )
+    .await;
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM zuse_rust_slack_inbox")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        0
+    );
+    let (status, _) = request(
+        &app,
+        "/v1/cloud/slack/links/update",
+        Some(json!({"chatKey":"chat:none","sync":true})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // Removing deletes the link and its queued replies.
+    request(
+        &app,
+        "/v1/cloud/slack/links/update",
+        Some(json!({"chatKey":"chat:one","sync":true})),
+    )
+    .await;
+    ingress(
+        &slack,
+        &channel_reply("U_ADA", "one more", "1793296900.6", "message", "EvF").to_string(),
+    )
+    .await;
+    let (status, body) = request(
+        &app,
+        "/v1/cloud/slack/links/remove",
+        Some(json!({"chatKey":"chat:one"})),
+    )
+    .await;
+    assert_eq!((status, body), (StatusCode::OK, json!({"removed":true})));
+    let left: (i64, i64, i64) = sqlx::query_as("SELECT (SELECT COUNT(*) FROM zuse_rust_slack_links),(SELECT COUNT(*) FROM zuse_rust_slack_link_posts),(SELECT COUNT(*) FROM zuse_rust_slack_inbox)").fetch_one(&pool).await.unwrap();
+    assert_eq!(left, (0, 0, 0));
+    let (status, body) = request(&app, "/v1/cloud/slack/links?chatKey=chat:one", None).await;
+    assert_eq!(
+        (status, body),
+        (StatusCode::OK, json!({"link":null,"connected":true}))
+    );
+    assert!(
+        !serde_json::to_string(
+            &calls
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(_, b)| b.clone())
+                .collect::<Vec<_>>()
+        )
+        .unwrap()
+        .contains("xoxb")
+    );
+    drop(slack);
+    finish(admin, pool, schema).await;
 }
