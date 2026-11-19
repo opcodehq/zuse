@@ -744,9 +744,9 @@ pub(super) fn render_avatar(avatar: &ZotAvatar) -> Result<Vec<u8>, ApiError> {
             let y = (py as f32 + 0.5) / size as f32;
             let disc = |cx: f32, cy: f32, r: f32| (x - cx).hypot(y - cy) <= r;
             let pill = |left: f32, top: f32, w: f32, h: f32, r: f32| {
-                let cx = x.clamp(left + r, left + w - r);
-                let cy = y.clamp(top + r, top + h - r);
-                (x - cx).hypot(y - cy) <= r
+                let dx = ((x - (left + w / 2.)).abs() - (w / 2. - r)).max(0.);
+                let dy = ((y - (top + h / 2.)).abs() - (h / 2. - r)).max(0.);
+                dx.hypot(dy) <= r
             };
             let arc = |cx: f32, cy: f32, r: f32, from: f32, to: f32, width: f32| {
                 let dx = x - cx;

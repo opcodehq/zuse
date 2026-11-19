@@ -1223,6 +1223,21 @@ fn avatars_render_as_square_pngs() {
     assert_eq!(u32::from_be_bytes(bytes[16..20].try_into().unwrap()), 512);
     assert_eq!(u32::from_be_bytes(bytes[20..24].try_into().unwrap()), 512);
 }
+#[test]
+fn avatars_render_every_current_face_distinctly() {
+    use zuse_protocol::{presentation::zot_mascots::MASCOTS, zots::ZotAvatar};
+    let images: std::collections::HashSet<_> = MASCOTS
+        .iter()
+        .map(|mascot| {
+            links::render_avatar(&ZotAvatar {
+                mascot: mascot.id.into(),
+                color: "teal".into(),
+            })
+            .unwrap()
+        })
+        .collect();
+    assert_eq!(images.len(), MASCOTS.len());
+}
 #[tokio::test]
 async fn avatar_route_validates_ids_and_is_cacheable() {
     let response = Router::new()
