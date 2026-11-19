@@ -86,7 +86,7 @@ mod main_tabs;
 mod navigation_focus;
 #[cfg(test)]
 mod navigation_tests;
-mod open_in;
+pub(crate) mod open_in;
 mod panel_layout;
 mod panel_menu;
 mod pr_watch;
@@ -4789,6 +4789,9 @@ impl Shell {
                                 files.reveal_file_explicit(path.clone(), cx)
                             });
                         }
+                    }
+                    FilesEvent::OpenIn { path, target } => {
+                        this.open_path_in(target.clone(), path.to_string_lossy().into_owned(), cx);
                     }
                     FilesEvent::OpenWebLink(activation) => {
                         if let crate::markdown::render::LinkOutcome::External(url) =
@@ -20586,7 +20589,17 @@ impl Shell {
             self.right_plus.open(());
             cx.notify();
         } else if route.ends_with("open-in-menu") {
-            self.fixture_open_panel("panel/files", window, cx);
+            if route.starts_with("file-") {
+                self.fixture_open_panel("main/file", window, cx);
+                if let Some(id) = self.active_main_file(cx)
+                    && let Some(file) = self.file_surfaces.get(&id).cloned()
+                {
+                    file.update(cx, |file, cx| file.fixture_open_file_picker(window, cx));
+                }
+                return;
+            } else {
+                self.fixture_open_panel("panel/files", window, cx);
+            }
             self.fixture_open_in_menu(cx);
         } else if route.ends_with("outline-menu") {
             // The outline needs a wide conversation column.
@@ -20738,6 +20751,16 @@ impl Shell {
                     });
                 }
             }
+            "main/file-diff" => {
+                self.fixture_open_panel("main/file", window, cx);
+                if let Some(id) = self.active_main_file(cx)
+                    && let Some(file) = self.file_surfaces.get(&id).cloned()
+                {
+                    let patch =
+                        FIXTURE_REVIEW_PATCH.replace("src/cache.rs", "apps/desktop/src/main.rs");
+                    file.update(cx, |file, cx| file.fixture_seed_inline_diff(&patch, cx));
+                }
+            }
             "main/file" => {
                 // A file opened from the tree, as a main-area tab beside the
                 // conversation; the tree stays in the right pane.
@@ -20885,6 +20908,13 @@ impl Shell {
         // the session card over it, `:transcript-fork` the reply's Fork
         // menu; `:transcript-outline` adds a second prompt so the outline
         // control shows.
+        if let Some(status) = variant.strip_prefix("image-generation-") {
+            self.fixture_reset_panels(cx);
+            self.set_surfaces_open(false, cx);
+            self.transcript.update(cx, |transcript, cx| {
+                transcript.fixture_image_generation(status, cx)
+            });
+        }
         if variant.starts_with("transcript") {
             self.fixture_seed_transcript(variant == "transcript-outline", cx);
             if variant.starts_with("transcript-card") {

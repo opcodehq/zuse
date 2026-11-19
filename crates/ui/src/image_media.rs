@@ -242,7 +242,12 @@ pub(crate) fn decode_image(mime: &str, bytes: Vec<u8>) -> Result<MediaImage, Str
         };
         return Ok(media.preview_for_view((900.0, 480.0), 2.0));
     }
-    decode_raster_image(bytes, zuse_protocol::MAX_WORKSPACE_IMAGE_BYTES)
+    decode_raster_image_with_format(
+        bytes,
+        zuse_protocol::MAX_WORKSPACE_IMAGE_BYTES,
+        Some(2048),
+        (mime == "image/x-tga").then_some(image::ImageFormat::Tga),
+    )
 }
 
 /// Repository icons retain only a small static thumbnail, even for large source logos.
@@ -279,13 +284,13 @@ pub(crate) fn decode_raster_image(bytes: Vec<u8>, max_bytes: usize) -> Result<Me
     decode_raster_image_bounded(bytes, max_bytes, None)
 }
 
-/// Decoder bounds for every raster preview: 4096 px per side, 64 MiB of
+/// Decoder bounds for every raster preview: 32768 px per side, 256 MiB of
 /// decoder allocation.
 pub(crate) fn raster_limits() -> image::Limits {
     let mut limits = image::Limits::default();
-    limits.max_image_width = Some(4096);
-    limits.max_image_height = Some(4096);
-    limits.max_alloc = Some(64 * 1024 * 1024);
+    limits.max_image_width = Some(32768);
+    limits.max_image_height = Some(32768);
+    limits.max_alloc = Some(256 * 1024 * 1024);
     limits
 }
 
@@ -294,12 +299,24 @@ fn decode_raster_image_bounded(
     max_bytes: usize,
     max_side: Option<u32>,
 ) -> Result<MediaImage, String> {
+    decode_raster_image_with_format(bytes, max_bytes, max_side, None)
+}
+
+fn decode_raster_image_with_format(
+    bytes: Vec<u8>,
+    max_bytes: usize,
+    max_side: Option<u32>,
+    format: Option<image::ImageFormat>,
+) -> Result<MediaImage, String> {
     if bytes.len() > max_bytes {
         return Err("Image exceeds preview size limit".into());
     }
     let mut reader = image::ImageReader::new(Cursor::new(bytes))
         .with_guessed_format()
         .map_err(|e| e.to_string())?;
+    if let Some(format) = format {
+        reader.set_format(format);
+    }
     reader.limits(raster_limits());
     // Decode one frame and encode a static PNG so GPUI cannot expand unbounded animation frames.
     let decoded = reader.decode().map_err(|e| e.to_string())?;
@@ -470,13 +487,24 @@ mod tests {
             )
             .is_err()
         );
-        for (width, height) in [(4097, 1), (1, 4097)] {
+        for (width, height) in [(32769, 1), (1, 32769)] {
             let mut png = Cursor::new(Vec::new());
             image::RgbaImage::new(width, height)
                 .write_to(&mut png, image::ImageFormat::Png)
                 .unwrap();
             assert!(decode_image("image/png", png.into_inner()).is_err());
         }
+    }
+
+    #[test]
+    fn large_workspace_rasters_keep_a_bounded_preview() {
+        let mut png = Cursor::new(Vec::new());
+        image::RgbaImage::new(6000, 100)
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        let media = decode_image("image/png", png.into_inner()).unwrap();
+        assert!(media.width <= 2048.0);
+        assert!(media.bytes < 64 * 1024 * 1024);
     }
 
     #[test]

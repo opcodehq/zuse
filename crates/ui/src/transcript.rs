@@ -59,6 +59,7 @@ use crate::theme::Theme;
 use zuse_syntax::LanguageId as Lang;
 
 mod find;
+mod image_generation;
 
 // ---------------------------------------------------------------------------
 // Constants (mugen ports)
@@ -1112,6 +1113,11 @@ pub fn diff_to_file(diff: &zuse_protocol::ToolDiff) -> crate::changes::FileDiff 
 
 #[derive(Clone)]
 pub enum RowKind {
+    ImageGeneration {
+        tool: Arc<ToolItem>,
+        assets: Arc<Vec<image_generation::GeneratedAsset>>,
+        streaming: bool,
+    },
     AgentSwitch {
         from: zuse_doc::parts::AgentIdentity,
         to: zuse_doc::parts::AgentIdentity,
@@ -1635,12 +1641,20 @@ pub fn rows_for_entry(
                 }
                 let item = ToolItem {
                     part_id: part.id().to_owned(),
-                    call: call.clone(),
+                    call: if image_generation::is_generation_call(call) {
+                        image_generation::display_call(call)
+                    } else {
+                        call.clone()
+                    },
                     is_error: *is_error,
                     resolved: *resolved,
                     detail: tool_detail(output.as_deref(), diff.as_ref(), diff_stats.as_deref())
                         .map(Arc::new),
-                    invocation: call_block(call).map(Arc::new),
+                    invocation: if image_generation::is_generation_call(call) {
+                        None
+                    } else {
+                        call_block(call).map(Arc::new)
+                    },
                     output_ref: output_ref.clone().map(SharedString::from),
                     output_bytes: *output_bytes,
                     diff_ref: diff_ref.clone().map(SharedString::from),
@@ -1648,8 +1662,40 @@ pub fn rows_for_entry(
                     subagent_status: *subagent_status,
                     subagent_tail: subagent_tail.clone().map(SharedString::from),
                     kind: ToolItemKind::Call,
-                    images: crate::tool_images::image_paths(call, output.as_deref()),
+                    images: if image_generation::is_generation_call(call) {
+                        crate::tool_images::output_image_paths(output.as_deref())
+                    } else {
+                        crate::tool_images::image_paths(call, output.as_deref())
+                    },
                 };
+                if image_generation::is_generation_call(call) {
+                    if !compact {
+                        flush_group(
+                            &mut rows,
+                            &mut pending_group,
+                            &mut group_ix,
+                            group_last_part_ix,
+                        );
+                    }
+                    let assets = image_generation::assets(entry, part.id());
+                    let version = tool_fingerprint(std::slice::from_ref(&item), streaming)
+                        ^ fnv1a(format!("{assets:?}").as_bytes());
+                    rows.push(Row {
+                        id: format!("{}#{}-generation", entry.id, item.part_id).into(),
+                        version,
+                        turn_start: false,
+                        kind: RowKind::ImageGeneration {
+                            tool: Arc::new(item),
+                            assets: Arc::new(assets),
+                            streaming,
+                        },
+                        entry_id: entry_id.clone(),
+                        timestamp: None,
+                        copy_text: None,
+                        compact_fold: None,
+                    });
+                    continue;
+                }
                 if call.is_workflow_run() {
                     // A workflow run is its own board row, in both modes: a
                     // background run must stay visible while it works.
@@ -1800,6 +1846,7 @@ pub fn rows_for_entry(
                         name,
                         mime_type,
                     } => {
+                        if entry.parts.iter().any(|part| matches!(part, MessagePart::Tool { id, call, .. } if image_generation::is_generation_call(call) && image_generation::owns_image(id, part_id))) { continue; }
                         rows.push(Row {
                             id: format!("{}#{}", entry.id, part_id).into(),
                             version: fnv1a(
@@ -2110,7 +2157,9 @@ pub(crate) fn folds_turn(entry: &SessionMessageEntry, compact_mode: bool) -> boo
 fn is_compact_work_part(ix: usize, part: &MessagePart, reply_start: Option<usize>) -> bool {
     match part {
         // Workflow runs keep their own board row outside the work fold.
-        MessagePart::Tool { call, .. } => !call.is_workflow_run(),
+        MessagePart::Tool { call, .. } => {
+            !call.is_workflow_run() && !image_generation::is_generation_call(call)
+        }
         MessagePart::Reasoning { text, .. } => !text.trim().is_empty(),
         MessagePart::Text { text, .. } => {
             !text.trim().is_empty() && reply_start.is_none_or(|start| ix < start)
@@ -7128,7 +7177,12 @@ impl Transcript {
         let live: HashSet<&str> = self
             .rows
             .iter()
-            .filter(|row| matches!(row.kind, RowKind::ToolGroup { .. }))
+            .filter(|row| {
+                matches!(
+                    row.kind,
+                    RowKind::ToolGroup { .. } | RowKind::ImageGeneration { .. }
+                )
+            })
             .map(|row| row.id.as_ref())
             .collect();
         self.tool_images
@@ -9257,6 +9311,11 @@ impl Transcript {
                 zuse_viewport::activity::agent_switch_notice(from, to, theme.text_muted)
                     .into_any_element()
             }
+            RowKind::ImageGeneration {
+                tool,
+                assets,
+                streaming,
+            } => self.render_image_generation(&row.id, tool, assets, *streaming, cx),
             RowKind::ErrorChip { message } => error_chip(message.clone(), &theme),
             RowKind::ForkMarker { source_title, .. } => fork_marker(source_title.clone(), &theme),
             RowKind::PullRequestCard { opened } => {
@@ -12290,10 +12349,19 @@ fn entry_fingerprint(entry: &SessionMessageEntry, pending: bool) -> u64 {
             subagent_ref,
             subagent_status,
             subagent_tail,
+            diff_stats,
             ..
         } = part
         {
             acc.push(*is_error as u8 | (*resolved as u8) << 1);
+            if let Some(stats) = diff_stats {
+                for stat in stats {
+                    acc.extend_from_slice(stat.path.as_bytes());
+                    acc.push(0);
+                    acc.extend_from_slice(&stat.additions.to_le_bytes());
+                    acc.extend_from_slice(&stat.deletions.to_le_bytes());
+                }
+            }
             // Subagent lifecycle mutates a COMPLETED entry in place (eager-
             // done: the spawn resolves while the subagent runs on) and
             // `byte_len` above doesn't cover these fields — hash them or the
@@ -15334,6 +15402,93 @@ mod tests {
             subagent_status: None,
             subagent_tail: None,
         }
+    }
+
+    #[test]
+    fn image_generation_cards_stay_visible_and_own_their_results_in_both_modes() {
+        for compact in [false, true] {
+            let mut part = tool_part("gen", "unused");
+            if let MessagePart::Tool { call, .. } = &mut part {
+                *call = ToolCall::Unknown {
+                    name: "Generate image".into(),
+                    input: Some(serde_json::json!({"prompt":"A landscape","image":"input.png"})),
+                };
+            }
+            let image = MessagePart::Image {
+                id: "gen:image".into(),
+                path: "/uploads/result.png".into(),
+                name: "result.png".into(),
+                mime_type: "image/png".into(),
+            };
+            let entry = assistant(
+                "images",
+                MessageStatus::Complete,
+                vec![part, image, text_part("reply", "Done.")],
+            );
+            let rows = rows_for_entry(&entry, false, compact, &mut parse);
+            let cards: Vec<_> = rows
+                .iter()
+                .filter(|r| matches!(r.kind, RowKind::ImageGeneration { .. }))
+                .collect();
+            assert_eq!(cards.len(), 1);
+            assert!(cards[0].compact_fold.is_none());
+            let RowKind::ImageGeneration { tool, assets, .. } = &cards[0].kind else {
+                unreachable!()
+            };
+            assert_eq!(assets.len(), 1);
+            assert!(
+                tool.images.is_empty(),
+                "input images must not masquerade as generated output"
+            );
+            assert!(
+                !rows
+                    .iter()
+                    .any(|r| matches!(r.kind, RowKind::GeneratedImage { .. }))
+            );
+        }
+    }
+
+    #[test]
+    fn image_generation_cards_track_running_failure_interruption_and_replay() {
+        let mut part = tool_part("gen", "unused");
+        if let MessagePart::Tool { call, resolved, .. } = &mut part {
+            *call = ToolCall::Mcp {
+                server: "images".into(),
+                tool: "generate_image".into(),
+                input: None,
+            };
+            *resolved = false;
+        }
+        let mut entry = assistant("images", MessageStatus::Streaming, vec![part]);
+        let live = rows_for_entry(&entry, false, true, &mut parse);
+        let RowKind::ImageGeneration {
+            streaming, tool, ..
+        } = &live[0].kind
+        else {
+            panic!("visible running card")
+        };
+        assert!(*streaming && !tool.resolved);
+        entry.status = Some(MessageStatus::Aborted);
+        let stopped = rows_for_entry(&entry, false, true, &mut parse);
+        assert_eq!(live[0].id, stopped[0].id);
+        assert_ne!(live[0].version, stopped[0].version);
+        let RowKind::ImageGeneration { streaming, .. } = &stopped[0].kind else {
+            unreachable!()
+        };
+        assert!(!streaming);
+        if let MessagePart::Tool {
+            resolved, is_error, ..
+        } = &mut entry.parts[0]
+        {
+            *resolved = true;
+            *is_error = true;
+        }
+        let failed = rows_for_entry(&entry, false, true, &mut parse);
+        let RowKind::ImageGeneration { tool, .. } = &failed[0].kind else {
+            unreachable!()
+        };
+        assert!(tool.is_error);
+        assert_eq!(failed[0].id, live[0].id);
     }
 
     const MD: &str = "# Title\n\npara one\n\n```rust\nlet x = 1;\n```";

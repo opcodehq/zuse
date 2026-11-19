@@ -33,6 +33,7 @@ pub(crate) mod markdown_media;
 mod markdown_preview;
 pub mod model;
 pub mod mutations;
+mod open_in;
 pub mod preview;
 mod rename;
 pub mod search;
@@ -40,6 +41,7 @@ pub mod search;
 pub(crate) mod test_support;
 pub mod tree;
 pub mod watch;
+mod web_preview;
 
 use client::{FilesRequestContext, WorkspaceFilesClient};
 use model::{DirectoryLoadState, FileTreeModel};
@@ -245,6 +247,10 @@ pub enum FilesEvent {
     /// A multi-entry move or delete, applied in order.
     MutateMany(Vec<mutations::MutationIntent>),
     OpenFile(String),
+    OpenIn {
+        path: std::path::PathBuf,
+        target: crate::shell::open_in::OpenTarget,
+    },
     RevealFile(String),
     OpenWebLink(crate::markdown::render::LinkActivation),
     TitleChanged,

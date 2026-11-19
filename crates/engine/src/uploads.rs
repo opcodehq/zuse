@@ -1067,6 +1067,51 @@ impl Uploads {
         let _ = std::fs::remove_file(manifest);
     }
 
+    /// Materialize bounded inline provider media into the same attachment store
+    /// as file-backed generation. Only sniffed passive raster formats are accepted.
+    pub fn import_generated_data(
+        &self,
+        data: &str,
+        mime: &str,
+        stable_key: &str,
+    ) -> Result<ImportedImage, EngineError> {
+        use base64::Engine as _;
+        use sha2::{Digest, Sha256};
+        use std::io::Write;
+        let invalid = || EngineError::Other("Invalid generated image data".into());
+        if data.len() as u64 > (MAX_GENERATED_IMAGE_BYTES + 2) / 3 * 4 {
+            return Err(invalid());
+        }
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(data)
+            .map_err(|_| invalid())?;
+        if bytes.len() as u64 > MAX_GENERATED_IMAGE_BYTES {
+            return Err(invalid());
+        }
+        let (ext, actual_mime) = raster_signature(&bytes).ok_or_else(invalid)?;
+        if actual_mime != mime {
+            return Err(invalid());
+        }
+        std::fs::create_dir_all(self.dir())?;
+        let root = self.dir().canonicalize()?;
+        let name = format!("generated.{ext}");
+        let hash = format!("{:x}", Sha256::digest(stable_key.as_bytes()));
+        let destination = root.join(format!("{hash}-{name}"));
+        let mut temporary = tempfile::NamedTempFile::new_in(&root)?;
+        temporary.write_all(&bytes)?;
+        temporary.flush()?;
+        temporary.as_file().sync_all()?;
+        temporary
+            .persist(&destination)
+            .map_err(|e| EngineError::Io(e.error))?;
+        Ok(ImportedImage {
+            path: destination.to_string_lossy().into_owned(),
+            name,
+            mime_type: actual_mime.into(),
+            size: bytes.len() as u64,
+        })
+    }
+
     /// Copy a Codex-owned raster into the active profile without exposing the
     /// original path to the journal, document, RPC readers, or relay.
     pub fn import_generated_image(
@@ -1146,6 +1191,43 @@ mod generated_image_tests {
     use super::*;
 
     const PNG: &[u8] = b"\x89PNG\r\n\x1a\nfixture";
+
+    #[test]
+    fn image_generation_inline_storage_validates_mime_and_uses_stable_attachments() {
+        use base64::Engine as _;
+        let root = tempfile::tempdir().unwrap();
+        let uploads = Uploads::from_root(root.path());
+        let data = base64::engine::general_purpose::STANDARD.encode(PNG);
+        let first = uploads
+            .import_generated_data(&data, "image/png", "chat/image")
+            .unwrap();
+        let again = uploads
+            .import_generated_data(&data, "image/png", "chat/image")
+            .unwrap();
+        assert_eq!(first, again);
+        assert_eq!(std::fs::read(&first.path).unwrap(), PNG);
+        assert_eq!(first.mime_type, "image/png");
+        assert!(
+            uploads
+                .import_generated_data(&data, "image/jpeg", "bad-mime")
+                .is_err()
+        );
+        assert!(
+            uploads
+                .import_generated_data("not-base64", "image/png", "invalid")
+                .is_err()
+        );
+        assert!(
+            uploads
+                .import_generated_data(
+                    &base64::engine::general_purpose::STANDARD.encode(b"<svg/>"),
+                    "image/svg+xml",
+                    "svg"
+                )
+                .is_err()
+        );
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
+    }
 
     #[test]
     fn generated_image_formats_are_sniffed_and_replays_are_idempotent() {

@@ -13,7 +13,24 @@ pub(super) fn is_image(path: &str) -> bool {
     path.rsplit_once('.').is_some_and(|(_, extension)| {
         matches!(
             extension.to_ascii_lowercase().as_str(),
-            "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "bmp" | "tif" | "tiff"
+            "ico"
+                | "pnm"
+                | "pbm"
+                | "pgm"
+                | "ppm"
+                | "qoi"
+                | "tga"
+                | "hdr"
+                | "exr"
+                | "png"
+                | "jpg"
+                | "jpeg"
+                | "gif"
+                | "webp"
+                | "svg"
+                | "bmp"
+                | "tif"
+                | "tiff"
         )
     })
 }

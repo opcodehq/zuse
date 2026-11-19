@@ -42,6 +42,10 @@ pub(super) struct PendingSave {
 
 #[allow(dead_code)]
 pub(super) struct FileDocument {
+    pub inline_diff: Option<Entity<crate::changes::Changes>>,
+    pub show_diff: bool,
+    pub web: Option<super::web_preview::WebPreview>,
+    pub show_web: bool,
     pub image: Option<Entity<super::image_preview::ImagePreview>>,
     pub markdown: Option<Entity<super::markdown_preview::MarkdownPreview>>,
     pub show_markdown: bool,
@@ -74,6 +78,10 @@ pub(super) struct FileDocument {
 impl FileDocument {
     pub fn loading(key: DocumentKey) -> Self {
         Self {
+            inline_diff: None,
+            show_diff: false,
+            web: None,
+            show_web: super::web_preview::supported(&key.path),
             image: None,
             markdown: None,
             show_markdown: super::markdown_preview::is_markdown(&key.path),

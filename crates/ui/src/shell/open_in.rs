@@ -13,15 +13,15 @@ use super::*;
 
 /// One app the workspace can open in.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct OpenTarget {
-    pub(super) id: &'static str,
-    pub(super) label: &'static str,
+pub struct OpenTarget {
+    pub(crate) id: &'static str,
+    pub(crate) label: &'static str,
     /// macOS: the app bundle (or, unresolved, its name) for `open -a`.
     /// Elsewhere: the executable resolved on PATH. `None` reveals the path
     /// in the file manager.
     launcher: Option<PathBuf>,
     /// A PNG of the app's own icon (macOS only).
-    pub(super) icon: Option<PathBuf>,
+    pub(crate) icon: Option<PathBuf>,
 }
 
 /// The menu's state: its popup and the last detection.
@@ -376,7 +376,8 @@ fn mac_targets(cache_dir: &Path) -> Vec<OpenTarget> {
 
 /// The apps available on this computer, in menu order. Blocking: run it off
 /// the UI thread.
-pub(super) fn detect_targets(cache_dir: &Path) -> Vec<OpenTarget> {
+pub(crate) fn detect_targets(cache_dir: &Path) -> Vec<OpenTarget> {
+    let _ = bundled_target_icon("vscode");
     if cfg!(target_os = "macos") {
         mac_targets(cache_dir)
     } else if cfg!(windows) {
@@ -390,6 +391,15 @@ pub(super) fn detect_targets(cache_dir: &Path) -> Vec<OpenTarget> {
 /// the file manager.
 fn open_command(target: &OpenTarget, path: &str) -> Option<std::process::Command> {
     let launcher = target.launcher.as_ref()?;
+    // Terminals open a file's containing directory; editors receive the file.
+    let path = if matches!(target.id, "terminal" | "ghostty") && Path::new(path).is_file() {
+        Path::new(path)
+            .parent()
+            .and_then(Path::to_str)
+            .unwrap_or(path)
+    } else {
+        path
+    };
     let mut command;
     if cfg!(target_os = "macos") {
         command = std::process::Command::new("open");
@@ -425,12 +435,82 @@ fn open_command(target: &OpenTarget, path: &str) -> Option<std::process::Command
     Some(command)
 }
 
+/// Brand artwork for platforms without macOS bundle icons, and for a
+/// temporarily unavailable installed-app icon. Decode one small cached frame.
+fn bundled_target_icon(id: &str) -> Option<std::sync::Arc<gpui::Image>> {
+    static ICONS: std::sync::OnceLock<
+        std::collections::HashMap<&'static str, std::sync::Arc<gpui::Image>>,
+    > = std::sync::OnceLock::new();
+    ICONS
+        .get_or_init(|| {
+            let sources: &[(&str, &str, &[u8])] = &[
+                (
+                    "cursor",
+                    "image/png",
+                    include_bytes!("../../assets/open-in/cursor.png"),
+                ),
+                (
+                    "vscode",
+                    "image/png",
+                    include_bytes!("../../assets/open-in/vscode.png"),
+                ),
+                (
+                    "zed",
+                    "image/png",
+                    include_bytes!("../../assets/open-in/zed.png"),
+                ),
+                (
+                    "ghostty",
+                    "image/png",
+                    include_bytes!("../../assets/open-in/ghostty.png"),
+                ),
+                (
+                    "windsurf",
+                    "image/x-icon",
+                    include_bytes!("../../assets/open-in/windsurf.ico"),
+                ),
+            ];
+            sources
+                .iter()
+                .filter_map(|(id, mime, bytes)| {
+                    crate::image_media::decode_project_icon(mime, bytes.to_vec())
+                        .ok()
+                        .map(|media| (*id, media.image))
+                })
+                .collect()
+        })
+        .get(id)
+        .cloned()
+}
+
 /// The fallback glyph for an app without its own icon.
 pub(super) fn fallback_glyph(id: &str) -> &'static str {
     match id {
         "finder" => icons::FOLDER_OPEN,
         "ghostty" | "terminal" => icons::TERMINAL,
         _ => icons::ACTION_LINT,
+    }
+}
+
+pub(crate) fn target_icon(target: &OpenTarget, theme: &Theme) -> AnyElement {
+    match &target.icon {
+        Some(png) => gpui::img(png.clone())
+            .size(px(20.0))
+            .flex_none()
+            .rounded(px(4.0))
+            .into_any_element(),
+        None if bundled_target_icon(target.id).is_some() => {
+            gpui::img(bundled_target_icon(target.id).unwrap())
+                .size(px(20.0))
+                .flex_none()
+                .rounded(px(4.0))
+                .into_any_element()
+        }
+        None => icon(fallback_glyph(target.id))
+            .size(px(20.0))
+            .flex_none()
+            .text_color(theme.text_muted)
+            .into_any_element(),
     }
 }
 
@@ -504,8 +584,9 @@ impl Shell {
 
     /// Open the chat's workspace in `target`, off the UI thread.
     pub(super) fn open_workspace_in(&mut self, target: OpenTarget, cx: &mut Context<Self>) {
+        let path = self.open_in_path(cx);
         self.close_open_in(cx);
-        let Some((path, true)) = self.open_in_path(cx) else {
+        let Some((path, true)) = path else {
             return;
         };
         self.open_path_in(target, path, cx);
@@ -557,8 +638,9 @@ impl Shell {
     }
 
     pub(super) fn copy_open_in_path(&mut self, cx: &mut Context<Self>) {
+        let path = self.open_in_path(cx);
         self.close_open_in(cx);
-        if let Some((path, _)) = self.open_in_path(cx) {
+        if let Some((path, _)) = path {
             cx.write_to_clipboard(ClipboardItem::new_string(path));
             self.show_notice(crate::toast::ToastKind::Success, "Path copied", cx);
         }
@@ -605,21 +687,6 @@ impl Shell {
         }
     }
 
-    fn open_target_icon(target: &OpenTarget, theme: &Theme) -> AnyElement {
-        match &target.icon {
-            Some(png) => gpui::img(png.clone())
-                .size(px(20.0))
-                .flex_none()
-                .rounded(px(4.0))
-                .into_any_element(),
-            None => icon(fallback_glyph(target.id))
-                .size(px(20.0))
-                .flex_none()
-                .text_color(theme.text_muted)
-                .into_any_element(),
-        }
-    }
-
     /// The split trigger (file manager icon │ chevron) and, while open, its
     /// menu. `None` on the new-session canvas.
     pub(super) fn render_open_in(
@@ -645,7 +712,7 @@ impl Shell {
                 cx,
             )
             .into_any_element(),
-            (Some(primary), false) if local => Self::open_target_icon(primary, theme),
+            (Some(primary), false) if local => target_icon(primary, theme),
             _ => icon(icons::ARROW_UP_RIGHT)
                 .size(px(14.0))
                 .text_color(theme.text_muted)
@@ -739,7 +806,7 @@ impl Shell {
         let rows = targets.into_iter().enumerate().map(|(index, target)| {
             let fade = format!("open-in-{}", target.id);
             let label = target.label;
-            let glyph = Self::open_target_icon(&target, &theme);
+            let glyph = target_icon(&target, &theme);
             popover::menu_row(&theme, false, fade.clone())
                 .id(SharedString::from(fade.clone()))
                 .debug_selector(move || fade.clone())
@@ -799,19 +866,24 @@ impl Shell {
     }
 }
 
+#[cfg(any(test, feature = "browser-fixture"))]
+pub(crate) fn fixture_targets() -> Vec<OpenTarget> {
+    LINUX_TARGETS
+        .iter()
+        .map(|(id, label, command)| OpenTarget {
+            id,
+            label,
+            launcher: command.map(PathBuf::from),
+            icon: None,
+        })
+        .collect()
+}
+
 #[cfg(feature = "browser-fixture")]
 impl Shell {
     /// A fixed target list for review captures (no detection, no icons).
     pub(super) fn fixture_open_in_menu(&mut self, cx: &mut Context<Self>) {
-        self.open_in.targets = LINUX_TARGETS
-            .iter()
-            .map(|(id, label, command)| OpenTarget {
-                id,
-                label,
-                launcher: command.map(PathBuf::from),
-                icon: None,
-            })
-            .collect();
+        self.open_in.targets = fixture_targets();
         self.open_in.detected = true;
         self.open_in.loading = false;
         self.open_in.menu.open(());
@@ -822,6 +894,16 @@ impl Shell {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_preview_picker_has_decodable_brand_artwork() {
+        for id in ["cursor", "vscode", "zed", "ghostty", "windsurf"] {
+            assert!(
+                bundled_target_icon(id).is_some(),
+                "missing app artwork for {id}"
+            );
+        }
+    }
 
     #[test]
     fn path_targets_keep_the_file_manager_and_resolve_commands() {

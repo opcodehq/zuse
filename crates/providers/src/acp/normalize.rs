@@ -337,10 +337,89 @@ fn typed_call(update: &Value) -> ToolCall {
             input: raw.cloned(),
         },
         _ => ToolCall::Unknown {
-            name: if title.is_empty() { kind.into() } else { title },
+            name: xai_tool_name(update)
+                .filter(|name| {
+                    matches!(
+                        *name,
+                        "generate_image" | "image_generation" | "imagegen" | "edit_image"
+                    )
+                })
+                .map(str::to_owned)
+                .unwrap_or_else(|| if title.is_empty() { kind.into() } else { title }),
             input: raw.cloned(),
         },
     }
+}
+
+/// Inline image results are transient events, never tool-output text or doc JSON.
+/// Traverse only result containers, cap both count and total encoded bytes.
+fn inline_images(update: &Value) -> Vec<AgentEvent> {
+    if update.get("status").and_then(Value::as_str) != Some("completed") {
+        return Vec::new();
+    }
+    fn collect(
+        value: &Value,
+        depth: usize,
+        remaining: &mut usize,
+        out: &mut Vec<(String, String)>,
+    ) {
+        if depth > 6 || out.len() >= 4 {
+            return;
+        }
+        if let Some(array) = value.as_array() {
+            for v in array {
+                collect(v, depth + 1, remaining, out);
+            }
+            return;
+        }
+        let Some(object) = value.as_object() else {
+            return;
+        };
+        if object.get("type").and_then(Value::as_str) == Some("image") {
+            if let (Some(data), Some(mime)) = (
+                object.get("data").and_then(Value::as_str),
+                object.get("mimeType").and_then(Value::as_str),
+            ) {
+                if !data.is_empty()
+                    && data.len() <= *remaining
+                    && matches!(
+                        mime,
+                        "image/png" | "image/jpeg" | "image/webp" | "image/gif"
+                    )
+                {
+                    *remaining -= data.len();
+                    out.push((data.into(), mime.into()));
+                }
+            }
+            return;
+        }
+        for key in ["content", "output", "result", "rawOutput"] {
+            if let Some(v) = object.get(key) {
+                collect(v, depth + 1, remaining, out);
+            }
+        }
+    }
+    let id = str_field(update, "toolCallId");
+    if id.is_empty() {
+        return Vec::new();
+    }
+    let mut images = Vec::new();
+    collect(update, 0, &mut (32 * 1024 * 1024), &mut images);
+    images
+        .into_iter()
+        .enumerate()
+        .map(
+            |(index, (data, mime_type))| AgentEvent::GeneratedImageData {
+                id: if index == 0 {
+                    format!("{id}:image")
+                } else {
+                    format!("{id}:image:{index}")
+                },
+                data,
+                mime_type,
+            },
+        )
+        .collect()
 }
 
 /// Map one `session/update` payload's `update` object to events.
@@ -372,6 +451,7 @@ pub(crate) fn map_update(update: &Value) -> Vec<AgentEvent> {
             if let Some(resolved) = resolved_result(update, id) {
                 events.push(resolved);
             }
+            events.extend(inline_images(update));
             events
         }
         "tool_call_update" => {
@@ -394,6 +474,7 @@ pub(crate) fn map_update(update: &Value) -> Vec<AgentEvent> {
             if let Some(resolved) = resolved_result(update, id) {
                 events.push(resolved);
             }
+            events.extend(inline_images(update));
             events
         }
         "plan" => {
@@ -503,6 +584,30 @@ pub(crate) fn preferred_allow_option(options: &[Value]) -> Option<String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn image_generation_inline_results_are_transient_bounded_and_correlated() {
+        let update = json!({"sessionUpdate":"tool_call_update","toolCallId":"g1","status":"completed",
+            "title":"Create a picture", "_meta":{"x.ai/tool":{"name":"generate_image"}},
+            "rawOutput":{"result":{"content":[{"type":"image","data":"aGVsbG8=","mimeType":"image/png"}]}}});
+        let events = map_update(&update);
+        assert!(events.iter().any(|event| matches!(event, AgentEvent::ToolCall { call: ToolCall::Unknown { name, .. }, .. } if name == "generate_image")));
+        assert!(events.iter().any(|event| matches!(event, AgentEvent::GeneratedImageData { id, data, .. } if id == "g1:image" && data == "aGVsbG8=")));
+        let mut failed = update.clone();
+        failed["status"] = json!("failed");
+        assert!(
+            !map_update(&failed)
+                .iter()
+                .any(|event| matches!(event, AgentEvent::GeneratedImageData { .. }))
+        );
+        let mut many = update.clone();
+        many["rawOutput"] = json!({"content": (0..9).map(|_| json!({"type":"image","data":"aGVsbG8=","mimeType":"image/png"})).collect::<Vec<_>>()});
+        assert_eq!(inline_images(&many).len(), 4);
+        let mut unsupported = update;
+        unsupported["rawOutput"] =
+            json!({"type":"image","data":"PHN2Zz4=","mimeType":"image/svg+xml"});
+        assert!(inline_images(&unsupported).is_empty());
+    }
 
     #[test]
     fn execute_tool_call_with_terminal_status_resolves_inline() {

@@ -652,7 +652,8 @@ pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
         // AvailableCommands and McpServers feed engine caches, not the
         // transcript. UserMessage becomes its own doc ENTRY (the engine's
         // subagent sink writes it), never a part of the assistant message.
-        AgentEvent::AssistantMessageCompleted { .. }
+        AgentEvent::GeneratedImageData { .. }
+        | AgentEvent::AssistantMessageCompleted { .. }
         | AgentEvent::Usage { .. }
         | AgentEvent::RequestUsage { .. }
         | AgentEvent::ContextUsage { .. }

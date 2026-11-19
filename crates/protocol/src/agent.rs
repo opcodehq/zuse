@@ -839,6 +839,14 @@ pub enum AgentEvent {
     TextDelta {
         text: String,
     },
+    /// Transient provider media. The engine stores it as an attachment before
+    /// any journal/doc/relay publication; raw media is never serializable.
+    #[serde(skip)]
+    GeneratedImageData {
+        id: String,
+        mime_type: String,
+        data: String,
+    },
     /// A generated raster asset. The engine materializes this path before publication.
     #[serde(rename_all = "camelCase")]
     GeneratedImage {
@@ -1186,6 +1194,16 @@ impl ContextUsage {
 #[cfg(test)]
 mod generated_image_tests {
     use super::*;
+
+    #[test]
+    fn image_generation_inline_bytes_cannot_be_serialized() {
+        let event = AgentEvent::GeneratedImageData {
+            id: "image".into(),
+            mime_type: "image/png".into(),
+            data: "private-media".into(),
+        };
+        assert!(serde_json::to_string(&event).is_err());
+    }
 
     #[test]
     fn generated_image_event_round_trip() {

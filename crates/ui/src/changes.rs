@@ -1662,6 +1662,7 @@ struct CommentDraft {
 /// The Changes pane entity. Lazy: no RPC until [`Changes::ensure_watch`] runs
 /// (the shell calls it when the pane first opens).
 pub struct Changes {
+    file_path: Option<String>,
     git_controls: Entity<crate::git_controls::GitPanel>,
     /// Sidebar reviews lead with files; source control remains available on demand.
     sidebar_review: bool,
@@ -1771,6 +1772,7 @@ impl Changes {
         let settings = crate::settings::current(cx);
         let mode = DiffMode::from_split(settings.diff_split);
         Self {
+            file_path: None,
             git_controls,
             sidebar_review: false,
             owner_chat_id: None,
@@ -1850,6 +1852,14 @@ impl Changes {
         self.owner_chat_id
             .clone()
             .unwrap_or_else(|| state.composer_key())
+    }
+
+    /// An inline, single-file comparison with no repository review controls.
+    pub(crate) fn for_file(state: Entity<AppState>, path: String, cx: &mut Context<Self>) -> Self {
+        let mut changes = Self::new(state, cx);
+        changes.file_path = Some(path);
+        changes.mode = DiffMode::Split;
+        changes
     }
 
     /// A pane pinned to one commit's diff (a History row click) — fetches
@@ -2365,7 +2375,7 @@ impl Changes {
                 .update(cx, |history, cx| history.ensure_loaded(cx));
             return;
         }
-        if self.scope != DiffScope::Commit {
+        if self.scope != DiffScope::Commit && self.file_path.is_none() {
             self.ensure_branches(cx);
         }
         self.ensure_scoped(cx);
@@ -2392,12 +2402,13 @@ impl Changes {
         let deletions = diff.deletions;
         let file_count = diff.files.len();
         let checkout = diff.checkout_id.clone();
+        let file_path = self.file_path.clone();
         self.parse_task = Some(cx.spawn(async move |this, cx| {
             let (files, fingerprints) = cx
                 .background_executor()
                 .spawn(async move {
                     use std::hash::{Hash, Hasher};
-                    let files = parse_patch(&patch);
+                    let files = filter_file_diff(parse_patch(&patch), file_path.as_deref());
                     let fingerprints = files
                         .iter()
                         .map(|file| {
@@ -2416,6 +2427,15 @@ impl Changes {
                 if current.as_deref() != Some(key.as_str()) {
                     return;
                 }
+                let (additions, deletions, file_count) = if changes.file_path.is_some() {
+                    (
+                        files.iter().map(|f| f.additions).sum(),
+                        files.iter().map(|f| f.deletions).sum(),
+                        files.len(),
+                    )
+                } else {
+                    (additions, deletions, file_count)
+                };
                 let file_count = if file_count > 0 {
                     file_count
                 } else {
@@ -3824,37 +3844,40 @@ impl Changes {
                         .child(SharedString::from(format!("−{dels}"))),
                 )
             })
-            .child(viewed_control)
-            .when(!self.sidebar_review || !collapsed, |el| {
-                el.child(
-                    div()
-                        .id(("diff-open-file", ix))
-                        .flex_none()
-                        .size(px(crate::surface_chrome::CONTROL_SIZE))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(crate::surface_chrome::CONTROL_RADIUS))
-                        .hover(|s| s.bg(theme.ink(0.08)))
-                        .on_mouse_down(gpui::MouseButton::Left, |_, window, cx| {
-                            window.prevent_default();
-                            cx.stop_propagation();
-                        })
-                        .on_click(cx.listener(move |_, _, _, cx| {
-                            cx.stop_propagation();
-                            cx.emit(ChangesEvent::OpenFile(path.clone()));
-                        }))
-                        .anchored_tooltip(crate::tooltip::Placement::Below, |_, cx| {
-                            cx.new(|_| DiffHeaderTooltip("Open in file browser")).into()
-                        })
-                        .tooltip_show_delay(Duration::from_millis(350))
-                        .child(
-                            crate::icons::icon(crate::icons::DOCUMENT)
-                                .size(px(crate::surface_chrome::ICON_SIZE))
-                                .text_color(theme.text_muted),
-                        ),
-                )
-            })
+            .when(self.file_path.is_none(), |el| el.child(viewed_control))
+            .when(
+                self.file_path.is_none() && (!self.sidebar_review || !collapsed),
+                |el| {
+                    el.child(
+                        div()
+                            .id(("diff-open-file", ix))
+                            .flex_none()
+                            .size(px(crate::surface_chrome::CONTROL_SIZE))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(crate::surface_chrome::CONTROL_RADIUS))
+                            .hover(|s| s.bg(theme.ink(0.08)))
+                            .on_mouse_down(gpui::MouseButton::Left, |_, window, cx| {
+                                window.prevent_default();
+                                cx.stop_propagation();
+                            })
+                            .on_click(cx.listener(move |_, _, _, cx| {
+                                cx.stop_propagation();
+                                cx.emit(ChangesEvent::OpenFile(path.clone()));
+                            }))
+                            .anchored_tooltip(crate::tooltip::Placement::Below, |_, cx| {
+                                cx.new(|_| DiffHeaderTooltip("Open in file browser")).into()
+                            })
+                            .tooltip_show_delay(Duration::from_millis(350))
+                            .child(
+                                crate::icons::icon(crate::icons::DOCUMENT)
+                                    .size(px(crate::surface_chrome::ICON_SIZE))
+                                    .text_color(theme.text_muted),
+                            ),
+                    )
+                },
+            )
             .into_any_element()
     }
 
@@ -5424,6 +5447,15 @@ fn render_file_body_upto(
         .into_any_element()
 }
 
+fn filter_file_diff(files: Vec<FileDiff>, path: Option<&str>) -> Vec<FileDiff> {
+    files
+        .into_iter()
+        .filter(|file| {
+            path.is_none_or(|path| file.path == path || file.old_path.as_deref() == Some(path))
+        })
+        .collect()
+}
+
 impl Render for Changes {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.scope == DiffScope::History {
@@ -5518,7 +5550,18 @@ impl Render for Changes {
                     .child(SharedString::from(clean_message(scope, base.as_deref())))
                     .into_any_element(),
                 DiffPhase::List => {
-                    if self.parsed.is_some() {
+                    if self.file_path.is_some()
+                        && self.parsed.as_ref().is_some_and(|p| p.files.is_empty())
+                    {
+                        div()
+                            .flex_1()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .text_color(theme.text_muted)
+                            .child("No changes for this file")
+                            .into_any_element()
+                    } else if self.parsed.is_some() {
                         let sticky_header = self.render_sticky_file_header(&theme, cx);
                         div()
                             .flex_1()
@@ -5578,9 +5621,10 @@ impl Render for Changes {
                         .child(message),
                 )
             })
-            .when(self.commit.is_none() && self.show_git_controls, |d| {
-                d.child(self.git_controls.clone())
-            })
+            .when(
+                self.commit.is_none() && self.file_path.is_none() && self.show_git_controls,
+                |d| d.child(self.git_controls.clone()),
+            )
             .child(content)
             .into_any_element()
     }
@@ -5638,6 +5682,20 @@ impl Changes {
 mod tests {
     use super::*;
     use chrono::Utc;
+
+    #[test]
+    fn file_preview_diff_is_scoped_and_matches_both_rename_paths() {
+        let mut renamed = FileDiff::new("src/new.rs".into(), Some("src/old.rs".into()));
+        renamed.additions = 3;
+        let other = FileDiff::new("src/other.rs".into(), None);
+        for path in ["src/new.rs", "src/old.rs"] {
+            let files = filter_file_diff(vec![renamed.clone(), other.clone()], Some(path));
+            assert_eq!(files.len(), 1);
+            assert_eq!(files[0].path, "src/new.rs");
+        }
+        assert!(filter_file_diff(vec![other], Some("unmodified.rs")).is_empty());
+        assert_eq!(filter_file_diff(vec![renamed], None).len(), 1);
+    }
 
     #[gpui::test]
     fn sidebar_review_keeps_chat_diff_draft_and_folds_when_selection_changes(

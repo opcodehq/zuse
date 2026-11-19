@@ -2301,7 +2301,19 @@ impl Inner {
             parents.push(parent_tool_use_id);
             leaf = *event;
         }
-        let events = if let AgentEvent::GeneratedImage { id, path, .. } = leaf {
+        let events = if matches!(
+            leaf,
+            AgentEvent::GeneratedImage { .. } | AgentEvent::GeneratedImageData { .. }
+        ) {
+            let (id, source, inline) = match leaf {
+                AgentEvent::GeneratedImage { id, path, .. } => (id, Some(path), None),
+                AgentEvent::GeneratedImageData {
+                    id,
+                    data,
+                    mime_type,
+                } => (id, None, Some((data, mime_type))),
+                _ => unreachable!(),
+            };
             let key = std::iter::once(chat_id)
                 .chain(parents.iter().map(String::as_str))
                 .chain(std::iter::once(id.as_str()))
@@ -2314,8 +2326,13 @@ impl Inner {
                 let uploads = uploads.clone();
                 let root = allowed_root.clone();
                 let stable_key = key.clone();
-                tokio::task::spawn_blocking(move || {
-                    uploads.import_generated_image(std::path::Path::new(&path), &root, &stable_key)
+                tokio::task::spawn_blocking(move || match inline {
+                    Some((data, mime)) => uploads.import_generated_data(&data, &mime, &stable_key),
+                    None => uploads.import_generated_image(
+                        std::path::Path::new(source.as_deref().unwrap()),
+                        &root,
+                        &stable_key,
+                    ),
                 })
                 .await
                 .unwrap_or_else(|err| Err(EngineError::Other(err.to_string())))
@@ -2338,7 +2355,10 @@ impl Inner {
                     tracing::warn!(chat = %chat_id, error = %err, "generated image import failed");
                     vec![
                         AgentEvent::ToolResult {
-                            id: id.strip_suffix(":image").unwrap_or(&id).into(),
+                            id: id
+                                .rsplit_once(":image")
+                                .map_or(id.as_str(), |(tool, _)| tool)
+                                .into(),
                             is_error: true,
                             output: None,
                             diff: None,
@@ -5397,6 +5417,59 @@ mod tests {
     }
 
     use zuse_protocol::{HarnessId, RunRequest, SandboxLevel};
+
+    #[tokio::test]
+    async fn image_generation_inline_media_is_stored_before_nested_publication() {
+        use super::*;
+        use base64::Engine as _;
+        let dir = tempfile::tempdir().unwrap();
+        let sessions = SessionsEngine::new(
+            "host".into(),
+            Arc::new(RunJournal::open(dir.path().join("journals")).unwrap()),
+            Arc::new(HarnessRegistry::new()),
+        );
+        let uploads = crate::uploads::Uploads::from_root(&dir.path().join("uploads"));
+        sessions.set_generated_images(uploads, dir.path().join("unused-source-root"));
+        let data = base64::engine::general_purpose::STANDARD.encode(b"\x89PNG\r\n\x1a\nfixture");
+        let event = AgentEvent::Subagent {
+            parent_tool_use_id: "child".into(),
+            event: Box::new(AgentEvent::GeneratedImageData {
+                id: "tool:image".into(),
+                mime_type: "image/png".into(),
+                data: data.clone(),
+            }),
+        };
+        let mut seen = std::collections::HashSet::new();
+        let events = sessions
+            .inner
+            .prepare_generated_image("chat", event.clone(), &mut seen)
+            .await;
+        assert_eq!(events.len(), 1);
+        let AgentEvent::Subagent { event, .. } = &events[0] else {
+            panic!("lost parent")
+        };
+        let AgentEvent::GeneratedImage { path, .. } = event.as_ref() else {
+            panic!("raw media reached publication")
+        };
+        assert!(std::path::Path::new(path).is_file());
+        let serialized = serde_json::to_string(&events).unwrap();
+        assert!(!serialized.contains(&data));
+        let replay = AgentEvent::Subagent {
+            parent_tool_use_id: "child".into(),
+            event: Box::new(AgentEvent::GeneratedImageData {
+                id: "tool:image".into(),
+                mime_type: "image/png".into(),
+                data,
+            }),
+        };
+        assert!(
+            sessions
+                .inner
+                .prepare_generated_image("chat", replay, &mut seen)
+                .await
+                .is_empty()
+        );
+    }
 
     #[tokio::test]
     async fn generated_image_failure_is_sanitized_even_inside_subagents() {

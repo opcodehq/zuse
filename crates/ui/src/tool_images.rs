@@ -117,6 +117,14 @@ fn push_json_paths(out: &mut Vec<SharedString>, value: &serde_json::Value) {
 
 /// The image files a tool call touched, as reported (possibly relative to the
 /// chat's working directory). Computed once per row build, never per paint.
+pub(crate) fn output_image_paths(output: Option<&str>) -> Arc<[SharedString]> {
+    let mut out = Vec::new();
+    if let Some(output) = output {
+        push_text_paths(&mut out, output);
+    }
+    out.into()
+}
+
 pub(crate) fn image_paths(call: &ToolCall, output: Option<&str>) -> Arc<[SharedString]> {
     let mut out = Vec::new();
     match call {

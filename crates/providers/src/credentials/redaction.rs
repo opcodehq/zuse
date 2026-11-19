@@ -350,6 +350,7 @@ impl Events {
             AgentEvent::UserMessage { text } => self.mask_text(text),
             AgentEvent::RequestUsage { details } => self.mask_json(details),
             AgentEvent::GeneratedImage { name, .. } => self.mask_text(name),
+            AgentEvent::GeneratedImageData { .. } => {}
             AgentEvent::Visual { title, path, .. } => {
                 self.mask_text(title);
                 self.mask_text(path);

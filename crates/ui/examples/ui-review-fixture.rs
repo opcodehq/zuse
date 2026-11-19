@@ -23,6 +23,8 @@ fn main() -> anyhow::Result<()> {
             .unwrap_or_else(|| "/tmp/zuse-review".into()),
     );
     std::fs::create_dir_all(&output)?;
+    let capture_width = std::env::var("ZUSE_REVIEW_WIDTH").ok().and_then(|v| v.parse().ok()).unwrap_or(1100.);
+    let capture_height = std::env::var("ZUSE_REVIEW_HEIGHT").ok().and_then(|v| v.parse().ok()).unwrap_or(800.);
     gpui_platform::application().with_assets(icons::Assets).with_http_client(fixture_http_client(runtime.handle().clone())).run(move |cx| {
         gpui_tokio::init(cx); gpui_base::init(cx);
         let mut settings = settings::UiSettings::default();
@@ -155,7 +157,7 @@ fn main() -> anyhow::Result<()> {
         });
         let boot = EngineBootConfig { target: None,  data_dir: data, ipc_port: 0, edge_url: String::new(), edge_token: None, org_id: None, workos_client_id: None, default_harness: HarnessId::ClaudeCode };
         let window = cx.open_window(WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(Bounds::new(gpui::point(px(12.),px(30.)), size(px(1100.),px(800.))))),
+            window_bounds: Some(WindowBounds::Windowed(Bounds::new(gpui::point(px(12.),px(30.)), size(px(capture_width),px(capture_height))))),
             titlebar: Some(gpui::TitlebarOptions { title: None, appears_transparent: true, traffic_light_position: Some(gpui::point(px(14.),px(14.))) }),
             app_owns_titlebar_drag: true,
             // Same backdrop as the app window, or the frosted surface has nothing to blur.

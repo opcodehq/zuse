@@ -342,6 +342,9 @@ impl Shell {
                     {
                         this.add_file_surface(path.clone(), window, cx);
                     }
+                    FilesEvent::OpenIn { path, target } => {
+                        this.open_path_in(target.clone(), path.to_string_lossy().into_owned(), cx);
+                    }
                     FilesEvent::OpenWebLink(activation) => {
                         if let crate::markdown::render::LinkOutcome::External(url) =
                             this.activate_session_link(activation, window, cx)

@@ -23,7 +23,7 @@ use super::{
     FileColumn, FilesCloseDisposition, FilesEvent, FilesSurface,
     client::{FilesRequestContext, WorkspaceFilesClient},
     document::{DocumentKey, DocumentPhase, FileDocument},
-    toolbar, toolbar_button,
+    toolbar_button,
 };
 use crate::{
     comments::{self, ReviewComment},
@@ -99,10 +99,11 @@ enum ReloadDecision {
 }
 
 pub(super) struct FilePreviewState {
+    pub(super) open_in: super::open_in::FileOpenIn,
     images_visible: bool,
     pub(super) documents: HashMap<String, FileDocument>,
     document_recency: VecDeque<String>,
-    active: Option<String>,
+    pub(super) active: Option<String>,
     highlights: HashMap<String, HighlightedFile>,
     syntax_cache: SyntaxHighlightCache,
     list: ListState,
@@ -127,6 +128,7 @@ impl FilePreviewState {
         editor_font_size: f32,
     ) -> Self {
         Self {
+            open_in: Default::default(),
             images_visible: true,
             documents: HashMap::new(),
             document_recency: VecDeque::new(),
@@ -149,6 +151,7 @@ impl FilePreviewState {
     }
 
     pub(super) fn reset(&mut self) {
+        self.open_in = Default::default();
         self.documents.clear();
         self.document_recency.clear();
         self.active = None;
@@ -517,8 +520,15 @@ impl FilesSurface {
         if !self.preview.images_visible {
             return;
         }
+        self.close_file_open_in(cx);
         self.preview.images_visible = false;
-        for document in self.preview.documents.values() {
+        for document in self.preview.documents.values_mut() {
+            document.inline_diff = None;
+            if let Some(web) = document.web.take() {
+                web.browser.update(cx, |v, cx| {
+                    v.set_presentation(crate::browser::model::Presentation::Hidden, cx)
+                });
+            }
             if let Some(view) = &document.image {
                 view.update(cx, |view, cx| view.suspend(cx));
             }
@@ -1937,6 +1947,7 @@ impl FilesSurface {
             document.reconcile_task = None;
             document.pending_save = None;
             document.key.path = new_document_path.clone();
+            document.inline_diff = None;
             let was_markdown = super::markdown_preview::is_markdown(old_document_path);
             let is_markdown = super::markdown_preview::is_markdown(new_document_path);
             if was_markdown != is_markdown {
@@ -2323,7 +2334,7 @@ impl FilesSurface {
     /// Where the system's default app can open `path`. Only a workspace on
     /// this device shares the viewport's filesystem; remote spaces live on
     /// another device, so they get no path.
-    fn system_open_path(&self, path: &str) -> Option<std::path::PathBuf> {
+    pub(super) fn system_open_path(&self, path: &str) -> Option<std::path::PathBuf> {
         self.request_context
             .as_ref()
             .filter(|context| context.target_device_id.is_none())
@@ -2342,12 +2353,6 @@ impl FilesSurface {
             .documents
             .get(path)
             .is_some_and(|d| d.show_markdown);
-        // Outside paths are absolute: the empty crumb before their leading
-        // slash is not a segment.
-        let parts = path
-            .split('/')
-            .filter(|part| !part.is_empty())
-            .collect::<Vec<_>>();
         let reveal_path = path.to_string();
         let system_path = self.system_open_path(path);
         let tooltip_path: SharedString = path.to_string().into();
@@ -2398,33 +2403,11 @@ impl FilesSurface {
             .id("files-breadcrumb-path")
             .min_w_0()
             .flex_1()
-            .flex()
-            .items_center()
-            .overflow_hidden();
-        for (index, part) in parts.iter().enumerate() {
-            if index > 0 {
-                crumbs = crumbs.child(
-                    div()
-                        .mx(px(4.0))
-                        .text_size(px(13.0))
-                        .text_color(theme.text_muted.opacity(0.75))
-                        .child("›"),
-                );
-            }
-            crumbs = crumbs.child(
-                div()
-                    .min_w_0()
-                    .truncate()
-                    .font_family(theme.font_sans.clone())
-                    .text_size(px(13.0))
-                    .text_color(if index + 1 == parts.len() {
-                        theme.text_muted
-                    } else {
-                        theme.text_muted
-                    })
-                    .child((*part).to_string()),
-            );
-        }
+            .truncate()
+            .font_family(theme.font_sans.clone())
+            .text_size(px(11.0))
+            .text_color(theme.text_muted)
+            .child(path.to_string());
         crumbs = crumbs
             .anchored_tooltip(crate::tooltip::Placement::Below, move |_, cx| {
                 cx.new(|_| FileEditorTooltip {
@@ -2433,17 +2416,94 @@ impl FilesSurface {
                 .into()
             })
             .tooltip_show_delay(Duration::from_millis(350));
-        toolbar(theme)
-            .pr(px(crate::surface_chrome::CONTROL_GAP))
-            .child(
-                crate::file_icons::icon(
-                    crate::file_icons::FileIconIdentity::file(path),
-                    theme.appearance,
-                )
-                .size(px(14.0))
-                .flex_none(),
-            )
+        div()
+            .h(px(30.0))
+            .w_full()
+            .flex_none()
+            .px(px(8.0))
+            .flex()
+            .items_center()
+            .gap(px(4.0))
+            .border_b_1()
+            .border_color(theme.border)
             .child(crumbs)
+            .when(
+                super::web_preview::is_html(path) && system_path.is_some(),
+                |el| {
+                    el.child(
+                        toolbar_button("files-web-preview", "Toggle preview and source")
+                            .w(px(92.0))
+                            .text_size(px(11.0))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                if let Some(d) = this
+                                    .preview
+                                    .active
+                                    .clone()
+                                    .and_then(|p| this.preview.documents.get_mut(&p))
+                                {
+                                    d.show_web = !d.show_web;
+                                    if !d.show_web {
+                                        if let Some(web) = d.web.take() {
+                                            web.browser.update(cx, |v, cx| {
+                                                v.set_presentation(
+                                                    crate::browser::model::Presentation::Hidden,
+                                                    cx,
+                                                )
+                                            });
+                                        }
+                                    }
+                                }
+                                cx.notify();
+                            }))
+                            .child("Preview / Edit"),
+                    )
+                },
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .border_1()
+                    .border_color(theme.border)
+                    .rounded(px(5.0))
+                    .children(
+                        [
+                            (true, "Diff", "files-show-diff"),
+                            (false, "Edit", "files-show-edit"),
+                        ]
+                        .into_iter()
+                        .map(|(diff, label, id)| {
+                            let selected = self
+                                .preview
+                                .documents
+                                .get(path)
+                                .is_some_and(|d| d.show_diff)
+                                == diff;
+                            toolbar_button(id, label)
+                                .w(px(36.0))
+                                .h(px(22.0))
+                                .text_size(px(11.0))
+                                .when(selected, |el| el.bg(crate::theme::wash(0.12)))
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.suspend_images(cx);
+                                    if let Some(path) = this.preview.active.clone() {
+                                        if let Some(d) = this.preview.documents.get_mut(&path) {
+                                            d.show_diff = diff;
+                                            if !diff {
+                                                d.show_web = false;
+                                                d.show_markdown = false;
+                                            }
+                                        }
+                                    }
+                                    if !diff {
+                                        this.focus_editor(window, cx);
+                                    }
+                                    cx.notify();
+                                }))
+                                .child(label)
+                        }),
+                    ),
+            )
             .when(markdown, |element| {
                 element.child(
                     toolbar_button(
@@ -2539,15 +2599,7 @@ impl FilesSurface {
                     ),
             )
             .when_some(system_path, |element, system_path| {
-                element.child(
-                    toolbar_button("files-open-with-system", "Open in default editor")
-                        .on_click(move |_, _, cx| cx.open_with_system(&system_path))
-                        .child(
-                            icon(icons::ARROW_UP_RIGHT)
-                                .size(px(crate::surface_chrome::ICON_SIZE))
-                                .text_color(theme.text_muted),
-                        ),
-                )
+                element.child(self.render_file_open_in(system_path, theme, cx))
             })
             .child(
                 toolbar_button(
@@ -2715,6 +2767,65 @@ impl FilesSurface {
             );
         }
         self.preview.images_visible = true;
+        if self
+            .preview
+            .documents
+            .get(path)
+            .is_some_and(|d| d.show_diff)
+        {
+            let state = self.state.clone();
+            let view = self
+                .preview
+                .documents
+                .get_mut(path)
+                .unwrap()
+                .inline_diff
+                .get_or_insert_with(|| {
+                    let view =
+                        cx.new(|cx| crate::changes::Changes::for_file(state, path.to_string(), cx));
+                    view.update(cx, |view, cx| view.ensure_content(cx));
+                    view
+                })
+                .clone();
+            return view.into_any_element();
+        }
+        if super::web_preview::supported(path)
+            && self.preview.documents.get(path).is_some_and(|d| d.show_web)
+            && let Some(local_path) = self.system_open_path(path)
+            && let Some(context) = self.request_context.as_ref()
+        {
+            if self
+                .preview
+                .documents
+                .get(path)
+                .is_some_and(|d| d.web.is_none())
+            {
+                match super::web_preview::WebPreview::new(
+                    std::path::Path::new(&context.cwd),
+                    &local_path,
+                    window,
+                    cx,
+                ) {
+                    Ok(web) => {
+                        if let Some(d) = self.preview.documents.get_mut(path) {
+                            d.web = Some(web);
+                        }
+                    }
+                    Err(error) => return centered_state(error, theme.text_muted),
+                }
+            }
+            if let Some(web) = self
+                .preview
+                .documents
+                .get(path)
+                .and_then(|d| d.web.as_ref())
+            {
+                web.browser.update(cx, |v, cx| {
+                    v.set_presentation(crate::browser::model::Presentation::Live, cx)
+                });
+                return web.browser.clone().into_any_element();
+            }
+        }
         if let Some(view) = self
             .preview
             .documents
@@ -3410,6 +3521,20 @@ fn read_only_message(reason: Option<WorkspaceReadOnlyReason>) -> SharedString {
 /// Review fixture: show `text` as the editor's file, as if it had loaded.
 #[cfg(feature = "browser-fixture")]
 impl FilesSurface {
+    pub fn fixture_seed_inline_diff(&mut self, patch: &str, cx: &mut Context<Self>) {
+        let Some(path) = self.preview.active.clone() else {
+            return;
+        };
+        let state = self.state.clone();
+        let view = cx.new(|cx| crate::changes::Changes::for_file(state, path.clone(), cx));
+        view.update(cx, |view, cx| view.fixture_seed_diff(patch, cx));
+        if let Some(document) = self.preview.documents.get_mut(&path) {
+            document.show_diff = true;
+            document.inline_diff = Some(view);
+        }
+        cx.notify();
+    }
+
     pub fn fixture_seed_document(&mut self, text: &str, cx: &mut Context<Self>) {
         let Some(path) = self.editor_path.clone() else {
             return;

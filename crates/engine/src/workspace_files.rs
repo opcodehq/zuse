@@ -1551,6 +1551,11 @@ fn read_image_blocking(
     {
         "png" => "image/png",
         "ico" => "image/x-icon",
+        "pnm" | "pbm" | "pgm" | "ppm" => "image/x-portable-anymap",
+        "qoi" => "image/qoi",
+        "tga" => "image/x-tga",
+        "hdr" => "image/vnd.radiance",
+        "exr" => "image/x-exr",
         "jpg" | "jpeg" => "image/jpeg",
         "gif" => "image/gif",
         "webp" => "image/webp",
