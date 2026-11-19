@@ -826,6 +826,7 @@ impl EngineCore {
         self.doc_host.pause_all_queues();
         self.simulators.shutdown();
         self.account.retire();
+        self.slack_links.shutdown().await;
         self.project_creation.shutdown().await;
         let reconcile = self
             .cloud_mirror_reconcile

@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
 use zuse_doc::{SessionCommandPayload, SessionMessageEntry};
 use zuse_model::{MessagePart, MessageRole, MessageStatus};
@@ -42,7 +42,8 @@ struct Inner {
     sessions: SessionsEngine,
     identity: Mutex<Option<CloudIdentity>>,
     started: OnceLock<()>,
-    wake: tokio::sync::Notify,
+    wake: Arc<tokio::sync::Notify>,
+    task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// Zapper worker chats whose automatic link failed this session; retried after restart.
     auto_link_failed: Mutex<HashSet<String>>,
 }
@@ -120,7 +121,8 @@ impl SlackLinks {
                 sessions,
                 identity: Mutex::new(None),
                 started: OnceLock::new(),
-                wake: tokio::sync::Notify::new(),
+                wake: Arc::new(tokio::sync::Notify::new()),
+                task: Mutex::new(None),
                 auto_link_failed: Mutex::new(HashSet::new()),
             }),
         }
@@ -135,8 +137,18 @@ impl SlackLinks {
         if self.inner.started.set(()).is_err() {
             return;
         }
-        let this = self.clone();
-        runtime.spawn(async move { this.run().await });
+        let inner = Arc::downgrade(&self.inner);
+        let wake = self.inner.wake.clone();
+        let statuses = self.inner.sessions.watch_sessions();
+        *lock(&self.inner.task) = Some(runtime.spawn(Self::run(inner, wake, statuses)));
+    }
+
+    pub async fn shutdown(&self) {
+        let task = lock(&self.inner.task).take();
+        if let Some(task) = task {
+            task.abort();
+            let _ = task.await;
+        }
     }
 
     pub async fn handle(
@@ -295,7 +307,7 @@ impl SlackLinks {
         }
     }
 
-    /// Chats that belong to a Zapper post under its name and pixel avatar.
+    /// Chats that belong to a Zapper post under its name and avatar.
     fn persona(&self, chat: &str) -> Option<Persona> {
         let zot = self.zapper_of(chat)?;
         Some(Persona {
@@ -368,28 +380,33 @@ impl SlackLinks {
         (!text.is_empty()).then_some(text)
     }
 
-    async fn run(self) {
-        let mut statuses = self.inner.sessions.watch_sessions();
+    async fn run(
+        inner: Weak<Inner>,
+        wake: Arc<tokio::sync::Notify>,
+        mut statuses: tokio::sync::watch::Receiver<Vec<zuse_protocol::Session>>,
+    ) {
         let mut tick = tokio::time::interval(INBOX_EVERY);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             let mut poll = false;
             tokio::select! {
                 _ = tick.tick() => poll = true,
-                _ = self.inner.wake.notified() => poll = true,
+                _ = wake.notified() => poll = true,
                 changed = statuses.changed() => if changed.is_err() { break },
             }
-            let identity = lock(&self.inner.identity).clone();
+            let Some(inner) = inner.upgrade() else { break };
+            let this = Self { inner };
+            let identity = lock(&this.inner.identity).clone();
             let Some(identity) = identity else { continue };
-            if !identity.state().is_signed_in() || lock(&self.inner.state).chats.is_empty() {
+            if !identity.state().is_signed_in() || lock(&this.inner.state).chats.is_empty() {
                 continue;
             }
-            if let Err(error) = self.mirror(&identity).await {
+            if let Err(error) = this.mirror(&identity).await {
                 tracing::debug!(%error, "Slack mirror deferred");
             }
             if poll {
-                self.link_zapper_workers(&identity).await;
-                if let Err(error) = self.receive(&identity).await {
+                this.link_zapper_workers(&identity).await;
+                if let Err(error) = this.receive(&identity).await {
                     tracing::debug!(%error, "Slack inbox deferred");
                 }
             }
@@ -577,6 +594,14 @@ impl SlackLinks {
             id,
         )?;
         Ok(())
+    }
+}
+
+impl Drop for Inner {
+    fn drop(&mut self) {
+        if let Some(task) = lock(&self.task).take() {
+            task.abort();
+        }
     }
 }
 

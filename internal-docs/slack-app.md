@@ -60,7 +60,7 @@ review posture; questions and approvals that need a person still require Zuse.
 A Zuse chat on a desktop engine can be linked to a Slack channel. Linking posts
 a parent message ("{title} · Started from Zuse by {member}") and the chat's
 finished replies are posted into that thread, optionally under a persona (a
-display name plus a pixel-art avatar rendered by the cloud, used for Zappers).
+display name plus an avatar rendered by the cloud, used for Zappers).
 Replies the linked Slack member writes in that thread wait in an inbox the
 engine polls and acknowledges. Nothing runs in the cloud runtime; the existing
 installation token and member links are reused.

@@ -731,26 +731,91 @@ pub(super) async fn ack(
 
 /// Side of the rendered avatar; Slack scales icons down from here.
 pub(super) const AVATAR_SIZE: u32 = 512;
-const AVATAR_SCALE: u32 = 25;
 const AVATAR_BACKGROUND: [u8; 3] = [0xF4, 0xF1, 0xEA];
-/// Render a mascot as a crisp, nearest-neighbour PNG on a light square that
-/// survives Slack's rounded-corner crop.
+/// Render the current round-face mascot definitions without a window or GPU.
 pub(super) fn render_avatar(avatar: &ZotAvatar) -> Result<Vec<u8>, ApiError> {
+    use zuse_protocol::presentation::zot_mascots::{self, Face};
+    let (mascot, color) = zot_mascots::resolve(avatar);
     let size = AVATAR_SIZE as usize;
-    let scale = AVATAR_SCALE as usize;
-    let offset = (size - 16 * scale) / 2;
     let mut pixels = AVATAR_BACKGROUND.repeat(size * size);
-    for (x, y, width, rgb) in zuse_protocol::presentation::zot_mascots::sprite_runs(avatar) {
-        let color = [(rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8];
-        let (x, y, width) = (x as usize, y as usize, width as usize);
-        if x + width > 16 || y >= 16 {
-            continue;
-        }
-        for py in offset + y * scale..offset + (y + 1) * scale {
-            for px in offset + x * scale..offset + (x + width) * scale {
-                let at = (py * size + px) * 3;
-                pixels[at..at + 3].copy_from_slice(&color);
+    for py in 0..size {
+        for px in 0..size {
+            let x = (px as f32 + 0.5) / size as f32;
+            let y = (py as f32 + 0.5) / size as f32;
+            let disc = |cx: f32, cy: f32, r: f32| (x - cx).hypot(y - cy) <= r;
+            let pill = |left: f32, top: f32, w: f32, h: f32, r: f32| {
+                let cx = x.clamp(left + r, left + w - r);
+                let cy = y.clamp(top + r, top + h - r);
+                (x - cx).hypot(y - cy) <= r
+            };
+            let arc = |cx: f32, cy: f32, r: f32, from: f32, to: f32, width: f32| {
+                let dx = x - cx;
+                let dy = y - cy;
+                let angle = dy.atan2(dx).to_degrees().rem_euclid(360.);
+                (dx.hypot(dy) - r).abs() <= width / 2. && angle >= from && angle <= to
+            };
+            if !disc(0.5, 0.5, 0.5) {
+                continue;
             }
+            let ink = match mascot.face {
+                Face::Smile => {
+                    disc(0.37, 0.44, 0.072)
+                        || disc(0.63, 0.44, 0.072)
+                        || arc(0.5, 0.53, 0.14, 25., 155., 0.065)
+                }
+                Face::Tall => {
+                    pill(0.325, 0.36, 0.11, 0.22, 0.055) || pill(0.565, 0.36, 0.11, 0.22, 0.055)
+                }
+                Face::Visor => {
+                    pill(0.2, 0.37, 0.6, 0.19, 0.095)
+                        && !disc(0.37, 0.465, 0.042)
+                        && !disc(0.63, 0.465, 0.042)
+                }
+                Face::Cyclops => disc(0.5, 0.46, 0.19) && !disc(0.555, 0.405, 0.06),
+                Face::Happy => {
+                    arc(0.36, 0.49, 0.085, 200., 340., 0.07)
+                        || arc(0.64, 0.49, 0.085, 200., 340., 0.07)
+                        || arc(0.5, 0.57, 0.08, 25., 155., 0.06)
+                }
+                Face::Shades => {
+                    pill(0.235, 0.38, 0.235, 0.15, 0.05)
+                        || pill(0.53, 0.38, 0.235, 0.15, 0.05)
+                        || pill(0.44, 0.405, 0.12, 0.04, 0.02)
+                        || pill(0.42, 0.65, 0.16, 0.045, 0.0225)
+                }
+                Face::Wink => {
+                    disc(0.37, 0.44, 0.072)
+                        || pill(0.55, 0.425, 0.16, 0.05, 0.025)
+                        || arc(0.53, 0.53, 0.12, 30., 120., 0.065)
+                }
+                Face::Sleepy => {
+                    arc(0.36, 0.42, 0.085, 20., 160., 0.065)
+                        || arc(0.64, 0.42, 0.085, 20., 160., 0.065)
+                        || disc(0.5, 0.65, 0.05)
+                }
+                Face::Blush => {
+                    disc(0.37, 0.45, 0.068) || disc(0.63, 0.45, 0.068) || disc(0.5, 0.6, 0.042)
+                }
+            };
+            let rgb = if ink { 0x161616 } else { color.body };
+            let mut rgb = [(rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8];
+            if !ink
+                && mascot.face == Face::Blush
+                && (disc(0.27, 0.58, 0.075) || disc(0.73, 0.58, 0.075))
+            {
+                let (cheek, alpha) = if color.body == 0xff8fbf {
+                    (color.shade, 1.)
+                } else {
+                    (0xff6b8b, 0.55)
+                };
+                for (channel, shift) in rgb.iter_mut().zip([16, 8, 0]) {
+                    *channel = (*channel as f32 * (1. - alpha)
+                        + ((cheek >> shift) & 255) as f32 * alpha)
+                        .round() as u8;
+                }
+            }
+            let at = (py * size + px) * 3;
+            pixels[at..at + 3].copy_from_slice(&rgb);
         }
     }
     let mut out = Vec::new();

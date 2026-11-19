@@ -2,22 +2,22 @@
   "ZuseCJK-sc.otf": {
     "source": "https://github.com/notofonts/noto-cjk/blob/Sans2.004/Sans/OTF/SimplifiedChinese/NotoSansCJKsc-Regular.otf",
     "sourceSha256": "2c76254f6fc379fddfce0a7e84fb5385bb135d3e399294f6eeb6680d0365b74b",
-    "sha256": "8ccf068b49ec3466f7feb0a759ca71214b16401487f971ae747bde60566ef330"
+    "sha256": "ba82a0ab061daf2408aea9cd1bb6fd3a03ea4a495ce377719eeebbeef275ce7b"
   },
   "ZuseCJK-tc.otf": {
     "source": "https://github.com/notofonts/noto-cjk/blob/Sans2.004/Sans/OTF/TraditionalChinese/NotoSansCJKtc-Regular.otf",
     "sourceSha256": "dce08bd4fd91aa8aa76ed8fea4b694c2dfb8550f67871e326843212ddbeb88b4",
-    "sha256": "ce2e7aa955b3c36a16ee61806f356a0cf3f610d3950830d3bd125acf90d3e3d4"
+    "sha256": "9f451807a3acdc09dd9535286e69dbc98f149ca5c2656d39c97072dd33bb64cd"
   },
   "ZuseCJK-jp.otf": {
     "source": "https://github.com/notofonts/noto-cjk/blob/Sans2.004/Sans/OTF/Japanese/NotoSansCJKjp-Regular.otf",
     "sourceSha256": "68a3fc98800b2a27b371f2fb79991daf3633bd89309d4ffaa6946fd587f375b5",
-    "sha256": "3abeea830d3a027566a725299eab5580554c4fe3d2b8c8d2d363c3fec16fc8f1"
+    "sha256": "613c4a76a343f0f76346a763b2de5a5ec8f0c3e1c42cc35a3a3843982f694189"
   },
   "ZuseCJK-kr.otf": {
     "source": "https://github.com/notofonts/noto-cjk/blob/Sans2.004/Sans/OTF/Korean/NotoSansCJKkr-Regular.otf",
     "sourceSha256": "6bcb2a0703aa137e874fc2dffa85f6c21ba9a67fa329e81b8c801663af7e992a",
-    "sha256": "23d2638a6eff92975bd5be5bf593fd49c78bbbf304ee6d4d60f43cd8b2b22efa"
+    "sha256": "9849587502cec57387cbb747a246e73ad50cdb8a7dc363f3cc7f6a46575ed758"
   },
   "ZuseCJK-Fallback.ttf": {
     "source": "google-droid-sans-fonts-20200215-9.amzn2023.0.2 (Android Open Source Project; Apache-2.0)",
