@@ -55,7 +55,8 @@ function install(seed) {
         archiveStatus: { workspaceId: "ws-arch", archived: true, machineRetained: true, backupVerified: true, computeRetired: false, retentionDeadline: now + 5 * day, phase: "retained", verifiedChunks: 12, totalChunks: 12, errorCode: null } },
       { workspaceId: "ws-clean", chatId: "chat-clean", initialSessionId: "s-clean", branch: "zuse/cleanup", state: "deleted", desiredState: "deleted", statusCode: "deleted", revision: 4, title: "Cleanup pending", rpcProtocol: "zuse-rpc-v1", localMirrorCleanup: { state: "error", removed: 2, preserved: 1, error: "Local files are in use." } },
     ],
-    usage: Array.from({ length: 14 }, (_, i) => ({ entryId: `u-${i}`, resourceKind: "sandbox", usageKind: "sandbox-run", resourceId: `ws-${i}`, provider: "boxd", startedAt: now - (i + 1) * 3600000, endedAt: now - i * 3600000, vcpuCount: 4, memoryMib: 8192, providerCostMicros: 120_000 + i * 1000, status: i === 0 ? "provisional" : "final" })),
+    // More than the current 100-row billing page, so the browser exercises pagination.
+    usage: Array.from({ length: 114 }, (_, i) => ({ entryId: `u-${i}`, resourceKind: "sandbox", usageKind: "sandbox-run", resourceId: `ws-${i}`, provider: "boxd", startedAt: now - (i + 1) * 3600000, endedAt: now - i * 3600000, vcpuCount: 4, memoryMib: 8192, providerCostMicros: 120_000 + i * 1000, status: i === 0 ? "provisional" : "final" })),
     seq: 1,
   };
   const transcript = (id, count) => Array.from({ length: count }, (_, i) => ({ id: `${id}-m${i}`, role: i % 2 ? "assistant" : "user", createdAt: now - (count - i) * 60000, deviceId: "cloud", parts: [{ kind: "text", id: `${id}-p${i}`, text: i % 2 ? `Reply ${i}: updated **the redirect** handling.\n\n- step one\n- step two` : `Request ${i}: please look at the login flow.` }] }));
