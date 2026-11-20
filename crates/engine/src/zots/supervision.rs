@@ -98,6 +98,38 @@ fn bounded_report(text: &str) -> String {
     report
 }
 
+/// Whether a pending delivery to `chat` may go out now. A Zapper runs at
+/// most `maxConcurrentWorkers` threads; a new thread that finds every slot
+/// taken is marked queued and stays pending, and a later pass starts it once
+/// a running thread settles. Queued threads start in the order they were
+/// delegated because the outbox is walked in that order.
+fn admit(
+    zots: &Zots,
+    zot: &Zot,
+    id: &str,
+    chat: &str,
+    action: &ZotAction,
+    busy: impl Fn(&str) -> bool,
+) -> Result<bool> {
+    let mut reserved = zots.reserved_workers(&zot.id)?;
+    reserved.extend(
+        zot.workers
+            .iter()
+            .filter(|worker| busy(&worker.chat_id))
+            .map(|worker| worker.chat_id.clone()),
+    );
+    if reserved.contains(chat) {
+        return Ok(false);
+    }
+    if reserved.len() >= zot.config.max_concurrent_workers as usize {
+        if matches!(action, ZotAction::Delegate { .. }) {
+            zots.mark_queued(id)?;
+        }
+        return Ok(false);
+    }
+    Ok(!busy(chat))
+}
+
 fn reconcile(
     zots: &Zots,
     sessions: &SessionsEngine,
@@ -457,33 +489,16 @@ fn reconcile(
             continue;
         }
         if phase == "pending" && !stopping {
-            let mut reserved = zots.reserved_workers(&zot.id)?;
-            reserved.extend(
-                zot.workers
-                    .iter()
-                    .filter(|worker| {
-                        statuses.iter().any(|s| {
-                            s.chat_id == worker.chat_id
-                                && matches!(
-                                    s.status,
-                                    SessionStatus::Working | SessionStatus::AwaitingInput
-                                )
-                        })
-                    })
-                    .map(|worker| worker.chat_id.clone()),
-            );
-            if reserved.contains(&chat)
-                || reserved.len() >= zot.config.max_concurrent_workers as usize
-            {
-                continue;
-            }
-            if statuses.iter().any(|s| {
-                s.chat_id == chat
-                    && matches!(
-                        s.status,
-                        SessionStatus::Working | SessionStatus::AwaitingInput
-                    )
-            }) {
+            let busy = |chat: &str| {
+                statuses.iter().any(|s| {
+                    s.chat_id == chat
+                        && matches!(
+                            s.status,
+                            SessionStatus::Working | SessionStatus::AwaitingInput
+                        )
+                })
+            };
+            if !admit(zots, zot, &id, &chat, &action, busy)? {
                 continue;
             }
         }
@@ -514,6 +529,7 @@ fn reconcile(
                 "UPDATE zot_outbox SET phase='sending' WHERE id=?1 AND phase='pending'",
                 [&id],
             )?;
+            tx.execute("DELETE FROM zot_queue WHERE id=?1", [&id])?;
             tx.commit()?;
         }
         let delivery: Result<()> = (|| {
@@ -666,5 +682,148 @@ mod abort_tests {
             abort_hold(&[message("zapper-stop", 150)], 100, &zapper),
             Some(HOLD_THREAD_STOPPED)
         );
+    }
+}
+
+#[cfg(test)]
+mod queue_tests {
+    use super::*;
+    use crate::zots::tests::{command, config, worker};
+
+    fn delegate(store: &Zots, chat: &str, issue: &str) {
+        store
+            .command(command(
+                "release",
+                &format!("issue-{issue}"),
+                ZotAction::CreateIssue {
+                    issue_id: issue.into(),
+                    details: ZotIssueDetails {
+                        title: format!("Fix {issue}"),
+                        description: "Pass acceptance".into(),
+                        assigned: true,
+                        ..Default::default()
+                    },
+                },
+            ))
+            .unwrap();
+        store
+            .command(command(
+                "release",
+                chat,
+                ZotAction::Delegate {
+                    issue_id: Some(issue.into()),
+                    worker: ZotWorker {
+                        chat_id: chat.into(),
+                        objective: format!("Fix {issue}"),
+                        // A client can't queue a thread by claiming a position.
+                        queue_position: Some(7),
+                        ..worker()
+                    },
+                    model: config().coordinator_model,
+                    base: "origin/main".into(),
+                },
+            ))
+            .unwrap();
+    }
+
+    /// One supervisor pass over pending deliveries, standing in for the
+    /// delivery itself: what's admitted is marked sent. No thread is busy
+    /// outside the Zapper's own deliveries.
+    fn pass(store: &Zots) -> Vec<String> {
+        let mut started = vec![];
+        for (id, zot_id, chat, action, phase) in store.outbox().unwrap() {
+            // Stops bypass admission, as in `reconcile`.
+            if phase != "pending" || !matches!(action, ZotAction::Delegate { .. }) {
+                continue;
+            }
+            let zot = store.get(&zot_id).unwrap();
+            if admit(store, &zot, &id, &chat, &action, |_| false).unwrap() {
+                store.outbox_phase(&id, "sent", None).unwrap();
+                started.push(chat);
+            }
+        }
+        started
+    }
+
+    fn positions(store: &Zots) -> Vec<(String, Option<u32>)> {
+        store
+            .get("release")
+            .unwrap()
+            .workers
+            .into_iter()
+            .map(|w| (w.chat_id, w.queue_position))
+            .collect()
+    }
+
+    #[test]
+    fn delegates_over_the_limit_queue_in_order_and_start_when_a_slot_frees() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Zots::open(dir.path(), "local").unwrap();
+        store
+            .command(command(
+                "release",
+                "create",
+                ZotAction::Create {
+                    config: ZotConfig {
+                        max_concurrent_workers: 1,
+                        ..config()
+                    },
+                },
+            ))
+            .unwrap();
+        delegate(&store, "a", "one");
+        delegate(&store, "b", "two");
+        // Not yet seen by the supervisor: nothing claims to be queued.
+        assert_eq!(positions(&store), [("a".into(), None), ("b".into(), None)]);
+        assert_eq!(pass(&store), ["a"]);
+        delegate(&store, "c", "three");
+        assert!(pass(&store).is_empty());
+        assert_eq!(
+            positions(&store),
+            [
+                ("a".into(), None),
+                ("b".into(), Some(1)),
+                ("c".into(), Some(2))
+            ]
+        );
+        let zot = store.get("release").unwrap();
+        let label = |issue: &str| {
+            let issue = zot.issues.iter().find(|i| i.id == issue).unwrap();
+            zot.issue_status_label(issue)
+        };
+        // The stored status stays inProgress; what's shown is honest.
+        assert_eq!(label("one"), "In progress");
+        assert_eq!(label("two"), "Queued");
+        assert_eq!(zot.issues[1].details.status, ZotIssueStatus::InProgress);
+        let view = issues::coordinator_view(&zot).unwrap();
+        assert_eq!(view["issues"][1]["queued"], true);
+        assert_eq!(view["issues"][1]["queuePosition"], 1);
+        assert!(view["issues"][0].get("queued").is_none());
+
+        // The running thread finishes: the next in line starts by itself.
+        store.settle("a").unwrap();
+        assert_eq!(pass(&store), ["b"]);
+        assert_eq!(
+            positions(&store),
+            [
+                ("a".into(), None),
+                ("b".into(), None),
+                ("c".into(), Some(1))
+            ]
+        );
+
+        // Stopping a queued thread takes it out of the queue for good.
+        store
+            .command(command(
+                "release",
+                "stop-c",
+                ZotAction::StopWorker {
+                    chat_id: "c".into(),
+                },
+            ))
+            .unwrap();
+        store.settle("b").unwrap();
+        assert!(pass(&store).iter().all(|chat| chat != "c"));
+        assert_eq!(positions(&store)[2], ("c".into(), None));
     }
 }

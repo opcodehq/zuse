@@ -121,6 +121,7 @@ fn zapper() -> Zot {
             space_id: "zuse".into(),
             objective: RUNNING.1.into(),
             followups: 0,
+            queue_position: None,
         }],
         decisions: vec![],
         issues: vec![

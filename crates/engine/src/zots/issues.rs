@@ -339,7 +339,7 @@ pub(super) fn coordinator_view(zot: &Zot) -> Result<serde_json::Value> {
                     a
                 })
                 .collect();
-            Ok(serde_json::json!({
+            let mut view = serde_json::json!({
                 "id": issue.id,
                 "code": issue.code(),
                 "number": issue.number,
@@ -351,7 +351,13 @@ pub(super) fn coordinator_view(zot: &Zot) -> Result<serde_json::Value> {
                 "pullRequests": issue.pull_requests,
                 "activityCount": issue.activity.len(),
                 "recentActivity": recent,
-            }))
+            });
+            // Its thread waits for a slot: the stored inProgress isn't running yet.
+            if let Some(worker) = zot.issue_queued_worker(issue) {
+                view["queued"] = serde_json::json!(true);
+                view["queuePosition"] = serde_json::json!(worker.queue_position);
+            }
+            Ok(view)
         })
         .collect::<Result<Vec<_>>>()?
         .into();

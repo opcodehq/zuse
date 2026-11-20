@@ -595,6 +595,7 @@ impl WorkspaceView {
                         space_id: repository.space_id.clone(),
                         objective: get("Objective"),
                         followups: 0,
+                        queue_position: None,
                     },
                     // New threads start on the coordinator conversation's current model.
                     model: self
@@ -1607,7 +1608,11 @@ impl WorkspaceView {
         let count = workers.len();
         for worker in workers {
             let id = worker.chat_id.clone();
-            let (dot, status) = thread_state(self.zot_thread_status(&id));
+            let (dot, status) = if worker.queued() {
+                (Hsla::from(rgb(FAINT)).opacity(0.5), "Queued")
+            } else {
+                thread_state(self.zot_thread_status(&id))
+            };
             let title = self
                 .chats
                 .iter()
@@ -1737,6 +1742,7 @@ impl WorkspaceView {
                                     space_id: chat["spaceId"].as_str().unwrap_or_default().into(),
                                     objective: title.clone(),
                                     followups: 0,
+                                    queue_position: None,
                                 },
                             },
                             cx,

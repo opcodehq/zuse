@@ -473,6 +473,7 @@ impl IssuePanel {
                         space_id: repo.space_id.clone(),
                         objective: values[0].clone(),
                         followups: 0,
+                        queue_position: None,
                     },
                     model: self.zot.config.coordinator_model.clone(),
                     // Same fallback as the other delegation paths.
@@ -490,6 +491,8 @@ impl IssuePanel {
         let id = issue.id.clone();
         let owner = issue.details.current_owner();
         let assignee = self.owner_name(owner.as_ref());
+        // Its thread waits for a slot: show Queued, not a running status.
+        let queued = self.zot.issue_queued_worker(issue).is_some();
         row()
             .id(SharedString::from(format!("issue-row-{id}")))
             .role(Role::Button)
@@ -506,7 +509,11 @@ impl IssuePanel {
             .cursor_pointer()
             .hover(|s| s.bg(rgb(HOVER)))
             .child(priority_icon(issue.details.priority))
-            .child(status_icon(issue.details.status))
+            .child(status_icon(if queued {
+                ZotIssueStatus::Todo
+            } else {
+                issue.details.status
+            }))
             .child(
                 div()
                     .flex_1()
@@ -514,6 +521,15 @@ impl IssuePanel {
                     .truncate()
                     .child(issue.details.title.clone()),
             )
+            .when(queued, |d| {
+                d.child(
+                    div()
+                        .flex_none()
+                        .text_size(px(11.5))
+                        .text_color(rgb(MUTED))
+                        .child("Queued"),
+                )
+            })
             .when_some(issue.pull_requests.first(), |d, pr| d.child(pr_badge(pr)))
             .child(
                 div()
@@ -1051,7 +1067,7 @@ impl IssuePanel {
             (
                 "clock-circle",
                 "Status",
-                issue.details.status.label().to_owned(),
+                self.zot.issue_status_label(issue).to_owned(),
                 "status",
             ),
             (

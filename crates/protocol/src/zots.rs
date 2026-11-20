@@ -86,6 +86,18 @@ pub struct ZotWorker {
     pub space_id: String,
     pub objective: String,
     pub followups: u32,
+    /// Set while the thread waits for a free slot (the Zapper already runs
+    /// `maxConcurrentWorkers` threads): its place in the start order, 1 being
+    /// the next to start. The engine derives it when it reports the Zapper and
+    /// ignores it on commands; absent means the thread was started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub queue_position: Option<u32>,
+}
+impl ZotWorker {
+    pub fn queued(&self) -> bool {
+        self.queue_position.is_some()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
@@ -568,9 +580,18 @@ pub fn command_summary(command: &ZotCommand, result: Option<&Zot>) -> serde_json
                 out["issue"] = issue_summary(i);
             }
             out["worker"] = serde_json::json!(worker(&w.chat_id));
+            // Whether it runs now or queues behind maxConcurrentWorkers is
+            // decided when the engine delivers it; the worker reports it.
             match issue_id.as_deref().and_then(issue) {
-                Some(i) => format!("Started thread {} on {}", w.chat_id, i.code()),
-                None => format!("Started thread {}", w.chat_id),
+                Some(i) => format!(
+                    "Delegated thread {} on {}; it starts when a slot is free",
+                    w.chat_id,
+                    i.code()
+                ),
+                None => format!(
+                    "Delegated thread {}; it starts when a slot is free",
+                    w.chat_id
+                ),
             }
         }
         ZotAction::AdoptWorker { worker: w } => {
@@ -829,6 +850,28 @@ pub struct ZotIssue {
 impl ZotIssue {
     pub fn code(&self) -> String {
         format!("ZAP-{}", self.number)
+    }
+}
+impl Zot {
+    /// The queued thread that owns `issue`, if any. Such an issue keeps the
+    /// `inProgress` status it was delegated with (the work is committed to a
+    /// thread and starts on its own), but every surface shows it as Queued
+    /// until the thread starts, so nothing claims a thread is running.
+    pub fn issue_queued_worker(&self, issue: &ZotIssue) -> Option<&ZotWorker> {
+        let ZotIssueOwner::Thread { chat_id } = issue.details.owner.as_ref()? else {
+            return None;
+        };
+        self.workers
+            .iter()
+            .find(|w| &w.chat_id == chat_id && w.queued())
+    }
+    /// The status label an issue shows: Queued while its thread waits.
+    pub fn issue_status_label(&self, issue: &ZotIssue) -> &'static str {
+        if self.issue_queued_worker(issue).is_some() {
+            "Queued"
+        } else {
+            issue.details.status.label()
+        }
     }
 }
 

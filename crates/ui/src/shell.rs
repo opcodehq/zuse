@@ -13208,6 +13208,11 @@ impl Shell {
                 .children(card)
                 .into_any_element();
         }
+        // A Zapper thread waiting for a slot (or still starting) has no
+        // conversation yet; say so instead of showing an empty transcript.
+        if let Some(placeholder) = self.selected_thread_placeholder(cx) {
+            return self.render_thread_placeholder(placeholder, cx);
+        }
         let _ = (text, border);
         let has_selection = self.state.read(cx).selected_chat.is_some();
         let has_spaces = !self.state.read(cx).spaces.is_empty()

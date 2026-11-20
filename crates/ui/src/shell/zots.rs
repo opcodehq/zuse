@@ -136,8 +136,12 @@ fn thread_action(
     callback: impl Fn(&mut Shell, &gpui::ClickEvent, &mut Window, &mut Context<Shell>) + 'static,
     cx: &mut Context<Shell>,
 ) -> AnyElement {
+    // GPUI paints an SVG with the icon's own text colour, never its
+    // parent's, so the colour and its hover state sit on the icon itself.
+    let group = SharedString::from(format!("{id}-action"));
     div()
         .id(SharedString::from(id))
+        .group(group.clone())
         .role(gpui::Role::Button)
         .aria_label(label)
         .size(px(24.0))
@@ -147,10 +151,13 @@ fn thread_action(
         .rounded(px(6.0))
         .bg(gpui::rgb(0x242424))
         .cursor_pointer()
-        .text_color(theme.text_muted)
-        .hover(|d| d.text_color(theme.text_strong))
         .tip(label)
-        .child(icon(glyph).size(px(13.0)))
+        .child(
+            icon(glyph)
+                .size(px(13.0))
+                .text_color(theme.text_muted)
+                .group_hover(group, |s| s.text_color(theme.text_strong)),
+        )
         .on_click(cx.listener(move |this, event, window, cx| {
             cx.stop_propagation();
             callback(this, event, window, cx)
@@ -231,7 +238,51 @@ enum ThreadPhase {
     NeedsYou(zuse_protocol::ChatIndicator),
     /// No message has run yet, so it has no worktree or transcript.
     NotStarted,
+    /// Waiting for a free slot: the Zapper already runs its maximum number
+    /// of threads. Its chat is created when it starts.
+    Queued,
     Done,
+}
+
+/// A Zapper thread row's phase. A thread waiting in the start queue has no
+/// chat yet, so the queue decides, not the (absent) conversation.
+fn worker_phase(worker: &ZotWorker, chat: ThreadPhase) -> ThreadPhase {
+    if worker.queued() {
+        ThreadPhase::Queued
+    } else {
+        chat
+    }
+}
+
+/// What the main pane shows for a selected Zapper thread that has no
+/// conversation to render yet, instead of an empty transcript.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum ThreadPlaceholder {
+    /// Waiting for a running thread to finish; `position` 1 starts next.
+    Queued { objective: String, position: u32 },
+    /// Delegated and starting: the engine hasn't reported its chat yet.
+    Starting { objective: String },
+}
+
+pub(super) fn thread_placeholder(
+    zots: &[Zot],
+    chat_exists: impl Fn(&str) -> bool,
+    selected: &str,
+) -> Option<ThreadPlaceholder> {
+    let worker = zots
+        .iter()
+        .flat_map(|z| &z.workers)
+        .find(|w| w.chat_id == selected)?;
+    match worker.queue_position {
+        Some(position) => Some(ThreadPlaceholder::Queued {
+            objective: worker.objective.clone(),
+            position,
+        }),
+        None if !chat_exists(selected) => Some(ThreadPlaceholder::Starting {
+            objective: worker.objective.clone(),
+        }),
+        None => None,
+    }
 }
 
 fn thread_phase(status: zuse_protocol::ChatIndicator, started: bool) -> ThreadPhase {
@@ -292,11 +343,103 @@ fn thread_mark(
                     .border_color(theme.text_faint.opacity(0.7)),
             )
             .into_any_element(),
+        ThreadPhase::Queued => glyph(icons::STATUS_QUEUED, 12.0, theme.text_muted),
         ThreadPhase::Done => glyph(icons::CHECK, 11.0, theme.text_faint),
     }
 }
 
 impl Shell {
+    /// The placeholder for the selected Zapper thread, when it has no
+    /// conversation yet (queued, or delegated and still starting).
+    pub(super) fn selected_thread_placeholder(&self, cx: &App) -> Option<ThreadPlaceholder> {
+        let state = self.state.read(cx);
+        let selected = state.selected_chat.as_deref()?;
+        thread_placeholder(
+            &state.zots,
+            |id| state.chats.iter().any(|c| c.id == id),
+            selected,
+        )
+    }
+
+    pub(super) fn render_thread_placeholder(
+        &self,
+        placeholder: ThreadPlaceholder,
+        cx: &App,
+    ) -> AnyElement {
+        let theme = Theme::of(cx);
+        let (glyph, heading, line, objective) = match placeholder {
+            ThreadPlaceholder::Queued {
+                objective,
+                position,
+            } => (
+                icons::STATUS_QUEUED,
+                "Queued",
+                if position == 1 {
+                    "Starts when a thread finishes. It's next in line.".to_owned()
+                } else {
+                    format!("Starts when a thread finishes. It's number {position} in line.")
+                },
+                objective,
+            ),
+            ThreadPlaceholder::Starting { objective } => (
+                icons::CLOCK_CIRCLE,
+                "Starting",
+                "This thread's chat appears once it starts.".to_owned(),
+                objective,
+            ),
+        };
+        const OBJECTIVE: usize = 800;
+        let objective = if objective.chars().count() > OBJECTIVE {
+            format!("{}…", objective.chars().take(OBJECTIVE).collect::<String>())
+        } else {
+            objective
+        };
+        div()
+            .debug_selector(|| "zot-thread-placeholder".into())
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .p(px(24.0))
+            .child(
+                div()
+                    .max_w(px(460.0))
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.0))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.0))
+                            .text_size(crate::typography::ui_rems(14.0))
+                            .text_color(theme.text_strong)
+                            .child(icon(glyph).size(px(14.0)).text_color(theme.text_muted))
+                            .child(heading),
+                    )
+                    .child(
+                        div()
+                            .text_size(crate::typography::ui_rems(13.0))
+                            .text_color(theme.text_muted)
+                            .child(line),
+                    )
+                    .child(
+                        div()
+                            .mt(px(4.0))
+                            .p(px(12.0))
+                            .rounded(px(8.0))
+                            .border_1()
+                            .border_color(theme.border)
+                            .text_size(crate::typography::ui_rems(12.5))
+                            .text_color(theme.text)
+                            .child(objective),
+                    ),
+            )
+            .into_any_element()
+    }
+
     pub(super) fn selected_zot(&self, cx: &App) -> Option<Zot> {
         let state = self.state.read(cx);
         state
@@ -364,7 +507,7 @@ impl Shell {
                 .filter(|worker| !self.zot_thread_archived(&worker.chat_id, cx))
                 .map(|worker| {
                     let (phase, awaiting) = self.zot_thread_phase(&worker.chat_id, cx);
-                    (worker, phase, awaiting)
+                    (worker, worker_phase(worker, phase), awaiting)
                 })
                 .filter(|(worker, phase, _)| {
                     !matches!(phase, ThreadPhase::Done)
@@ -517,6 +660,16 @@ impl Shell {
                         .child(div().flex_1().min_w_0().truncate().child(title))
                         .when(matches!(phase, ThreadPhase::NotStarted), |d| {
                             d.tip("Hasn't started yet")
+                        })
+                        .when(matches!(phase, ThreadPhase::Queued), |d| {
+                            d.child(
+                                div()
+                                    .flex_none()
+                                    .text_size(crate::typography::ui_rems(11.0))
+                                    .text_color(theme.text_faint)
+                                    .child("Queued"),
+                            )
+                            .tip("Queued · starts when a thread finishes")
                         })
                         .child(
                             div()
@@ -798,11 +951,8 @@ impl Shell {
         if self.zot_ui.pending {
             return;
         }
-        let viewing = self
-            .state
-            .read(cx)
-            .selected_chat_row()
-            .is_some_and(|chat| chat.id == chat_id);
+        // By id: a queued thread has no chat row yet.
+        let viewing = self.state.read(cx).selected_chat.as_deref() == Some(chat_id.as_str());
         // Don't leave the user on a thread that just left the list.
         if viewing {
             self.open_chat(zot.coordinator_chat_id.clone(), cx);
@@ -1544,10 +1694,12 @@ impl Shell {
                 let state = if self.zot_thread_archived(&w.chat_id, cx) {
                     ThreadState::Archived
                 } else {
-                    match self.zot_thread_phase(&w.chat_id, cx).0 {
+                    match worker_phase(w, self.zot_thread_phase(&w.chat_id, cx).0) {
                         ThreadPhase::Working => ThreadState::Working,
                         ThreadPhase::NeedsYou(_) => ThreadState::NeedsYou,
-                        ThreadPhase::NotStarted | ThreadPhase::Done => ThreadState::Idle,
+                        ThreadPhase::NotStarted | ThreadPhase::Queued | ThreadPhase::Done => {
+                            ThreadState::Idle
+                        }
                     }
                 };
                 (w.chat_id.clone(), state)
@@ -2455,6 +2607,80 @@ mod tests {
             version,
             content: content.into(),
         }
+    }
+
+    fn queued_zot() -> Zot {
+        let worker = |chat: &str, queue_position| ZotWorker {
+            chat_id: chat.into(),
+            device_id: "local".into(),
+            space_id: "repo".into(),
+            objective: format!("Objective of {chat}"),
+            followups: 0,
+            queue_position,
+        };
+        serde_json::from_value(serde_json::json!({
+            "id": "z", "revision": 1,
+            "config": {
+                "name": "Z", "purpose": "", "homeDeviceId": "local", "repositories": [],
+                "coordinatorModel": {"harness": "mock", "model": null},
+                "workerDeviceId": "local", "maxConcurrentWorkers": 1, "maxFollowups": 3
+            },
+            "status": "active", "coordinatorChatId": "zot-z-0",
+            "previousCoordinatorChats": [], "decisions": [],
+            "workers": [
+                worker("running", None),
+                worker("queued", Some(2)),
+                worker("starting", None),
+            ],
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn queued_threads_read_queued_in_the_sidebar() {
+        use zuse_protocol::ChatIndicator as C;
+        let zot = queued_zot();
+        let phase = |chat: &str, chat_phase| {
+            let worker = zot.workers.iter().find(|w| w.chat_id == chat).unwrap();
+            worker_phase(worker, chat_phase)
+        };
+        // No chat yet reads as NotStarted; the queue says why.
+        assert!(matches!(
+            phase("queued", ThreadPhase::NotStarted),
+            ThreadPhase::Queued
+        ));
+        assert!(matches!(
+            phase("running", thread_phase(C::Working, true)),
+            ThreadPhase::Working
+        ));
+        assert!(matches!(
+            phase("starting", ThreadPhase::NotStarted),
+            ThreadPhase::NotStarted
+        ));
+    }
+
+    #[test]
+    fn threads_without_a_conversation_get_a_placeholder_not_an_empty_pane() {
+        let zots = vec![queued_zot()];
+        let exists = |chat: &str| chat == "running" || chat == "zot-z-0" || chat == "other";
+        assert_eq!(
+            thread_placeholder(&zots, exists, "queued"),
+            Some(ThreadPlaceholder::Queued {
+                objective: "Objective of queued".into(),
+                position: 2,
+            })
+        );
+        // Delegated, its chat not reported yet: still never a blank pane.
+        assert_eq!(
+            thread_placeholder(&zots, exists, "starting"),
+            Some(ThreadPlaceholder::Starting {
+                objective: "Objective of starting".into(),
+            })
+        );
+        // Real conversations, and chats that aren't Zapper threads, render as usual.
+        assert_eq!(thread_placeholder(&zots, exists, "running"), None);
+        assert_eq!(thread_placeholder(&zots, exists, "zot-z-0"), None);
+        assert_eq!(thread_placeholder(&zots, exists, "other"), None);
     }
 
     #[test]

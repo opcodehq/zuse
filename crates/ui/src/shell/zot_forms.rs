@@ -706,6 +706,7 @@ impl Shell {
                         space_id: repository.space_id.clone(),
                         objective,
                         followups: 0,
+                        queue_position: None,
                     },
                     model: self.zot_thread_model(zot, cx),
                     base: if base.is_empty() {

@@ -16,7 +16,14 @@ avatar?: ZotAvatar,
  */
 avatarImage?: string, };
 export type ZotStatus = "active" | "paused" | "stopped" | "archived";
-export type ZotWorker = { chatId: string, deviceId: string, spaceId: string, objective: string, followups: number, };
+export type ZotWorker = { chatId: string, deviceId: string, spaceId: string, objective: string, followups: number,
+/**
+ * Set while the thread waits for a free slot (the Zapper already runs
+ * `maxConcurrentWorkers` threads): its place in the start order, 1 being
+ * the next to start. The engine derives it when it reports the Zapper and
+ * ignores it on commands; absent means the thread was started.
+ */
+queuePosition?: number, };
 export type ZotDecision = { id: string, workerChatId: string | null, question: string, answer: string | null, };
 export type ZotIssueStatus = "backlog" | "todo" | "inProgress" | "needsYou" | "blocked" | "inReview" | "done" | "canceled";
 export type ZotIssuePriority = "urgent" | "high" | "normal" | "low";

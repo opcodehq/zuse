@@ -574,6 +574,7 @@ mod tests {
                     space_id: "s".into(),
                     objective: format!("Objective {id}"),
                     followups: 0,
+                    queue_position: None,
                 })
                 .collect(),
             decisions: vec![],

@@ -119,6 +119,7 @@ fn zapper(issues: Vec<ZotIssue>, workers: usize) -> Zot {
                 ][(n as usize - 1) % 3]
                     .into(),
                 followups: 0,
+                queue_position: None,
             })
             .collect(),
         decisions: vec![],
