@@ -429,6 +429,10 @@ impl PullRequestDetailPage {
         let busy = self.updating_pr;
         let draft = detail.is_draft;
         let mergeable = can_merge(detail);
+        let blocked = match primary_action(detail, busy) {
+            PrimaryAction::MergeBlocked(reason) => Some(reason),
+            _ => None,
+        };
         let label = if busy {
             "Updating…"
         } else if draft {
@@ -453,7 +457,13 @@ impl PullRequestDetailPage {
         .id("pr-primary-merge")
         .debug_selector(|| "pr-primary-merge".into())
         .role(gpui::Role::Button)
-        .aria_label(label)
+        .aria_label(match blocked {
+            Some(reason) => format!("{label}, blocked: {reason}"),
+            None => label.to_owned(),
+        })
+        .when_some(blocked, |el, reason| {
+            el.tip(format!("Can't merge yet: {reason}"))
+        })
         .tab_index(if busy { -1 } else { 0 })
         .flex_none()
         .min_h(px(26.0))
@@ -937,6 +947,17 @@ impl PullRequestDetailPage {
                     .text_color(review_color)
                     .child(review_label),
             )
+            .when_some(unresolved_label(detail), |el, unresolved| {
+                el.child(div().flex_none().text_color(theme.text_faint).child("·"))
+                    .child(
+                        div()
+                            .id("pr-unresolved-threads")
+                            .debug_selector(|| "pr-unresolved-threads".into())
+                            .flex_none()
+                            .text_color(theme.warning)
+                            .child(unresolved),
+                    )
+            })
             .on_click(cx.listener(|page, _, _, cx| page.select_tab(Tab::Activity, cx)));
 
         let branch = div()
@@ -950,6 +971,16 @@ impl PullRequestDetailPage {
                     .id("pr-header-changes")
                     .debug_selector(|| "pr-header-changes".into())
                     .flex_none()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .when(!detail.files.is_empty(), |el| {
+                        el.child(
+                            div()
+                                .text_color(theme.text_muted)
+                                .child(files_label(detail.files.len())),
+                        )
+                    })
                     .child(super::code::counts(
                         detail.additions,
                         detail.deletions,
@@ -983,7 +1014,24 @@ impl PullRequestDetailPage {
                     } else {
                         state_label.to_owned()
                     }),
-            );
+            )
+            .when_some(mergeability(detail), |el, (text, tone)| {
+                el.child(div().flex_none().text_color(theme.text_faint).child("·"))
+                    .child(
+                        div()
+                            .id("pr-mergeability")
+                            .debug_selector(|| "pr-mergeability".into())
+                            .min_w_0()
+                            .truncate()
+                            .text_color(match tone {
+                                Tone::Good => theme.success,
+                                Tone::Warning => theme.warning,
+                                Tone::Bad => theme.danger,
+                                Tone::Muted => theme.text_muted,
+                            })
+                            .child(text),
+                    )
+            });
 
         let properties = div()
             .id("pr-properties")
@@ -1628,6 +1676,92 @@ fn section_toggle(
         )
 }
 
+/// How the mergeability fact reads: a tone for its tint.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Tone {
+    Good,
+    Warning,
+    Bad,
+    Muted,
+}
+
+/// Whether an open pull request can merge, in a few words, for the Status
+/// row. None once it is merged or closed.
+pub(super) fn mergeability(detail: &ChangeRequestDetail) -> Option<(&'static str, Tone)> {
+    if !detail.state.eq_ignore_ascii_case("open") {
+        return None;
+    }
+    Some(if detail.is_draft {
+        ("Not ready for review", Tone::Muted)
+    } else if detail.mergeable == "CONFLICTING" {
+        ("Merge conflicts", Tone::Bad)
+    } else if can_merge(detail) {
+        ("Ready to merge", Tone::Good)
+    } else {
+        let blocker = merge_blocker(detail);
+        let assessment = Facts::from_detail(detail).assess();
+        let tone = if assessment.ci.state == CiState::Failed {
+            Tone::Bad
+        } else {
+            Tone::Warning
+        };
+        (blocker, tone)
+    })
+}
+
+/// What the header's primary button offers for this pull request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PrimaryAction {
+    /// Merged or closed: no button.
+    Hidden,
+    /// An update is in flight.
+    Busy,
+    /// A draft: Ready for review.
+    MarkReady,
+    /// Merge goes straight through (squash first in its menu).
+    Merge,
+    /// Merge can't go straight through; the reason is its tooltip and the
+    /// menu's heading. The menu still offers the existing overrides
+    /// (auto-merge, force merge) when GitHub could accept them.
+    MergeBlocked(&'static str),
+}
+
+pub(super) fn primary_action(detail: &ChangeRequestDetail, busy: bool) -> PrimaryAction {
+    if !detail.state.eq_ignore_ascii_case("open") {
+        PrimaryAction::Hidden
+    } else if busy {
+        PrimaryAction::Busy
+    } else if detail.is_draft {
+        PrimaryAction::MarkReady
+    } else if can_merge(detail) {
+        PrimaryAction::Merge
+    } else {
+        PrimaryAction::MergeBlocked(merge_blocker(detail))
+    }
+}
+
+/// Unresolved review threads, when GitHub returned threads at all.
+pub(super) fn unresolved_threads(detail: &ChangeRequestDetail) -> Option<usize> {
+    detail
+        .review_threads
+        .as_ref()
+        .map(|threads| threads.iter().filter(|thread| !thread.is_resolved).count())
+}
+
+/// "1 unresolved thread", "3 unresolved threads"; nothing when all resolved.
+pub(super) fn unresolved_label(detail: &ChangeRequestDetail) -> Option<String> {
+    match unresolved_threads(detail)? {
+        0 => None,
+        1 => Some("1 unresolved thread".into()),
+        n => Some(format!("{n} unresolved threads")),
+    }
+}
+
+/// "1 file", "6 files".
+pub(super) fn files_label(count: usize) -> String {
+    format!("{count} {}", if count == 1 { "file" } else { "files" })
+}
+
 pub(super) fn can_merge(detail: &ChangeRequestDetail) -> bool {
     let assessment = Facts::from_detail(detail).assess();
     detail.state.eq_ignore_ascii_case("open")
@@ -1654,7 +1788,10 @@ fn can_defer_merge(detail: &ChangeRequestDetail) -> bool {
 /// Why Merge can't go straight through, for the top of its menu.
 fn merge_blocker(detail: &ChangeRequestDetail) -> &'static str {
     let assessment = Facts::from_detail(detail).assess();
-    if let Some(blocker) = assessment.blockers.first() {
+    // Conflicts first: they need work before anything else can merge it.
+    if detail.mergeable.eq_ignore_ascii_case("CONFLICTING") {
+        "Merge conflicts"
+    } else if let Some(blocker) = assessment.blockers.first() {
         blocker.label()
     } else if assessment.ci.state == CiState::Pending {
         "Waiting on checks"
@@ -1704,6 +1841,140 @@ mod tests {
         ] {
             assert!(!can_defer_merge(&blocked));
         }
+    }
+
+    fn open_green() -> ChangeRequestDetail {
+        ChangeRequestDetail {
+            state: "OPEN".into(),
+            mergeable: "MERGEABLE".into(),
+            review_decision: "APPROVED".into(),
+            head_ref_oid: "a".repeat(40),
+            status_check_rollup: vec![zuse_protocol::ChangeRequestCheck {
+                name: "test".into(),
+                status: "COMPLETED".into(),
+                conclusion: "SUCCESS".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
+    fn with_check(status: &str, conclusion: &str) -> ChangeRequestDetail {
+        ChangeRequestDetail {
+            status_check_rollup: vec![zuse_protocol::ChangeRequestCheck {
+                name: "test".into(),
+                status: status.into(),
+                conclusion: conclusion.into(),
+                ..Default::default()
+            }],
+            ..open_green()
+        }
+    }
+
+    #[test]
+    fn primary_action_enables_merge_only_when_github_would_accept_it() {
+        assert_eq!(primary_action(&open_green(), false), PrimaryAction::Merge);
+        assert_eq!(primary_action(&open_green(), true), PrimaryAction::Busy);
+        let draft = ChangeRequestDetail {
+            is_draft: true,
+            ..open_green()
+        };
+        assert_eq!(primary_action(&draft, false), PrimaryAction::MarkReady);
+        for state in ["MERGED", "CLOSED"] {
+            let done = ChangeRequestDetail {
+                state: state.into(),
+                ..open_green()
+            };
+            assert_eq!(primary_action(&done, false), PrimaryAction::Hidden);
+        }
+        let conflicting = ChangeRequestDetail {
+            mergeable: "CONFLICTING".into(),
+            ..open_green()
+        };
+        assert_eq!(
+            primary_action(&conflicting, false),
+            PrimaryAction::MergeBlocked("Merge conflicts")
+        );
+        assert_eq!(
+            primary_action(&with_check("COMPLETED", "FAILURE"), false),
+            PrimaryAction::MergeBlocked("CI failing")
+        );
+        assert_eq!(
+            primary_action(&with_check("IN_PROGRESS", ""), false),
+            PrimaryAction::MergeBlocked("Waiting on checks")
+        );
+        let changes = ChangeRequestDetail {
+            review_decision: "CHANGES_REQUESTED".into(),
+            ..open_green()
+        };
+        assert_eq!(
+            primary_action(&changes, false),
+            PrimaryAction::MergeBlocked("Changes requested")
+        );
+    }
+
+    #[test]
+    fn mergeability_reads_the_state_and_its_blocker() {
+        assert_eq!(
+            mergeability(&open_green()),
+            Some(("Ready to merge", Tone::Good))
+        );
+        let draft = ChangeRequestDetail {
+            is_draft: true,
+            mergeable: "CONFLICTING".into(),
+            ..open_green()
+        };
+        assert_eq!(
+            mergeability(&draft),
+            Some(("Not ready for review", Tone::Muted))
+        );
+        let conflicting = ChangeRequestDetail {
+            mergeable: "CONFLICTING".into(),
+            ..with_check("COMPLETED", "FAILURE")
+        };
+        assert_eq!(
+            mergeability(&conflicting),
+            Some(("Merge conflicts", Tone::Bad))
+        );
+        assert_eq!(
+            mergeability(&with_check("COMPLETED", "FAILURE")),
+            Some(("CI failing", Tone::Bad))
+        );
+        assert_eq!(
+            mergeability(&with_check("QUEUED", "")),
+            Some(("Waiting on checks", Tone::Warning))
+        );
+        let merged = ChangeRequestDetail {
+            state: "MERGED".into(),
+            ..open_green()
+        };
+        assert_eq!(mergeability(&merged), None);
+    }
+
+    #[test]
+    fn unresolved_threads_and_file_counts_map_to_words() {
+        let thread = |resolved| zuse_protocol::ChangeRequestReviewThread {
+            is_resolved: resolved,
+            ..Default::default()
+        };
+        let mut detail = open_green();
+        assert_eq!(unresolved_threads(&detail), None, "threads unavailable");
+        assert_eq!(unresolved_label(&detail), None);
+        detail.review_threads = Some(vec![thread(true)]);
+        assert_eq!(unresolved_threads(&detail), Some(0));
+        assert_eq!(unresolved_label(&detail), None);
+        detail.review_threads = Some(vec![thread(false), thread(true)]);
+        assert_eq!(
+            unresolved_label(&detail).as_deref(),
+            Some("1 unresolved thread")
+        );
+        detail.review_threads = Some(vec![thread(false), thread(false), thread(true)]);
+        assert_eq!(
+            unresolved_label(&detail).as_deref(),
+            Some("2 unresolved threads")
+        );
+        assert_eq!(files_label(1), "1 file");
+        assert_eq!(files_label(6), "6 files");
     }
 
     #[gpui::test]

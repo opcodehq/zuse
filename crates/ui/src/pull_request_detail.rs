@@ -672,6 +672,9 @@ impl Default for CodeReview {
     }
 }
 
+/// Details this old are reloaded when their pull request is reopened.
+const REOPEN_REFRESH: Duration = Duration::from_secs(30);
+
 pub struct PullRequestDetailPage {
     state: Entity<AppState>,
     watch_control: Option<Entity<crate::pr_watch::PrWatchControl>>,
@@ -1483,6 +1486,21 @@ impl PullRequestDetailPage {
         }
         self.refresh_with_head(Some(head), cx);
         true
+    }
+
+    /// A host showing this page again reloads details older than
+    /// [`REOPEN_REFRESH`]; the live watch covers changes while it stays open.
+    /// A load already in flight is enough.
+    pub(crate) fn refresh_if_stale(&mut self, cx: &mut Context<Self>) {
+        if self.loading || self.updating_pr {
+            return;
+        }
+        if self
+            .fetched
+            .is_none_or(|fetched| fetched.elapsed() >= REOPEN_REFRESH)
+        {
+            self.refresh(cx);
+        }
     }
 
     /// Reload the details, and the diff now or on the next Code visit.
@@ -2488,6 +2506,129 @@ pub(crate) fn fixture_seed_cache(cache: &Rc<RefCell<PullRequestCache>>) -> Strin
     };
     cache.borrow_mut().put(None, url.clone(), snapshot);
     url
+}
+
+/// Seed one offline pull request for the Zapper panel fixture: `ready`
+/// (approved, green), `blocked` (a failing check and conflicts) or `draft`.
+/// Nothing is fetched or written; the URL points at a fixture repository.
+#[cfg(feature = "appshots-fixture")]
+pub(crate) fn fixture_seed_zapper_pull_request(
+    cache: &Rc<RefCell<PullRequestCache>>,
+    target: Option<String>,
+    url: &str,
+    variant: &str,
+) {
+    use zuse_protocol::{ChangeRequestActor, ChangeRequestCheck, ChangeRequestFile};
+    let check = |name: &str, status: &str, conclusion: &str| ChangeRequestCheck {
+        name: name.into(),
+        status: status.into(),
+        conclusion: conclusion.into(),
+        details_url: "https://github.com/acme/app/actions/runs/1".into(),
+        ..Default::default()
+    };
+    let thread = |id: &str, resolved: bool| zuse_protocol::ChangeRequestReviewThread {
+        id: id.into(),
+        is_resolved: resolved,
+        path: "crates/ui/src/shell/zots.rs".into(),
+        line: Some(42),
+        ..Default::default()
+    };
+    let (draft, mergeable, decision, checks) = match variant {
+        "blocked" => (
+            false,
+            "CONFLICTING",
+            "CHANGES_REQUESTED",
+            vec![
+                check("clippy", "COMPLETED", "SUCCESS"),
+                check("test (ui)", "COMPLETED", "FAILURE"),
+                check("test (engine)", "IN_PROGRESS", ""),
+            ],
+        ),
+        "draft" => (
+            true,
+            "MERGEABLE",
+            "",
+            vec![
+                check("clippy", "COMPLETED", "SUCCESS"),
+                check("test (ui)", "IN_PROGRESS", ""),
+            ],
+        ),
+        _ => (
+            false,
+            "MERGEABLE",
+            "APPROVED",
+            vec![
+                check("clippy", "COMPLETED", "SUCCESS"),
+                check("test (ui)", "COMPLETED", "SUCCESS"),
+                check("test (engine)", "COMPLETED", "SUCCESS"),
+            ],
+        ),
+    };
+    let detail = ChangeRequestDetail {
+        title: "Zapper panel: closable tabs".into(),
+        body: "Tabs in the Zapper panel can be closed and remember their order.".into(),
+        url: url.into(),
+        number: 42,
+        author: ChangeRequestActor {
+            login: "swarajbachu".into(),
+            ..Default::default()
+        },
+        base_ref_name: "main".into(),
+        head_ref_name: "swarajbachu/zapper-closable-tabs".into(),
+        base_ref_oid: "1f0c9a7e2b3d4c5e6f708192a3b4c5d6e7f80912".into(),
+        head_ref_oid: "8e1d2c3b4a5968778695a4b3c2d1e0f9a8b7c6d5".into(),
+        state: "OPEN".into(),
+        is_draft: draft,
+        review_decision: decision.into(),
+        mergeable: mergeable.into(),
+        additions: 184,
+        deletions: 37,
+        files: [
+            "crates/ui/src/shell/zots.rs",
+            "crates/ui/src/shell/zot_tabs.rs",
+        ]
+        .into_iter()
+        .map(|path| ChangeRequestFile {
+            path: path.into(),
+            additions: 92,
+            deletions: 18,
+        })
+        .collect(),
+        status_check_rollup: checks,
+        review_threads: Some(vec![
+            thread("t1", false),
+            thread("t2", variant != "blocked"),
+            thread("t3", true),
+        ]),
+        viewer_login: Some("swarajbachu".into()),
+        ..Default::default()
+    };
+    let snapshot = DetailSnapshot {
+        discussion_loaded: true,
+        body: super::pull_request_media::parse_description(&detail.body),
+        activity: Vec::new(),
+        detail,
+        fetched: Instant::now(),
+        diff: None,
+        diff_refresh_owed: false,
+    };
+    cache.borrow_mut().put(target, url.into(), snapshot);
+}
+
+#[cfg(feature = "appshots-fixture")]
+impl PullRequestDetailPage {
+    /// Keep the seeded details on screen: stop the live watch, whose
+    /// fixture repository GitHub doesn't know, and drop its error.
+    pub(crate) fn fixture_offline(&mut self, merge_menu: bool, cx: &mut Context<Self>) {
+        self.set_active(false, cx);
+        if merge_menu {
+            self.merge_menu = summary::MergeMenu::Now;
+        }
+        self.task = None;
+        self.loading = false;
+        self.error = None;
+        cx.notify();
+    }
 }
 
 #[cfg(feature = "browser-fixture")]
@@ -3576,6 +3717,30 @@ mod tests {
                 Arc::ptr_eq(page.diff.as_ref().unwrap(), &reused),
                 "cached diff rows are reused without parsing or copying"
             );
+            page
+        });
+        cx.run_until_parked();
+    }
+
+    #[gpui::test]
+    fn pull_request_shown_again_reloads_only_stale_details(cx: &mut gpui::TestAppContext) {
+        fixture::init(cx);
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let state = fixture::state(cx, None);
+            let cache = Rc::new(RefCell::new(PullRequestCache::default()));
+            let url = "https://github.com/a/b/pull/1";
+            cache
+                .borrow_mut()
+                .put(None, url.into(), snapshot("Already loaded"));
+            let mut page =
+                PullRequestDetailPage::new(state, url.into(), None, cache, None, window, cx);
+            page.refresh_if_stale(cx);
+            assert!(page.error.is_none(), "fresh details are not reloaded");
+            page.fetched = Some(Instant::now() - REOPEN_REFRESH);
+            page.refresh_if_stale(cx);
+            // No engine exists in this fixture, so the attempted read reports it.
+            assert!(page.error.is_some(), "stale details are reloaded");
+            assert_eq!(page.detail.as_ref().unwrap().title, "Already loaded");
             page
         });
         cx.run_until_parked();

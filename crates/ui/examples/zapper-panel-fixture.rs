@@ -243,13 +243,16 @@ fn main() -> anyhow::Result<()> {
                 )
                 .unwrap();
             state.update(cx, |_, cx| cx.notify());
-            cx.activate(true);
+            // No activation: the capture reads this window only, and the
+            // fixture must not take keyboard focus from the desktop.
             cx.spawn(async move |cx| {
                 let run: anyhow::Result<()> = async {
                     pause(cx, 1500).await;
                     for step in &steps {
                         window.update(cx, |s, _, cx| s.fixture_zapper_panel(files(), step, cx))?;
                         pause(cx, 900).await;
+                        window.update(cx, |s, _, cx| s.fixture_zapper_settle(step, cx))?;
+                        pause(cx, 300).await;
                         capture(window.into(), cx, &output, step).await?;
                     }
                     Ok(())

@@ -865,6 +865,13 @@ impl Shell {
             self.zot_ui.page = None;
         }
         let history = self.zot_history_view();
+        // Reopening a pull request reloads details that may be out of date.
+        if let (ZotPage::PullRequest(url), Some((loaded, existing))) =
+            (&page, &self.zot_ui.pull_request_page)
+            && url == loaded
+        {
+            existing.update(cx, |existing, cx| existing.refresh_if_stale(cx));
+        }
         self.zot_ui.tabs.show(page);
         self.zot_page_changed(history);
         self.reveal_active_zot_tab();
@@ -1324,7 +1331,14 @@ impl Shell {
                 .filter(|(loaded, _)| loaded == &url)
                 .map(|(_, page)| page.clone());
             if let Some(page) = page {
-                let mut content = div().flex_1().min_h_0().flex().flex_col();
+                // Merge, Open on GitHub and the More menu, as in a chat's PR pane.
+                let toolbar = page.update(cx, |page, cx| page.toolbar(cx));
+                let mut content = div()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .flex_col()
+                    .child(crate::surface_chrome::flowing_header().child(toolbar));
                 if let Some(issue) = zot
                     .issues
                     .iter()
@@ -2534,6 +2548,16 @@ mod tests {
 /// Native visual QA of the Zapper panel with seeded documents.
 #[cfg(feature = "appshots-fixture")]
 impl Shell {
+    /// Keep a seeded pull request tab offline once its page exists.
+    /// A `-menu` step also opens Merge's menu.
+    pub fn fixture_zapper_settle(&mut self, step: &str, cx: &mut Context<Self>) {
+        if let Some((_, page)) = &self.zot_ui.pull_request_page {
+            let menu = step.ends_with("-menu");
+            page.update(cx, |page, cx| page.fixture_offline(menu, cx));
+        }
+        cx.notify();
+    }
+
     pub fn fixture_zapper_panel(
         &mut self,
         files: Vec<ZotFile>,
@@ -2592,6 +2616,34 @@ impl Shell {
                 if let Some(page) = file {
                     self.show_zot_page(page, cx);
                 }
+            }
+            // `pr-ready`, `pr-blocked`, `pr-draft`: the PR tab on seeded,
+            // offline details linked from the second issue.
+            step if step.starts_with("pr-") => {
+                let url = "https://github.com/zuse-fixture/zapper/pull/42".to_owned();
+                crate::pull_request_detail::fixture_seed_zapper_pull_request(
+                    &self.pull_request_cache,
+                    Some(zot.config.home_device_id.clone()),
+                    &url,
+                    step["pr-".len()..].trim_end_matches("-menu"),
+                );
+                self.zot_ui.pull_request_page = None;
+                self.zot_ui.pull_request_subscription = None;
+                let link = ZotIssuePullRequest {
+                    url: url.clone(),
+                    title: "Zapper panel: closable tabs".into(),
+                };
+                self.state.update(cx, |state, _| {
+                    if let Some(issue) = state
+                        .zots
+                        .iter_mut()
+                        .find(|z| z.id == zot.id)
+                        .and_then(|z| z.issues.get_mut(1))
+                    {
+                        issue.pull_requests = vec![link];
+                    }
+                });
+                self.show_zot_page(ZotPage::PullRequest(url), cx);
             }
             "threads" => {
                 self.zot_ui.finished_open = true;
